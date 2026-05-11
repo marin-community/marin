@@ -5,7 +5,6 @@
 
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -529,65 +528,144 @@ def _write_summary(
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
 
-_DASHBOARD_URL_RE = re.compile(r"Dashboard:\s+(http://\S+)")
+@click.group()
+def cli() -> None:
+    pass
 
 
-def open_controller_tunnel(
-    iris_config: Path,
-    *,
-    health_path: str,
-    timeout: float,
+@cli.command()
+@click.option("--job-id", required=True, help="Iris job ID to inspect.")
+@click.option("--iris-config", default=None, type=click.Path(path_type=Path), help="Path to iris config file.")
+@click.option(
+    "--controller-url", default=None, help="Iris controller URL (e.g. http://localhost:PORT). Overrides --iris-config."
+)
+def status(job_id: str, iris_config: Path | None, controller_url: str | None) -> None:
+    """Print the current state of an Iris job."""
+    s = job_status(job_id, iris_config=iris_config, controller_url=controller_url, repo_root=_REPO_ROOT)
+    click.echo(f"job_id: {s.job_id}")
+    click.echo(f"state:  {s.state}")
+    if s.error:
+        click.echo(f"error:  {s.error}")
+
+
+@cli.command()
+@click.option("--job-id", required=True, help="Iris job ID to wait on.")
+@click.option("--iris-config", default=None, type=click.Path(path_type=Path), help="Path to iris config file.")
+@click.option(
+    "--controller-url", default=None, help="Iris controller URL (e.g. http://localhost:PORT). Overrides --iris-config."
+)
+@click.option("--poll-interval", default=30.0, type=float, help="Seconds between polls.", show_default=True)
+@click.option("--timeout", default=None, type=float, help="Maximum seconds to wait. No limit if omitted.")
+@click.option(
+    "--github-output",
+    is_flag=True,
+    default=False,
+    help="Write job_id, state, and succeeded to $GITHUB_OUTPUT on terminal exit.",
+)
+def wait(
+    job_id: str,
+    iris_config: Path | None,
+    controller_url: str | None,
     poll_interval: float,
-    repo_root: Path,
-) -> tuple[str, int]:
-    """Run ``iris cluster dashboard`` detached and return ``(controller_url, pid)``.
-
-    The iris CLI establishes the tunnel via the provider bundle (kubectl
-    port-forward on K8s, IAP/SSH on GCP) and prints the URL. We parse it,
-    probe ``health_path``, and leave the process running so the caller can
-    kill it later.
-    """
-    cmd = [*iris_command(repo_root), f"--config={iris_config}", "cluster", "dashboard"]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        start_new_session=True,
+    timeout: float | None,
+    github_output: bool,
+) -> None:
+    """Poll until an Iris job reaches a terminal state. Exit non-zero unless SUCCEEDED."""
+    click.echo(f"Polling job {job_id!r} every {poll_interval}s ...", err=True)
+    s = wait_for_job(
+        job_id,
+        iris_config=iris_config,
+        controller_url=controller_url,
+        poll_interval=poll_interval,
+        timeout=timeout,
+        repo_root=_REPO_ROOT,
     )
 
-    deadline = time.monotonic() + timeout
-    url: str | None = None
-    while url is None and time.monotonic() < deadline:
-        line = proc.stdout.readline() if proc.stdout else ""
-        if not line:
-            if proc.poll() is not None:
-                raise RuntimeError(f"`iris cluster dashboard` exited with code {proc.returncode} before printing URL")
-            time.sleep(0.2)
-            continue
-        click.echo(line.rstrip(), err=True)
-        match = _DASHBOARD_URL_RE.search(line)
-        if match:
-            url = match.group(1)
-    if url is None:
-        proc.terminate()
-        raise TimeoutError(f"`iris cluster dashboard` never printed a URL within {timeout}s")
+    if github_output and (path := os.environ.get("GITHUB_OUTPUT")):
+        succeeded = "true" if s.state == JOB_STATE_SUCCEEDED else "false"
+        with open(path, "a") as fh:
+            fh.write(f"job_id={s.job_id}\nstate={s.state}\nsucceeded={succeeded}\n")
 
-    health_url = url + health_path
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"`iris cluster dashboard` exited (code {proc.returncode}) while probing health")
-        try:
-            with urllib.request.urlopen(health_url, timeout=poll_interval) as resp:
-                if 200 <= resp.status < 300:
-                    return url, proc.pid
-        except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
-            pass
-        time.sleep(poll_interval)
+    click.echo(f"Job {job_id!r} finished with state: {s.state}", err=True)
+    if s.error:
+        click.echo(f"Error: {s.error}", err=True)
+    if s.state != JOB_STATE_SUCCEEDED:
+        sys.exit(1)
 
-    proc.terminate()
-    raise TimeoutError(f"controller {health_url} never became healthy within {timeout}s")
+
+@cli.command()
+@click.option("--job-id", required=True, help="Iris job ID to collect diagnostics for.")
+@click.option("--iris-config", default=None, type=click.Path(path_type=Path), help="Path to iris config file.")
+@click.option(
+    "--controller-url", default=None, help="Iris controller URL (e.g. http://localhost:PORT). Overrides --iris-config."
+)
+@click.option(
+    "--provider",
+    required=True,
+    type=click.Choice(["gcp", "coreweave"]),
+    help="Cloud provider for provider-specific diagnostics.",
+)
+@click.option(
+    "--output-dir", required=True, type=click.Path(path_type=Path), help="Directory to write diagnostic files into."
+)
+@click.option("--project", default=None, help="GCP project ID (GCP only).")
+@click.option("--controller-label", default=None, help="GCE instance label key identifying controller VMs (GCP only).")
+@click.option(
+    "--managed-label",
+    default=None,
+    help=(
+        "Label key identifying every managed VM/pod (controllers + workers). When set, GCP diagnostics also "
+        "SSH worker VMs and CoreWeave diagnostics also dump per-pod logs."
+    ),
+)
+@click.option("--service-account", default=None, help="Service account to impersonate for gcloud SSH (GCP only).")
+@click.option(
+    "--ssh-key", default=None, type=click.Path(path_type=Path), help="Path to SSH key file for gcloud SSH (GCP only)."
+)
+@click.option("--namespace", default=None, help="Kubernetes namespace (CoreWeave only).")
+@click.option(
+    "--kubeconfig", default=None, type=click.Path(path_type=Path), help="Path to kubeconfig file (CoreWeave only)."
+)
+@click.option(
+    "--include-cluster-context",
+    is_flag=True,
+    default=False,
+    help="CoreWeave: also dump nodepools, nodes, autoscaler-status, and scheduler-state.",
+)
+def collect(
+    job_id: str,
+    iris_config: Path | None,
+    controller_url: str | None,
+    provider: Literal["gcp", "coreweave"],
+    output_dir: Path,
+    project: str | None,
+    controller_label: str | None,
+    managed_label: str | None,
+    service_account: str | None,
+    ssh_key: Path | None,
+    namespace: str | None,
+    kubeconfig: Path | None,
+    include_cluster_context: bool,
+) -> None:
+    """Collect failure diagnostics for an Iris job into an output directory."""
+    click.echo(f"Collecting diagnostics for job {job_id!r} into {output_dir} ...", err=True)
+    out = collect_diagnostics(
+        job_id,
+        output_dir,
+        provider,
+        iris_config=iris_config,
+        controller_url=controller_url,
+        project=project,
+        controller_label=controller_label,
+        managed_label=managed_label,
+        service_account=service_account,
+        ssh_key=ssh_key,
+        namespace=namespace,
+        kubeconfig=kubeconfig,
+        include_cluster_context=include_cluster_context,
+        repo_root=_REPO_ROOT,
+    )
+    click.echo(f"Diagnostics written to {out}", err=True)
 
 
 def _pod_ready(pod: dict) -> bool:
@@ -825,187 +903,6 @@ def open_coreweave_controller_tunnel(
     return controller_url, port_forward.pid
 
 
-@click.group()
-def cli() -> None:
-    pass
-
-
-@cli.command()
-@click.option("--job-id", required=True, help="Iris job ID to inspect.")
-@click.option("--iris-config", default=None, type=click.Path(path_type=Path), help="Path to iris config file.")
-@click.option(
-    "--controller-url", default=None, help="Iris controller URL (e.g. http://localhost:PORT). Overrides --iris-config."
-)
-def status(job_id: str, iris_config: Path | None, controller_url: str | None) -> None:
-    """Print the current state of an Iris job."""
-    s = job_status(job_id, iris_config=iris_config, controller_url=controller_url, repo_root=_REPO_ROOT)
-    click.echo(f"job_id: {s.job_id}")
-    click.echo(f"state:  {s.state}")
-    if s.error:
-        click.echo(f"error:  {s.error}")
-
-
-@cli.command()
-@click.option("--job-id", required=True, help="Iris job ID to wait on.")
-@click.option("--iris-config", default=None, type=click.Path(path_type=Path), help="Path to iris config file.")
-@click.option(
-    "--controller-url", default=None, help="Iris controller URL (e.g. http://localhost:PORT). Overrides --iris-config."
-)
-@click.option("--poll-interval", default=30.0, type=float, help="Seconds between polls.", show_default=True)
-@click.option("--timeout", default=None, type=float, help="Maximum seconds to wait. No limit if omitted.")
-@click.option(
-    "--github-output",
-    is_flag=True,
-    default=False,
-    help="Write job_id, state, and succeeded to $GITHUB_OUTPUT on terminal exit.",
-)
-def wait(
-    job_id: str,
-    iris_config: Path | None,
-    controller_url: str | None,
-    poll_interval: float,
-    timeout: float | None,
-    github_output: bool,
-) -> None:
-    """Poll until an Iris job reaches a terminal state. Exit non-zero unless SUCCEEDED."""
-    click.echo(f"Polling job {job_id!r} every {poll_interval}s ...", err=True)
-    s = wait_for_job(
-        job_id,
-        iris_config=iris_config,
-        controller_url=controller_url,
-        poll_interval=poll_interval,
-        timeout=timeout,
-        repo_root=_REPO_ROOT,
-    )
-
-    if github_output and (path := os.environ.get("GITHUB_OUTPUT")):
-        succeeded = "true" if s.state == JOB_STATE_SUCCEEDED else "false"
-        with open(path, "a") as fh:
-            fh.write(f"job_id={s.job_id}\nstate={s.state}\nsucceeded={succeeded}\n")
-
-    click.echo(f"Job {job_id!r} finished with state: {s.state}", err=True)
-    if s.error:
-        click.echo(f"Error: {s.error}", err=True)
-    if s.state != JOB_STATE_SUCCEEDED:
-        sys.exit(1)
-
-
-@cli.command()
-@click.option("--job-id", required=True, help="Iris job ID to collect diagnostics for.")
-@click.option("--iris-config", default=None, type=click.Path(path_type=Path), help="Path to iris config file.")
-@click.option(
-    "--controller-url", default=None, help="Iris controller URL (e.g. http://localhost:PORT). Overrides --iris-config."
-)
-@click.option(
-    "--provider",
-    required=True,
-    type=click.Choice(["gcp", "coreweave"]),
-    help="Cloud provider for provider-specific diagnostics.",
-)
-@click.option(
-    "--output-dir", required=True, type=click.Path(path_type=Path), help="Directory to write diagnostic files into."
-)
-@click.option("--project", default=None, help="GCP project ID (GCP only).")
-@click.option("--controller-label", default=None, help="GCE instance label key identifying controller VMs (GCP only).")
-@click.option(
-    "--managed-label",
-    default=None,
-    help=(
-        "Label key identifying every managed VM/pod (controllers + workers). When set, GCP diagnostics also "
-        "SSH worker VMs and CoreWeave diagnostics also dump per-pod logs."
-    ),
-)
-@click.option("--service-account", default=None, help="Service account to impersonate for gcloud SSH (GCP only).")
-@click.option(
-    "--ssh-key", default=None, type=click.Path(path_type=Path), help="Path to SSH key file for gcloud SSH (GCP only)."
-)
-@click.option("--namespace", default=None, help="Kubernetes namespace (CoreWeave only).")
-@click.option(
-    "--kubeconfig", default=None, type=click.Path(path_type=Path), help="Path to kubeconfig file (CoreWeave only)."
-)
-@click.option(
-    "--include-cluster-context",
-    is_flag=True,
-    default=False,
-    help="CoreWeave: also dump nodepools, nodes, autoscaler-status, and scheduler-state.",
-)
-def collect(
-    job_id: str,
-    iris_config: Path | None,
-    controller_url: str | None,
-    provider: Literal["gcp", "coreweave"],
-    output_dir: Path,
-    project: str | None,
-    controller_label: str | None,
-    managed_label: str | None,
-    service_account: str | None,
-    ssh_key: Path | None,
-    namespace: str | None,
-    kubeconfig: Path | None,
-    include_cluster_context: bool,
-) -> None:
-    """Collect failure diagnostics for an Iris job into an output directory."""
-    click.echo(f"Collecting diagnostics for job {job_id!r} into {output_dir} ...", err=True)
-    out = collect_diagnostics(
-        job_id,
-        output_dir,
-        provider,
-        iris_config=iris_config,
-        controller_url=controller_url,
-        project=project,
-        controller_label=controller_label,
-        managed_label=managed_label,
-        service_account=service_account,
-        ssh_key=ssh_key,
-        namespace=namespace,
-        kubeconfig=kubeconfig,
-        include_cluster_context=include_cluster_context,
-        repo_root=_REPO_ROOT,
-    )
-    click.echo(f"Diagnostics written to {out}", err=True)
-
-
-@cli.command(name="port-forward")
-@click.option(
-    "--iris-config", required=True, type=click.Path(exists=True, path_type=Path), help="Path to iris config file."
-)
-@click.option(
-    "--timeout", default=300.0, show_default=True, type=float, help="Seconds to wait for the controller to be healthy."
-)
-@click.option("--poll-interval", default=5.0, show_default=True, type=float, help="Seconds between health probes.")
-@click.option("--health-path", default="/health", show_default=True, help="HTTP path to probe for readiness.")
-@click.option(
-    "--url-var",
-    default="IRIS_CONTROLLER_URL",
-    show_default=True,
-    help="$GITHUB_ENV variable name to write the controller URL under.",
-)
-def port_forward(
-    iris_config: Path,
-    timeout: float,
-    poll_interval: float,
-    health_path: str,
-    url_var: str,
-) -> None:
-    """Open a tunnel to the iris controller via ``iris cluster dashboard`` and probe ``/health``.
-
-    Writes the controller URL and tunnel PID to $GITHUB_ENV so a later
-    ``Stop port-forward`` step can ``kill $PF_PID`` to tear it down.
-    """
-    url, pf_pid = open_controller_tunnel(
-        iris_config,
-        health_path=health_path,
-        timeout=timeout,
-        poll_interval=poll_interval,
-        repo_root=_REPO_ROOT,
-    )
-    click.echo(f"Controller healthy on {url} (pid={pf_pid})", err=True)
-
-    if path := os.environ.get("GITHUB_ENV"):
-        with open(path, "a") as fh:
-            fh.write(f"{url_var}={url}\nPF_PID={pf_pid}\n")
-
-
 @cli.command(name="coreweave-controller")
 @click.option("--namespace", required=True, help="Kubernetes namespace containing the Iris controller.")
 @click.option(
@@ -1049,7 +946,13 @@ def coreweave_controller(
     pid_var: str,
     log_var: str,
 ) -> None:
-    """Wait for the CoreWeave controller rollout and export a stable local controller URL."""
+    """Wait for the CoreWeave controller rollout and export a stable local controller URL.
+
+    Kept for the iris-smoke-coreweave workflow, which still tunnels into the
+    shared controller from the runner. Once that workflow migrates to running
+    its tests as in-cluster iris jobs (see ``--config`` path used by the canary
+    in marin-canary-ferry-coreweave.yaml), this subcommand can be removed.
+    """
     url, pf_pid = open_coreweave_controller_tunnel(
         namespace,
         kubeconfig,

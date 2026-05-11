@@ -19,6 +19,7 @@ from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
     SchedulingResult,
+    worker_snapshot_from_row,
 )
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
@@ -123,6 +124,13 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
         )
 
 
+def _snapshots_with_usage(state, workers):
+    """Project worker rows + per-cycle held-resource usage into bundled snapshots."""
+    with state._db.read_snapshot() as snap:
+        usage_by_worker = state._store.attempts.resource_usage_by_worker(snap)
+    return [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
+
+
 def _build_context(scheduler, state):
     pending_tasks = _schedulable_tasks(state)
     workers = list(healthy_active_workers(state))
@@ -140,7 +148,7 @@ def _build_context(scheduler, state):
                 jobs[task.job_id] = _job_requirements_from_job(job)
 
     return scheduler.create_scheduling_context(
-        workers,
+        _snapshots_with_usage(state, workers),
         building_counts=building_counts,
         pending_tasks=task_ids,
         jobs=jobs,
@@ -273,9 +281,10 @@ def test_scheduler_skips_tasks_that_dont_fit(scheduler, state):
 def test_scheduler_detects_timed_out_tasks(state):
     """Verify timed-out tasks are handled by the controller (not the scheduler).
 
-    The scheduler no longer handles timeouts -- the controller filters them out
-    before calling find_assignments. This test verifies the overall behavior
-    by testing the controller-level flow.
+    The controller filters timeout-expired tasks before calling
+    ``find_assignments``, so the scheduler only sees active tasks within
+    their timeout window. This test verifies the overall behavior by
+    testing the controller-level flow.
     """
     register_worker(state, "w1", "addr", make_worker_metadata(cpu=2))
 
@@ -1478,7 +1487,7 @@ def test_scheduler_reports_device_variant_mismatch(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1515,7 +1524,7 @@ def test_scheduler_reports_tpu_count_exceeded(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1551,7 +1560,7 @@ def test_scheduler_reports_device_type_mismatch(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1588,7 +1597,7 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1609,7 +1618,7 @@ def test_diagnostics_for_schedulable_job_does_not_say_unknown_failure(scheduler,
     register_worker(state, "w1", "addr1", make_worker_metadata())
     tasks = submit_job(state, "j1", make_job_request())
 
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = scheduler.create_scheduling_context(_snapshots_with_usage(state, healthy_active_workers(state)))
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -2137,7 +2146,7 @@ def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     context = scheduler.create_scheduling_context(
-        healthy_active_workers(state),
+        _snapshots_with_usage(state, healthy_active_workers(state)),
         pending_tasks=[t.task_id for t in tasks],
         jobs={tasks[0].job_id: _job_requirements_from_job(_query_job(state, tasks[0].job_id))},
     )

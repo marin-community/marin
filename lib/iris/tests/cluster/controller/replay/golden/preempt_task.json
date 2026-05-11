@@ -1,14 +1,4 @@
 {
-  "dispatch_queue": [
-    {
-      "created_at_ms": 1704067200000,
-      "id": 1,
-      "kind": "run",
-      "payload_proto": "ChgvdGVzdC11c2VyL3ByZWVtcHQtam9iLzAQARoUEhIKBnB5dGhvbgoCLWMKBHBhc3MiACoAMg0I6AcggICAgAQqAEgASABaAA==",
-      "task_id": null,
-      "worker_id": "w-preempt"
-    }
-  ],
   "endpoints": [],
   "job_config": [
     {
@@ -81,7 +71,7 @@
       "created_at_ms": 1704067200000,
       "error": "reclaim",
       "exit_code": null,
-      "finished_at_ms": 1704067200001,
+      "finished_at_ms": null,
       "started_at_ms": null,
       "state": 10,
       "task_id": "/test-user/preempt-job/0",
@@ -135,10 +125,6 @@
   "workers": [
     {
       "address": "w-preempt:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,

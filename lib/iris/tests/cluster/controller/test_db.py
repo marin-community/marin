@@ -284,38 +284,6 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     db.close()
 
 
-def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
-    """replace_from() must re-attach the profiles DB so profile tables remain accessible."""
-    from iris.cluster.controller.db import get_task_profiles, insert_task_profile
-    from rigging.timing import Timestamp
-
-    db = ControllerDB(db_dir=tmp_path)
-    insert_task_profile(db, "task-1", b"profile-data", Timestamp.now())
-
-    backup_dir = tmp_path / "backup"
-    backup_dir.mkdir()
-    db.backup_to(backup_dir / "controller.sqlite3")
-
-    # The profiles DB is a separate WAL-mode file; export a standalone backup
-    # so replace_from can restore from a self-contained sqlite file.
-    profiles_backup = backup_dir / ControllerDB.PROFILES_DB_FILENAME
-    src = sqlite3.connect(str(db.profiles_db_path))
-    dest = sqlite3.connect(str(profiles_backup))
-    try:
-        src.backup(dest)
-        dest.execute("PRAGMA journal_mode = DELETE")
-        dest.commit()
-    finally:
-        src.close()
-        dest.close()
-
-    db.replace_from(str(backup_dir))
-
-    profiles = get_task_profiles(db, "task-1")
-    assert len(profiles) == 1
-    db.close()
-
-
 def test_replace_from_replaces_db_with_live_wal_sidecars_present(tmp_path: Path) -> None:
     """replace_from() must discard stale sidecars from the live DB before reopening."""
     db = ControllerDB(db_dir=tmp_path)

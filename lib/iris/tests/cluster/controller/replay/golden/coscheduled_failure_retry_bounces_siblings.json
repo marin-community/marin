@@ -1,22 +1,4 @@
 {
-  "dispatch_queue": [
-    {
-      "created_at_ms": 1704067200000,
-      "id": 1,
-      "kind": "run",
-      "payload_proto": "ChkvdGVzdC11c2VyL2Nvc2NoZWQtZmFpbC8wEAIaFBISCgZweXRob24KAi1jCgRwYXNzIgAqADINCOgHIICAgIAEKgBIAEgAWgA=",
-      "task_id": null,
-      "worker_id": "w-cosched-fail-a"
-    },
-    {
-      "created_at_ms": 1704067200000,
-      "id": 2,
-      "kind": "run",
-      "payload_proto": "ChkvdGVzdC11c2VyL2Nvc2NoZWQtZmFpbC8xEAIaFBISCgZweXRob24KAi1jCgRwYXNzIgAqADINCOgHIICAgIAEKgBIAEgAWgA=",
-      "task_id": null,
-      "worker_id": "w-cosched-fail-b"
-    }
-  ],
   "endpoints": [],
   "job_config": [
     {
@@ -100,7 +82,7 @@
       "created_at_ms": 1704067200000,
       "error": "Coscheduled sibling /test-user/cosched-fail/0 bounced for atomic re-scheduling",
       "exit_code": null,
-      "finished_at_ms": 1704067200005,
+      "finished_at_ms": null,
       "started_at_ms": 1704067200003,
       "state": 10,
       "task_id": "/test-user/cosched-fail/1",
@@ -185,10 +167,6 @@
   "workers": [
     {
       "address": "w-cosched-fail-a:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,
@@ -217,10 +195,6 @@
     },
     {
       "address": "w-cosched-fail-b:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,

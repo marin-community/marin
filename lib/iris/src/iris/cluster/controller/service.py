@@ -23,7 +23,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from rigging.timing import Timer, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -89,7 +89,13 @@ from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
+from iris.cluster.runtime.profile import (
+    PROFILE_NAMESPACE,
+    IrisProfile,
+    build_profile_row,
+    parse_profile_target,
+    profile_local_process,
+)
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -99,6 +105,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
+from iris.rpc.async_adapter import on_loop
 from iris.rpc.auth import (
     AuthzAction,
     authorize,
@@ -131,6 +138,12 @@ DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
+# Time the launch RPC blocks waiting for a replaced job's worker-bound attempts
+# to finalize before deleting them. Normal worker shutdown is well under one
+# minute; the bound is finite so a stuck finalization surfaces as
+# DEADLINE_EXCEEDED rather than hanging launches forever.
+_JOB_REPLACEMENT_DRAIN_TIMEOUT = Duration.from_minutes(10)
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
@@ -318,14 +331,13 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 # =============================================================================
 
 
-def _read_job(db: ControllerDB, job_id: JobName) -> JobDetailRow | None:
-    with db.read_snapshot() as q:
-        return JOB_DETAIL_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} " f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
-                (job_id.to_wire(),),
-            )
+def _read_job(q: QuerySnapshot, job_id: JobName) -> JobDetailRow | None:
+    return JOB_DETAIL_PROJECTION.decode_one(
+        q.fetchall(
+            f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} " f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+            (job_id.to_wire(),),
         )
+    )
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRow | None:
@@ -759,15 +771,10 @@ def _parent_ids_with_children(q: QuerySnapshot, job_ids: list[JobName]) -> set[J
     return {JobName.from_wire(row.parent_job_id) for row in rows if row.parent_job_id}
 
 
-def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
+def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName]) -> dict[JobName, TaskJobSummary]:
     """Aggregate task counts per job via a SQL GROUP BY."""
-    if job_ids is not None:
-        placeholders = ",".join("?" for _ in job_ids)
-        where = f"WHERE t.job_id IN ({placeholders})"
-        params: tuple[object, ...] = tuple(j.to_wire() for j in job_ids)
-    else:
-        where = ""
-        params = ()
+    placeholders = ",".join("?" for _ in job_ids)
+    params: tuple[object, ...] = tuple(j.to_wire() for j in job_ids)
 
     sql = f"""
         SELECT t.job_id,
@@ -776,7 +783,7 @@ def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName] | None = No
                SUM(t.failure_count) as total_failures,
                SUM(t.preemption_count) as total_preemptions
         FROM tasks t
-        {where}
+        WHERE t.job_id IN ({placeholders})
         GROUP BY t.job_id, t.state
     """
     completed_states = (job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_KILLED)
@@ -816,21 +823,6 @@ def _worker_roster(store: ControllerStore) -> list[WorkerDetailRow]:
             key, value = _decode_attribute_value(row)
             attrs_by_worker.setdefault(wid, {})[key] = value
     return [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in decoded]
-
-
-def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
-    # PK range scan: '0' (ASCII 48) is the next char after '/' (ASCII 47),
-    # so this matches all job_ids starting with "<job_id>/" without LIKE.
-    prefix = job_id.to_wire() + "/"
-    upper = job_id.to_wire() + chr(ord("/") + 1)
-    with db.read_snapshot() as q:
-        return JOB_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} FROM jobs j {JOB_CONFIG_JOIN} "
-                f"WHERE j.job_id >= ? AND j.job_id < ?",
-                (prefix, upper),
-            ),
-        )
 
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
@@ -936,12 +928,6 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def kill_tasks_on_workers(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None: ...
-
     def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
@@ -1022,6 +1008,7 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1047,6 +1034,44 @@ class ControllerServiceImpl:
         if not self._auth.provider:
             return
         authorize_resource_owner(job_id.user)
+
+    def _wait_until_job_drained(self, job_id: JobName, timeout: Duration) -> None:
+        """Block until ``job_id`` has no unfinished worker-bound attempts.
+
+        Polls the snapshot DB; the heartbeat path landing terminal updates is
+        what finally clears the predicate. Used to gate ``remove_finished_job``
+        on a replacement so we never CASCADE-delete tasks whose attempts the
+        worker is still racing to finalize. Raises ``ConnectError`` with
+        ``DEADLINE_EXCEEDED`` if the job hasn't drained within ``timeout``.
+        """
+
+        def drained() -> bool:
+            with self._db.read_snapshot() as snap:
+                return not self._store.jobs.has_unfinished_worker_attempts(snap, job_id)
+
+        try:
+            ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until_or_raise(
+                drained,
+                timeout=timeout,
+                error_message=f"Timed out waiting for job {job_id} to drain before replacement",
+            )
+        except TimeoutError as exc:
+            raise ConnectError(Code.DEADLINE_EXCEEDED, str(exc)) from exc
+
+    def _remove_finished_job_safely(self, cur, job_id: JobName) -> None:
+        """``remove_finished_job`` gated on no unfinished worker-bound attempts.
+
+        CASCADE-deleting a job's tasks while its attempts are still worker-
+        bound destroys the rows the heartbeat path needs to find when it
+        stamps ``finished_at_ms``. Every replacement / prune / admin-delete
+        path goes through here so that contract is uniform.
+        """
+        if self._store.jobs.has_unfinished_worker_attempts(cur, job_id):
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Refusing to remove job {job_id}: worker-bound attempts have not finalized",
+            )
+        self._transitions.remove_finished_job(cur, job_id)
 
     def launch_job(
         self,
@@ -1137,6 +1162,7 @@ class ControllerServiceImpl:
         # transaction further down — between the two txs another submitter
         # can race, but ``INSERT INTO jobs`` then PK-conflicts, which is a
         # legitimate error rather than a correctness bug.
+        needs_drain = False
         with self._store.transaction() as cur:
             existing_state = self._store.jobs.get_state(cur, job_id)
             if existing_state is not None:
@@ -1150,11 +1176,19 @@ class ControllerServiceImpl:
                     if not is_job_finished(existing_state):
                         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                     # Job finished, replace it (KEEP only preserves running jobs)
-                    self._transitions.remove_finished_job(cur, job_id)
+                    self._remove_finished_job_safely(cur, job_id)
                 elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                     if not is_job_finished(existing_state):
                         self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
-                    self._transitions.remove_finished_job(cur, job_id)
+                        # Cancel is a producer transition: attempts stay
+                        # unfinished until the worker confirms termination.
+                        # Defer remove_finished_job to a second tx after the
+                        # drain wait so we don't destroy task_attempts rows
+                        # whose finished_at_ms write the heartbeat path is
+                        # still racing to land.
+                        needs_drain = True
+                    else:
+                        self._remove_finished_job_safely(cur, job_id)
                 elif is_job_finished(existing_state):
                     # Default/UNSPECIFIED: replace finished jobs
                     logger.info(
@@ -1162,9 +1196,18 @@ class ControllerServiceImpl:
                         job_id,
                         job_pb2.JobState.Name(existing_state),
                     )
-                    self._transitions.remove_finished_job(cur, job_id)
+                    self._remove_finished_job_safely(cur, job_id)
                 else:
                     raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
+
+        if needs_drain:
+            # Nudge the polling loop so workers see the cancelled tasks excluded
+            # from their expected set on the next reconcile and auto-kill the
+            # containers; the heartbeat path then stamps finished_at_ms.
+            self._controller.wake()
+            self._wait_until_job_drained(job_id, _JOB_REPLACEMENT_DRAIN_TIMEOUT)
+            with self._store.transaction() as cur:
+                self._remove_finished_job_safely(cur, job_id)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).
@@ -1238,13 +1281,13 @@ class ControllerServiceImpl:
         cheap: one job row read + one GROUP BY query vs loading every task,
         attempt, and worker address.
         """
-        job = _read_job(self._db, JobName.from_wire(request.job_id))
-        if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-
-        # Aggregate task counts via a single GROUP BY query.
         with self._db.read_snapshot() as q:
+            job = _read_job(q, JobName.from_wire(request.job_id))
+            if not job:
+                raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            # Aggregate task counts via a single GROUP BY query.
             summaries = _task_summaries_for_jobs(q, {job.job_id})
+            has_children = bool(_parent_ids_with_children(q, [job.job_id]))
         summary = summaries.get(job.job_id)
 
         task_state_counts = (
@@ -1266,9 +1309,6 @@ class ControllerServiceImpl:
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
         resources = _resource_spec_from_job_row(job)
-
-        with self._db.read_snapshot() as q:
-            has_children = bool(_parent_ids_with_children(q, [job.job_id]))
 
         proto_job_status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -1298,6 +1338,7 @@ class ControllerServiceImpl:
             request=redact_request_env_vars(reconstructed_request),
         )
 
+    @on_loop
     def get_job_state(
         self,
         request: controller_pb2.Controller.GetJobStateRequest,
@@ -1341,9 +1382,11 @@ class ControllerServiceImpl:
         # cancel_job uses a recursive CTE to walk the full subtree in a single
         # transaction, so there is no need to recurse manually.
         with self._store.transaction() as cur:
-            result = self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
-        if result.tasks_to_kill:
-            self._controller.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+            self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
+        # The next polling tick reconciles each affected worker and sends
+        # StopTasks via the expected_tasks diff; wake the loops so it lands
+        # within one tick rather than waiting on the next backoff.
+        self._controller.wake()
         return job_pb2.Empty()
 
     def _job_to_proto(
@@ -1895,20 +1938,48 @@ class ControllerServiceImpl:
         request: job_pb2.ProfileTaskRequest,
         ctx: RequestContext,
     ) -> job_pb2.ProfileTaskResponse:
-        """Profile a running task or system process.
+        """Dashboard-facing on-demand profile dispatch.
 
-        Target routing:
-        - /system/process: the controller process itself
-        - /system/worker/<worker_id>: proxy to a specific worker (profiles the worker process)
-        - /job/.../task/N: proxied to the task's worker
+        Behaviour by target:
+          /system/controller (also /system/process — CLI default)
+            - Capture this controller process via profile_local_process,
+              write one IrisProfile row (source='/system/controller',
+              vm_id='controller-self', attempt_id=None, trigger='on_demand'),
+              return bytes inline.
+          /system/worker/<id>
+            - Forward as /system/process to the named worker via
+              WorkerService.ProfileTask. Worker writes the row with
+              source='/system/worker/<id>'.
+          /job/.../task/N[:attempt_id]
+            - Resolve task and worker; delegate to provider.profile_task.
+              Worker-based: forwards to worker; worker writes IrisProfile
+              (all types), returns bytes. K8s: K8sTaskProvider captures via
+              kubectl exec, writes IrisProfile (all types), returns bytes.
+          Anything else
+            - INVALID_ARGUMENT.
         """
-        # Handle controller-local targets: profile the controller process itself
-        if is_system_target(request.target):
-            if not request.HasField("profile_type"):
-                raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+        if not request.HasField("profile_type"):
+            raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+
+        # /system/controller (or its alias /system/process from the CLI): capture
+        # this controller process itself.
+        if request.target in ("/system/controller", "/system/process"):
             try:
                 duration = request.duration_seconds or 10
                 data = profile_local_process(duration, request.profile_type)
+                if self._profile_table is not None:
+                    self._profile_table.write(
+                        [
+                            build_profile_row(
+                                source="/system/controller",
+                                attempt_id=None,
+                                vm_id="controller-self",
+                                duration_seconds=duration,
+                                profile_type=request.profile_type,
+                                profile_data=data,
+                            )
+                        ]
+                    )
                 return job_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:
                 return job_pb2.ProfileTaskResponse(error=str(e))
@@ -2439,6 +2510,7 @@ class ControllerServiceImpl:
                     (job_pb2.TASK_STATE_PENDING,),
                 ),
             )
+            pending_requested_bands = self._store.jobs.get_priority_bands(snap, {row.job_id for row in pending_rows})
 
             # Running tasks: only task_id, priority_band, and worker — no
             # job_config join is needed for the rolled-up counts below.
@@ -2458,7 +2530,11 @@ class ControllerServiceImpl:
                 continue
             user_id = row.task_id.user
             eff_band = compute_effective_band(
-                row.priority_band, user_id, user_spend, budget_limits, self._user_budget_defaults
+                pending_requested_bands.get(row.job_id, row.priority_band),
+                user_id,
+                user_spend,
+                budget_limits,
+                self._user_budget_defaults,
             )
             job_id = (row.task_id.parent or row.task_id).to_wire()
             key = (eff_band, user_id, job_id)
@@ -2466,15 +2542,15 @@ class ControllerServiceImpl:
             total_pending += 1
 
         # Aggregate running into (band, user, worker, job) → count buckets.
+        # Use the stamped ``tasks.priority_band`` directly: the scheduler stamps the
+        # effective band at assign time (see ``_commit_assignments``), so re-running
+        # ``compute_effective_band`` here against current spend would double-demote.
         running_counts: dict[tuple[int, str, str, str], int] = {}
         total_running = 0
         for row in running_rows:
             user_id = row.task_id.user
-            eff_band = compute_effective_band(
-                row.priority_band, user_id, user_spend, budget_limits, self._user_budget_defaults
-            )
             job_id = (row.task_id.parent or row.task_id).to_wire()
-            key = (eff_band, user_id, str(row.worker_id), job_id)
+            key = (row.priority_band, user_id, str(row.worker_id), job_id)
             running_counts[key] = running_counts.get(key, 0) + 1
             total_running += 1
 
@@ -2571,6 +2647,7 @@ class ControllerServiceImpl:
 
     # --- Task Status Text Push ---
 
+    @on_loop
     def set_task_status_text(
         self,
         request: job_pb2.SetTaskStatusTextRequest,

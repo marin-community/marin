@@ -2,11 +2,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Register Marin package names on PyPI.
+"""Register Marin stub package names on PyPI.
 
-Builds each workspace package and uploads it to PyPI to claim the distribution
-name. Packages uploaded here may not be installable standalone — the goal is
-name registration and anti-squatting.
+Builds a minimal stub sdist for each package in STUB_PACKAGES and uploads it
+to PyPI to claim the distribution name. These packages are not buildable from
+the workspace (e.g. native-extension projects whose sources live elsewhere)
+and exist on PyPI only as name-squatting placeholders.
+
+Workspace marin-* packages (marin, marin-iris, marin-haliax, etc.) are
+registered by `scripts/python_libs_package.py --publish-pypi` instead, which
+builds real wheels + sdists from the workspace tree.
 
 Requires a PyPI API token with account-wide scope (project-scoped tokens can't
 create new projects). Create one at https://pypi.org/manage/account/token/
@@ -14,7 +19,7 @@ create new projects). Create one at https://pypi.org/manage/account/token/
 Usage:
     UV_PUBLISH_TOKEN=pypi-xxxx python scripts/infra/register_pypi_packages.py
     python scripts/infra/register_pypi_packages.py --dry-run    # build only
-    python scripts/infra/register_pypi_packages.py marin-iris   # single package
+    python scripts/infra/register_pypi_packages.py marin-kitoken  # single package
 """
 
 from __future__ import annotations
@@ -29,27 +34,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
-# Packages buildable from this workspace via `uv build --package <name>`.
-WORKSPACE_PACKAGES: list[str] = [
-    "marin",
-    "marin-finelog",
-    "marin-fray",
-    "marin-haliax",
-    "marin-iris",
-    "marin-levanter",
-    "marin-rigging",
-    "marin-zephyr",
-]
-
-# Packages not buildable from this workspace. Registered via minimal stubs.
+# Stub packages: not buildable from the workspace. Registered via minimal
+# placeholder sdists purely to claim the name on PyPI.
 STUB_PACKAGES: dict[str, str] = {
     "marin-dupekit": "Optimized text de-duplication, written in Rust",
     "marin-kitoken": "Tokenizer library for Marin",
 }
 
-ALL_PACKAGES: list[str] = sorted(WORKSPACE_PACKAGES + list(STUB_PACKAGES))
+ALL_PACKAGES: list[str] = sorted(STUB_PACKAGES)
 
 
 def package_exists_on_pypi(name: str) -> bool:
@@ -60,15 +52,6 @@ def package_exists_on_pypi(name: str) -> bool:
         if e.code == 404:
             return False
         raise
-
-
-def build_workspace_package(name: str, out_dir: Path) -> list[Path]:
-    subprocess.run(
-        ["uv", "build", "--package", name, "--sdist", "--out-dir", str(out_dir)],
-        check=True,
-        cwd=REPO_ROOT,
-    )
-    return sorted(out_dir.glob("*"))
 
 
 def build_stub_package(name: str, description: str, out_dir: Path) -> list[Path]:
@@ -118,7 +101,9 @@ def publish(dist_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("packages", nargs="*", default=ALL_PACKAGES, help="Package names to register (default: all)")
+    parser.add_argument(
+        "packages", nargs="*", default=ALL_PACKAGES, help="Package names to register (default: all stubs)"
+    )
     parser.add_argument("--dry-run", action="store_true", help="Build only, don't upload")
     args = parser.parse_args()
 
@@ -132,7 +117,11 @@ def main() -> None:
     unknown = set(args.packages) - set(ALL_PACKAGES)
     if unknown:
         print(f"ERROR: Unknown packages: {', '.join(sorted(unknown))}", file=sys.stderr)
-        print(f"  Known packages: {', '.join(ALL_PACKAGES)}", file=sys.stderr)
+        print(f"  Known stub packages: {', '.join(ALL_PACKAGES)}", file=sys.stderr)
+        print(
+            "  For workspace marin-* packages, use scripts/python_libs_package.py --publish-pypi",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     registered = []
@@ -151,12 +140,8 @@ def main() -> None:
 
         dist_dir = Path(tempfile.mkdtemp(prefix=f"marin-pypi-{name}-"))
         try:
-            if name in STUB_PACKAGES:
-                print("  Building stub...")
-                build_stub_package(name, STUB_PACKAGES[name], dist_dir)
-            else:
-                print("  Building from workspace...")
-                build_workspace_package(name, dist_dir)
+            print("  Building stub...")
+            build_stub_package(name, STUB_PACKAGES[name], dist_dir)
 
             for f in _sdists(dist_dir):
                 print(f"  Built: {f.name}")

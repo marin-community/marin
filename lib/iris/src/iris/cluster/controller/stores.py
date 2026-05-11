@@ -18,20 +18,18 @@ Dependency chain (target state)::
 
 The layer is introduced incrementally. The current state is mid-migration:
 ``EndpointStore`` and ``JobStore`` are populated, while ``TaskStore``,
-``TaskAttemptStore``, ``WorkerStore``, ``DispatchQueueStore`` and
-``ReservationStore`` are still empty skeletons. ``ControllerTransitions``
-keeps a temporary ``self._db`` backdoor for SQL that has not yet been
-moved (tasks, workers, dispatch queue, reservations, the ``meta`` table,
-worker-attribute cache). That backdoor is removed in a later phase once
-every entity has a store.
+``TaskAttemptStore``, ``WorkerStore`` and ``ReservationStore`` are still
+empty skeletons. ``ControllerTransitions`` keeps a temporary ``self._db``
+backdoor for SQL that has not yet been moved (tasks, workers,
+reservations, the ``meta`` table, worker-attribute cache). That backdoor
+is removed in a later phase once every entity has a store.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import RLock
@@ -39,7 +37,7 @@ from threading import RLock
 from rigging.timing import Timestamp
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.codec import resource_spec_from_scalars
+from iris.cluster.controller.codec import device_counts_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ControllerDB,
@@ -61,7 +59,7 @@ from iris.cluster.controller.schema import (
     WorkerDetailRow,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
-from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName, WorkerId, get_gpu_count, get_tpu_count
+from iris.cluster.types import TERMINAL_JOB_STATES, TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -598,13 +596,14 @@ def _decode_active_task_row(row) -> ActiveTaskRow:
 
 @dataclass(frozen=True, slots=True)
 class PendingDispatchRow:
-    """Scheduling payload for a pending task awaiting direct-provider promotion.
+    """Scheduling payload for a task being dispatched to a direct provider.
 
     Unlike :class:`ActiveTaskRow`, this row carries the full serialized
     runtime configuration (entrypoint / environment / ports / constraints
     / task_image / timeout) so the caller can assemble a
     ``RunTaskRequest``. Kept separate so other active-task queries don't
-    pay for loading these JSON blobs.
+    pay for loading these JSON blobs. Used for both PENDING-promotion and
+    ASSIGNED-redrive paths (see ``TaskStore.list_*_for_direct_provider``).
     """
 
     task_id: JobName
@@ -619,6 +618,37 @@ class PendingDispatchRow:
     constraints_json: str | None
     task_image: str
     timeout_ms: int | None
+
+
+_DISPATCH_PROJECTION = (
+    "t.task_id, t.job_id, t.current_attempt_id, j.num_tasks, "
+    "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
+    "jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, "
+    "jc.constraints_json, jc.task_image, jc.timeout_ms"
+)
+
+
+def _decode_dispatch_row(row) -> PendingDispatchRow:
+    timeout_ms = row["timeout_ms"]
+    return PendingDispatchRow(
+        task_id=JobName.from_wire(str(row["task_id"])),
+        job_id=JobName.from_wire(str(row["job_id"])),
+        current_attempt_id=int(row["current_attempt_id"]),
+        num_tasks=int(row["num_tasks"]),
+        resources=resource_spec_from_scalars(
+            int(row["res_cpu_millicores"]),
+            int(row["res_memory_bytes"]),
+            int(row["res_disk_bytes"]),
+            row["res_device_json"],
+        ),
+        entrypoint_json=str(row["entrypoint_json"]),
+        environment_json=str(row["environment_json"]),
+        bundle_id=str(row["bundle_id"]),
+        ports_json=str(row["ports_json"]),
+        constraints_json=row["constraints_json"],
+        task_image=str(row["task_image"]),
+        timeout_ms=int(timeout_ms) if timeout_ms is not None else None,
+    )
 
 
 class JobStore:
@@ -686,6 +716,59 @@ class JobStore:
         row = tx.fetchone("SELECT * FROM job_config WHERE job_id = ?", (job_id.to_wire(),))
         return dict(row) if row is not None else None
 
+    def get_priority_bands(self, tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
+        """Return ``{job_id: resolved priority_band}`` for the given jobs.
+
+        Mirrors ``submit_job``'s band resolution at read time: use the job's
+        own ``job_config.priority_band`` if it's set; otherwise walk up the
+        ``parent_job_id`` chain and use the nearest ancestor with a
+        non-UNSPECIFIED band; otherwise default to INTERACTIVE.
+
+        The scheduler uses this as the input to ``compute_effective_band`` so
+        a previously-downgraded task can be promoted again once the user
+        falls back under budget. Reading ``tasks.priority_band`` here would
+        be wrong because that column is overwritten with the effective
+        (possibly demoted) band at assign time, and reading the raw
+        ``job_config.priority_band`` without resolution would let UNSPECIFIED
+        (0) leak through and sort ahead of PRODUCTION.
+        """
+        wire_ids = [jid.to_wire() for jid in job_ids]
+        if not wire_ids:
+            return {}
+        placeholders = ",".join("?" for _ in wire_ids)
+        # Recursive CTE: for each input job, walk parent_job_id while the
+        # current row's priority_band is UNSPECIFIED (0). The first row with
+        # a non-UNSPECIFIED band wins. Inputs whose entire chain is
+        # UNSPECIFIED don't appear in the result; the caller substitutes
+        # INTERACTIVE for those.
+        rows = tx.fetchall(
+            f"""
+            WITH RECURSIVE chain(input_id, current_id, current_band, parent_id) AS (
+                SELECT j.job_id, j.job_id, jc.priority_band, j.parent_job_id
+                FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id
+                WHERE j.job_id IN ({placeholders})
+                UNION ALL
+                SELECT chain.input_id, j.job_id, jc.priority_band, j.parent_job_id
+                FROM chain
+                JOIN jobs j ON j.job_id = chain.parent_id
+                JOIN job_config jc ON jc.job_id = j.job_id
+                WHERE chain.current_band = 0
+            )
+            SELECT input_id, current_band
+            FROM chain
+            WHERE current_band != 0
+            """,
+            tuple(wire_ids),
+        )
+        resolved: dict[JobName, int] = {}
+        for row in rows:
+            resolved[JobName.from_wire(str(row["input_id"]))] = int(row["current_band"])
+        # Fall back to INTERACTIVE for inputs where the entire ancestor chain
+        # was UNSPECIFIED (raw user requests with no band, no inherited band).
+        for jid in job_ids:
+            resolved.setdefault(jid, int(job_pb2.PRIORITY_BAND_INTERACTIVE))
+        return resolved
+
     def list_descendants(
         self,
         tx: Tx,
@@ -749,6 +832,32 @@ class JobStore:
             (job_id.to_wire(),),
         )
         return {str(row["filename"]): bytes(row["data"]) for row in rows}
+
+    def has_unfinished_worker_attempts(self, tx: Tx, job_id: JobName) -> bool:
+        """True if any task under ``job_id`` still has an attempt holding a worker.
+
+        Used to gate job replacement / removal: the launch RPC blocks until
+        every worker-bound attempt has been finalized by a heartbeat, so that
+        deleting the job's tasks doesn't destroy the ``task_attempts`` rows
+        that describe live resource ownership.
+
+        Walks the parent_job_id subtree so child jobs are included.
+        """
+        row = tx.fetchone(
+            "WITH RECURSIVE subtree(job_id) AS ("
+            "  SELECT job_id FROM jobs WHERE job_id = ?"
+            "  UNION ALL"
+            "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
+            ") "
+            "SELECT 1 FROM tasks t "
+            "JOIN task_attempts ta ON ta.task_id = t.task_id "
+            "WHERE t.job_id IN subtree "
+            "  AND ta.worker_id IS NOT NULL "
+            "  AND ta.finished_at_ms IS NULL "
+            "LIMIT 1",
+            (job_id.to_wire(),),
+        )
+        return row is not None
 
     # -- Writes --------------------------------------------------------------
 
@@ -1155,40 +1264,30 @@ class TaskStore:
         if limit <= 0:
             return []
         rows = tx.fetchall(
-            "SELECT t.task_id, t.job_id, t.current_attempt_id, j.num_tasks, "
-            "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
-            "jc.entrypoint_json, jc.environment_json, jc.bundle_id, jc.ports_json, "
-            "jc.constraints_json, jc.task_image, jc.timeout_ms "
+            f"SELECT {_DISPATCH_PROJECTION} "
             f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
             "WHERE t.state = ? AND j.is_reservation_holder = 0 "
             "LIMIT ?",
             (job_pb2.TASK_STATE_PENDING, limit),
         )
-        result: list[PendingDispatchRow] = []
-        for row in rows:
-            timeout_ms = row["timeout_ms"]
-            result.append(
-                PendingDispatchRow(
-                    task_id=JobName.from_wire(str(row["task_id"])),
-                    job_id=JobName.from_wire(str(row["job_id"])),
-                    current_attempt_id=int(row["current_attempt_id"]),
-                    num_tasks=int(row["num_tasks"]),
-                    resources=resource_spec_from_scalars(
-                        int(row["res_cpu_millicores"]),
-                        int(row["res_memory_bytes"]),
-                        int(row["res_disk_bytes"]),
-                        row["res_device_json"],
-                    ),
-                    entrypoint_json=str(row["entrypoint_json"]),
-                    environment_json=str(row["environment_json"]),
-                    bundle_id=str(row["bundle_id"]),
-                    ports_json=str(row["ports_json"]),
-                    constraints_json=row["constraints_json"],
-                    task_image=str(row["task_image"]),
-                    timeout_ms=int(timeout_ms) if timeout_ms is not None else None,
-                )
-            )
-        return result
+        return [_decode_dispatch_row(row) for row in rows]
+
+    def list_assigned_null_worker_for_direct_provider(self, tx: Tx) -> list[PendingDispatchRow]:
+        """Return ASSIGNED+null-worker rows with full runtime payload, for redrive.
+
+        Used by the direct-provider drain to rebuild ``RunTaskRequest`` for
+        rows whose pod creation never landed — the controller crashed between
+        the drain commit and ``provider.sync``, or the prior ``_apply_pod``
+        call errored out. ``kubectl apply`` is idempotent, so re-issuing for
+        a row whose pod already exists is a no-op.
+        """
+        rows = tx.fetchall(
+            f"SELECT {_DISPATCH_PROJECTION} "
+            f"FROM tasks t JOIN jobs j ON j.job_id = t.job_id {JOB_CONFIG_JOIN} "
+            "WHERE t.state = ? AND t.current_worker_id IS NULL AND j.is_reservation_holder = 0",
+            (job_pb2.TASK_STATE_ASSIGNED,),
+        )
+        return [_decode_dispatch_row(row) for row in rows]
 
     # -- Writes --------------------------------------------------------------
 
@@ -1223,19 +1322,44 @@ class TaskStore:
         worker_id: WorkerId | None,
         worker_address: str | None,
         now_ms: int,
+        priority_band: int | None = None,
     ) -> None:
+        # ``priority_band`` is stamped at assign time so that the preemption
+        # pass treats a running task's band as fixed. Without this, a user who
+        # crosses their budget cliff while their tasks are running gets their
+        # running tasks demoted to BATCH on the next tick — and then preempted
+        # by another user whose pending tasks haven't yet bumped them over the
+        # cliff. The two users then mutually preempt each other indefinitely.
+        # ``None`` leaves the existing column value untouched (used by code
+        # paths that do not run the budget computation).
+        band_set = "" if priority_band is None else ", priority_band = ?"
+        band_param: tuple[int, ...] = () if priority_band is None else (priority_band,)
         if worker_id is not None:
             cur.execute(
                 "UPDATE tasks SET state = ?, current_attempt_id = ?, "
                 "current_worker_id = ?, current_worker_address = ?, "
-                "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
-                (job_pb2.TASK_STATE_ASSIGNED, attempt_id, str(worker_id), worker_address, now_ms, task_id.to_wire()),
+                f"started_at_ms = COALESCE(started_at_ms, ?){band_set} WHERE task_id = ?",
+                (
+                    job_pb2.TASK_STATE_ASSIGNED,
+                    attempt_id,
+                    str(worker_id),
+                    worker_address,
+                    now_ms,
+                    *band_param,
+                    task_id.to_wire(),
+                ),
             )
             return
         cur.execute(
             "UPDATE tasks SET state = ?, current_attempt_id = ?, "
-            "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
-            (job_pb2.TASK_STATE_ASSIGNED, attempt_id, now_ms, task_id.to_wire()),
+            f"started_at_ms = COALESCE(started_at_ms, ?){band_set} WHERE task_id = ?",
+            (
+                job_pb2.TASK_STATE_ASSIGNED,
+                attempt_id,
+                now_ms,
+                *band_param,
+                task_id.to_wire(),
+            ),
         )
 
     def assign(
@@ -1247,6 +1371,7 @@ class TaskStore:
         worker_address: str | None,
         attempt_id: int,
         now_ms: int,
+        priority_band: int | None = None,
     ) -> None:
         attempts.insert(
             cur,
@@ -1258,7 +1383,7 @@ class TaskStore:
                 created_at_ms=now_ms,
             ),
         )
-        self.mark_assigned(cur, task_id, attempt_id, worker_id, worker_address, now_ms)
+        self.mark_assigned(cur, task_id, attempt_id, worker_id, worker_address, now_ms, priority_band=priority_band)
 
     def apply_state_update(
         self,
@@ -1368,62 +1493,6 @@ class TaskStore:
             (container_id, task_id.to_wire()),
         )
 
-    def _batch_prune_profiles(
-        self,
-        sql: str,
-        params: tuple[object, ...],
-        *,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Repeatedly delete one batch per transaction, sleeping between commits.
-
-        Each iteration commits its batch before sleeping so the writer lock
-        is released and other RPCs can interleave with pruning.
-        """
-        total = 0
-        while not stopped():
-            with self._db.transaction() as cur:
-                batch = cur.execute(sql, params).rowcount
-            if batch == 0:
-                break
-            total += batch
-            time.sleep(pause_between_s)
-        return total
-
-    def prune_stale_profiles(
-        self,
-        *,
-        cutoff_ms: int,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Delete ``task_profiles`` rows older than ``cutoff_ms`` in 1000-row batches."""
-        return self._batch_prune_profiles(
-            "DELETE FROM profiles.task_profiles WHERE rowid IN "
-            "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
-            (cutoff_ms,),
-            stopped=stopped,
-            pause_between_s=pause_between_s,
-        )
-
-    def prune_orphan_profiles(
-        self,
-        *,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Delete ``task_profiles`` rows whose task has been pruned."""
-        return self._batch_prune_profiles(
-            "DELETE FROM profiles.task_profiles WHERE rowid IN "
-            "(SELECT p.rowid FROM profiles.task_profiles p"
-            " LEFT JOIN tasks t ON p.task_id = t.task_id"
-            " WHERE t.task_id IS NULL LIMIT 1000)",
-            (),
-            stopped=stopped,
-            pause_between_s=pause_between_s,
-        )
-
     def set_state_for_test(
         self,
         cur: TransactionCursor,
@@ -1452,6 +1521,37 @@ class TaskStore:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerResourceUsage:
+    """Aggregate resources currently held by unfinished worker-bound attempts.
+
+    Computed by ``TaskAttemptStore.resource_usage_by_worker``; the scheduler
+    subtracts these from a worker's totals to derive available capacity.
+    """
+
+    cpu_millicores: int
+    memory_bytes: int
+    gpu_count: int
+    tpu_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileRow:
+    """One (task, attempt, worker) tuple driving per-worker reconcile.
+
+    Returned by ``TaskAttemptStore.reconcile_rows_for_workers``; rows whose
+    task is in ASSIGNED produce start payloads, rows in BUILDING/RUNNING
+    populate the worker's expected-task set.
+    """
+
+    worker_id: WorkerId
+    task_id: JobName
+    attempt_id: int
+    task_state: int
+    attempt_state: int
+    job_id: JobName
+
+
 class TaskAttemptStore:
     """Task attempts."""
 
@@ -1477,6 +1577,41 @@ class TaskAttemptStore:
         )
         return int(row["state"]) if row is not None else None
 
+    def bulk_get_for_updates(
+        self,
+        tx: Tx,
+        keys: Sequence[tuple[JobName, int]],
+    ) -> dict[tuple[JobName, int], AttemptRow]:
+        """Return ``{(task_id, attempt_id): AttemptRow}`` for the requested keys.
+
+        Drives lookups through the ``task_attempts`` PK (``task_id``,
+        ``attempt_id``) using a composite ``IN (VALUES ...)`` clause so a
+        single statement covers an entire heartbeat batch. Missing keys are
+        silently absent. Chunks to stay under SQLite's parameter limit.
+        """
+        result: dict[tuple[JobName, int], AttemptRow] = {}
+        if not keys:
+            return result
+        # Deduplicate so the IN list never carries the same (task, attempt) twice.
+        unique: list[tuple[JobName, int]] = list({k: None for k in keys}.keys())
+        # 2 placeholders per row; keep well under SQLite's 999 default limit.
+        chunk_size = 450
+        for chunk_start in range(0, len(unique), chunk_size):
+            chunk = unique[chunk_start : chunk_start + chunk_size]
+            values_clause = ",".join("(?, ?)" for _ in chunk)
+            params: list[object] = []
+            for task_id, attempt_id in chunk:
+                params.append(task_id.to_wire())
+                params.append(attempt_id)
+            rows = tx.fetchall(
+                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
+                f"WHERE (ta.task_id, ta.attempt_id) IN (VALUES {values_clause})",
+                tuple(params),
+            )
+            for attempt in ATTEMPT_PROJECTION.decode(rows):
+                result[(attempt.task_id, attempt.attempt_id)] = attempt
+        return result
+
     def get_worker_id(self, tx: Tx, task_id: JobName, attempt_id: int) -> WorkerId | None:
         row = tx.fetchone(
             "SELECT worker_id FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
@@ -1485,6 +1620,115 @@ class TaskAttemptStore:
         if row is None or row["worker_id"] is None:
             return None
         return WorkerId(str(row["worker_id"]))
+
+    def resource_usage_by_worker(self, tx: Tx) -> dict[WorkerId, WorkerResourceUsage]:
+        """Aggregate resources held by unfinished worker-bound attempts.
+
+        An attempt holds its worker's resources iff ``worker_id IS NOT NULL``
+        and ``finished_at_ms IS NULL``. The scheduler subtracts this map from
+        each worker's totals to get available capacity, replacing the durable
+        ``workers.committed_*`` counters.
+
+        Reservation-holder jobs are excluded: their tasks anchor the worker
+        for taint-injection but consume zero capacity, matching the
+        pre-refactor ``add_committed_resources`` skip. The exclusion is done
+        in Python using a small set fetched once per call: an inline ``JOIN
+        jobs ON is_reservation_holder = 0`` causes SQLite to drive from the
+        ``jobs`` table (full scan over ~24k rows on production), blowing the
+        query from ~3 ms to ~380 ms. Reservation-holder rows are typically a
+        handful (~200), so the dedicated lookup + Python filter is cheap.
+
+        Drives from ``task_attempts`` via ``idx_task_attempts_live_
+        workerbound`` (partial index added by migration 0045).
+
+        Device counts are parsed in Python (cached) because device_json is a
+        proto-as-JSON blob and SQLite has no first-class JSON aggregation.
+        """
+        holder_rows = tx.fetchall("SELECT job_id FROM jobs WHERE is_reservation_holder = 1")
+        holder_jobs = {str(r["job_id"]) for r in holder_rows}
+        rows = tx.fetchall(
+            "SELECT ta.worker_id, t.job_id, jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_device_json "
+            "FROM task_attempts ta "
+            "JOIN tasks t ON t.task_id = ta.task_id "
+            "JOIN job_config jc ON jc.job_id = t.job_id "
+            "WHERE ta.worker_id IS NOT NULL AND ta.finished_at_ms IS NULL"
+        )
+        cpu: dict[WorkerId, int] = {}
+        mem: dict[WorkerId, int] = {}
+        gpu: dict[WorkerId, int] = {}
+        tpu: dict[WorkerId, int] = {}
+        for row in rows:
+            if str(row["job_id"]) in holder_jobs:
+                continue
+            wid = WorkerId(str(row["worker_id"]))
+            cpu[wid] = cpu.get(wid, 0) + int(row["res_cpu_millicores"])
+            mem[wid] = mem.get(wid, 0) + int(row["res_memory_bytes"])
+            counts = device_counts_from_json(row["res_device_json"])
+            gpu[wid] = gpu.get(wid, 0) + counts.gpu
+            tpu[wid] = tpu.get(wid, 0) + counts.tpu
+        return {
+            wid: WorkerResourceUsage(
+                cpu_millicores=cpu.get(wid, 0),
+                memory_bytes=mem.get(wid, 0),
+                gpu_count=gpu.get(wid, 0),
+                tpu_count=tpu.get(wid, 0),
+            )
+            for wid in cpu.keys() | mem.keys() | gpu.keys() | tpu.keys()
+        }
+
+    def reconcile_rows_for_workers(
+        self,
+        tx: Tx,
+        worker_ids: Sequence[WorkerId],
+    ) -> list[ReconcileRow]:
+        """Snapshot the current attempts for a batch of workers.
+
+        Yields one row per (worker, task) where the task is in
+        ASSIGNED/BUILDING/RUNNING and the bound attempt is the task's current
+        attempt. The reconcile loop uses these rows for both PollTasks
+        (every row goes into ``expected_tasks`` so the worker reports current
+        state) and StartTasks (only ASSIGNED rows produce a RunTaskRequest).
+        ASSIGNED rows are included in ``expected_tasks`` because the worker's
+        state-change push is best-effort; PollTasks is the only resilient
+        channel for ASSIGNED → BUILDING transitions.
+
+        Drives from ``task_attempts`` via ``idx_task_attempts_live_workerbound``
+        (partial index: ``worker_id IS NOT NULL AND finished_at_ms IS NULL``),
+        which keeps the read at ~3 ms regardless of cluster size. A previous
+        ``worker_id IN (?, …)`` filter caused SQLite to drop to ``SCAN ta``
+        once the IN-list passed ~128 elements, blowing per-tick cost from
+        ~10 ms to ~70 ms. ``worker_ids`` is now a Python-side filter applied
+        to the small result set.
+        """
+        if not worker_ids:
+            return []
+        wire_ids = {str(w) for w in worker_ids}
+        rows = tx.fetchall(
+            "SELECT ta.worker_id, t.task_id, ta.attempt_id, t.state AS task_state, "
+            "ta.state AS attempt_state, t.job_id "
+            "FROM task_attempts ta "
+            "JOIN tasks t "
+            "  ON t.task_id = ta.task_id AND t.current_attempt_id = ta.attempt_id "
+            "WHERE ta.worker_id IS NOT NULL AND ta.finished_at_ms IS NULL "
+            "  AND t.state IN (?, ?, ?)",
+            (
+                job_pb2.TASK_STATE_ASSIGNED,
+                job_pb2.TASK_STATE_BUILDING,
+                job_pb2.TASK_STATE_RUNNING,
+            ),
+        )
+        rows = [r for r in rows if str(r["worker_id"]) in wire_ids]
+        return [
+            ReconcileRow(
+                worker_id=WorkerId(str(row["worker_id"])),
+                task_id=JobName.from_wire(row["task_id"]),
+                attempt_id=int(row["attempt_id"]),
+                task_state=int(row["task_state"]),
+                attempt_state=int(row["attempt_state"]),
+                job_id=JobName.from_wire(row["job_id"]),
+            )
+            for row in rows
+        ]
 
     # -- Writes --------------------------------------------------------------
 
@@ -1515,6 +1759,27 @@ class TaskAttemptStore:
             (state, finished_at_ms, error, task_id.to_wire(), attempt_id),
         )
 
+    def apply_attempt_state(
+        self,
+        cur: TransactionCursor,
+        task_id: JobName,
+        attempt_id: int,
+        state: int,
+        error: str | None,
+    ) -> None:
+        """Update an attempt's reporting state without stamping finished_at_ms.
+
+        Producing transitions (cancel, preempt, timeout, gang cascade) call
+        this to record the controller's intent while the worker still holds
+        the container. The heartbeat path stamps finished_at_ms via
+        ``mark_finished`` once the worker confirms termination, releasing
+        the attempt's resources to the scheduler.
+        """
+        cur.execute(
+            "UPDATE task_attempts SET state = ?, error = COALESCE(?, error) " "WHERE task_id = ? AND attempt_id = ?",
+            (state, error, task_id.to_wire(), attempt_id),
+        )
+
     def apply_update(self, cur: TransactionCursor, params: TaskAttemptUpdateParams) -> None:
         cur.execute(
             "UPDATE task_attempts SET state = ?, started_at_ms = COALESCE(started_at_ms, ?), "
@@ -1531,20 +1796,22 @@ class TaskAttemptStore:
             ),
         )
 
-    def bulk_finalize_active(
+    def bulk_apply_attempt_state(
         self,
         cur: TransactionCursor,
         job_ids: Sequence[JobName],
         state: int,
         error: str,
-        finished_at_ms: int,
         active_states: set[int],
     ) -> None:
-        """Mark every still-active attempt under ``job_ids`` as terminal.
+        """Update reporting state on every active attempt under ``job_ids``.
 
-        Pairs with TaskStore.bulk_kill_non_terminal so cancel_job leaves no
-        orphan task_attempts rows where state stays ACTIVE long after the
-        owning task has gone terminal.
+        Producer-transition counterpart of ``apply_attempt_state``: rewrites
+        ``state`` and ``error`` without stamping ``finished_at_ms``. Worker-
+        bound attempts continue to hold their resources (``finished_at_ms IS
+        NULL``) until the heartbeat path confirms termination via
+        ``mark_finished``. Pairs with ``TaskStore.bulk_kill_non_terminal`` so
+        ``cancel_job`` leaves no orphan attempts in an ACTIVE state.
         """
         if not job_ids:
             return
@@ -1552,15 +1819,13 @@ class TaskAttemptStore:
         job_placeholders = ",".join("?" for _ in wire_ids)
         active_placeholders = ",".join("?" for _ in active_states)
         cur.execute(
-            "UPDATE task_attempts SET state = ?, error = COALESCE(error, ?), "
-            "finished_at_ms = COALESCE(finished_at_ms, ?) "
+            "UPDATE task_attempts SET state = ?, error = COALESCE(error, ?) "
             f"WHERE task_id IN ("
             f"  SELECT task_id FROM tasks WHERE job_id IN ({job_placeholders})"
             f") AND state IN ({active_placeholders})",
             (
                 state,
                 error,
-                finished_at_ms,
                 *wire_ids,
                 *active_states,
             ),
@@ -1654,8 +1919,10 @@ class WorkerStore:
     def upsert(self, cur: TransactionCursor, params: WorkerUpsertParams, now_ms: int) -> None:
         """Insert or refresh durable identity/capability metadata for a worker.
 
-        ``committed_*`` columns are written by the scheduler, not here. A
-        post-commit hook registers the worker in the liveness tracker so
+        Resource usage is derived per-cycle from unfinished worker-bound
+        ``task_attempts`` (see ``TaskAttemptStore.resource_usage_by_worker``);
+        the legacy ``committed_*`` columns were dropped by migration 0043.
+        A post-commit hook registers the worker in the liveness tracker so
         memory state advances with the DB row.
         """
         cur.execute(
@@ -1751,50 +2018,6 @@ class WorkerStore:
         else:
             self._health.bump_heartbeat(worker_ids, now_ms)
 
-    def add_committed_resources(
-        self,
-        cur: TransactionCursor,
-        worker_id: WorkerId,
-        resources: job_pb2.ResourceSpecProto,
-    ) -> None:
-        cur.execute(
-            "UPDATE workers SET "
-            "committed_cpu_millicores = committed_cpu_millicores + ?, "
-            "committed_mem_bytes      = committed_mem_bytes      + ?, "
-            "committed_gpu            = committed_gpu            + ?, "
-            "committed_tpu            = committed_tpu            + ? "
-            "WHERE worker_id = ?",
-            (
-                int(resources.cpu_millicores),
-                int(resources.memory_bytes),
-                int(get_gpu_count(resources.device)),
-                int(get_tpu_count(resources.device)),
-                str(worker_id),
-            ),
-        )
-
-    def decommit_resources(
-        self,
-        cur: TransactionCursor,
-        worker_id: WorkerId,
-        resources: job_pb2.ResourceSpecProto,
-    ) -> None:
-        cur.execute(
-            "UPDATE workers SET "
-            "committed_cpu_millicores = MAX(0, committed_cpu_millicores - ?), "
-            "committed_mem_bytes      = MAX(0, committed_mem_bytes      - ?), "
-            "committed_gpu            = MAX(0, committed_gpu            - ?), "
-            "committed_tpu            = MAX(0, committed_tpu            - ?) "
-            "WHERE worker_id = ?",
-            (
-                int(resources.cpu_millicores),
-                int(resources.memory_bytes),
-                int(get_gpu_count(resources.device)),
-                int(get_tpu_count(resources.device)),
-                str(worker_id),
-            ),
-        )
-
     def set_health_for_test(self, worker_id: WorkerId, healthy: bool) -> None:
         """Test helper: overwrite the in-memory health verdict."""
         self._health.set_health_for_test(worker_id, healthy)
@@ -1843,43 +2066,9 @@ class WorkerStore:
     def remove(self, cur: TransactionCursor, worker_id: WorkerId) -> None:
         cur.execute("UPDATE task_attempts SET worker_id = NULL WHERE worker_id = ?", (str(worker_id),))
         cur.execute("UPDATE tasks SET current_worker_id = NULL WHERE current_worker_id = ?", (str(worker_id),))
-        cur.execute("DELETE FROM dispatch_queue WHERE worker_id = ?", (str(worker_id),))
         cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
 
         cur.on_commit(lambda: self._health.forget(worker_id))
-
-
-class DispatchQueueStore:
-    """The dispatch_queue table."""
-
-    def __init__(self, db: ControllerDB) -> None:
-        self._db = db
-
-    def enqueue_run(self, cur: TransactionCursor, worker_id: WorkerId, payload_proto: bytes, now_ms: int) -> None:
-        cur.execute(
-            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-            "VALUES (?, 'run', ?, NULL, ?)",
-            (str(worker_id), payload_proto, now_ms),
-        )
-
-    def enqueue_kill(self, cur: TransactionCursor, worker_id: WorkerId | None, task_id: str, now_ms: int) -> None:
-        """Insert a kill entry. ``task_id`` is stored verbatim — direct-provider
-        callers may pass non-canonical IDs (e.g. K8s pod-derived strings) and
-        the dispatch_queue.task_id column is plain TEXT."""
-        cur.execute(
-            "INSERT INTO dispatch_queue(worker_id, kind, payload_proto, task_id, created_at_ms) "
-            "VALUES (?, 'kill', NULL, ?, ?)",
-            (str(worker_id) if worker_id is not None else None, task_id, now_ms),
-        )
-
-    def drain_direct_kills(self, cur: TransactionCursor) -> list[str]:
-        rows = cur.execute(
-            "SELECT task_id FROM dispatch_queue WHERE worker_id IS NULL AND kind = 'kill'",
-        ).fetchall()
-        tasks_to_kill = [str(row["task_id"]) for row in rows if row["task_id"] is not None]
-        if rows:
-            cur.execute("DELETE FROM dispatch_queue WHERE worker_id IS NULL AND kind = 'kill'")
-        return tasks_to_kill
 
 
 class ReservationStore:
@@ -1923,7 +2112,6 @@ class ControllerStore:
         self.attempts = TaskAttemptStore(db)
         self.workers = WorkerStore(db, self._health)
         self.endpoints = EndpointStore(db)
-        self.dispatch = DispatchQueueStore(db)
         self.reservations = ReservationStore(db)
         self._seed_liveness_from_workers()
         # Caches reload after a checkpoint restore via db.replace_from(). The

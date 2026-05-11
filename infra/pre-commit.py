@@ -691,8 +691,10 @@ PRECOMMIT_CONFIGS = [
 @click.command()
 @click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
 @click.option("--all-files", is_flag=True, help="Run checks on all files, not just staged")
+@click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
 @click.argument("files", nargs=-1)
-def main(fix: bool, all_files: bool, files: tuple[str, ...]):
+def main(fix: bool, all_files: bool, files_opt: tuple[str, ...], files: tuple[str, ...]):
+    files = files_opt + files
     all_files_list = get_all_files(all_files, list(files))
     exit_codes = []
 

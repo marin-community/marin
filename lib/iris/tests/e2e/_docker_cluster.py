@@ -149,6 +149,7 @@ class E2ECluster:
             host="127.0.0.1",
             port=self._controller_port,
             remote_state_dir=f"file://{bundle_dir}",
+            local_state_dir=temp_path / "local",
         )
         self._controller = Controller(
             config=controller_config,

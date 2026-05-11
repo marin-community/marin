@@ -1712,8 +1712,23 @@ class ExecutorMainConfig:
 
 
 @draccus.wrap()
-def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
-    """Main entry point for experiments (to standardize)"""
+def executor_main(
+    config: ExecutorMainConfig,
+    steps: list[ExecutorStep],
+    description: str | None = None,
+    max_concurrent: int | None = None,
+):
+    """Main entry point for experiments (to standardize).
+
+    Args:
+        config: Parsed CLI config (draccus). Carries `--dry_run`, `--max_concurrent`, etc.
+        steps: Steps to execute.
+        description: Optional human-readable description recorded in executor info.
+        max_concurrent: Programmatic cap on concurrent step execution. If provided,
+            takes precedence over `config.max_concurrent`. Use this to express
+            "run all of these with cap N" inside an experiment script without
+            requiring users to pass `--max_concurrent N` on the CLI.
+    """
 
     configure_logging(level=logging.INFO)
     time_in = time.time()
@@ -1731,12 +1746,14 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
+    effective_max_concurrent = max_concurrent if max_concurrent is not None else config.max_concurrent
+
     executor.run(
         steps=steps,
         dry_run=config.dry_run,
         run_only=config.run_only,
         force_run_failed=config.force_run_failed,
-        max_concurrent=config.max_concurrent,
+        max_concurrent=effective_max_concurrent,
     )
     time_out = time.time()
     logger.info(f"Executor run took {time_out - time_in:.2f}s")

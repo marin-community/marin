@@ -247,20 +247,33 @@ class AuthInterceptor:
     def __init__(self, verifier: TokenVerifier):
         self._verifier = verifier
 
-    def intercept_unary_sync(self, call_next, request, ctx):
+    def _verify_or_raise(self, ctx) -> "VerifiedIdentity":
         token = extract_bearer_token(ctx.request_headers())
         if not token:
             raise ConnectError(Code.UNAUTHENTICATED, "Missing or malformed Authorization header")
-
         try:
-            identity = self._verifier.verify(token)
+            return self._verifier.verify(token)
         except ValueError as exc:
             logger.warning("Authentication failed: %s", exc)
             raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
 
+    def intercept_unary_sync(self, call_next, request, ctx):
+        identity = self._verify_or_raise(ctx)
         reset_token = _verified_identity.set(identity)
         try:
             return call_next(request, ctx)
+        finally:
+            _verified_identity.reset(reset_token)
+
+    async def intercept_unary(self, call_next, request, ctx):
+        # Token verification is pure crypto (HMAC-SHA256 for JWTs); safe to
+        # run inline on the loop. ContextVar bookkeeping mirrors the sync
+        # path so service handlers see the same identity regardless of
+        # which dispatch surface they came in through.
+        identity = self._verify_or_raise(ctx)
+        reset_token = _verified_identity.set(identity)
+        try:
+            return await call_next(request, ctx)
         finally:
             _verified_identity.reset(reset_token)
 
@@ -291,9 +304,8 @@ class NullAuthInterceptor:
         self._default_identity = VerifiedIdentity(user_id=user, role=role)
         self._verifier = verifier
 
-    def intercept_unary_sync(self, call_next, request, ctx):
+    def _resolve_identity(self, ctx) -> "VerifiedIdentity":
         identity = self._default_identity
-
         if self._verifier is not None:
             token = extract_bearer_token(ctx.request_headers())
             if token:
@@ -301,10 +313,19 @@ class NullAuthInterceptor:
                     identity = self._verifier.verify(token)
                 except ValueError:
                     pass
+        return identity
 
-        reset_token = _verified_identity.set(identity)
+    def intercept_unary_sync(self, call_next, request, ctx):
+        reset_token = _verified_identity.set(self._resolve_identity(ctx))
         try:
             return call_next(request, ctx)
+        finally:
+            _verified_identity.reset(reset_token)
+
+    async def intercept_unary(self, call_next, request, ctx):
+        reset_token = _verified_identity.set(self._resolve_identity(ctx))
+        try:
+            return await call_next(request, ctx)
         finally:
             _verified_identity.reset(reset_token)
 

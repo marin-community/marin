@@ -1,18 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reproduction test for issue #5470: TPU placement collision after preemption.
+"""Regression test for issue #5470: TPU placement collision after preemption.
 
-Root cause (from production controller logs): when a coscheduled TPU gang fails
-during BUILDING, `_requeue_coscheduled_siblings` decommits committed_tpu on all
-workers in the same DB transaction. The kill RPCs for the still-running sibling
-processes are sent AFTER the transaction commits (async). The scheduling thread
-can run a tick between the decommit and the kills, see the freed capacity, and
-assign a second gang to workers that still have stale processes.
-
-The fix populates `_workers_pending_kill` inside the decommit transaction (before
-commit) so the scheduling thread cannot observe freed capacity without also
-seeing the pending-kill marker.
+Verify the scheduler does not reassign a TPU slice while sibling kill RPCs
+for the slice are still in flight. Worker capacity is derived from
+unfinished worker-bound attempts (``finished_at_ms IS NULL``), so
+producer-side cancel/preempt does not free the slice — only the heartbeat
+path's terminal finalization does.
 
 Production incident timeline (Incident B, v5p-256):
   09:14:31  lr0.5  assigned -> slice 389585fe
@@ -26,7 +21,8 @@ import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.controller import SchedulingOutcome
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
+from iris.cluster.controller.stores import WorkerResourceUsage
 from iris.cluster.controller.transitions import (
     Assignment,
     HeartbeatApplyRequest,
@@ -49,8 +45,6 @@ from .conftest import (
 )
 from .conftest import query_job as _query_job
 from .conftest import query_task as _query_task
-from .conftest import query_worker as _query_worker
-from .conftest import schedulable_tasks as _schedulable_tasks
 
 CHIPS_PER_VM = 4
 VMS_PER_SLICE = 8
@@ -101,8 +95,20 @@ def _job_requirements_from_job(job):
     )
 
 
+def _read_usage_by_worker(state) -> dict[WorkerId, WorkerResourceUsage]:
+    """Snapshot the derived resource-usage map (replaces workers.committed_*)."""
+    with state._db.read_snapshot() as snap:
+        return state._store.attempts.resource_usage_by_worker(snap)
+
+
+def _tpu_used(usage_map: dict[WorkerId, WorkerResourceUsage], wid: WorkerId) -> int:
+    """Look up tpu chips currently reserved for ``wid``; absent worker means 0."""
+    entry = usage_map.get(wid)
+    return entry.tpu_count if entry is not None else 0
+
+
 def _build_context(scheduler, state):
-    pending = _schedulable_tasks(state)
+    pending = _schedulable_tasks_for_test(state)
     workers = list(healthy_active_workers(state))
     bc = _building_counts(state)
     task_ids = []
@@ -115,7 +121,15 @@ def _build_context(scheduler, state):
             job = _query_job(state, task.job_id)
             if job:
                 jobs[task.job_id] = _job_requirements_from_job(job)
-    return scheduler.create_scheduling_context(workers, building_counts=bc, pending_tasks=task_ids, jobs=jobs)
+    usage = _read_usage_by_worker(state)
+    snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
+    return scheduler.create_scheduling_context(snapshots, building_counts=bc, pending_tasks=task_ids, jobs=jobs)
+
+
+def _schedulable_tasks_for_test(state):
+    from .conftest import schedulable_tasks as _schedulable_tasks
+
+    return _schedulable_tasks(state)
 
 
 def _schedule_and_commit(scheduler, state):
@@ -144,10 +158,27 @@ def _transition_to_running(state, task):
         )
 
 
+def _heartbeat_killed(state, task):
+    """Synthesize a terminal heartbeat for ``task``: that is what releases capacity now."""
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=task.current_worker_id,
+                updates=[
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=task.current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_KILLED,
+                    )
+                ],
+            ),
+        )
+
+
 def _worker_fail_one_task(state, task):
     """Send WORKER_FAILED for one task. For coscheduled jobs this triggers
-    _requeue_coscheduled_siblings which bounces all siblings to PENDING and
-    decommits their resources."""
+    _requeue_coscheduled_siblings which bounces all siblings to PENDING."""
     with state._store.transaction() as cur:
         result = state.apply_task_updates(
             cur,
@@ -185,8 +216,8 @@ def scheduler():
     return Scheduler()
 
 
-class TestPreemptionReassignmentRace:
-    """Reproduce the #5470 collision via the decommit-before-kill race."""
+class TestPreemptionReassignment:
+    """Capacity stays held by unfinished worker-bound attempts until heartbeats finalize them."""
 
     def _setup_two_gangs_running(self, scheduler_or_ctrl, state):
         """Common setup: two slices, two gangs, all running. Returns (job_a_id, job_b_id)."""
@@ -217,74 +248,147 @@ class TestPreemptionReassignmentRace:
         return job_a_id, job_b_id
 
     def _preempt_and_new_slice(self, state, job_a_id, job_b_id):
-        """Preempt both gangs, mark old slices unhealthy, register slice-3."""
+        """Preempt both gangs, mark old slices unhealthy, register slice-3.
+
+        Under the new contract the trigger task IS finalized via the
+        heartbeat path that delivered WORKER_FAILED, but the siblings
+        bounced by ``_requeue_coscheduled_siblings`` use
+        ``finalize_attempt=False``. So one worker in each slice has its
+        capacity released; the other 7 hold ``CHIPS_PER_VM`` until their
+        own terminal heartbeats arrive.
+        """
         tasks_a = query_tasks_for_job(state, job_a_id)
         tasks_b = query_tasks_for_job(state, job_b_id)
-        _worker_fail_one_task(state, tasks_a[0])
-        _worker_fail_one_task(state, tasks_b[0])
+        trigger_a = tasks_a[0]
+        trigger_b = tasks_b[0]
+        _worker_fail_one_task(state, trigger_a)
+        _worker_fail_one_task(state, trigger_b)
 
-        for wid in [WorkerId(f"slice-1-w{i}") for i in range(VMS_PER_SLICE)]:
-            assert _query_worker(state, wid).committed_tpu == 0
-        for wid in [WorkerId(f"slice-2-w{i}") for i in range(VMS_PER_SLICE)]:
-            assert _query_worker(state, wid).committed_tpu == 0
+        usage = _read_usage_by_worker(state)
+        # Trigger workers were finalized by their WORKER_FAILED heartbeat
+        # (heartbeat path is the only finalizer).
+        assert _tpu_used(usage, trigger_a.current_worker_id) == 0
+        assert _tpu_used(usage, trigger_b.current_worker_id) == 0
+        # Sibling workers still hold their reservations because the producer-
+        # side requeue path leaves the attempt unfinished.
+        for i in range(VMS_PER_SLICE):
+            wid = WorkerId(f"slice-1-w{i}")
+            if wid == trigger_a.current_worker_id:
+                continue
+            assert _tpu_used(usage, wid) == CHIPS_PER_VM, f"slice-1-w{i} should still be reserved"
+        for i in range(VMS_PER_SLICE):
+            wid = WorkerId(f"slice-2-w{i}")
+            if wid == trigger_b.current_worker_id:
+                continue
+            assert _tpu_used(usage, wid) == CHIPS_PER_VM, f"slice-2-w{i} should still be reserved"
 
         _mark_slice_unhealthy(state, "slice-1")
         _mark_slice_unhealthy(state, "slice-2")
         _register_slice(state, "slice-3")
 
-    def test_scheduler_assigns_to_decommitted_workers(self, scheduler, state):
-        """Without the pending-kill guard, the scheduler assigns a gang to
-        workers whose resources were decommitted but whose kill RPCs haven't
-        landed. This demonstrates the race that #5470 fixes."""
-        job_a_id, job_b_id = self._setup_two_gangs_running(scheduler, state)
-        self._preempt_and_new_slice(state, job_a_id, job_b_id)
+    def test_scheduler_does_not_reassign_until_heartbeats_finalize_old_slice(self, scheduler, state):
+        """Under the new derived-usage contract, the scheduler cannot place a
+        gang onto a slice whose attempts are still unfinished. Even after
+        ``_requeue_coscheduled_siblings`` writes ``tasks.state=PENDING``, the
+        attempts on the old slice keep their workers' chips reserved until
+        terminal heartbeats arrive — so the second gang slots into slice-3 and
+        cannot collide with slice-1's still-running processes.
+        """
+        job_a_id, _job_b_id = self._setup_two_gangs_running(scheduler, state)
+        self._preempt_and_new_slice(state, job_a_id, _job_b_id)
 
-        # Scheduler assigns first gang to slice-3
+        # Scheduler assigns the first gang back to slice-3 (the only fully-free slice).
         result1 = _schedule_and_commit(scheduler, state)
         assert len(result1.assignments) == VMS_PER_SLICE
         by_job1 = _assigned_workers_by_job(result1.assignments)
         assert len(by_job1) == 1
         first_job = next(iter(by_job1))
+        slice3_workers = {WorkerId(f"slice-3-w{i}") for i in range(VMS_PER_SLICE)}
+        assert by_job1[first_job] == slice3_workers, "first reassignment must land on slice-3"
 
-        # First gang fails during BUILDING -> decommit happens in DB.
-        # In production, kill RPCs are queued but NOT yet sent.
+        # First gang fails during BUILDING -> producer-side requeue marks
+        # tasks.state PENDING but does NOT stamp finished_at_ms on slice-3
+        # attempts (siblings) — so slice-3's chips remain reserved.
         first_job_tasks = query_tasks_for_job(state, first_job)
         fail_result = _worker_fail_one_task(state, first_job_tasks[0])
         assert fail_result.tasks_to_kill, "Coscheduled requeue should produce kill targets"
 
-        for i in range(VMS_PER_SLICE):
-            w = _query_worker(state, WorkerId(f"slice-3-w{i}"))
-            assert w.committed_tpu == 0, f"slice-3-w{i} should be decommitted"
+        usage_after_fail = _read_usage_by_worker(state)
+        # The trigger task's worker was finalized by its terminal heartbeat.
+        trigger_wid = first_job_tasks[0].current_worker_id
+        assert _tpu_used(usage_after_fail, trigger_wid) == 0
+        # The other slice-3 workers still hold the bounced siblings' chips.
+        for wid in slice3_workers:
+            if wid == trigger_wid:
+                continue
+            assert (
+                _tpu_used(usage_after_fail, wid) == CHIPS_PER_VM
+            ), f"slice-3 sibling on {wid} must keep its reservation until heartbeat finalizes the attempt"
 
-        # Without the guard: scheduler sees free capacity and reassigns to slice-3.
-        # This is the race -- in production the old processes are still running.
+        # Without the old decommit, the scheduler does not see free capacity:
+        # only one worker on slice-3 has freed up, but a coscheduled gang needs
+        # all VMS_PER_SLICE in the same group, so it stays pending.
         result2 = _schedule_and_commit(scheduler, state)
-        assert (
-            len(result2.assignments) == VMS_PER_SLICE
-        ), "Scheduler should assign to the decommitted workers (no guard at scheduler level)"
+        assert result2.assignments == [], "Scheduler must not reassign while sibling attempts are still unfinished"
 
-        # Verify the assignment lands on slice-3 -- the same workers where old
-        # processes are still being killed. In production this causes port 8476
-        # collision between old and new JAX coordinators.
-        slice3_workers = {WorkerId(f"slice-3-w{i}") for i in range(VMS_PER_SLICE)}
-        assigned_workers = set()
-        for _, wid in result2.assignments:
-            assigned_workers.add(wid)
-        assert assigned_workers == slice3_workers, "Assignment should land on slice-3 (the only healthy slice)"
+        # Synthesize terminal heartbeats for the remaining slice-3 attempts —
+        # this is what the worker would emit after auto-killing the stale
+        # processes via reconcile. The bounced tasks went back to PENDING
+        # with current_worker_id=NULL on the tasks row, but their attempt
+        # rows still reference the old worker. We finalize each unfinished
+        # attempt on slice-3 directly.
+        with state._db.read_snapshot() as snap:
+            placeholders = ",".join("?" for _ in slice3_workers)
+            unfinished = snap.fetchall(
+                f"SELECT task_id, attempt_id FROM task_attempts "
+                f"WHERE worker_id IN ({placeholders}) AND finished_at_ms IS NULL",
+                tuple(str(w) for w in slice3_workers),
+            )
+        with state._store.transaction() as cur:
+            for row in unfinished:
+                state._store.attempts.mark_finished(
+                    cur,
+                    JobName.from_wire(row["task_id"]),
+                    int(row["attempt_id"]),
+                    job_pb2.TASK_STATE_KILLED,
+                    finished_at_ms=1,
+                    error="terminal heartbeat (test)",
+                )
 
-    def test_pending_kill_guard_prevents_reassignment(self, make_controller):
-        """WITH the fix: _process_heartbeat_updates populates _workers_pending_kill
-        inside the decommit transaction, and the scheduler excludes those workers.
+        usage_after_drain = _read_usage_by_worker(state)
+        for wid in slice3_workers:
+            assert _tpu_used(usage_after_drain, wid) == 0, f"{wid} must be released after terminal heartbeat"
 
-        Mocks _stop_tasks_direct (the RPC boundary) to run a scheduling tick
-        mid-kill, verifying the guard blocks reassignment while kills are in
-        flight.
+        # Now the scheduler can reuse slice-3 — the old kill RPCs have landed.
+        result3 = _schedule_and_commit(scheduler, state)
+        assert len(result3.assignments) == VMS_PER_SLICE
+        assert {wid for _tid, wid in result3.assignments} == slice3_workers
+
+    def test_requeue_keeps_slice_reserved_until_heartbeats(self, make_controller):
+        """Cascaded requeue does not free the slice until terminal heartbeats land.
+
+        Pre-Jumbo, this scenario relied on a separate ``_workers_pending_kill``
+        in-memory guard while StopTasks RPCs were in flight. Post-Jumbo, the
+        worker auto-kills via the polling reconcile loop and the only thing
+        keeping the slice reserved is the unfinished attempt rows. This test
+        asserts that a scheduling tick run *immediately* after a sibling
+        requeue (no heartbeats yet) cannot place gang B on the still-busy
+        slice — the conservative-state property described in design §6.1.
         """
         ctrl = make_controller(remote_state_dir="file:///tmp/iris-5470-test")
         state = ctrl._transitions
 
         job_a_id, job_b_id = self._setup_two_gangs_running(ctrl, state)
         self._preempt_and_new_slice(state, job_a_id, job_b_id)
+
+        # Drain the trigger workers' reserved chips on slice-1 & slice-2 so the
+        # next scheduling tick has a clean slice-3 to look at, then synthesize
+        # terminal heartbeats for the remaining (still-reserved) sibling
+        # attempts so slice-3 reassignment can proceed.
+        for jid in (job_a_id, job_b_id):
+            for task in query_tasks_for_job(state, jid):
+                if task.current_worker_id is not None:
+                    _heartbeat_killed(state, task)
 
         # Schedule gang A onto slice-3
         ctrl._run_scheduling()
@@ -310,28 +414,14 @@ class TestPreemptionReassignmentRace:
             ],
         )
 
-        # Mock _stop_tasks_direct to intercept the kill RPCs and run scheduling
-        # mid-kill -- this is the exact interleaving that causes #5470.
-        pending_kill_during_rpc = None
-
-        def intercepting_stop(task_ids, task_kill_workers=None):
-            nonlocal pending_kill_during_rpc
-            with ctrl._workers_pending_kill_lock:
-                pending_kill_during_rpc = set(ctrl._workers_pending_kill)
-            ctrl._run_scheduling()
-
-        ctrl._stop_tasks_direct = intercepting_stop
-
-        # Drive the production code path
+        # Drive the production code path: heartbeat-induced cascade requeues
+        # gang A's siblings without finalizing their attempts. Then run a
+        # scheduling tick before any worker confirms termination.
         ctrl._process_heartbeat_updates([fail_request])
+        ctrl._run_scheduling()
 
-        # Verify pending-kill was populated during the RPC window
-        assert pending_kill_during_rpc, "pending-kill set should be non-empty during kill RPCs"
-        slice3_workers = {WorkerId(f"slice-3-w{i}") for i in range(VMS_PER_SLICE)}
-        assert pending_kill_during_rpc & slice3_workers, "slice-3 workers should be in pending-kill during kill RPCs"
-
-        # The mid-kill scheduling tick should NOT have placed gang B on slice-3
-        # because 7 of 8 workers were excluded (the gang needs all 8).
+        # Gang B must not land on slice-3 — the still-unfinished sibling
+        # attempts hold the slice's chips in the derived-usage ledger.
         tasks_b_during = query_tasks_for_job(state, job_b_id)
         b_on_slice3 = [
             t
@@ -339,43 +429,82 @@ class TestPreemptionReassignmentRace:
             if t.current_worker_id is not None and str(t.current_worker_id).startswith("slice-3")
         ]
         assert len(b_on_slice3) == 0, (
-            f"Gang B must not be assigned to slice-3 while kills are pending: "
+            f"Gang B must not be assigned to slice-3 while siblings are unfinished: "
             f"{[str(t.current_worker_id) for t in b_on_slice3]}"
         )
 
-        # After kills complete, pending-kill should be cleared
-        with ctrl._workers_pending_kill_lock:
-            assert len(ctrl._workers_pending_kill) == 0, "pending-kill should be empty after kills"
+    def test_derived_usage_correct_through_full_cycle(self, scheduler, state):
+        """Track the derived per-worker tpu usage at every step.
 
-    def test_committed_tpu_correct_through_full_cycle(self, scheduler, state):
-        """Track committed_tpu at every step to verify accounting."""
+        Producer transitions (cancel, requeue) leave attempts unfinished and
+        the worker keeps its reservation; only terminal heartbeats release it.
+        """
         slice1_wids = _register_slice(state, "slice-1")
 
         submit_job(state, "job-a", _make_gang_request("train-a"))
 
-        # Assign
+        # Assign: each worker now hosts an attempt that holds CHIPS_PER_VM.
         _schedule_and_commit(scheduler, state)
+        usage = _read_usage_by_worker(state)
         for wid in slice1_wids:
-            w = _query_worker(state, wid)
-            assert w.committed_tpu == CHIPS_PER_VM, f"after assign: {wid}={w.committed_tpu}"
+            assert _tpu_used(usage, wid) == CHIPS_PER_VM, f"after assign: {wid}={_tpu_used(usage, wid)}"
 
-        # Run
+        # Transition to RUNNING — attempt state changes but it still holds the chips.
         job_a_id = JobName.root("test-user", "job-a")
         for task in query_tasks_for_job(state, job_a_id):
             _transition_to_running(state, task)
+        usage = _read_usage_by_worker(state)
         for wid in slice1_wids:
-            w = _query_worker(state, wid)
-            assert w.committed_tpu == CHIPS_PER_VM, f"after running: {wid}={w.committed_tpu}"
+            assert _tpu_used(usage, wid) == CHIPS_PER_VM, f"after running: {wid}={_tpu_used(usage, wid)}"
 
-        # Fail one task -> requeue all siblings
+        # Fail one task -> requeue all siblings. Trigger task gets finalized by
+        # the heartbeat path that delivered WORKER_FAILED; siblings are bounced
+        # to PENDING but their attempts are NOT finalized — so 7/8 workers still
+        # show their reservation.
         tasks = query_tasks_for_job(state, job_a_id)
-        _worker_fail_one_task(state, tasks[0])
+        trigger = tasks[0]
+        _worker_fail_one_task(state, trigger)
+        usage = _read_usage_by_worker(state)
+        assert (
+            _tpu_used(usage, trigger.current_worker_id) == 0
+        ), f"trigger worker {trigger.current_worker_id} must be released by its terminal heartbeat"
         for wid in slice1_wids:
-            w = _query_worker(state, wid)
-            assert w.committed_tpu == 0, f"after requeue: {wid}={w.committed_tpu}"
+            if wid == trigger.current_worker_id:
+                continue
+            assert (
+                _tpu_used(usage, wid) == CHIPS_PER_VM
+            ), f"sibling worker {wid} must keep its reservation until its own terminal heartbeat lands"
 
-        # Reassign
-        _schedule_and_commit(scheduler, state)
+        # Synthesize terminal heartbeats for the bounced sibling attempts —
+        # what the worker would emit after reconcile auto-kills the stale
+        # processes. The bounced tasks were sent back to PENDING and the
+        # attempt rows still reference the old worker; finalising them is
+        # what the heartbeat path would normally do.
         for wid in slice1_wids:
-            w = _query_worker(state, wid)
-            assert w.committed_tpu == CHIPS_PER_VM, f"after reassign: {wid}={w.committed_tpu}"
+            if wid == trigger.current_worker_id:
+                continue
+            with state._db.read_snapshot() as snap:
+                rows = snap.fetchall(
+                    "SELECT task_id, attempt_id FROM task_attempts " "WHERE worker_id = ? AND finished_at_ms IS NULL",
+                    (str(wid),),
+                )
+            with state._store.transaction() as cur:
+                for row in rows:
+                    state._store.attempts.mark_finished(
+                        cur,
+                        JobName.from_wire(row["task_id"]),
+                        int(row["attempt_id"]),
+                        job_pb2.TASK_STATE_KILLED,
+                        finished_at_ms=1,
+                        error="terminal heartbeat (test)",
+                    )
+
+        usage = _read_usage_by_worker(state)
+        for wid in slice1_wids:
+            assert _tpu_used(usage, wid) == 0, f"after terminal heartbeats: {wid}={_tpu_used(usage, wid)}"
+
+        # Reassign — capacity is now genuinely available.
+        _schedule_and_commit(scheduler, state)
+        usage = _read_usage_by_worker(state)
+        for wid in slice1_wids:
+            assert _tpu_used(usage, wid) == CHIPS_PER_VM, f"after reassign: {wid}={_tpu_used(usage, wid)}"

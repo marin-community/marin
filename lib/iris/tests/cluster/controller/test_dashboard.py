@@ -20,7 +20,7 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
@@ -126,7 +126,10 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
                 decoders={"worker_id": WorkerId, "c": int},
             )
         building_counts = {row.worker_id: row.c for row in rows}
-        return scheduler.create_scheduling_context(workers, building_counts=building_counts)
+        with state._db.read_snapshot() as snap:
+            usage_by_worker = state._store.attempts.resource_usage_by_worker(snap)
+        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
+        return scheduler.create_scheduling_context(snapshots, building_counts=building_counts)
 
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
@@ -759,10 +762,8 @@ def test_worker_detail_page_escapes_id(client):
 
 
 def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_request):
-    """GetWorkerStatus returns one recent_attempts row per attempt with its
-    own started/finished timestamps. Regression: previously returned
-    per-task rows, dropping retry distinctions and inheriting the parent
-    task's state on every row."""
+    """Verify GetWorkerStatus returns per-attempt rows with distinct
+    timestamps, preserving retry history."""
     wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
     job_id = submit_job(state, "ts-job", job_request)
     task_id = job_id.task(0)
@@ -879,9 +880,9 @@ def test_get_worker_status_by_worker_id(client, state):
 def test_get_worker_status_includes_running_tasks(client, state, job_request):
     """GetWorkerStatus assembles running tasks for the worker.
 
-    Per-tick resource history now flows directly to the ``iris.worker`` stats
-    namespace and is no longer surfaced on this RPC; this test only covers the
-    controller-DB-backed fields.
+    Per-tick resource history is populated from the ``iris.worker`` stats
+    namespace, not the controller DB; this test covers only DB-backed
+    fields.
     """
     wid = register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
     job_id = submit_job(state, "worker-detail-res", job_request)
@@ -1221,7 +1222,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     )
 
     # Sync to populate ClusterState.
-    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[], tasks_to_kill=[]))
+    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[]))
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

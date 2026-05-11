@@ -27,9 +27,14 @@ ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
 IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "test.yaml"
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def iris_cluster():
-    """Start local Iris cluster for testing - reused across all tests."""
+    """Start local Iris cluster for testing - reused across tests in a module.
+
+    Module-scoped (rather than session-scoped) so that a stuck or polluted
+    cluster from one test module does not bleed into another. Tests within a
+    single module still amortize the cluster startup cost.
+    """
     from iris.cluster.config import connect_cluster, load_config, make_local_config
 
     config = load_config(IRIS_CONFIG)
@@ -73,11 +78,14 @@ def _parent_holder_entrypoint():
     time.sleep(3600)
 
 
-@pytest.fixture(params=["local", "iris"], scope="session")
+@pytest.fixture(params=["local", "iris"], scope="module")
 def integration_client(request):
     """Parametrized fixture providing Local and Iris clients.
 
-    Session-scoped to reuse clusters across all test modules.
+    Module-scoped so a stuck cluster or leaked actor from one module does not
+    bleed into another. The Iris path depends on `iris_cluster` (also
+    module-scoped); pytest enforces that a fixture cannot depend on a
+    narrower-scoped fixture, so these scopes must match.
     """
     if request.param == "local":
         client = LocalClient()
@@ -111,9 +119,13 @@ def integration_client(request):
         raise ValueError(f"Unknown backend: {request.param}")
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def integration_ctx(integration_client, tmp_path_factory):
-    """ZephyrContext on all backends for integration tests."""
+    """ZephyrContext on all backends for integration tests.
+
+    Module-scoped to match `integration_client` (a fixture cannot depend on a
+    narrower-scoped fixture).
+    """
     tmp_path = tmp_path_factory.mktemp("zephyr-integration")
     ctx = ZephyrContext(
         client=integration_client,
@@ -180,8 +192,9 @@ def _configure_marin_prefix():
         del os.environ["MARIN_PREFIX"]
 
 
-# Thread name prefixes for infrastructure threads managed by session-scoped
-# clusters (iris, fray). These persist across tests and are not leaks.
+# Thread name prefixes for infrastructure threads managed by long-lived
+# fixtures (iris, fray). These persist across tests within a module/session
+# and are not leaks.
 _INFRA_THREAD_PREFIXES = (
     "worker-server",
     "worker-lifecycle",
@@ -190,6 +203,10 @@ _INFRA_THREAD_PREFIXES = (
     "asyncio_",
     "grpc_",
     "monitoring",
+    # Iris worker task/log threads, spawned the first time a test touches the
+    # cluster fixture and torn down with the cluster.
+    "task-/",
+    "logs-/",
 )
 
 
@@ -201,8 +218,8 @@ def _thread_cleanup():
     non-daemon threads remain after teardown. Waits briefly for threads
     that are in the process of shutting down.
 
-    Infrastructure threads from session-scoped clusters (iris) are
-    excluded — they persist for the session and are not leaks.
+    Infrastructure threads from long-lived fixtures (iris cluster, fray) are
+    excluded — they persist for the lifetime of the fixture and are not leaks.
     """
     before = {t.ident for t in threading.enumerate()}
     yield

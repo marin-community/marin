@@ -1,5 +1,4 @@
 {
-  "dispatch_queue": [],
   "endpoints": [],
   "job_config": [
     {
@@ -215,10 +214,6 @@
   "workers": [
     {
       "address": "w-claim-a:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,
@@ -247,10 +242,6 @@
     },
     {
       "address": "w-claim-b:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,

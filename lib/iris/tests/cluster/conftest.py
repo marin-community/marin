@@ -40,6 +40,12 @@ class _FakeLogClientFromService:
     def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
         return self._log_service.fetch_logs(request, ctx=None)
 
+    def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def get_table(self, namespace: str, schema: object) -> None:
+        return None
+
     def close(self) -> None:
         return
 
@@ -131,7 +137,6 @@ class _HarnessController:
 
     def __init__(self) -> None:
         self.wake = Mock()
-        self.kill_tasks_on_workers = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None

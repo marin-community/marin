@@ -72,8 +72,8 @@ export interface IrisStatus {
 }
 
 export interface WorkerResourceTotals {
-  cpuAvailableMillicores: number;
-  memoryAvailableBytes: number;
+  cpuTotalMillicores: number;
+  memoryTotalBytes: number;
   chipsTotal: number;
 }
 

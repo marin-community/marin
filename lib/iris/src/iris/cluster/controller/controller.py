@@ -6,13 +6,12 @@
 import atexit
 import enum
 import logging
-import queue as queue_mod
 import sys
 import tempfile
 import threading
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -69,7 +68,6 @@ from iris.cluster.controller.db import (
     ControllerDB,
     SchedulableWorker,
     healthy_active_workers_with_attributes,
-    insert_task_profile,
     job_scheduling_deadline,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
@@ -81,26 +79,26 @@ from iris.cluster.controller.scheduler import (
     Scheduler,
     SchedulingContext,
     WorkerCapacity,
+    WorkerSnapshot,
+    worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_CONFIG_JOIN,
-    JOB_DETAIL_PROJECTION,
+    JOB_RESERVATION_PROJECTION,
     JOB_SCHEDULING_PROJECTION,
     TASK_DETAIL_PROJECTION,
     TASK_ROW_PROJECTION,
-    WORKER_DETAIL_PROJECTION,
-    JobDetailRow,
+    JobReservationRow,
     JobRow,
     JobSchedulingRow,
     TaskDetailRow,
     TaskRow,
-    WorkerDetailRow,
     proto_decoder,
     tasks_with_attempts,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore
+from iris.cluster.controller.stores import ControllerStore, TaskAttemptStore
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -109,14 +107,17 @@ from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     ReservationClaim,
+    RunningTaskEntry,
     SchedulingEvent,
     TaskUpdate,
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.worker_provider import WorkerReconcilePlan
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
+from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,
     WorkerId,
@@ -128,7 +129,7 @@ from iris.cluster.types import (
 )
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
@@ -145,18 +146,6 @@ class SchedulingOutcome(enum.Enum):
     NO_PENDING_TASKS = "no_pending_tasks"
     NO_ASSIGNMENTS = "no_assignments"
     ASSIGNMENTS_MADE = "assignments_made"
-
-
-def _drain_queue(q: queue_mod.Queue, timeout: float = 1.0) -> list:
-    """Drain all items from queue, blocking up to timeout for the first item."""
-    items: list = []
-    try:
-        items.append(q.get(timeout=timeout))
-        while True:
-            items.append(q.get_nowait())
-    except queue_mod.Empty:
-        pass
-    return items
 
 
 # Log a detailed per-phase scheduling trace every this many rounds.
@@ -200,7 +189,7 @@ class _SchedulingStateRead:
     """Snapshot of pending tasks and workers read at the start of a scheduling cycle."""
 
     pending_tasks: list[TaskRow]
-    workers: list[SchedulableWorker]
+    workers: list[WorkerSnapshot]
     state_read_ms: int
 
 
@@ -314,9 +303,12 @@ def compute_demand_entries(
     absorbed_task_ids: set[JobName] = set()
     if scheduler is not None and workers is not None and workers:
         building_counts = _building_counts(queries, workers)
+        with queries.read_snapshot() as snap:
+            usage_by_worker = TaskAttemptStore(queries).resource_usage_by_worker(snap)
+        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
-        dry_run_workers = _inject_reservation_taints(workers, claims)
+        dry_run_workers = _inject_reservation_taints(snapshots, claims)
         dry_run_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
         context = scheduler.create_scheduling_context(
@@ -423,35 +415,39 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, J
     return {job.job_id: job for job in jobs}
 
 
-def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobDetailRow]:
-    """Fetch only jobs that have reservations, filtering at the SQL level.
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobReservationRow]:
+    """Fetch (job_id, reservation_json) for jobs that hold a reservation.
 
-    Uses the has_reservation column on the jobs table to filter without a JOIN.
+    Per-tick hot path: only decode what the reservation-claim recomputation
+    reads. Filters via ``jobs.has_reservation`` (no scan of ``job_config``)
+    and joins ``job_config`` solely to pull ``reservation_json``.
     """
     placeholders = ",".join("?" for _ in states)
     with queries.read_snapshot() as snapshot:
         rows = snapshot._fetchall(
-            f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} "
+            f"SELECT {JOB_RESERVATION_PROJECTION.select_clause()} "
             f"FROM jobs j {JOB_CONFIG_JOIN} "
             f"WHERE j.state IN ({placeholders}) AND j.has_reservation = 1",
             list(states),
         )
-    return JOB_DETAIL_PROJECTION.decode(rows)
+    return JOB_RESERVATION_PROJECTION.decode(rows)
 
 
 def _get_running_tasks_with_band_and_value(
     db: ControllerDB,
     claimed_workers: set[WorkerId],
-    user_spend: dict[str, int] | None = None,
-    user_budget_limits: dict[str, int] | None = None,
-    user_budget_defaults: UserBudgetDefaults | None = None,
 ) -> list[RunningTaskInfo]:
     """Query running tasks with band, worker, resource spec, and coscheduling status.
 
     Skips tasks on reservation-claimed workers since those workers are spoken for.
-    When ``user_spend`` and ``user_budget_limits`` are provided, the effective band
-    is computed so over-budget users' tasks are treated as BATCH for preemption.
-    Users without a budget row fall back to ``user_budget_defaults``.
+
+    The reported band is the value persisted in ``tasks.priority_band``, which
+    is stamped at assignment time (see ``_commit_assignments`` and
+    ``TaskStore.mark_assigned``). The over-budget downgrade is applied at that
+    stamping point, not on every scheduling tick, which prevents a running
+    task from oscillating into BATCH and back as its own user crosses the
+    budget cliff — the source of mutual same-band preemption between two
+    users sitting at their limits.
     """
     with db.read_snapshot() as q:
         rows = q.raw(
@@ -468,9 +464,6 @@ def _get_running_tasks_with_band_and_value(
                 "worker_id": WorkerId,
             },
         )
-    _spend = user_spend or {}
-    _limits = user_budget_limits or {}
-    _defaults = user_budget_defaults or UserBudgetDefaults()
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
@@ -482,12 +475,11 @@ def _get_running_tasks_with_band_and_value(
             row.res_disk_bytes,
             row.res_device_json,
         )
-        band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits, _defaults)
         result.append(
             RunningTaskInfo(
                 task_id=row.task_id,
                 worker_id=wid,
-                band_sort_key=band,
+                band_sort_key=row.priority_band,
                 resource_value=resource_value(
                     resources.cpu_millicores,
                     resources.memory_bytes,
@@ -675,12 +667,30 @@ def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
         tasks = TASK_ROW_PROJECTION.decode(
             snapshot.fetchall(
                 f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
-                "ORDER BY t.priority_band ASC, t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
+                "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
                 "t.submitted_at_ms ASC, t.priority_insertion ASC",
                 (job_pb2.TASK_STATE_PENDING,),
             ),
         )
     return [task for task in tasks if task_row_can_be_scheduled(task)]
+
+
+def _sort_pending_tasks_by_resolved_band(store: ControllerStore, pending_tasks: list[TaskRow]) -> list[TaskRow]:
+    """Order pending rows using immutable job_config priority bands."""
+    if not pending_tasks:
+        return []
+    with store.read_snapshot() as snap:
+        requested_bands = store.jobs.get_priority_bands(snap, {task.job_id for task in pending_tasks})
+    return sorted(
+        pending_tasks,
+        key=lambda task: (
+            requested_bands.get(task.job_id, job_pb2.PRIORITY_BAND_INTERACTIVE),
+            task.priority_neg_depth,
+            task.priority_root_submitted_ms,
+            task.submitted_at.epoch_ms(),
+            task.priority_insertion,
+        ),
+    )
 
 
 def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:
@@ -707,7 +717,10 @@ def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -
     return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
-def _building_counts(queries: ControllerDB, workers: list[SchedulableWorker]) -> dict[WorkerId, int]:
+def _building_counts(
+    queries: ControllerDB,
+    workers: Sequence[SchedulableWorker] | Sequence[WorkerSnapshot],
+) -> dict[WorkerId, int]:
     """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
@@ -728,37 +741,6 @@ def _building_counts(queries: ControllerDB, workers: list[SchedulableWorker]) ->
             decoders={"worker_id": WorkerId, "cnt": int},
         )
     return {row.worker_id: row.cnt for row in rows}
-
-
-def _workers_by_id(queries: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, WorkerDetailRow]:
-    if not worker_ids:
-        return {}
-    wires = [str(wid) for wid in worker_ids]
-    placeholders = ",".join("?" for _ in wires)
-    with queries.read_snapshot() as snapshot:
-        workers = WORKER_DETAIL_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} "
-                f"FROM workers w WHERE w.worker_id IN ({placeholders})",
-                tuple(wires),
-            ),
-        )
-    return {worker.worker_id: worker for worker in workers}
-
-
-def _task_worker_mapping(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, WorkerId]:
-    if not task_ids:
-        return {}
-    task_wires = [task_id.to_wire() for task_id in task_ids]
-    placeholders = ",".join("?" for _ in task_wires)
-    with queries.read_snapshot() as snapshot:
-        rows = snapshot.raw(
-            f"SELECT t.task_id, t.current_worker_id AS worker_id FROM tasks t "
-            f"WHERE t.task_id IN ({placeholders}) AND t.current_worker_id IS NOT NULL",
-            tuple(task_wires),
-            decoders={"task_id": JobName.from_wire, "worker_id": WorkerId},
-        )
-    return {row.task_id: row.worker_id for row in rows}
 
 
 def _worker_matches_reservation_entry(
@@ -784,23 +766,23 @@ def _worker_matches_reservation_entry(
 
 
 def _inject_reservation_taints(
-    workers: list[SchedulableWorker],
+    workers: list[WorkerSnapshot],
     claims: dict[WorkerId, ReservationClaim],
-) -> list[SchedulableWorker]:
-    """Create modified worker copies with reservation taints and prioritization.
+) -> list[WorkerSnapshot]:
+    """Create modified worker snapshots with reservation taints and prioritization.
 
     Claimed workers receive a ``reservation-job`` attribute set to the claiming
     job's ID.  The returned list is ordered with claimed workers first so that
     reservation jobs (which have no NOT_EXISTS constraint) naturally pick from
     their claimed workers before unclaimed ones.
 
-    Workers are never mutated — ``dataclasses.replace`` produces shallow copies.
+    Snapshots are never mutated — ``dataclasses.replace`` produces shallow copies.
     """
     if not claims:
         return workers
 
-    claimed: list[SchedulableWorker] = []
-    unclaimed: list[SchedulableWorker] = []
+    claimed: list[WorkerSnapshot] = []
+    unclaimed: list[WorkerSnapshot] = []
     for worker in workers:
         claim = claims.get(worker.worker_id)
         if claim is not None:
@@ -1003,11 +985,12 @@ class ControllerConfig:
     heartbeat_interval: Duration = field(default_factory=lambda: Duration.from_seconds(5.0))
     """How often to send heartbeats to workers."""
 
-    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(60.0))
-    """How often to reconcile worker task state via PollTasks. Reconciliation runs
-    inline at the end of each scheduling iteration so it observes a post-commit DB
-    view, eliminating the StartTasks/PollTasks race that arose when poll ran in a
-    separate thread (issue #5041)."""
+    poll_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
+    """Polling reconcile cadence. The polling thread wakes every ``poll_interval``
+    (or sooner if ``_polling_wake`` is set) and runs ``_reconcile_worker_batch``
+    against every healthy worker. Workers push state changes themselves via
+    ``UpdateTaskStatus``; this loop is the recovery channel for ASSIGNED→BUILDING
+    when the push is dropped, plus the dispatch path for fresh ASSIGNED rows."""
 
     max_dispatch_parallelism: int = 32
     """Maximum number of concurrent RPC dispatch operations."""
@@ -1025,12 +1008,6 @@ class ControllerConfig:
     """If set, take a periodic best-effort snapshot this often.
     Runs in the autoscaler loop thread; does not pause scheduling."""
 
-    profile_interval: Duration = field(default_factory=lambda: Duration.from_seconds(600))
-    """How often the controller captures CPU profiles for all running tasks."""
-
-    profile_duration: int = 10
-    """Duration in seconds for each profile capture (CPU and memory)."""
-
     prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
     """How often to run the data pruning sweep (default: 1 hour)."""
 
@@ -1039,12 +1016,6 @@ class ControllerConfig:
 
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
-
-    profile_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
-    """Delete task_profiles older than this (default: 24 hours)."""
-
-    profile_concurrency: int = 8
-    """Maximum parallel profile RPCs to workers."""
 
     local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
     """Local directory for controller DB, logs, bundle cache."""
@@ -1186,6 +1157,7 @@ class Controller:
             k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
             self._provider.log_client = k8s_log_client
             self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
+            self._provider.profile_table = k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
         # Controller process logs ship to the log server via RemoteLogHandler.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
@@ -1224,26 +1196,25 @@ class Controller:
             finelog_stats_service=self._remote_stats_service,
         )
 
-        # Background loop state
-        self._wake_event = threading.Event()
+        # Background loop state. Two wake events drive two threads:
+        #   * ``_scheduling_wake`` — producers that may free capacity (terminal
+        #     heartbeats, attempt finalization). Scheduling tick re-evaluates
+        #     pending tasks.
+        #   * ``_polling_wake`` — producers that change ``tasks.state`` such
+        #     that the per-worker reconcile snapshot differs (new ASSIGNED,
+        #     bulk cancel). Polling tick re-fans-out the next worker batch.
+        #
+        # Most write paths set both: over-waking is cheaper than missing a
+        # capacity-return or a fresh ASSIGNED row.
+        self._scheduling_wake = threading.Event()
+        self._polling_wake = threading.Event()
         self._server: uvicorn.Server | None = None
         self._scheduling_thread: ManagedThread | None = None
+        self._polling_thread: ManagedThread | None = None
         self._direct_provider_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
-        self._profile_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
-        self._task_updater_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
-        self._task_update_queue: queue_mod.Queue[HeartbeatApplyRequest] = queue_mod.Queue()
-
-        # Workers with outstanding StopTasks RPCs from the task-updater thread.
-        # The scheduling thread excludes these workers so it won't reassign a
-        # TPU slice while stale processes are still being killed on the workers.
-        # See issue #5470: without this, a coscheduled gang requeue decommits
-        # resources instantly but kill RPCs arrive later, allowing a second gang
-        # to be dispatched to workers that still have running processes.
-        self._workers_pending_kill: set[WorkerId] = set()
-        self._workers_pending_kill_lock = threading.Lock()
 
         self._autoscaler: Autoscaler | None = autoscaler
 
@@ -1276,12 +1247,15 @@ class Controller:
             self._periodic_checkpoint_limiter.mark_run()
 
     def wake(self) -> None:
-        """Signal the scheduling loop to run immediately and reset backoff.
+        """Signal both the scheduling and polling loops to run immediately.
 
-        Called on new job submission. Resets the adaptive backoff so the
-        scheduler responds to new work within one cycle.
+        Called on new job submission. The scheduling tick picks up the new
+        pending tasks, and the polling tick re-fans-out the next worker batch
+        so any ASSIGNED rows the scheduler writes land on the worker without
+        waiting for a full polling rotation.
         """
-        self._wake_event.set()
+        self._scheduling_wake.set()
+        self._polling_wake.set()
 
     @property
     def started(self) -> bool:
@@ -1345,10 +1319,9 @@ class Controller:
             self._direct_provider_thread = self._threads.spawn(self._run_direct_provider_loop, name="provider-loop")
         else:
             self._scheduling_thread = self._threads.spawn(self._run_scheduling_loop, name="scheduling-loop")
+            self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
             self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
-            self._task_updater_thread = self._threads.spawn(self._run_task_updater_loop, name="task-updater-loop")
             if not self._config.dry_run:
-                self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
                 self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
@@ -1421,20 +1394,21 @@ class Controller:
         if self._atexit_registered:
             atexit.unregister(self._atexit_checkpoint)
             self._atexit_registered = False
-        self._wake_event.set()
+        self._scheduling_wake.set()
+        self._polling_wake.set()
         join_timeout = Duration.from_seconds(5.0)
         if self._scheduling_thread:
             self._scheduling_thread.stop()
             self._scheduling_thread.join(timeout=join_timeout)
+        if self._polling_thread:
+            self._polling_thread.stop()
+            self._polling_thread.join(timeout=join_timeout)
         if self._direct_provider_thread:
             self._direct_provider_thread.stop()
             self._direct_provider_thread.join(timeout=join_timeout)
         if self._ping_thread:
             self._ping_thread.stop()
             self._ping_thread.join(timeout=join_timeout)
-        if self._task_updater_thread:
-            self._task_updater_thread.stop()
-            self._task_updater_thread.join(timeout=join_timeout)
         if self._prune_thread:
             self._prune_thread.stop()
             self._prune_thread.join(timeout=join_timeout)
@@ -1474,13 +1448,14 @@ class Controller:
         """Scheduling loop with adaptive backoff.
 
         Backs off from min to max interval when idle (no pending tasks or no
-        assignments possible). Resets to min interval when woken by a new job
-        submission or when assignments are made.
+        assignments possible). Resets to min interval when woken by a producer
+        that may free capacity or by a new job submission.
 
-        Reconciliation (PollTasks) runs inline at the end of each iteration,
-        gated by a rate limiter. Sharing this thread with scheduling guarantees
-        the poll's expected_tasks snapshot is taken after the same iteration's
-        StartTasks commits — see issue #5041 for the race that motivated this.
+        Reconciliation (StartTasks + PollTasks) runs on the separate polling
+        thread (``_run_polling_loop``) on its own 250 ms cadence. Sharing the
+        same write transaction is no longer required: producers write
+        ``tasks.state = ASSIGNED`` and the polling thread reads that state via
+        a snapshot query, so dispatch never crosses a transaction boundary.
         """
         backoff = ExponentialBackoff(
             initial=self._config.scheduler_min_interval.to_seconds(),
@@ -1488,11 +1463,10 @@ class Controller:
             factor=2.0,
             jitter=0.1,
         )
-        poll_limiter = RateLimiter(interval_seconds=self._config.poll_interval.to_seconds())
         while not stop_event.is_set():
             interval = backoff.next_interval()
-            woken = self._wake_event.wait(timeout=interval)
-            self._wake_event.clear()
+            woken = self._scheduling_wake.wait(timeout=interval)
+            self._scheduling_wake.clear()
 
             if stop_event.is_set():
                 break
@@ -1506,11 +1480,29 @@ class Controller:
             if outcome == SchedulingOutcome.ASSIGNMENTS_MADE:
                 backoff.reset()
 
-            if poll_limiter.should_run():
-                try:
-                    self._poll_all_workers()
-                except Exception:
-                    logger.exception("Inline poll reconciliation failed")
+    def _run_polling_loop(self, stop_event: threading.Event) -> None:
+        """Per-worker reconcile loop on the configured ``poll_interval`` cadence.
+
+        Each tick:
+          1. Snapshot every healthy active worker.
+          2. Fan out ``StartTasks`` for ASSIGNED rows and ``PollTasks`` for
+             BUILDING/RUNNING rows.
+          3. Apply heartbeat-style results in one write txn.
+
+        The polling thread is the sole path that pushes work to a worker.
+        Worker auto-kill is implicit: any task absent from the worker's
+        ``expected_tasks`` set on the next poll is killed locally.
+        """
+        tick_seconds = self._config.poll_interval.to_seconds()
+        while not stop_event.is_set():
+            self._polling_wake.wait(timeout=tick_seconds)
+            self._polling_wake.clear()
+            if stop_event.is_set():
+                break
+            try:
+                self._reconcile_worker_batch()
+            except Exception:
+                logger.exception("Polling reconcile tick failed")
 
     def _run_prune_loop(self, stop_event: threading.Event) -> None:
         """Background maintenance: WAL checkpoint every 10 min, full data prune on the configured interval."""
@@ -1541,7 +1533,6 @@ class Controller:
                     self._transitions.prune_old_data(
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
-                        profile_retention=self._config.profile_retention,
                         stop_event=stop_event,
                     )
                 except Exception:
@@ -1598,110 +1589,11 @@ class Controller:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         result = provider.sync(batch)
         with self._store.transaction() as cur:
-            tx_result = self._transitions.apply_direct_provider_updates(cur, result.updates)
+            self._transitions.apply_direct_provider_updates(cur, result.updates)
         self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
         self._provider_capacity = result.capacity
-        if tx_result.tasks_to_kill:
-            self.kill_tasks_on_workers(tx_result.tasks_to_kill, tx_result.task_kill_workers)
-
-    def _run_profile_loop(self, stop_event: threading.Event) -> None:
-        """Periodically capture CPU and memory profiles for all running tasks.
-
-        Runs on its own thread with a rate limiter. For each running task, sends
-        ProfileTask RPCs (CPU then memory, sequentially) to the task's worker and
-        stores the results in the controller DB.
-        """
-        limiter = RateLimiter(interval_seconds=self._config.profile_interval.to_seconds())
-        while not stop_event.is_set():
-            remaining = limiter.time_until_next()
-            if remaining > 0:
-                stop_event.wait(timeout=remaining)
-            if stop_event.is_set():
-                break
-            limiter.mark_run()
-            try:
-                self._profile_all_running_tasks()
-            except Exception:
-                logger.exception("Profile loop iteration failed")
-
-    def _profile_all_running_tasks(self) -> None:
-        """Capture CPU profiles (py-spy) for every running task and store in the DB.
-
-        Memory profiling via memray is currently disabled because memray attach
-        has been triggering segfaults in target processes.
-        """
-        workers = healthy_active_workers_with_attributes(self._db, self._health)
-        if not workers:
-            return
-        workers_by_id = {w.worker_id: w for w in workers}
-        tasks_by_worker = running_tasks_by_worker(self._db, set(workers_by_id.keys()))
-
-        profile_targets: list[tuple[JobName, SchedulableWorker]] = []
-        for worker_id, task_ids in tasks_by_worker.items():
-            worker = workers_by_id[worker_id]
-            for task_id in task_ids:
-                profile_targets.append((task_id, worker))
-
-        if not profile_targets:
-            return
-
-        cpu_profile_type = job_pb2.ProfileType(
-            cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.RAW),
-        )
-        self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
-
-        logger.info("Profile round (cpu): captured for %d tasks", len(profile_targets))
-
-    def _dispatch_profiles(
-        self,
-        targets: list[tuple[JobName, SchedulableWorker]],
-        profile_type: job_pb2.ProfileType,
-        profile_kind: str,
-        duration: int,
-    ) -> None:
-        """Send profile RPCs for the given targets with bounded concurrency."""
-        concurrency = min(self._config.profile_concurrency, len(targets))
-        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="profile") as pool:
-            futures = [
-                pool.submit(self._capture_one_profile, task_id, worker, profile_type, profile_kind, duration)
-                for task_id, worker in targets
-            ]
-            for future in as_completed(futures):
-                future.result()
-
-    def _capture_one_profile(
-        self,
-        task_id: JobName,
-        worker: SchedulableWorker,
-        profile_type: job_pb2.ProfileType,
-        profile_kind: str,
-        duration: int,
-    ) -> None:
-        """Capture a single task profile via RPC and store it in the DB."""
-        try:
-            request = job_pb2.ProfileTaskRequest(
-                target=task_id.to_wire(),
-                duration_seconds=duration,
-                profile_type=profile_type,
-            )
-            timeout_ms = duration * 1000 + 30000
-            resp = self._provider.profile_task(worker.address, request, timeout_ms=timeout_ms)
-            if resp.error:
-                logger.debug("Profile (%s) failed for %s: %s", profile_kind, task_id, resp.error)
-                return
-            if not resp.profile_data:
-                logger.debug("Empty %s profile for %s", profile_kind, task_id)
-                return
-            insert_task_profile(
-                self._db,
-                task_id=task_id.to_wire(),
-                profile_data=resp.profile_data,
-                captured_at=Timestamp.now(),
-                profile_kind=profile_kind,
-            )
-            logger.debug("Stored %d byte %s profile for %s", len(resp.profile_data), profile_kind, task_id)
-        except Exception:
-            logger.debug("Profile capture (%s) failed for %s", profile_kind, task_id, exc_info=True)
+        # Worker-side kills are surfaced through the next K8s pod-diff sync;
+        # no immediate RPC fan-out here.
 
     def _is_reservation_satisfied(
         self,
@@ -1906,14 +1798,22 @@ class Controller:
         return claims
 
     def _read_scheduling_state(self) -> _SchedulingStateRead:
-        """Fetch pending tasks and healthy workers from the DB."""
+        """Fetch pending tasks and healthy workers from the DB.
+
+        Projects worker rows + per-cycle held-resource usage (from
+        ``task_attempts``) into bundled ``WorkerSnapshot``s at the boundary so
+        downstream scheduling code only sees the scheduler's input type.
+        """
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
-            pending_tasks = _schedulable_tasks(self._db)
+            pending_tasks = _sort_pending_tasks_by_resolved_band(self._store, _schedulable_tasks(self._db))
             workers = healthy_active_workers_with_attributes(self._db, self._health)
+            with self._db.read_snapshot() as snap:
+                usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
+            snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return _SchedulingStateRead(
             pending_tasks=pending_tasks,
-            workers=workers,
+            workers=snapshots,
             state_read_ms=timer.elapsed_ms(),
         )
 
@@ -1991,11 +1891,24 @@ class Controller:
         """
         with self._db.read_snapshot() as budget_snapshot:
             user_spend = compute_user_spend(budget_snapshot)
+            # Source the requested band from ``job_config`` (immutable since
+            # submission), not from ``tasks.priority_band`` (which is overwritten
+            # with the effective band at assign time). Otherwise a task that was
+            # downgraded to BATCH while its user was over budget would stay
+            # BATCH forever after preemption — ``compute_effective_band`` only
+            # demotes, never promotes back to the user's requested band.
+            requested_bands = self._store.jobs.get_priority_bands(
+                budget_snapshot, {task.job_id for task in pending_tasks}
+            )
         user_budget_limits = self._db.get_all_user_budget_limits()
         defaults = self._config.user_budget_defaults
         task_band_map: dict[JobName, int] = {
             task.task_id: compute_effective_band(
-                task.priority_band, task.task_id.user, user_spend, user_budget_limits, defaults
+                requested_bands.get(task.job_id, task.priority_band),
+                task.task_id.user,
+                user_spend,
+                user_budget_limits,
+                defaults,
             )
             for task in pending_tasks
         }
@@ -2040,23 +1953,6 @@ class Controller:
         modified_workers = _inject_reservation_taints(state.workers, claims)
         modified_jobs = _inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
-        # Exclude workers with outstanding StopTasks RPCs from the task-updater
-        # thread. This prevents the scheduler from assigning new tasks to workers
-        # that still have stale processes being killed. Without this, a
-        # coscheduled gang requeue frees committed resources in the DB before the
-        # kill RPCs complete, and the scheduler can place a second gang on workers
-        # that are still running the first gang's processes (#5470).
-        with self._workers_pending_kill_lock:
-            pending_kill = set(self._workers_pending_kill)
-        if pending_kill:
-            pre_filter = len(modified_workers)
-            modified_workers = [w for w in modified_workers if w.worker_id not in pending_kill]
-            if len(modified_workers) < pre_filter:
-                logger.info(
-                    "Excluded %d workers with pending kills from scheduling",
-                    pre_filter - len(modified_workers),
-                )
-
         with slow_log(logger, "building_counts", threshold_ms=50):
             building_counts = _building_counts(self._db, workers=state.workers)
         context = self._scheduler.create_scheduling_context(
@@ -2089,8 +1985,7 @@ class Controller:
                 len(result.assignments),
             )
         if all_assignments:
-            with slow_log(logger, "dispatch_assignments_direct", threshold_ms=200):
-                self._dispatch_assignments_direct(all_assignments)
+            self._commit_assignments(all_assignments, order.task_band_map)
             logger.debug(
                 "Scheduling cycle: %d assignments (%d preferred, %d normal), %dms (state read: %dms)",
                 len(all_assignments),
@@ -2100,6 +1995,40 @@ class Controller:
                 state.state_read_ms,
             )
         return all_assignments, context, modified_jobs
+
+    def _commit_assignments(
+        self,
+        assignments: list[tuple[JobName, WorkerId]],
+        task_band_map: dict[JobName, int],
+    ) -> None:
+        """Persist scheduler decisions to ``tasks.state = ASSIGNED`` rows.
+
+        Each assignment carries the effective priority band from
+        ``task_band_map`` (computed against the snapshot's user spend) so
+        ``mark_assigned`` can stamp it onto ``tasks.priority_band``. The
+        preemption pass then trusts that stamped value instead of
+        recomputing from current spend on every tick.
+
+        The polling reconcile thread reads ASSIGNED rows on its next tick
+        (woken via ``_polling_wake``) and fans out the StartTasks RPCs.
+        """
+        if self._config.dry_run:
+            for task_id, worker_id in assignments:
+                logger.info("[DRY-RUN] Would assign task %s to worker %s", task_id, worker_id)
+            return
+        command = [
+            Assignment(
+                task_id=task_id,
+                worker_id=worker_id,
+                priority_band=task_band_map.get(task_id),
+            )
+            for task_id, worker_id in assignments
+        ]
+        with self._store.transaction() as cur:
+            self._transitions.queue_assignments(cur, command)
+        # Wake the polling thread; every tick reconciles every healthy worker,
+        # so the new ASSIGNED rows turn into StartTasks RPCs on the next tick.
+        self._polling_wake.set()
 
     def _apply_preemptions(
         self,
@@ -2123,25 +2052,16 @@ class Controller:
         preemptions: list[tuple[JobName, JobName]] = []
         if unscheduled:
             claimed_workers = set(claims.keys())
-            running_info = _get_running_tasks_with_band_and_value(
-                self._db,
-                claimed_workers,
-                user_spend=order.user_spend,
-                user_budget_limits=order.user_budget_limits,
-                user_budget_defaults=self._config.user_budget_defaults,
-            )
+            running_info = _get_running_tasks_with_band_and_value(self._db, claimed_workers)
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             # Apply all preemptions in one transaction so slice evictions
             # (N siblings of a coscheduled preemptor) are all-or-nothing.
-            kills: set[JobName] = set()
             if preemptions:
                 with self._store.transaction() as cur:
                     for preemptor_name, victim_id in preemptions:
-                        preempt_result = self._transitions.preempt_task(
-                            cur, victim_id, reason=f"Preempted by {preemptor_name}"
-                        )
-                        kills |= preempt_result.tasks_to_kill
-                self.kill_tasks_on_workers(kills)
+                        self._transitions.preempt_task(cur, victim_id, reason=f"Preempted by {preemptor_name}")
+                # Killed-task RPCs land on the next polling tick via the
+                # worker's expected_tasks diff.
                 logger.info("Preemption pass: %d tasks preempted", len(preemptions))
         return preemptions
 
@@ -2210,9 +2130,7 @@ class Controller:
             logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
         task_ids = {t.task_id for t in timed_out}
         with self._store.transaction() as cur:
-            result = self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
-        if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+            self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
 
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
         """Mark a task as unschedulable due to timeout."""
@@ -2226,149 +2144,181 @@ class Controller:
             timeout = None
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
         with self._store.transaction() as cur:
-            result = self._transitions.mark_task_unschedulable(
+            self._transitions.mark_task_unschedulable(
                 cur,
                 task.task_id,
                 reason=f"Scheduling timeout exceeded ({timeout})",
             )
-        if result.tasks_to_kill:
-            self.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
 
     def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext:
         """Create a scheduling context for the given workers."""
         building_counts = _building_counts(self._db, workers)
+        with self._db.read_snapshot() as snap:
+            usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
+        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return self._scheduler.create_scheduling_context(
-            workers,
+            snapshots,
             building_counts=building_counts,
         )
 
-    def kill_tasks_on_workers(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None:
-        """Kill tasks on their assigned workers.
+    # =========================================================================
+    # Worker lifecycle RPC dispatch (Reconcile / Ping)
+    # =========================================================================
 
-        Non-K8s providers send StopTasks RPCs directly. K8s buffers direct kills
-        for the provider sync loop to consume.
+    def _reconcile_worker_batch(self) -> None:
+        """One polling-tick reconcile pass.
+
+        Phase 1 (snapshot read): pick the next batch of healthy workers
+        (priority lane first, then round-robin), and snapshot the
+        ``(worker, task, attempt)`` rows that drive their reconcile. ASSIGNED
+        rows produce StartTasks payloads; BUILDING/RUNNING rows populate the
+        worker's expected_tasks set; workers with no rows still receive an
+        empty Poll so they auto-kill any strays.
+
+        Phase 2 (no DB lock): fan out StartTasks and Poll RPCs concurrently.
+
+        Phase 3 (small write tx): apply Poll responses through the existing
+        heartbeat queue, and emit synthetic WORKER_FAILED for StartTasks
+        failures so the scheduler bounces ASSIGNED rows that never landed.
         """
         if self._config.dry_run:
-            logger.info("[DRY-RUN] Would kill %d tasks on workers: %s", len(task_ids), list(task_ids)[:5])
             return
-        if not isinstance(self._provider, K8sTaskProvider):
-            self._stop_tasks_direct(task_ids, task_kill_workers)
-            return
-        # K8s: buffer direct kills for the provider sync loop.
-        with self._store.transaction() as cur:
-            for task_id in task_ids:
-                self._transitions.buffer_direct_kill(cur, task_id.to_wire())
 
-    # =========================================================================
-    # Worker lifecycle RPC dispatch (StartTasks / StopTasks / Ping / PollTasks)
-    # =========================================================================
+        # ── Phase 1: snapshot every healthy worker ───────────────────────
+        with self._db.read_snapshot() as snap:
+            addresses = self._store.workers.list_active_healthy(snap)
+            if not addresses:
+                return
+            worker_ids = list(addresses)
+            rows = self._store.attempts.reconcile_rows_for_workers(snap, worker_ids)
+            templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
+            for row in rows:
+                if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
+                    continue
+                if row.job_id not in templates_by_job:
+                    templates_by_job[row.job_id] = self._transitions.run_request_template(snap, row.job_id)
 
-    def _dispatch_assignments_direct(
+        expected: dict[WorkerId, list[RunningTaskEntry]] = {wid: [] for wid in worker_ids}
+        starts: dict[WorkerId, list[job_pb2.RunTaskRequest]] = {wid: [] for wid in worker_ids}
+        attempt_by_worker_task: dict[tuple[WorkerId, str], int] = {}
+
+        for row in rows:
+            if row.task_state == job_pb2.TASK_STATE_ASSIGNED:
+                template = templates_by_job.get(row.job_id)
+                if template is None:
+                    # Reservation-holder task or a job that disappeared mid-tick.
+                    continue
+                req = job_pb2.RunTaskRequest()
+                req.CopyFrom(template)
+                req.task_id = row.task_id.to_wire()
+                req.attempt_id = row.attempt_id
+                starts[row.worker_id].append(req)
+                attempt_by_worker_task[(row.worker_id, row.task_id.to_wire())] = row.attempt_id
+            # ASSIGNED rows go into ``expected`` too so PollTasks reports
+            # current state. The worker's BUILDING push is best-effort
+            # (worker.py:_on_state_change drops RPC failures); poll is the
+            # only resilient recovery channel for ASSIGNED -> BUILDING.
+            # Per-worker reconcile (see ``WorkerProvider._reconcile_one``)
+            # sends StartTasks then PollTasks under one stub, so by the time
+            # PollTasks lands the worker's task table already contains the
+            # rows we just dispatched and ``_missing_task_status`` cannot
+            # auto-kill them.
+            expected[row.worker_id].append(RunningTaskEntry(task_id=row.task_id, attempt_id=row.attempt_id))
+
+        # ── Phase 2: per-worker reconcile under a single asyncio loop ────
+        plans = [
+            WorkerReconcilePlan(
+                worker_id=wid,
+                address=addresses.get(wid),
+                start_tasks=starts.get(wid, []),
+                expected_tasks=expected.get(wid, []),
+            )
+            for wid in worker_ids
+        ]
+        results = self._provider.reconcile_workers(plans)
+
+        heartbeats: list[HeartbeatApplyRequest] = []
+        for result in results:
+            if result.start_error is not None or result.start_response is not None:
+                self._collect_start_tasks_result(
+                    heartbeats,
+                    result.worker_id,
+                    result.start_response,
+                    result.start_error,
+                    starts.get(result.worker_id, []),
+                    attempt_by_worker_task,
+                )
+            if result.poll_error is not None:
+                logger.debug("PollTasks failed for worker %s: %s", result.worker_id, result.poll_error)
+            elif result.poll_updates:
+                heartbeats.append(HeartbeatApplyRequest(worker_id=result.worker_id, updates=result.poll_updates))
+
+        # ── Phase 3: apply heartbeat-style results in one write txn ──────
+        if heartbeats:
+            self._process_heartbeat_updates(heartbeats)
+
+    def _collect_start_tasks_result(
         self,
-        assignments: list[tuple[JobName, WorkerId]],
+        heartbeats: list[HeartbeatApplyRequest],
+        worker_id: WorkerId,
+        response: worker_pb2.Worker.StartTasksResponse | None,
+        error: str | None,
+        sent: list[job_pb2.RunTaskRequest],
+        attempt_by_worker_task: dict[tuple[WorkerId, str], int],
     ) -> None:
-        """Commit assignments and send StartTasks RPCs directly."""
-        if self._config.dry_run:
-            for task_id, worker_id in assignments:
-                logger.info("[DRY-RUN] Would assign task %s to worker %s", task_id, worker_id)
-            return
-        command = [Assignment(task_id=task_id, worker_id=worker_id) for task_id, worker_id in assignments]
-        with self._store.transaction() as cur:
-            result = self._transitions.queue_assignments(cur, command, direct_dispatch=True)
+        """Convert StartTasks RPC failures and worker rejects into synthetic heartbeats.
 
-        # Group StartTasks payloads by (worker_id, address)
-        by_worker: dict[tuple[WorkerId, str], list[job_pb2.RunTaskRequest]] = {}
-        for worker_id, address, run_request in result.start_requests:
-            by_worker.setdefault((worker_id, address), []).append(run_request)
-
-        attempt_by_worker_task = {
-            (worker_id, t.task_id): t.attempt_id for (worker_id, _), tasks in by_worker.items() for t in tasks
-        }
-        jobs = [(worker_id, address, tasks) for (worker_id, address), tasks in by_worker.items()]
-        tasks_by_worker: dict[WorkerId, list[job_pb2.RunTaskRequest]] = {
-            worker_id: tasks for (worker_id, _), tasks in by_worker.items()
-        }
-        for worker_id, response, error in self._provider.start_tasks(jobs):
-            if error is not None:
-                # The assignment is already committed (task is ASSIGNED against
-                # this worker) but the worker never heard about it, so no poll
-                # or heartbeat can ever surface completion. Fail the attempt so
-                # the task state machine bounces it back to PENDING — see
-                # transitions._apply_task_transition: WORKER_FAILED from ASSIGNED
-                # rolls the task to PENDING without consuming a preemption retry.
-                log_event(
-                    "dispatch_failed",
-                    str(worker_id),
-                    trigger="start_tasks_rpc",
-                    task_count=len(tasks_by_worker.get(worker_id, [])),
-                    error=error,
-                )
-                self._task_update_queue.put(
-                    HeartbeatApplyRequest(
-                        worker_id=worker_id,
-                        updates=[
-                            TaskUpdate(
-                                task_id=JobName.from_wire(t.task_id),
-                                attempt_id=attempt_by_worker_task.get((worker_id, t.task_id), -1),
-                                new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                                error=f"StartTasks RPC failed: {error}",
-                            )
-                            for t in tasks_by_worker.get(worker_id, [])
-                        ],
-                    )
-                )
-                continue
-            assert response is not None
-            for ack in response.acks:
-                if not ack.accepted:
-                    log_event(
-                        "task_rejected",
-                        ack.task_id,
-                        trigger="start_tasks_ack",
-                        worker=str(worker_id),
-                        error=ack.error,
-                    )
-                    self._task_update_queue.put(
-                        HeartbeatApplyRequest(
-                            worker_id=worker_id,
-                            updates=[
-                                TaskUpdate(
-                                    task_id=JobName.from_wire(ack.task_id),
-                                    attempt_id=attempt_by_worker_task.get((worker_id, ack.task_id), -1),
-                                    new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                                    error=f"Worker rejected task: {ack.error}",
-                                )
-                            ],
+        ASSIGNED → WORKER_FAILED through the heartbeat path bounces the task
+        back to PENDING (without consuming a preemption retry; see
+        ``_apply_task_transitions``). The next scheduling tick re-places it.
+        """
+        if error is not None:
+            log_event(
+                "dispatch_failed",
+                str(worker_id),
+                trigger="start_tasks_rpc",
+                task_count=len(sent),
+                error=error,
+            )
+            heartbeats.append(
+                HeartbeatApplyRequest(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=JobName.from_wire(t.task_id),
+                            attempt_id=attempt_by_worker_task.get((worker_id, t.task_id), -1),
+                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            error=f"StartTasks RPC failed: {error}",
                         )
-                    )
-
-    def _stop_tasks_direct(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None:
-        """Send StopTasks RPCs directly to workers."""
-        mapping = dict(task_kill_workers or {})
-        unresolved = task_ids - set(mapping.keys())
-        if unresolved:
-            mapping.update(_task_worker_mapping(self._db, unresolved))
-        workers = _workers_by_id(self._db, set(mapping.values()))
-
-        by_worker: dict[tuple[WorkerId, str], list[str]] = {}
-        for task_id, worker_id in mapping.items():
-            worker = workers.get(worker_id)
-            if worker is None:
+                        for t in sent
+                    ],
+                )
+            )
+            return
+        assert response is not None
+        for ack in response.acks:
+            if ack.accepted:
                 continue
-            by_worker.setdefault((worker_id, worker.address), []).append(task_id.to_wire())
-
-        jobs = [(worker_id, address, wids) for (worker_id, address), wids in by_worker.items()]
-        for worker_id, error in self._provider.stop_tasks(jobs):
-            if error is not None:
-                logger.warning("StopTasks RPC failed for worker %s: %s", worker_id, error)
+            log_event(
+                "task_rejected",
+                ack.task_id,
+                trigger="start_tasks_ack",
+                worker=str(worker_id),
+                error=ack.error,
+            )
+            heartbeats.append(
+                HeartbeatApplyRequest(
+                    worker_id=worker_id,
+                    updates=[
+                        TaskUpdate(
+                            task_id=JobName.from_wire(ack.task_id),
+                            attempt_id=attempt_by_worker_task.get((worker_id, ack.task_id), -1),
+                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            error=f"Worker rejected task: {ack.error}",
+                        )
+                    ],
+                )
+            )
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
@@ -2419,67 +2369,21 @@ class Controller:
             except Exception:
                 logger.exception("Ping loop iteration failed")
 
-    def _poll_all_workers(self) -> None:
-        """Poll all workers for task state and feed results into the updater queue."""
-        if self._config.dry_run:
-            return
-        with self._store.read_snapshot() as snap:
-            running, addresses = self._transitions.get_running_tasks_for_poll(snap)
-        if not running:
-            return
-        poll_results = self._provider.poll_workers(running, addresses)
-        for worker_id, updates, error in poll_results:
-            if error is not None:
-                logger.warning("PollTasks failed for worker %s: %s", worker_id, error)
-                continue
-            if updates:
-                self._task_update_queue.put(
-                    HeartbeatApplyRequest(
-                        worker_id=worker_id,
-                        updates=updates,
-                    )
-                )
-
     def _process_heartbeat_updates(self, requests: list[HeartbeatApplyRequest]) -> None:
-        """Apply heartbeat-driven transitions and send kill RPCs.
+        """Apply heartbeat-driven state transitions in one write txn.
 
-        The pending-kill set is populated inside the decommit transaction so that
-        the scheduling thread cannot observe freed capacity without also seeing
-        the pending-kill marker.
+        Cascades and gang requeues surface ``tasks_to_kill`` so the next
+        polling tick (or, for K8s, the sync loop) picks up the kills.
+
+        Deliberately does **not** wake the scheduling loop. The scheduler
+        re-evaluates capacity on its own backoff cadence; the worker push
+        path (``update_task_status``) is the only writer that wakes
+        scheduling, since it can free capacity by stamping ``finished_at_ms``
+        on the heartbeat. Polling-thread heartbeats firing every tick used
+        to short-circuit the backoff entirely.
         """
-        workers_to_kill: set[WorkerId] = set()
         with self._store.transaction() as cur:
-            results = self._transitions.apply_heartbeats_batch(cur, requests)
-            all_tasks_to_kill: set[JobName] = set()
-            all_task_kill_workers: dict[JobName, WorkerId] = {}
-            for result in results:
-                all_tasks_to_kill.update(result.tasks_to_kill)
-                all_task_kill_workers.update(result.task_kill_workers)
-            if all_tasks_to_kill:
-                workers_to_kill = set(all_task_kill_workers.values())
-                with self._workers_pending_kill_lock:
-                    self._workers_pending_kill |= workers_to_kill
-        if workers_to_kill:
-            try:
-                self._stop_tasks_direct(all_tasks_to_kill, all_task_kill_workers)
-            finally:
-                with self._workers_pending_kill_lock:
-                    self._workers_pending_kill -= workers_to_kill
-
-    def _run_task_updater_loop(self, stop_event: threading.Event) -> None:
-        """Batched task state updater.
-
-        Drains the task-update queue every 1s and applies transitions in a
-        single batch via _process_heartbeat_updates.
-        """
-        while not stop_event.is_set():
-            requests = _drain_queue(self._task_update_queue, timeout=1.0)
-            if not requests or stop_event.is_set():
-                continue
-            try:
-                self._process_heartbeat_updates(requests)
-            except Exception:
-                logger.exception("Task updater loop iteration failed")
+            self._transitions.apply_heartbeats_batch(cur, requests)
 
     def _terminate_workers(self, worker_ids: list[str], reason: str, sibling_reason: str) -> list[WorkerId]:
         """Fail the given workers, terminate their slice siblings, and kill running tasks.
@@ -2509,8 +2413,9 @@ class Controller:
                 removed.append(wid)
             failure_result.tasks_to_kill.update(sibling_failures.tasks_to_kill)
             failure_result.task_kill_workers.update(sibling_failures.task_kill_workers)
-        if failure_result.tasks_to_kill:
-            self.kill_tasks_on_workers(failure_result.tasks_to_kill, failure_result.task_kill_workers)
+        # Surviving-slice siblings get killed on the next polling tick via
+        # the worker's expected_tasks diff; the failed workers themselves
+        # are already gone from the worker table.
         return removed
 
     def _run_autoscaler_once(self) -> None:

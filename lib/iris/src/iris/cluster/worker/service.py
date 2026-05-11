@@ -12,7 +12,7 @@ from connectrpc.request import RequestContext
 from rigging.timing import Timer
 
 from iris.cluster.process_status import get_process_status as _get_process_status
-from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
+from iris.cluster.runtime.profile import ProfileTrigger
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import rpc_error_handler
@@ -36,8 +36,12 @@ class TaskProvider(Protocol):
     ) -> worker_pb2.Worker.StartTasksResponse: ...
     def handle_stop_tasks(self, request: worker_pb2.Worker.StopTasksRequest) -> worker_pb2.Worker.StopTasksResponse: ...
     def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse: ...
-    def profile_task(
-        self, task_id: str, duration_seconds: int, profile_type: job_pb2.ProfileType, attempt_id: int | None = None
+    def capture_and_log_profile(
+        self,
+        *,
+        target: str,
+        request: job_pb2.ProfileTaskRequest,
+        trigger: ProfileTrigger,
     ) -> bytes: ...
     def exec_in_container(
         self, task_id: str, command: list[str], timeout_seconds: int = 60
@@ -109,28 +113,21 @@ class WorkerServiceImpl:
         """Profile a running task or the worker process itself.
 
         The target field determines what to profile:
-        - /system/process: the worker process itself
-        - /job/.../task/N:A: a specific task attempt (delegated to TaskProvider)
+        - ``/system/process``: the worker process itself. The persisted row's
+          ``source`` is rewritten to ``/system/worker/<id>``.
+        - ``/job/.../task/N[:attempt_id]``: a specific task attempt.
+
+        All captures (CPU, memory, threads) persist to ``iris.profile`` with
+        ``trigger="on_demand"`` and the bytes are returned inline.
         """
         with rpc_error_handler("profile_task"):
             try:
                 if not request.HasField("profile_type"):
                     raise ValueError("profile_type is required")
-
-                duration = request.duration_seconds or 10
-
-                # /system/process: profile the worker process itself using py-spy/memray
-                if is_system_target(request.target):
-                    data = profile_local_process(duration, request.profile_type)
-                    return job_pb2.ProfileTaskResponse(profile_data=data)
-
-                # Task target: parse optional :attempt_id and delegate to the container handle
-                target = parse_profile_target(request.target)
-                data = self._provider.profile_task(
-                    target.task_id.to_wire(),
-                    duration_seconds=duration,
-                    profile_type=request.profile_type,
-                    attempt_id=target.attempt_id,
+                data = self._provider.capture_and_log_profile(
+                    target=request.target,
+                    request=request,
+                    trigger=ProfileTrigger.ON_DEMAND,
                 )
                 return job_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:

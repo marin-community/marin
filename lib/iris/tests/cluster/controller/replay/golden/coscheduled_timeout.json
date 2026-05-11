@@ -1,22 +1,4 @@
 {
-  "dispatch_queue": [
-    {
-      "created_at_ms": 1704067200000,
-      "id": 1,
-      "kind": "run",
-      "payload_proto": "ChgvdGVzdC11c2VyL2Nvc2NoZWQtam9iLzAQAhoUEhIKBnB5dGhvbgoCLWMKBHBhc3MiACoAMg0I6AcggICAgAQqAEgASABaAA==",
-      "task_id": null,
-      "worker_id": "w-cosched-a"
-    },
-    {
-      "created_at_ms": 1704067200000,
-      "id": 2,
-      "kind": "run",
-      "payload_proto": "ChgvdGVzdC11c2VyL2Nvc2NoZWQtam9iLzEQAhoUEhIKBnB5dGhvbgoCLWMKBHBhc3MiACoAMg0I6AcggICAgAQqAEgASABaAA==",
-      "task_id": null,
-      "worker_id": "w-cosched-b"
-    }
-  ],
   "endpoints": [],
   "job_config": [
     {
@@ -185,10 +167,6 @@
   "workers": [
     {
       "address": "w-cosched-a:8080",
-      "committed_cpu_millicores": 1000,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 1073741824,
-      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,
@@ -217,10 +195,6 @@
     },
     {
       "address": "w-cosched-b:8080",
-      "committed_cpu_millicores": 1000,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 1073741824,
-      "committed_tpu": 0,
       "device_type": "",
       "device_variant": "",
       "md_cpu_count": 8,

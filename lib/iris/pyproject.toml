@@ -78,6 +78,15 @@ packages = ["src/iris"]
 # probe in _bundled_iris_examples_dir() in iris.cli.main).
 "examples" = "iris/examples"
 
+[tool.hatch.build.targets.sdist]
+# Without an explicit sdist scope, hatchling sweeps the whole iris/ directory
+# and bundles ~146 MiB of dashboard/node_modules (git-ignored but still on
+# disk). Restrict to source + configs so the sdist stays small.
+packages = ["src/iris"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"examples" = "examples"
+
 [tool.pytest.ini_options]
 timeout = 10
 timeout_method = "thread"
