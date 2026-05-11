@@ -177,8 +177,9 @@ def _write_xla_dump_hint(directory: Path, *, backend: PallasBackend) -> dict[str
     hint = directory / "xla_dump_hint.txt"
     hint.write_text(
         'Set XLA_FLAGS="--xla_dump_to=/tmp/xla-sonic-pallas --xla_dump_hlo_as_text '
-        '--xla_gpu_dump_llvmir --xla_gpu_dump_ptx" before running this script to capture '
-        f"the compiled artifacts for backend={backend}.\n",
+        '--xla_gpu_dump_llvmir" before running this script to capture the compiled artifacts '
+        f"for backend={backend}. Current XLA builds reject --xla_gpu_dump_ptx; PTX is emitted "
+        "alongside LLVM IR when GPU IR dumping is enabled.\n",
         encoding="utf-8",
     )
     return {"path": str(hint), "kind": "xla_dump_hint", "bytes": hint.stat().st_size}

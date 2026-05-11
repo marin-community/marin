@@ -91,6 +91,48 @@ variant and is not the faithful Sonic source-shape port.
    through JAX/Pallas/Triton custom calls, so launch/codegen overhead is still
    part of the comparison.
 
+## PTX Check, 2026-05-11
+
+Jobs:
+
+- `/dlwh/sonicmoe-faithful-ptx2-20260511-121635`: real Sonic plus fastest
+  faithful Pallas PTX dump.
+- `/dlwh/sonicmoe-autotune-id-20260511-121825`: Sonic autotune identification.
+- `/dlwh/sonicmoe-selected-ptx-20260511-121937`: selected Sonic PTX summary.
+- `/dlwh/sonicmoe-pallas-ptx-match-20260511-122056`: Pallas PTX with the same
+  tile/warp shape as Sonic's selected autotune config.
+
+Shape: `tokens=8192`, `hidden=2048`, `experts=8`, `topk=4`, weighted BF16 on
+GH200.
+
+Sonic's Triton autotuner selected `BLOCK_H=2048`, `BLOCK_K=2`, `num_warps=8`.
+The fastest Pallas timing from the manual sweep was still
+`BLOCK_H=4096`, `BLOCK_K=4`, `num_warps=8`, but the matched-tile PTX is the
+cleaner source-comparison artifact.
+
+| Path | Tile | PTX bytes | Lines | `ld.global` | `st.global` | `add.*` | `mul.*` | `cvt.*` | `fma.*` |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sonic selected Triton | `H=2048`, `K=2`, `warps=8` | `19.6KB` | `522` | `9` | `1` | `28` | `17` | `45` | `16` |
+| Pallas faithful, matched tile | `H=2048`, `K=2`, `warps=8` | `8.2KB` | `271` | `13` | `1` | `49` | `39` | `40` | `0` |
+| Pallas faithful, fastest manual tile | `H=4096`, `K=4`, `warps=8` | `13.5KB` | `435` | `17` | `2` | `91` | `76` | `76` | `0` |
+
+The matched-tile PTX changes the earlier diagnosis. The old token-loop Pallas
+artifact was much larger than Sonic's PTX; the source-faithful matched-tile PTX
+is smaller in bytes/lines than Sonic, but it still emits more global loads and
+substantially more integer address arithmetic. The load pattern is:
+
+- Sonic selected: one repeat-offset load, one vectorized reverse-position load
+  for the `K=2` tile, several vectorized source/weight loads, and one vectorized
+  output store.
+- Pallas matched tile: one repeat-offset load, two scalar reverse-position
+  loads, two vectorized source loads and two scalar weight loads per `K=2` tile,
+  repeated for the two K tiles, and one vectorized output store.
+
+So the remaining isolated gather/sum gap is no longer explained by gross PTX
+size. The more concrete PTX-level gap is scalarization / duplicated address and
+load work in the Pallas lowering, plus any residual custom-call/runtime launch
+tax outside the kernel body.
+
 ## Reading The Next IR/PTX Report
 
 Use this map as the source alignment before looking at IR:
@@ -101,7 +143,9 @@ Use this map as the source alignment before looking at IR:
 2. Compare real Sonic [lines 147-163](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/.agents/scripts/sonicmoe_compare/real_sonic_token_gather_sum.py#L147-L163)
    against faithful Pallas
    [lines 586-613](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L586-L613).
-3. Treat differences caused by padding and launch-grid decomposition separately
-   from actual math differences.
-4. If Pallas PTX still has many more global load instructions, the first source
-   suspects are K blocking, accumulator dtype, and launch-grid structure.
+3. Compare matched-tile PTX first (`H=2048`, `K=2`, `warps=8`) before comparing
+   fastest-tile PTX, otherwise autotuning differences obscure source-lowering
+   differences.
+4. The current first suspect is Pallas scalarization of reverse-position and
+   weight loads across K tiles, not missing `BLOCK_K`, accumulator dtype, masks,
+   or launch-grid structure.
