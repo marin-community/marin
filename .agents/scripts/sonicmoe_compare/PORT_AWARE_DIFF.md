@@ -129,9 +129,162 @@ substantially more integer address arithmetic. The load pattern is:
   loads, two vectorized source loads and two scalar weight loads per `K=2` tile,
   repeated for the two K tiles, and one vectorized output store.
 
+### Load-Origin Check, 2026-05-11
+
+Follow-up jobs isolated the `13` versus `9` load count:
+
+- `/dlwh/sonicmoe-load-origin-20260511-ptx13b-132328`: selected the Pallas
+  matched-tile artifact
+  `/tmp/xla_pallas_faithful_ptx13/module_18531.jit_call.ptx` with `13`
+  `ld.global` and `1` `st.global`.
+- `/dlwh/sonicmoe-load-origin-20260511-sonic9-132509`: selected the real
+  Sonic `K=2` artifact
+  `/tmp/sonicmoe_load_origin/upstream/real_sonic/kernel.fn.device_caches.dict_0.tuple_0.dict_15.asm.ptx`
+  with `9` `ld.global` and `1` `st.global`.
+
+The extra four Pallas loads are not extra `dispatch_output` tensor loads. They
+come from scalarization of the two-element K tile metadata:
+
+| Logical load group | Sonic selected PTX | Pallas matched PTX | Difference |
+|---|---:|---:|---:|
+| `repeat_offsets[repeat_index]` | `1` scalar `b32` | `1` scalar `b32` | `0` |
+| Reverse positions, tile `K=2` | `2` vector `v2.b32` loads, one per K tile | `4` scalar `b32` loads, one per route | `+2` |
+| Source rows, two rows per K tile | `4` vector `v4.b32` loads | `4` vector `v4.b32` loads | `0` |
+| Combine weights, tile `K=2` | `2` packed `b32` loads, one per K tile | `4` scalar `b16` loads, one per route | `+2` |
+| Total loads | `9` | `13` | `+4` |
+
+Real Sonic TTIR for the selected artifact has vector K-tile loads:
+
+```text
+%perm_idx_18 = tt.load ... : tensor<2x!tt.ptr<i32>>
+%x_vals = tt.load ... : tensor<2x2048x!tt.ptr<bf16>>
+%w_vals_35 = tt.load ... : tensor<2x!tt.ptr<bf16>>
+```
+
+Those lower in PTX to one `ld.global.v2.b32` for two reverse positions and one
+packed `ld.global.b32` for two BF16 weights per K tile. The current faithful
+Pallas source also expresses `K=2`, but XLA/Pallas emits scalar loads for
+`dispatch_positions_ref.at[token_index, safe_k_offsets]` and
+`combine_weights_ref.at[token_index, safe_k_offsets]`.
+
+Concrete Pallas load map from
+`/dlwh/sonicmoe-load-origin-20260511-ptx13b-132328`:
+
+```text
+45   repeat offset
+54   dispatch_positions[t, 0]
+58   dispatch_positions[t, 1]
+76   dispatch_output[row0, h:h+8]
+87   dispatch_output[row1, h:h+8]
+115  combine_weights[t, 0]
+119  combine_weights[t, 1]
+159  dispatch_positions[t, 2]
+163  dispatch_positions[t, 3]
+180  dispatch_output[row2, h:h+8]
+191  dispatch_output[row3, h:h+8]
+217  combine_weights[t, 2]
+221  combine_weights[t, 3]
+266  output store
+```
+
+Concrete Sonic selected load map from
+`/dlwh/sonicmoe-load-origin-20260511-sonic9-132509`:
+
+```text
+48   repeat offset
+62   packed reverse positions for K tile 0
+83   dispatch_output[row0, h:h+8]
+90   dispatch_output[row1, h:h+8]
+97   packed BF16 weights for K tile 0
+105  packed reverse positions for K tile 1
+125  dispatch_output[row2, h:h+8]
+132  dispatch_output[row3, h:h+8]
+139  packed BF16 weights for K tile 1
+302  output store
+```
+
+Next source-level experiment: special-case exact fixed K tiles where
+`topk % k_block_size == 0` in the faithful Pallas path and remove the `k_mask`
+/ `safe_k_offsets` shape guards for the `K=2` metadata loads. If Pallas still
+emits scalar `dispatch_positions` and `combine_weights` loads, reduce this to a
+minimal Pallas repro that loads `i32[2]` and `bf16[2]` vectors from contiguous
+memory and compare against Triton.
+
+### Fixed-K Metadata Result, 2026-05-11
+
+Job `/dlwh/sonicmoe-pallas-fixedk-jitcall-20260511-220348` confirmed that the
+exact fixed-K branch fixes the textual global-load count:
+
+| Path | Tile | PTX bytes | Lines | `ld.global` | `st.global` | `add.*` | `mul.*` | `cvt.*` | `fma.*` | Steady time |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Sonic selected Triton | `H=2048`, `K=2`, `warps=8` | `19.6KB` | `522` | `9` | `1` | `28` | `17` | `45` | `16` | `0.072ms` CUDA event / `0.086ms` wall |
+| Pallas faithful before fixed-K | `H=2048`, `K=2`, `warps=8` | `8.2KB` | `271` | `13` | `1` | `49` | `39` | `40` | `0` | `0.118ms` wall |
+| Pallas faithful after fixed-K | `H=2048`, `K=2`, `warps=8` | `7.7KB` | `254` | `9` | `1` | `45` | `39` | `40` | `0` | `0.121ms` wall |
+
+The selected Pallas `jit_call` memory instructions now line up structurally with
+Sonic:
+
+```text
+45   repeat offset
+53   packed reverse positions for K tile 0
+72   dispatch_output[row0, h:h+8]
+83   dispatch_output[row1, h:h+8]
+109  packed BF16 weights for K tile 0
+150  packed reverse positions for K tile 1
+167  dispatch_output[row2, h:h+8]
+178  dispatch_output[row3, h:h+8]
+203  packed BF16 weights for K tile 1
+249  output store
+```
+
+This means the tiny `i32[2]` / `bf16[2]` repro is no longer the next blocker for
+this exact shape. Pallas can emit the packed loads when the source removes
+partial-K guards. The remaining gap is now arithmetic/codegen shape: Pallas
+still emits many more integer adds/muls and no textual `fma.*`, while Sonic
+emits fewer address operations and `16` fma instructions.
+
+### FMA And Flat-Metadata Result, 2026-05-11
+
+There is no named `pltriton.fma` intrinsic in the local JAX/Pallas build. The
+usable escape hatch is `pltriton.elementwise_inline_asm`. A whole-tile inline
+ASM wrapper around the multiply side of the weighted sum lowers and emits real
+`fma.rn.f32` instructions; a per-route slicing version does not lower because
+Pallas GPU lowering does not currently handle that `slice` primitive in this
+context. A `jnp.dot(weights, values)` rewrite also failed during Pallas/Triton
+lowering with an invalid tensor shape assertion, so it is not a viable source
+rewrite here.
+
+Jobs:
+
+- `/dlwh/sonicmoe-pallas-inlinefma-20260511-221005`: per-route inline-ASM
+  attempt; failed during lowering on an unsupported `slice`.
+- `/dlwh/sonicmoe-pallas-inlinefma2-20260511-221246`: whole-tile inline-ASM
+  attempt; succeeded and emitted textual `fma.rn.f32`.
+- `/dlwh/sonicmoe-pallas-flatmeta-20260511-221532`: flattened metadata inputs
+  for the fixed-K source path, with and without inline FMA.
+
+| Path | Metadata layout | FMA source | PTX bytes | Lines | `ld.global` | `st.global` | `add.*` | `mul.*` | `cvt.*` | `fma.*` | Steady time |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Pallas fixed-K | 2D source, fixed-K offsets | normal multiply/sum | `7.7KB` | `254` | `9` | `1` | `45` | `39` | `40` | `0` | `0.121ms` |
+| Pallas inline FMA | 2D source, fixed-K offsets | whole-tile inline ASM | `9.3KB` | `322` | `9` | `1` | `49` | `7` | `40` | `32` | `0.115ms` |
+| Pallas flat metadata | flattened metadata refs | normal multiply/sum | `7.7KB` | `254` | `9` | `1` | `45` | `39` | `40` | `0` | `0.117ms` |
+| Pallas flat metadata + inline FMA | flattened metadata refs | whole-tile inline ASM | `9.3KB` | `322` | `9` | `1` | `49` | `7` | `40` | `32` | `0.116ms` |
+
+Flattening `dispatch_positions` / `combine_weights` to one-dimensional metadata
+refs did not materially change generated PTX or runtime once the fixed-K branch
+was in place. Inline FMA does what we asked codegen to do, but the speedup is
+small and noisy: it removes most textual `mul.*` instructions and introduces
+`fma.rn.f32`, yet the best observed Pallas timing remains around `0.115ms`,
+still slower than real Sonic's same-shape `0.086ms` wall / `0.072ms` CUDA event
+measurement. The remaining gap is likely in address arithmetic, instruction
+scheduling, or other lowering differences rather than just missing vector loads
+or missing FMA contraction.
+
 So the remaining isolated gather/sum gap is no longer explained by gross PTX
-size. The more concrete PTX-level gap is scalarization / duplicated address and
-load work in the Pallas lowering. Host-dispatch overhead can dominate
+size or by K-metadata scalarization for the fixed `K=2` shape. The more
+concrete PTX-level gap is duplicated address arithmetic, scheduling, and the
+shape of the lowered arithmetic/reduction in the Pallas path. Host-dispatch
+overhead can dominate
 standalone JAX microbenchmarks, but the compiled-executable launch check below
 suggests it should not be the fundamental limit inside a real JIT-compiled
 training step.
@@ -190,13 +343,14 @@ Use this map as the source alignment before looking at IR:
 
 1. Compare real Sonic [lines 142-166](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/.agents/scripts/sonicmoe_compare/real_sonic_token_gather_sum.py#L142-L166)
    against faithful Pallas
-   [lines 581-616](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L581-L616).
+   [lines 596-684](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L596-L684).
 2. Compare real Sonic [lines 147-163](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/.agents/scripts/sonicmoe_compare/real_sonic_token_gather_sum.py#L147-L163)
    against faithful Pallas
-   [lines 586-613](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L586-L613).
+   [lines 621-679](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L621-L679).
 3. Compare matched-tile PTX first (`H=2048`, `K=2`, `warps=8`) before comparing
    fastest-tile PTX, otherwise autotuning differences obscure source-lowering
    differences.
-4. The current first suspect is Pallas scalarization of reverse-position and
-   weight loads across K tiles, not missing `BLOCK_K`, accumulator dtype, masks,
-   or launch-grid structure.
+4. The fixed-K source path now removes the reverse-position and weight
+   scalarization for the matched `K=2` case. The current first suspect is the
+   remaining address/integer arithmetic and scheduling difference rather than
+   missing `BLOCK_K`, accumulator dtype, masks, or launch-grid structure.

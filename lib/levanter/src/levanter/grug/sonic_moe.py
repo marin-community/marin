@@ -49,6 +49,7 @@ class SonicGatherSumBlockSizes:
     k_block_size: int = 4
     kernel_repeat: int = 1
     num_warps: int = 4
+    use_inline_fma: bool = False
 
     @classmethod
     def get_default(cls) -> "SonicGatherSumBlockSizes":
@@ -560,6 +561,38 @@ def _gather_sum_pallas_triton_token_loop_kernel(
         pltriton.store(output_ref.at[token_index, hidden_offsets], output)
 
 
+def _pallas_triton_fma_f32(
+    left: jax.Array,
+    right: jax.Array,
+    addend: jax.Array,
+) -> jax.Array:
+    if pltriton is None:
+        return left * right + addend
+    [out] = pltriton.elementwise_inline_asm(
+        "fma.rn.f32 $0, $1, $2, $3;",
+        args=[left, right, addend],
+        constraints="=f,f,f,f",
+        pack=1,
+        result_shape_dtypes=[jax.ShapeDtypeStruct(left.shape, jnp.float32)],
+    )
+    return out
+
+
+def _weighted_accumulate_fma(
+    acc: jax.Array,
+    values: jax.Array,
+    weights: jax.Array,
+    *,
+    k_block_size: int,
+    hidden_block_size: int,
+) -> jax.Array:
+    del k_block_size, hidden_block_size
+    zero_values = jnp.zeros_like(values)
+    weight_values = weights[:, None] + zero_values
+    weighted_values = _pallas_triton_fma_f32(values, weight_values, zero_values)
+    return acc + jnp.sum(weighted_values, axis=0)
+
+
 def _gather_sum_pallas_triton_faithful_kernel(
     dispatch_output_ref,
     dispatch_positions_ref,
@@ -575,8 +608,10 @@ def _gather_sum_pallas_triton_faithful_kernel(
     k_tiles: int,
     kernel_repeat: int,
     has_weights: bool,
+    use_inline_fma: bool,
 ) -> None:
     token_index = pl.program_id(0)
+    metadata_base = token_index * topk
 
     for hidden_tile in range(hidden_tiles):
         hidden_offsets = hidden_tile * hidden_block_size + jnp.arange(hidden_block_size)
@@ -587,30 +622,63 @@ def _gather_sum_pallas_triton_faithful_kernel(
             repeat_offset = pltriton.load(repeat_offsets_ref.at[repeat_index])
             for k_tile in range(k_tiles):
                 k_offsets = k_tile * k_block_size + jnp.arange(k_block_size)
-                k_mask = k_offsets < topk
-                safe_k_offsets = jnp.minimum(k_offsets, topk - 1)
-                dispatch_rows = (
-                    pltriton.load(
-                        dispatch_positions_ref.at[token_index, safe_k_offsets],
-                        mask=k_mask,
-                        other=0,
-                    )
-                    + repeat_offset
-                )
-                values = pltriton.load(
-                    dispatch_output_ref.at[dispatch_rows[:, None], hidden_offsets[None, :]],
-                    mask=k_mask[:, None] & hidden_mask[None, :],
-                    other=0.0,
-                ).astype(jnp.float32)
-                if has_weights:
-                    weights = pltriton.load(
-                        combine_weights_ref.at[token_index, safe_k_offsets],
-                        mask=k_mask,
+                if topk % k_block_size == 0:
+                    metadata_offsets = metadata_base + k_offsets
+                    dispatch_rows = pltriton.load(dispatch_positions_ref.at[metadata_offsets]) + repeat_offset
+                    values = pltriton.load(
+                        dispatch_output_ref.at[dispatch_rows[:, None], hidden_offsets[None, :]],
+                        mask=hidden_mask[None, :],
                         other=0.0,
                     ).astype(jnp.float32)
-                    acc = acc + jnp.sum(values * weights[:, None], axis=0)
+                    if has_weights:
+                        weights = pltriton.load(combine_weights_ref.at[metadata_offsets]).astype(jnp.float32)
+                        if use_inline_fma:
+                            acc = _weighted_accumulate_fma(
+                                acc,
+                                values,
+                                weights,
+                                k_block_size=k_block_size,
+                                hidden_block_size=hidden_block_size,
+                            )
+                        else:
+                            acc = acc + jnp.sum(values * weights[:, None], axis=0)
+                    else:
+                        acc = acc + jnp.sum(values, axis=0)
                 else:
-                    acc = acc + jnp.sum(values, axis=0)
+                    k_mask = k_offsets < topk
+                    safe_k_offsets = jnp.minimum(k_offsets, topk - 1)
+                    metadata_offsets = metadata_base + safe_k_offsets
+                    dispatch_rows = (
+                        pltriton.load(
+                            dispatch_positions_ref.at[metadata_offsets],
+                            mask=k_mask,
+                            other=0,
+                        )
+                        + repeat_offset
+                    )
+                    values = pltriton.load(
+                        dispatch_output_ref.at[dispatch_rows[:, None], hidden_offsets[None, :]],
+                        mask=k_mask[:, None] & hidden_mask[None, :],
+                        other=0.0,
+                    ).astype(jnp.float32)
+                    if has_weights:
+                        weights = pltriton.load(
+                            combine_weights_ref.at[metadata_offsets],
+                            mask=k_mask,
+                            other=0.0,
+                        ).astype(jnp.float32)
+                        if use_inline_fma:
+                            acc = _weighted_accumulate_fma(
+                                acc,
+                                values,
+                                weights,
+                                k_block_size=k_block_size,
+                                hidden_block_size=hidden_block_size,
+                            )
+                        else:
+                            acc = acc + jnp.sum(values * weights[:, None], axis=0)
+                    else:
+                        acc = acc + jnp.sum(values, axis=0)
 
         output = (acc * (1.0 / kernel_repeat)).astype(output_ref.dtype)
         pltriton.store(output_ref.at[token_index, hidden_offsets], output, mask=hidden_mask)
@@ -1019,6 +1087,9 @@ def _sonic_gather_sum_pallas_triton_faithful_call(
     has_weights = combine_weights is not None
     if combine_weights is None:
         combine_weights = jnp.zeros(dispatch_positions.shape, dtype=dispatch_output.dtype)
+    combine_weights_2d = combine_weights
+    flat_dispatch_positions = dispatch_positions.reshape((tokens * topk,))
+    flat_combine_weights = combine_weights.reshape((tokens * topk,))
 
     out = pl.pallas_call(
         lambda dispatch_output_ref, dispatch_positions_ref, combine_weights_ref, repeat_offsets_ref, output_ref: (
@@ -1036,6 +1107,7 @@ def _sonic_gather_sum_pallas_triton_faithful_call(
                 k_tiles=k_tiles,
                 kernel_repeat=block_sizes.kernel_repeat,
                 has_weights=has_weights,
+                use_inline_fma=block_sizes.use_inline_fma,
             )
         ),
         out_shape=jax.ShapeDtypeStruct((tokens, hidden), dispatch_output.dtype),
@@ -1044,14 +1116,14 @@ def _sonic_gather_sum_pallas_triton_faithful_call(
         cost_estimate=_gather_sum_cost_estimate(
             dispatch_output,
             dispatch_positions,
-            combine_weights,
+            combine_weights_2d,
             hidden=hidden,
             kernel_repeat=block_sizes.kernel_repeat,
             output_dtype=dispatch_output.dtype,
         ),
         interpret=interpret,
         name="sonic_gather_sum_pallas_triton_faithful",
-    )(dispatch_output, dispatch_positions, combine_weights, repeat_offsets)
+    )(dispatch_output, flat_dispatch_positions, flat_combine_weights, repeat_offsets)
     return out
 
 

@@ -72,6 +72,7 @@ def _call_port(
     hidden_block_size: int,
     k_block_size: int,
     num_warps: int,
+    use_inline_fma: bool,
 ):
     import jax.numpy as jnp
     from levanter.grug.sonic_moe import (
@@ -89,6 +90,7 @@ def _call_port(
         k_block_size=k_block_size,
         kernel_repeat=config.kernel_repeat,
         num_warps=num_warps,
+        use_inline_fma=use_inline_fma,
     )
 
     repeated_output = dispatch_output
@@ -193,6 +195,7 @@ def run_case(
     hidden_block_size: int,
     k_block_size: int,
     num_warps: int,
+    use_inline_fma: bool,
     write_ir_dir: Path | None = None,
 ) -> dict[str, Any]:
     import jax
@@ -213,6 +216,7 @@ def run_case(
             hidden_block_size=hidden_block_size,
             k_block_size=k_block_size,
             num_warps=num_warps,
+            use_inline_fma=use_inline_fma,
         )
 
     jitted = jax.jit(call)
@@ -231,6 +235,7 @@ def run_case(
         "hidden_block_size": hidden_block_size,
         "k_block_size": k_block_size,
         "num_warps": num_warps,
+        "use_inline_fma": use_inline_fma,
         "max_abs_vs_reference": float(jnp.max(jnp.abs(diff))),
         "mean_abs_vs_reference": float(jnp.mean(jnp.abs(diff))),
     }
@@ -258,6 +263,7 @@ def main() -> None:
     parser.add_argument("--hidden-block", type=int, default=64)
     parser.add_argument("--k-block", type=int, default=4)
     parser.add_argument("--num-warps", type=int, default=4)
+    parser.add_argument("--use-inline-fma", action="store_true")
     parser.add_argument("--write-ir-dir", type=Path)
     add_common_arguments(parser)
     args = parser.parse_args()
@@ -270,6 +276,7 @@ def main() -> None:
             hidden_block_size=args.hidden_block,
             k_block_size=args.k_block,
             num_warps=args.num_warps,
+            use_inline_fma=args.use_inline_fma,
             write_ir_dir=args.write_ir_dir,
         )
     )
