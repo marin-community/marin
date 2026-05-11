@@ -666,9 +666,12 @@ def _query_workers_page(
     where_sql = ""
     where_params: tuple[object, ...] = ()
     if query.contains:
-        pattern = f"%{query.contains.lower()}%"
-        where_sql = "WHERE (LOWER(w.worker_id) LIKE ? OR LOWER(w.address) LIKE ?)"
-        where_params = (pattern, pattern)
+        # INSTR rather than LIKE so the needle is treated as a literal substring
+        # — needles containing ``%``/``_`` (legitimate in worker_ids and
+        # address ports) would otherwise be interpreted as LIKE wildcards.
+        needle = query.contains.lower()
+        where_sql = "WHERE (INSTR(LOWER(w.worker_id), ?) > 0 OR INSTR(LOWER(w.address), ?) > 0)"
+        where_params = (needle, needle)
 
     offset = max(query.offset, 0)
     limit = max(query.limit, 0)

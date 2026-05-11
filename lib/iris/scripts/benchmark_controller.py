@@ -55,11 +55,11 @@ from iris.cluster.controller.service import (
     USER_JOB_STATES,
     _parent_ids_with_children,
     _query_jobs,
+    _query_workers_page,
     _read_job,
     _task_summaries_for_jobs,
     _tasks_for_listing,
     _worker_addresses_for_tasks,
-    _worker_roster,
 )
 from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
@@ -788,13 +788,18 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     bench("Dashboard: jobs_in_states (top-level)", _bench_jobs_in_states)
 
-    # Worker roster + running map drives ListWorkers.
-    def _list_workers():
-        roster = _worker_roster(store)
-        if roster:
-            running_tasks_by_worker(db, {w.worker_id for w in roster})
+    # ListWorkers: full roster page + running-task map.
+    list_workers_query = controller_pb2.Controller.WorkerQuery(limit=0)
 
-    bench(f"RPC: ListWorkers (n={len(_worker_roster(store))})", _list_workers)
+    def _list_workers():
+        page = _query_workers_page(store, list_workers_query)
+        if page.rows:
+            running_tasks_by_worker(db, {r.worker_id for r in page.rows})
+
+    bench(
+        f"RPC: ListWorkers (n={_query_workers_page(store, list_workers_query).total_count})",
+        _list_workers,
+    )
 
     # Sample job for ListTasks.
     sample_row = db.fetchone(

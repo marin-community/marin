@@ -71,8 +71,13 @@ def test_gpu_worker_metadata(tmp_path):
                     timeout=Duration.from_seconds(15.0),
                     error_message="Worker did not register within timeout",
                 )
-                w = workers[0]
-                meta = w.metadata
+                # ListWorkers returns the slim roster row; the full
+                # worker_attributes payload (gpu-variant, gpu-count, ...) lives
+                # on GetWorkerStatus.
+                detail = controller_client.get_worker_status(
+                    controller_pb2.Controller.GetWorkerStatusRequest(id=workers[0].worker_id)
+                )
+                meta = detail.worker.metadata
                 assert meta.gpu_count == 8
                 assert "H100" in meta.gpu_name
                 assert meta.gpu_memory_mb == 81559

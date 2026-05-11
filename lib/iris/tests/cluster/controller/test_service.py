@@ -1296,6 +1296,35 @@ def test_list_workers_projects_fleet_metadata(mixed_fleet, service):
     assert all(w.healthy for w in response.workers)
 
 
+def test_list_workers_contains_treats_sql_wildcards_literally(service, state):
+    """``contains`` matches the needle as a literal substring.
+
+    The SQL path must not interpret ``%`` / ``_`` as LIKE wildcards: worker
+    ids and addresses regularly contain ``_``, and the dashboard filter box
+    forwards the user's typed string unmodified.
+    """
+    from iris.rpc.auth import VerifiedIdentity, _verified_identity
+
+    state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
+    try:
+        for wid in ("worker_alpha", "worker-beta", "worker-gamma"):
+            service.register(
+                controller_pb2.Controller.RegisterRequest(
+                    address=f"{wid}:8080", metadata=make_worker_metadata(), worker_id=wid
+                ),
+                None,
+            )
+    finally:
+        _verified_identity.reset(token)
+
+    # ``_`` is a single-char LIKE wildcard; literal interpretation must hit
+    # only the worker that actually contains an underscore.
+    matched = _list_workers(service, contains="worker_")
+    assert [w.worker_id for w in matched.workers] == ["worker_alpha"]
+    assert matched.total_count == 1
+
+
 # =============================================================================
 # Constraint Injection Tests
 # =============================================================================
