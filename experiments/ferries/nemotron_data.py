@@ -48,12 +48,30 @@ DCLM_COMPONENTS = [
         "download_override_path": "raw/starcoderdata-720c8c",
         "text_field": "content",
         "file_extensions": (".parquet",),
-        # ``max_stars_count`` is double in batches whose first 8 records have
-        # null values (inferred as double for nullable) and int64 elsewhere.
-        # PyArrow's reduce-stage schema widening blows up with:
-        #   pyarrow.lib.ArrowInvalid: schema mismatch -- expected double, got int64
-        # Drop these GitHub-meta fields rather than try to coerce types.
-        "drop_fields": ("max_stars_count", "max_stars_repo_path", "max_stars_repo_name"),
+        # starcoderdata's 87 lang subdirs have heterogeneous schemas: most
+        # have content/id + max_stars_*, but git-commits-cleaned has only
+        # (content, id), jupyter-* dirs add chain_length / hexsha / size /
+        # avg_line_length / etc. Different per-record column sets break the
+        # parquet writer ("Table schema does not match schema used to create
+        # file") and PyArrow's null-vs-typed widening. Drop every column
+        # except content (-> text) and id (-> source_id) so the normalized
+        # schema is uniform across all subdirs.
+        "drop_fields": (
+            "alphanum_fraction",
+            "avg_line_length",
+            "chain_length",
+            "ext",
+            "hexsha",
+            "lang",
+            "license",
+            "max_stars_count",
+            "max_stars_repo_licenses",
+            "max_stars_repo_name",
+            "max_stars_repo_path",
+            "path",
+            "repo_name",
+            "size",
+        ),
     },
     {
         "name": "proofpile_2",
