@@ -83,7 +83,6 @@ from iris.cluster.controller.stores import AddEndpointOutcome, ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
-    _LRUCache,
     task_updates_from_proto,
 )
 from iris.cluster.controller.worker_health import WorkerLiveness
@@ -136,12 +135,6 @@ def _to_iris_log_entries(entries) -> list[iris_logging_pb2.LogEntry]:
 
 
 DEFAULT_MAX_TOTAL_LINES = 100000
-
-# Per-attempt ``RunTaskRequest`` cache for ``GetTaskAttemptInfo``. A
-# ``(task_id, attempt_id)`` is immutable once written, so cache entries
-# never need invalidation. Sized to cover the worst-case concurrent
-# attempt count we expect in a single controller process.
-GET_TASK_ATTEMPT_INFO_CACHE_SIZE = 4096
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
@@ -1016,12 +1009,6 @@ class ControllerServiceImpl:
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
-        # Per-attempt RunTaskRequest cache for GetTaskAttemptInfo. Cache miss
-        # falls back to reading job_config + the task row via
-        # ``ControllerTransitions.run_request_template``.
-        self._task_attempt_info_cache: _LRUCache[tuple[str, int], job_pb2.RunTaskRequest] = _LRUCache(
-            GET_TASK_ATTEMPT_INFO_CACHE_SIZE
-        )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1586,13 +1573,15 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetTaskAttemptInfoRequest,
         ctx: Any,
     ) -> job_pb2.RunTaskRequest:
-        """Return the cached ``RunTaskRequest`` for a ``(task_id, attempt_id)``.
+        """Return the ``RunTaskRequest`` for a ``(task_id, attempt_id)``.
 
         Reconcile-only workers poll this after learning about a new attempt
-        from ``PollTasks``. The pair is immutable once written, so the
-        controller serves from an in-process LRU; cache miss falls back to
-        reading ``job_config`` + the task row and re-rendering through
-        ``ControllerTransitions.run_request_template``.
+        from ``PollTasks``. The expensive work — reading ``job_config`` +
+        ``workdir_files`` from the DB and JSON-parsing them — is memoized
+        per-job by ``ControllerTransitions._run_template_cache`` (correctly
+        invalidated on same-name replacement in ``submit_job``). Stamping
+        ``task_id`` + ``attempt_id`` onto the cached template is sub-ms, so
+        this handler does not need its own per-attempt cache.
 
         Errors:
             NOT_FOUND: no task row exists for ``task_id``.
@@ -1607,15 +1596,13 @@ class ControllerServiceImpl:
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
 
-        wire = task_id.to_wire()
-        cache_key = (wire, int(request.attempt_id))
-        cached = self._task_attempt_info_cache.get(cache_key)
-        if cached is not None:
-            return cached
+        # Worker-role gate: the response embeds the job's ``environment``,
+        # which Fray populates with secrets (HF_TOKEN, WANDB_API_KEY, ...).
+        # Only workers (and admins) may read it.
+        if self._auth.provider is not None:
+            authorize(AuthzAction.ACT_AS_WORKER)
 
-        # Cache miss: rebuild from the DB. The task must exist, its
-        # ``current_attempt_id`` must match the request, and the parent job
-        # must still be assemble-able (non-reservation-holder).
+        wire = task_id.to_wire()
         with self._db.read_snapshot() as snap:
             current_attempt_id = self._store.tasks.get_current_attempt_id(snap, task_id)
             if current_attempt_id is None:
@@ -1636,8 +1623,7 @@ class ControllerServiceImpl:
                     f"Task {wire} has no dispatchable RunTaskRequest (reservation holder or job removed)",
                 )
 
-        req = ControllerTransitions.stamp_attempt_onto_template(template, task_id, int(request.attempt_id))
-        return self._task_attempt_info_cache.put(cache_key, req)
+        return ControllerTransitions.stamp_attempt_onto_template(template, task_id, int(request.attempt_id))
 
     # --- Worker Management ---
 
@@ -1651,7 +1637,7 @@ class ControllerServiceImpl:
         Worker registers once, then waits for heartbeats from the controller.
         """
         if self._auth.provider is not None:
-            authorize(AuthzAction.REGISTER_WORKER)
+            authorize(AuthzAction.ACT_AS_WORKER)
 
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
