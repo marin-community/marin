@@ -31,7 +31,6 @@ from zephyr.execution import (
     ZephyrContext,
     ZephyrCoordinator,
     ZephyrWorkerError,
-    _terminate_worker_group_if_needed,
     zephyr_worker_ctx,
 )
 from zephyr.plan import compute_plan
@@ -956,64 +955,6 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_pa
     # Coordinator should detect the deadlock and abort.
     assert coord._fatal_error is not None
     assert "terminated permanently" in coord._fatal_error
-
-
-def test_terminate_worker_group_skips_terminate_when_workers_self_exit():
-    """Workers exiting cleanly via SHUTDOWN must land in SUCCEEDED, not KILLED. #5484.
-
-    The coordinator-job teardown signals shutdown via the coordinator actor;
-    workers receive ``SHUTDOWN`` from ``pull_task`` and the actor-hosting Iris
-    task ends naturally. ``_terminate_worker_group_if_needed`` must not call
-    ``shutdown()`` (which terminates the Iris job and forces ``KILLED``) once
-    ``is_done()`` reports True.
-    """
-    group = MagicMock()
-    # Simulate workers finishing on the third poll (e.g. after SHUTDOWN handling).
-    group.is_done.side_effect = [False, False, True]
-
-    _terminate_worker_group_if_needed(group, natural_exit_timeout=5.0, poll_interval=0.0)
-
-    assert group.is_done.call_count == 3
-    group.shutdown.assert_not_called()
-
-
-def test_terminate_worker_group_falls_back_on_timeout():
-    """If workers don't exit within the timeout, terminate them so we don't hang."""
-    group = MagicMock()
-    group.is_done.return_value = False
-
-    _terminate_worker_group_if_needed(group, natural_exit_timeout=0.05, poll_interval=0.0)
-
-    group.shutdown.assert_called_once_with()
-
-
-def test_terminate_worker_group_falls_back_on_is_done_error():
-    """An unreachable controller (is_done raises) must fall through to terminate."""
-    group = MagicMock()
-    group.is_done.side_effect = RuntimeError("controller unreachable")
-
-    _terminate_worker_group_if_needed(group, natural_exit_timeout=5.0, poll_interval=0.0)
-
-    group.shutdown.assert_called_once_with()
-
-
-def test_terminate_worker_group_skips_wait_for_local_backend(local_client):
-    """Local backend has no separate Iris job lifecycle; don't wait the timeout."""
-    from fray.local_backend import LocalActorGroup
-
-    class _Noop:
-        pass
-
-    group = local_client.create_actor_group(_Noop, name=f"noop-{uuid.uuid4().hex[:8]}", count=1)
-    assert isinstance(group, LocalActorGroup)
-
-    start = time.monotonic()
-    _terminate_worker_group_if_needed(group, natural_exit_timeout=30.0, poll_interval=5.0)
-    elapsed = time.monotonic() - start
-
-    # Without the local-backend short-circuit this would block 30s waiting for
-    # is_done() to return True (it never does on LocalActorGroup).
-    assert elapsed < 1.0, f"Local terminate took {elapsed:.2f}s, expected near-instant"
 
 
 def test_coordinator_loop_crash_aborts_pipeline(actor_context, tmp_path):

@@ -34,9 +34,8 @@ from typing import Any, Protocol
 
 import cloudpickle
 import humanfriendly
-from fray import ActorConfig, ActorFuture, ActorGroup, ActorHandle, Client, ResourceConfig
+from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.client import JobHandle
-from fray.local_backend import LocalActorGroup
 from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
@@ -1655,60 +1654,24 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
-        # pull_task and self-terminate via shutdown_event → exit_actor().
-        # Then wait for the worker job to land in a terminal state on its own
-        # so its Iris tasks record SUCCEEDED instead of KILLED (#5484). Only
-        # fall back to forcibly terminating the job if workers don't exit in
-        # time (e.g. stuck in user code).
+        # pull_task and self-terminate via shutdown_event → exit_actor(). Then
+        # give the worker job a brief window to land in a terminal state on
+        # its own so its Iris tasks record SUCCEEDED instead of KILLED
+        # (#5484); fall back to forcibly terminating if they don't.
         with suppress(Exception):
             coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
-            _terminate_worker_group_if_needed(worker_group)
+            with suppress(Exception):
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if worker_group.is_done():
+                        break
+                    time.sleep(0.5)
+                else:
+                    logger.warning("Workers did not exit naturally, terminating")
+                    worker_group.shutdown()
         with suppress(Exception):
             hosted.shutdown()
-
-
-def _terminate_worker_group_if_needed(
-    worker_group: ActorGroup,
-    natural_exit_timeout: float = 60.0,
-    poll_interval: float = 0.5,
-) -> None:
-    """Wait for workers to exit cleanly, otherwise forcibly terminate the job.
-
-    Workers receive ``SHUTDOWN`` from ``pull_task`` once the coordinator's
-    ``_shutdown_event`` is set, exit their polling loops, and let
-    ``_host_actor`` return. The Iris tasks that hosted them then record as
-    ``SUCCEEDED``. Calling ``worker_group.shutdown()`` (which terminates the
-    underlying job) before they finish forces the job into ``KILLED`` even
-    though the pipeline succeeded.
-
-    Polls ``worker_group.is_done()`` until ``natural_exit_timeout`` elapses;
-    if the job hasn't terminated by then, falls back to
-    ``worker_group.shutdown()``. The local in-process backend does not have a
-    distinct "job" lifecycle (and is never user-visible), so we skip the wait
-    and terminate immediately.
-    """
-    if isinstance(worker_group, LocalActorGroup):
-        with suppress(Exception):
-            worker_group.shutdown()
-        return
-
-    deadline = time.monotonic() + natural_exit_timeout
-    while time.monotonic() < deadline:
-        try:
-            if worker_group.is_done():
-                return
-        except Exception:
-            logger.debug("worker_group.is_done() failed; falling back to terminate", exc_info=True)
-            break
-        time.sleep(poll_interval)
-    else:
-        logger.warning(
-            "Workers did not exit naturally within %.0fs; terminating worker job",
-            natural_exit_timeout,
-        )
-    with suppress(Exception):
-        worker_group.shutdown()
 
 
 def _read_coordinator_result(result_path: str) -> Any:
