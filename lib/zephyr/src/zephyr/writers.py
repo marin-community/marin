@@ -20,6 +20,7 @@ from typing import Any
 import msgspec
 import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
+from rigging.timing import log_time
 
 from zephyr import counters
 
@@ -63,7 +64,10 @@ def atomic_rename(output_path: str) -> Iterable[str]:
 
     For S3-compatible stores, writes to a local temp directory first, then uploads
     via fs.put() to avoid server-side multipart copy which is unreliable on some
-    providers (e.g. Cloudflare R2).
+    providers (e.g. Cloudflare R2). The local temp directory is rooted under
+    ``ZEPHYR_LOCAL_STAGING_DIR`` (or the process cwd) rather than ``$TMPDIR`` —
+    on iris/k8s task pods ``/tmp`` is typically tmpfs (RAM-backed), so writing
+    multi-GB cache shards there blows past the pod's memory limit.
 
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
@@ -72,15 +76,26 @@ def atomic_rename(output_path: str) -> Iterable[str]:
     """
     if output_path.startswith("s3://"):
         fs, resolved_path = url_to_fs(output_path)
-        with tempfile.TemporaryDirectory() as local_tmp_dir:
+        # Stage to a real-disk location (cwd or explicit override) so we don't
+        # accidentally land on tmpfs and OOM the pod on large multipart writes.
+        staging_dir = os.environ.get("ZEPHYR_LOCAL_STAGING_DIR") or os.getcwd()
+        os.makedirs(staging_dir, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=staging_dir) as local_tmp_dir:
             local_path = os.path.join(local_tmp_dir, "output")
             yield local_path
             if os.path.isdir(local_path):
-                # Trailing slash prevents fsspec from nesting under an extra
-                # "output/" level when the destination already exists.
-                fs.put(local_path + "/", resolved_path, recursive=True)
+                # batch_size caps concurrent files in flight; at fsspec's default
+                # of 128 the per-file multipart buffers (max_concurrency *
+                # default_block_size = 500 MiB) compound to multi-GB peaks that
+                # OOM tokenize workers. 8 keeps the upload-side buffer ceiling at
+                # a few GiB on the largest caches.
+                with log_time(f"atomic_rename fs.put recursive {local_path} → {resolved_path}"):
+                    # Trailing slash prevents fsspec from nesting under an extra
+                    # "output/" level when the destination already exists.
+                    fs.put(local_path + "/", resolved_path, recursive=True, batch_size=8)
             else:
-                fs.put(local_path, resolved_path)
+                with log_time(f"atomic_rename fs.put {local_path} → {resolved_path}"):
+                    fs.put(local_path, resolved_path)
         return
 
     temp_path = unique_temp_path(output_path)

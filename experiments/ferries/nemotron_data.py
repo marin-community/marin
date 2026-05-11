@@ -33,7 +33,7 @@ CACHE_COPY_MAX_WORKERS = 42
 # treats ``disk="0"`` as "no ephemeral-storage limit on the pod" (k8s only
 # applies node-level pressure). Cluster nodes have ~7 TiB ephemeral storage,
 # so this is the simplest fix.
-TOKENIZE_WORKER_RESOURCES = ResourceConfig(ram="64g", disk="0")
+TOKENIZE_WORKER_RESOURCES = ResourceConfig(ram="12g", disk="0")
 NORMALIZE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="0")
 
 # DCLM components consumed by the Nemotron canary mix. Each entry mirrors the
