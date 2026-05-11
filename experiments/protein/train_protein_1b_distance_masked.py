@@ -24,8 +24,10 @@ Usage:
 
 import dataclasses
 
+from fray import ResourceConfig
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main, versioned
 
 from experiments.defaults import default_train
 from experiments.protein.protein_distogram_eval import distogram_eval_benchmark
@@ -34,8 +36,6 @@ from experiments.protein.protein_train_common import (
     distance_masked_components,
 )
 from experiments.simple_train_config import SimpleTrainConfig
-from fray import ResourceConfig
-from marin.execution.executor import executor_main, versioned
 
 # -- Resources --
 

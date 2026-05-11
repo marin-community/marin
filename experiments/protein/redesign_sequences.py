@@ -62,9 +62,9 @@ from pathlib import Path
 import fsspec
 
 from experiments.protein.protein_distogram_eval import (
-    ProteinTarget,
     STANDARD_AA_3LETTER,
     TARGETS,
+    ProteinTarget,
     _fetch_pdb_text,
     _parse_chain,
 )

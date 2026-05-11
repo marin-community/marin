@@ -21,14 +21,14 @@ Runs on CPU only (the 1.4B model is small enough to load into host memory)::
 from copy import deepcopy
 
 from levanter.trainer import TrainerConfig
+from marin.execution.executor import executor_main
+from marin.export import convert_checkpoint_to_hf_step
 
 from experiments.protein.train_protein_1b import (
     PROTEIN_TOKENIZER,
     protein_llama_1b,
     protein_model_1b,
 )
-from marin.execution.executor import executor_main
-from marin.export import convert_checkpoint_to_hf_step
 
 TRAINING_OUTPUT = "gs://marin-us-east5/checkpoints/protein-contacts-1b-2.5e-4-780930"
 CHECKPOINT_STEP = 22477

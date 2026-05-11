@@ -21,14 +21,14 @@ Run with Iris::
 
 import dataclasses
 
+from fray.cluster import ResourceConfig
 from levanter.data.text import LmDataConfig, TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 from experiments.defaults import default_download, default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
-from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 TOKENIZER = "timodonnell/protein-docs-tokenizer"
 

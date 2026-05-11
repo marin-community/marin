@@ -19,12 +19,13 @@ Usage::
         -- python -m experiments.protein.export_protein_100m_unmasked
 """
 
+from marin.execution.executor import executor_main
+
 from experiments.protein.protein_train_common import build_hf_export_step
 from experiments.protein.train_protein_100m_unmasked import (
     protein_llama_100m,
     protein_model_100m_unmasked,
 )
-from marin.execution.executor import executor_main
 
 CHECKPOINT_STEP = 50000
 CHECKPOINT_PATH = "gs://marin-us-east5/checkpoints/protein-contacts-100m-3.5e-4-unmasked-7c3ef7/checkpoints"

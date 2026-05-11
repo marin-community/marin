@@ -194,10 +194,7 @@ def get_all_domain_tokens(*, all_doc_types: bool = False) -> list[str]:
     if not all_doc_types:
         return base
     return base + (
-        EXTRA_DOCUMENT_TYPES
-        + EXTRA_STATEMENT_MARKERS
-        + RANDOM_3_BINS_DISTANCE_BINS
-        + RANDOM_3_BINS_MODIFIERS
+        EXTRA_DOCUMENT_TYPES + EXTRA_STATEMENT_MARKERS + RANDOM_3_BINS_DISTANCE_BINS + RANDOM_3_BINS_MODIFIERS
     )
 
 

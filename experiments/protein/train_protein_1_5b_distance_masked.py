@@ -18,9 +18,9 @@ Usage::
 """
 
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main
 
 from experiments.protein.protein_train_common import build_distance_masked_train_step
-from marin.execution.executor import executor_main
 
 protein_llama_1_5b = LlamaConfig(
     max_seq_len=8192,

@@ -19,14 +19,14 @@ Usage::
 from copy import deepcopy
 
 from levanter.trainer import TrainerConfig
+from marin.execution.executor import executor_main
+from marin.export import convert_checkpoint_to_hf_step
 
 from experiments.protein.train_protein_1b_distance_masked import (
     PROTEIN_TOKENIZER,
     protein_llama_1b,
     protein_model_1b_distance_masked,
 )
-from marin.execution.executor import executor_main
-from marin.export import convert_checkpoint_to_hf_step
 
 TRAINING_OUTPUT = "gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-distance-masked-7d355e"
 CHECKPOINT_STEP = 31337  # latest temp checkpoint with metadata.json as of 2026-04-27 13:16Z

@@ -24,17 +24,17 @@ from copy import deepcopy
 
 import jax
 import jax.numpy as jnp
+from fray import ResourceConfig
 from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
+from marin.execution.executor import ExecutorStep, output_path_of, versioned
+from marin.export import convert_checkpoint_to_hf_step
+from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.protein.create_protein_tokenizer import create_protein_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from fray import ResourceConfig
-from marin.execution.executor import ExecutorStep, output_path_of, versioned
-from marin.export import convert_checkpoint_to_hf_step
-from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 # Pinned to the legacy 2840-vocab revision of protein-docs-tokenizer. Required
 # because the all-doc-types training run (see ``train_protein_1b_all_docs_unmasked``)

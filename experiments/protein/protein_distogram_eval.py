@@ -65,10 +65,9 @@ import fsspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from transformers import AutoTokenizer
-
 from levanter.data.text import DatasetComponent, PrebuiltLmDatasetFormat, UrlDatasetSourceConfig
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 

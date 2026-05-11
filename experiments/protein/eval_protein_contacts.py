@@ -35,6 +35,7 @@ Usage (launched via iris on a v5p-8)::
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import logging
 import os
@@ -46,7 +47,6 @@ from dataclasses import dataclass
 from urllib.request import urlopen
 
 import fsspec
-import io
 import numpy as np
 from rigging.filesystem import url_to_fs
 

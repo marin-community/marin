@@ -161,10 +161,9 @@ def _per_n(c: CellResult) -> dict[int, dict]:
 def plot_target_variant_page(target: str, variant: str, cells: list[CellResult]):
     """Page with two panels — MAE-vs-N and contact-corr-vs-N — overlaying all models."""
     import matplotlib.pyplot as plt
-    from matplotlib import cm
 
     n_models = len(cells)
-    color_map = cm.get_cmap("viridis")
+    color_map = plt.get_cmap("viridis")
     colors = {c.model_label: color_map(i / max(1, n_models - 1)) for i, c in enumerate(cells)}
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.8), constrained_layout=True)

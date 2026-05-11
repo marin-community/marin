@@ -26,6 +26,7 @@ Usage::
 
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main, versioned
 
 from experiments.defaults import default_train
 from experiments.protein.protein_train_common import (
@@ -34,7 +35,6 @@ from experiments.protein.protein_train_common import (
     distance_masked_components,
 )
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main, versioned
 
 protein_llama_1b = LlamaConfig(
     max_seq_len=8192,

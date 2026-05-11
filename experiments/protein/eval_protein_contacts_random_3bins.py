@@ -61,8 +61,8 @@ from experiments.protein.eval_protein_distogram_3bins import (
     DISTANCE_BIN_TOKENS,
     PLDDT_TOKENS,
     _assemble_model_dir,
-    _build_base_prompt_tokens_3bins,  # reused for prompt header
     _bin_for_distance_A,
+    _build_base_prompt_tokens_3bins,  # reused for prompt header
     _encode_token,
     _encode_tokens,
 )

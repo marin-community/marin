@@ -15,12 +15,13 @@ Usage::
         -- python -m experiments.protein.export_protein_400m_distance_masked
 """
 
+from marin.execution.executor import executor_main
+
 from experiments.protein.protein_train_common import build_hf_export_step
 from experiments.protein.train_protein_400m_distance_masked import (
     protein_llama_400m,
     protein_model_400m_distance_masked,
 )
-from marin.execution.executor import executor_main
 
 CHECKPOINT_STEP = 7000
 CHECKPOINT_PATH = "gs://marin-us-east5/checkpoints/protein-contacts-400m-distance-masked-0de2c1/checkpoints"

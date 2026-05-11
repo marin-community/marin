@@ -117,12 +117,9 @@ class EvalVariant:
 # the actual checkpoint loaded is the latest one found by
 # ``discover_latest_checkpoint`` when the eval container starts.
 #
-# Snapshot 7 (2026-05-08 ~15:40 UTC): bumped 4 still-training models to latest
-# checkpoints. Focus question: are the unmasked variants catching up to the
-# masked variants? Critical for the 1b_all_docs run (which is unmasked) — if
-# unmasked never catches up at any size, the all-docs experiment is a long
-# shot. Step numbers in ``model_label`` are approximate;
-# ``discover_latest_checkpoint`` resolves whatever's loadable at submit time.
+# Snapshot 8 (2026-05-11 ~01:10 UTC): 1b_unmasked and 420m_deep finished.
+# Updated still-training models to latest checkpoints. 1b_all_docs not yet
+# included — only has eval@1000, too early.
 EVAL_RUNS: list[EvalRunEntry] = [
     EvalRunEntry(
         # Finished at step-50000. Unchanged.
@@ -143,20 +140,21 @@ EVAL_RUNS: list[EvalRunEntry] = [
         levanter_model_spec="experiments.protein.train_protein_400m_distance_masked.protein_llama_400m",
     ),
     EvalRunEntry(
-        # Recovered fully from divergence; eval@47000 loss=1.232.
-        model_label="420m_deep-step-47000",
+        # Finished at step-49999. Final eval loss=1.224, bpb=0.131.
+        # Diverged briefly at step 32500 then recovered.
+        model_label="420m_deep-step-50000",
         levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-420m-deep-distance-masked-81e865/checkpoints",
         levanter_model_spec="experiments.protein.train_protein_420m_deep_distance_masked.protein_llama_420m_deep",
     ),
     EvalRunEntry(
-        # Latest eval@26500 loss=1.075.
-        model_label="1_5b-step-27000",
+        # Latest eval@28500 loss=1.065.
+        model_label="1_5b-step-29000",
         levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-1_5b-distance-masked-70f8f5/checkpoints",
         levanter_model_spec="experiments.protein.train_protein_1_5b_distance_masked.protein_llama_1_5b",
     ),
     EvalRunEntry(
-        # Latest eval@11500 loss=1.244 — slow but progressing.
-        model_label="3b-step-11500",
+        # Latest eval@13000 loss=1.226 — slow but progressing.
+        model_label="3b-step-13000",
         levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-3b-distance-masked-ef3aa5/checkpoints",
         levanter_model_spec="experiments.protein.train_protein_3b_distance_masked.protein_llama_3b",
     ),
@@ -166,8 +164,8 @@ EVAL_RUNS: list[EvalRunEntry] = [
         hf_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-distance-masked-7d355e/hf/step-49999",
     ),
     EvalRunEntry(
-        # Latest eval@40000 loss=2.531.
-        model_label="1b_unmasked-step-40000",
+        # Finished at step-49999. Final eval loss=2.524.
+        model_label="1b_unmasked-step-50000",
         levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-unmasked-8efbcb/checkpoints",
         levanter_model_spec="experiments.protein.train_protein_1b_unmasked.protein_llama_1b",
     ),

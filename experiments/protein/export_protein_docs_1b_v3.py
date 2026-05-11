@@ -23,7 +23,6 @@ Runs on CPU only (the 1.4B model fits in host memory)::
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.trainer import TrainerConfig
-
 from marin.execution.executor import executor_main
 from marin.export import convert_checkpoint_to_hf_step
 

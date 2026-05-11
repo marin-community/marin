@@ -27,6 +27,8 @@ import dataclasses
 
 from levanter.data.text import LmDataConfig
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main, versioned
+from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 from experiments.defaults import default_train
 from experiments.protein.protein_train_common import (
@@ -36,8 +38,6 @@ from experiments.protein.protein_train_common import (
     protein_docs_val_tokenized,
 )
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main, versioned
-from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 protein_llama_100m = LlamaConfig(
     max_seq_len=8192,
