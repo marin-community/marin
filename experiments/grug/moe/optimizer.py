@@ -16,14 +16,51 @@ from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
 
+_ADAM_GROUP_PATH_ELEMENTS = frozenset({"token_embed", "router_bias", "attn_gate", "router"})
 
-def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
-    return (
-        "token_embed" in path_lower
-        or "router_bias" in path_lower
-        or "attn_gate" in path_lower
-        or ".router" in path_lower
-    )
+
+def _uses_adamh_baseline_adam_group(path_elements: tuple[str, ...]) -> bool:
+    """Decide whether ``path_elements`` corresponds to the AdamH baseline's Adam group.
+
+    Checks exact path-element membership rather than substring containment, so
+    e.g. ``attn_gate`` only matches the headwise attention-gate field and not
+    sibling fields like ``attn_gated_norm`` whose name happens to start the
+    same way.
+    """
+    return bool(_ADAM_GROUP_PATH_ELEMENTS.intersection(path_elements))
+
+
+def _is_gated_norm(path_elements: tuple[str, ...]) -> bool:
+    """Matches every ``GatedNorm`` instance in the model.
+
+    Block-level: ``blocks[i].attn_gated_norm.{w_up,w_down}``,
+    ``blocks[i].mlp_gated_norm.{w_up,w_down}``. Model-level:
+    ``embed_gated_norm.{w_up,w_down}``, ``final_gated_norm.{w_up,w_down}``.
+    """
+    return any(p.endswith("gated_norm") for p in path_elements)
+
+
+def _is_expert_matrix(path_elements: tuple[str, ...]) -> bool:
+    """Matches expert MLP matrices: ``mlp.w_*`` or ``shared.w_*`` per block.
+
+    Used by the AdamH baseline mask to route expert matrices to the
+    ``adamh_expert`` group (separate LR knob).
+    """
+    for i in range(len(path_elements) - 1):
+        if path_elements[i] in ("mlp", "shared") and path_elements[i + 1].startswith("w_"):
+            return True
+    return False
+
+
+def _lower_path(path) -> tuple[str, ...]:
+    """Coerce a ``leaf_key_paths`` entry to a lower-cased tuple of path elements.
+
+    ``leaf_key_paths`` returns dotted strings like ``"blocks.0.attn.attn_gate"``;
+    this splits on ``.`` so callers can do exact path-element checks.
+    """
+    if isinstance(path, (list, tuple)):
+        return tuple(str(p).lower() for p in path)
+    return tuple(str(path).lower().split("."))
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -455,11 +492,10 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         paths = leaf_key_paths(params)
 
         def mask_fn(param, path):
-            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
-            path_lower = path_str.lower()
-            if _uses_adamh_baseline_adam_group(path_lower):
+            path_elements = _lower_path(path)
+            if _uses_adamh_baseline_adam_group(path_elements):
                 return "adam"
-            if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
+            if _is_expert_matrix(path_elements):
                 return "adamh_expert"
             if hasattr(param, "ndim") and param.ndim >= 2:
                 return "adamh"
@@ -544,11 +580,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         paths = leaf_key_paths(params)
 
         def mask_fn(param, path):
-            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
-            path_lower = path_str.lower()
-            if _uses_adamh_baseline_adam_group(path_lower):
+            path_elements = _lower_path(path)
+            if _uses_adamh_baseline_adam_group(path_elements):
                 return "adam"
-            if "output_proj" in path_lower or "lm_head" in path_lower:
+            if "output_proj" in path_elements or "lm_head" in path_elements:
+                return "adamh"
+            if _is_gated_norm(path_elements):
+                # All four GatedNorm instances (per-block attn / mlp + model-level
+                # embed / final) get the AdamH treatment; they were previously
+                # split asymmetrically (attn_gated_norm -> adam due to a substring
+                # bug, the rest -> muonh).
                 return "adamh"
             if hasattr(param, "ndim") and param.ndim in (2, 3):
                 return "muonh"
@@ -645,11 +686,12 @@ class GrugMoeMuonHPairedConfig(OptimizerConfig):
         paths = leaf_key_paths(params)
 
         def mask_fn(param, path):
-            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
-            path_lower = path_str.lower()
-            if _uses_adamh_baseline_adam_group(path_lower):
+            path_elements = _lower_path(path)
+            if _uses_adamh_baseline_adam_group(path_elements):
                 return "adam"
-            if "output_proj" in path_lower or "lm_head" in path_lower:
+            if "output_proj" in path_elements or "lm_head" in path_elements:
+                return "adamh"
+            if _is_gated_norm(path_elements):
                 return "adamh"
             if hasattr(param, "ndim") and param.ndim in (2, 3):
                 return "muonh_paired"
@@ -737,11 +779,12 @@ class GrugMoeNorMuonHConfig(OptimizerConfig):
         paths = leaf_key_paths(params)
 
         def mask_fn(param, path):
-            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
-            path_lower = path_str.lower()
-            if _uses_adamh_baseline_adam_group(path_lower):
+            path_elements = _lower_path(path)
+            if _uses_adamh_baseline_adam_group(path_elements):
                 return "adam"
-            if "output_proj" in path_lower or "lm_head" in path_lower:
+            if "output_proj" in path_elements or "lm_head" in path_elements:
+                return "adamh"
+            if _is_gated_norm(path_elements):
                 return "adamh"
             if hasattr(param, "ndim") and param.ndim in (2, 3):
                 return "normuonh"

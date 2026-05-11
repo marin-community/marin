@@ -36,17 +36,35 @@ def test_grug_moe_muonh_keeps_adamh_baseline_adam_group_on_adam():
         "token_embed": jnp.ones((128, 32), dtype=jnp.float32),
         "output_proj": jnp.ones((32, 128), dtype=jnp.float32),
         "lm_head": jnp.ones((32, 128), dtype=jnp.float32),
+        "embed_norm": {"weight": jnp.ones((32,), dtype=jnp.float32)},
+        "embed_gated_norm": {
+            "w_down": jnp.ones((32, 128), dtype=jnp.float32),
+            "w_up": jnp.ones((128, 32), dtype=jnp.float32),
+        },
+        "final_norm": {"weight": jnp.ones((32,), dtype=jnp.float32)},
+        "final_gated_norm": {
+            "w_down": jnp.ones((32, 128), dtype=jnp.float32),
+            "w_up": jnp.ones((128, 32), dtype=jnp.float32),
+        },
         "blocks": (
             {
                 "attn": {
                     "w_q": jnp.ones((32, 32), dtype=jnp.float32),
                     "attn_gate": jnp.ones((32, 2), dtype=jnp.float32),
                 },
+                "attn_gated_norm": {
+                    "w_down": jnp.ones((32, 128), dtype=jnp.float32),
+                    "w_up": jnp.ones((128, 32), dtype=jnp.float32),
+                },
                 "mlp": {
                     "router": jnp.ones((32, 4), dtype=jnp.float32),
                     "router_bias": jnp.ones((4,), dtype=jnp.float32),
                     "w_gate_up": jnp.ones((4, 32, 64), dtype=jnp.float32),
                     "w_down": jnp.ones((4, 64, 32), dtype=jnp.float32),
+                },
+                "mlp_gated_norm": {
+                    "w_down": jnp.ones((32, 128), dtype=jnp.float32),
+                    "w_up": jnp.ones((128, 32), dtype=jnp.float32),
                 },
                 "shared": {
                     "w_up": jnp.ones((32, 64), dtype=jnp.float32),
@@ -77,6 +95,19 @@ def test_grug_moe_muonh_keeps_adamh_baseline_adam_group_on_adam():
     assert block_mask["shared"]["w_up"] == "muonh"
     assert block_mask["mlp"]["router_bias"] == "adam"
     assert block_mask["rms_attn"]["weight"] == "adam"
+    # All four GatedNorm instances now route to AdamH (previously split across
+    # adam / muonh due to a substring-match bug on "attn_gate").
+    assert block_mask["attn_gated_norm"]["w_up"] == "adamh"
+    assert block_mask["attn_gated_norm"]["w_down"] == "adamh"
+    assert block_mask["mlp_gated_norm"]["w_up"] == "adamh"
+    assert block_mask["mlp_gated_norm"]["w_down"] == "adamh"
+    assert mask["embed_gated_norm"]["w_up"] == "adamh"
+    assert mask["embed_gated_norm"]["w_down"] == "adamh"
+    assert mask["final_gated_norm"]["w_up"] == "adamh"
+    assert mask["final_gated_norm"]["w_down"] == "adamh"
+    # RMSNorm weights (1D) stay in Adam.
+    assert mask["embed_norm"]["weight"] == "adam"
+    assert mask["final_norm"]["weight"] == "adam"
 
 
 def test_grug_moe_normuonh_keeps_adamh_baseline_adam_group_on_adam():
@@ -332,26 +363,26 @@ def test_grug_moe_muonh_paired_mask_matches_muonh_routing():
     assert block_mask["rms_attn"]["weight"] == "adam"
 
 
-def test_muonh_paired_sweep_gate1_builds_readme_gate_steps():
-    from experiments.grug.moe import muonh_paired_sweep
+def test_muonh_gn_adamh_sweep_gate1_builds_readme_gate_steps():
+    from experiments.grug.moe import muonh_gn_adamh_sweep
 
-    steps = muonh_paired_sweep._build_steps("1")
+    steps = muonh_gn_adamh_sweep._build_steps("1")
 
     assert [step.name for step in steps] == [
-        "grug/muonh_paired_sweep/muonh-paired-d512-2.19e17",
-        "grug/muonh_paired_sweep/muonh-paired-d768-1.70e18",
+        "grug/muonh_gn_adamh_sweep/muonh-gn-adamh-d512-2.19e17",
+        "grug/muonh_gn_adamh_sweep/muonh-gn-adamh-d768-1.70e18",
     ]
-    assert all(isinstance(step.config.optimizer.value, GrugMoeMuonHPairedConfig) for step in steps)
+    assert all(isinstance(step.config.optimizer.value, GrugMoeMuonHConfig) for step in steps)
 
 
-def test_muonh_paired_sweep_suffix_builds_distinct_relaunch_steps():
-    from experiments.grug.moe import muonh_paired_sweep
+def test_muonh_gn_adamh_sweep_suffix_builds_distinct_relaunch_steps():
+    from experiments.grug.moe import muonh_gn_adamh_sweep
 
-    steps = muonh_paired_sweep._build_steps("1", run_suffix="retry1")
+    steps = muonh_gn_adamh_sweep._build_steps("1", run_suffix="retry1")
 
     assert [step.name for step in steps] == [
-        "grug/muonh_paired_sweep/muonh-paired-retry1-d512-2.19e17",
-        "grug/muonh_paired_sweep/muonh-paired-retry1-d768-1.70e18",
+        "grug/muonh_gn_adamh_sweep/muonh-gn-adamh-retry1-d512-2.19e17",
+        "grug/muonh_gn_adamh_sweep/muonh-gn-adamh-retry1-d768-1.70e18",
     ]
 
 
