@@ -10,7 +10,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -132,20 +132,34 @@ def _open_iris_client(
             yield client
 
 
-def _job_tree(
-    job_id: str,
-    *,
-    client: IrisClient,
-) -> list[job_pb2.JobStatus]:
-    return client.list_jobs(prefix=JobName.from_wire(job_id))
-
-
 def _status_from_job(job: job_pb2.JobStatus) -> IrisJobStatus:
     return IrisJobStatus(
         job_id=job.job_id,
         state=job_pb2.JobState.Name(job.state),
         error=job.error or None,
     )
+
+
+def _row(job: job_pb2.JobStatus | None) -> str:
+    if job is None:
+        return "null"
+    return json.dumps(json_format.MessageToDict(job, preserving_proto_field_name=True), sort_keys=True)
+
+
+def _child_started(child: job_pb2.JobStatus) -> bool:
+    """A child has left the queue once it reaches RUNNING or a terminal state other than UNSCHEDULABLE."""
+    return child.state == job_pb2.JOB_STATE_RUNNING or (
+        is_job_finished(child.state) and child.state != job_pb2.JOB_STATE_UNSCHEDULABLE
+    )
+
+
+def _pick_child(parent_job_id: str, jobs: list[job_pb2.JobStatus]) -> job_pb2.JobStatus | None:
+    """Pick a representative child (prefer non-finished). Single-child today; arbitrary order otherwise."""
+    prefix = parent_job_id.rstrip("/") + "/"
+    children = [j for j in jobs if j.job_id.startswith(prefix)]
+    if not children:
+        return None
+    return next((c for c in children if not is_job_finished(c.state)), children[0])
 
 
 def job_status(
@@ -156,20 +170,11 @@ def job_status(
     controller_url: str | None = None,
 ) -> IrisJobStatus:
     with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
-        for job in _job_tree(job_id, client=client):
+        for job in client.list_jobs(prefix=JobName.from_wire(job_id)):
             if job.job_id == job_id:
                 return _status_from_job(job)
 
     raise LookupError(f"Job not found in Iris job list: {job_id!r}")
-
-
-def _is_finished_job_state(state: int) -> bool:
-    return is_job_finished(state)
-
-
-def _child_has_started(job: job_pb2.JobStatus) -> bool:
-    state = job.state
-    return state == job_pb2.JOB_STATE_RUNNING or (is_job_finished(state) and state != job_pb2.JOB_STATE_UNSCHEDULABLE)
 
 
 def wait_for_job(
@@ -182,133 +187,64 @@ def wait_for_job(
     controller_url: str | None = None,
 ) -> IrisJobStatus:
     """Poll until the job reaches a terminal state. Raises TimeoutError if `timeout` elapses."""
+    prefix = JobName.from_wire(job_id)
     start = time.monotonic()
     with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
         while True:
-            for job in _job_tree(job_id, client=client):
-                if job.job_id == job_id:
-                    status = _status_from_job(job)
-                    if _is_finished_job_state(job.state):
-                        return status
-                    if timeout is not None and (time.monotonic() - start) >= timeout:
-                        raise TimeoutError(f"Timed out waiting for job {job_id!r} after {timeout}s")
-                    time.sleep(poll_interval)
-                    break
-            else:
+            job = next((j for j in client.list_jobs(prefix=prefix) if j.job_id == job_id), None)
+            if job is None:
                 raise LookupError(f"Job not found in Iris job list: {job_id!r}")
-
-
-def _relevant_child_job(
-    parent_job_id: str,
-    jobs: list[job_pb2.JobStatus],
-) -> tuple[job_pb2.JobStatus, job_pb2.JobStatus | None]:
-    parent = next((job for job in jobs if job.job_id == parent_job_id), None)
-    if parent is None:
-        raise LookupError(f"Job not found in Iris job list: {parent_job_id!r}")
-
-    prefix = parent_job_id.rstrip("/") + "/"
-    children = [job for job in jobs if job.job_id.startswith(prefix)]
-    active_children = [job for job in children if not _is_finished_job_state(job.state)]
-    return parent, (active_children or children or [None])[0]
-
-
-def _format_job_for_wait(label: str, job: job_pb2.JobStatus | None) -> str:
-    if job is None:
-        return f"{label}=null"
-
-    row = json_format.MessageToDict(job, preserving_proto_field_name=True)
-    return f"{label}={json.dumps(row, sort_keys=True, separators=(',', ':'))}"
-
-
-def _child_wait_message(
-    phase: str,
-    parent: job_pb2.JobStatus,
-    child: job_pb2.JobStatus | None,
-    *,
-    elapsed: float,
-    timeout: float | None,
-) -> str:
-    timeout_text = "unbounded" if timeout is None else f"{timeout:.0f}s"
-    return (
-        f"Child wait phase={phase} elapsed={elapsed:.0f}s timeout={timeout_text}; "
-        f"{_format_job_for_wait('parent', parent)}; {_format_job_for_wait('child', child)}"
-    )
+            if is_job_finished(job.state):
+                return _status_from_job(job)
+            if timeout is not None and (time.monotonic() - start) >= timeout:
+                raise TimeoutError(f"Timed out waiting for job {job_id!r} after {timeout}s")
+            time.sleep(poll_interval)
 
 
 def wait_for_child_job(
     job_id: str,
     *,
     iris_config: Path | None,
+    controller_url: str | None,
     poll_interval: float,
-    queue_timeout: float | None,
-    run_timeout: float | None,
+    queue_timeout: float,
     repo_root: Path,
-    controller_url: str | None = None,
-    list_jobs: Callable[[], list[job_pb2.JobStatus]] | None = None,
-    clock: Callable[[], float] = time.monotonic,
 ) -> IrisJobStatus:
-    """Poll a parent job with separate child queue/start and runtime timeouts."""
-    if list_jobs is not None:
-        return _wait_for_child_job(
-            job_id,
-            poll_interval=poll_interval,
-            queue_timeout=queue_timeout,
-            run_timeout=run_timeout,
-            list_jobs=list_jobs,
-            clock=clock,
-        )
+    """Wait for a parent job to reach a terminal state.
 
+    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within ``queue_timeout``.
+    Once any child has started, the queue timeout is dropped — total runtime is bounded by the caller's
+    wall clock (e.g. GitHub ``timeout-minutes``).
+    """
+    prefix = JobName.from_wire(job_id)
+    deadline = time.monotonic() + queue_timeout
+    child_running = False
     with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
-        return _wait_for_child_job(
-            job_id,
-            poll_interval=poll_interval,
-            queue_timeout=queue_timeout,
-            run_timeout=run_timeout,
-            list_jobs=lambda: _job_tree(job_id, client=client),
-            clock=clock,
-        )
+        while True:
+            jobs = client.list_jobs(prefix=prefix)
+            parent = next((j for j in jobs if j.job_id == job_id), None)
+            if parent is None:
+                raise LookupError(f"Job not found in Iris job list: {job_id!r}")
+            if is_job_finished(parent.state):
+                return _status_from_job(parent)
 
+            child = _pick_child(job_id, jobs)
+            if not child_running and child is not None and _child_started(child):
+                child_running = True
+                click.echo(
+                    f"Child {child.job_id} reached {job_pb2.JobState.Name(child.state)}; dropping queue timeout.",
+                    err=True,
+                )
 
-def _wait_for_child_job(
-    job_id: str,
-    *,
-    poll_interval: float,
-    queue_timeout: float | None,
-    run_timeout: float | None,
-    list_jobs: Callable[[], list[job_pb2.JobStatus]],
-    clock: Callable[[], float],
-) -> IrisJobStatus:
+            click.echo(f"parent={_row(parent)} child={_row(child)}", err=True)
 
-    queue_started = clock()
-    run_started: float | None = None
-    while True:
-        now = clock()
-        parent, child = _relevant_child_job(job_id, list_jobs())
+            if not child_running and time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"No child reached RUNNING within {queue_timeout:.0f}s. "
+                    f"parent={_row(parent)} child={_row(child)}"
+                )
 
-        if _is_finished_job_state(parent.state):
-            return _status_from_job(parent)
-
-        if child is None or not _child_has_started(child):
-            if run_started is not None:
-                queue_started = now
-                run_started = None
-            elapsed = now - queue_started
-            message = _child_wait_message(
-                "waiting-for-child-start", parent, child, elapsed=elapsed, timeout=queue_timeout
-            )
-            if queue_timeout is not None and elapsed >= queue_timeout:
-                raise TimeoutError(f"Child queue/start timeout: {message}")
-            click.echo(message, err=True)
-        else:
-            if run_started is None:
-                run_started = now
-            elapsed = now - run_started
-            message = _child_wait_message("child-running", parent, child, elapsed=elapsed, timeout=run_timeout)
-            if run_timeout is not None and elapsed >= run_timeout:
-                raise TimeoutError(f"Child runtime timeout: {message}")
-            click.echo(message, err=True)
-
-        time.sleep(poll_interval)
+            time.sleep(poll_interval)
 
 
 def _list_managed_instances(
@@ -757,13 +693,17 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     "--queue-timeout",
     default=None,
     type=float,
-    help="Maximum seconds to wait for a child job to start. Requires --run-timeout and cannot be used with --timeout.",
+    help=(
+        "Fail fast if no child reaches RUNNING within this many seconds. Mutually exclusive with --timeout; "
+        "once a child runs, total runtime is bounded by the caller's wall clock."
+    ),
 )
 @click.option(
     "--run-timeout",
     default=None,
     type=float,
-    help="Maximum seconds to wait after a child job starts. Requires --queue-timeout and cannot be used with --timeout.",
+    hidden=True,
+    help="Deprecated no-op kept for in-flight workflows. Remove once .github/workflows stop passing it.",
 )
 def wait(
     job_id: str,
@@ -776,17 +716,14 @@ def wait(
     run_timeout: float | None,
 ) -> None:
     """Poll until an Iris job reaches a terminal state. Exit non-zero unless SUCCEEDED."""
-    child_aware = queue_timeout is not None or run_timeout is not None
-    if child_aware:
-        if timeout is not None:
-            raise click.UsageError("--timeout cannot be used with --queue-timeout/--run-timeout")
-        if queue_timeout is None or run_timeout is None:
-            raise click.UsageError("--queue-timeout and --run-timeout must be supplied together")
+    if run_timeout is not None:
+        click.echo("--run-timeout is deprecated and ignored; the GitHub timeout-minutes bounds runtime.", err=True)
+    if queue_timeout is not None and timeout is not None:
+        raise click.UsageError("--queue-timeout and --timeout are mutually exclusive")
+
+    if queue_timeout is not None:
         click.echo(
-            (
-                f"Polling parent job {job_id!r} every {poll_interval}s "
-                f"(child queue/start timeout={queue_timeout:.0f}s, child runtime timeout={run_timeout:.0f}s) ..."
-            ),
+            f"Waiting for {job_id!r}: queue/start timeout {queue_timeout:.0f}s, polling every {poll_interval}s.",
             err=True,
         )
         s = wait_for_child_job(
@@ -795,11 +732,10 @@ def wait(
             controller_url=controller_url,
             poll_interval=poll_interval,
             queue_timeout=queue_timeout,
-            run_timeout=run_timeout,
             repo_root=_REPO_ROOT,
         )
     else:
-        click.echo(f"Polling job {job_id!r} every {poll_interval}s ...", err=True)
+        click.echo(f"Waiting for {job_id!r} every {poll_interval}s ...", err=True)
         s = wait_for_job(
             job_id,
             iris_config=iris_config,

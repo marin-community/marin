@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from contextlib import contextmanager
 
 import pytest
 from iris.rpc import job_pb2
@@ -27,19 +28,16 @@ def _statuses(*pods: dict) -> list[iris_monitor.K8sPodStatus]:
     return iris_monitor._controller_pods_from_json(json.dumps({"items": list(pods)}))
 
 
-def _job(
-    job_id: str,
-    state: str,
-    *,
-    failure_count: int = 0,
-    preemption_count: int = 0,
-) -> job_pb2.JobStatus:
-    return job_pb2.JobStatus(
-        job_id=job_id,
-        state=job_pb2.JobState.Value(state),
-        failure_count=failure_count,
-        preemption_count=preemption_count,
-    )
+def _job(job_id: str, state: str) -> job_pb2.JobStatus:
+    return job_pb2.JobStatus(job_id=job_id, state=job_pb2.JobState.Value(state))
+
+
+class _FakeClient:
+    def __init__(self, polls: list[list[job_pb2.JobStatus]]) -> None:
+        self._polls = iter(polls)
+
+    def list_jobs(self, *, prefix=None):
+        return next(self._polls)
 
 
 def test_settled_coreweave_controller_requires_exactly_one_ready_pod() -> None:
@@ -59,143 +57,35 @@ def test_settled_coreweave_controller_requires_exactly_one_ready_pod() -> None:
     assert iris_monitor._settled_controller_pod_name(_statuses(_pod("iris-controller-new", phase="Pending"))) is None
 
 
-def test_wait_for_child_job_uses_runtime_timeout_after_child_start() -> None:
+def test_wait_for_child_job_times_out_when_no_child_starts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the parent is queued long enough that no child reaches RUNNING, fail fast with a queue timeout."""
     parent_id = "/runner/parent"
     child_id = f"{parent_id}/grug-train-canary-tpu-1"
-    polls = iter(
+    fake = _FakeClient(
         [
-            [
-                _job(parent_id, "JOB_STATE_RUNNING"),
-                _job(child_id, "JOB_STATE_PENDING", preemption_count=1),
-            ],
-            [
-                _job(parent_id, "JOB_STATE_RUNNING"),
-                _job(child_id, "JOB_STATE_RUNNING", preemption_count=1),
-            ],
-            [
-                _job(parent_id, "JOB_STATE_SUCCEEDED"),
-                _job(child_id, "JOB_STATE_SUCCEEDED", preemption_count=1),
-            ],
+            [_job(parent_id, "JOB_STATE_RUNNING"), _job(child_id, "JOB_STATE_PENDING")],
+            [_job(parent_id, "JOB_STATE_RUNNING"), _job(child_id, "JOB_STATE_PENDING")],
         ]
     )
-    monotonic = iter([0, 4000, 5001, 5010])
 
-    status = iris_monitor.wait_for_child_job(
-        parent_id,
-        iris_config=None,
-        poll_interval=0,
-        queue_timeout=5000,
-        run_timeout=60,
-        repo_root=iris_monitor._REPO_ROOT,
-        list_jobs=lambda: next(polls),
-        clock=lambda: next(monotonic),
-    )
+    @contextmanager
+    def fake_open(**_kwargs):
+        yield fake
 
-    assert status.state == iris_monitor.JOB_STATE_SUCCEEDED
+    monkeypatch.setattr(iris_monitor, "_open_iris_client", fake_open)
+    monkeypatch.setattr(iris_monitor.time, "sleep", lambda _s: None)
+    times = iter([0.0, 100.0, 5000.0])
+    monkeypatch.setattr(iris_monitor.time, "monotonic", lambda: next(times))
 
-
-def test_wait_for_child_job_resets_timeouts_after_preemption() -> None:
-    parent_id = "/runner/parent"
-    child_id = f"{parent_id}/grug-train-canary-tpu-1"
-    polls = iter(
-        [
-            [
-                _job(parent_id, "JOB_STATE_RUNNING"),
-                _job(child_id, "JOB_STATE_RUNNING"),
-            ],
-            [
-                _job(parent_id, "JOB_STATE_RUNNING"),
-                _job(child_id, "JOB_STATE_PENDING", preemption_count=1),
-            ],
-            [
-                _job(parent_id, "JOB_STATE_RUNNING"),
-                _job(child_id, "JOB_STATE_RUNNING", preemption_count=1),
-            ],
-            [
-                _job(parent_id, "JOB_STATE_SUCCEEDED"),
-                _job(child_id, "JOB_STATE_SUCCEEDED", preemption_count=1),
-            ],
-        ]
-    )
-    monotonic = iter([0, 10, 90, 100, 110])
-
-    status = iris_monitor.wait_for_child_job(
-        parent_id,
-        iris_config=None,
-        poll_interval=0,
-        queue_timeout=50,
-        run_timeout=50,
-        repo_root=iris_monitor._REPO_ROOT,
-        list_jobs=lambda: next(polls),
-        clock=lambda: next(monotonic),
-    )
-
-    assert status.state == iris_monitor.JOB_STATE_SUCCEEDED
-
-
-def test_wait_for_child_job_reports_queue_timeout() -> None:
-    parent_id = "/runner/parent"
-    child_id = f"{parent_id}/grug-train-canary-tpu-1"
-    monotonic = iter([0, 4000])
-
-    with pytest.raises(TimeoutError, match="queue/start timeout") as exc:
+    with pytest.raises(TimeoutError, match="No child reached RUNNING"):
         iris_monitor.wait_for_child_job(
             parent_id,
             iris_config=None,
-            poll_interval=30,
-            queue_timeout=3000,
-            run_timeout=60,
-            repo_root=iris_monitor._REPO_ROOT,
-            list_jobs=lambda: [
-                _job(parent_id, "JOB_STATE_RUNNING", failure_count=2),
-                _job(child_id, "JOB_STATE_PENDING", preemption_count=1),
-            ],
-            clock=lambda: next(monotonic),
-        )
-
-    message = str(exc.value)
-    assert "parent=" in message
-    assert "child=" in message
-    assert '"state":"JOB_STATE_RUNNING"' in message
-    assert '"state":"JOB_STATE_PENDING"' in message
-    assert '"failure_count":2' in message
-    assert '"preemption_count":1' in message
-
-
-def test_wait_for_child_job_reports_runtime_timeout() -> None:
-    parent_id = "/runner/parent"
-    child_id = f"{parent_id}/grug-train-canary-tpu-1"
-
-    polls = iter(
-        [
-            [
-                _job(parent_id, "JOB_STATE_RUNNING"),
-                _job(child_id, "JOB_STATE_RUNNING", preemption_count=1),
-            ],
-            [
-                _job(parent_id, "JOB_STATE_RUNNING"),
-                _job(child_id, "JOB_STATE_RUNNING", preemption_count=1),
-            ],
-        ]
-    )
-    monotonic = iter([0, 10, 80])
-
-    with pytest.raises(TimeoutError, match="runtime timeout") as exc:
-        iris_monitor.wait_for_child_job(
-            parent_id,
-            iris_config=None,
+            controller_url=None,
             poll_interval=0,
             queue_timeout=3000,
-            run_timeout=60,
             repo_root=iris_monitor._REPO_ROOT,
-            list_jobs=lambda: next(polls),
-            clock=lambda: next(monotonic),
         )
-
-    message = str(exc.value)
-    assert "phase=child-running" in message
-    assert '"state":"JOB_STATE_RUNNING"' in message
-    assert '"preemption_count":1' in message
 
 
 def test_redact_pod_doc_redacts_env_values_and_preserves_context():
