@@ -38,6 +38,7 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.job_state import compute_job_state
 from iris.cluster.controller.schema import (
     AttemptRow,
     EndpointRow,
@@ -856,6 +857,14 @@ class ControllerTransitions:
         return self._store._db
 
     def _recompute_job_state(self, cur: TransactionCursor, job_id: JobName) -> int | None:
+        """Recompute and persist ``jobs.state`` from the task-state aggregate.
+
+        Delegates the formula to :func:`compute_job_state` so the controller
+        and the ``jobs_with_state`` SQL view agree on derivation. Returns
+        the (possibly unchanged) job state; ``None`` if the job row is gone.
+        Terminal state is sticky: once a job is in a terminal state, no
+        amount of task churn can bring it back to a non-terminal one.
+        """
         basis = self._store.jobs.get_recompute_basis(cur, job_id)
         if basis is None:
             return None
@@ -863,34 +872,22 @@ class ControllerTransitions:
         if current_state in TERMINAL_JOB_STATES:
             return current_state
         counts = self._store.tasks.state_counts_for_job(cur, job_id)
-        total = sum(counts.values())
-        new_state = current_state
+        # ``Timestamp.now`` is sampled here (not after the change check) so
+        # the replay goldens — which pin a specific number of ``now`` calls
+        # per transition — stay stable when the formula short-circuits on a
+        # no-op recompute.
         now_ms = Timestamp.now().epoch_ms()
-        if total > 0 and counts.get(job_pb2.TASK_STATE_SUCCEEDED, 0) == total:
-            new_state = job_pb2.JOB_STATE_SUCCEEDED
-        elif counts.get(job_pb2.TASK_STATE_FAILED, 0) > basis.max_task_failures:
-            new_state = job_pb2.JOB_STATE_FAILED
-        elif counts.get(job_pb2.TASK_STATE_UNSCHEDULABLE, 0) > 0:
-            new_state = job_pb2.JOB_STATE_UNSCHEDULABLE
-        elif counts.get(job_pb2.TASK_STATE_KILLED, 0) > 0:
-            new_state = job_pb2.JOB_STATE_KILLED
-        elif (
-            total > 0
-            and (counts.get(job_pb2.TASK_STATE_WORKER_FAILED, 0) + counts.get(job_pb2.TASK_STATE_PREEMPTED, 0)) > 0
-            and all(s in TERMINAL_TASK_STATES for s in counts)
-        ):
-            new_state = job_pb2.JOB_STATE_WORKER_FAILED
-        elif (
-            counts.get(job_pb2.TASK_STATE_ASSIGNED, 0) > 0
-            or counts.get(job_pb2.TASK_STATE_BUILDING, 0) > 0
-            or counts.get(job_pb2.TASK_STATE_RUNNING, 0) > 0
-        ):
-            new_state = job_pb2.JOB_STATE_RUNNING
-        elif basis.started_at_ms is not None:
-            # Retries put tasks back into PENDING; keep job running once it has started.
-            new_state = job_pb2.JOB_STATE_RUNNING
-        elif total > 0:
-            new_state = job_pb2.JOB_STATE_PENDING
+        # ``compute_job_state`` returns PENDING for empty/total=0; preserve
+        # the historic behaviour of leaving the stored value untouched in
+        # that pre-task-expansion window (where the job has just been
+        # inserted at PENDING and no tasks exist yet).
+        if sum(counts.values()) == 0:
+            return current_state
+        new_state = compute_job_state(
+            counts,
+            max_task_failures=basis.max_task_failures,
+            started_at_ms=basis.started_at_ms,
+        )
         if new_state == current_state:
             return new_state
         error = self._store.tasks.first_error_for_job(cur, job_id)
