@@ -20,6 +20,7 @@ from typing import Any
 import msgspec
 import pyarrow as pa
 from rigging.filesystem import open_url, url_to_fs
+from rigging.timing import log_time
 
 from zephyr import counters
 
@@ -76,9 +77,16 @@ def atomic_rename(output_path: str) -> Iterable[str]:
             local_path = os.path.join(local_tmp_dir, "output")
             yield local_path
             if os.path.isdir(local_path):
-                # Trailing slash prevents fsspec from nesting under an extra
-                # "output/" level when the destination already exists.
-                fs.put(local_path + "/", resolved_path, recursive=True)
+                # batch_size caps concurrent files in flight. Per-file ceiling
+                # is max_concurrency=10 * chunksize=50 MiB = 500 MiB for any
+                # file ≥ 100 MiB (smaller ones skip multipart). fsspec's default
+                # batch_size=128 → 64 GiB ceiling, observed ~11 GiB peak on a
+                # 40-chunk sample. batch_size=8 → 4 GiB ceiling, observed ~2 GiB
+                # peak on the same sample.
+                with log_time(f"atomic_rename fs.put recursive {local_path} → {resolved_path}"):
+                    # Trailing slash prevents fsspec from nesting under an extra
+                    # "output/" level when the destination already exists.
+                    fs.put(local_path + "/", resolved_path, recursive=True, batch_size=8)
             else:
                 fs.put(local_path, resolved_path)
         return
