@@ -12,7 +12,6 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -69,7 +68,6 @@ from iris.cluster.controller.db import (
     ControllerDB,
     SchedulableWorker,
     healthy_active_workers_with_attributes,
-    insert_task_profile,
     job_scheduling_deadline,
     running_tasks_by_worker,
     task_row_can_be_scheduled,
@@ -119,6 +117,7 @@ from iris.cluster.controller.worker_provider import WorkerReconcilePlan
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
+from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,
     WorkerId,
@@ -437,16 +436,18 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
 def _get_running_tasks_with_band_and_value(
     db: ControllerDB,
     claimed_workers: set[WorkerId],
-    user_spend: dict[str, int] | None = None,
-    user_budget_limits: dict[str, int] | None = None,
-    user_budget_defaults: UserBudgetDefaults | None = None,
 ) -> list[RunningTaskInfo]:
     """Query running tasks with band, worker, resource spec, and coscheduling status.
 
     Skips tasks on reservation-claimed workers since those workers are spoken for.
-    When ``user_spend`` and ``user_budget_limits`` are provided, the effective band
-    is computed so over-budget users' tasks are treated as BATCH for preemption.
-    Users without a budget row fall back to ``user_budget_defaults``.
+
+    The reported band is the value persisted in ``tasks.priority_band``, which
+    is stamped at assignment time (see ``_commit_assignments`` and
+    ``TaskStore.mark_assigned``). The over-budget downgrade is applied at that
+    stamping point, not on every scheduling tick, which prevents a running
+    task from oscillating into BATCH and back as its own user crosses the
+    budget cliff — the source of mutual same-band preemption between two
+    users sitting at their limits.
     """
     with db.read_snapshot() as q:
         rows = q.raw(
@@ -463,9 +464,6 @@ def _get_running_tasks_with_band_and_value(
                 "worker_id": WorkerId,
             },
         )
-    _spend = user_spend or {}
-    _limits = user_budget_limits or {}
-    _defaults = user_budget_defaults or UserBudgetDefaults()
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
@@ -477,12 +475,11 @@ def _get_running_tasks_with_band_and_value(
             row.res_disk_bytes,
             row.res_device_json,
         )
-        band = compute_effective_band(row.priority_band, row.task_id.user, _spend, _limits, _defaults)
         result.append(
             RunningTaskInfo(
                 task_id=row.task_id,
                 worker_id=wid,
-                band_sort_key=band,
+                band_sort_key=row.priority_band,
                 resource_value=resource_value(
                     resources.cpu_millicores,
                     resources.memory_bytes,
@@ -670,12 +667,30 @@ def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
         tasks = TASK_ROW_PROJECTION.decode(
             snapshot.fetchall(
                 f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
-                "ORDER BY t.priority_band ASC, t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
+                "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
                 "t.submitted_at_ms ASC, t.priority_insertion ASC",
                 (job_pb2.TASK_STATE_PENDING,),
             ),
         )
     return [task for task in tasks if task_row_can_be_scheduled(task)]
+
+
+def _sort_pending_tasks_by_resolved_band(store: ControllerStore, pending_tasks: list[TaskRow]) -> list[TaskRow]:
+    """Order pending rows using immutable job_config priority bands."""
+    if not pending_tasks:
+        return []
+    with store.read_snapshot() as snap:
+        requested_bands = store.jobs.get_priority_bands(snap, {task.job_id for task in pending_tasks})
+    return sorted(
+        pending_tasks,
+        key=lambda task: (
+            requested_bands.get(task.job_id, job_pb2.PRIORITY_BAND_INTERACTIVE),
+            task.priority_neg_depth,
+            task.priority_root_submitted_ms,
+            task.submitted_at.epoch_ms(),
+            task.priority_insertion,
+        ),
+    )
 
 
 def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:
@@ -993,12 +1008,6 @@ class ControllerConfig:
     """If set, take a periodic best-effort snapshot this often.
     Runs in the autoscaler loop thread; does not pause scheduling."""
 
-    profile_interval: Duration = field(default_factory=lambda: Duration.from_seconds(600))
-    """How often the controller captures CPU profiles for all running tasks."""
-
-    profile_duration: int = 10
-    """Duration in seconds for each profile capture (CPU and memory)."""
-
     prune_interval: Duration = field(default_factory=lambda: Duration.from_seconds(3600))
     """How often to run the data pruning sweep (default: 1 hour)."""
 
@@ -1007,12 +1016,6 @@ class ControllerConfig:
 
     worker_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
     """Delete inactive/unhealthy workers whose last heartbeat exceeds this (default: 24 hours)."""
-
-    profile_retention: Duration = field(default_factory=lambda: Duration.from_seconds(86400))
-    """Delete task_profiles older than this (default: 24 hours)."""
-
-    profile_concurrency: int = 8
-    """Maximum parallel profile RPCs to workers."""
 
     local_state_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="iris_controller_state_")))
     """Local directory for controller DB, logs, bundle cache."""
@@ -1154,6 +1157,7 @@ class Controller:
             k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
             self._provider.log_client = k8s_log_client
             self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
+            self._provider.profile_table = k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
         # Controller process logs ship to the log server via RemoteLogHandler.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
@@ -1209,7 +1213,6 @@ class Controller:
         self._polling_thread: ManagedThread | None = None
         self._direct_provider_thread: ManagedThread | None = None
         self._autoscaler_thread: ManagedThread | None = None
-        self._profile_thread: ManagedThread | None = None
         self._prune_thread: ManagedThread | None = None
         self._ping_thread: ManagedThread | None = None
 
@@ -1319,7 +1322,6 @@ class Controller:
             self._polling_thread = self._threads.spawn(self._run_polling_loop, name="polling-loop")
             self._ping_thread = self._threads.spawn(self._run_ping_loop, name="ping-loop")
             if not self._config.dry_run:
-                self._profile_thread = self._threads.spawn(self._run_profile_loop, name="profile-loop")
                 self._prune_thread = self._threads.spawn(self._run_prune_loop, name="prune-loop")
 
         # Create and start uvicorn server via spawn_server, which bridges the
@@ -1531,7 +1533,6 @@ class Controller:
                     self._transitions.prune_old_data(
                         job_retention=self._config.job_retention,
                         worker_retention=self._config.worker_retention,
-                        profile_retention=self._config.profile_retention,
                         stop_event=stop_event,
                     )
                 except Exception:
@@ -1593,105 +1594,6 @@ class Controller:
         self._provider_capacity = result.capacity
         # Worker-side kills are surfaced through the next K8s pod-diff sync;
         # no immediate RPC fan-out here.
-
-    def _run_profile_loop(self, stop_event: threading.Event) -> None:
-        """Periodically capture CPU and memory profiles for all running tasks.
-
-        Runs on its own thread with a rate limiter. For each running task, sends
-        ProfileTask RPCs (CPU then memory, sequentially) to the task's worker and
-        stores the results in the controller DB.
-        """
-        limiter = RateLimiter(interval_seconds=self._config.profile_interval.to_seconds())
-        while not stop_event.is_set():
-            remaining = limiter.time_until_next()
-            if remaining > 0:
-                stop_event.wait(timeout=remaining)
-            if stop_event.is_set():
-                break
-            limiter.mark_run()
-            try:
-                self._profile_all_running_tasks()
-            except Exception:
-                logger.exception("Profile loop iteration failed")
-
-    def _profile_all_running_tasks(self) -> None:
-        """Capture CPU profiles (py-spy) for every running task and store in the DB.
-
-        Memory profiling via memray is currently disabled because memray attach
-        has been triggering segfaults in target processes.
-        """
-        workers = healthy_active_workers_with_attributes(self._db, self._health)
-        if not workers:
-            return
-        workers_by_id = {w.worker_id: w for w in workers}
-        tasks_by_worker = running_tasks_by_worker(self._db, set(workers_by_id.keys()))
-
-        profile_targets: list[tuple[JobName, SchedulableWorker]] = []
-        for worker_id, task_ids in tasks_by_worker.items():
-            worker = workers_by_id[worker_id]
-            for task_id in task_ids:
-                profile_targets.append((task_id, worker))
-
-        if not profile_targets:
-            return
-
-        cpu_profile_type = job_pb2.ProfileType(
-            cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.RAW),
-        )
-        self._dispatch_profiles(profile_targets, cpu_profile_type, "cpu", self._config.profile_duration)
-
-        logger.info("Profile round (cpu): captured for %d tasks", len(profile_targets))
-
-    def _dispatch_profiles(
-        self,
-        targets: list[tuple[JobName, SchedulableWorker]],
-        profile_type: job_pb2.ProfileType,
-        profile_kind: str,
-        duration: int,
-    ) -> None:
-        """Send profile RPCs for the given targets with bounded concurrency."""
-        concurrency = min(self._config.profile_concurrency, len(targets))
-        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="profile") as pool:
-            futures = [
-                pool.submit(self._capture_one_profile, task_id, worker, profile_type, profile_kind, duration)
-                for task_id, worker in targets
-            ]
-            for future in as_completed(futures):
-                future.result()
-
-    def _capture_one_profile(
-        self,
-        task_id: JobName,
-        worker: SchedulableWorker,
-        profile_type: job_pb2.ProfileType,
-        profile_kind: str,
-        duration: int,
-    ) -> None:
-        """Capture a single task profile via RPC and store it in the DB."""
-        try:
-            request = job_pb2.ProfileTaskRequest(
-                target=task_id.to_wire(),
-                duration_seconds=duration,
-                profile_type=profile_type,
-            )
-            timeout_ms = duration * 1000 + 30000
-            resp = self._provider.profile_task(worker.address, request, timeout_ms=timeout_ms)
-            if resp.error:
-                logger.debug("Profile (%s) failed for %s: %s", profile_kind, task_id, resp.error)
-                return
-            if not resp.profile_data:
-                logger.debug("Empty %s profile for %s", profile_kind, task_id)
-                return
-            insert_task_profile(
-                self._db,
-                task_id=task_id.to_wire(),
-                profile_data=resp.profile_data,
-                captured_at=Timestamp.now(),
-                profile_kind=profile_kind,
-            )
-            logger.debug("Stored %d byte %s profile for %s", len(resp.profile_data), profile_kind, task_id)
-        except Exception:
-            logger.debug("Profile capture (%s) failed for %s", profile_kind, task_id, exc_info=True)
 
     def _is_reservation_satisfied(
         self,
@@ -1904,7 +1806,7 @@ class Controller:
         """
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
-            pending_tasks = _schedulable_tasks(self._db)
+            pending_tasks = _sort_pending_tasks_by_resolved_band(self._store, _schedulable_tasks(self._db))
             workers = healthy_active_workers_with_attributes(self._db, self._health)
             with self._db.read_snapshot() as snap:
                 usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
@@ -1989,11 +1891,24 @@ class Controller:
         """
         with self._db.read_snapshot() as budget_snapshot:
             user_spend = compute_user_spend(budget_snapshot)
+            # Source the requested band from ``job_config`` (immutable since
+            # submission), not from ``tasks.priority_band`` (which is overwritten
+            # with the effective band at assign time). Otherwise a task that was
+            # downgraded to BATCH while its user was over budget would stay
+            # BATCH forever after preemption — ``compute_effective_band`` only
+            # demotes, never promotes back to the user's requested band.
+            requested_bands = self._store.jobs.get_priority_bands(
+                budget_snapshot, {task.job_id for task in pending_tasks}
+            )
         user_budget_limits = self._db.get_all_user_budget_limits()
         defaults = self._config.user_budget_defaults
         task_band_map: dict[JobName, int] = {
             task.task_id: compute_effective_band(
-                task.priority_band, task.task_id.user, user_spend, user_budget_limits, defaults
+                requested_bands.get(task.job_id, task.priority_band),
+                task.task_id.user,
+                user_spend,
+                user_budget_limits,
+                defaults,
             )
             for task in pending_tasks
         }
@@ -2070,7 +1985,7 @@ class Controller:
                 len(result.assignments),
             )
         if all_assignments:
-            self._commit_assignments(all_assignments)
+            self._commit_assignments(all_assignments, order.task_band_map)
             logger.debug(
                 "Scheduling cycle: %d assignments (%d preferred, %d normal), %dms (state read: %dms)",
                 len(all_assignments),
@@ -2081,8 +1996,18 @@ class Controller:
             )
         return all_assignments, context, modified_jobs
 
-    def _commit_assignments(self, assignments: list[tuple[JobName, WorkerId]]) -> None:
+    def _commit_assignments(
+        self,
+        assignments: list[tuple[JobName, WorkerId]],
+        task_band_map: dict[JobName, int],
+    ) -> None:
         """Persist scheduler decisions to ``tasks.state = ASSIGNED`` rows.
+
+        Each assignment carries the effective priority band from
+        ``task_band_map`` (computed against the snapshot's user spend) so
+        ``mark_assigned`` can stamp it onto ``tasks.priority_band``. The
+        preemption pass then trusts that stamped value instead of
+        recomputing from current spend on every tick.
 
         The polling reconcile thread reads ASSIGNED rows on its next tick
         (woken via ``_polling_wake``) and fans out the StartTasks RPCs.
@@ -2091,7 +2016,14 @@ class Controller:
             for task_id, worker_id in assignments:
                 logger.info("[DRY-RUN] Would assign task %s to worker %s", task_id, worker_id)
             return
-        command = [Assignment(task_id=task_id, worker_id=worker_id) for task_id, worker_id in assignments]
+        command = [
+            Assignment(
+                task_id=task_id,
+                worker_id=worker_id,
+                priority_band=task_band_map.get(task_id),
+            )
+            for task_id, worker_id in assignments
+        ]
         with self._store.transaction() as cur:
             self._transitions.queue_assignments(cur, command)
         # Wake the polling thread; every tick reconciles every healthy worker,
@@ -2120,13 +2052,7 @@ class Controller:
         preemptions: list[tuple[JobName, JobName]] = []
         if unscheduled:
             claimed_workers = set(claims.keys())
-            running_info = _get_running_tasks_with_band_and_value(
-                self._db,
-                claimed_workers,
-                user_spend=order.user_spend,
-                user_budget_limits=order.user_budget_limits,
-                user_budget_defaults=self._config.user_budget_defaults,
-            )
+            running_info = _get_running_tasks_with_band_and_value(self._db, claimed_workers)
             preemptions = _run_preemption_pass(unscheduled, running_info, context)
             # Apply all preemptions in one transaction so slice evictions
             # (N siblings of a coscheduled preemptor) are all-or-nothing.

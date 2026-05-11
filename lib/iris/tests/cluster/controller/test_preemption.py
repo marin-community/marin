@@ -9,6 +9,8 @@ from iris.cluster.controller.controller import (
     RunningTaskInfo,
     _get_running_tasks_with_band_and_value,
     _run_preemption_pass,
+    _schedulable_tasks,
+    _sort_pending_tasks_by_resolved_band,
 )
 from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
 from iris.cluster.controller.transitions import (
@@ -20,6 +22,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from rigging.timing import Timestamp
 
 from .conftest import (
     ControllerTestHarness,
@@ -661,31 +664,148 @@ def test_over_budget_production_not_preemptible():
     assert effective == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
-def test_running_tasks_use_effective_band():
-    """_get_running_tasks_with_band_and_value applies budget down-weighting to running tasks."""
+def test_running_tasks_report_stamped_band():
+    """_get_running_tasks_with_band_and_value returns the band stamped at assign time.
+
+    The over-budget downgrade is applied once in ``_commit_assignments`` and
+    persisted in ``tasks.priority_band``; the lookup must not re-derive the
+    band from current spend (which is what previously caused two same-band
+    users at the budget cliff to mutually preempt each other).
+    """
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+        w2 = harness.add_worker("w2", cpu=4)
+
+        tasks_alice = harness.submit("/alice/interactive-job", cpu=1)
+        tasks_bob = harness.submit("/bob/interactive-job", cpu=1)
+
+        # Alice's task is stamped INTERACTIVE (she was under budget at schedule time).
+        # Bob's task is stamped BATCH (he was over budget at schedule time).
+        _dispatch_with_band(state, tasks_alice[0], w1, job_pb2.PRIORITY_BAND_INTERACTIVE)
+        _dispatch_with_band(state, tasks_bob[0], w2, job_pb2.PRIORITY_BAND_BATCH)
+
+        running = {r.task_id: r.band_sort_key for r in _get_running_tasks_with_band_and_value(state._db, set())}
+        assert running == {
+            tasks_alice[0].task_id: job_pb2.PRIORITY_BAND_INTERACTIVE,
+            tasks_bob[0].task_id: job_pb2.PRIORITY_BAND_BATCH,
+        }
+
+
+def test_demoted_task_re_promotes_after_user_returns_under_budget():
+    """Stamping the effective band on assign must not pin a task to BATCH for life.
+
+    Sequence: alice submits INTERACTIVE → over-budget at assign time, scheduler
+    stamps ``tasks.priority_band = BATCH`` → task is preempted back to PENDING
+    → alice now under budget. The next scheduling tick must source the
+    requested band from ``job_config`` (immutable since submission), not from
+    the stamped ``tasks.priority_band`` (BATCH). Otherwise
+    ``compute_effective_band`` — which only demotes — can never restore
+    INTERACTIVE, and a momentary over-budget blip becomes a permanent
+    downgrade that did not exist before this PR's stamping change.
+    """
     with make_controller_state() as state:
         harness = ControllerTestHarness(state)
         w1 = harness.add_worker("w1", cpu=4)
 
-        # Submit an INTERACTIVE job for alice
-        tasks = harness.submit("/alice/interactive-job", cpu=1)
-        harness.dispatch(tasks[0], w1)
+        tasks = harness.submit("/alice/interactive-job", cpu=1, priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+        task = tasks[0]
+        job_id = task.job_id
 
-        # Set alice's budget: over budget
-        user_spend = {"alice": 10000}
-        user_budget_limits = {"alice": 5000}
+        # Scheduler decides alice is over budget and stamps BATCH at assign
+        # time. We bypass the over-budget computation by passing the band
+        # directly; ``mark_assigned`` is the same code path the scheduler hits.
+        _dispatch_with_band(state, task, w1, job_pb2.PRIORITY_BAND_BATCH)
 
-        running = _get_running_tasks_with_band_and_value(
-            state._db,
-            set(),
-            user_spend=user_spend,
-            user_budget_limits=user_budget_limits,
-            user_budget_defaults=UserBudgetDefaults(),
+        # Confirm tasks.priority_band has been overwritten to BATCH.
+        assert query_task(state, task.task_id).priority_band == job_pb2.PRIORITY_BAND_BATCH
+
+        # job_config still reflects what alice asked for.
+        with state._db.read_snapshot() as snap:
+            requested = state._store.jobs.get_priority_bands(snap, [job_id])
+        assert requested == {job_id: job_pb2.PRIORITY_BAND_INTERACTIVE}
+
+        # And under-budget alice gets her INTERACTIVE band back from
+        # compute_effective_band — the scheduler now feeds it the job_config
+        # value so the next assignment will re-stamp INTERACTIVE.
+        assert (
+            compute_effective_band(
+                requested[job_id],
+                "alice",
+                user_spend={"alice": 0},
+                user_budgets={"alice": 5000},
+                defaults=UserBudgetDefaults(),
+            )
+            == job_pb2.PRIORITY_BAND_INTERACTIVE
         )
 
-        assert len(running) == 1
-        # Should be downgraded to BATCH
-        assert running[0].band_sort_key == job_pb2.PRIORITY_BAND_BATCH
+
+def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
+    """Pending order resolves parent bands from job_config, not stamped task rows."""
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        w1 = harness.add_worker("w1", cpu=4)
+
+        parent_tasks = harness.submit(
+            "/alice/parent-prod",
+            cpu=1,
+            priority_band=job_pb2.PRIORITY_BAND_PRODUCTION,
+        )
+        parent_task = parent_tasks[0]
+        parent_id = parent_task.job_id
+
+        # Simulate an assignment-time effective-band stamp that differs from
+        # the parent's immutable requested band. Child inheritance and pending
+        # ordering must not read this stamped value.
+        _dispatch_with_band(state, parent_task, w1, job_pb2.PRIORITY_BAND_BATCH)
+        assert query_task(state, parent_task.task_id).priority_band == job_pb2.PRIORITY_BAND_BATCH
+
+        child_id = parent_id.child("child")
+        child_req = controller_pb2.Controller.LaunchJobRequest(
+            name=child_id.to_wire(),
+            entrypoint=make_test_entrypoint(),
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            environment=job_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        with state._store.transaction() as cur:
+            state.submit_job(cur, child_id, child_req, Timestamp.now())
+        interactive_tasks = harness.submit(
+            "/bob/interactive",
+            cpu=1,
+            priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+        )
+
+        child_task = query_tasks_for_job(state, child_id)[0]
+        assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+        ordered = _sort_pending_tasks_by_resolved_band(state._store, _schedulable_tasks(state._db))
+        ordered_ids = [task.task_id for task in ordered]
+
+        assert ordered_ids.index(child_task.task_id) < ordered_ids.index(interactive_tasks[0].task_id)
+
+
+def _dispatch_with_band(state, task, worker_id, priority_band: int) -> None:
+    """Dispatch task with an explicit stamped band, advancing it to RUNNING."""
+    with state._store.transaction() as cur:
+        state.queue_assignments(
+            cur,
+            [Assignment(task_id=task.task_id, worker_id=worker_id, priority_band=priority_band)],
+        )
+    with state._store.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=worker_id,
+                updates=[
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=query_task(state, task.task_id).current_attempt_id,
+                        new_state=job_pb2.TASK_STATE_RUNNING,
+                    )
+                ],
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------

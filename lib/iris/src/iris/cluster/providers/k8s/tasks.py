@@ -42,6 +42,7 @@ from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
+from iris.cluster.runtime.profile import IrisProfile, build_profile_row
 from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
 from iris.cluster.worker.stats import build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -1053,6 +1054,17 @@ class ResourceCollector:
         self._thread.join(timeout=5)
 
 
+def _get_pod_node_name(kubectl: K8sService, pod_name: str) -> str:
+    """Return the pod's spec.nodeName, or empty string if unschedulable / not yet bound."""
+    try:
+        pod = kubectl.get_json(K8sResource.PODS, pod_name)
+    except KubectlError:
+        return ""
+    if pod is None:
+        return ""
+    return pod.get("spec", {}).get("nodeName", "") or ""
+
+
 @dataclass
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
@@ -1085,6 +1097,9 @@ class K8sTaskProvider:
     # constructing the LogClient (see controller.py); when None — e.g. tests
     # without finelog — the resource collector is disabled.
     task_stats_table: Table | None = None
+    # Pre-resolved iris.profile Table handle injected by the controller
+    # alongside task_stats_table. None in test mode.
+    profile_table: Table[IrisProfile] | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
@@ -1170,22 +1185,41 @@ class K8sTaskProvider:
         attempt_id: int,
         request: job_pb2.ProfileTaskRequest,
     ) -> job_pb2.ProfileTaskResponse:
-        """Profile a running task pod via kubectl exec."""
+        """Profile a running task pod via kubectl exec.
+
+        On success, writes one IrisProfile row to the finelog profile_table
+        (when not None). On failure, returns ProfileTaskResponse(error=...) and
+        skips the write.
+        """
         pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
         duration = request.duration_seconds or 10
         profile_type = request.profile_type
 
         try:
             if profile_type.HasField("threads"):
-                return self._profile_threads(pod_name, profile_type.threads)
+                resp = self._profile_threads(pod_name, profile_type.threads)
             elif profile_type.HasField("cpu"):
-                return self._profile_cpu(pod_name, profile_type.cpu, duration)
+                resp = self._profile_cpu(pod_name, profile_type.cpu, duration)
             elif profile_type.HasField("memory"):
-                return self._profile_memory(pod_name, profile_type.memory, duration)
+                resp = self._profile_memory(pod_name, profile_type.memory, duration)
             else:
                 return job_pb2.ProfileTaskResponse(error="Unknown profile type")
         except Exception as e:
             return job_pb2.ProfileTaskResponse(error=str(e))
+
+        if self.profile_table is not None and resp.profile_data:
+            pod_node_name = _get_pod_node_name(self.kubectl, pod_name)
+            row = build_profile_row(
+                source=request.target,
+                attempt_id=attempt_id,
+                vm_id=f"k8s/{pod_node_name or pod_name}",
+                duration_seconds=duration,
+                profile_type=profile_type,
+                profile_data=resp.profile_data,
+            )
+            self.profile_table.write([row])
+
+        return resp
 
     def exec_in_container(
         self,

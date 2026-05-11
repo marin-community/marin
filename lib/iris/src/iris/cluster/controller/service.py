@@ -89,7 +89,13 @@ from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
+from iris.cluster.runtime.profile import (
+    PROFILE_NAMESPACE,
+    IrisProfile,
+    build_profile_row,
+    parse_profile_target,
+    profile_local_process,
+)
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
@@ -99,6 +105,7 @@ from iris.cluster.types import (
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
+from iris.rpc.async_adapter import on_loop
 from iris.rpc.auth import (
     AuthzAction,
     authorize,
@@ -1001,6 +1008,7 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
@@ -1330,6 +1338,7 @@ class ControllerServiceImpl:
             request=redact_request_env_vars(reconstructed_request),
         )
 
+    @on_loop
     def get_job_state(
         self,
         request: controller_pb2.Controller.GetJobStateRequest,
@@ -1929,20 +1938,48 @@ class ControllerServiceImpl:
         request: job_pb2.ProfileTaskRequest,
         ctx: RequestContext,
     ) -> job_pb2.ProfileTaskResponse:
-        """Profile a running task or system process.
+        """Dashboard-facing on-demand profile dispatch.
 
-        Target routing:
-        - /system/process: the controller process itself
-        - /system/worker/<worker_id>: proxy to a specific worker (profiles the worker process)
-        - /job/.../task/N: proxied to the task's worker
+        Behaviour by target:
+          /system/controller (also /system/process — CLI default)
+            - Capture this controller process via profile_local_process,
+              write one IrisProfile row (source='/system/controller',
+              vm_id='controller-self', attempt_id=None, trigger='on_demand'),
+              return bytes inline.
+          /system/worker/<id>
+            - Forward as /system/process to the named worker via
+              WorkerService.ProfileTask. Worker writes the row with
+              source='/system/worker/<id>'.
+          /job/.../task/N[:attempt_id]
+            - Resolve task and worker; delegate to provider.profile_task.
+              Worker-based: forwards to worker; worker writes IrisProfile
+              (all types), returns bytes. K8s: K8sTaskProvider captures via
+              kubectl exec, writes IrisProfile (all types), returns bytes.
+          Anything else
+            - INVALID_ARGUMENT.
         """
-        # Handle controller-local targets: profile the controller process itself
-        if is_system_target(request.target):
-            if not request.HasField("profile_type"):
-                raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+        if not request.HasField("profile_type"):
+            raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+
+        # /system/controller (or its alias /system/process from the CLI): capture
+        # this controller process itself.
+        if request.target in ("/system/controller", "/system/process"):
             try:
                 duration = request.duration_seconds or 10
                 data = profile_local_process(duration, request.profile_type)
+                if self._profile_table is not None:
+                    self._profile_table.write(
+                        [
+                            build_profile_row(
+                                source="/system/controller",
+                                attempt_id=None,
+                                vm_id="controller-self",
+                                duration_seconds=duration,
+                                profile_type=request.profile_type,
+                                profile_data=data,
+                            )
+                        ]
+                    )
                 return job_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:
                 return job_pb2.ProfileTaskResponse(error=str(e))
@@ -2473,6 +2510,7 @@ class ControllerServiceImpl:
                     (job_pb2.TASK_STATE_PENDING,),
                 ),
             )
+            pending_requested_bands = self._store.jobs.get_priority_bands(snap, {row.job_id for row in pending_rows})
 
             # Running tasks: only task_id, priority_band, and worker — no
             # job_config join is needed for the rolled-up counts below.
@@ -2492,7 +2530,11 @@ class ControllerServiceImpl:
                 continue
             user_id = row.task_id.user
             eff_band = compute_effective_band(
-                row.priority_band, user_id, user_spend, budget_limits, self._user_budget_defaults
+                pending_requested_bands.get(row.job_id, row.priority_band),
+                user_id,
+                user_spend,
+                budget_limits,
+                self._user_budget_defaults,
             )
             job_id = (row.task_id.parent or row.task_id).to_wire()
             key = (eff_band, user_id, job_id)
@@ -2500,15 +2542,15 @@ class ControllerServiceImpl:
             total_pending += 1
 
         # Aggregate running into (band, user, worker, job) → count buckets.
+        # Use the stamped ``tasks.priority_band`` directly: the scheduler stamps the
+        # effective band at assign time (see ``_commit_assignments``), so re-running
+        # ``compute_effective_band`` here against current spend would double-demote.
         running_counts: dict[tuple[int, str, str, str], int] = {}
         total_running = 0
         for row in running_rows:
             user_id = row.task_id.user
-            eff_band = compute_effective_band(
-                row.priority_band, user_id, user_spend, budget_limits, self._user_budget_defaults
-            )
             job_id = (row.task_id.parent or row.task_id).to_wire()
-            key = (eff_band, user_id, str(row.worker_id), job_id)
+            key = (row.priority_band, user_id, str(row.worker_id), job_id)
             running_counts[key] = running_counts.get(key, 0) + 1
             total_running += 1
 
@@ -2605,6 +2647,7 @@ class ControllerServiceImpl:
 
     # --- Task Status Text Push ---
 
+    @on_loop
     def set_task_status_text(
         self,
         request: job_pb2.SetTaskStatusTextRequest,

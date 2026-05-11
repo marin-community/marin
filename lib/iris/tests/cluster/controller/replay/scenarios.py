@@ -477,7 +477,6 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
     transitions.prune_old_data(
         job_retention=Duration.from_seconds(0),
         worker_retention=Duration.from_seconds(3600),
-        profile_retention=Duration.from_seconds(3600),
         pause_between_s=0.0,
     )
 

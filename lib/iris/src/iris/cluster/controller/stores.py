@@ -29,8 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
-import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import RLock
@@ -717,6 +716,59 @@ class JobStore:
         row = tx.fetchone("SELECT * FROM job_config WHERE job_id = ?", (job_id.to_wire(),))
         return dict(row) if row is not None else None
 
+    def get_priority_bands(self, tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
+        """Return ``{job_id: resolved priority_band}`` for the given jobs.
+
+        Mirrors ``submit_job``'s band resolution at read time: use the job's
+        own ``job_config.priority_band`` if it's set; otherwise walk up the
+        ``parent_job_id`` chain and use the nearest ancestor with a
+        non-UNSPECIFIED band; otherwise default to INTERACTIVE.
+
+        The scheduler uses this as the input to ``compute_effective_band`` so
+        a previously-downgraded task can be promoted again once the user
+        falls back under budget. Reading ``tasks.priority_band`` here would
+        be wrong because that column is overwritten with the effective
+        (possibly demoted) band at assign time, and reading the raw
+        ``job_config.priority_band`` without resolution would let UNSPECIFIED
+        (0) leak through and sort ahead of PRODUCTION.
+        """
+        wire_ids = [jid.to_wire() for jid in job_ids]
+        if not wire_ids:
+            return {}
+        placeholders = ",".join("?" for _ in wire_ids)
+        # Recursive CTE: for each input job, walk parent_job_id while the
+        # current row's priority_band is UNSPECIFIED (0). The first row with
+        # a non-UNSPECIFIED band wins. Inputs whose entire chain is
+        # UNSPECIFIED don't appear in the result; the caller substitutes
+        # INTERACTIVE for those.
+        rows = tx.fetchall(
+            f"""
+            WITH RECURSIVE chain(input_id, current_id, current_band, parent_id) AS (
+                SELECT j.job_id, j.job_id, jc.priority_band, j.parent_job_id
+                FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id
+                WHERE j.job_id IN ({placeholders})
+                UNION ALL
+                SELECT chain.input_id, j.job_id, jc.priority_band, j.parent_job_id
+                FROM chain
+                JOIN jobs j ON j.job_id = chain.parent_id
+                JOIN job_config jc ON jc.job_id = j.job_id
+                WHERE chain.current_band = 0
+            )
+            SELECT input_id, current_band
+            FROM chain
+            WHERE current_band != 0
+            """,
+            tuple(wire_ids),
+        )
+        resolved: dict[JobName, int] = {}
+        for row in rows:
+            resolved[JobName.from_wire(str(row["input_id"]))] = int(row["current_band"])
+        # Fall back to INTERACTIVE for inputs where the entire ancestor chain
+        # was UNSPECIFIED (raw user requests with no band, no inherited band).
+        for jid in job_ids:
+            resolved.setdefault(jid, int(job_pb2.PRIORITY_BAND_INTERACTIVE))
+        return resolved
+
     def list_descendants(
         self,
         tx: Tx,
@@ -1270,19 +1322,44 @@ class TaskStore:
         worker_id: WorkerId | None,
         worker_address: str | None,
         now_ms: int,
+        priority_band: int | None = None,
     ) -> None:
+        # ``priority_band`` is stamped at assign time so that the preemption
+        # pass treats a running task's band as fixed. Without this, a user who
+        # crosses their budget cliff while their tasks are running gets their
+        # running tasks demoted to BATCH on the next tick — and then preempted
+        # by another user whose pending tasks haven't yet bumped them over the
+        # cliff. The two users then mutually preempt each other indefinitely.
+        # ``None`` leaves the existing column value untouched (used by code
+        # paths that do not run the budget computation).
+        band_set = "" if priority_band is None else ", priority_band = ?"
+        band_param: tuple[int, ...] = () if priority_band is None else (priority_band,)
         if worker_id is not None:
             cur.execute(
                 "UPDATE tasks SET state = ?, current_attempt_id = ?, "
                 "current_worker_id = ?, current_worker_address = ?, "
-                "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
-                (job_pb2.TASK_STATE_ASSIGNED, attempt_id, str(worker_id), worker_address, now_ms, task_id.to_wire()),
+                f"started_at_ms = COALESCE(started_at_ms, ?){band_set} WHERE task_id = ?",
+                (
+                    job_pb2.TASK_STATE_ASSIGNED,
+                    attempt_id,
+                    str(worker_id),
+                    worker_address,
+                    now_ms,
+                    *band_param,
+                    task_id.to_wire(),
+                ),
             )
             return
         cur.execute(
             "UPDATE tasks SET state = ?, current_attempt_id = ?, "
-            "started_at_ms = COALESCE(started_at_ms, ?) WHERE task_id = ?",
-            (job_pb2.TASK_STATE_ASSIGNED, attempt_id, now_ms, task_id.to_wire()),
+            f"started_at_ms = COALESCE(started_at_ms, ?){band_set} WHERE task_id = ?",
+            (
+                job_pb2.TASK_STATE_ASSIGNED,
+                attempt_id,
+                now_ms,
+                *band_param,
+                task_id.to_wire(),
+            ),
         )
 
     def assign(
@@ -1294,6 +1371,7 @@ class TaskStore:
         worker_address: str | None,
         attempt_id: int,
         now_ms: int,
+        priority_band: int | None = None,
     ) -> None:
         attempts.insert(
             cur,
@@ -1305,7 +1383,7 @@ class TaskStore:
                 created_at_ms=now_ms,
             ),
         )
-        self.mark_assigned(cur, task_id, attempt_id, worker_id, worker_address, now_ms)
+        self.mark_assigned(cur, task_id, attempt_id, worker_id, worker_address, now_ms, priority_band=priority_band)
 
     def apply_state_update(
         self,
@@ -1413,62 +1491,6 @@ class TaskStore:
         cur.execute(
             "UPDATE tasks SET container_id = ? WHERE task_id = ?",
             (container_id, task_id.to_wire()),
-        )
-
-    def _batch_prune_profiles(
-        self,
-        sql: str,
-        params: tuple[object, ...],
-        *,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Repeatedly delete one batch per transaction, sleeping between commits.
-
-        Each iteration commits its batch before sleeping so the writer lock
-        is released and other RPCs can interleave with pruning.
-        """
-        total = 0
-        while not stopped():
-            with self._db.transaction() as cur:
-                batch = cur.execute(sql, params).rowcount
-            if batch == 0:
-                break
-            total += batch
-            time.sleep(pause_between_s)
-        return total
-
-    def prune_stale_profiles(
-        self,
-        *,
-        cutoff_ms: int,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Delete ``task_profiles`` rows older than ``cutoff_ms`` in 1000-row batches."""
-        return self._batch_prune_profiles(
-            "DELETE FROM profiles.task_profiles WHERE rowid IN "
-            "(SELECT rowid FROM profiles.task_profiles WHERE captured_at_ms < ? LIMIT 1000)",
-            (cutoff_ms,),
-            stopped=stopped,
-            pause_between_s=pause_between_s,
-        )
-
-    def prune_orphan_profiles(
-        self,
-        *,
-        stopped: Callable[[], bool],
-        pause_between_s: float,
-    ) -> int:
-        """Delete ``task_profiles`` rows whose task has been pruned."""
-        return self._batch_prune_profiles(
-            "DELETE FROM profiles.task_profiles WHERE rowid IN "
-            "(SELECT p.rowid FROM profiles.task_profiles p"
-            " LEFT JOIN tasks t ON p.task_id = t.task_id"
-            " WHERE t.task_id IS NULL LIMIT 1000)",
-            (),
-            stopped=stopped,
-            pause_between_s=pause_between_s,
         )
 
     def set_state_for_test(

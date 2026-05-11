@@ -164,11 +164,10 @@ class PruneResult:
 
     jobs_deleted: int = 0
     workers_deleted: int = 0
-    profiles_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return self.jobs_deleted + self.workers_deleted + self.profiles_deleted
+        return self.jobs_deleted + self.workers_deleted
 
 
 @dataclass
@@ -231,10 +230,21 @@ class HeartbeatApplyRequest:
 
 @dataclass(frozen=True)
 class Assignment:
-    """Scheduler assignment decision."""
+    """Scheduler assignment decision.
+
+    ``priority_band`` is the effective band computed at scheduling time
+    (after applying any over-budget downgrade). Stamped onto ``tasks.priority_band``
+    when the row transitions to ASSIGNED so that the preemption pass uses a
+    fixed, point-in-time band rather than re-evaluating against current spend
+    on every tick. Re-evaluating caused mutual preemption between two
+    same-band users sitting at the budget cliff. ``None`` leaves the column
+    unchanged (used by call sites that do not run the budget computation,
+    e.g. K8s direct-provider promotions and manual reassignment).
+    """
 
     task_id: JobName
     worker_id: WorkerId
+    priority_band: int | None = None
 
 
 @dataclass(frozen=True)
@@ -939,16 +949,12 @@ class ControllerTransitions:
         # config (see reconcile_user_budget_tiers) and admin overrides via
         # set_user_budget.
 
-        # Resolve priority band: use explicit request value, inherit from parent, or default to INTERACTIVE.
+        # Pending rows keep only this job's requested/default band. Parent
+        # inheritance is resolved from immutable job_config when the scheduler
+        # computes the effective band for a scheduling loop.
         requested_band = int(request.priority_band)
         if requested_band != job_pb2.PRIORITY_BAND_UNSPECIFIED:
             band_sort_key = requested_band
-        elif job_id.parent is not None:
-            parent_band = self._store.tasks.get_priority_band_for_job(cur, job_id.parent)
-            if parent_band is not None:
-                band_sort_key = parent_band
-            else:
-                band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
         else:
             band_sort_key = job_pb2.PRIORITY_BAND_INTERACTIVE
 
@@ -1358,6 +1364,7 @@ class ControllerTransitions:
                 worker_address,
                 attempt_id,
                 now_ms,
+                priority_band=assignment.priority_band,
             )
             jobs_to_update.add(job_id_wire)
             accepted.append(assignment)
@@ -2176,7 +2183,6 @@ class ControllerTransitions:
         *,
         job_retention: Duration,
         worker_retention: Duration,
-        profile_retention: Duration,
         stop_event: threading.Event | None = None,
         pause_between_s: float = 1.0,
     ) -> PruneResult:
@@ -2189,7 +2195,6 @@ class ControllerTransitions:
         Args:
             job_retention: Delete terminal jobs whose finished_at is older than this.
             worker_retention: Delete inactive/unhealthy workers whose last heartbeat is older than this.
-            profile_retention: Delete task_profiles older than this.
             stop_event: If set, abort early (e.g. during shutdown).
             pause_between_s: Sleep between individual deletes to reduce lock contention.
         """
@@ -2229,29 +2234,15 @@ class ControllerTransitions:
             workers_deleted += 1
             time.sleep(pause_between_s)
 
-        # 3. Task profiles: batch of 1000 per transaction
-        profile_cutoff_ms = now_ms - profile_retention.to_ms()
-        profiles_deleted = self._store.tasks.prune_stale_profiles(
-            cutoff_ms=profile_cutoff_ms,
-            stopped=_stopped,
-            pause_between_s=pause_between_s,
-        )
-        profiles_deleted += self._store.tasks.prune_orphan_profiles(
-            stopped=_stopped,
-            pause_between_s=pause_between_s,
-        )
-
         result = PruneResult(
             jobs_deleted=jobs_deleted,
             workers_deleted=workers_deleted,
-            profiles_deleted=profiles_deleted,
         )
         if result.total > 0:
             logger.info(
-                "Pruned old data: %d jobs, %d workers, %d profiles",
+                "Pruned old data: %d jobs, %d workers",
                 result.jobs_deleted,
                 result.workers_deleted,
-                result.profiles_deleted,
             )
             self._store.optimize()
 

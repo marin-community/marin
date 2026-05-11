@@ -3224,7 +3224,6 @@ def test_prune_old_terminal_jobs(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result.jobs_deleted == 1
@@ -3260,7 +3259,6 @@ def test_prune_evicts_status_text_cache(state):
     state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert state._store.tasks.get_status_text_detail(old_tasks[0].task_id.to_wire()) == ""
@@ -3289,7 +3287,6 @@ def test_prune_old_inactive_workers(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result.workers_deleted == 1
@@ -3317,7 +3314,6 @@ def test_prune_noop_when_nothing_old(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()
@@ -3347,7 +3343,6 @@ def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     result = state.prune_old_data(
         job_retention=Duration.from_seconds(86400),
         worker_retention=Duration.from_seconds(86400),
-        profile_retention=Duration.from_seconds(86400),
     )
 
     assert result == PruneResult()

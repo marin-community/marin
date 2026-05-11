@@ -40,6 +40,12 @@ class _FakeLogClientFromService:
     def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
         return self._log_service.fetch_logs(request, ctx=None)
 
+    def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def get_table(self, namespace: str, schema: object) -> None:
+        return None
+
     def close(self) -> None:
         return
 

@@ -46,7 +46,7 @@ const copiedName = ref(false)
 const taskSearch = ref('')
 const stateFilter = ref('')
 
-type SortColumn = 'task' | 'state' | 'mem' | 'peakMem' | 'cpu' | 'duration'
+type SortColumn = 'task' | 'state' | 'mem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
 
 const sortColumn = ref<SortColumn | null>(null)
@@ -100,16 +100,22 @@ async function fetchChildJobs(parentJobId: string): Promise<JobStatus[]> {
 
 // --- Per-task resource samples sourced from finelog stats (iris.task) ---
 //
-// Latest sample per task_id, scoped to this job's tasks. Drives MEM /
-// PEAK MEM / CPU columns and their sort comparators. Empty until the
+// Latest sample per task_id, scoped to this job's tasks. Drives the
+// Memory / Peak / CPU columns and their sort comparators. Empty until the
 // stats query lands. The controller no longer populates
 // TaskStatus.resource_usage, so this is the canonical source.
+//
+// The underlying iris.task columns are stored in MB (matching the
+// ResourceUsage proto), but the SQL projection converts to bytes so the
+// dashboard can call formatBytes directly without a per-call MB→B helper.
 interface TaskStatRow {
   task_id?: string
   attempt_id?: number
   cpu_millicores?: number
-  memory_mb?: number
-  memory_peak_mb?: number
+  // Memory in bytes — converted in the SQL projection so the dashboard can call
+  // formatBytes directly without re-multiplying at every render site.
+  memory_bytes?: number
+  memory_peak_bytes?: number
 }
 
 function buildTaskStatsSql(taskIds: readonly string[]): string {
@@ -117,7 +123,12 @@ function buildTaskStatsSql(taskIds: readonly string[]): string {
   // QueryRequest has no param binding; manual DuckDB single-quote escape.
   const list = taskIds.map(t => `'${t.replace(/'/g, "''")}'`).join(',')
   return `
-SELECT task_id, attempt_id, cpu_millicores, memory_mb, memory_peak_mb
+SELECT
+  task_id,
+  attempt_id,
+  cpu_millicores,
+  memory_mb * 1024 * 1024 AS memory_bytes,
+  memory_peak_mb * 1024 * 1024 AS memory_peak_bytes
 FROM "iris.task"
 WHERE task_id IN (${list})
 QUALIFY row_number() OVER (PARTITION BY task_id ORDER BY ts DESC) = 1
@@ -140,14 +151,23 @@ const taskUsageMap = computed<Map<string, TaskStatRow>>(() => {
   return m
 })
 
-function taskMemMb(taskId: string): number {
-  return Number(taskUsageMap.value.get(taskId)?.memory_mb ?? 0)
+function taskMemBytes(taskId: string): number {
+  return Number(taskUsageMap.value.get(taskId)?.memory_bytes ?? 0)
 }
-function taskPeakMemMb(taskId: string): number {
-  return Number(taskUsageMap.value.get(taskId)?.memory_peak_mb ?? 0)
+function taskPeakMemBytes(taskId: string): number {
+  return Number(taskUsageMap.value.get(taskId)?.memory_peak_bytes ?? 0)
 }
 function taskCpuMillicores(taskId: string): number {
   return Number(taskUsageMap.value.get(taskId)?.cpu_millicores ?? 0)
+}
+
+// True when the task has finished with a non-zero exit code. Drives the
+// merged status column: non-zero exits get prominent display; zero exits
+// fall back to status text or the state badge.
+function taskExitNonZero(t: TaskStatus): boolean {
+  return TERMINAL_STATES.has(stateToName(t.state))
+    && t.exitCode !== undefined
+    && t.exitCode !== 0
 }
 
 // Min/max of the latest stat sample across currently-running tasks. Powers
@@ -155,9 +175,9 @@ function taskCpuMillicores(taskId: string): number {
 interface RunningResourceRange {
   cpuMillicoresMin: number
   cpuMillicoresMax: number
-  memoryMbMin: number
-  memoryMbMax: number
-  memoryPeakMbMax: number
+  memoryBytesMin: number
+  memoryBytesMax: number
+  memoryPeakBytesMax: number
 }
 const runningResourceRange = computed<RunningResourceRange | null>(() => {
   const samples: TaskStatRow[] = []
@@ -168,14 +188,14 @@ const runningResourceRange = computed<RunningResourceRange | null>(() => {
   }
   if (samples.length === 0) return null
   const cpus = samples.map(r => Number(r.cpu_millicores ?? 0))
-  const mems = samples.map(r => Number(r.memory_mb ?? 0))
-  const peaks = samples.map(r => Number(r.memory_peak_mb ?? 0))
+  const mems = samples.map(r => Number(r.memory_bytes ?? 0))
+  const peaks = samples.map(r => Number(r.memory_peak_bytes ?? 0))
   return {
     cpuMillicoresMin: Math.min(...cpus),
     cpuMillicoresMax: Math.max(...cpus),
-    memoryMbMin: Math.min(...mems),
-    memoryMbMax: Math.max(...mems),
-    memoryPeakMbMax: Math.max(...peaks),
+    memoryBytesMin: Math.min(...mems),
+    memoryBytesMax: Math.max(...mems),
+    memoryPeakBytesMax: Math.max(...peaks),
   }
 })
 
@@ -531,10 +551,10 @@ const filteredTasks = computed(() => {
         cmp = (STATE_SORT_ORDER[stateToName(a.state)] ?? 99) - (STATE_SORT_ORDER[stateToName(b.state)] ?? 99)
         break
       case 'mem':
-        cmp = taskMemMb(a.taskId) - taskMemMb(b.taskId)
-        break
-      case 'peakMem':
-        cmp = taskPeakMemMb(a.taskId) - taskPeakMemMb(b.taskId)
+        // Sort by peak when present so the "biggest memory consumer" surfaces;
+        // current usage breaks ties for tasks without a peak sample yet.
+        cmp = (taskPeakMemBytes(a.taskId) || taskMemBytes(a.taskId))
+            - (taskPeakMemBytes(b.taskId) || taskMemBytes(b.taskId))
         break
       case 'cpu':
         cmp = taskCpuMillicores(a.taskId) - taskCpuMillicores(b.taskId)
@@ -813,13 +833,13 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </div>
           <div>
             <span class="text-text-muted">Memory:</span>
-            <span class="font-mono ml-1">{{ formatBytes(runningResourceRange.memoryMbMin * 1024 * 1024) }}</span>
+            <span class="font-mono ml-1">{{ formatBytes(runningResourceRange.memoryBytesMin) }}</span>
             <span class="text-text-muted mx-1">&ndash;</span>
-            <span class="font-mono">{{ formatBytes(runningResourceRange.memoryMbMax * 1024 * 1024) }}</span>
+            <span class="font-mono">{{ formatBytes(runningResourceRange.memoryBytesMax) }}</span>
           </div>
-          <div v-if="runningResourceRange.memoryPeakMbMax">
+          <div v-if="runningResourceRange.memoryPeakBytesMax">
             <span class="text-text-muted">Peak Memory:</span>
-            <span class="font-mono ml-1">{{ formatBytes(runningResourceRange.memoryPeakMbMax * 1024 * 1024) }}</span>
+            <span class="font-mono ml-1">{{ formatBytes(runningResourceRange.memoryPeakBytesMax) }}</span>
           </div>
         </div>
       </div>
@@ -1098,7 +1118,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <span v-if="task.workerId"> · </span>{{ formatTimestamp(task.startedAt) }}
             </template>
             <span> · {{ taskDuration(task) }}</span>
-            <span v-if="TERMINAL_STATES.has(stateToName(task.state)) && task.exitCode !== undefined">
+            <span v-if="taskExitNonZero(task)" class="text-status-danger">
               · exit {{ task.exitCode }}
             </span>
           </div>
@@ -1138,13 +1158,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <col class="w-[4%]" />   <!-- Task -->
             <col class="w-[9%]" />   <!-- State -->
             <col />                  <!-- Worker -->
-            <col class="w-[6%]" />   <!-- Mem -->
-            <col class="w-[5%]" />   <!-- Peak Mem -->
+            <col class="w-[11%]" />  <!-- Memory / Peak -->
             <col class="w-[5%]" />   <!-- CPU -->
             <col class="w-[11%]" />  <!-- Started -->
             <col class="w-[7%]" />   <!-- Duration -->
-            <col class="w-[4%]" />   <!-- Exit -->
-            <col class="w-[15%]" />  <!-- Status / Error -->
+            <col class="w-[19%]" />  <!-- Status (exit code or status text) -->
             <col class="w-[9%]" />   <!-- Profiling -->
           </colgroup>
           <thead>
@@ -1157,10 +1175,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               </th>
               <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Worker</th>
               <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('mem')">
-                Mem <span v-if="sortColumn === 'mem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
-              </th>
-              <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('peakMem')">
-                Peak Mem <span v-if="sortColumn === 'peakMem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+                Memory / Peak <span v-if="sortColumn === 'mem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
               <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('cpu')">
                 CPU <span v-if="sortColumn === 'cpu'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
@@ -1169,7 +1184,6 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <th class="hidden sm:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('duration')">
                 Duration <span v-if="sortColumn === 'duration'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Exit</th>
               <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Status</th>
               <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Profiling</th>
             </tr>
@@ -1205,10 +1219,12 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                 <span v-else class="text-text-muted">&mdash;</span>
               </td>
               <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
-                {{ taskMemMb(task.taskId) ? `${taskMemMb(task.taskId)} MB` : '-' }}
-              </td>
-              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
-                {{ taskPeakMemMb(task.taskId) ? `${taskPeakMemMb(task.taskId)} MB` : '-' }}
+                <template v-if="taskMemBytes(task.taskId) || taskPeakMemBytes(task.taskId)">
+                  {{ taskMemBytes(task.taskId) ? formatBytes(taskMemBytes(task.taskId)) : '-' }}
+                  <span class="text-text-muted">/</span>
+                  {{ taskPeakMemBytes(task.taskId) ? formatBytes(taskPeakMemBytes(task.taskId)) : '-' }}
+                </template>
+                <span v-else class="text-text-muted">-</span>
               </td>
               <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
                 {{ formatCpuMillicores(taskCpuMillicores(task.taskId)) }}
@@ -1219,11 +1235,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               <td class="hidden sm:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono text-text-secondary">
                 {{ taskDuration(task) }}
               </td>
-              <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
-                {{ TERMINAL_STATES.has(stateToName(task.state)) && task.exitCode !== undefined ? task.exitCode : '-' }}
-              </td>
               <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs max-w-xs">
-                <MarkdownRenderer v-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" />
+                <span v-if="taskExitNonZero(task)" class="text-status-danger font-mono">
+                  exit {{ task.exitCode }}
+                </span>
+                <MarkdownRenderer v-else-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" />
                 <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger break-anywhere" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
                 <span v-else class="text-text-muted">—</span>
               </td>

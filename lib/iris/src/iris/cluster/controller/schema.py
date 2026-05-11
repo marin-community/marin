@@ -976,7 +976,6 @@ SLICES = Table(
             default_factory=list,
         ),
         Column("created_at_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
-        Column("last_active_ms", "INTEGER", "NOT NULL DEFAULT 0", python_type=int, decoder=int, default=0),
         Column("error_message", "TEXT", "NOT NULL DEFAULT ''", python_type=str, decoder=str, default=""),
     ),
     indexes=("CREATE INDEX IF NOT EXISTS idx_slices_scale_group ON slices(scale_group)",),
@@ -989,49 +988,6 @@ RESERVATION_CLAIMS = Table(
         Column("worker_id", "TEXT", "PRIMARY KEY", python_type=WorkerId, decoder=decode_worker_id),
         Column("job_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
         Column("entry_idx", "INTEGER", "NOT NULL", python_type=int, decoder=int),
-    ),
-)
-
-# Migration 0005 + 0014 + 0023 (moved to profiles DB)
-TASK_PROFILES = Table(
-    "profiles.task_profiles",
-    "tp",
-    columns=(
-        Column("id", "INTEGER", "PRIMARY KEY AUTOINCREMENT"),
-        Column("task_id", "TEXT", "NOT NULL", python_type=str, decoder=str),
-        Column("profile_data", "BLOB", "NOT NULL", expensive=True),
-        Column(
-            "captured_at_ms",
-            "INTEGER",
-            "NOT NULL",
-            python_name="captured_at",
-            python_type=Timestamp,
-            decoder=decode_timestamp_ms,
-        ),
-        # Migration 0014
-        Column("profile_kind", "TEXT", "NOT NULL DEFAULT 'cpu'", python_type=str, decoder=str, default="cpu"),
-    ),
-    indexes=(
-        "CREATE INDEX IF NOT EXISTS profiles.idx_task_profiles_task_kind"
-        " ON task_profiles(task_id, profile_kind, id DESC)",
-    ),
-    triggers=(
-        # Trigger lives in the profiles schema; SQLite prohibits qualified table
-        # names inside trigger bodies, so we use unqualified references.
-        """CREATE TRIGGER IF NOT EXISTS profiles.trg_task_profiles_cap
-AFTER INSERT ON task_profiles
-BEGIN
-  DELETE FROM task_profiles
-   WHERE task_id = NEW.task_id
-     AND profile_kind = NEW.profile_kind
-     AND id NOT IN (
-       SELECT id FROM task_profiles
-        WHERE task_id = NEW.task_id
-          AND profile_kind = NEW.profile_kind
-        ORDER BY id DESC
-        LIMIT 10
-     );
-END;""",
     ),
 )
 
@@ -1151,8 +1107,6 @@ AUTH_TABLES: tuple[Table, ...] = (
     AUTH_API_KEYS,
     AUTH_CONTROLLER_SECRETS,
 )
-
-PROFILES_TABLES: tuple[Table, ...] = (TASK_PROFILES,)
 
 # ---------------------------------------------------------------------------
 # Hand-written row dataclasses
@@ -1282,6 +1236,9 @@ class TaskRow:
     max_retries_preemption: int
     submitted_at: Timestamp
     priority_band: int = 2
+    priority_neg_depth: int = 0
+    priority_root_submitted_ms: int = 0
+    priority_insertion: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1517,6 +1474,9 @@ TASK_ROW_PROJECTION = TASKS.projection(
     "max_retries_preemption",
     "submitted_at_ms",
     "priority_band",
+    "priority_neg_depth",
+    "priority_root_submitted_ms",
+    "priority_insertion",
     row_cls=TaskRow,
 )
 
