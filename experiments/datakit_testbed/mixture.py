@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import dataclass
 
-from marin.execution.executor import ExecutorStep, output_path_of, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.processing.tokenize.data_configs import TokenizerStep
 from rigging.filesystem import open_url
 
@@ -25,7 +25,7 @@ class TokenizedBucketWeightsConfig:
     runtime, after the executor resolves dependencies.
     """
 
-    tokenized_paths: dict
+    tokenized_paths: dict[str, str | InputName]
     output_path: str
 
 
