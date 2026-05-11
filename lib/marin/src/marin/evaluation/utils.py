@@ -3,8 +3,12 @@
 
 import logging
 import os
+import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 
+import fsspec
 from fsspec.callbacks import TqdmCallback
 from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem import filesystem as marin_filesystem
@@ -14,6 +18,17 @@ from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
 
 logger = logging.getLogger(__name__)
 
+TOKENIZER_FILENAMES = (
+    "tokenizer_config.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "special_tokens_map.json",
+    "added_tokens.json",
+    "merges.txt",
+    "vocab.json",
+    "config.json",
+)
+
 
 def is_remote_path(path: str) -> bool:
     """
@@ -21,6 +36,25 @@ def is_remote_path(path: str) -> bool:
     """
     fs, _ = url_to_fs(path)
     return not isinstance(fs, LocalFileSystem)
+
+
+@contextmanager
+def stage_remote_tokenizer_dir(remote_dir: str) -> Iterator[str | None]:
+    with tempfile.TemporaryDirectory(prefix="marin-tokenizer-") as local_dir:
+        copied_any = False
+        for filename in TOKENIZER_FILENAMES:
+            remote_path = os.path.join(remote_dir.rstrip("/"), filename)
+            if not is_remote_path(remote_path) or not fsspec_exists(remote_path):
+                continue
+
+            local_path = os.path.join(local_dir, filename)
+            with fsspec.open(remote_path, "rb") as src:
+                data = src.read()
+            with open(local_path, "wb") as dst:
+                dst.write(data)
+            copied_any = True
+
+        yield local_dir if copied_any else None
 
 
 def download_from_gcs(gcs_path: str, destination_path: str) -> None:
