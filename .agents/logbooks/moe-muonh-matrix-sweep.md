@@ -68,3 +68,83 @@
 - Result: Both corrected MuonH children are running with zero failures/preemptions. W&B runs are live at `muonh-matrix-baseline-adam-mask-d512-2.19e17` and `muonh-matrix-baseline-adam-mask-d768-1.70e18`. No `Traceback` or `ShardingTypeError` appeared in the recent log scan.
 - Interpretation: Corrected MuonH reached W&B startup for both gate-1 points; wait for step metrics before assessing quality/throughput.
 - Next action: Monitor W&B until both runs log `global_step`, `throughput/tokens_per_second`, and eval metrics.
+
+### 2026-05-10 17:00 - MOE-MH-007 gate-1 completion and verdict
+
+- Hypothesis: Corrected MuonH baseline-adam-mask passes gate 1 against the v16 AdamH README baseline.
+- Command: wandb pull from `marin-community/marin_moe`.
+- Config: PR #5597 commit `c6dd1df58`, suffix `baseline-adam-mask`.
+- Result: Both gate-1 runs `state=finished`. d768 was preempted at step 3000 and resumed cleanly from checkpoint.
+
+| Scale | Run | macro_loss | tps | step |
+|---|---|---|---|---|
+| d512 (2.19e17) | v16 AdamH baseline | 3.8104 | 405,630 | 6386 |
+| d512 (2.19e17) | MuonH baseline-adam-mask | 3.7542 | 411,620 | 6386 |
+| d768 (1.70e18) | v16 AdamH baseline | 3.4339 | 273,532 | 10342 |
+| d768 (1.70e18) | MuonH baseline-adam-mask | 3.3988 | 281,211 | 10342 |
+
+Effective speedup (`L_inf=1.6, alpha=0.0941`):
+
+| Scale | Wall-clock | Step-wise |
+|---|---|---|
+| d512 | 1.33 | 1.32 |
+| d768 | 1.26 | 1.23 |
+
+- Interpretation: Passes gate 1 cleanly. ~+1-2% tps gain plus a ~0.04-0.06 macro_loss reduction at both scales.
+- W&B report: https://wandb.ai/marin-community/marin_moe/reports/MuonH-vs-v16-AdamH-—-gate-1-(d512-+-d768)--VmlldzoxNjgyNzg5Ng==
+- Next action: Launch gate 2 (d1024 at 9.00e18 and d1280 at 2.83e19) under the same suffix.
+
+### 2026-05-10 17:07 - MOE-MH-008 gate-2 launch and preemption-driven relaunches
+
+- Hypothesis: MuonH should continue to beat the v16 AdamH baseline at d1024 and d1280.
+- Command: `.venv/bin/iris --config lib/iris/examples/marin.yaml job run --no-wait --preemptible --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" -e MUONH_MATRIX_GATE 2 -e MUONH_MATRIX_RUN_SUFFIX baseline-adam-mask -- python -m experiments.grug.moe.muonh_matrix_sweep`
+- Config: PR #5597 commit `054f7c6cc` (entity-pin on top of `c6dd1df58`), suffix `baseline-adam-mask`, preemptible v5p-8.
+- Result: Three preemption / capacity events required relaunches:
+  1. `/kaiyue/iris-run-job-20260510-000716` — d1024 and d1280 both preempted at 05:30 UTC. Parent exhausted `max_task_failures`, went to `failed`.
+  2. `/kaiyue/iris-run-job-20260510-060004` — relaunch stuck pending ~50 min on `tpu_v5e-preemptible_16-europe-west4-b` autoscaler capacity. Terminated.
+  3. `/kaiyue/iris-run-job-20260510-065540` — relaunched with `--region us-east5 --region us-central2` (had to drop `--reserve` as the CLI rejects the combination). Landed in us-east5-a where prior gate-1 runs ran. d1024 succeeded; d1280 was preempted again at step 9010.
+  4. `/kaiyue/iris-run-job-20260511-033447` — final relaunch with `--region us-east5` only. d1280 resumed from the latest GCS checkpoint and ran to completion.
+- Interpretation: The us-east5-a v5p-8 preemptible pool (145 ready slices, `availability_status=requesting`) is the proven landing zone for this workload. `us-central1-a` is `quota_exceeded`; `us-central2` has no v5p-8 pool. Submitting with `--region us-east5` (no `--reserve`) is the right pattern for this workload going forward.
+- Next action: Pull final metrics for d1024 and d1280, compute speedups + scaling-law projection, record gate-2 verdict.
+
+### 2026-05-11 03:50 - MOE-MH-009 gate-2 completion and scaling projection
+
+- Hypothesis: MuonH passes gate 2 — wall-clock speedup > 1 at all four scales AND projected MuonH macro_loss < baseline projection at 1e21 and 1e23.
+- Command: wandb pull for all four MuonH runs; scaling-law fit via `scipy.optimize.curve_fit` on `loss(C) = 1.6 + A * C^(-alpha)`.
+- Config: Same code (PR #5597 commit `054f7c6cc`), suffix `baseline-adam-mask`, all four runs in `marin-community/marin_moe`.
+- Result: All four MuonH gate points finished.
+
+| Scale | Budget | Baseline macro_loss | Baseline tps | MuonH macro_loss | MuonH tps | MuonH step |
+|---|---|---|---|---|---|---|
+| d512 | 2.19e17 | 3.8104 | 405,630 | 3.7542 | 411,620 | 6,386 |
+| d768 | 1.70e18 | 3.4339 | 273,532 | 3.3988 | 281,211 | 10,342 |
+| d1024 | 9.00e18 | 3.1605 | 175,165 | 3.1357 | 179,731 | 12,648 |
+| d1280 | 2.83e19 | 3.0065 | 128,277 | 2.9888 | 133,289 | 11,806 |
+
+Effective speedup (`L_inf=1.6, alpha=0.0941`):
+
+| Scale | Wall-clock | Step-wise |
+|---|---|---|
+| d512 | 1.33 | 1.32 |
+| d768 | 1.26 | 1.23 |
+| d1024 | 1.22 | 1.19 |
+| d1280 | **1.19** | 1.14 |
+
+MuonH scaling-law fit on the 4 measured optima (L∞=1.6 pinned):
+
+- `A = 80.22`
+- `alpha = 0.0906`
+- Fit residuals (predicted vs actual): d512 −0.003, d768 +0.007, d1024 −0.005, d1280 +0.0001.
+
+Projections:
+
+| Budget | MuonH projected | Baseline projected | Δ |
+|---|---|---|---|
+| 1e21 | 2.6055 | 2.606 | **−0.0005** (MuonH lower, essentially tied) |
+| 1e23 | 2.2626 | 2.252 | **+0.0106** (MuonH higher — fails) |
+
+- Interpretation: Gate 2 passes the **all-scales speedup** criterion (>1 wall-clock at every measured budget) but **fails the 1e23 projection criterion**: MuonH's fitted alpha (0.0906) is slightly shallower than the baseline's (0.0941), so extrapolating with L∞=1.6 pinned predicts the baseline catches up and overtakes MuonH between 1e21 and 1e23. In the measured range (2.19e17 to 2.83e19) MuonH is uniformly better; outside that range it depends on whether the alpha estimate is real or just a small-sample artifact.
+- W&B reports:
+  - Gate 1: https://wandb.ai/marin-community/marin_moe/reports/MuonH-vs-v16-AdamH-—-gate-1-(d512-+-d768)--VmlldzoxNjgyNzg5Ng==
+  - Gate 2: https://wandb.ai/marin-community/marin_moe/reports/MuonH-vs-v16-AdamH-—-gate-2-(d1024-+-d1280)--VmlldzoxNjgyODM0Ng==
+- Next action: Decide on promotion. The speedup is real and consistent in-range, but the projection caveat at 1e23 is a real concern. Consider (a) re-running one of the existing baseline points with the same recipe to tighten the alpha estimate, or (b) collecting a fifth MuonH point at higher compute to anchor the fit. The router-zloss-4e-3 variant (#5600) is a candidate refinement that has shown ~+6% wall-clock over baseline-adam-mask MuonH at d768 and may have a steeper alpha.
