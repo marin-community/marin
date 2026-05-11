@@ -210,12 +210,13 @@ def _init_right_vector_leaf(leaf: Any, path: Any, *, rank_fraction: float, epsil
     if array.ndim < 2:
         return None
 
-    fan_out, fan_in = array.shape[-2:]
+    Out = weight.resolve_axis("__OUT__")
+    In = weight.resolve_axis("__IN__")
+    fan_out, fan_in = Out.size, In.size
     rank = _rank_from_shape(fan_out, fan_in, rank_fraction)
     key = jax.random.fold_in(jax.random.PRNGKey(0), _stable_seed(path, array.shape, rank))
     right_vector = jax.random.normal(key, (*array.shape[:-2], fan_in, rank), dtype=array.dtype)
     right_vector = _normalize_columns(right_vector, epsilon)
-    In = weight.resolve_axis("__IN__")
     Rank = haliax.Axis("__DION_RANK__", rank)
     named_right_vector = haliax.named(right_vector, (*weight.axes[:-2], In, Rank))
     # Wrap V in a Linear shell so the state tree has the same pytree structure as
@@ -252,10 +253,16 @@ def _dion_update_tree(
         ):
             return update_leaf, momentum_leaf, right_vector_leaf
 
+        Out = update_weight.resolve_axis("__OUT__")
+        In = update_weight.resolve_axis("__IN__")
+        out_first = update_weight.axes[-2].name == "__OUT__"
         dion_update, new_momentum, new_right_vector = _dion_update_matrix(
             update_weight.array,
             momentum_weight.array,
             right_vector_weight.array,
+            fan_out=Out.size,
+            fan_in=In.size,
+            out_first=out_first,
             mu=mu,
             power_iters=power_iters,
             epsilon=epsilon,
@@ -284,13 +291,20 @@ def _dion_update_matrix(
     momentum: Array,
     right_vectors: Array,
     *,
+    fan_out: int,
+    fan_in: int,
+    out_first: bool,
     mu: float,
     power_iters: int,
     epsilon: float,
 ) -> tuple[Array, Array, Array]:
     _assert_matrix(gradient)
-    fan_out, fan_in = gradient.shape
     accumulated = momentum + gradient.astype(momentum.dtype)
+
+    # Ensure M is [Out, In] for the matmuls. V is always [In, r].
+    if not out_first:
+        accumulated = accumulated.T
+
     basis = right_vectors.astype(accumulated.dtype)
 
     left_basis = None
@@ -304,16 +318,21 @@ def _dion_update_matrix(
     assert left_basis is not None
     assert right_factor is not None
 
-    new_momentum = accumulated - (1.0 - mu) * (left_basis @ right_factor.T)
+    new_momentum_oi = accumulated - (1.0 - mu) * (left_basis @ right_factor.T)
     new_right_vectors = basis.astype(right_vectors.dtype)
-    orthonormal_update = left_basis @ new_right_vectors.astype(left_basis.dtype).T
+    orthonormal_update_oi = left_basis @ new_right_vectors.astype(left_basis.dtype).T
+
+    # Transpose back to original layout if needed
+    if not out_first:
+        new_momentum_oi = new_momentum_oi.T
+        orthonormal_update_oi = orthonormal_update_oi.T
 
     # Mask to zero when M is degenerate (avoids NaN from QR on a zero matrix).
     # Can't branch inside jit, so multiply by 0/1 instead.
-    projected_norm = jnp.linalg.norm(accumulated @ right_vectors.astype(accumulated.dtype))
-    nonzero = (projected_norm > epsilon).astype(orthonormal_update.dtype)
-    scale = jnp.sqrt(jnp.asarray(fan_out / fan_in, dtype=orthonormal_update.dtype))
-    return (scale * orthonormal_update * nonzero).astype(gradient.dtype), new_momentum, new_right_vectors
+    projected_norm = jnp.linalg.norm(projected)
+    nonzero = (projected_norm > epsilon).astype(orthonormal_update_oi.dtype)
+    scale = jnp.sqrt(jnp.asarray(fan_out / fan_in, dtype=orthonormal_update_oi.dtype))
+    return (scale * orthonormal_update_oi * nonzero).astype(gradient.dtype), new_momentum_oi, new_right_vectors
 
 
 def _normalize_columns(matrix: Array, epsilon: float) -> Array:

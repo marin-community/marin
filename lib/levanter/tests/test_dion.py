@@ -58,6 +58,28 @@ def test_dion_mask_routes_only_haliax_linear_weight_to_dion():
     assert mask.lm_head == "adamw"
 
 
+def test_scale_with_dion_works_with_out_first_false():
+    In = hax.Axis("In", 8)
+    Out = hax.Axis("Out", 16)
+    linear = hax.nn.Linear.init(In, Out, key=jax.random.PRNGKey(42), out_first=False)
+    grad_weight = dataclasses.replace(linear.weight, array=jnp.ones_like(linear.weight.array))
+    grads = dataclasses.replace(linear, weight=grad_weight, bias=None)
+
+    transform = scale_with_dion(rank_fraction=0.5)
+    state = transform.init(linear)
+
+    # V should be [In=8, r=4] regardless of out_first
+    assert state.right_vectors.weight.array.shape[-2:] == (8, 4)
+
+    updates, new_state = transform.update(grads, state, linear)
+    flat_updates = flatten_linear_layers(updates)
+
+    # Output shape matches input: [In, Out] = [8, 16] for out_first=False
+    assert flat_updates.weight.array.shape == (8, 16)
+    assert jnp.all(jnp.isfinite(flat_updates.weight.array))
+    assert jnp.any(flat_updates.weight.array != 0)
+
+
 def test_scale_with_dion_initializes_rank_reduced_right_vectors():
     params, grads = _linear_params_and_grads(in_size=64, out_size=64)
     transform = scale_with_dion(rank_fraction=0.5)
@@ -111,6 +133,9 @@ def test_dion_error_feedback_reduces_naive_momentum_growth():
             gradient,
             momentum,
             right_vectors,
+            fan_out=8,
+            fan_in=4,
+            out_first=True,
             mu=0.5,
             power_iters=1,
             epsilon=1e-8,
@@ -130,6 +155,9 @@ def test_dion_update_has_unit_singular_values_at_full_rank_before_shape_scaling(
         gradient,
         momentum,
         right_vectors,
+        fan_out=8,
+        fan_in=4,
+        out_first=True,
         mu=0.95,
         power_iters=1,
         epsilon=1e-8,
@@ -151,6 +179,9 @@ def test_dion_update_matches_manual_reference():
         gradient,
         momentum,
         right_vectors,
+        fan_out=5,
+        fan_in=3,
+        out_first=True,
         mu=0.9,
         power_iters=1,
         epsilon=1e-8,
