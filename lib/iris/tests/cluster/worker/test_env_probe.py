@@ -4,7 +4,6 @@
 """Tests for worker environment probing."""
 
 import sys
-import time
 
 import iris.cluster.worker.env_probe as env_probe
 import pytest
@@ -324,19 +323,8 @@ def test_read_net_dev_bytes_returns_nonzero_on_linux():
     assert sent >= 0
 
 
-def test_host_metrics_collector_network_first_call_returns_zero():
-    """First network collection establishes baseline and reports 0 B/s."""
-    collector = HostMetricsCollector()
-    snapshot = collector.collect()
-    assert snapshot.net_recv_bps == 0
-    assert snapshot.net_sent_bps == 0
-
-
-def test_host_metrics_collector_network_delta(monkeypatch):
-    """Second network collection computes bytes/sec from the delta."""
-    fake_time = [100.0]
-    monkeypatch.setattr(time, "monotonic", lambda: fake_time[0])
-
+def test_host_metrics_collector_network_writes_cumulative_bytes(monkeypatch):
+    """Snapshot reports cumulative byte counters straight from /proc/net/dev."""
     call_count = [0]
     net_values = [
         (1000, 2000),
@@ -353,14 +341,12 @@ def test_host_metrics_collector_network_delta(monkeypatch):
     collector = HostMetricsCollector()
 
     snapshot1 = collector.collect()
-    assert snapshot1.net_recv_bps == 0
-    assert snapshot1.net_sent_bps == 0
-
-    fake_time[0] = 105.0
+    assert snapshot1.net_recv_bytes == 1000
+    assert snapshot1.net_sent_bytes == 2000
 
     snapshot2 = collector.collect()
-    assert snapshot2.net_recv_bps == 1000
-    assert snapshot2.net_sent_bps == 2000
+    assert snapshot2.net_recv_bytes == 6000
+    assert snapshot2.net_sent_bytes == 12000
 
 
 # --- Network metrics ---
@@ -435,5 +421,5 @@ def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
 
     collector = HostMetricsCollector()
     snapshot = collector.collect()
-    assert snapshot.net_recv_bps == 0
-    assert snapshot.net_sent_bps == 0
+    assert snapshot.net_recv_bytes == 0
+    assert snapshot.net_sent_bytes == 0

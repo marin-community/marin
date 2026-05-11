@@ -42,7 +42,13 @@ class WandbTracker(Tracker):
     name: str = "wandb"
     run: WandbRun
 
-    def __init__(self, run: Optional[WandbRun], replicate_path: Optional[str] = None):
+    def __init__(
+        self,
+        run: Optional[WandbRun],
+        replicate_path: Optional[str] = None,
+        suppress_logging: bool = False,
+        minimum_log_step: int = 0,
+    ):
         import wandb
 
         if run is None:
@@ -59,18 +65,23 @@ class WandbTracker(Tracker):
 
         self._last_warning_step = -500
         self._replicate_path = replicate_path
+        self._suppress_logging = suppress_logging
+        self._minimum_log_step = minimum_log_step
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
+        if self._suppress_logging:
+            return
         self.run.config.update(_convert_value_to_loggable_rec(hparams), allow_val_change=True)
 
     def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
         if step is None and not commit:
             step = self.run.step
 
-        if step < self.run.step:
+        if step < self._minimum_log_step:
             if step - self._last_warning_step > 500:
                 logger.warning(
-                    f"Step {step} is less than the current step {self.run.step}. Cowardly refusing to log metrics."
+                    f"Step {step} is less than the current step {self._minimum_log_step}. "
+                    "Cowardly refusing to log metrics."
                 )
                 self._last_warning_step = step
             return
@@ -97,12 +108,27 @@ class WandbTracker(Tracker):
                 # otherwise, just log the value normally
                 to_log[k] = _convert_value_to_loggable_rec(v)
 
+        if self._suppress_logging:
+            return
+
+        if step < self.run.step:
+            if step - self._last_warning_step > 500:
+                logger.warning(
+                    f"Step {step} is less than the current step {self.run.step}. Cowardly refusing to log metrics."
+                )
+                self._last_warning_step = step
+            return
+
         self.run.log(to_log, step=step, commit=commit)
 
     def log_summary(self, metrics: typing.Mapping[str, Any]):
+        if self._suppress_logging:
+            return
         self.run.summary.update(_convert_value_to_loggable_rec(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+        if self._suppress_logging:
+            return
         artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
         self.run.log_artifact(
             artifact_path,
@@ -111,6 +137,9 @@ class WandbTracker(Tracker):
         )
 
     def finish(self):
+        if self._suppress_logging:
+            return
+
         logger.info("Finishing wandb run...")
         # Finish wandb first to ensure all metrics are synced to the summary
         self.run.finish()
@@ -268,10 +297,11 @@ class WandbConfig(TrackerConfig):
 
         # for distributed runs, we only want the primary worker to use wandb, so we make everyone else be disabled
         # however, we do share information about the run id, so that we can link to it from the other workers
-        if jax.process_index() == 0:
+        is_primary_process = jax.process_index() == 0
+        if is_primary_process:
             mode = self.mode
         else:
-            mode = "offline"
+            mode = "disabled"
 
         git_settings = self._git_settings()
 
@@ -297,6 +327,7 @@ class WandbConfig(TrackerConfig):
         if r.step != 0:
             logger.info("Resuming wandb run. Attempting to mitigate issues.")
 
+        minimum_log_step = int(r.step)
         if jax.process_count() > 1:
             # we need to share wandb run information across all hosts, because we use it for checkpoint paths and things
             metadata_to_share = dict(
@@ -306,10 +337,12 @@ class WandbConfig(TrackerConfig):
                 tags=r.tags,
                 id=r.id,
                 group=r.group,
+                minimum_log_step=minimum_log_step,
             )
             metadata_to_share = jax_utils.multihost_broadcast_sync(
                 metadata_to_share, is_source=jax.process_index() == 0
             )
+            minimum_log_step = int(metadata_to_share["minimum_log_step"])
 
             # if jax.process_index() != 0:
             # assert r.mode == "disabled", f"Only the primary worker should be using wandb. Got {r.mode}"
@@ -319,20 +352,26 @@ class WandbConfig(TrackerConfig):
             logger.info(f"Synced wandb run information from process 0: {r.name} {r.id}")
 
         # generate a pip freeze
-        with tempfile.TemporaryDirectory() as tmpdir:
-            requirements_path = os.path.join(tmpdir, "requirements.txt")
-            requirements = generate_pip_freeze()
-            with open(requirements_path, "w") as f:
-                f.write(requirements)
-            if wandb.run is not None:
-                wandb.run.log_artifact(str(requirements_path), name="requirements.txt", type="requirements")
+        if is_primary_process:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                requirements_path = os.path.join(tmpdir, "requirements.txt")
+                requirements = generate_pip_freeze()
+                with open(requirements_path, "w") as f:
+                    f.write(requirements)
+                if wandb.run is not None:
+                    wandb.run.log_artifact(str(requirements_path), name="requirements.txt", type="requirements")
 
-        wandb.summary["num_devices"] = jax.device_count()  # type: ignore
-        wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
-        wandb.summary["backend"] = jax.default_backend()  # type: ignore
+            wandb.summary["num_devices"] = jax.device_count()  # type: ignore
+            wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
+            wandb.summary["backend"] = jax.default_backend()  # type: ignore
 
         return maybe_wrap_background(
-            WandbTracker(r, replicate_path=self.replicate_path),
+            WandbTracker(
+                r,
+                replicate_path=self.replicate_path,
+                suppress_logging=not is_primary_process,
+                minimum_log_step=minimum_log_step,
+            ),
             enabled=self.background,
             max_queue_size=self.background_max_queue_size,
             finish_timeout=self.background_finish_timeout,

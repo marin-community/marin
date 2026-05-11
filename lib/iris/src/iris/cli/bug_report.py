@@ -11,13 +11,14 @@ import logging
 import subprocess
 from dataclasses import dataclass, field
 
+from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from finelog.rpc.logging_connect import LogServiceClientSync
 
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import format_resources, job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
@@ -119,8 +120,14 @@ def gather_bug_report(
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
-    log_client = LogServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
+    client = ControllerServiceClientSync(
+        controller_url,
+        timeout_ms=30000,
+        interceptors=interceptors,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=None,
+    )
+    log_client = LogClient.connect(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
         return _gather(client, log_client, job_id, tail=tail)
     finally:
@@ -130,7 +137,7 @@ def gather_bug_report(
 
 def _gather(
     client: ControllerServiceClientSync,
-    log_client: LogServiceClientSync,
+    log_client: LogClient,
     job_id: JobName,
     *,
     tail: int,

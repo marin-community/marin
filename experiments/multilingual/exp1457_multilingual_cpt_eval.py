@@ -57,6 +57,7 @@ multilingual_eval_steps = [
 
 
 if __name__ == "__main__":
-    for i in range(0, len(multilingual_eval_steps), 4):
-        batch = multilingual_eval_steps[i : i + 4]
-        executor_main(steps=batch)
+    # Cap concurrency at 4 to avoid swamping the cluster scheduler with 1,122
+    # ready eval steps. A single executor_main call walks the shared dependency
+    # DAG once instead of once per batch.
+    executor_main(steps=multilingual_eval_steps, max_concurrent=4)

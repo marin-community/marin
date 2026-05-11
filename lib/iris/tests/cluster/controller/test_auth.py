@@ -27,6 +27,8 @@ from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resol
 from rigging.timing import Timestamp
 from starlette.testclient import TestClient
 
+from tests.cluster.conftest import fake_log_client_from_service
+
 _TEST_TOKEN = "valid-test-token"
 _TEST_USER = "test-user"
 CSRF_HEADERS = {"Origin": "http://testserver"}
@@ -49,7 +51,12 @@ def state(db, tmp_path):
 
 
 @pytest.fixture
-def service(state, tmp_path):
+def log_service() -> LogServiceImpl:
+    return LogServiceImpl()
+
+
+@pytest.fixture
+def service(state, tmp_path, log_service):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.autoscaler = None
@@ -60,7 +67,7 @@ def service(state, tmp_path):
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
@@ -70,16 +77,14 @@ def verifier():
 
 
 @pytest.fixture
-def authed_client(service, verifier):
-    dashboard = ControllerDashboard(
-        service, log_service=service._log_service, auth_verifier=verifier, auth_provider="gcp"
-    )
+def authed_client(service, log_service, verifier):
+    dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
     return TestClient(dashboard.app)
 
 
 @pytest.fixture
-def noauth_client(service):
-    dashboard = ControllerDashboard(service, log_service=service._log_service)
+def noauth_client(service, log_service):
+    dashboard = ControllerDashboard(service, log_service=log_service)
     return TestClient(dashboard.app)
 
 
@@ -329,11 +334,11 @@ def test_revoke_login_keys(db: ControllerDB):
 
 
 @pytest.fixture
-def optional_auth_client(service, verifier):
+def optional_auth_client(service, log_service, verifier):
     """Dashboard with auth configured but optional — tokens verified if present, anonymous fallback."""
     dashboard = ControllerDashboard(
         service,
-        log_service=service._log_service,
+        log_service=log_service,
         auth_verifier=verifier,
         auth_provider="static",
         auth_optional=True,
@@ -446,7 +451,7 @@ def test_resolve_auth_policy(verifier, token, optional, should_succeed):
         "invalid-optional",
     ],
 )
-def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optional, should_allow):
+def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier, token, optional, should_allow):
     """_RouteAuthMiddleware applies the same resolve_auth policy as the gRPC interceptor.
 
     We build a dashboard with a @requires_auth route injected and verify it
@@ -454,6 +459,7 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
     """
     from iris.cluster.controller.dashboard import (
         ControllerDashboard,
+        _LegacyFetchLogsRedirect,
         _RouteAuthMiddleware,
         _SubdomainProxyMiddleware,
         requires_auth,
@@ -467,16 +473,17 @@ def test_route_auth_middleware_uses_resolve_auth(service, verifier, token, optio
 
     dashboard = ControllerDashboard(
         service,
-        log_service=service._log_service,
+        log_service=log_service,
         auth_verifier=verifier,
         auth_provider="static",
         auth_optional=optional,
     )
     # Inject a @requires_auth route. The app is wrapped in
-    # _SubdomainProxyMiddleware → _RouteAuthMiddleware → Starlette; walk down
-    # to the Starlette router so the new route participates in route matching.
+    # _SubdomainProxyMiddleware → _LegacyFetchLogsRedirect → _RouteAuthMiddleware
+    # → Starlette; walk down to the Starlette router so the new route
+    # participates in route matching.
     app = dashboard.app
-    while isinstance(app, _SubdomainProxyMiddleware | _RouteAuthMiddleware):
+    while isinstance(app, _SubdomainProxyMiddleware | _LegacyFetchLogsRedirect | _RouteAuthMiddleware):
         app = app._app
     app.router.routes.insert(0, Route("/test-protected", _protected))
 

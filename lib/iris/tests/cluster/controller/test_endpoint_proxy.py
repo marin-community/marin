@@ -92,9 +92,11 @@ def _build_upstream_app(handle: UpstreamHandle) -> Starlette:
 
     async def slow(request: Request) -> Response:
         await _record(request)
-        # Sleep long enough to outlast any reasonable test-side proxy timeout.
-        # The timeout test uses a 0.5s proxy timeout, so 5s here is plenty.
-        await asyncio.sleep(5.0)
+        # Just-long-enough to outlast the proxy's 0.5s timeout. Keeping this
+        # tight matters: uvicorn's graceful shutdown on the upstream fixture
+        # waits for in-flight handlers to finish, so a long sleep here turns
+        # into multi-second test teardown.
+        await asyncio.sleep(1.0)
         return PlainTextResponse("late", status_code=200)
 
     async def large(request: Request) -> Response:

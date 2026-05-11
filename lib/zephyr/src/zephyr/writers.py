@@ -13,7 +13,7 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Iterable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -40,8 +40,8 @@ _MICRO_BATCH_SIZE = 8
 # Fixed batch size for Levanter cache writes (2^14).
 _LEVANTER_BATCH_SIZE = 16384
 
-# Number of items per intermediate chunk for pickle and scatter writes.
-# Used by both _write_pickle_chunks (execution.py) and _write_scatter (shuffle.py).
+# Number of items per intermediate pickle chunk between non-scatter stages.
+# Used by ``_write_pickle_chunks`` in execution.py.
 INTERMEDIATE_CHUNK_SIZE = 100_000
 
 
@@ -90,12 +90,10 @@ def atomic_rename(output_path: str) -> Iterable[str]:
         yield temp_path
         fs.mv(temp_path, output_path, recursive=True)
     except Exception:
-        # Try to cleanup if something went wrong
-        try:
-            if fs.exists(temp_path):
-                fs.rm(temp_path)
-        except Exception:
-            pass
+        # Best-effort cleanup: temp file may not exist (writer crashed before
+        # creating it) so we tolerate any rm error and re-raise the original.
+        with suppress(Exception):
+            fs.rm(temp_path)
         raise
 
 

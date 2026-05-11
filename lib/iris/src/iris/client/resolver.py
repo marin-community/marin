@@ -8,6 +8,7 @@ import os
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.types import Namespace
 from iris.rpc import controller_pb2
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
 
@@ -54,6 +55,8 @@ class ClusterResolver:
         self._client = ControllerServiceClientSync(
             address=self._address,
             timeout_ms=int(timeout * 1000),
+            accept_compression=IRIS_RPC_COMPRESSIONS,
+            send_compression=None,
         )
 
     def _namespace_prefix(self) -> str:

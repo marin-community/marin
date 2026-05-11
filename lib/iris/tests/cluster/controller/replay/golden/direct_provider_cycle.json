@@ -1,5 +1,4 @@
 {
-  "dispatch_queue": [],
   "endpoints": [],
   "job_config": [
     {
@@ -79,7 +78,6 @@
       "worker_id": null
     }
   ],
-  "task_resource_history": [],
   "tasks": [
     {
       "container_id": null,
@@ -115,7 +113,5 @@
     }
   ],
   "worker_attributes": [],
-  "worker_resource_history": [],
-  "worker_task_history": [],
   "workers": []
 }

@@ -13,8 +13,6 @@ import json
 import logging
 import re
 import secrets
-import threading
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -23,10 +21,9 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from finelog.client import LogServiceProxy
+from finelog.client import LogClient
 from finelog.rpc import logging_pb2
-from finelog.server import LogServiceImpl
-from rigging.timing import Timer, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -41,11 +38,8 @@ from iris.cluster.controller.auth import (
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.budget import (
     UserBudgetDefaults,
-    UserTask,
     compute_effective_band,
     compute_user_spend,
-    interleave_by_user,
-    resource_value,
 )
 from iris.cluster.controller.codec import (
     constraints_from_json,
@@ -57,6 +51,8 @@ from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ControllerDB,
     EndpointQuery,
+    QuerySnapshot,
+    SchedulableWorker,
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
@@ -81,30 +77,35 @@ from iris.cluster.controller.schema import (
     JobRow,
     TaskDetailRow,
     WorkerDetailRow,
-    WorkerRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.stores import TASK_RESOURCE_HISTORY_RETENTION, ControllerStore
+from iris.cluster.controller.stores import AddEndpointOutcome, ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     task_updates_from_proto,
 )
+from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.runtime.profile import is_system_target, parse_profile_target, profile_local_process
+from iris.cluster.runtime.profile import (
+    PROFILE_NAMESPACE,
+    IrisProfile,
+    build_profile_row,
+    parse_profile_target,
+    profile_local_process,
+)
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
     WorkerId,
-    get_gpu_count,
-    get_tpu_count,
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
 from iris.rpc import logging_pb2 as iris_logging_pb2
+from iris.rpc.async_adapter import on_loop
 from iris.rpc.auth import (
     AuthzAction,
     authorize,
@@ -137,6 +138,12 @@ DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+
+# Time the launch RPC blocks waiting for a replaced job's worker-bound attempts
+# to finalize before deleting them. Normal worker shutdown is well under one
+# minute; the bound is finite so a stuck finalization surfaces as
+# DEADLINE_EXCEEDED rather than hanging launches forever.
+_JOB_REPLACEMENT_DRAIN_TIMEOUT = Duration.from_minutes(10)
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
@@ -225,9 +232,10 @@ def _active_worker_id(task: TaskDetailRow) -> WorkerId | None:
 def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.TaskStatus:
     """Convert a task row to a TaskStatus proto.
 
-    Handles attempt conversion and timestamps.  resource_usage is NOT populated
-    here — callers must attach it separately from task_resource_history.
-    The caller is responsible for resolving worker_address from worker_id if needed.
+    Handles attempt conversion and timestamps. Per-attempt resource samples
+    live in the ``iris.task`` stats namespace and are not populated here. The
+    caller is responsible for resolving worker_address from worker_id if
+    needed.
     """
     current_attempt = _current_attempt(task)
 
@@ -274,12 +282,12 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.Task
     return proto
 
 
-def worker_status_message(w: WorkerDetailRow) -> str:
+def worker_status_message(liveness: WorkerLiveness) -> str:
     """Build a human-readable status message for unhealthy workers."""
-    if w.healthy:
+    if liveness.healthy:
         return ""
-    age = w.last_heartbeat.age_ms()
-    return f"Unhealthy (last seen {age // 1000}s ago)"
+    age_ms = max(0, Timestamp.now().epoch_ms() - liveness.last_heartbeat_ms)
+    return f"Unhealthy (last seen {age_ms // 1000}s ago)"
 
 
 _WORKER_TARGET_PREFIX = "/system/worker/"
@@ -323,14 +331,13 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 # =============================================================================
 
 
-def _read_job(db: ControllerDB, job_id: JobName) -> JobDetailRow | None:
-    with db.read_snapshot() as q:
-        return JOB_DETAIL_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} " f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
-                (job_id.to_wire(),),
-            )
+def _read_job(q: QuerySnapshot, job_id: JobName) -> JobDetailRow | None:
+    return JOB_DETAIL_PROJECTION.decode_one(
+        q.fetchall(
+            f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} " f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+            (job_id.to_wire(),),
         )
+    )
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRow | None:
@@ -354,14 +361,9 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRo
     return tasks_with_attempts([task], attempts)[0]
 
 
-def _read_worker(db: ControllerDB, worker_id: WorkerId) -> WorkerDetailRow | None:
-    with db.read_snapshot() as q:
-        return WORKER_DETAIL_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w WHERE w.worker_id = ?",
-                (str(worker_id),),
-            )
-        )
+def _read_worker(store: ControllerStore, worker_id: WorkerId) -> WorkerDetailRow | None:
+    with store.read_snapshot() as q:
+        return store.workers.get_detail(q, worker_id)
 
 
 def _job_state(db: ControllerDB, job_id: JobName) -> int | None:
@@ -383,31 +385,6 @@ def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
     return resource_spec_from_scalars(
         job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
     )
-
-
-_SNAPSHOT_FIELD_MAP = (
-    ("snapshot_host_cpu_percent", "host_cpu_percent"),
-    ("snapshot_memory_used_bytes", "memory_used_bytes"),
-    ("snapshot_memory_total_bytes", "memory_total_bytes"),
-    ("snapshot_disk_used_bytes", "disk_used_bytes"),
-    ("snapshot_disk_total_bytes", "disk_total_bytes"),
-    ("snapshot_running_task_count", "running_task_count"),
-    ("snapshot_total_process_count", "total_process_count"),
-    ("snapshot_net_recv_bps", "net_recv_bps"),
-    ("snapshot_net_sent_bps", "net_sent_bps"),
-)
-
-
-def _snapshot_row_to_proto(row: Any, timestamp_ms: int | None = None) -> job_pb2.WorkerResourceSnapshot:
-    """Reconstruct a WorkerResourceSnapshot proto from scalar columns."""
-    snap = job_pb2.WorkerResourceSnapshot()
-    for col, proto_field in _SNAPSHOT_FIELD_MAP:
-        val = getattr(row, col)
-        if val is not None:
-            setattr(snap, proto_field, val)
-    if timestamp_ms is not None:
-        snap.timestamp.epoch_ms = timestamp_ms
-    return snap
 
 
 def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Controller.LaunchJobRequest:
@@ -505,19 +482,11 @@ def _decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
 class _WorkerDetail:
     worker: WorkerDetailRow
     running_tasks: frozenset[JobName]
-    resource_history: tuple[job_pb2.WorkerResourceSnapshot, ...]
 
 
-def _read_worker_detail(
-    db: ControllerDB, worker_id: WorkerId, *, resource_history_limit: int = 200
-) -> _WorkerDetail | None:
-    with db.read_snapshot() as q:
-        worker = WORKER_DETAIL_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w WHERE w.worker_id = ?",
-                (str(worker_id),),
-            ),
-        )
+def _read_worker_detail(store: ControllerStore, worker_id: WorkerId) -> _WorkerDetail | None:
+    with store.read_snapshot() as q:
+        worker = store.workers.get_detail(q, worker_id)
         if worker is None:
             return None
         attr_rows = q.fetchall(
@@ -534,43 +503,36 @@ def _read_worker_detail(
             (str(worker_id), *ACTIVE_TASK_STATES),
             decoders={"task_id": JobName.from_wire},
         )
-        resource_rows = q.raw(
-            "SELECT wrh.snapshot_host_cpu_percent, wrh.snapshot_memory_used_bytes, "
-            "wrh.snapshot_memory_total_bytes, wrh.snapshot_disk_used_bytes, "
-            "wrh.snapshot_disk_total_bytes, wrh.snapshot_running_task_count, "
-            "wrh.snapshot_total_process_count, wrh.snapshot_net_recv_bps, "
-            "wrh.snapshot_net_sent_bps, wrh.timestamp_ms "
-            "FROM worker_resource_history wrh "
-            "WHERE wrh.worker_id = ? ORDER BY wrh.id DESC LIMIT ?",
-            (str(worker_id), max(resource_history_limit, 0)),
-        )
-    resource_history = tuple(reversed([_snapshot_row_to_proto(r, timestamp_ms=r.timestamp_ms) for r in resource_rows]))
     return _WorkerDetail(
         worker=worker,
         running_tasks=frozenset(r.task_id for r in running_rows),
-        resource_history=resource_history,
     )
 
 
 def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailRow]:
+    """Load tasks for the list view, attaching only the current attempt.
+
+    The list UI only needs the current attempt's ``started_at`` /
+    ``finished_at`` and a single ``proto.attempts`` entry. Full history is
+    fetched separately by ``get_task_status``.
+    """
+    job_wire = job_id.to_wire()
     with db.read_snapshot() as q:
         tasks = TASK_DETAIL_PROJECTION.decode(
             q.fetchall(
                 f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
                 "FROM tasks t WHERE t.job_id = ? ORDER BY t.job_id ASC, t.task_index ASC",
-                (job_id.to_wire(),),
+                (job_wire,),
             ),
         )
-        if not tasks:
-            return []
-        task_wires = [t.task_id.to_wire() for t in tasks]
-        placeholders = ",".join("?" for _ in task_wires)
         attempts = ATTEMPT_PROJECTION.decode(
             q.fetchall(
                 f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
-                f"WHERE ta.task_id IN ({placeholders}) "
-                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
-                tuple(task_wires),
+                "WHERE (ta.task_id, ta.attempt_id) IN ("
+                "    SELECT t.task_id, t.current_attempt_id FROM tasks t "
+                "    WHERE t.job_id = ? AND t.current_attempt_id >= 0"
+                ")",
+                (job_wire,),
             ),
         )
     return tasks_with_attempts(tasks, attempts)
@@ -591,18 +553,22 @@ def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskDetailRow]) ->
     return {WorkerId(str(row.worker_id)): row.address for row in rows}
 
 
-# State display order for sorting (active states first)
+# State display order for sorting (active states first). Rendered into
+# ``_STATE_SORT_EXPR`` as a CASE expression for the JOB_SORT_FIELD_STATE path.
+_STATE_SORT_ORDER: dict[int, int] = {
+    job_pb2.JOB_STATE_RUNNING: 0,
+    job_pb2.JOB_STATE_BUILDING: 1,
+    job_pb2.JOB_STATE_PENDING: 2,
+    job_pb2.JOB_STATE_SUCCEEDED: 3,
+    job_pb2.JOB_STATE_FAILED: 4,
+    job_pb2.JOB_STATE_KILLED: 5,
+    job_pb2.JOB_STATE_WORKER_FAILED: 6,
+    job_pb2.JOB_STATE_UNSCHEDULABLE: 7,
+}
 _STATE_SORT_EXPR = (
     "CASE j.state"
-    " WHEN 3 THEN 0"  # RUNNING
-    " WHEN 2 THEN 1"  # BUILDING
-    " WHEN 1 THEN 2"  # PENDING
-    " WHEN 4 THEN 3"  # SUCCEEDED
-    " WHEN 5 THEN 4"  # FAILED
-    " WHEN 6 THEN 5"  # KILLED
-    " WHEN 7 THEN 6"  # WORKER_FAILED
-    " WHEN 8 THEN 7"  # UNSCHEDULABLE
-    " ELSE 99 END"
+    + "".join(f" WHEN {state} THEN {order}" for state, order in _STATE_SORT_ORDER.items())
+    + " ELSE 99 END"
 )
 
 _SORT_FIELD_TO_SQL: dict[int, str] = {
@@ -615,11 +581,17 @@ _SORT_FIELD_TO_SQL: dict[int, str] = {
 
 
 MAX_LIST_JOBS_LIMIT = 500
+# Hard cap on how deep ListJobs callers may page. A correctly-filtered query
+# should narrow the result set; anything reaching offsets this deep is a sign
+# of a caller scanning the entire jobs table page-by-page, which is what the
+# snapshot is supposed to prevent. Force callers to filter instead.
+MAX_LIST_JOBS_OFFSET = 5000
 MAX_LIST_WORKERS_LIMIT = 1000
 
 
 def _filter_and_sort_workers(
     workers: list[WorkerDetailRow],
+    liveness_by_id: dict[WorkerId, WorkerLiveness],
     query: controller_pb2.Controller.WorkerQuery,
 ) -> list[WorkerDetailRow]:
     """Apply the ``WorkerQuery`` contains filter and sort the cached roster.
@@ -639,7 +611,7 @@ def _filter_and_sort_workers(
     sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
     descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
     if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
-        workers = sorted(workers, key=lambda w: w.last_heartbeat.epoch_ms(), reverse=descending)
+        workers = sorted(workers, key=lambda w: liveness_by_id[w.worker_id].last_heartbeat_ms, reverse=descending)
     elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
         # CPU workers persist with ``device_type == ""``; under ascending sort
         # they group first (treating CPU as the no-accelerator baseline).
@@ -666,7 +638,7 @@ def _resolve_state_filter(state_filter: str) -> tuple[int, ...] | None:
 
 
 def _query_jobs(
-    db: ControllerDB,
+    q: QuerySnapshot,
     query: controller_pb2.Controller.JobQuery,
     state_ids: tuple[int, ...],
 ) -> tuple[list[JobRow], int]:
@@ -674,7 +646,9 @@ def _query_jobs(
 
     ``state_ids`` is the pre-resolved state filter (always non-empty); the
     caller owns "unknown state -> empty page" handling so that a bad filter
-    never reaches SQL.
+    never reaches SQL. The caller also owns the read snapshot — list_jobs
+    chains the SELECT, COUNT, and downstream summary/parent queries on a
+    single snapshot to keep the per-connection page cache hot.
     """
     assert state_ids, "_query_jobs requires at least one state id"
 
@@ -715,7 +689,10 @@ def _query_jobs(
     direction = "DESC" if sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC else "ASC"
     order_expr = _SORT_FIELD_TO_SQL.get(sort_field, "j.submitted_at_ms")
 
-    count_sql = f"SELECT COUNT(*) FROM jobs j {JOB_CONFIG_JOIN} WHERE {where_clause}"
+    # COUNT only filters on j.* columns; the projection-side join to job_config
+    # adds a B-tree probe per candidate row for nothing. The FK guarantees the
+    # row exists, so the COUNT cannot diverge from the unjoined form.
+    count_sql = f"SELECT COUNT(*) FROM jobs j WHERE {where_clause}"
 
     # Only join tasks when sorting by failure/preemption aggregates.
     # The common case (sort by date, name, state) skips the expensive LEFT JOIN + GROUP BY.
@@ -750,43 +727,37 @@ def _query_jobs(
         select_sql += " LIMIT ? OFFSET ?"
         select_params.extend([limit, offset])
 
-    with db.read_snapshot() as q:
-        rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
-        # Skip the COUNT query when we can infer the total from the result set:
-        # first page + short result means we already have everything.
-        if offset == 0 and limit > 0 and len(rows) < limit:
-            total = len(rows)
-        else:
-            total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
-
+    rows = q.execute_sql(select_sql, tuple(select_params)).fetchall()
+    total = q.execute_sql(count_sql, tuple(params)).fetchone()[0]
     return JOB_ROW_PROJECTION.decode(rows), total
 
 
 def _query_from_list_jobs_request(
     request: controller_pb2.Controller.ListJobsRequest,
 ) -> controller_pb2.Controller.JobQuery:
-    """Return the request's ``JobQuery`` with paging clamped to safe bounds.
-
-    The legacy flat fields on ``ListJobsRequest`` were removed in #4573;
-    callers must now always submit a ``JobQuery``.
-    """
+    """Return the request's ``JobQuery`` with paging clamped to safe bounds."""
     query = controller_pb2.Controller.JobQuery()
     if request.HasField("query"):
         query.CopyFrom(request.query)
 
-    # Clamp paging: 0 (unset) defaults to MAX; explicit values are capped at MAX.
-    # We no longer support unbounded listing — callers that previously relied on
-    # limit=0 must paginate. Unbounded queries scale poorly because downstream
-    # per-page work (_task_summaries_for_jobs, _parent_ids_with_children) grows
-    # an IN-clause with one placeholder per returned row.
+    # Clamp paging: 0 (unset) or out-of-range values default to MAX. Unbounded
+    # listing is not supported because downstream per-page work
+    # (_task_summaries_for_jobs, _parent_ids_with_children) grows an IN-clause
+    # with one placeholder per returned row.
     if query.limit <= 0 or query.limit > MAX_LIST_JOBS_LIMIT:
         query.limit = MAX_LIST_JOBS_LIMIT
     if query.offset < 0:
         query.offset = 0
+    if query.offset > MAX_LIST_JOBS_OFFSET:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            f"query.offset={query.offset} exceeds MAX_LIST_JOBS_OFFSET={MAX_LIST_JOBS_OFFSET}; "
+            "narrow the result set with state_filter/name_filter/parent_job_id instead of paging deeper.",
+        )
     return query
 
 
-def _parent_ids_with_children(db: ControllerDB, job_ids: list[JobName]) -> set[JobName]:
+def _parent_ids_with_children(q: QuerySnapshot, job_ids: list[JobName]) -> set[JobName]:
     """Return the subset of *job_ids* that currently have direct children."""
     if not job_ids:
         return set()
@@ -796,20 +767,14 @@ def _parent_ids_with_children(db: ControllerDB, job_ids: list[JobName]) -> set[J
         FROM jobs j
         WHERE j.parent_job_id IN ({placeholders})
     """
-    with db.read_snapshot() as q:
-        rows = q.raw(sql, tuple(job_id.to_wire() for job_id in job_ids))
+    rows = q.raw(sql, tuple(job_id.to_wire() for job_id in job_ids))
     return {JobName.from_wire(row.parent_job_id) for row in rows if row.parent_job_id}
 
 
-def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = None) -> dict[JobName, TaskJobSummary]:
-    """Aggregate task counts per job using SQL GROUP BY instead of Python-side iteration."""
-    if job_ids is not None:
-        placeholders = ",".join("?" for _ in job_ids)
-        where = f"WHERE t.job_id IN ({placeholders})"
-        params: tuple[object, ...] = tuple(j.to_wire() for j in job_ids)
-    else:
-        where = ""
-        params = ()
+def _task_summaries_for_jobs(q: QuerySnapshot, job_ids: set[JobName]) -> dict[JobName, TaskJobSummary]:
+    """Aggregate task counts per job via a SQL GROUP BY."""
+    placeholders = ",".join("?" for _ in job_ids)
+    params: tuple[object, ...] = tuple(j.to_wire() for j in job_ids)
 
     sql = f"""
         SELECT t.job_id,
@@ -818,12 +783,11 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
                SUM(t.failure_count) as total_failures,
                SUM(t.preemption_count) as total_preemptions
         FROM tasks t
-        {where}
+        WHERE t.job_id IN ({placeholders})
         GROUP BY t.job_id, t.state
     """
     completed_states = (job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_KILLED)
-    with db.read_snapshot() as q:
-        rows = q.raw(sql, params, decoders={"job_id": JobName.from_wire})
+    rows = q.raw(sql, params, decoders={"job_id": JobName.from_wire})
 
     summaries: dict[JobName, TaskJobSummary] = {}
     for row in rows:
@@ -839,42 +803,26 @@ def _task_summaries_for_jobs(db: ControllerDB, job_ids: set[JobName] | None = No
     return summaries
 
 
-def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
-    with db.read_snapshot() as q:
-        workers = WORKER_DETAIL_PROJECTION.decode(
+def _worker_roster(store: ControllerStore) -> list[WorkerDetailRow]:
+    with store.read_snapshot() as q:
+        decoded = WORKER_DETAIL_PROJECTION.decode(
             q.fetchall(f"SELECT {WORKER_DETAIL_PROJECTION.select_clause()} FROM workers w")
         )
-        # Populate attributes from worker_attributes table.
-        if workers:
-            worker_ids = tuple(str(w.worker_id) for w in workers)
-            placeholders = ",".join("?" for _ in worker_ids)
-            attr_rows = q.fetchall(
-                f"SELECT worker_id, key, value_type, str_value, int_value, float_value "
-                f"FROM worker_attributes WHERE worker_id IN ({placeholders})",
-                worker_ids,
-            )
-            attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
-            for row in attr_rows:
-                wid = str(row["worker_id"])
-                key, value = _decode_attribute_value(row)
-                attrs_by_worker.setdefault(wid, {})[key] = value
-            workers = [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in workers]
-        return workers
-
-
-def _descendant_jobs(db: ControllerDB, job_id: JobName) -> list[JobDetailRow]:
-    # PK range scan: '0' (ASCII 48) is the next char after '/' (ASCII 47),
-    # so this matches all job_ids starting with "<job_id>/" without LIKE.
-    prefix = job_id.to_wire() + "/"
-    upper = job_id.to_wire() + chr(ord("/") + 1)
-    with db.read_snapshot() as q:
-        return JOB_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} FROM jobs j {JOB_CONFIG_JOIN} "
-                f"WHERE j.job_id >= ? AND j.job_id < ?",
-                (prefix, upper),
-            ),
+        if not decoded:
+            return []
+        worker_ids = tuple(str(w.worker_id) for w in decoded)
+        placeholders = ",".join("?" for _ in worker_ids)
+        attr_rows = q.fetchall(
+            f"SELECT worker_id, key, value_type, str_value, int_value, float_value "
+            f"FROM worker_attributes WHERE worker_id IN ({placeholders})",
+            worker_ids,
         )
+        attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
+        for row in attr_rows:
+            wid = str(row["worker_id"])
+            key, value = _decode_attribute_value(row)
+            attrs_by_worker.setdefault(wid, {})[key] = value
+    return [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in decoded]
 
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
@@ -980,13 +928,7 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def kill_tasks_on_workers(
-        self,
-        task_ids: set[JobName],
-        task_kill_workers: dict[JobName, WorkerId] | None = None,
-    ) -> None: ...
-
-    def create_scheduling_context(self, workers: list[WorkerRow]) -> SchedulingContext: ...
+    def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext: ...
 
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
@@ -1042,7 +984,7 @@ class ControllerServiceImpl:
         store: Controller store bundle (per-entity stores + transaction / read_snapshot).
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
-        log_service: LogService for fetching logs (in-process or remote proxy).
+        log_client: LogClient for reading task logs through LogService.FetchLogs.
     """
 
     def __init__(
@@ -1051,7 +993,7 @@ class ControllerServiceImpl:
         store: ControllerStore,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
-        log_service: LogServiceImpl | LogServiceProxy,
+        log_client: LogClient,
         auth: ControllerAuth | None = None,
         system_endpoints: dict[str, str] | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
@@ -1061,43 +1003,18 @@ class ControllerServiceImpl:
         self._db = store._db
         self._controller = controller
         self._bundle_store = bundle_store
-        self._log_service = log_service
+        self._log_client = log_client
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
-        # Short-TTL cache of the worker roster. Dashboards call ListWorkers
-        # and GetAutoscalerStatus back-to-back; both enumerate every worker.
-        # 1s is short enough that stale rows don't matter (workers have
-        # slower health/heartbeat cadence) and long enough to fuse adjacent
-        # refreshes into one SELECT.
-        self._worker_roster_cache: tuple[float, list[WorkerDetailRow]] | None = None
-        self._worker_roster_cache_lock = threading.Lock()
-        self._worker_roster_ttl_s = 1.0
+        self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get_zip(blob_id)
-
-    def _worker_roster_cached(self) -> list[WorkerDetailRow]:
-        """Return the worker roster, refreshed at most once per TTL window.
-
-        `ListWorkers` and `GetAutoscalerStatus` both enumerate every worker
-        and get polled back-to-back by the dashboard. The SELECT + attribute
-        fan-out is expensive (no WHERE, full scan of workers + worker_attributes)
-        and repeating it twice per refresh is pure duplication.
-        """
-        now = time.monotonic()
-        with self._worker_roster_cache_lock:
-            cached = self._worker_roster_cache
-            if cached is not None and (now - cached[0]) < self._worker_roster_ttl_s:
-                return cached[1]
-        roster = _worker_roster(self._db)
-        with self._worker_roster_cache_lock:
-            self._worker_roster_cache = (now, roster)
-        return roster
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -1118,6 +1035,44 @@ class ControllerServiceImpl:
             return
         authorize_resource_owner(job_id.user)
 
+    def _wait_until_job_drained(self, job_id: JobName, timeout: Duration) -> None:
+        """Block until ``job_id`` has no unfinished worker-bound attempts.
+
+        Polls the snapshot DB; the heartbeat path landing terminal updates is
+        what finally clears the predicate. Used to gate ``remove_finished_job``
+        on a replacement so we never CASCADE-delete tasks whose attempts the
+        worker is still racing to finalize. Raises ``ConnectError`` with
+        ``DEADLINE_EXCEEDED`` if the job hasn't drained within ``timeout``.
+        """
+
+        def drained() -> bool:
+            with self._db.read_snapshot() as snap:
+                return not self._store.jobs.has_unfinished_worker_attempts(snap, job_id)
+
+        try:
+            ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until_or_raise(
+                drained,
+                timeout=timeout,
+                error_message=f"Timed out waiting for job {job_id} to drain before replacement",
+            )
+        except TimeoutError as exc:
+            raise ConnectError(Code.DEADLINE_EXCEEDED, str(exc)) from exc
+
+    def _remove_finished_job_safely(self, cur, job_id: JobName) -> None:
+        """``remove_finished_job`` gated on no unfinished worker-bound attempts.
+
+        CASCADE-deleting a job's tasks while its attempts are still worker-
+        bound destroys the rows the heartbeat path needs to find when it
+        stamps ``finished_at_ms``. Every replacement / prune / admin-delete
+        path goes through here so that contract is uniform.
+        """
+        if self._store.jobs.has_unfinished_worker_attempts(cur, job_id):
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Refusing to remove job {job_id}: worker-bound attempts have not finalized",
+            )
+        self._transitions.remove_finished_job(cur, job_id)
+
     def launch_job(
         self,
         request: controller_pb2.Controller.LaunchJobRequest,
@@ -1133,10 +1088,12 @@ class ControllerServiceImpl:
 
         job_id = JobName.from_wire(request.name)
 
-        # Reject root submissions from stale clients. Nested submissions (from
-        # a job already running in the cluster) are exempt — the workload would
-        # otherwise crash mid-flight as the freshness window slides forward.
-        if job_id.is_root:
+        # Reject root RPC submissions from stale clients. Direct in-process
+        # calls have no wire client; tests and harnesses use ctx=None.
+        # Nested submissions are exempt because they come from an already
+        # running workload, which would otherwise crash mid-flight as the
+        # freshness window slides forward.
+        if job_id.is_root and ctx is not None:
             _check_client_freshness(request.client_revision_date, date.today())
 
         # When an auth provider is configured, override the user segment with
@@ -1205,6 +1162,7 @@ class ControllerServiceImpl:
         # transaction further down — between the two txs another submitter
         # can race, but ``INSERT INTO jobs`` then PK-conflicts, which is a
         # legitimate error rather than a correctness bug.
+        needs_drain = False
         with self._store.transaction() as cur:
             existing_state = self._store.jobs.get_state(cur, job_id)
             if existing_state is not None:
@@ -1218,11 +1176,19 @@ class ControllerServiceImpl:
                     if not is_job_finished(existing_state):
                         return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
                     # Job finished, replace it (KEEP only preserves running jobs)
-                    self._transitions.remove_finished_job(cur, job_id)
+                    self._remove_finished_job_safely(cur, job_id)
                 elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                     if not is_job_finished(existing_state):
                         self._transitions.cancel_job(cur, job_id, "Replaced by new submission")
-                    self._transitions.remove_finished_job(cur, job_id)
+                        # Cancel is a producer transition: attempts stay
+                        # unfinished until the worker confirms termination.
+                        # Defer remove_finished_job to a second tx after the
+                        # drain wait so we don't destroy task_attempts rows
+                        # whose finished_at_ms write the heartbeat path is
+                        # still racing to land.
+                        needs_drain = True
+                    else:
+                        self._remove_finished_job_safely(cur, job_id)
                 elif is_job_finished(existing_state):
                     # Default/UNSPECIFIED: replace finished jobs
                     logger.info(
@@ -1230,9 +1196,18 @@ class ControllerServiceImpl:
                         job_id,
                         job_pb2.JobState.Name(existing_state),
                     )
-                    self._transitions.remove_finished_job(cur, job_id)
+                    self._remove_finished_job_safely(cur, job_id)
                 else:
                     raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
+
+        if needs_drain:
+            # Nudge the polling loop so workers see the cancelled tasks excluded
+            # from their expected set on the next reconcile and auto-kill the
+            # containers; the heartbeat path then stamps finished_at_ms.
+            self._controller.wake()
+            self._wait_until_job_drained(job_id, _JOB_REPLACEMENT_DRAIN_TIMEOUT)
+            with self._store.transaction() as cur:
+                self._remove_finished_job_safely(cur, job_id)
 
         # Handle bundle_blob: upload to bundle store, then replace blob
         # with the resulting GCS path (preserving all other fields).
@@ -1306,12 +1281,13 @@ class ControllerServiceImpl:
         cheap: one job row read + one GROUP BY query vs loading every task,
         attempt, and worker address.
         """
-        job = _read_job(self._db, JobName.from_wire(request.job_id))
-        if not job:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
-
-        # Aggregate task counts via a single GROUP BY query.
-        summaries = _task_summaries_for_jobs(self._db, {job.job_id})
+        with self._db.read_snapshot() as q:
+            job = _read_job(q, JobName.from_wire(request.job_id))
+            if not job:
+                raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+            # Aggregate task counts via a single GROUP BY query.
+            summaries = _task_summaries_for_jobs(q, {job.job_id})
+            has_children = bool(_parent_ids_with_children(q, [job.job_id]))
         summary = summaries.get(job.job_id)
 
         task_state_counts = (
@@ -1333,8 +1309,6 @@ class ControllerServiceImpl:
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
         resources = _resource_spec_from_job_row(job)
-
-        has_children = bool(_parent_ids_with_children(self._db, [job.job_id]))
 
         proto_job_status = job_pb2.JobStatus(
             job_id=job.job_id.to_wire(),
@@ -1358,44 +1332,13 @@ class ControllerServiceImpl:
         if job.submitted_at:
             proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at))
 
-        # Compute min/max resource usage across running tasks via pure SQL.
-        resource_min = None
-        resource_max = None
-        with self._db.read_snapshot() as q:
-            agg = q.raw(
-                "SELECT "
-                "  MIN(trh.cpu_millicores) as min_cpu, MAX(trh.cpu_millicores) as max_cpu, "
-                "  MIN(trh.memory_mb) as min_mem, MAX(trh.memory_mb) as max_mem, "
-                "  MIN(trh.disk_mb) as min_disk, MAX(trh.disk_mb) as max_disk, "
-                "  MAX(trh.memory_peak_mb) as max_peak_mem, "
-                "  COUNT(*) as cnt "
-                "FROM task_resource_history trh "
-                "JOIN tasks t ON trh.task_id = t.task_id AND trh.attempt_id = t.current_attempt_id "
-                "WHERE t.job_id = ? AND t.state IN (?, ?)",
-                (job.job_id.to_wire(), job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING),
-            )
-        if agg and agg[0].cnt > 0:
-            row = agg[0]
-            resource_min = job_pb2.ResourceUsage(
-                memory_mb=row.min_mem,
-                cpu_millicores=row.min_cpu,
-                disk_mb=row.min_disk,
-            )
-            resource_max = job_pb2.ResourceUsage(
-                memory_mb=row.max_mem,
-                cpu_millicores=row.max_cpu,
-                disk_mb=row.max_disk,
-                memory_peak_mb=row.max_peak_mem,
-            )
-
         reconstructed_request = _reconstruct_launch_job_request(job)
         return controller_pb2.Controller.GetJobStatusResponse(
             job=proto_job_status,
             request=redact_request_env_vars(reconstructed_request),
-            resource_min=resource_min,
-            resource_max=resource_max,
         )
 
+    @on_loop
     def get_job_state(
         self,
         request: controller_pb2.Controller.GetJobStateRequest,
@@ -1439,9 +1382,11 @@ class ControllerServiceImpl:
         # cancel_job uses a recursive CTE to walk the full subtree in a single
         # transaction, so there is no need to recurse manually.
         with self._store.transaction() as cur:
-            result = self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
-        if result.tasks_to_kill:
-            self._controller.kill_tasks_on_workers(result.tasks_to_kill, result.task_kill_workers)
+            self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
+        # The next polling tick reconciles each affected worker and sends
+        # StopTasks via the expected_tasks diff; wake the loops so it lands
+        # within one tick rather than waiting on the next backoff.
+        self._controller.wake()
         return job_pb2.Empty()
 
     def _job_to_proto(
@@ -1469,8 +1414,6 @@ class ControllerServiceImpl:
                 scaling_prefix = "(scaling up) " if hint.is_scaling_up else ""
                 pending_reason = f"Scheduler: {pending_reason}\n\nAutoscaler: {scaling_prefix}{hint.message}"
 
-        resources = _resource_spec_from_job_row(j)
-
         proto_job = job_pb2.JobStatus(
             job_id=j.job_id.to_wire(),
             state=j.state,
@@ -1479,7 +1422,6 @@ class ControllerServiceImpl:
             failure_count=task_summary.failure_count if task_summary else 0,
             preemption_count=task_summary.preemption_count if task_summary else 0,
             name=job_name,
-            resources=resources,
             task_state_counts=task_state_counts,
             task_count=task_summary.task_count if task_summary else 0,
             completed_count=task_summary.completed_count if task_summary else 0,
@@ -1517,21 +1459,36 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListJobsRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListJobsResponse:
-        """List jobs with SQL-level filtering, sorting, and pagination."""
+        """List jobs with filtering, sorting, and pagination.
+
+        Served directly from indexed SQL via ``_query_jobs``. Per-page task
+        summaries and parent->child flags are looked up against the same read
+        snapshot so the whole RPC observes a single transactionally-consistent
+        view.
+        """
         query = _query_from_list_jobs_request(request)
 
         state_ids = _resolve_state_filter(query.state_filter)
         if state_ids is None:
             return controller_pb2.Controller.ListJobsResponse(jobs=[], total_count=0, has_more=False)
+        if query.scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN and not query.parent_job_id:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN",
+            )
 
-        jobs, total_count = _query_jobs(self._db, query, state_ids)
+        with self._db.read_snapshot() as q:
+            page, total_count = _query_jobs(q, query, state_ids)
+            page_ids = [j.job_id for j in page]
+            summaries = _task_summaries_for_jobs(q, set(page_ids)) if page_ids else {}
+            children = _parent_ids_with_children(q, page_ids) if page_ids else set()
 
-        task_summaries = _task_summaries_for_jobs(self._db, {j.job_id for j in jobs})
-        has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in jobs)
+        has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in page)
         autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
-        has_children = _parent_ids_with_children(self._db, [j.job_id for j in jobs])
-        all_jobs = self._jobs_to_protos(jobs, task_summaries, autoscaler_pending_hints, has_children=has_children)
-        has_more = query.limit > 0 and query.offset + query.limit < total_count
+        all_jobs = self._jobs_to_protos(page, summaries, autoscaler_pending_hints, has_children=children)
+        limit = query.limit
+        offset = query.offset
+        has_more = limit > 0 and offset + limit < total_count
         return controller_pb2.Controller.ListJobsResponse(
             jobs=all_jobs,
             total_count=total_count,
@@ -1561,41 +1518,15 @@ class ControllerServiceImpl:
 
         proto = task_to_proto(task, worker_address=worker_address)
 
-        # Attach resource history and job resource limits (detail view only).
+        # Resource history / latest usage now comes from the ``iris.task``
+        # stats namespace; the controller only attaches the static job
+        # resource limits here.
         job_resources = None
         with self._db.read_snapshot() as q:
-            # Fetch newest rows first so active tasks with >N rows get current data.
-            history_rows = q.raw(
-                "SELECT trh.cpu_millicores, trh.memory_mb, trh.disk_mb, trh.memory_peak_mb "
-                "FROM task_resource_history trh "
-                "WHERE trh.task_id = ? AND trh.attempt_id = ? ORDER BY trh.id DESC LIMIT ?",
-                (task_id.to_wire(), task.current_attempt_id, TASK_RESOURCE_HISTORY_RETENTION),
-            )
             jc_row = q.raw(
                 "SELECT jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json "
                 "FROM job_config jc WHERE jc.job_id = ?",
                 (task.job_id.to_wire(),),
-            )
-        # Reverse to oldest-first for the API contract.
-        for r in reversed(history_rows):
-            proto.resource_history.append(
-                job_pb2.ResourceUsage(
-                    cpu_millicores=r.cpu_millicores,
-                    memory_mb=r.memory_mb,
-                    disk_mb=r.disk_mb,
-                    memory_peak_mb=r.memory_peak_mb,
-                )
-            )
-        # Populate resource_usage from the latest history entry (newest is first before reversal).
-        if history_rows:
-            latest = history_rows[0]
-            proto.resource_usage.CopyFrom(
-                job_pb2.ResourceUsage(
-                    cpu_millicores=latest.cpu_millicores,
-                    memory_mb=latest.memory_mb,
-                    disk_mb=latest.disk_mb,
-                    memory_peak_mb=latest.memory_peak_mb,
-                )
             )
         if jc_row:
             row = jc_row[0]
@@ -1621,40 +1552,10 @@ class ControllerServiceImpl:
         tasks = _tasks_for_listing(self._db, job_id=job_id)
         worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
-        # Batch-fetch latest resource usage per task from task_resource_history.
-        # Join through tasks table (same pattern as the aggregate query in get_job_status).
-        resource_by_task: dict[str, job_pb2.ResourceUsage] = {}
-        if tasks:
-            with self._db.read_snapshot() as q:
-                rows = q.raw(
-                    "SELECT trh.task_id, trh.cpu_millicores, trh.memory_mb, trh.disk_mb, trh.memory_peak_mb "
-                    "FROM task_resource_history trh "
-                    "INNER JOIN ("
-                    "  SELECT trh2.task_id, MAX(trh2.id) as max_id "
-                    "  FROM task_resource_history trh2 "
-                    "  JOIN tasks t ON trh2.task_id = t.task_id AND trh2.attempt_id = t.current_attempt_id "
-                    "  WHERE t.job_id = ? "
-                    "  GROUP BY trh2.task_id"
-                    ") latest ON trh.id = latest.max_id",
-                    (job_id.to_wire(),),
-                )
-            for r in rows:
-                resource_by_task[r.task_id] = job_pb2.ResourceUsage(
-                    cpu_millicores=r.cpu_millicores,
-                    memory_mb=r.memory_mb,
-                    disk_mb=r.disk_mb,
-                    memory_peak_mb=r.memory_peak_mb,
-                )
-
         task_statuses = []
         for task in tasks:
             twid = _task_worker_id(task)
             proto_task_status = task_to_proto(task, worker_address=worker_addr_by_id.get(twid, "") if twid else "")
-
-            # Attach latest resource usage if available.
-            usage = resource_by_task.get(task.task_id.to_wire())
-            if usage is not None:
-                proto_task_status.resource_usage.CopyFrom(usage)
 
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics
@@ -1699,7 +1600,6 @@ class ControllerServiceImpl:
                 slice_id=request.slice_id,
                 scale_group=request.scale_group,
             )
-
         logger.info("Worker registered: %s at %s", worker_id, request.address)
         return controller_pb2.Controller.RegisterResponse(
             worker_id=str(worker_id),
@@ -1713,11 +1613,12 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListWorkersResponse:
         """List workers with their running task counts.
 
-        Filters/sorts the cached roster, then slices to the requested page so
-        only the page's workers pay the ``running_tasks_by_worker`` fan-out
-        and proto-build cost. ``query.limit == 0`` disables paging (preserves
-        CLI callers that fetch the whole roster); ``limit > 0`` is clamped to
-        ``MAX_LIST_WORKERS_LIMIT``.
+        Served directly from the workers table (cluster size is in the low
+        thousands at most), with liveness queried from
+        :class:`~iris.cluster.controller.worker_health.WorkerHealthTracker` and
+        a single per-page running-task lookup. ``query.limit == 0`` disables
+        paging (preserves CLI callers that fetch the whole roster); ``limit > 0``
+        is clamped to ``MAX_LIST_WORKERS_LIMIT``.
         """
         if self._controller.has_direct_provider:
             return controller_pb2.Controller.ListWorkersResponse()
@@ -1726,8 +1627,9 @@ class ControllerServiceImpl:
         if request.HasField("query"):
             query.CopyFrom(request.query)
 
-        all_rows = self._worker_roster_cached()
-        filtered = _filter_and_sort_workers(all_rows, query)
+        workers_all = _worker_roster(self._store)
+        liveness_by_id = self._store.health.liveness_many(w.worker_id for w in workers_all)
+        filtered = _filter_and_sort_workers(workers_all, liveness_by_id, query)
         total_count = len(filtered)
 
         offset = max(query.offset, 0)
@@ -1741,20 +1643,22 @@ class ControllerServiceImpl:
             page_rows = filtered[offset:] if offset else filtered
             has_more = False
 
-        running_by_worker = running_tasks_by_worker(self._db, {worker.worker_id for worker in page_rows})
-        workers = [
-            controller_pb2.Controller.WorkerHealthStatus(
-                worker_id=worker.worker_id,
-                healthy=worker.healthy,
-                consecutive_failures=worker.consecutive_failures,
-                last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
-                running_job_ids=[task_id.to_wire() for task_id in running_by_worker.get(worker.worker_id, [])],
-                address=worker.address,
-                metadata=_worker_metadata_to_proto(worker),
-                status_message=worker_status_message(worker),
+        running = running_tasks_by_worker(self._db, {w.worker_id for w in page_rows}) if page_rows else {}
+        workers = []
+        for worker in page_rows:
+            liveness = liveness_by_id[worker.worker_id]
+            workers.append(
+                controller_pb2.Controller.WorkerHealthStatus(
+                    worker_id=worker.worker_id,
+                    healthy=liveness.healthy,
+                    consecutive_failures=liveness.consecutive_failures,
+                    last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
+                    running_job_ids=[task_id.to_wire() for task_id in running.get(worker.worker_id, set())],
+                    address=worker.address,
+                    metadata=_worker_metadata_to_proto(worker),
+                    status_message=worker_status_message(liveness),
+                )
             )
-            for worker in page_rows
-        ]
         return controller_pb2.Controller.ListWorkersResponse(
             workers=workers,
             total_count=total_count,
@@ -1782,20 +1686,7 @@ class ControllerServiceImpl:
         endpoint_id = request.endpoint_id or str(uuid.uuid4())
 
         task_id = JobName.from_wire(request.task_id)
-        job_id, _task_index = task_id.require_task()
-
-        if _job_state(self._db, job_id) is None:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.task_id} not found")
-
-        task = _read_task_with_attempts(self._db, task_id)
-        if not task:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
-        if request.attempt_id != task.current_attempt_id:
-            raise ConnectError(
-                Code.FAILED_PRECONDITION,
-                f"Stale attempt: task {request.task_id} attempt {request.attempt_id} "
-                f"!= current {task.current_attempt_id}",
-            )
+        task_id.require_task()
 
         endpoint = EndpointRow(
             endpoint_id=endpoint_id,
@@ -1806,9 +1697,19 @@ class ControllerServiceImpl:
             registered_at=Timestamp.now(),
         )
 
+        # Validation runs inside the writer transaction in
+        # :meth:`EndpointStore.add`: NOT_FOUND if the task row is missing,
+        # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
         with self._store.transaction() as cur:
-            added = self._transitions.add_endpoint(cur, endpoint)
-        if not added:
+            outcome = self._transitions.add_endpoint(cur, endpoint, expected_attempt_id=request.attempt_id)
+        if outcome is AddEndpointOutcome.NOT_FOUND:
+            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
+        if outcome is AddEndpointOutcome.STALE_ATTEMPT:
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Stale attempt for task {request.task_id} (attempt {request.attempt_id})",
+            )
+        if outcome is AddEndpointOutcome.TERMINAL:
             raise ConnectError(
                 Code.FAILED_PRECONDITION,
                 f"Task {request.task_id} is already terminal; endpoint not registered",
@@ -1898,26 +1799,26 @@ class ControllerServiceImpl:
 
         status = autoscaler.get_status()
 
-        # Build a map of worker_id -> (worker_id, healthy) for enriching VmInfo
-        workers = self._worker_roster_cached()
-        worker_id_to_info: dict[str, tuple[str, bool]] = {}
-        for w in workers:
-            worker_id_to_info[w.worker_id] = (w.worker_id, w.healthy)
+        workers = _worker_roster(self._store)
+        liveness_by_id = self._store.health.liveness_many(w.worker_id for w in workers)
+        worker_id_to_health: dict[str, bool] = {str(w.worker_id): liveness_by_id[w.worker_id].healthy for w in workers}
 
-        # Fetch running task counts per worker for dashboard display
-        all_worker_ids = {WorkerId(w.worker_id) for w in workers}
-        running_by_worker = running_tasks_by_worker(self._db, all_worker_ids) if all_worker_ids else {}
+        # The vm_ids appearing in the autoscaler status are the only candidates
+        # for the running-task lookup; restrict to those known to be in the
+        # roster to keep the IN-clause bounded by visible VMs, not roster size.
+        vm_ids = {vm.vm_id for group in status.groups for slice_info in group.slices for vm in slice_info.vms}
+        candidate_ids = {WorkerId(vid) for vid in vm_ids if vid in worker_id_to_health}
+        running = running_tasks_by_worker(self._db, candidate_ids) if candidate_ids else {}
 
-        # Enrich VmInfo objects with worker information by matching vm_id to worker_id
         for group in status.groups:
             for slice_info in group.slices:
                 for vm in slice_info.vms:
-                    worker_info = worker_id_to_info.get(vm.vm_id)
-                    if worker_info:
-                        vm.worker_id = worker_info[0]
-                        vm.worker_healthy = worker_info[1]
-                        wid = WorkerId(vm.worker_id)
-                        vm.running_task_count = len(running_by_worker.get(wid, set()))
+                    healthy = worker_id_to_health.get(vm.vm_id)
+                    if healthy is None:
+                        continue
+                    vm.worker_id = vm.vm_id
+                    vm.worker_healthy = healthy
+                    vm.running_task_count = len(running.get(WorkerId(vm.vm_id), set()))
 
         return controller_pb2.Controller.GetAutoscalerStatusResponse(status=status)
 
@@ -2014,7 +1915,7 @@ class ControllerServiceImpl:
             min_level=request.min_level,
         )
 
-        fetch_response = self._log_service.fetch_logs(fetch_request, ctx)
+        fetch_response = self._log_client.fetch_logs(fetch_request)
         entries = fetch_response.entries
 
         batch = controller_pb2.Controller.TaskLogBatch(
@@ -2037,32 +1938,60 @@ class ControllerServiceImpl:
         request: job_pb2.ProfileTaskRequest,
         ctx: RequestContext,
     ) -> job_pb2.ProfileTaskResponse:
-        """Profile a running task or system process.
+        """Dashboard-facing on-demand profile dispatch.
 
-        Target routing:
-        - /system/process: the controller process itself
-        - /system/worker/<worker_id>: proxy to a specific worker (profiles the worker process)
-        - /job/.../task/N: proxied to the task's worker
+        Behaviour by target:
+          /system/controller (also /system/process — CLI default)
+            - Capture this controller process via profile_local_process,
+              write one IrisProfile row (source='/system/controller',
+              vm_id='controller-self', attempt_id=None, trigger='on_demand'),
+              return bytes inline.
+          /system/worker/<id>
+            - Forward as /system/process to the named worker via
+              WorkerService.ProfileTask. Worker writes the row with
+              source='/system/worker/<id>'.
+          /job/.../task/N[:attempt_id]
+            - Resolve task and worker; delegate to provider.profile_task.
+              Worker-based: forwards to worker; worker writes IrisProfile
+              (all types), returns bytes. K8s: K8sTaskProvider captures via
+              kubectl exec, writes IrisProfile (all types), returns bytes.
+          Anything else
+            - INVALID_ARGUMENT.
         """
-        # Handle controller-local targets: profile the controller process itself
-        if is_system_target(request.target):
-            if not request.HasField("profile_type"):
-                raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+        if not request.HasField("profile_type"):
+            raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
+
+        # /system/controller (or its alias /system/process from the CLI): capture
+        # this controller process itself.
+        if request.target in ("/system/controller", "/system/process"):
             try:
                 duration = request.duration_seconds or 10
                 data = profile_local_process(duration, request.profile_type)
+                if self._profile_table is not None:
+                    self._profile_table.write(
+                        [
+                            build_profile_row(
+                                source="/system/controller",
+                                attempt_id=None,
+                                vm_id="controller-self",
+                                duration_seconds=duration,
+                                profile_type=request.profile_type,
+                                profile_data=data,
+                            )
+                        ]
+                    )
                 return job_pb2.ProfileTaskResponse(profile_data=data)
             except Exception as e:
                 return job_pb2.ProfileTaskResponse(error=str(e))
 
         # /system/worker/<worker_id>: proxy profile to the worker's own process
-        worker_id = _parse_worker_target(request.target)
-        if worker_id is not None:
-            worker = self._transitions.get_worker(WorkerId(worker_id))
+        worker_id_str = _parse_worker_target(request.target)
+        if worker_id_str is not None:
+            worker = _read_worker(self._store, WorkerId(worker_id_str))
             if not worker:
-                raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-            if not worker.healthy:
-                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
+                raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
+            if not self._store.health.liveness(worker.worker_id).healthy:
+                raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id_str} is unavailable")
             forwarded = job_pb2.ProfileTaskRequest(
                 target="/system/process",
                 duration_seconds=request.duration_seconds,
@@ -2097,8 +2026,8 @@ class ControllerServiceImpl:
                 )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
 
-        worker = _read_worker(self._db, task_worker_id)
-        if not worker or not worker.healthy:
+        worker = _read_worker(self._store, task_worker_id)
+        if not worker or not self._store.health.liveness(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
@@ -2152,20 +2081,21 @@ class ControllerServiceImpl:
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
-        detail = _read_worker_detail(self._db, WorkerId(str(request.id)))
+        detail = _read_worker_detail(self._store, WorkerId(str(request.id)))
         if not detail:
             raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
         worker = detail.worker
+        liveness = self._store.health.liveness(worker.worker_id)
         worker_health = controller_pb2.Controller.WorkerHealthStatus(
             worker_id=worker.worker_id,
-            healthy=worker.healthy,
-            consecutive_failures=worker.consecutive_failures,
-            last_heartbeat=timestamp_to_proto(worker.last_heartbeat),
+            healthy=liveness.healthy,
+            consecutive_failures=liveness.consecutive_failures,
+            last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
             running_job_ids=[tid.to_wire() for tid in detail.running_tasks],
             address=worker.address,
             metadata=_worker_metadata_to_proto(worker),
-            status_message=worker_status_message(worker),
+            status_message=worker_status_message(liveness),
         )
 
         # Worker daemon logs are NOT inlined here — when the worker is
@@ -2179,11 +2109,6 @@ class ControllerServiceImpl:
             recent_attempts=recent_attempts,
         )
         resp.worker.CopyFrom(worker_health)
-        resource_history = detail.resource_history
-        if resource_history:
-            resp.current_resources.CopyFrom(resource_history[-1])
-        for snapshot in resource_history:
-            resp.resource_history.append(snapshot)
         return resp
 
     def begin_checkpoint(
@@ -2221,10 +2146,10 @@ class ControllerServiceImpl:
         if worker_id is None:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
 
-        worker = self._transitions.get_worker(WorkerId(worker_id))
+        worker = _read_worker(self._store, WorkerId(worker_id))
         if not worker:
             raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-        if not worker.healthy:
+        if not self._store.health.liveness(worker.worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
 
         try:
@@ -2423,8 +2348,8 @@ class ControllerServiceImpl:
                 )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
 
-        worker = _read_worker(self._db, task_worker_id)
-        if not worker or not worker.healthy:
+        worker = _read_worker(self._store, task_worker_id)
+        if not worker or not self._store.health.liveness(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         # Proxy to worker
@@ -2561,105 +2486,77 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetSchedulerStateRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.GetSchedulerStateResponse:
-        """Return scheduler state for the dashboard: pending queue, budgets, running tasks."""
+        """Return aggregated scheduler state for the dashboard.
+
+        The dashboard SchedulerTab + AutoscalerTab consume rolled-up counts:
+        per-(band, user, job) for pending and per-(band, user, worker, job)
+        for running. Aggregation runs server-side and emits one proto entry
+        per bucket rather than per task.
+        """
         require_identity()
 
-        # --- User budgets and spend ---
         budgets = self._db.list_user_budgets()
         budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
+
         with self._db.read_snapshot() as snap:
             user_spend = compute_user_spend(snap)
 
-        # --- Pending queue ---
-        # Inline _schedulable_tasks logic to avoid circular import with controller.py
-        with self._db.read_snapshot() as snap:
-            task_rows = TASK_ROW_PROJECTION.decode(
+            # Pending tasks: full TASK_ROW_PROJECTION so ``task_row_can_be_scheduled``
+            # can apply the schedulable filter (excludes retry-exhausted
+            # PENDING tasks). No ORDER BY — we aggregate, not display.
+            pending_rows = TASK_ROW_PROJECTION.decode(
                 snap.fetchall(
-                    f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
-                    "ORDER BY t.priority_band ASC, t.priority_neg_depth ASC, "
-                    "t.priority_root_submitted_ms ASC, t.submitted_at_ms ASC, t.priority_insertion ASC",
+                    f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ?",
                     (job_pb2.TASK_STATE_PENDING,),
                 ),
             )
-        pending_tasks = [t for t in task_rows if task_row_can_be_scheduled(t)]
-        # Batch-fetch resource spec columns for resource values
-        job_ids = {t.job_id for t in pending_tasks}
-        job_resources: dict[JobName, job_pb2.ResourceSpecProto] = {}
-        if job_ids:
-            wires = [jid.to_wire() for jid in job_ids]
-            placeholders = ",".join("?" for _ in wires)
-            with self._db.read_snapshot() as snap:
-                rows = snap.raw(
-                    f"SELECT jc.job_id, jc.res_cpu_millicores, jc.res_memory_bytes, "
-                    f"jc.res_disk_bytes, jc.res_device_json "
-                    f"FROM job_config jc WHERE jc.job_id IN ({placeholders})",
-                    tuple(wires),
-                    decoders={"job_id": JobName.from_wire},
-                )
-            for row in rows:
-                job_resources[row.job_id] = _resource_spec_from_job_row(row)
+            pending_requested_bands = self._store.jobs.get_priority_bands(snap, {row.job_id for row in pending_rows})
 
-        # Group by effective band, interleaving by user within each band
-        BAND_ORDER = [
-            job_pb2.PRIORITY_BAND_PRODUCTION,
-            job_pb2.PRIORITY_BAND_INTERACTIVE,
-            job_pb2.PRIORITY_BAND_BATCH,
-        ]
-        MAX_TASKS_PER_BAND = 100
-
-        band_groups: list[controller_pb2.Controller.SchedulerBandGroup] = []
-        total_pending = len(pending_tasks)
-        # Partition tasks by effective band
-        tasks_by_band: dict[int, list[UserTask]] = {b: [] for b in BAND_ORDER}
-        for task in pending_tasks:
-            eff_band = compute_effective_band(
-                task.priority_band, task.task_id.user, user_spend, budget_limits, self._user_budget_defaults
+            # Running tasks: only task_id, priority_band, and worker — no
+            # job_config join is needed for the rolled-up counts below.
+            running_rows = snap.raw(
+                "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id "
+                "FROM tasks t "
+                "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
+                (job_pb2.TASK_STATE_RUNNING,),
+                decoders={"task_id": JobName.from_wire, "priority_band": int, "worker_id": WorkerId},
             )
-            ut: UserTask = UserTask(user_id=task.task_id.user, task=(task, eff_band))
-            target_band = eff_band if eff_band in tasks_by_band else job_pb2.PRIORITY_BAND_BATCH
-            tasks_by_band[target_band].append(ut)
 
-        global_position = 0
-        for band in BAND_ORDER:
-            band_tasks = tasks_by_band.get(band, [])
-            if not band_tasks:
+        # Aggregate pending into (band, user, job) → count buckets.
+        pending_counts: dict[tuple[int, str, str], int] = {}
+        total_pending = 0
+        for row in pending_rows:
+            if not task_row_can_be_scheduled(row):
                 continue
-            interleaved = interleave_by_user(band_tasks, user_spend)
-            total_in_band = len(interleaved)
-            entries: list[controller_pb2.Controller.SchedulerTaskEntry] = []
-            for task_and_band in interleaved[:MAX_TASKS_PER_BAND]:
-                task, eff_band = task_and_band
-                res = job_resources.get(task.job_id)
-                rv = 0
-                if res is not None:
-                    accel = get_gpu_count(res.device) + get_tpu_count(res.device)
-                    rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)
-                entries.append(
-                    controller_pb2.Controller.SchedulerTaskEntry(
-                        task_id=task.task_id.to_wire(),
-                        job_id=task.job_id.to_wire(),
-                        user_id=task.task_id.user,
-                        original_band=task.priority_band,
-                        effective_band=eff_band,
-                        queue_position=global_position,
-                        resource_value=rv,
-                    )
-                )
-                global_position += 1
-            # Advance position for truncated tasks
-            global_position += max(0, total_in_band - MAX_TASKS_PER_BAND)
-            band_groups.append(
-                controller_pb2.Controller.SchedulerBandGroup(
-                    band=band,
-                    tasks=entries,
-                    total_in_band=total_in_band,
-                )
+            user_id = row.task_id.user
+            eff_band = compute_effective_band(
+                pending_requested_bands.get(row.job_id, row.priority_band),
+                user_id,
+                user_spend,
+                budget_limits,
+                self._user_budget_defaults,
             )
+            job_id = (row.task_id.parent or row.task_id).to_wire()
+            key = (eff_band, user_id, job_id)
+            pending_counts[key] = pending_counts.get(key, 0) + 1
+            total_pending += 1
 
-        # --- User budgets for response ---
-        # Users without an explicit user_budgets row inherit UserBudgetDefaults;
-        # synthesize entries for any user with active spend so the dashboard
-        # renders their Spent/Limit/Utilization instead of '-'.
+        # Aggregate running into (band, user, worker, job) → count buckets.
+        # Use the stamped ``tasks.priority_band`` directly: the scheduler stamps the
+        # effective band at assign time (see ``_commit_assignments``), so re-running
+        # ``compute_effective_band`` here against current spend would double-demote.
+        running_counts: dict[tuple[int, str, str, str], int] = {}
+        total_running = 0
+        for row in running_rows:
+            user_id = row.task_id.user
+            job_id = (row.task_id.parent or row.task_id).to_wire()
+            key = (row.priority_band, user_id, str(row.worker_id), job_id)
+            running_counts[key] = running_counts.get(key, 0) + 1
+            total_running += 1
+
+        # Synthesize budget rows for users with active spend but no explicit
+        # user_budgets entry; the dashboard renders their utilization from
+        # UserBudgetDefaults instead of '-'.
         budget_protos: list[controller_pb2.Controller.SchedulerUserBudget] = []
         defaults = self._user_budget_defaults
         seen_users = {b.user_id for b in budgets}
@@ -2670,7 +2567,8 @@ class ControllerServiceImpl:
         for user_id, budget_limit, max_band in budget_rows:
             spent = user_spend.get(user_id, 0)
             utilization = (spent / budget_limit * 100.0) if budget_limit > 0 else 0.0
-            # Show effective band: use INTERACTIVE as the test band to see if user is downgraded
+            # Probe with INTERACTIVE so the dashboard sees whether this user is
+            # currently downgraded.
             eff = compute_effective_band(
                 job_pb2.PRIORITY_BAND_INTERACTIVE,
                 user_id,
@@ -2689,64 +2587,32 @@ class ControllerServiceImpl:
                 )
             )
 
-        # --- Running tasks ---
-        # Inline _get_running_tasks_with_band_and_value logic to avoid circular import
-        with self._db.read_snapshot() as snap:
-            running_rows = snap.raw(
-                "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
-                "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, "
-                "jc.res_device_json, jc.has_coscheduling "
-                "FROM tasks t "
-                "JOIN job_config jc ON jc.job_id = t.job_id "
-                "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
-                (job_pb2.TASK_STATE_RUNNING,),
-                decoders={
-                    "task_id": JobName.from_wire,
-                    "priority_band": int,
-                    "worker_id": WorkerId,
-                },
+        pending_buckets = [
+            controller_pb2.Controller.PendingTaskBucket(
+                band=band,
+                user_id=user_id,
+                job_id=job_id,
+                count=count,
             )
-        running_protos: list[controller_pb2.Controller.SchedulerRunningTask] = []
-        for row in running_rows:
-            res = _resource_spec_from_job_row(row)
-            eff_band = compute_effective_band(
-                row.priority_band, row.task_id.user, user_spend, budget_limits, self._user_budget_defaults
+            for (band, user_id, job_id), count in pending_counts.items()
+        ]
+        running_buckets = [
+            controller_pb2.Controller.RunningTaskBucket(
+                band=band,
+                user_id=user_id,
+                worker_id=worker_id,
+                job_id=job_id,
+                count=count,
             )
-            accel = get_gpu_count(res.device) + get_tpu_count(res.device)
-            rv = resource_value(res.cpu_millicores, res.memory_bytes, accel)
-            is_cosched = bool(row.has_coscheduling)
-            preemptible_by: list[int] = []
-            preemptible = False
-            if not is_cosched:
-                if eff_band == job_pb2.PRIORITY_BAND_BATCH:
-                    preemptible = True
-                    preemptible_by = [
-                        job_pb2.PRIORITY_BAND_PRODUCTION,
-                        job_pb2.PRIORITY_BAND_INTERACTIVE,
-                    ]
-                elif eff_band == job_pb2.PRIORITY_BAND_INTERACTIVE:
-                    preemptible = True
-                    preemptible_by = [job_pb2.PRIORITY_BAND_PRODUCTION]
-            running_protos.append(
-                controller_pb2.Controller.SchedulerRunningTask(
-                    task_id=row.task_id.to_wire(),
-                    job_id=(row.task_id.parent or row.task_id).to_wire(),
-                    user_id=row.task_id.user,
-                    worker_id=str(row.worker_id),
-                    effective_band=eff_band,
-                    resource_value=rv,
-                    preemptible=preemptible,
-                    preemptible_by=preemptible_by,
-                    is_coscheduled=is_cosched,
-                )
-            )
+            for (band, user_id, worker_id, job_id), count in running_counts.items()
+        ]
 
         return controller_pb2.Controller.GetSchedulerStateResponse(
-            pending_queue=band_groups,
             user_budgets=budget_protos,
-            running_tasks=running_protos,
             total_pending=total_pending,
-            total_running=len(running_protos),
+            total_running=total_running,
+            pending_buckets=pending_buckets,
+            running_buckets=running_buckets,
         )
 
     # --- Worker Push ---
@@ -2773,7 +2639,6 @@ class ControllerServiceImpl:
                     cur,
                     HeartbeatApplyRequest(
                         worker_id=WorkerId(request.worker_id),
-                        worker_resource_snapshot=None,
                         updates=updates,
                     ),
                 )
@@ -2782,15 +2647,18 @@ class ControllerServiceImpl:
 
     # --- Task Status Text Push ---
 
+    @on_loop
     def set_task_status_text(
         self,
         request: job_pb2.SetTaskStatusTextRequest,
         _ctx: Any,
     ) -> job_pb2.SetTaskStatusTextResponse:
-        """Task pushes a markdown status string to the coordinator."""
+        """Task pushes a markdown status string to the coordinator.
+
+        Status text lives entirely in the in-memory ``TaskStore`` dict; the
+        write is idempotent and stale task IDs are evicted by
+        ``remove_status_text_by_job_ids`` during pruning.
+        """
         task_id = JobName.from_wire(request.task_id)
-        task = _read_task_with_attempts(self._db, task_id)
-        if task is None:
-            raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
         self._transitions.record_task_status_text(task_id, request.status_text_detail_md, request.status_text_summary_md)
         return job_pb2.SetTaskStatusTextResponse()

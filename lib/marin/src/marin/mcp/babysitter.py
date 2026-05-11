@@ -22,6 +22,7 @@ from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
@@ -162,7 +163,12 @@ def task_status_to_json(task: job_pb2.TaskStatus) -> dict[str, Any]:
 
 
 def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatus] = ()) -> dict[str, Any]:
-    """Serialize Iris job status into stable JSON."""
+    """Serialize Iris job status into stable JSON.
+
+    Callers that need per-job ``resources`` / ``ports`` / ``tasks`` /
+    ``status_message`` should hit ``GetJobStatus`` and use
+    :func:`_job_summary_payload`.
+    """
     task_payloads = [task_status_to_json(task) for task in tasks]
     return {
         "job_id": job.job_id,
@@ -174,7 +180,6 @@ def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatu
         "started_at_ms": _timestamp_ms(job.started_at),
         "finished_at_ms": _timestamp_ms(job.finished_at),
         "duration_ms": _duration_ms(job.started_at, job.finished_at),
-        "status_message": job.status_message,
         "pending_reason": job.pending_reason,
         "failure_count": int(job.failure_count),
         "preemption_count": int(job.preemption_count),
@@ -182,9 +187,6 @@ def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatu
         "completed_count": int(job.completed_count),
         "task_state_counts": dict(job.task_state_counts),
         "has_children": bool(job.has_children),
-        "resource_usage": _resource_usage_to_json(job.resource_usage),
-        "resource_requests": _resource_spec_to_json(job.resources),
-        "ports": dict(job.ports),
         "tasks": task_payloads,
     }
 
@@ -406,6 +408,8 @@ class IrisBabysitter:
             config.controller_url,
             timeout_ms=config.timeout_ms,
             interceptors=interceptors,
+            accept_compression=IRIS_RPC_COMPRESSIONS,
+            send_compression=IRIS_RPC_COMPRESSIONS[0],
         )
         self.logs = LogServiceClientSync(
             config.controller_url,
@@ -433,10 +437,14 @@ class IrisBabysitter:
         offset = 0
         capped_limit = max(1, limit)
         prefix_job = JobName.from_wire(prefix) if prefix else None
+        # Push the prefix into name_filter (substring on j.name) when the caller
+        # didn't pass an explicit name_filter, so the server narrows results
+        # before we re-validate prefix anchoring client-side.
+        effective_name_filter = name_filter or (prefix_job.to_wire() if prefix_job else "")
         while len(jobs) < capped_limit:
             query = controller_pb2.Controller.JobQuery(
                 state_filter=state_filter,
-                name_filter=name_filter,
+                name_filter=effective_name_filter,
                 sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
                 sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
                 offset=offset,
@@ -650,8 +658,14 @@ class IrisBabysitter:
         jobs: list[job_pb2.JobStatus] = []
         offset = 0
         root = JobName.from_wire(prefix)
+        # Substring filter on j.name (which stores the full wire path) narrows
+        # the page-walk server-side; the loop body re-validates anchored prefix
+        # matching to drop jobs whose names happen to contain the prefix
+        # without being a true descendant.
+        name_filter = root.to_wire()
         while True:
             query = controller_pb2.Controller.JobQuery(
+                name_filter=name_filter,
                 sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
                 sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
                 offset=offset,
@@ -666,7 +680,18 @@ class IrisBabysitter:
 
 def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]) -> dict[str, Any]:
     summary = build_job_summary(job, tasks)
-    for key, value in job_status_to_json(job).items():
+    extra_fields = {
+        "submitted_at_ms": _timestamp_ms(job.submitted_at),
+        "started_at_ms": _timestamp_ms(job.started_at),
+        "finished_at_ms": _timestamp_ms(job.finished_at),
+        "duration_ms": _duration_ms(job.started_at, job.finished_at),
+        "status_message": job.status_message,
+        "pending_reason": job.pending_reason,
+        "has_children": bool(job.has_children),
+        "resource_requests": _resource_spec_to_json(job.resources),
+        "ports": dict(job.ports),
+    }
+    for key, value in extra_fields.items():
         summary.setdefault(key, value)
     return summary
 

@@ -52,7 +52,6 @@ from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
 from iris.rpc.proto_utils import (
     PRIORITY_BAND_NAMES,
-    format_resources,
     job_state_friendly,
     priority_band_value,
     task_state_friendly,
@@ -162,6 +161,7 @@ KNOWN_GPU_VARIANTS: frozenset[str] = frozenset(
         "B100",
         "B200",
         "GB200",
+        "GH200",
         "H100",
         "H200",
         "L4",
@@ -808,7 +808,7 @@ Examples:
         "requested by worker tasks spawned by the job."
     ),
 )
-@click.option("--cpu", type=float, default=0.5, show_default=True, help="Number of CPUs to request")
+@click.option("--cpu", type=float, default=0.1, show_default=True, help="Number of CPUs to request")
 @click.option("--memory", type=str, default="1GB", show_default=True, help="Memory size to request (e.g., 8GB, 512MB)")
 @click.option(
     "--disk", type=str, default="5GB", show_default=True, help="Ephemeral disk size to request (e.g., 64GB, 1TB)"
@@ -1007,7 +1007,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         click.echo("No jobs found.")
         return
 
-    # Build table rows
     rows: list[list[str]] = []
     has_reasons = False
 
@@ -1015,23 +1014,19 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         job_id = j.job_id
         state_name = job_state_friendly(j.state)
         submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
-        resources = format_resources(j.resources) if j.HasField("resources") else "-"
 
-        # Show error for failed jobs, pending_reason for pending/unschedulable
         reason = j.error or j.pending_reason or ""
         if reason:
             has_reasons = True
-            # Truncate long reasons
             reason = (reason[:60] + "...") if len(reason) > 63 else reason
 
-        rows.append([job_id, state_name, resources, submitted, reason])
+        rows.append([job_id, state_name, submitted, reason])
 
-    # Build headers - only include REASON column if there are any reasons
     if has_reasons:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED", "REASON"]
+        headers = ["JOB ID", "STATE", "SUBMITTED", "REASON"]
     else:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED"]
-        rows = [row[:4] for row in rows]
+        headers = ["JOB ID", "STATE", "SUBMITTED"]
+        rows = [row[:3] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 
@@ -1201,7 +1196,7 @@ def logs(
     tail: bool,
     level: str | None,
 ) -> None:
-    """Stream task logs for a job using batch log fetching."""
+    """Stream task logs for a job and its descendants using batch log fetching."""
     if since_ms is not None and since_seconds is not None:
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 

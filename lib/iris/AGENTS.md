@@ -10,7 +10,6 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior
 - `docs/image-push.md` — multi-region image push/pull architecture
-- `docs/constraints.md` — constraint system design
 
 Archived design docs (implemented, read code instead): `.agents/projects/2026*_iris_*.md`
 
@@ -26,7 +25,7 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 
 ```bash
 # Unit tests (run from lib/iris/)
-cd lib/iris && uv run --group dev python -m pytest -n1 --tb=short -m 'not slow and not docker and not e2e' tests/
+cd lib/iris && uv run --group dev python -m pytest --tb=short -m 'not slow and not docker and not e2e' tests/
 ```
 
 See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
@@ -57,6 +56,12 @@ Always run `build:check` after editing `.vue` or `.ts` files to catch type error
 - Use `concurrent.futures.ThreadPoolExecutor` (not asyncio) for concurrent platform operations, with hard timeouts.
 - Avoid `TYPE_CHECKING`. Use real imports. If you hit a cycle, prefer refactoring or use a `Protocol` at the boundary.
 - Prefer spiral plans: each stage should be independently testable (proto → server stub → client wiring → end-to-end test).
+
+### Decisions vs measurements
+
+The controller SQLite DB stores the *registry and decisions*: worker liveness verdict, task↔worker assignments, scheduling state. Time-series *measurements* (per-tick utilization, per-attempt resource snapshots, profile captures) live in the finelog stats namespaces (`iris.worker`, `iris.task`, `iris.profile`) and are queried via the controller-bundled StatsService. New columns that record measurements should be added as stats namespaces, not controller tables.
+
+Profiles in particular: the worker drives a 10-minute periodic CPU capture loop and writes rows to `iris.profile`. On-demand captures (cpu/memory/thread) flow through the same RPC path the dashboard's "Profile now" buttons use: controller → provider → worker (or `K8sTaskProvider`) → finelog. The controller writes its own row for `/system/controller` self-captures only. See `lib/iris/OPS.md` for retention and example queries.
 
 ## Environment Variables
 

@@ -12,6 +12,7 @@ from functools import cached_property
 from typing import Any
 from urllib.parse import urlparse
 
+from fray.types import ResourceConfig
 from rigging.filesystem import marin_prefix
 
 
@@ -24,14 +25,9 @@ def _is_relative_path(url_or_path: str) -> bool:
 
 @dataclass(frozen=True)
 class _StepSpecMigrationConfig:
-    """Temporary config used by ``StepSpec.as_executor_step()`` during the
-    migration from ``ExecutorStep`` to ``StepSpec``.
-
-    New steps can be authored as ``StepSpec`` and converted to ``ExecutorStep``
-    for use in existing ``Executor.run()`` pipelines.  This config carries
-    the versioning and dependency information that the Executor's
-    ``compute_version`` traversal expects.  Once the migration is complete
-    and all pipelines use ``StepRunner`` directly, this class can be removed.
+    """Carries StepSpec version + dependency state into the dataclass shape
+    that ``Executor.compute_version`` traverses, so a StepSpec-authored step
+    can be embedded in an ``Executor.run()`` pipeline.
     """
 
     output_path: Any
@@ -71,6 +67,13 @@ class StepSpec:
     arguments. Usually you would specify this via a `lambda output_path: foo(output_path=output_path, bar=42)`.
 
     May be a :class:`~marin.execution.remote.RemoteCallable` for Fray dispatch.
+    """
+
+    resources: ResourceConfig | None = None
+    """If set, the step runner submits ``fn`` as its own Fray job with these
+    resources. If ``None``, dispatch falls back to ``fn``'s type: a
+    :class:`~marin.execution.remote.RemoteCallable` is submitted via Fray; a
+    plain callable runs inline in the runner thread.
     """
 
     @cached_property
@@ -116,11 +119,8 @@ class StepSpec:
         """Convert to an ``ExecutorStep`` for use in ``Executor.run()`` pipelines.
 
         The resulting ``ExecutorStep`` preserves this step's output path and
-        caching identity via ``override_output_path``.  Round-tripping through
+        caching identity via ``override_output_path``. Round-tripping through
         ``resolve_executor_step`` returns the original ``StepSpec``.
-
-        The exists to allow for incremental migration from ``ExecutorStep`` to ``StepSpec``:
-        steps can be authored as ``StepSpec`` and used in existing pipelines without modification.
         """
         from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 
@@ -138,8 +138,7 @@ class StepSpec:
             config=config,
             override_output_path=self.output_path,
         )
-        # Stash the original StepSpec for round-trip recovery in
-        # resolve_executor_step.  Uses object.__setattr__ because
-        # ExecutorStep is frozen.
+        # ExecutorStep is frozen; object.__setattr__ stashes the original
+        # StepSpec for round-trip recovery in resolve_executor_step.
         object.__setattr__(result, "_original_step_spec", self)
         return result

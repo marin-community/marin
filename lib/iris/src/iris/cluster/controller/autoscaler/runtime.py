@@ -308,6 +308,9 @@ class Autoscaler:
             decisions: List of scaling decisions to execute.
             timestamp: Current timestamp.
         """
+        # Aggregate rate-limited decisions per group so we emit a single summary
+        # line per group per cycle instead of one per deferred slice (#5580).
+        rate_limited: dict[str, list[ScalingDecision]] = {}
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -316,14 +319,26 @@ class Autoscaler:
 
             if decision.action == ScalingAction.SCALE_UP:
                 if not group.acquire_scale_up_token(timestamp):
-                    logger.info("Rate-limited scale-up for %s: %s", decision.scale_group, decision.reason)
-                    self._log_action(
-                        "rate_limited",
-                        decision.scale_group,
-                        reason=decision.reason,
-                    )
+                    rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
+
+        for scale_group, deferred in rate_limited.items():
+            # All decisions in a cycle share the same target/demand snapshot;
+            # the first reason is representative of the whole batch.
+            sample_reason = deferred[0].reason
+            summary = f"deferred={len(deferred)} sample_reason={sample_reason}"
+            logger.info(
+                "Rate-limited scale-up for %s: deferred %d slice(s) (sample reason: %s)",
+                scale_group,
+                len(deferred),
+                sample_reason,
+            )
+            self._log_action(
+                "rate_limited",
+                scale_group,
+                reason=summary,
+            )
 
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.

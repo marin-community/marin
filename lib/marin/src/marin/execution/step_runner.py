@@ -3,34 +3,31 @@
 
 """Step runner for StepSpec.
 
-This module provides the execution layer for ``StepSpec`` objects. The main
-entry point is ``StepRunner``, a thin DAG scheduler that launches steps as
-they are yielded from an iterable, as soon as their dependencies are satisfied.
-
-Caching, distributed locking, heartbeats, and status writes are handled
-explicitly in :func:`run_step` rather than composed as decorators.  This
-makes the control flow easy to follow and debug.
-
-``ExecutorStep`` objects can be converted to ``StepSpec`` via
-``resolve_executor_step`` in ``marin.execution.executor``.
+``StepRunner`` is a thin DAG scheduler that launches steps as they are yielded
+from an iterable, as soon as their dependencies are satisfied. Caching,
+distributed locking, heartbeats, and status writes are handled explicitly in
+:func:`run_step` rather than composed as decorators, so the control flow is
+easy to follow and debug.
 """
 
 from __future__ import annotations
 
 import contextvars
-import dataclasses
 import json
 import logging
 import os
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from typing import Any
 
 import levanter.utils.fsspec_utils as fsspec_utils
+from fray import client as fray_client
 from fray.client import JobHandle, JobStatus
 from fray.local_backend import LocalJobHandle
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from rigging.filesystem import open_url, url_to_fs
 
 from marin.execution.artifact import Artifact
@@ -46,7 +43,7 @@ from marin.execution.executor_step_status import (
     step_lock,
     worker_id,
 )
-from marin.execution.remote import RemoteCallable
+from marin.execution.remote import RemoteCallable, _sanitize_job_name
 from marin.execution.step_spec import StepSpec
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -59,10 +56,10 @@ logger = logging.getLogger(__name__)
 
 
 def _write_executor_info(step: StepSpec) -> None:
-    """Write a ``.executor_info`` JSON file matching the legacy ExecutorStepInfo schema.
+    """Write a ``.executor_info`` JSON file in the ExecutorStepInfo schema.
 
-    Skips writing if the file already exists (e.g. Executor.write_infos() wrote
-    a richer version before StepRunner launched the step).
+    Skips writing if the file already exists (e.g. ``Executor.write_infos()``
+    wrote a richer version before this step launched).
     """
     info_path = os.path.join(step.output_path, ".executor_info")
     fs = url_to_fs(info_path, use_listings_cache=False)[0]
@@ -149,8 +146,8 @@ class StepRunner:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
         # Capture the fray client on the calling thread so worker threads can
-        # inherit it explicitly.  This is more robust than contextvars.copy_context()
-        # alone because it survives process/thread-pool boundary edge cases.
+        # inherit it explicitly. More robust than contextvars.copy_context()
+        # alone, which can lose state across thread-pool reuse patterns.
         from fray.client import _current_client_var
 
         caller_fray_client = _current_client_var.get()
@@ -285,10 +282,6 @@ class StepRunner:
         if step.fn is None:
             raise ValueError(f"Step {step_name} has no callable fn")
 
-        # Explicitly propagate the fray client into worker threads.
-        # We use set_current_client() inside the worker rather than relying
-        # solely on contextvars.copy_context(), because the latter can
-        # silently lose state across certain thread-pool reuse patterns.
         captured_client = fray_client
 
         def worker_fn():
@@ -326,9 +319,10 @@ def check_cache(output_path: str) -> bool:
 def run_step(step: StepSpec) -> None:
     """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
 
-    For local steps the result is saved via ``Artifact.save``.  For remote
-    steps (``@remote``) the raw function + artifact save are submitted as a
-    Fray job; the executor node only manages the lock and status file.
+    For inline steps the result is saved via ``Artifact.save``. For
+    ``RemoteCallable`` steps (or any step with explicit ``resources``), the
+    raw function + artifact save are submitted as a Fray job; the runner
+    process only manages the lock and status file.
     """
     output_path = step.output_path
     step_label = step.name_with_hash
@@ -343,7 +337,9 @@ def run_step(step: StepSpec) -> None:
             # 3. Run the function
             try:
                 t0 = time.monotonic()
-                if isinstance(step.fn, RemoteCallable):
+                if step.resources is not None:
+                    _run_iris_job(step, output_path)
+                elif isinstance(step.fn, RemoteCallable):
                     _run_remote_step(step, output_path)
                 else:
                     result = step.fn(output_path)  # pyrefly: ignore[not-callable]
@@ -360,20 +356,65 @@ def run_step(step: StepSpec) -> None:
         logger.info(f"Step {step_label} completed by another worker")
 
 
-def _run_remote_step(step: StepSpec, output_path: str) -> None:
-    """Submit the step's raw function to Fray with artifact saving inside the job.
+def _submit_iris_job(
+    step: StepSpec,
+    output_path: str,
+    raw_fn: Callable[[str], Any],
+    resources: ResourceConfig,
+    *,
+    env_vars: dict[str, str] | None = None,
+    pip_dependency_groups: list[str] | None = None,
+) -> None:
+    """Submit ``raw_fn(output_path)`` as a Fray job and block until completion.
 
-    Fray jobs can't return values back to the executor, so the artifact
-    is saved inside the remote job itself.
+    ``raw_fn`` is wrapped to also persist its return value via
+    :func:`Artifact.save` inside the submitted job, since Fray jobs cannot
+    return values back to the caller.
+    """
+
+    def _fn_with_artifact_save() -> None:
+        result = raw_fn(output_path)
+        Artifact.save(result, output_path)
+
+    job_name = _sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
+    request = JobRequest(
+        name=job_name,
+        entrypoint=Entrypoint.from_callable(_fn_with_artifact_save),
+        resources=resources,
+        environment=create_environment(
+            extras=pip_dependency_groups or [],
+            env_vars=env_vars or {},
+        ),
+    )
+    handle = fray_client.current_client().submit(request)
+    handle.wait(raise_on_failure=True)
+
+
+def _run_iris_job(step: StepSpec, output_path: str) -> None:
+    """Dispatch a step with explicit ``resources`` as a Fray job.
+
+    When ``step.fn`` is a :class:`RemoteCallable`, its inner callable is
+    unwrapped — ``step.resources`` takes precedence over any resources
+    carried by the wrapper.
+    """
+    assert step.resources is not None
+    raw_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
+    assert raw_fn is not None, f"Step {step.name} has no callable"
+    _submit_iris_job(step, output_path, raw_fn, step.resources)
+
+
+def _run_remote_step(step: StepSpec, output_path: str) -> None:
+    """Submit the step's ``RemoteCallable`` to Fray.
+
+    Carries the wrapper's ``env_vars`` and ``pip_dependency_groups`` through
+    to the submitted job's environment.
     """
     assert isinstance(step.fn, RemoteCallable)
-    raw_fn = step.fn.fn
-
-    def _fn_with_artifact_save(out_path: str):
-        result = raw_fn(out_path)  # pyrefly: ignore[not-callable]
-        Artifact.save(result, out_path)
-
-    job_name = f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}"
-    remote_callable = step.fn.named(job_name)
-    job = dataclasses.replace(remote_callable, fn=_fn_with_artifact_save)
-    job(output_path)
+    _submit_iris_job(
+        step,
+        output_path,
+        step.fn.fn,
+        step.fn.resources,
+        env_vars=step.fn.env_vars,
+        pip_dependency_groups=step.fn.pip_dependency_groups,
+    )

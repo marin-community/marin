@@ -14,7 +14,7 @@ from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
 from test_utils import skip_if_no_torch, use_test_mesh
 
 
-def _hf_qwen_config(vocab_size=1000):
+def _hf_qwen_config(vocab_size=151936):
     """Return a tiny transformers Qwen2Config tweaked for tests but with qk-norm on."""
     from transformers.models.qwen3 import Qwen3Config
 
@@ -40,13 +40,13 @@ def test_qwen3_roundtrip():
     import torch
     from transformers.models.qwen3 import Qwen3ForCausalLM
 
-    Vocab = hax.Axis("vocab", 1000)
+    Vocab = hax.Axis("vocab", 151936)
     hf_config = _hf_qwen_config(Vocab.size)
 
     # Levanter config from HF
     config = Qwen3Config.from_hf_config(hf_config)  # type: ignore
 
-    converter = Qwen3Config().hf_checkpoint_converter()  # type: ignore
+    converter = config.hf_checkpoint_converter()  # type: ignore
 
     # Inputs
     input_ids = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)

@@ -1,12 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures and helpers for cluster-level tests.
-
-Provides constraint builders, resource spec fixtures, and the
-ServiceTestHarness used across scheduling, controller, and integration tests.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -14,6 +8,7 @@ from dataclasses import dataclass
 from unittest.mock import Mock
 
 import pytest
+from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
@@ -36,6 +31,28 @@ from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+
+
+class _FakeLogClientFromService:
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def get_table(self, namespace: str, schema: object) -> None:
+        return None
+
+    def close(self) -> None:
+        return
+
+
+def fake_log_client_from_service(log_service: LogServiceImpl) -> _FakeLogClientFromService:
+    return _FakeLogClientFromService(log_service)
+
 
 # ---------------------------------------------------------------------------
 # Constraint builders
@@ -120,7 +137,6 @@ class _HarnessController:
 
     def __init__(self) -> None:
         self.wake = Mock()
-        self.kill_tasks_on_workers = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
@@ -365,7 +381,6 @@ class ServiceTestHarness:
                     cur,
                     HeartbeatApplyRequest(
                         worker_id=worker_id,
-                        worker_resource_snapshot=None,
                         updates=[
                             TaskUpdate(
                                 task_id=task_id,
@@ -381,7 +396,6 @@ class ServiceTestHarness:
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[
                         TaskUpdate(
                             task_id=task_id,
@@ -426,7 +440,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
         store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
     )
 
     return ServiceTestHarness(
@@ -452,7 +466,7 @@ def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
         store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
     )
 
     return ServiceTestHarness(

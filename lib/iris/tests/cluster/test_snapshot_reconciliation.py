@@ -120,7 +120,6 @@ def _make_slice_snapshot(
         lifecycle=lifecycle,
         worker_ids=worker_ids or [],
         created_at_ms=created_at_ms,
-        last_active_ms=created_at_ms,
         error_message=error_message,
     )
 

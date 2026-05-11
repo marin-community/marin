@@ -27,10 +27,17 @@ def _zone_of(scale_group: str) -> str | None:
     return None
 
 
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return column in {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def migrate(conn: sqlite3.Connection) -> None:
+    # ``active`` was a workers column at the time this migration was authored.
+    # It is dropped in 0042; on fresh DBs the column is absent at this point.
+    active_predicate = "w.active=1 AND " if _has_column(conn, "workers", "active") else ""
     rows = conn.execute(
         "SELECT w.worker_id, w.scale_group FROM workers w "
-        "WHERE w.active=1 AND w.scale_group != '' "
+        f"WHERE {active_predicate}w.scale_group != '' "
         "AND NOT EXISTS ("
         "  SELECT 1 FROM worker_attributes wa "
         "  WHERE wa.worker_id = w.worker_id AND wa.key = 'region'"

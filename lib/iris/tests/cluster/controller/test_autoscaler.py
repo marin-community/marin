@@ -239,7 +239,9 @@ class TestAutoscalerScaleDown:
             slice_002_wid: WorkerStatus(worker_id=slice_002_wid, running_task_ids=frozenset()),
         }
 
-        # Timestamp must be past idle_threshold (1000ms) from when slices became ready
+        # First idle observation stamps quiet_since at t=2000.
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(2_000))
+        # At t=10_000 dwell=8s, well past the 1s threshold.
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
         assert group.slice_count() == 1
@@ -386,7 +388,10 @@ class TestAutoscalerScaleDown:
             slice_003_wid: WorkerStatus(worker_id=slice_003_wid, running_task_ids=frozenset()),
         }
 
+        # First idle observation at t=2000 stamps quiet_since on all three.
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(2_000))
         # With rate_limit=5, all 3 idle slices should be scaled down in one cycle
+        # at t=10_000 (8s dwell, past 1s threshold).
         autoscaler.run_once(demand, vm_status_map, timestamp=Timestamp.from_ms(10_000))
         assert group.slice_count() == 0
 
@@ -1280,8 +1285,10 @@ class TestPerGroupWorkerConfig:
 class TestGpuScaleGroupBugs:
     """Reproduction tests for GPU scale group bugs observed on CoreWeave."""
 
-    def test_freshly_ready_slice_has_nonzero_last_active(self):
-        """When a slice transitions to READY, last_active should be initialized."""
+    def test_freshly_ready_slice_not_eligible_for_scaledown(self):
+        """A freshly-READY slice is treated as currently active (quiet_since=None)
+        and is not eligible for scale-down until an autoscaler tick observes it idle.
+        """
         config = make_scale_group_config(
             name="h100-8x",
             buffer_slices=0,
@@ -1297,28 +1304,18 @@ class TestGpuScaleGroupBugs:
 
         ts = Timestamp.from_ms(1_000_000)
 
-        # Scale up and complete
         group.begin_scale_up(timestamp=ts)
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(handle, ts)
 
-        # Mark the slice as READY (simulates bootstrap completion)
         worker_ids = [w.worker_id for w in handle.describe().workers]
         group.mark_slice_ready(handle.slice_id, worker_ids)
 
-        # last_active should be initialized to at least the ready time
         with group._slices_lock:
             state = group._slices[handle.slice_id]
 
-        assert state.last_active.epoch_ms() > 0, (
-            "Freshly READY slice should have last_active set to at least the ready time, "
-            f"not epoch(0). Got last_active={state.last_active.epoch_ms()}"
-        )
-
-        # Consequently, the slice should NOT be eligible for scaledown immediately
-        assert not group.is_slice_eligible_for_scaledown(
-            handle.slice_id, ts
-        ), "Freshly READY slice should not be eligible for scaledown immediately"
+        assert state.quiet_since is None
+        assert not group.is_slice_eligible_for_scaledown(handle.slice_id, ts)
 
     def test_idle_threshold_protects_freshly_ready_slice(self):
         """A freshly-ready slice should be protected by idle_threshold even when
@@ -1557,6 +1554,8 @@ class TestMultiSliceScaleUp:
             wid_0: WorkerStatus(worker_id=wid_0, running_task_ids=frozenset()),
             wid_1: WorkerStatus(worker_id=wid_1, running_task_ids=frozenset()),
         }
+        # First idle observation stamps quiet_since at t=2_000.
+        group.update_slice_activity(vm_status_map, Timestamp.from_ms(2_000))
         autoscaler.run_once([], vm_status_map, timestamp=Timestamp.from_ms(10_000))
 
         # One idle slice should be scaled down.

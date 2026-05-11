@@ -6,7 +6,15 @@
 !lib/iris/src/
 !lib/iris/examples/
 !lib/iris/config/
-!lib/iris/dashboard/dist/
+!lib/iris/dashboard/package.json
+!lib/iris/dashboard/package-lock.json
+!lib/iris/dashboard/rsbuild.config.ts
+!lib/iris/dashboard/tsconfig.json
+!lib/iris/dashboard/tailwind.config.ts
+!lib/iris/dashboard/postcss.config.cjs
+!lib/iris/dashboard/env.d.ts
+!lib/iris/dashboard/favicon.ico
+!lib/iris/dashboard/src/
 
 !lib/rigging/
 

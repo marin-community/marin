@@ -36,7 +36,7 @@ classifiers = [
 dependencies = [
     "marin-haliax",
     "equinox>=0.11.7,!=0.12.0",
-    "jax>=0.9.2",
+    "jax>=0.9.2,<0.11",
     "marin-fray",
     "marin-rigging",
     "marin-zephyr",
@@ -80,10 +80,11 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 
 [project.optional-dependencies]
 gpu = [
-  "jax[cuda12]>=0.9.2",
-  # JAX 0.9.2 all-to-all fails on CW H100s with NCCL 2.27.x. Keep this floor
-  # until the JAX CUDA deps or the top-level lock exclude the bad NCCL line.
-  "nvidia-nccl-cu12>=2.28.3; sys_platform == 'linux'",
+  "jax[cuda13]==0.10.0",
+  # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
+  "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
+  # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
+  "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
 ]
 tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.38"]
 torch_test = [

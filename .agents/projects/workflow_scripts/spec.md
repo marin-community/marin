@@ -8,12 +8,12 @@ This spec defines the target contracts for moving Marin's GitHub Actions workflo
 | --- | --- |
 | `scripts/workflows/__init__.py` | Empty package marker for workflow-owned Python modules. No exported convenience API. |
 | `scripts/workflows/changes.py` | Repo-local replacement for path-filter logic used by unit/docs/lint workflows. |
-| `scripts/workflows/pull_request.py` | Repo-local replacement for third-party create-PR workflow logic. |
 | `scripts/workflows/github_actions.py` | Workflow inventory and policy checks: naming, `.yaml`, third-party SHA pins, and required-status inventory. |
-| `scripts/workflows/iris_job.py` | Iris job status, wait, and GitHub Actions output helpers. |
-| `scripts/workflows/iris_diagnostics.py` | Failure diagnostics collection for Iris-backed workflows. |
-| `.github/workflows/README.md` | Human index of workflows: target name, trigger, gate type, owner domain, and local reproduction command. |
+| `scripts/workflows/iris_monitor.py` | Iris job `status`, `wait`, and `collect` (failure diagnostics) for Iris-backed workflows. |
+| `.github/workflows/README.md` | Human index of workflows: target name, trigger, gate type, owner domain, and local reproduction command. Includes the canonical `git + gh pr create/edit` recipe used in place of third-party PR-creation actions. |
 | `pyproject.toml` | Includes `scripts/workflows/**` in ruff and pyrefly while leaving unrelated legacy scripts excluded. |
+
+GitHub state changes (PR creation/update, issue creation, comments, labels, releases, branch-protection queries) are performed by calling the pre-installed `gh` CLI directly from workflow YAML, not by Python wrappers under `scripts/workflows/`. The bar for promoting a `gh`-based snippet into a Python module is real logic that benefits from tests: not a wrapper that adds `--dry-run` to a single API call.
 
 Do not add `scripts/workflows/lib/` in the first migration. If two or more modules need the same non-trivial helper, add a concrete helper module named for the concept, not a generic utility module. Docker image build orchestration can be added later if the cleanup shows real duplicated behavior after trusted Docker setup/login/build actions remain in YAML.
 
@@ -25,7 +25,7 @@ All `scripts/workflows/*.py` modules are repo-local commands invoked as:
 uv run python scripts/workflows/<name>.py <command> [options]
 ```
 
-All new workflow scripts use Click. Commands must fail non-zero on operational failure, print concise human-readable progress to stderr, and write machine-readable data either to stdout or to `$GITHUB_OUTPUT` when `--github-output` is supplied. Commands that can affect GitHub state must support `--dry-run`.
+All new workflow scripts use Click. Commands must fail non-zero on operational failure, print concise human-readable progress to stderr, and write machine-readable data either to stdout or to `$GITHUB_OUTPUT` when `--github-output` is supplied. Python commands that affect external state (writing files outside the workspace, mutating cloud or Iris resources) must support `--dry-run`. `gh`-driven workflow steps are exempt; rely on workflow-level dispatch gating and `--dry-run`-equivalent `gh` flags (`gh api -X GET`, `gh pr list`) when previewing.
 
 ### `changes.py`
 
@@ -56,12 +56,21 @@ def match_groups(paths: Iterable[str], groups: Mapping[str, Sequence[str]]) -> t
 CLI:
 
 ```bash
+# Diff-driven (pull_request, push):
 uv run python scripts/workflows/changes.py match \
   --base "$BASE_SHA" \
   --head "$HEAD_SHA" \
   --group marin='lib/marin/**,tests/**,pyproject.toml,uv.lock' \
   --github-output
+
+# Manual or scheduled (workflow_dispatch, schedule): force every group on.
+uv run python scripts/workflows/changes.py match \
+  --always-match \
+  --group marin='lib/marin/**,tests/**,pyproject.toml,uv.lock' \
+  --github-output
 ```
+
+`--always-match` is mutually exclusive with `--base`/`--head`; passing both is a usage error.
 
 Output contract:
 
@@ -70,43 +79,74 @@ Output contract:
 
 For `pull_request` events, callers pass the PR base SHA and head SHA and the command uses merge-base diff semantics. For `push` events, callers pass before/after SHAs and the command uses direct range semantics. For `schedule` and `workflow_dispatch`, workflows must either skip `changes.py` or pass `--always-match`, which marks every group as matched and records `reason="manual-or-scheduled"` in stdout JSON. Deleted-only files do not trigger groups because the command excludes `D` from the diff filter; renames trigger on the new path.
 
-### `pull_request.py`
+### Pull-request creation via `gh`
 
-```python
-@dataclass(frozen=True)
-class PullRequestRequest:
-    branch: str
-    title: str
-    body: str
-    commit_message: str
-    labels: tuple[str, ...]
-    base: str = "main"
-    author_name: str = "github-actions[bot]"
-    author_email: str = "41898282+github-actions[bot]@users.noreply.github.com"
-    draft: bool = False
-
-
-def create_or_update_pull_request(request: PullRequestRequest, *, repo: str, dry_run: bool) -> str | None:
-    """Commit current worktree changes, push `request.branch`, and create or update a pull request.
-
-    Returns the PR URL, or None in dry-run mode. Raises ValueError for an empty diff or invalid request.
-    """
-```
-
-CLI:
+`peter-evans/create-pull-request@v7` is replaced by an inline `git + gh` snippet in workflow YAML, not a Python wrapper. **The canonical, copyable version of this recipe lives in `.github/workflows/README.md`; the snippet below is illustrative and may drift — the README is the source of truth.**
 
 ```bash
-uv run python scripts/workflows/pull_request.py create \
-  --branch auto/update-dupekit-wheels \
-  --title "chore: update dupekit wheels" \
-  --body-file pr-body.md \
-  --commit-message "chore: pin dupekit wheels to $GITHUB_SHA" \
-  --label agent-generated
+set -euo pipefail
+
+# Set DESIRED_LABELS to the exact label set the bot should own on this PR
+# (space-separated). Anything else stays as-is. To clear, set DESIRED_LABELS="".
+: "${BRANCH:?}" "${TITLE:?}" "${BODY_FILE:?}" "${COMMIT_MESSAGE:?}"
+: "${DESIRED_LABELS:=agent-generated}"
+
+git config user.name "github-actions[bot]"
+git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+# Reset onto the existing remote branch when present so --force-with-lease
+# has a real lease, then layer the new commit on top. Falls back to a fresh
+# branch when origin/$BRANCH does not exist yet.
+git fetch origin "$BRANCH" --depth=1 2>/dev/null || true
+if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null; then
+  git checkout -B "$BRANCH" "refs/remotes/origin/$BRANCH"
+  # Carry the working-tree edits from the build step over the reset.
+  git checkout "$GITHUB_SHA" -- .
+else
+  git checkout -B "$BRANCH"
+fi
+
+git add -A
+if git diff --cached --quiet; then
+  echo "pr_created=false" >>"$GITHUB_OUTPUT"
+  exit 0
+fi
+git commit -m "$COMMIT_MESSAGE"
+git push --force-with-lease origin "$BRANCH"
+
+# Capture URL via --json so we never parse gh's human banner.
+PR_URL=$(gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+if [[ -z "$PR_URL" ]]; then
+  gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$BODY_FILE" >/dev/null
+  PR_URL=$(gh pr view "$BRANCH" --json url --jq .url)
+else
+  gh pr edit "$PR_URL" --title "$TITLE" --body-file "$BODY_FILE" >/dev/null
+fi
+
+# Reconcile labels: peter-evans semantics (replace), expressed via add+remove.
+CURRENT_LABELS=$(gh pr view "$PR_URL" --json labels --jq '[.labels[].name] | join(" ")')
+for label in $DESIRED_LABELS; do
+  case " $CURRENT_LABELS " in *" $label "*) ;; *) gh pr edit "$PR_URL" --add-label "$label" >/dev/null ;; esac
+done
+for label in $CURRENT_LABELS; do
+  case " $DESIRED_LABELS " in *" $label "*) ;; *) gh pr edit "$PR_URL" --remove-label "$label" >/dev/null ;; esac
+done
+
+echo "pr_url=$PR_URL" >>"$GITHUB_OUTPUT"
+echo "pr_created=true" >>"$GITHUB_OUTPUT"
 ```
 
-This command replaces `peter-evans/create-pull-request@v7` in `dupekit-wheels.yaml` and any future in-workflow PR creation.
+Three details that bit the v1 of this recipe and must stay fixed:
 
-Supported behavior is intentionally narrower than the third-party action: commit the current worktree diff, push or force-with-lease the named branch, create a PR if none exists, update title/body/labels on an existing open PR from the same branch, and exit zero with `pr_created=false` when the diff is empty. Unsupported behavior: reviewers, assignees, branch deletion, signed commits, path-scoped commits, multi-commit preservation, and automatic base-branch rebasing. The workflow must grant `contents: write` and `pull-requests: write`.
+- **URL capture.** `gh pr create` writes a human banner before the URL on non-TTY runners; capture from `gh pr view --json url` (or `gh pr list --json url`) instead of parsing `gh pr create` stdout.
+- **Stale branch + `--force-with-lease`.** `git checkout -B` against `HEAD` with no knowledge of `origin/$BRANCH` yields an empty lease, and the push will be rejected. Always `git fetch` the branch first and reset onto it when present, then re-apply the build-step edits before staging.
+- **Label semantics.** `gh pr edit --add-label` accumulates; peter-evans `labels:` replaced. The reconcile loop above expresses replace-semantics explicitly. If callers want accumulate-only, they should set `DESIRED_LABELS` to the union and skip the second loop.
+
+`gh` reads `GITHUB_TOKEN` (or `GH_TOKEN`) from the workflow environment. The default `GITHUB_TOKEN` issued by Actions cannot trigger downstream workflow runs on PRs it creates — the same limitation peter-evans has. Callers that need downstream CI on the auto-PR must use a PAT or a GitHub App token (e.g. via `actions/create-github-app-token`) bound to `GH_TOKEN`. Workflows must grant `contents: write` and `pull-requests: write`; `actions/checkout` must keep its default `persist-credentials: true` for the `git push` to succeed.
+
+Reviewers, assignees, branch deletion, signed commits, multi-commit preservation, and automatic base rebasing are explicitly out of scope; if a future caller needs them, add `gh` flags or promote to a Python helper at that point — not preemptively.
+
+Issue creation (`gh issue create`), PR/issue comments (`gh pr comment`, `gh issue comment`), label edits (`gh pr edit --add-label`/`--remove-label`), and branch-protection queries (`gh api repos/.../branches/.../protection`) follow the same rule: invoke `gh` directly from YAML.
 
 ### `github_actions.py`
 
@@ -171,7 +211,19 @@ Trusted tag-pinned actions:
 
 All other external actions must be SHA-pinned.
 
-### `iris_job.py`
+### `iris_monitor.py`
+
+One CLI entry point exposes `status`, `wait`, and `collect` subcommands. The shared Iris CLI plumbing (`.venv/bin/iris` when present, otherwise `uv run iris`; `--config` plumbing; JSON parsing) is small (~10 lines), but the provider-specific diagnostics (GCP SSH + controller logs vs CoreWeave kubectl/pod listing) are not. Internally, the module is split:
+
+```text
+scripts/workflows/
+  iris_monitor.py            # Click entry point + status/wait logic
+  _iris_cli.py               # Shared: locate iris binary, parse `iris job list --json`, IrisJobStatus
+  _iris_diagnostics_gcp.py   # GCP-only: gcloud SSH, controller log fetch
+  _iris_diagnostics_coreweave.py  # CoreWeave-only: kubectl, pod listing
+```
+
+`_iris_cli.py` is the first concrete helper module. `lib/` is still not introduced — these are sibling modules with leading underscores, and they exist because at least two callers (wait, collect) share them. If a third workflow script needs the same Iris CLI plumbing, that's the trigger to consider promoting `_iris_cli.py` to a public module, not creating `lib/`.
 
 ```python
 class IrisJobState(StrEnum):
@@ -188,6 +240,17 @@ class IrisJobStatus:
     job_id: str
     state: IrisJobState
     error: str | None
+
+
+@dataclass(frozen=True)
+class DiagnosticsRequest:
+    job_id: str
+    output_dir: Path
+    iris_config: Path | None
+    provider: Literal["gcp", "coreweave"]
+    project: str | None
+    controller_label: str | None
+    namespace: str | None
 
 
 def job_status(job_id: str, *, iris_config: Path | None, prefix: str | None = None) -> IrisJobStatus:
@@ -207,32 +270,6 @@ def wait_for_job(
     `poll_interval` and `timeout` are seconds. Raises TimeoutError on timeout and RuntimeError for
     FAILED, CANCELLED, missing job, malformed JSON, or Iris CLI failure.
     """
-```
-
-CLI:
-
-```bash
-uv run python scripts/workflows/iris_job.py wait \
-  --job-id "$JOB_ID" \
-  --iris-config "$IRIS_CONFIG" \
-  --poll-interval 30 \
-  --github-output
-```
-
-The command shells out to `.venv/bin/iris` when present, otherwise `uv run iris`. It passes `--config <iris_config>` when supplied, selects the exact `job_id` from JSON output, and treats unknown terminal states as failure. `--github-output` writes `job_id`, `state`, and `succeeded` before exiting on both success and known terminal failure; it may be absent only when the command cannot parse status at all. `SIGINT` and `SIGTERM` stop polling and exit non-zero without cancelling the remote job.
-
-### `iris_diagnostics.py`
-
-```python
-@dataclass(frozen=True)
-class DiagnosticsRequest:
-    job_id: str
-    output_dir: Path
-    iris_config: Path | None
-    provider: Literal["gcp", "coreweave"]
-    project: str | None
-    controller_label: str | None
-    namespace: str | None
 
 
 def collect_diagnostics(request: DiagnosticsRequest) -> Path:
@@ -242,12 +279,20 @@ def collect_diagnostics(request: DiagnosticsRequest) -> Path:
 CLI:
 
 ```bash
-uv run python scripts/workflows/iris_diagnostics.py collect \
+uv run python scripts/workflows/iris_monitor.py wait \
+  --job-id "$JOB_ID" \
+  --iris-config "$IRIS_CONFIG" \
+  --poll-interval 30 \
+  --github-output
+
+uv run python scripts/workflows/iris_monitor.py collect \
   --job-id "$JOB_ID" \
   --iris-config "$IRIS_CONFIG" \
   --provider gcp \
   --output-dir "$DIAG_DIR"
 ```
+
+`wait` selects the exact `job_id` from JSON output and treats unknown terminal states as failure. `--github-output` writes `job_id`, `state`, and `succeeded` before exiting on both success and known terminal failure; it may be absent only when the command cannot parse status at all. `SIGINT` and `SIGTERM` stop polling and exit non-zero without cancelling the remote job.
 
 Output directory contract:
 
@@ -302,7 +347,7 @@ Workflow files use `.yaml` and lower-case kebab-case. Display names use title ca
 | `marin-itest.yaml` | `marin-integration.yaml` | `Marin - Integration` |
 | `marin-libs-wheels.yaml` | `marin-release-libs-wheels.yaml` | `Marin - Release Libs Wheels` |
 | `marin-lint-and-format.yaml` | `marin-lint.yaml` | `Marin - Lint` |
-| `marin-metrics.yaml` | `marin-dev-metrics.yaml` | `Marin - Dev Metrics` |
+| `marin-metrics.yaml` | *(deleted in PR 1)* | *(deleted in PR 1)* |
 | `marin-unit-tests.yaml` | `marin-unit.yaml` | `Marin - Unit` |
 | `nightshift-cleanup.yml` | `ops-nightshift-cleanup.yaml` | `Ops - Nightshift Cleanup` |
 | `nightshift-doc-drift.yml` | `ops-nightshift-doc-drift.yaml` | `Ops - Nightshift Doc Drift` |
@@ -368,18 +413,20 @@ The work should land in three large PRs.
 
 Required content:
 
-- Add `scripts/workflows/changes.py`, `pull_request.py`, and `github_actions.py`.
-- Add `.github/workflows/README.md`.
+- Add `scripts/workflows/changes.py` and `scripts/workflows/github_actions.py`.
+- Add `.github/workflows/README.md`, including the canonical `git + gh pr create/edit` recipe.
 - Update `pyproject.toml` so `scripts/workflows/**` is linted and type checked.
 - Replace `dorny/paths-filter` usages in unit/docs/lint/release workflows with `changes.py`.
-- Replace `peter-evans/create-pull-request@v7` in `dupekit-wheels.yaml` with `pull_request.py`.
-- Pin all non-trusted third-party actions to full SHAs, including `dorny/paths-filter`, `peaceiris/actions-gh-pages`, `actions/github-script` if retained, `actions/stale`, `anthropics/claude-code-action`, and `conda-incubator/setup-miniconda`.
+- Replace `peter-evans/create-pull-request@v7` in `dupekit-wheels.yaml` with the inline `git + gh` snippet from `.github/workflows/README.md`. No Python wrapper is added for this.
+- Delete `marin-metrics.yaml` outright (dead conda-based weekly job; no migration). This removes the only `conda-incubator/setup-miniconda` usage from the repo.
+- Pin all remaining non-trusted third-party actions to full SHAs, including `dorny/paths-filter`, `peaceiris/actions-gh-pages`, `actions/github-script` if retained, `actions/stale`, and `anthropics/claude-code-action`.
 - Keep existing required job ids unchanged in this PR unless branch protection is updated in the same PR window.
 
-Workflow scope:
+Workflow scope is grouped by what changes, since the risk profile differs:
+
+**`paths-filter` → `changes.py` conversions** (path-filter logic moves into Python; behavior should be identical):
 
 - `dupekit-unit-tests.yaml`
-- `dupekit-wheels.yaml`
 - `fray-unit-tests.yaml`
 - `haliax-run_tests.yaml`
 - `iris-unit-tests.yaml`
@@ -388,16 +435,27 @@ Workflow scope:
 - `marin-lint-and-format.yaml`
 - `marin-unit-tests.yaml`
 - `zephyr-unit-tests.yaml`
+
+**Release-state-changing workflow** (separate review focus — this is the only PR-1 workflow that performs GitHub state changes; gate-test against the actual auto-PR branch before merge):
+
+- `dupekit-wheels.yaml` (peter-evans → `gh` snippet)
+
+**SHA-pin-only conversions** (no `changes.py`, no PR-creation rewrite — only third-party action pinning):
+
 - `grug-variant-diff.yaml`
 - `stale.yml`
+
+**Deletion**:
+
+- `marin-metrics.yaml` (dead conda weekly; safe to remove — `experiments/metrics/exp446_metrics.py` no longer exists in the tree, no docs/AGENTS.md references)
 
 ### PR 2: Iris, Ferries, and Live-Infrastructure Workflows
 
 Required content:
 
-- Add `scripts/workflows/iris_job.py` and `iris_diagnostics.py`.
-- Migrate all copied Iris wait loops to `iris_job.py wait`.
-- Migrate all copied GCP/CoreWeave diagnostics to `iris_diagnostics.py collect`.
+- Add `scripts/workflows/iris_monitor.py` with `status`, `wait`, and `collect` subcommands.
+- Migrate all copied Iris wait loops to `iris_monitor.py wait`.
+- Migrate all copied GCP/CoreWeave diagnostics to `iris_monitor.py collect`.
 - Convert workflow-specific notification shell to existing `scripts/ops/discord.py` where practical.
 - Preserve provider-specific setup in YAML until the behavior is proven scriptable. Do not restart or bounce Iris clusters as part of this migration.
 

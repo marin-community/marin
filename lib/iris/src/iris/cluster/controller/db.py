@@ -11,7 +11,6 @@ import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from dataclasses import replace as dc_replace
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any
@@ -19,7 +18,8 @@ from typing import Any
 from rigging.timing import Deadline, Duration, Timestamp
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.schema import decode_timestamp_ms, decode_worker_id
+from iris.cluster.controller.schema import decode_worker_id
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2
 
@@ -294,7 +294,6 @@ class ControllerDB:
     _READ_POOL_SIZE = 32
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
-    PROFILES_DB_FILENAME = "profiles.sqlite3"
 
     def __init__(self, db_dir: Path):
         import time
@@ -303,7 +302,6 @@ class ControllerDB:
         self._db_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = self._db_dir / self.DB_FILENAME
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
-        self._profiles_db_path = self._db_dir / self.PROFILES_DB_FILENAME
         self._lock = RLock()
 
         t0 = time.monotonic()
@@ -311,7 +309,6 @@ class ControllerDB:
         self._conn.row_factory = sqlite3.Row
         self._configure(self._conn)
         self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
-        self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
         logger.info("DB opened in %.2fs (path=%s)", time.monotonic() - t0, self._db_path)
 
         t0 = time.monotonic()
@@ -391,7 +388,6 @@ class ControllerDB:
             conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             conn.row_factory = sqlite3.Row
             self._configure(conn)
-            conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             conn.execute("PRAGMA query_only = ON")
             self._read_pool.put(conn)
 
@@ -407,16 +403,17 @@ class ControllerDB:
     def auth_db_path(self) -> Path:
         return self._auth_db_path
 
-    @property
-    def profiles_db_path(self) -> Path:
-        return self._profiles_db_path
-
     @staticmethod
     def _configure(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
+        # Default page cache (2000 pages ≈ 8 MB) is too small for an 815 MB
+        # controller DB. With 32 read connections each caching independently
+        # the working set rotates fast and "warm" reads keep going to disk.
+        # 64 MB per connection caps total cache at ~2 GB on a 32 GB host.
+        conn.execute("PRAGMA cache_size = -65536")
 
     def optimize(self) -> None:
         """Run PRAGMA optimize to refresh statistics for tables with stale data.
@@ -578,6 +575,11 @@ class ControllerDB:
         # cannot hold a statement-level lock that would block wal_checkpoint.
         self._conn.execute("PRAGMA journal_mode=MEMORY").fetchall()
         self._conn.execute("PRAGMA temp_store=MEMORY")
+        # Legacy migrations 0005/0014/0020/0023 reference `profiles.task_profiles`,
+        # so attach the legacy file for the migration loop. 0046 + the finally
+        # block below detach and unlink it.
+        profiles_path = self._db_dir / "profiles.sqlite3"
+        self._conn.execute("ATTACH DATABASE ? AS profiles", (str(profiles_path),))
         try:
             for path in pending:
                 t0 = time.monotonic()
@@ -600,6 +602,16 @@ class ControllerDB:
             self._conn.commit()
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA journal_mode=WAL").fetchall()
+            # Detach + unlink the legacy profiles DB. Idempotent — 0046 may
+            # already have detached and unlinked.
+            try:
+                self._conn.execute("DETACH DATABASE profiles")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                profiles_path.unlink()
+            except FileNotFoundError:
+                pass
             # Checkpoint and truncate the WAL so the migration's write volume
             # does not linger as a giant WAL file that every subsequent reader
             # must walk to build a snapshot.
@@ -618,10 +630,6 @@ class ControllerDB:
     @property
     def secrets_table(self) -> str:
         return "auth.controller_secrets"
-
-    @property
-    def task_profiles_table(self) -> str:
-        return "profiles.task_profiles"
 
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
@@ -742,21 +750,10 @@ class ControllerDB:
                 self._remove_sidecars(self._auth_db_path)
                 auth_tmp.rename(self._auth_db_path)
 
-            # Download profiles DB if present in source
-            profiles_source = f"{source_dir_str}/{self.PROFILES_DB_FILENAME}"
-            fs2, fs_path2 = fsspec.core.url_to_fs(profiles_source)
-            if fs2.exists(fs_path2):
-                profiles_tmp = self._profiles_db_path.with_suffix(".tmp")
-                with fsspec.core.open(profiles_source, "rb") as src, open(profiles_tmp, "wb") as dst:
-                    dst.write(src.read())
-                self._remove_sidecars(self._profiles_db_path)
-                profiles_tmp.rename(self._profiles_db_path)
-
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._configure(self._conn)
             self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
-            self._conn.execute("ATTACH DATABASE ? AS profiles", (str(self._profiles_db_path),))
             self._init_read_pool()
         self.apply_migrations()
         for hook in self._reopen_hooks:
@@ -822,10 +819,7 @@ class ControllerDB:
 
 
 def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-    """Return the set of currently-running task IDs for each worker.
-
-    Uses the denormalized current_worker_id column instead of joining task_attempts.
-    """
+    """Return the set of currently-running task IDs for each worker."""
     if not worker_ids:
         return {}
     placeholders = ",".join("?" for _ in worker_ids)
@@ -884,29 +878,6 @@ def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOut
     return result
 
 
-def tasks_for_job_with_attempts(db: ControllerDB, job_id: JobName) -> list:
-    """Fetch all tasks for a job with their attempt history."""
-    from iris.cluster.controller.schema import ATTEMPT_PROJECTION, TASK_DETAIL_PROJECTION, tasks_with_attempts
-
-    with db.read_snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                "SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index, task_id",
-                (job_id.to_wire(),),
-            ),
-        )
-        if not tasks:
-            return []
-        placeholders = ",".join("?" for _ in tasks)
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT * FROM task_attempts WHERE task_id IN ({placeholders}) ORDER BY task_id, attempt_id",
-                tuple(t.task_id.to_wire() for t in tasks),
-            ),
-        )
-    return tasks_with_attempts(tasks, attempts)
-
-
 def _worker_row_select() -> str:
     """Lazily resolve WORKER_ROW_PROJECTION.select_clause() to break the db -> schema cycle."""
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
@@ -914,69 +885,61 @@ def _worker_row_select() -> str:
     return WORKER_ROW_PROJECTION.select_clause()
 
 
-def healthy_active_workers_with_attributes(db: ControllerDB) -> list:
-    """Fetch all healthy, active workers with their attributes populated.
+@dataclass(frozen=True, slots=True)
+class SchedulableWorker:
+    """Worker shape consumed by the scheduler.
 
-    Returns WorkerRow (scalar-only) so the scheduling loop avoids loading metadata columns.
-    Uses the in-memory attribute cache to avoid a per-cycle SQL join.
+    Field names mirror the :class:`scheduler.WorkerSnapshot` protocol so
+    instances flow into ``Scheduler.create_scheduling_context`` without
+    an adapter.
     """
+
+    worker_id: WorkerId
+    address: str
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    attributes: dict[str, AttributeValue]
+
+
+def healthy_active_workers_with_attributes(
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+) -> list[SchedulableWorker]:
+    """Return healthy + active workers with attributes."""
     from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
 
+    liveness = health.all()
+    healthy_active = {wid for wid, l in liveness.items() if l.healthy and l.active}
+    if not healthy_active:
+        return []
+    placeholders = ",".join("?" for _ in healthy_active)
     with db.read_snapshot() as q:
-        workers = WORKER_ROW_PROJECTION.decode(
-            q.fetchall(f"SELECT {_worker_row_select()} FROM workers w WHERE w.healthy = 1 AND w.active = 1"),
+        rows = WORKER_ROW_PROJECTION.decode(
+            q.fetchall(
+                f"SELECT {_worker_row_select()} FROM workers w WHERE w.worker_id IN ({placeholders})",
+                tuple(str(wid) for wid in healthy_active),
+            ),
         )
-        if not workers:
+        if not rows:
             return []
     attrs_by_worker = db.get_worker_attributes()
-    return [
-        dc_replace(
-            w,
-            attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
-            available_memory=w.total_memory_bytes - w.committed_mem,
-            available_gpus=w.total_gpu_count - w.committed_gpu,
-            available_tpus=w.total_tpu_count - w.committed_tpu,
+    out: list[SchedulableWorker] = []
+    for w in rows:
+        out.append(
+            SchedulableWorker(
+                worker_id=w.worker_id,
+                address=w.address,
+                total_cpu_millicores=w.total_cpu_millicores,
+                total_memory_bytes=w.total_memory_bytes,
+                total_gpu_count=w.total_gpu_count,
+                total_tpu_count=w.total_tpu_count,
+                device_type=w.device_type,
+                device_variant=w.device_variant,
+                attributes=attrs_by_worker.get(w.worker_id, {}),
+            )
         )
-        for w in workers
-    ]
-
-
-def insert_task_profile(
-    db: ControllerDB, task_id: str, profile_data: bytes, captured_at: Timestamp, profile_kind: str = "cpu"
-) -> None:
-    """Insert a captured profile snapshot for a task.
-
-    The DB trigger caps profiles at 10 per (task_id, profile_kind), evicting the oldest automatically.
-    """
-    db.execute(
-        "INSERT INTO profiles.task_profiles (task_id, profile_data, captured_at_ms, profile_kind) VALUES (?, ?, ?, ?)",
-        (task_id, profile_data, captured_at.epoch_ms(), profile_kind),
-    )
-
-
-def get_task_profiles(
-    db: ControllerDB, task_id: str, profile_kind: str | None = None
-) -> list[tuple[bytes, Timestamp, str]]:
-    """Return stored profile snapshots for a task, newest first.
-
-    Args:
-        db: Controller database.
-        task_id: Task wire string.
-        profile_kind: If set, filter to this kind (e.g. "cpu", "memory"). Returns all kinds when None.
-    """
-    if profile_kind is not None:
-        query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
-            " WHERE task_id = ? AND profile_kind = ? ORDER BY id DESC"
-        )
-        params: tuple[str, ...] = (task_id, profile_kind)
-    else:
-        query = (
-            "SELECT profile_data, captured_at_ms, profile_kind FROM profiles.task_profiles"
-            " WHERE task_id = ? ORDER BY id DESC"
-        )
-        params = (task_id,)
-    with db.read_snapshot() as q:
-        rows = q.raw(query, params, decoders={"captured_at_ms": decode_timestamp_ms})
-    return [(row.profile_data, row.captured_at_ms, row.profile_kind) for row in rows]
+    return out

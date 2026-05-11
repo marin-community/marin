@@ -6,6 +6,7 @@
 import shutil
 import tempfile
 from contextlib import contextmanager
+from dataclasses import dataclass
 from dataclasses import replace as _replace
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
@@ -33,10 +34,12 @@ from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ControllerDB,
+    SchedulableWorker,
     _decode_attribute_rows,
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.db import healthy_active_workers_with_attributes as _healthy_active_workers_with_attributes
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -67,6 +70,7 @@ from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
 
+from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
@@ -105,16 +109,20 @@ class FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def start_tasks(self, jobs):
+    def reconcile_workers(self, plans):
+        from iris.cluster.controller.worker_provider import WorkerReconcileResult
         from iris.rpc import worker_pb2
 
-        return [(wid, worker_pb2.Worker.StartTasksResponse(), None) for wid, _, _ in jobs]
-
-    def stop_tasks(self, jobs):
-        return [(wid, None) for wid, _, _ in jobs]
-
-    def poll_workers(self, running, worker_addresses):
-        return []
+        return [
+            WorkerReconcileResult(
+                worker_id=plan.worker_id,
+                start_response=worker_pb2.Worker.StartTasksResponse() if plan.start_tasks else None,
+                start_error=None,
+                poll_updates=[],
+                poll_error=None,
+            )
+            for plan in plans
+        ]
 
     def close(self) -> None:
         pass
@@ -132,7 +140,6 @@ class MockController:
 
     def __init__(self):
         self.wake = Mock()
-        self.kill_tasks_on_workers = Mock()
         self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
         self.autoscaler = None
@@ -157,7 +164,10 @@ def log_service(state, tmp_path) -> LogServiceImpl:
     original_fetch = svc.fetch_logs
 
     def fetch_logs(request, ctx):
-        svc._log_store._compact_step()
+        # Force a flush + compaction so just-pushed data is queryable
+        # within the same test, bypassing the production 1s bg tick.
+        svc._log_store._force_flush()
+        svc._log_store._force_compaction()
         return original_fetch(request, ctx)
 
     svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
@@ -173,7 +183,7 @@ def controller_service(state, log_service, mock_controller, tmp_path) -> Control
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
@@ -200,7 +210,7 @@ def make_controller(tmp_path):
     """Factory for building ``Controller`` instances with automatic teardown.
 
     ``Controller.__init__`` attaches a ``RemoteLogHandler`` to the ``iris``
-    logger and spawns a ``LogPusher`` drain thread. Without ``stop()``, those
+    logger and spawns a ``LogClient`` drain thread. Without ``stop()``, those
     leak across the test session and pull every ``iris.*`` log record into
     their internal queue — which can then be flushed into another test's
     monkeypatched ``LogServiceClientSync``. The factory tracks every
@@ -233,6 +243,7 @@ def make_controller(tmp_path):
     ) -> Controller:
         if config is None:
             config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
+            config_kwargs.setdefault("local_state_dir", tmp_path / "local")
             config = ControllerConfig(**config_kwargs)
         elif config_kwargs:
             raise TypeError("make_controller: pass either a config or config kwargs, not both")
@@ -336,11 +347,51 @@ def query_job_row(state: ControllerTransitions, job_id: JobName):
         )
 
 
-def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerRow | None:
+@dataclass(frozen=True, slots=True)
+class WorkerView:
+    """Combined snapshot for tests that read DB row data + liveness in one call."""
+
+    worker_id: WorkerId
+    address: str
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    attributes: dict
+    healthy: bool
+    active: bool
+    consecutive_failures: int
+    last_heartbeat_ms: int
+
+
+def _worker_view(row: WorkerRow, liveness) -> WorkerView:
+    return WorkerView(
+        worker_id=row.worker_id,
+        address=row.address,
+        total_cpu_millicores=row.total_cpu_millicores,
+        total_memory_bytes=row.total_memory_bytes,
+        total_gpu_count=row.total_gpu_count,
+        total_tpu_count=row.total_tpu_count,
+        device_type=row.device_type,
+        device_variant=row.device_variant,
+        attributes=row.attributes,
+        healthy=liveness.healthy,
+        active=liveness.active,
+        consecutive_failures=liveness.consecutive_failures,
+        last_heartbeat_ms=liveness.last_heartbeat_ms,
+    )
+
+
+def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerView | None:
     with state._db.read_snapshot() as q:
-        return WORKER_ROW_PROJECTION.decode_one(
+        decoded = WORKER_ROW_PROJECTION.decode_one(
             q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)),
         )
+    if decoded is None:
+        return None
+    return _worker_view(decoded, state._store.health.liveness(decoded.worker_id))
 
 
 def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[TaskDetailRow]:
@@ -400,8 +451,8 @@ def register_worker(
             slice_id=slice_id,
             scale_group=scale_group,
         )
-        if not healthy:
-            state._store.workers.set_health_for_test(cur, wid, healthy=False)
+    if not healthy:
+        state._store.workers.set_health_for_test(wid, healthy=False)
     return wid
 
 
@@ -579,23 +630,11 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
             tuple(worker_ids),
         )
     attrs_by_worker = _decode_attribute_rows(attrs)
-    return [
-        _replace(
-            w,
-            attributes=attrs_by_worker.get(w.worker_id, {}),
-            available_cpu_millicores=w.total_cpu_millicores - w.committed_cpu_millicores,
-            available_memory=w.total_memory_bytes - w.committed_mem,
-            available_gpus=w.total_gpu_count - w.committed_gpu,
-            available_tpus=w.total_tpu_count - w.committed_tpu,
-        )
-        for w in workers
-    ]
+    return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
-def healthy_active_workers(state: ControllerTransitions) -> list[WorkerRow]:
-    with state._db.read_snapshot() as q:
-        workers = WORKER_ROW_PROJECTION.decode(q.fetchall("SELECT * FROM workers WHERE healthy = 1 AND active = 1"))
-    return hydrate_worker_attributes(state, workers)
+def healthy_active_workers(state: ControllerTransitions) -> list[SchedulableWorker]:
+    return _healthy_active_workers_with_attributes(state._db, state._store.health)
 
 
 def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: WorkerId) -> None:
@@ -606,7 +645,6 @@ def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: 
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task.task_id,
@@ -647,7 +685,6 @@ def transition_task(
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task_id,

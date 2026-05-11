@@ -7,6 +7,8 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
+import concurrent.futures
+import time
 from datetime import date, timedelta
 
 import pytest
@@ -18,6 +20,7 @@ from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
+    MAX_LIST_JOBS_OFFSET,
     ControllerServiceImpl,
     _check_client_freshness,
 )
@@ -30,6 +33,8 @@ from iris.cluster.controller.transitions import (
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+
+from tests.cluster.conftest import fake_log_client_from_service
 
 from .conftest import (
     make_job_request,
@@ -88,7 +93,6 @@ def _assign_and_transition(
             cur,
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         )
@@ -98,7 +102,6 @@ def _assign_and_transition(
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=target_state, error=error)],
                 ),
             )
@@ -692,7 +695,7 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -723,7 +726,7 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -895,6 +898,16 @@ def test_list_jobs_sql_pagination(service):
     assert response3.has_more is False
 
 
+def test_list_jobs_rejects_deep_offset(service):
+    """Offsets past MAX_LIST_JOBS_OFFSET are rejected to force callers to filter."""
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(offset=MAX_LIST_JOBS_OFFSET + 1, limit=500)
+    )
+    with pytest.raises(ConnectError) as exc_info:
+        service.list_jobs(request, None)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
 def test_list_jobs_state_filter(service):
     """SQL pagination respects state_filter."""
     service.launch_job(make_job_request("job-a"), None)
@@ -999,7 +1012,8 @@ def test_task_summaries_sql_group_by(state, service):
     service.launch_job(make_job_request("multi-task", replicas=3), None)
 
     job_id = JobName.root("test-user", "multi-task")
-    summaries = _task_summaries_for_jobs(state._db, {job_id})
+    with state._db.read_snapshot() as q:
+        summaries = _task_summaries_for_jobs(q, {job_id})
 
     assert job_id in summaries
     s = summaries[job_id]
@@ -1282,7 +1296,7 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth,
     )
 
@@ -1318,7 +1332,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
         state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
         auth=auth,
     )
 
@@ -1338,10 +1352,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
-    """get_scheduler_state must not crash when there are running tasks.
-
-    Regression: JobName has no `.job` attribute — the code must use `.parent`.
-    """
+    """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     # Submit a job and move a task to RUNNING
@@ -1381,8 +1392,12 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             None,
         )
         assert resp.total_running == 1
-        assert resp.running_tasks[0].job_id == job_id.to_wire()
-        assert resp.running_tasks[0].user_id == "alice"
+        assert len(resp.running_buckets) == 1
+        bucket = resp.running_buckets[0]
+        assert bucket.job_id == job_id.to_wire()
+        assert bucket.user_id == "alice"
+        assert bucket.worker_id == "w1"
+        assert bucket.count == 1
         # alice has no explicit user_budgets row but has an active task — the
         # scheduler state must report her spend using UserBudgetDefaults so the
         # dashboard renders Spent/Limit/Utilization instead of '-'.
@@ -1447,7 +1462,7 @@ def test_launch_job_root_with_fresh_client_date(service):
     """Root submission with today's date succeeds end-to-end through launch_job."""
     request = make_job_request("fresh-client")
     request.client_revision_date = date.today().isoformat()
-    response = service.launch_job(request, None)
+    response = service.launch_job(request, object())
     assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
 
 
@@ -1456,7 +1471,7 @@ def test_launch_job_root_with_stale_client_date(service):
     request = make_job_request("stale-client")
     request.client_revision_date = "2000-01-01"
     with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
+        service.launch_job(request, object())
     assert exc_info.value.code == Code.FAILED_PRECONDITION
 
 
@@ -1493,3 +1508,86 @@ def test_set_task_status_text_persists_via_store(service):
     service.set_task_status_text(request, None)
     assert service._store.tasks.get_status_text_detail(task_id.to_wire()) == detail_text
     assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text
+
+
+def test_list_tasks_returns_current_attempt_timing(service, state):
+    """ListTasks must surface the current attempt's started_at and exactly one attempt entry.
+
+    Regression target: ``_tasks_for_listing`` previously returned tasks with
+    empty ``attempts``, so the proto's ``started_at`` (read from the current
+    attempt) was never populated and retry status text was missing on the
+    dashboard. The fixed version JOINs the current attempt only — at most one
+    row per task — to avoid the IN-clause blowup on long histories.
+    """
+    request = make_job_request("list-tasks-timing")
+    service.launch_job(request, None)
+    job_id = JobName.root("test-user", "list-tasks-timing")
+    task_id = job_id.task(0)
+    worker_id = WorkerId("w-list-timing")
+    _register_worker(state, worker_id)
+    _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_RUNNING)
+
+    response = service.list_tasks(
+        controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()),
+        None,
+    )
+
+    assert len(response.tasks) == 1
+    proto = response.tasks[0]
+    assert proto.task_id == task_id.to_wire()
+    assert proto.state == job_pb2.TASK_STATE_RUNNING
+    # current attempt is loaded -> started_at on the proto is populated
+    assert proto.started_at.epoch_ms > 0
+    # exactly one attempt entry — the current one — even if more existed
+    assert len(proto.attempts) == 1
+    assert proto.attempts[0].attempt_id == proto.current_attempt_id
+
+
+# =============================================================================
+# Direct-SQL load: ensure list_jobs scales under concurrent dashboard polling.
+# =============================================================================
+
+
+def test_list_jobs_concurrent_load_p99_under_threshold(service):
+    """100 concurrent ``list_jobs`` calls against ~1k jobs must hit p99 < 500ms.
+
+    The previous implementation amortized this fan-out behind ``SnapshotView``;
+    direct SQL replaces that with per-request reads from the 32-slot reader
+    pool. This test would have failed if the reader pool were starving on the
+    GIL-unfriendly path or if the EXPLAIN-verified indexes were not being
+    used. The threshold is generous on purpose — we want to detect regressions
+    on the order of seconds, not micro-jitter.
+    """
+    for i in range(1000):
+        service.launch_job(make_job_request(f"load-job-{i:04d}"), None)
+
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(limit=50),
+    )
+
+    # Warm one call so the SQLite page cache is populated.
+    service.list_jobs(request, None)
+
+    n_requests = 100
+    latencies_ms: list[float] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+
+        def call() -> float:
+            start = time.perf_counter()
+            response = service.list_jobs(request, None)
+            assert response.total_count == 1000
+            return (time.perf_counter() - start) * 1000.0
+
+        futures = [pool.submit(call) for _ in range(n_requests)]
+        for f in concurrent.futures.as_completed(futures):
+            latencies_ms.append(f.result())
+
+    latencies_ms.sort()
+    p50 = latencies_ms[len(latencies_ms) // 2]
+    p99 = latencies_ms[int(len(latencies_ms) * 0.99)]
+    # 500ms is well above expected steady-state (in-process measurement was
+    # ~100-120ms; production should be cheaper since the test fixture's DB has
+    # transaction overhead from thousands of launch_job inserts) but tight
+    # enough that read-pool starvation or accidental N+1 query growth would
+    # trip it.
+    assert p99 < 500.0, f"list_jobs concurrent p99 too high: p50={p50:.1f}ms p99={p99:.1f}ms"

@@ -284,38 +284,6 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     db.close()
 
 
-def test_replace_from_reattaches_profiles_db(tmp_path: Path) -> None:
-    """replace_from() must re-attach the profiles DB so profile tables remain accessible."""
-    from iris.cluster.controller.db import get_task_profiles, insert_task_profile
-    from rigging.timing import Timestamp
-
-    db = ControllerDB(db_dir=tmp_path)
-    insert_task_profile(db, "task-1", b"profile-data", Timestamp.now())
-
-    backup_dir = tmp_path / "backup"
-    backup_dir.mkdir()
-    db.backup_to(backup_dir / "controller.sqlite3")
-
-    # The profiles DB is a separate WAL-mode file; export a standalone backup
-    # so replace_from can restore from a self-contained sqlite file.
-    profiles_backup = backup_dir / ControllerDB.PROFILES_DB_FILENAME
-    src = sqlite3.connect(str(db.profiles_db_path))
-    dest = sqlite3.connect(str(profiles_backup))
-    try:
-        src.backup(dest)
-        dest.execute("PRAGMA journal_mode = DELETE")
-        dest.commit()
-    finally:
-        src.close()
-        dest.close()
-
-    db.replace_from(str(backup_dir))
-
-    profiles = get_task_profiles(db, "task-1")
-    assert len(profiles) == 1
-    db.close()
-
-
 def test_replace_from_replaces_db_with_live_wal_sidecars_present(tmp_path: Path) -> None:
     """replace_from() must discard stale sidecars from the live DB before reopening."""
     db = ControllerDB(db_dir=tmp_path)
@@ -729,4 +697,84 @@ def test_requeue_split_coscheduled_jobs_migration(tmp_path: Path) -> None:
     conn.commit()
     snap2 = list(conn.execute("SELECT task_id, state, current_worker_id FROM tasks").fetchall())
     assert snap == snap2
+    conn.close()
+
+
+def test_drop_resource_history_tables_migration(tmp_path: Path) -> None:
+    """0040 drops worker_resource_history, task_resource_history, and the
+    cached snapshot_* columns on workers.
+
+    Builds a minimal v0039-shape DB (just the surfaces this migration
+    touches), populates each, runs the migration, and asserts the tables
+    and columns are gone. A second invocation must be a no-op.
+    """
+    import importlib
+
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite3"))
+    conn.executescript(
+        """
+        CREATE TABLE workers (
+            worker_id TEXT PRIMARY KEY,
+            address TEXT NOT NULL,
+            snapshot_host_cpu_percent INTEGER,
+            snapshot_memory_used_bytes INTEGER,
+            snapshot_memory_total_bytes INTEGER,
+            snapshot_disk_used_bytes INTEGER,
+            snapshot_disk_total_bytes INTEGER,
+            snapshot_running_task_count INTEGER,
+            snapshot_total_process_count INTEGER,
+            snapshot_net_recv_bps INTEGER,
+            snapshot_net_sent_bps INTEGER
+        );
+        CREATE TABLE worker_resource_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            worker_id TEXT NOT NULL,
+            snapshot_host_cpu_percent INTEGER,
+            timestamp_ms INTEGER NOT NULL
+        );
+        CREATE INDEX idx_worker_resource_history_worker
+            ON worker_resource_history(worker_id, id DESC);
+        CREATE INDEX idx_worker_resource_history_ts
+            ON worker_resource_history(worker_id, timestamp_ms DESC);
+        CREATE TABLE task_resource_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            attempt_id INTEGER NOT NULL,
+            cpu_millicores INTEGER NOT NULL DEFAULT 0,
+            timestamp_ms INTEGER NOT NULL
+        );
+        CREATE INDEX idx_task_resource_history_task_attempt
+            ON task_resource_history(task_id, attempt_id, id DESC);
+        """
+    )
+    conn.execute("INSERT INTO workers VALUES ('w1','host:1', 50, 1, 2, 3, 4, 5, 6, 7, 8)")
+    conn.execute(
+        "INSERT INTO worker_resource_history (worker_id, snapshot_host_cpu_percent, timestamp_ms) "
+        "VALUES ('w1', 42, 1000)"
+    )
+    conn.execute(
+        "INSERT INTO task_resource_history (task_id, attempt_id, cpu_millicores, timestamp_ms) "
+        "VALUES ('/u/t', 0, 100, 1000)"
+    )
+    conn.commit()
+
+    mod = importlib.import_module("iris.cluster.controller.migrations.0040_drop_resource_history_tables")
+    mod.migrate(conn)
+    conn.commit()
+
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%resource_history'"
+        ).fetchall()
+    }
+    assert tables == set(), f"resource_history tables still present: {tables}"
+
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(workers)").fetchall()}
+    assert not any(c.startswith("snapshot_") for c in cols), f"snapshot_* still on workers: {sorted(cols)}"
+
+    # Idempotent — re-running on a DB where everything is already gone
+    # must be a no-op (no exception).
+    mod.migrate(conn)
+    conn.commit()
     conn.close()

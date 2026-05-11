@@ -24,7 +24,7 @@ import time
 import traceback
 import uuid
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from contextvars import ContextVar
@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 import cloudpickle
+import humanfriendly
 from fray import ActorConfig, ActorFuture, ActorHandle, Client, ResourceConfig
 from fray.client import JobHandle
 from fray.types import Entrypoint, JobRequest
@@ -54,7 +55,7 @@ from zephyr.plan import (
     compute_plan,
 )
 from zephyr.shuffle import ListShard, MemChunk, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, ensure_parent_dir, unique_temp_path
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, unique_temp_path
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,51 @@ def _generate_execution_id() -> str:
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 
+def _format_count(n: float) -> str:
+    """Format a count with SI-style suffixes (K/M/B/T) once it grows past 1k."""
+    abs_n = abs(n)
+    if abs_n >= 1e12:
+        return f"{n / 1e12:.2f}T"
+    if abs_n >= 1e9:
+        return f"{n / 1e9:.2f}B"
+    if abs_n >= 1e6:
+        return f"{n / 1e6:.2f}M"
+    if abs_n >= 1e3:
+        return f"{n / 1e3:.2f}K"
+    if n == int(n):
+        return f"{int(n):,}"
+    return f"{n:.1f}"
+
+
+def _format_bytes(n: float) -> str:
+    """Format a byte count with binary (IEC) prefixes."""
+    return humanfriendly.format_size(int(n), binary=True)
+
+
+def _stage_throughput(
+    counters: Mapping[str, int],
+    stage_name: str,
+    elapsed: float,
+) -> tuple[int, int, float, float] | None:
+    """Return ``(items, bytes_processed, item_rate, byte_rate)`` for *stage_name*.
+
+    Returns ``None`` when neither the item nor the byte counter has been
+    recorded for this stage. Map-only stages and stages still in run_stage
+    setup never populate these counters; ``None`` distinguishes that case
+    from a real zero count so callers can suppress misleading "0 items"
+    status lines.
+    """
+    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
+    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
+    if item_key not in counters and byte_key not in counters:
+        return None
+    items = counters.get(item_key, 0)
+    bytes_processed = counters.get(byte_key, 0)
+    item_rate = items / elapsed if elapsed > 0 else 0.0
+    byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+    return items, bytes_processed, item_rate, byte_rate
+
+
 def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     """Path for a shared data object: {prefix}/{execution_id}/shared/{name}.pkl"""
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
@@ -192,26 +238,17 @@ def _write_pickle_chunks(
     Returns a ListShard containing PickleDiskChunk references.
     """
     chunks: list[Iterable] = []
-    batch: list = []
-    pidx = 0
-
-    for item in items:
-        batch.append(item)
-        if len(batch) >= INTERMEDIATE_CHUNK_SIZE:
-            chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
-            chunks.append(chunk_ref)
-            pidx += 1
-            batch = []
-            if pidx % 10 == 0:
-                logger.info(
-                    "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
-                    source_shard,
-                    pidx,
-                    chunk_ref.count,
-                )
-
-    if batch:
-        chunks.append(PickleDiskChunk.write(chunk_path_fn(pidx), batch))
+    for pidx, batch in enumerate(batchify(items, n=INTERMEDIATE_CHUNK_SIZE)):
+        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
+        chunks.append(chunk_ref)
+        written = pidx + 1
+        if written % 10 == 0:
+            logger.info(
+                "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
+                source_shard,
+                written,
+                chunk_ref.count,
+            )
 
     return ListShard(refs=chunks)
 
@@ -548,11 +585,8 @@ class ZephyrCoordinator:
             stage_start = self._stage_monotonic_start
 
         totals = self.get_counters()
-        items = totals.get(ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name), 0)
-        bytes_processed = totals.get(ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name), 0)
-        elapsed = time.monotonic() - (stage_start if stage_start is not None else float("inf"))
-        item_rate = items / elapsed if elapsed > 0 else 0.0
-        byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+        elapsed = time.monotonic() - (stage_start or time.monotonic())
+        throughput = _stage_throughput(totals, stage_name, elapsed)
 
         lines = ["**Stages**\n"]
         for idx, stage in enumerate(plan_stages):
@@ -564,18 +598,22 @@ class ZephyrCoordinator:
         lines.append(
             f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
         )
-        mib = bytes_processed / (1024 * 1024)
-        mib_rate = byte_rate / (1024 * 1024)
-        lines.append(f"\n**Throughput** — {items:,} items ({item_rate:.1f}/s), {mib:.1f} MiB ({mib_rate:.1f} MiB/s)")
+        if throughput is not None:
+            items, bytes_processed, item_rate, byte_rate = throughput
+            lines.append(
+                f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
+                f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
+            )
 
         detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
 
         current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
         summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
         summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
-        if items > 0:
-            summary_lines.append(f"{item_rate:.0f} items/s")
-            summary_lines.append(f"{mib_rate:.1f} MiB/s")
+        if throughput is not None:
+            _, _, item_rate, byte_rate = throughput
+            summary_lines.append(f"{_format_count(item_rate)} items/s")
+            summary_lines.append(f"{_format_bytes(byte_rate)}/s")
         summary_md = "  \n".join(summary_lines)
 
         try:
@@ -591,8 +629,6 @@ class ZephyrCoordinator:
         dead = sum(1 for s in states if s in {WorkerState.FAILED, WorkerState.DEAD})
 
         totals = self.get_counters()
-        item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=self._stage_name)
-        byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=self._stage_name)
         base_msg = "[%s] [%s] %d/%d complete, %d in-flight, %d queued, %d/%d workers alive, %d dead"
         base_args = (
             self._execution_id,
@@ -609,21 +645,17 @@ class ZephyrCoordinator:
         # Map-only stages don't yield through ``_StageStatsGenerator`` and never
         # populate these counters. Drop the items/bytes_processed segment for
         # those stages.
-        if item_key in totals or byte_key in totals:
-            items = totals.get(item_key, 0)
-            bytes_processed = totals.get(byte_key, 0)
-            elapsed = time.monotonic() - (
-                self._stage_monotonic_start if self._stage_monotonic_start is not None else float("inf")
-            )
-            item_rate = items / elapsed
-            byte_rate = bytes_processed / elapsed
+        elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
+        throughput = _stage_throughput(totals, self._stage_name, elapsed)
+        if throughput is not None:
+            items, bytes_processed, item_rate, byte_rate = throughput
             logger.info(
-                base_msg + "; items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
+                base_msg + "; items=%s (%s/s), bytes_processed=%s (%s/s)",
                 *base_args,
-                items,
-                item_rate,
-                bytes_processed / (1024 * 1024),
-                byte_rate / (1024 * 1024),
+                _format_count(items),
+                _format_count(item_rate),
+                _format_bytes(bytes_processed),
+                _format_bytes(byte_rate),
             )
         else:
             logger.info(base_msg, *base_args)
@@ -1224,16 +1256,7 @@ class ZephyrWorker:
             shard_idx = task.shard_idx
             total_shards = task.total_shards
             elapsed = time.monotonic() - self._task_monotonic_start
-
-            item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-            byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-
-            items = self._last_reported_counters.get(item_key, 0)
-            bytes_processed = self._last_reported_counters.get(byte_key, 0)
-            item_rate = items / elapsed if elapsed > 0 else 0.0
-            byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
-            mib = bytes_processed / (1024 * 1024)
-            mib_rate = byte_rate / (1024 * 1024)
+            throughput = _stage_throughput(self._last_reported_counters, stage_name, elapsed)
 
             summary_lines = [f"**{stage_name}**", f"shard {shard_idx + 1}/{total_shards}"]
             summary_md = "  \n".join(summary_lines)
@@ -1241,10 +1264,11 @@ class ZephyrWorker:
                 f"**Stage**: {stage_name}",
                 f"**Shard**: {shard_idx + 1}/{total_shards}",
             ]
-            if items > 0:
+            if throughput is not None:
+                items, bytes_processed, item_rate, byte_rate = throughput
                 detail_lines += [
-                    f"**Items**: {items:,} ({item_rate:.1f}/s)",
-                    f"**Throughput**: {mib:.1f} MiB ({mib_rate:.1f} MiB/s)",
+                    f"**Items**: {_format_count(items)} ({_format_count(item_rate)}/s)",
+                    f"**Throughput**: {_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)",
                 ]
             detail_md = "  \n".join(detail_lines)
 
@@ -1576,53 +1600,58 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
         actor_config=ActorConfig(max_concurrency=100),
     )
     coordinator = hosted.handle
-    coordinator.initialize.remote(
-        config.chunk_storage_prefix,
-        coordinator,
-        config.no_workers_timeout,
-    ).result()
-
-    # Create workers (child jobs)
-    num_shards = config.plan.num_shards
-    actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
     worker_group = None
-
-    if actual_workers > 0:
-        # Worker name includes attempt ID so that if a stale coordinator
-        # process from a previous attempt is still running, its shutdown
-        # targets the old name and cannot kill this attempt's workers.
-        worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
-        logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
-        worker_group = client.create_actor_group(
-            ZephyrWorker,
-            coordinator,
-            config.stage_runner_factory,
-            name=worker_name,
-            count=actual_workers,
-            resources=config.worker_resources,
-            actor_config=ActorConfig(max_task_retries=10),
-        )
-        worker_group.wait_ready(count=1, timeout=3600.0)
-
-        # Let the coordinator poll worker job health in its maintenance loop
-        coordinator.set_worker_group.remote(worker_group).result()
-
+    # host_actor starts a non-daemon uvicorn thread; the finally below must
+    # run on every exit path or the process will stay alive after the main
+    # body raises and the Iris task will be stuck RUNNING.
     try:
-        results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
-        counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
-        payload = ZephyrExecutionResult(results=results, counters=counters)
+        coordinator.initialize.remote(
+            config.chunk_storage_prefix,
+            coordinator,
+            config.no_workers_timeout,
+        ).result()
 
-        ensure_parent_dir(result_path)
-        with open_url(result_path, "wb") as f:
-            f.write(cloudpickle.dumps(payload))
-    except Exception as e:
-        # Persist the exception so the caller can recover the original type
-        # (important for non-retryable error detection).
-        with suppress(Exception):
+        # Create workers (child jobs)
+        num_shards = config.plan.num_shards
+        actual_workers = min(config.max_workers, num_shards) if num_shards > 0 else 0
+
+        if actual_workers > 0:
+            # Worker name includes attempt ID so that if a stale coordinator
+            # process from a previous attempt is still running, its shutdown
+            # targets the old name and cannot kill this attempt's workers.
+            worker_name = f"zephyr-{config.name}-p{config.pipeline_id}-workers-a{attempt_id}"
+            logger.info("Starting %d workers (max=%d, shards=%d)", actual_workers, config.max_workers, num_shards)
+            worker_group = client.create_actor_group(
+                ZephyrWorker,
+                coordinator,
+                config.stage_runner_factory,
+                name=worker_name,
+                count=actual_workers,
+                resources=config.worker_resources,
+                actor_config=ActorConfig(max_task_retries=10),
+            )
+            ready_wait_s = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
+            worker_group.wait_ready(count=1, timeout=ready_wait_s)
+
+            # Let the coordinator poll worker job health in its maintenance loop
+            coordinator.set_worker_group.remote(worker_group).result()
+
+        try:
+            results = coordinator.run_pipeline.submit(config.plan, config.execution_id).result()
+            counters = coordinator.get_counters.remote().result(timeout=10.0) or {}
+            payload = ZephyrExecutionResult(results=results, counters=counters)
+
             ensure_parent_dir(result_path)
             with open_url(result_path, "wb") as f:
-                f.write(cloudpickle.dumps(e))
-        raise
+                f.write(cloudpickle.dumps(payload))
+        except Exception as e:
+            # Persist the exception so the caller can recover the original type
+            # (important for non-retryable error detection).
+            with suppress(Exception):
+                ensure_parent_dir(result_path)
+                with open_url(result_path, "wb") as f:
+                    f.write(cloudpickle.dumps(e))
+            raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
         # pull_task and self-terminate via shutdown_event → exit_actor()
@@ -1693,7 +1722,7 @@ class ZephyrContext:
     max_workers: int | None = None
     resources: ResourceConfig = field(default_factory=lambda: ResourceConfig(cpu=1, ram="1g"))
     coordinator_resources: ResourceConfig = field(
-        default_factory=lambda: ResourceConfig(cpu=1, ram="2g", preemptible=False)
+        default_factory=lambda: ResourceConfig(cpu=0.1, ram="1g", preemptible=False)
     )
     chunk_storage_prefix: str | None = None
     name: str = ""

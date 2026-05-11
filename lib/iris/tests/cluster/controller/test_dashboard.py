@@ -20,7 +20,7 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
 )
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler
+from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
     JOB_DETAIL_PROJECTION,
@@ -34,6 +34,8 @@ from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
 from starlette.testclient import TestClient
+
+from tests.cluster.conftest import fake_log_client_from_service
 
 from .conftest import (
     check_task_can_be_scheduled,
@@ -124,7 +126,10 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
                 decoders={"worker_id": WorkerId, "c": int},
             )
         building_counts = {row.worker_id: row.c for row in rows}
-        return scheduler.create_scheduling_context(workers, building_counts=building_counts)
+        with state._db.read_snapshot() as snap:
+            usage_by_worker = state._store.attempts.resource_usage_by_worker(snap)
+        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
+        return scheduler.create_scheduling_context(snapshots, building_counts=building_counts)
 
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
@@ -150,7 +155,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)
-        workers = healthy_active_workers_with_attributes(state._db)
+        workers = healthy_active_workers_with_attributes(state._db, state._store.health)
         context = _create_scheduling_context(workers)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
@@ -165,35 +170,37 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
 
 @pytest.fixture
-def service(state, scheduler, tmp_path):
+def log_service() -> LogServiceImpl:
+    return LogServiceImpl()
+
+
+@pytest.fixture
+def service(state, scheduler, tmp_path, log_service):
     controller_mock = _make_controller_mock(state, scheduler)
-    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
 @pytest.fixture
-def client(service):
-    dashboard = ControllerDashboard(service, log_service=service._log_service)
+def client(service, log_service):
+    dashboard = ControllerDashboard(service, log_service=log_service)
     return TestClient(dashboard.app)
 
 
 @pytest.fixture
-def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path):
-    """Service with autoscaler enabled for tests."""
+def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_service):
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
-    log_service = LogServiceImpl()
     return ControllerServiceImpl(
         state,
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
 
 
@@ -592,9 +599,9 @@ def mock_autoscaler():
 
 
 @pytest.fixture
-def client_with_autoscaler(service_with_autoscaler):
+def client_with_autoscaler(service_with_autoscaler, log_service):
     """Dashboard test client with autoscaler enabled."""
-    dashboard = ControllerDashboard(service_with_autoscaler, log_service=service_with_autoscaler._log_service)
+    dashboard = ControllerDashboard(service_with_autoscaler, log_service=log_service)
     return TestClient(dashboard.app)
 
 
@@ -755,10 +762,8 @@ def test_worker_detail_page_escapes_id(client):
 
 
 def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_request):
-    """GetWorkerStatus returns one recent_attempts row per attempt with its
-    own started/finished timestamps. Regression: previously returned
-    per-task rows, dropping retry distinctions and inheriting the parent
-    task's state on every row."""
+    """Verify GetWorkerStatus returns per-attempt rows with distinct
+    timestamps, preserving retry history."""
     wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
     job_id = submit_job(state, "ts-job", job_request)
     task_id = job_id.task(0)
@@ -770,7 +775,6 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
             cur,
             HeartbeatApplyRequest(
                 worker_id=wid,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         )
@@ -779,7 +783,6 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
             cur,
             HeartbeatApplyRequest(
                 worker_id=wid,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             ),
         )
@@ -823,7 +826,6 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=wid,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_BUILDING),
                 ],
@@ -834,7 +836,6 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=wid,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task_id,
@@ -853,7 +854,6 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
             cur,
             HeartbeatApplyRequest(
                 worker_id=wid,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         )
@@ -877,26 +877,27 @@ def test_get_worker_status_by_worker_id(client, state):
     assert resp.get("worker", {}).get("address") == "10.0.0.5:8080"
 
 
-def test_get_worker_status_includes_running_tasks_and_resource_history(client, state, job_request):
-    """GetWorkerStatus assembles running tasks and resource history explicitly."""
+def test_get_worker_status_includes_running_tasks(client, state, job_request):
+    """GetWorkerStatus assembles running tasks for the worker.
+
+    Per-tick resource history is populated from the ``iris.worker`` stats
+    namespace, not the controller DB; this test covers only DB-backed
+    fields.
+    """
     wid = register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
     job_id = submit_job(state, "worker-detail-res", job_request)
     task_id = job_id.task(0)
     with state._store.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
 
-    first = job_pb2.WorkerResourceSnapshot(host_cpu_percent=25, running_task_count=1)
-    second = job_pb2.WorkerResourceSnapshot(host_cpu_percent=50, running_task_count=1)
     with state._store.transaction() as cur:
-        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=first, updates=[]))
-    with state._store.transaction() as cur:
-        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, worker_resource_snapshot=second, updates=[]))
+        state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, updates=[]))
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
     running_job_ids = resp.get("worker", {}).get("runningJobIds", [])
     assert task_id.to_wire() in running_job_ids
-    assert [entry.get("hostCpuPercent") for entry in resp.get("resourceHistory", [])] == [25, 50]
-    assert resp.get("currentResources", {}).get("hostCpuPercent") == 50
+    assert "resourceHistory" not in resp
+    assert "currentResources" not in resp
 
 
 def test_get_worker_status_unknown_id_returns_error(client):
@@ -1114,14 +1115,12 @@ def test_auth_config_returns_disabled_by_default(client):
     assert data["provider"] is None
 
 
-def test_auth_config_returns_enabled_when_verifier_set(service):
+def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
     from iris.rpc.auth import StaticTokenVerifier
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
-    dashboard = ControllerDashboard(
-        service, log_service=service._log_service, auth_verifier=verifier, auth_provider="gcp"
-    )
+    dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
     authed_client = TestClient(dashboard.app)
 
     resp = authed_client.get("/auth/config")
@@ -1149,9 +1148,9 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
-    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
+    dashboard = ControllerDashboard(svc, log_service=log_service)
     k8s_client = TestClient(dashboard.app)
 
     resp = k8s_client.get("/auth/config")
@@ -1181,9 +1180,9 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
         state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=log_service,
+        log_client=fake_log_client_from_service(log_service),
     )
-    dashboard = ControllerDashboard(svc, log_service=svc._log_service)
+    dashboard = ControllerDashboard(svc, log_service=log_service)
     return TestClient(dashboard.app), k8s, provider
 
 
@@ -1223,7 +1222,7 @@ def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     )
 
     # Sync to populate ClusterState.
-    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[], tasks_to_kill=[]))
+    provider.sync(DirectProviderBatch(tasks_to_run=[], running_tasks=[]))
 
     resp = client.post(
         "/iris.cluster.ControllerService/GetKubernetesClusterStatus",

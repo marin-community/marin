@@ -31,7 +31,6 @@ from tests.cluster.controller.replay.events import (
     AddEndpoint,
     ApplyDirectProviderUpdates,
     ApplyTaskUpdates,
-    BufferDirectKill,
     CancelJob,
     CancelTasksForTimeout,
     DrainForDirectProvider,
@@ -243,7 +242,6 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
         ApplyTaskUpdates(
             request=HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         ),
@@ -253,7 +251,6 @@ def scenario_register_assign_run_succeed(transitions: ControllerTransitions, clo
         ApplyTaskUpdates(
             request=HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             ),
         ),
@@ -272,7 +269,6 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=task_id,
@@ -291,7 +287,6 @@ def scenario_task_failure_with_retry(transitions: ControllerTransitions, clock: 
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=second_attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             )
         ),
@@ -381,7 +376,6 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_a,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=tasks[0], attempt_id=a0, new_state=job_pb2.TASK_STATE_RUNNING)],
             )
         ),
@@ -391,7 +385,6 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_b,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=tasks[1], attempt_id=a1, new_state=job_pb2.TASK_STATE_RUNNING)],
             )
         ),
@@ -401,7 +394,6 @@ def scenario_coscheduled_failure_retry_bounces_siblings(transitions: ControllerT
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_a,
-                worker_resource_snapshot=None,
                 updates=[
                     TaskUpdate(
                         task_id=tasks[0],
@@ -469,7 +461,6 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
         ApplyTaskUpdates(
             HeartbeatApplyRequest(
                 worker_id=worker_id,
-                worker_resource_snapshot=None,
                 updates=[TaskUpdate(task_id=task_id, attempt_id=attempt, new_state=job_pb2.TASK_STATE_SUCCEEDED)],
             )
         ),
@@ -486,7 +477,6 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
     transitions.prune_old_data(
         job_retention=Duration.from_seconds(0),
         worker_retention=Duration.from_seconds(3600),
-        profile_retention=Duration.from_seconds(3600),
         pause_between_s=0.0,
     )
 
@@ -522,15 +512,7 @@ def scenario_replace_reservation_claims(transitions: ControllerTransitions, cloc
     apply_event(transitions, ReplaceReservationClaims(claims={}))
 
 
-def scenario_buffer_direct_kill(transitions: ControllerTransitions, clock: FrozenClock) -> None:
-    """Buffer a kill request for a direct-provider task."""
-    job_id = _submit(transitions, clock, "buffer-direct")
-    (task_id,) = _task_ids(transitions, job_id)
-    apply_event(transitions, BufferDirectKill(task_id=task_id.to_wire()))
-
-
 SCENARIOS: dict[str, Callable[[ControllerTransitions, FrozenClock], None]] = {
-    "buffer_direct_kill": scenario_buffer_direct_kill,
     "cancel_running_job": scenario_cancel_running_job,
     "coscheduled_failure_retry_bounces_siblings": scenario_coscheduled_failure_retry_bounces_siblings,
     "coscheduled_preempt_retry_bounces_siblings": scenario_coscheduled_preempt_retry_bounces_siblings,
