@@ -174,7 +174,10 @@ message Controller {
     JobQueryScope scope = 1;
     // Required when scope == JOB_QUERY_SCOPE_CHILDREN; ignored otherwise.
     string parent_job_id = 2;
-    // Substring match against job name (case-insensitive).
+    // Substring match against the job's local name (case-insensitive).
+    // Use this for the dashboard "search by name" box; it does NOT anchor and
+    // does NOT match the leading "/user/..." path. For path-prefix filtering
+    // (e.g. "/alice/exp-"), set ``job_id_prefix`` instead.
     string name_filter = 3;
     // Exact state name (e.g. "running"). Empty means all user-visible states.
     string state_filter = 4;
@@ -182,6 +185,10 @@ message Controller {
     SortDirection sort_direction = 6;
     int32 offset = 7;
     int32 limit = 8;  // Max jobs to return (default: 50, max: 500).
+    // Anchored prefix match against the full job_id (wire form, e.g.
+    // "/alice/exp-"). The caller does not need to provide a parseable JobName;
+    // any string is accepted and is matched as ``job_id LIKE '<prefix>%'``.
+    string job_id_prefix = 9;
   }
 
   message ListJobsRequest {

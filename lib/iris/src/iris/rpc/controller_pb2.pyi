@@ -144,7 +144,7 @@ class Controller(_message.Message):
         job_id: str
         def __init__(self, job_id: _Optional[str] = ...) -> None: ...
     class JobQuery(_message.Message):
-        __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit")
+        __slots__ = ("scope", "parent_job_id", "name_filter", "state_filter", "sort_field", "sort_direction", "offset", "limit", "job_id_prefix")
         SCOPE_FIELD_NUMBER: _ClassVar[int]
         PARENT_JOB_ID_FIELD_NUMBER: _ClassVar[int]
         NAME_FILTER_FIELD_NUMBER: _ClassVar[int]
@@ -153,6 +153,7 @@ class Controller(_message.Message):
         SORT_DIRECTION_FIELD_NUMBER: _ClassVar[int]
         OFFSET_FIELD_NUMBER: _ClassVar[int]
         LIMIT_FIELD_NUMBER: _ClassVar[int]
+        JOB_ID_PREFIX_FIELD_NUMBER: _ClassVar[int]
         scope: Controller.JobQueryScope
         parent_job_id: str
         name_filter: str
@@ -161,7 +162,8 @@ class Controller(_message.Message):
         sort_direction: Controller.SortDirection
         offset: int
         limit: int
-        def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
+        job_id_prefix: str
+        def __init__(self, scope: _Optional[_Union[Controller.JobQueryScope, str]] = ..., parent_job_id: _Optional[str] = ..., name_filter: _Optional[str] = ..., state_filter: _Optional[str] = ..., sort_field: _Optional[_Union[Controller.JobSortField, str]] = ..., sort_direction: _Optional[_Union[Controller.SortDirection, str]] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ..., job_id_prefix: _Optional[str] = ...) -> None: ...
     class ListJobsRequest(_message.Message):
         __slots__ = ("query",)
         QUERY_FIELD_NUMBER: _ClassVar[int]

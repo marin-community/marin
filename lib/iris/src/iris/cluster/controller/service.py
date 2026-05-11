@@ -570,6 +570,55 @@ MAX_LIST_JOBS_LIMIT = 500
 MAX_LIST_JOBS_OFFSET = 5000
 MAX_LIST_WORKERS_LIMIT = 1000
 
+# JobStatus carries int32 counter fields (failure_count, preemption_count,
+# task_count, completed_count, task_state_counts values). SQLite SUM aggregates
+# are 64-bit, so a runaway retry counter on a single task row would otherwise
+# blow up proto serialization for the whole page. Clamp at the boundary and
+# log so the underlying corruption surfaces in controller logs.
+_PROTO_INT32_MAX = (1 << 31) - 1
+
+# Substituted for a missing TaskJobSummary so the proto-construction paths can
+# read counter fields uniformly without an ``if summary else 0`` per field.
+# The ``job_id`` is a placeholder — callers feed the *enclosing* JobRow's
+# job_id into ``_clamp_int32`` for diagnostics, never this one.
+_EMPTY_TASK_SUMMARY = TaskJobSummary(job_id=JobName.from_wire("/_/_empty"))
+
+
+def _clamp_int32(value: int, *, job_id: JobName, field: str) -> int:
+    if value > _PROTO_INT32_MAX:
+        logger.warning(
+            "JobStatus.%s for %s overflowed int32 (%d > %d); clamping. "
+            "Investigate the upstream counter — this usually means a task row "
+            "has a corrupted failure_count/preemption_count.",
+            field,
+            job_id.to_wire(),
+            value,
+            _PROTO_INT32_MAX,
+        )
+        return _PROTO_INT32_MAX
+    return value
+
+
+def _job_status_counts(summary: TaskJobSummary | None, job_id: JobName) -> dict[str, Any]:
+    """Return the clamped int32 counter fields for a ``JobStatus``.
+
+    Spread into ``JobStatus(...)`` as ``**_job_status_counts(summary, job_id)``.
+    A ``None`` summary collapses to all-zero counters (no log noise); a real
+    summary runs each field through ``_clamp_int32`` so 64-bit aggregates
+    never trip the proto encoder.
+    """
+    s = summary or _EMPTY_TASK_SUMMARY
+    return {
+        "failure_count": _clamp_int32(s.failure_count, job_id=job_id, field="failure_count"),
+        "preemption_count": _clamp_int32(s.preemption_count, job_id=job_id, field="preemption_count"),
+        "task_count": _clamp_int32(s.task_count, job_id=job_id, field="task_count"),
+        "completed_count": _clamp_int32(s.completed_count, job_id=job_id, field="completed_count"),
+        "task_state_counts": {
+            task_state_friendly(state): _clamp_int32(count, job_id=job_id, field=f"task_state_counts[{state}]")
+            for state, count in s.task_state_counts.items()
+        },
+    }
+
 
 def _filter_and_sort_workers(
     workers: list[WorkerDetailRow],
@@ -657,6 +706,14 @@ def _query_jobs(
     if query.name_filter:
         conditions.append("j.name LIKE ?")
         params.append(f"%{query.name_filter.lower()}%")
+
+    if query.job_id_prefix:
+        # Anchored prefix match against the wire-form job_id. We escape SQL
+        # wildcards in the user-supplied prefix so a stray '%' or '_' cannot
+        # widen the match; ``ESCAPE '\\'`` keeps the trailing '%' literal.
+        escaped = query.job_id_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conditions.append("j.job_id LIKE ? ESCAPE '\\'")
+        params.append(f"{escaped}%")
 
     where_clause = " AND ".join(conditions)
 
@@ -1280,10 +1337,6 @@ class ControllerServiceImpl:
             has_children = bool(_parent_ids_with_children(q, [job.job_id]))
         summary = summaries.get(job.job_id)
 
-        task_state_counts = (
-            {task_state_friendly(state): count for state, count in summary.task_state_counts.items()} if summary else {}
-        )
-
         # Get scheduling diagnostics for pending jobs from cache
         # (populated each scheduling cycle by the controller). The autoscaler
         # hint dict is cached per evaluate() cycle (#4848), so the lookup here
@@ -1305,15 +1358,11 @@ class ControllerServiceImpl:
             state=job.state,
             error=job.error or "",
             exit_code=job.exit_code or 0,
-            failure_count=summary.failure_count if summary else 0,
-            preemption_count=summary.preemption_count if summary else 0,
             name=job.name,
             pending_reason=pending_reason,
-            task_state_counts=task_state_counts,
-            task_count=summary.task_count if summary else 0,
-            completed_count=summary.completed_count if summary else 0,
             resources=resources,
             has_children=has_children,
+            **_job_status_counts(summary, job.job_id),
         )
         if job.started_at:
             proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at))
@@ -1388,13 +1437,6 @@ class ControllerServiceImpl:
         has_children: bool = False,
     ) -> job_pb2.JobStatus:
         """Convert a JobRow + its task summary into a JobStatus proto."""
-        job_name = j.name
-        task_state_counts = (
-            {task_state_friendly(state): count for state, count in task_summary.task_state_counts.items()}
-            if task_summary
-            else {}
-        )
-
         pending_reason = j.error or ""
         if j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
@@ -1409,14 +1451,10 @@ class ControllerServiceImpl:
             state=j.state,
             error=j.error or "",
             exit_code=j.exit_code or 0,
-            failure_count=task_summary.failure_count if task_summary else 0,
-            preemption_count=task_summary.preemption_count if task_summary else 0,
-            name=job_name,
-            task_state_counts=task_state_counts,
-            task_count=task_summary.task_count if task_summary else 0,
-            completed_count=task_summary.completed_count if task_summary else 0,
+            name=j.name,
             pending_reason=pending_reason,
             has_children=has_children,
+            **_job_status_counts(task_summary, j.job_id),
         )
         if j.started_at:
             proto_job.started_at.CopyFrom(timestamp_to_proto(j.started_at))

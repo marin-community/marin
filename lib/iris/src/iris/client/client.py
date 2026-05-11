@@ -719,35 +719,31 @@ class IrisClient:
         self,
         *,
         state: job_pb2.JobState | None = None,
-        prefix: JobName | None = None,
+        prefix: str | None = None,
     ) -> list[job_pb2.JobStatus]:
         """List jobs with optional filtering.
 
-        Filters are pushed down to the server via ``JobQuery`` so the
-        controller does not page-walk its entire jobs table: ``state`` becomes
-        ``state_filter`` and ``prefix`` becomes a ``name_filter`` substring
-        match. The prefix is re-validated client-side because ``name_filter``
-        is a substring, not an anchored prefix.
+        Filters are pushed down to the server via ``JobQuery``: ``state``
+        becomes ``state_filter`` and ``prefix`` becomes ``job_id_prefix``, an
+        anchored prefix match against the wire-form job_id (e.g.
+        ``"/alice/exp-"``). The prefix is passed through verbatim; callers do
+        not need to provide a parseable ``JobName``.
 
         Args:
-            state: If provided, only return jobs in this state
-            prefix: If provided, only return jobs whose JobName starts with this prefix
+            state: If provided, only return jobs in this state.
+            prefix: If provided, only return jobs whose ``job_id`` (wire form,
+                e.g. ``"/alice/foo"``) starts with this string.
 
         Returns:
-            List of JobStatus matching the filters
+            List of JobStatus matching the filters.
         """
         query = controller_pb2.Controller.JobQuery()
         if state is not None:
             query.state_filter = job_state_friendly(state)
-        if prefix is not None:
-            query.name_filter = prefix.to_wire()
+        if prefix:
+            query.job_id_prefix = prefix
 
-        all_jobs = self._cluster_client.list_jobs(query=query)
-        if prefix is None:
-            return list(all_jobs)
-
-        prefix_wire = prefix.to_wire()
-        return [job for job in all_jobs if JobName.from_wire(job.job_id).to_wire().startswith(prefix_wire)]
+        return list(self._cluster_client.list_jobs(query=query))
 
     def terminate_prefix(
         self,
@@ -764,7 +760,7 @@ class IrisClient:
         Returns:
             List of job IDs that were terminated
         """
-        jobs = self.list_jobs(prefix=prefix)
+        jobs = self.list_jobs(prefix=prefix.to_wire())
         terminated = []
         for job in jobs:
             if exclude_finished and is_job_finished(job.state):

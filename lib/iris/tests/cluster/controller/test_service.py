@@ -18,12 +18,14 @@ from finelog.server import LogServiceImpl
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.db import TaskJobSummary
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
     MAX_LIST_JOBS_OFFSET,
     ControllerServiceImpl,
     _check_client_freshness,
+    _job_status_counts,
 )
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -1025,16 +1027,89 @@ def test_list_jobs_state_filter(service):
     assert response.jobs[0].state == job_pb2.JOB_STATE_KILLED
 
 
-def test_list_jobs_name_filter(service):
-    """Name filter returns only matching jobs."""
+_INT32_MAX = (1 << 31) - 1
+
+
+@pytest.mark.parametrize(
+    "query_kwargs,expected_job_ids",
+    [
+        # name_filter is a case-insensitive substring on the stored job name.
+        pytest.param({"name_filter": "alpha"}, {"/test-user/alpha-job"}, id="name_filter_substring"),
+        # job_id_prefix anchors on the full wire-form job_id, so the user
+        # segment must be part of the prefix.
+        pytest.param(
+            {"job_id_prefix": "/test-user/alpha"},
+            {"/test-user/alpha-job"},
+            id="job_id_prefix_matches_user_and_name",
+        ),
+        # The bare "%" in a prefix must be treated literally; without escaping
+        # this would degenerate into "LIKE '%a%'" and match every job.
+        pytest.param({"job_id_prefix": "%a"}, set(), id="job_id_prefix_escapes_sql_wildcards"),
+        # A prefix anchored to a path that doesn't exist returns nothing even
+        # when the substring appears elsewhere in some id.
+        pytest.param({"job_id_prefix": "/test-user/zzz"}, set(), id="job_id_prefix_no_match"),
+    ],
+)
+def test_list_jobs_filter(service, query_kwargs, expected_job_ids):
+    """ListJobs supports two distinct filter shapes — verify both end-to-end."""
     service.launch_job(make_job_request("alpha-job"), None)
     service.launch_job(make_job_request("beta-job"), None)
 
-    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="alpha"))
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(**query_kwargs),
+    )
     response = service.list_jobs(request, None)
 
-    assert len(response.jobs) == 1
-    assert "alpha" in response.jobs[0].name.lower()
+    assert {j.job_id for j in response.jobs} == expected_job_ids
+
+
+@pytest.mark.parametrize(
+    "summary,expected,expect_warning",
+    [
+        pytest.param(
+            None,
+            {
+                "failure_count": 0,
+                "preemption_count": 0,
+                "task_count": 0,
+                "completed_count": 0,
+                "task_state_counts": {},
+            },
+            False,
+            id="none_summary_zero_fill",
+        ),
+        pytest.param(
+            TaskJobSummary(
+                job_id=JobName.from_wire("/alice/runaway"),
+                # 6_442_450_944 is the literal value from the prod stack trace
+                # (3 * 2^31). Mixing in one in-range value confirms we only
+                # touch the overflowing fields.
+                task_count=_INT32_MAX + 5,
+                completed_count=10,
+                failure_count=6_442_450_944,
+                preemption_count=_INT32_MAX + 1,
+                task_state_counts={job_pb2.TASK_STATE_FAILED: _INT32_MAX + 7},
+            ),
+            {
+                "failure_count": _INT32_MAX,
+                "preemption_count": _INT32_MAX,
+                "task_count": _INT32_MAX,
+                "completed_count": 10,
+                "task_state_counts": {"failed": _INT32_MAX},
+            },
+            True,
+            id="clamps_overflowing_counters",
+        ),
+    ],
+)
+def test_job_status_counts(summary, expected, expect_warning, caplog):
+    """``_job_status_counts`` clamps int32 overflow + handles missing summary."""
+    job_id = JobName.from_wire("/alice/runaway")
+    with caplog.at_level("WARNING", logger="iris.cluster.controller.service"):
+        out = _job_status_counts(summary, job_id)
+    assert out == expected
+    has_warning = any("/alice/runaway" in rec.getMessage() for rec in caplog.records)
+    assert has_warning is expect_warning
 
 
 def test_list_jobs_all_scope_includes_descendants(service, state):
