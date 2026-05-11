@@ -1054,31 +1054,18 @@ class ZephyrCoordinator:
                 self._plan_stages = list(plan.stages)
 
             for stage_idx, stage in enumerate(plan.stages):
-                stage_label = f"stage{stage_idx}-{stage.stage_name(max_length=40)}"
-
                 if stage.stage_type == StageType.RESHARD:
                     shards = _reshard_refs(shards, stage.output_shards or len(shards))
                     continue
 
-                # Compute aux data for joins
                 aux_per_shard = self._compute_join_aux(stage.operations, shards, stage_idx)
-
-                # Build and submit tasks
-                tasks = _compute_tasks_from_shards(shards, stage, stage_name=stage_label, aux_per_shard=aux_per_shard)
-                logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
-                self._start_stage(stage_label, stage_idx, tasks, is_last_stage=(stage_idx == last_worker_stage_idx))
-
-                # Wait for stage completion
-                self._wait_for_stage()
-
-                # Collect and regroup results for next stage
-                result_refs = self._collect_results()
-                stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
-                shards = _regroup_result_refs(
-                    result_refs,
-                    len(shards),
-                    output_shard_count=stage.output_shards,
-                    is_scatter=stage_is_scatter,
+                shards = self._run_worker_stage(
+                    stage,
+                    shards,
+                    stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
+                    stage_index_for_state=stage_idx,
+                    aux_per_shard=aux_per_shard,
+                    is_last_stage=(stage_idx == last_worker_stage_idx),
                 )
 
             # Flatten final results — each shard may involve I/O (unpickling from
@@ -1097,6 +1084,35 @@ class ZephyrCoordinator:
         finally:
             with self._lock:
                 self._pipeline_running = False
+
+    def _run_worker_stage(
+        self,
+        stage: PhysicalStage,
+        shards: list[Shard],
+        *,
+        stage_label: str,
+        stage_index_for_state: int,
+        aux_per_shard: list[dict[int, Shard]] | None = None,
+        is_last_stage: bool = False,
+    ) -> list[Shard]:
+        """Submit a worker stage, wait for completion, return regrouped output shards.
+
+        ``stage_index_for_state`` is the index reported in coordinator state for
+        UI/logging — for join right-sub-stages this is the *parent* stage index
+        so progress reports stay attached to the user-visible stage.
+        """
+        tasks = _compute_tasks_from_shards(shards, stage, stage_name=stage_label, aux_per_shard=aux_per_shard)
+        logger.info("[%s] Starting stage %s with %d tasks", self._execution_id, stage_label, len(tasks))
+        self._start_stage(stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
+        self._wait_for_stage()
+        result_refs = self._collect_results()
+        stage_is_scatter = any(isinstance(op, Scatter) for op in stage.operations)
+        return _regroup_result_refs(
+            result_refs,
+            len(shards),
+            output_shard_count=stage.output_shards,
+            is_scatter=stage_is_scatter,
+        )
 
     def _compute_join_aux(
         self,
@@ -1118,17 +1134,11 @@ class ZephyrCoordinator:
                     right_refs = _reshard_refs(right_refs, right_stage.output_shards or len(right_refs))
                     continue
 
-                join_stage_label = f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}"
-                right_tasks = _compute_tasks_from_shards(right_refs, right_stage, stage_name=join_stage_label)
-                self._start_stage(join_stage_label, parent_stage_idx, right_tasks)
-                self._wait_for_stage()
-                raw = self._collect_results()
-                right_is_scatter = any(isinstance(op, Scatter) for op in right_stage.operations)
-                right_refs = _regroup_result_refs(
-                    raw,
-                    len(right_refs),
-                    output_shard_count=right_stage.output_shards,
-                    is_scatter=right_is_scatter,
+                right_refs = self._run_worker_stage(
+                    right_stage,
+                    right_refs,
+                    stage_label=f"join-right-{parent_stage_idx}-{i}-stage{stage_idx}",
+                    stage_index_for_state=parent_stage_idx,
                 )
 
             if len(shard_refs) != len(right_refs):
@@ -1210,8 +1220,6 @@ class ZephyrWorker:
 
         self._coordinator = coordinator_handle
         self._shutdown_event = threading.Event()
-        self._chunk_prefix: str = ""
-        self._execution_id: str = ""
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, int] = {}
         # Each worker owns its runner instance; the heartbeat thread polls
@@ -1455,8 +1463,6 @@ class ZephyrWorker:
         """
         chunk_prefix = config["chunk_prefix"]
         execution_id = config["execution_id"]
-        self._chunk_prefix = chunk_prefix
-        self._execution_id = execution_id
 
         logger.info(
             "[%s] [shard %d/%d] Starting stage=%s, %d ops",
