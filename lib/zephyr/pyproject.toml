@@ -24,6 +24,7 @@ dependencies = [
     "tqdm-loggable>=0.2",
     "vortex-data>=0.61.0",
     "xxhash>=3.4",
+    "polars>=1.40.1",
 ]
 
 [dependency-groups]

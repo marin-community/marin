@@ -7,22 +7,26 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
-import msgspec
-import pyarrow as pa
-from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge, in_memory_k_way_merge
+from collections import OrderedDict
+
+import polars as pl
+from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, _dataframe_to_items, external_sort_merge
 from zephyr.shuffle import (
     _SORT_KEY_COL,
     ScatterReader,
     ScatterWriter,
-    _batches_to_items,
-    _items_to_record_batch,
+    _items_to_dataframe,
     _write_scatter,
     deterministic_hash,
 )
 
 
 def _read_shard(shard: ScatterReader) -> list:
-    return list(_batches_to_items(shard.get_iterators()))
+    frames = list(shard.get_iterators())
+    if not frames:
+        return []
+    combined = pl.concat([f.collect() for f in frames], how="diagonal_relaxed")
+    return list(_dataframe_to_items(combined))
 
 
 def _key(item):
@@ -86,8 +90,8 @@ def test_scatter_roundtrip_sorted_chunks(tmp_path):
 
     for shard_idx in range(2):
         shard = ScatterReader.from_sidecars(scatter_paths, shard_idx)
-        for batch in shard.get_iterators():
-            chunk = list(_batches_to_items([batch]))
+        for lf in shard.get_iterators():
+            chunk = list(_dataframe_to_items(lf.collect()))
             keys = [_key(x) for x in chunk]
             assert keys == sorted(keys), f"chunk for shard {shard_idx} not sorted"
 
@@ -123,7 +127,8 @@ def test_max_chunk_rows_per_shard(tmp_path):
 def test_needs_external_sort_triggers(tmp_path):
     fake_path = str(tmp_path / "fake.shuffle")
     shard = ScatterReader(
-        files=[(fake_path, tuple((i, 1) for i in range(1000)))],
+        files=[(fake_path, 1000)],
+        target_shard=0,
         max_chunk_rows=1000,
         avg_item_bytes=1000.0,
     )
@@ -139,7 +144,7 @@ def test_needs_external_sort_below_threshold(tmp_path):
 
 
 def test_needs_external_sort_empty_shard():
-    shard = ScatterReader(files=[], max_chunk_rows=100_000, avg_item_bytes=200.0)
+    shard = ScatterReader(files=[], target_shard=0, max_chunk_rows=100_000, avg_item_bytes=200.0)
     assert not shard.needs_external_sort(memory_limit=32 * 1024**3)
 
 
@@ -166,8 +171,8 @@ def test_merge_sorted_chunks_basic(tmp_path):
     # Force two chunks by writing twice
     data_path = str(tmp_path / "shard-0000.shuffle")
     writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=1)
-    writer.write(_items_to_record_batch(items[:2], _key, None, 1))
-    writer.write(_items_to_record_batch(items[2:], _key, None, 1))
+    writer.write(_items_to_dataframe(items[:2], _key, None, 1))
+    writer.write(_items_to_dataframe(items[2:], _key, None, 1))
     scatter_paths = list(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
@@ -187,8 +192,8 @@ def test_merge_sorted_chunks_secondary_sort(tmp_path):
     # Write as two separate chunks
     data_path = str(tmp_path / "shard-0000.shuffle")
     writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=1)
-    writer.write(_items_to_record_batch([items[0]], _key, lambda x: x["ts"], 1))
-    writer.write(_items_to_record_batch([items[1]], _key, lambda x: x["ts"], 1))
+    writer.write(_items_to_dataframe([items[0]], _key, lambda x: x["ts"], 1))
+    writer.write(_items_to_dataframe([items[1]], _key, lambda x: x["ts"], 1))
     scatter_paths = list(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
@@ -211,7 +216,7 @@ def test_scatter_with_combiner(tmp_path):
 
     data_path = str(tmp_path / "shard-0000.shuffle")
     writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=1, combiner_fn=sum_combiner)
-    writer.write(_items_to_record_batch(items, _key, None, 1))
+    writer.write(_items_to_dataframe(items, _key, None, 1))
     scatter_paths = list(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
@@ -231,7 +236,7 @@ def test_merge_sorted_chunks_external_trigger(tmp_path):
     # Write many small chunks
     writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=1)
     for i in range(10):
-        writer.write(_items_to_record_batch([items[i]], _key, None, 1))
+        writer.write(_items_to_dataframe([items[i]], _key, None, 1))
     scatter_paths = list(writer.close())
 
     shard = ScatterReader.from_sidecars(scatter_paths, 0)
@@ -328,7 +333,7 @@ def test_scatter_byte_budget_flushes_mid_write(tmp_path):
     )
     batch_size = 10
     for i in range(0, len(items), batch_size):
-        batch = _items_to_record_batch(items[i : i + batch_size], _key, None, num_shards)
+        batch = _items_to_dataframe(items[i : i + batch_size], _key, None, num_shards)
         writer.write(batch)
     writer.close()
 
@@ -360,9 +365,9 @@ def test_scatter_estimate_tracks_skewed_items(tmp_path):
     )
     # Write small items as one batch, large items one-at-a-time so EMA adapts
     # after each large item (same closed-loop behavior as the old per-item path).
-    writer.write(_items_to_record_batch(small_items, _key, None, num_shards))
+    writer.write(_items_to_dataframe(small_items, _key, None, num_shards))
     for item in large_items:
-        writer.write(_items_to_record_batch([item], _key, None, num_shards))
+        writer.write(_items_to_dataframe([item], _key, None, num_shards))
     writer.close()
 
     # All items must survive the skewed flush pattern.
@@ -399,7 +404,7 @@ def test_scatter_estimate_adapts_to_gradual_drift(tmp_path):
     # Write in small batches so EMA has chances to adapt as item sizes grow.
     batch_size = 10
     for i in range(0, n_items, batch_size):
-        batch = _items_to_record_batch(items[i : i + batch_size], _key, None, num_shards)
+        batch = _items_to_dataframe(items[i : i + batch_size], _key, None, num_shards)
         writer.write(batch)
     writer.close()
 
@@ -437,47 +442,65 @@ def test_scatter_byte_budget_preserves_all_items(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _make_sorted_batch(values: list[int]) -> pa.RecordBatch:
-    """Build a RecordBatch sorted by _SORT_KEY_COL for use in external sort tests."""
-    sort_keys = [msgspec.msgpack.encode(v, order="deterministic") for v in values]
-    return pa.record_batch(
-        {"v": pa.array(values, type=pa.int64()), _SORT_KEY_COL: pa.array(sort_keys, type=pa.binary())}
-    )
+def _make_sorted_frame(values: list[int]) -> pl.LazyFrame:
+    """Build a sorted LazyFrame by _SORT_KEY_COL for use in external sort tests."""
+    return pl.DataFrame(
+        {"v": values, _SORT_KEY_COL: [OrderedDict([("key", v), ("sort_value", None)]) for v in values]}
+    ).lazy()
 
 
 def test_external_sort_merge_streaming(tmp_path):
-    batches = [_make_sorted_batch([1, 4, 7]), _make_sorted_batch([2, 5, 8]), _make_sorted_batch([3, 6, 9])]
-    rows = list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
+    frames = [_make_sorted_frame([1, 4, 7]), _make_sorted_frame([2, 5, 8]), _make_sorted_frame([3, 6, 9])]
+    rows = list(external_sort_merge(iter(frames), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
     result = [row["v"] for row in rows]
     assert result == list(range(1, 10))
 
 
 def test_external_sort_merge_single_batch(tmp_path):
-    batches = [_make_sorted_batch([i]) for i in range(10)]
-    rows = list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
+    frames = [_make_sorted_frame([i]) for i in range(10)]
+    rows = list(external_sort_merge(iter(frames), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
     result = [row["v"] for row in rows]
     assert result == list(range(10))
 
 
 def test_external_sort_merge_cleans_up(tmp_path):
-    batches = [_make_sorted_batch([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
-    list(external_sort_merge(iter(batches), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
+    frames = [_make_sorted_frame([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
+    list(external_sort_merge(iter(frames), sort_key=_SORT_KEY_COL, external_sort_dir=str(tmp_path)))
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
 
 
-def test_k_way_merge_promotes_null_column_with_int64():
-    """``null`` vs ``int64`` across batches must unify (from_pylist pinned null early)."""
-    sort_keys_a = [msgspec.msgpack.encode(v, order="deterministic") for v in [1, 3]]
-    batch_a = pa.record_batch(
-        {"v": pa.array([None, None], type=pa.null()), _SORT_KEY_COL: pa.array(sort_keys_a, type=pa.binary())}
+def test_external_sort_multi_chunk_source_shard(tmp_path):
+    """external_sort_merge merges interleaved chunks from the same source shard correctly.
+    """
+    data_path = str(tmp_path / "shard-0000.shuffle")
+    # buffer_limit_bytes=1 forces a flush after every write() call.
+    writer = ScatterWriter(
+        data_path=data_path,
+        key_fn=_key,
+        num_output_shards=1,
+        buffer_limit_bytes=1,
     )
-    sort_keys_b = [msgspec.msgpack.encode(v, order="deterministic") for v in [2, 4]]
-    batch_b = pa.record_batch(
-        {"v": pa.array([2, 4], type=pa.int64()), _SORT_KEY_COL: pa.array(sort_keys_b, type=pa.binary())}
+    # Flush 1 → chunk-0 sorted: [key=1, key=3]
+    writer.write(_items_to_dataframe([{"k": 3, "v": "a"}, {"k": 1, "v": "b"}], _key, None, 1))
+    # Flush 2 → chunk-1 sorted: [key=2]
+    # Interleaved ranges: bundling both into one scan_parquet gives [1, 3, 2], not [1, 2, 3].
+    writer.write(_items_to_dataframe([{"k": 2, "v": "c"}], _key, None, 1))
+    writer.close()
+
+    shard = ScatterReader.from_sidecars([data_path], target_shard=0)
+    assert shard.total_chunks >= 2, "test requires multiple chunks; flush did not fire"
+
+    external_dir = tmp_path / "sort_work"
+    external_dir.mkdir()
+
+    rows = list(
+        external_sort_merge(
+            shard.get_iterators(),
+            sort_key=_SORT_KEY_COL,
+            external_sort_dir=str(external_dir),
+        )
     )
-    merged = list(in_memory_k_way_merge(iter([batch_a, batch_b]), key=_SORT_KEY_COL))
-    values = [v for b in merged for v in b.column("v").to_pylist()]
-    assert values == [None, 2, None, 4]
+    assert [r["k"] for r in rows] == [1, 2, 3]
 
 
 def test_mixed_schema_corruption(tmp_path):
@@ -492,15 +515,17 @@ def test_mixed_schema_corruption(tmp_path):
     writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=num_shards)
 
     friendly_items = [{"k": 1, "v": i} for i in range(5)]
-    writer.write(_items_to_record_batch(friendly_items, _key, None, num_shards))
+    writer.write(_items_to_dataframe(friendly_items, _key, None, num_shards))
 
     hostile_items = [{"k": 1, "v": frozenset([1, 2, 3])}]
-    writer.write(_items_to_record_batch(hostile_items, _key, None, num_shards))
+    writer.write(_items_to_dataframe(hostile_items, _key, None, num_shards))
 
     writer.close()
 
     reader = ScatterReader.from_sidecars([data_path], target_shard=0)
-    recovered = list(_batches_to_items(reader.get_iterators()))
+    frames = list(reader.get_iterators())
+    combined = pl.concat([f.collect() for f in frames], how="diagonal_relaxed")
+    recovered = list(_dataframe_to_items(combined))
 
     expected = friendly_items + hostile_items
     assert recovered == expected
@@ -521,15 +546,17 @@ def test_mixed_schema_with_combiner(tmp_path):
     writer = ScatterWriter(data_path=data_path, key_fn=_key, num_output_shards=num_shards, combiner_fn=_combiner)
 
     friendly_items = [{"k": 1, "v": i} for i in range(5)]
-    writer.write(_items_to_record_batch(friendly_items, _key, None, num_shards))
+    writer.write(_items_to_dataframe(friendly_items, _key, None, num_shards))
 
     hostile_items = [{"k": 1, "v": frozenset([1, 2, 3])}]
-    writer.write(_items_to_record_batch(hostile_items, _key, None, num_shards))
+    writer.write(_items_to_dataframe(hostile_items, _key, None, num_shards))
 
     writer.close()
 
     reader = ScatterReader.from_sidecars([data_path], target_shard=0)
-    recovered = list(_batches_to_items(reader.get_iterators()))
+    frames = list(reader.get_iterators())
+    combined = pl.concat([f.collect() for f in frames], how="diagonal_relaxed")
+    recovered = list(_dataframe_to_items(combined))
 
     expected = friendly_items + hostile_items
     assert recovered == expected
