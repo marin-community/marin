@@ -1,39 +1,51 @@
 # Logbook: MuonH paired-experts sweep
 
 Variant of the MuonH matrix sweep where Newton-Schulz iteration runs on
-**pairs of experts** instead of one expert at a time. For each 3D expert
-weight `(E, A, B)` we reshape to `(E // 2, 2 * A, B)` before NS — so a
-layer's MLP runs **32 NS instances instead of 64**.
+**pairs of experts** instead of one expert at a time, and the standard
+``w_gate_up`` MoE param is **split** into separate ``w_gate`` and
+``w_up`` tensors (concatenated only on the forward pass into the kernel).
 
-Motivation: with Grug MoE defaults (E=64, `intermediate_dim = d / 2`),
-the per-expert `w_down` is `(i, d) = (d/2, d)` — a 1:2 rectangle. Pairing
-makes the resulting matrix `(d, d)` — square. NS converges fastest on
-square matrices, so we should get cleaner orthogonalization with half
-the per-layer NS overhead. Per-expert `w_gate_up` was already square
-`(d, d)`; after pairing it becomes `(d, 2d)`, a 1:2 rectangle (still a
-relatively benign aspect ratio for NS).
+Combined effect: with Grug MoE defaults (E=64, `intermediate_dim = d / 2`),
+the paired NS matrices for ``w_gate``, ``w_up``, and ``w_down`` are all
+square ``(d, d)``. NS converges fastest on square matrices.
+
+Counts per MLP layer:
+
+|                              | per-expert MuonH (concat'd ``w_gate_up``) | paired MuonH (split + pair) |
+| ---------------------------- | ----------------------------------------- | ---------------------------- |
+| NS ops on ``w_gate_up`` / split gate+up | 64 (one ``(d, d)`` each)         | 32 + 32 (two ``(d, d)`` each)|
+| NS ops on ``w_down``         | 64 (one ``(d/2, d)`` each, 1:2 aspect)    | 32 (one ``(d, d)`` each)     |
+| total NS ops                 | 128                                       | 96                           |
+| matrix aspect                | gate_up square, down 1:2                  | all square                   |
 
 ## Implementation
 
-Single change in `experiments/grug/moe/optimizer.py`:
+Two changes:
 
-- New helpers `_pair_3d_leading` and `_unpair_to_original` reshape
-  3D expert arrays in / out of the paired layout.
-- New transform `scale_with_grug_muonh_paired` runs `_grug_scale_with_muon`
-  in the paired space (momentum buffer + hyperball normalization both
-  live there), then unpairs the result back to `(E, A, B)` so the trainer
-  can apply the update.
-- New config `GrugMoeMuonHPairedConfig` mirrors `GrugMoeMuonHConfig` but
-  swaps the muonh transform for the paired one. Mask logic is identical
-  (matrix leaves -> `muonh_paired`, lm head -> `adamh`, rest -> `adam`).
-- New sweep launcher `experiments/grug/moe/muonh_paired_sweep.py`. Same
-  gate points and surface as the original MuonH sweep but with run-id
-  prefix `muonh-paired-*` and wandb group `muonh-paired-sweep`.
+1. `experiments/grug/moe/model.py` (`MoEMLP`): store ``w_gate`` and
+   ``w_up`` as separate ``(E, d, i)`` tensors. Concatenate to ``(E, d, 2i)``
+   on the forward pass before handing to ``moe_mlp``. Random init is
+   identical to the concat'd version (same keys, same `_init_weight`
+   calls), so the model is mathematically identical at init time.
+2. `experiments/grug/moe/optimizer.py`: new helpers `_pair_axis`,
+   `_pair_3d_leading`, `_unpair_to_original`. The pair-axis chooser
+   picks whichever of `(A, B)` is smaller so the resulting NS matrix is
+   most-square. New `scale_with_grug_muonh_paired` runs
+   `_grug_scale_with_muon` in paired space (momentum + hyperball
+   normalization both there). New `GrugMoeMuonHPairedConfig` mirrors
+   `GrugMoeMuonHConfig` with the paired transform swapped in. Mask
+   logic is identical (matrix leaves -> `muonh_paired`, lm head ->
+   `adamh`, rest -> `adam`).
 
-Hyperball normalization runs in **paired space** — each pair is treated
-as one matrix for norm preservation. This means w_down's update
-magnitude is computed across both paired experts together (single Fro
-norm over the `(d, d)` block), not per-expert.
+New launcher `experiments/grug/moe/muonh_paired_sweep.py` mirrors
+`muonh_matrix_sweep.py` but with run-id prefix `muonh-paired-*` and
+wandb group `muonh-paired-sweep`. Gate via `MUONH_PAIRED_GATE`,
+relaunch suffix via `MUONH_PAIRED_RUN_SUFFIX`.
+
+Tests cover pair/unpair along either axis, paired momentum buffer
+shape, paired end-to-end update shape preservation, mask routing, and
+sweep step naming. All 19 tests in `tests/test_grug_moe_optimizer.py`
+pass.
 
 ## Gate 1 run
 
@@ -50,17 +62,20 @@ norm over the `(d, d)` block), not per-expert.
   - d512: paloma_macro = 3.8104, 405,630 tok/s, 0.6h
   - d768: paloma_macro = 3.4339, 273,532 tok/s, 2.8h
 
-Comparison metric: effective speedup at the baseline's macro_loss target
-(see `agent.md`). Pass = speedup > 1 at both scales.
+Pass = effective speedup > 1 at both scales.
 
 ## Notes / caveats
 
+- Splitting `w_gate_up` changes how AdamH on this branch's model would
+  treat that param (per-tensor norm vs concat'd-tensor norm). The
+  baseline AdamH README runs were trained with the concat'd storage, so
+  use the README numbers directly as the comparison target — don't
+  re-run a "split-storage AdamH" baseline on this branch.
 - NS scaling factor inside `_grug_scale_with_muon` is
-  `sqrt(max(1, fan_out / fan_in))`. For paired `w_down` (d, d) this is 1
-  (down from `sqrt(2)` for original `(d/2, d)`); for paired `w_gate_up`
-  (d, 2d) this is also 1 (down from 1 for `(d, d)`). Net effect: paired
-  `w_down` updates are ~`sqrt(2)` smaller in magnitude than per-expert,
-  paired `w_gate_up` unchanged.
+  `sqrt(max(1, fan_out / fan_in))`. For all three paired matrices ``(d, d)``
+  this is 1. Per-expert reference: `w_gate_up (d, d)` had scale 1;
+  `w_down (d/2, d)` had `sqrt(2) ≈ 1.41`. So paired `w_down` updates
+  are smaller in magnitude than per-expert by `sqrt(2)`. LR sweep can
+  compensate if needed.
 - Pairs adjacent experts by index (no rotation, no learned grouping).
-  Sensible because expert ordering is arbitrary; QB routing balances the
-  load across experts regardless of which pair they fall in.
+  QB routing balances expert load regardless of pair index.

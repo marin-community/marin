@@ -135,23 +135,55 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def _pair_3d_leading(x):
-    """Reshape ``(E, A, B)`` -> ``(E // 2, 2 * A, B)`` for 3D expert arrays.
+def _pair_axis(shape: tuple[int, ...]) -> int | None:
+    """Choose which non-leading axis to pair along to maximize squareness.
 
-    Used to halve the number of NS instances per layer: instead of 64
-    independent (A, B) matrix orthogonalizations, we run 32 (2A, B)
-    orthogonalizations. With Grug MoE's ``w_down`` shape ``(E, i, d)`` and
-    the heuristic ``intermediate_dim = d / 2``, the paired shape becomes
-    ``(d, d)`` — square. ``w_gate_up`` paired shape is ``(d, 2d)``.
+    For a 3D ``(E, A, B)`` expert tensor we pair adjacent experts and stack
+    their matrices into one larger matrix that NS then orthogonalizes. We
+    want the resulting matrix to be as close to square as possible, so we
+    pair along whichever non-leading axis is smaller (since doubling the
+    smaller one moves us toward equal axes).
 
-    Falls through unchanged for non-3D arrays or odd ``E``.
+    Returns the chosen axis index (1 or 2), or ``None`` if ``shape`` is not
+    a paired-able 3D shape (e.g. odd leading dim).
     """
-    if not hasattr(x, "ndim") or x.ndim != 3:
+    if len(shape) != 3:
+        return None
+    E, A, B = shape
+    if E % 2 != 0:
+        return None
+    return 1 if A <= B else 2
+
+
+def _pair_3d_leading(x):
+    """Reshape a 3D expert array so adjacent experts share one NS op.
+
+    For ``(E, A, B)`` we pair along whichever of ``A`` and ``B`` is the
+    smaller (intermediate) dimension — doubling the smaller axis pushes the
+    resulting matrix toward a square aspect, which is where NS converges
+    fastest. Concretely, with the split-storage Grug MoE recipe (E=64,
+    ``intermediate_dim = d / 2``):
+
+    - ``w_gate`` / ``w_up`` shape ``(E, d, i)`` -> pair along axis 2:
+      ``(E // 2, d, 2 * i) = (32, d, d)``.
+    - ``w_down`` shape ``(E, i, d)`` -> pair along axis 1:
+      ``(E // 2, 2 * i, d) = (32, d, d)``.
+
+    All three are square per pair. Falls through unchanged for non-3D
+    arrays or odd ``E``.
+    """
+    if not hasattr(x, "shape") or len(x.shape) != 3:
+        return x
+    axis = _pair_axis(x.shape)
+    if axis is None:
         return x
     E, A, B = x.shape
-    if E % 2 != 0:
-        return x
-    return x.reshape(E // 2, 2 * A, B)
+    if axis == 1:
+        return x.reshape(E // 2, 2 * A, B)
+    # axis == 2: interleave adjacent experts along the trailing axis.
+    # Reshape (E, A, B) -> (E // 2, 2, A, B), transpose to (E // 2, A, 2, B),
+    # then flatten the last two axes to (E // 2, A, 2 * B).
+    return x.reshape(E // 2, 2, A, B).transpose(0, 2, 1, 3).reshape(E // 2, A, 2 * B)
 
 
 def _unpair_to_original(x_paired, original):
@@ -161,12 +193,16 @@ def _unpair_to_original(x_paired, original):
     parameter or update); we reuse its shape to drive the reshape so
     non-3D leaves pass through.
     """
-    if not hasattr(original, "ndim") or original.ndim != 3:
+    if not hasattr(original, "shape") or len(original.shape) != 3:
+        return x_paired
+    axis = _pair_axis(original.shape)
+    if axis is None:
         return x_paired
     E, A, B = original.shape
-    if E % 2 != 0:
-        return x_paired
-    return x_paired.reshape(E, A, B)
+    if axis == 1:
+        return x_paired.reshape(E, A, B)
+    # axis == 2: reverse the interleave from _pair_3d_leading.
+    return x_paired.reshape(E // 2, A, 2, B).transpose(0, 2, 1, 3).reshape(E, A, B)
 
 
 def scale_with_grug_muonh_paired(
@@ -177,16 +213,19 @@ def scale_with_grug_muonh_paired(
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
 ) -> optax.GradientTransformation:
-    """MuonH on PAIRED expert MLPs: 32 NS instances per layer instead of 64.
+    """MuonH on PAIRED expert MLPs: 32 NS instances per 3D leaf instead of 64.
 
     Same surface as ``scale_with_grug_muonh`` but each 3D ``(E, A, B)``
-    leaf is reshaped to ``(E // 2, 2 * A, B)`` before the NS iteration and
-    reshaped back afterwards. Momentum and hyperball normalization both
-    live in the paired space (so each pair is treated as one matrix for
-    norm preservation, not 2). 2D leaves are unaffected.
+    leaf is reshaped before NS so that adjacent experts share a single
+    NS op. Pairing is along whichever of ``A`` / ``B`` is smaller (see
+    ``_pair_axis``). Momentum and hyperball normalization both live in
+    the paired space (so each pair is treated as one matrix for norm
+    preservation). 2D leaves are unaffected.
 
-    At Grug MoE defaults (E=64, intermediate_dim=d/2) the paired
-    ``w_down`` is square ``(d, d)``; ``w_gate_up`` is ``(d, 2d)``.
+    At Grug MoE defaults (E=64, intermediate_dim=d/2) and split-storage
+    ``w_gate`` / ``w_up`` (shape ``(E, d, i)`` each), the paired NS
+    matrices for ``w_gate``, ``w_up``, and ``w_down`` are all square
+    ``(d, d)``.
     """
     inner = _grug_scale_with_muon(
         momentum=momentum,
@@ -477,10 +516,13 @@ class GrugMoeMuonHPairedConfig(OptimizerConfig):
     - ``adam``: leaves that the AdamH baseline routes to Adam
 
     The only difference vs. :class:`GrugMoeMuonHConfig` is the NS layout:
-    3D expert tensors ``(E, A, B)`` are reshaped to ``(E // 2, 2 * A, B)``
-    before NS. With Grug MoE defaults (E=64, intermediate_dim=d/2), the
-    paired ``w_down`` is square ``(d, d)`` and the paired ``w_gate_up`` is
-    ``(d, 2d)``. Each layer's MLP now runs 32 NS instances instead of 64.
+    3D expert tensors ``(E, A, B)`` are reshaped to pair adjacent experts
+    before NS (see :func:`_pair_3d_leading`). With Grug MoE defaults
+    (E=64, intermediate_dim=d/2) and split-storage MLP weights, paired
+    ``w_gate``, ``w_up``, and ``w_down`` are all square ``(d, d)``. Each
+    layer's MLP runs 96 NS instances (32 per 3D leaf x 3 leaves) instead
+    of the 128 the per-expert baseline runs (64 per 3D leaf x 2 leaves
+    with concat'd ``w_gate_up``).
     """
 
     adam_lr: float = 6e-4

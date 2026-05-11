@@ -4,11 +4,17 @@
 """MuonH paired-experts sweep across the compute-optimal MoE gate points.
 
 Variant of ``muonh_matrix_sweep.py`` where Muon's Newton-Schulz iteration
-runs on **pairs of experts** instead of one expert at a time. For each
-3D expert tensor ``(E, A, B)`` we reshape to ``(E // 2, 2 * A, B)`` before
-NS, so a layer's MLP now runs **32 NS instances instead of 64**. With
-Grug MoE defaults (E=64, ``intermediate_dim = d / 2``), the paired
-``w_down`` is square ``(d, d)``; the paired ``w_gate_up`` is ``(d, 2d)``.
+runs on **pairs of experts** instead of one expert at a time. Each 3D
+expert tensor ``(E, A, B)`` is reshaped before NS to pair adjacent
+experts along its **smaller** non-leading axis, so the resulting NS
+matrix is as close to square as possible — and so the per-3D-leaf NS
+count drops from 64 to 32.
+
+This sweep also splits the standard ``w_gate_up`` MoE parameter into
+separate ``w_gate`` and ``w_up`` tensors (concatenated only on the
+forward pass before entering the MoE kernel). With Grug MoE defaults
+(E=64, ``intermediate_dim = d / 2``), the paired NS matrices for
+``w_gate``, ``w_up``, and ``w_down`` are all square ``(d, d)`` per pair.
 
 Model shape, data, batch size, step count, schedule, z-loss, and eval
 cadence match the AdamH baseline. Optimizer routing:

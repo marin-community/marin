@@ -312,7 +312,12 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    w_gate_up: jax.Array
+    # ``w_gate`` and ``w_up`` are stored as separate ``(E, d, i)`` tensors so
+    # the optimizer sees each individually as a square (after pairing) NS
+    # target. They are concatenated on the forward pass before being handed
+    # to the MoE kernel.
+    w_gate: jax.Array
+    w_up: jax.Array
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -328,15 +333,12 @@ class MoEMLP(eqx.Module):
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
         w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
         w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
-        # TODO: Explore whether concatenating gate/up at init (instead of keeping separate params)
-        # is (1) a meaningful MFU speedup and (2) a meaningful perf hit due to AdamH treating the
-        # concatenated tensor as a single parameter for its scale-invariant norm computation.
-        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
+            w_gate=reshard(w_gate, P("expert", "data", "model")),
+            w_up=reshard(w_up, P("expert", "data", "model")),
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
@@ -389,11 +391,15 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        # Concatenate gate and up on the forward pass so the kernel still
+        # receives a single (E, d, 2i) tensor while the stored params remain
+        # split for the optimizer to see square per-expert NS targets.
+        w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
-            self.w_gate_up,
+            w_gate_up,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             implementation=self.cfg.moe_implementation,

@@ -214,48 +214,68 @@ def test_normuonh_matrix_sweep_suffix_builds_distinct_relaunch_steps():
     ]
 
 
-def test_pair_3d_leading_reshapes_3d_only():
-    a3d = jnp.ones((4, 8, 16), dtype=jnp.float32)
-    paired = _pair_3d_leading(a3d)
-    assert paired.shape == (2, 16, 16)
-    # 1D / 2D / scalar pass through untouched
+def test_pair_3d_leading_pairs_along_smaller_axis():
+    """w_gate / w_up (E, d, i): pair along axis 2 (smaller). w_down (E, i, d):
+    pair along axis 1. Both end up square at Grug MoE defaults."""
+    # (E=4, d=16, i=8) -- i is smaller -> pair along axis 2 -> (2, 16, 16)
+    w_gate = jnp.ones((4, 16, 8), dtype=jnp.float32)
+    assert _pair_3d_leading(w_gate).shape == (2, 16, 16)
+    # (E=4, i=8, d=16) -- i is smaller -> pair along axis 1 -> (2, 16, 16)
+    w_down = jnp.ones((4, 8, 16), dtype=jnp.float32)
+    assert _pair_3d_leading(w_down).shape == (2, 16, 16)
+    # Square (A == B): we pair axis 1 by convention.
+    square = jnp.ones((4, 8, 8), dtype=jnp.float32)
+    assert _pair_3d_leading(square).shape == (2, 16, 8)
+    # 1D / 2D / scalar pass through untouched.
     assert _pair_3d_leading(jnp.ones((32,))).shape == (32,)
     assert _pair_3d_leading(jnp.ones((4, 8))).shape == (4, 8)
-    # Odd leading axis passes through untouched
-    a3d_odd = jnp.ones((3, 8, 16), dtype=jnp.float32)
-    assert _pair_3d_leading(a3d_odd).shape == (3, 8, 16)
+    # Odd leading axis passes through untouched.
+    assert _pair_3d_leading(jnp.ones((3, 8, 16), dtype=jnp.float32)).shape == (3, 8, 16)
 
 
-def test_unpair_to_original_inverts_pair():
-    a3d = jnp.arange(4 * 8 * 16, dtype=jnp.float32).reshape((4, 8, 16))
-    paired = _pair_3d_leading(a3d)
-    recovered = _unpair_to_original(paired, a3d)
-    assert recovered.shape == a3d.shape
-    assert jnp.allclose(recovered, a3d)
+def test_unpair_to_original_inverts_pair_along_either_axis():
+    # axis-1 pair (w_down-shaped)
+    w_down = jnp.arange(4 * 8 * 16, dtype=jnp.float32).reshape((4, 8, 16))
+    paired = _pair_3d_leading(w_down)
+    assert paired.shape == (2, 16, 16)
+    recovered = _unpair_to_original(paired, w_down)
+    assert recovered.shape == w_down.shape
+    assert jnp.allclose(recovered, w_down)
+    # axis-2 pair (w_gate/w_up-shaped)
+    w_gate = jnp.arange(4 * 16 * 8, dtype=jnp.float32).reshape((4, 16, 8))
+    paired = _pair_3d_leading(w_gate)
+    assert paired.shape == (2, 16, 16)
+    recovered = _unpair_to_original(paired, w_gate)
+    assert recovered.shape == w_gate.shape
+    assert jnp.allclose(recovered, w_gate)
 
 
 def test_muonh_paired_creates_paired_momentum_state():
-    """Paired transform's momentum buffer must be in PAIRED shape, not original."""
+    """Paired transform's momentum buffer must be in PAIRED shape, square at
+    Grug MoE defaults, with axis chosen by smaller-axis rule."""
     params = {
-        "w_gate_up": jnp.ones((4, 8, 16), dtype=jnp.float32),  # (E=4, A=8, B=16)
-        "w_down": jnp.ones((4, 16, 8), dtype=jnp.float32),  # (E=4, A=16, B=8)
+        # (E=4, d=16, i=8) -- pair axis 2 -> (2, 16, 16)
+        "w_gate": jnp.ones((4, 16, 8), dtype=jnp.float32),
+        "w_up": jnp.ones((4, 16, 8), dtype=jnp.float32),
+        # (E=4, i=8, d=16) -- pair axis 1 -> (2, 16, 16)
+        "w_down": jnp.ones((4, 8, 16), dtype=jnp.float32),
         "dense_2d": jnp.ones((8, 16), dtype=jnp.float32),
     }
     transform = scale_with_grug_muonh_paired(momentum=0.0, nesterov=False, steps=1, learning_rate=0.01)
     state = transform.init(params)
     momentum = state.momentum_buffer
-    # 3D leaves get paired: leading axis halves, second axis doubles
-    assert momentum["w_gate_up"].shape == (2, 16, 16)  # (E/2, 2A, B) — square!
-    assert momentum["w_down"].shape == (2, 32, 8)  # (E/2, 2A, B)
-    # 2D leaves untouched
+    assert momentum["w_gate"].shape == (2, 16, 16)
+    assert momentum["w_up"].shape == (2, 16, 16)
+    assert momentum["w_down"].shape == (2, 16, 16)
     assert momentum["dense_2d"].shape == (8, 16)
 
 
 def test_muonh_paired_update_preserves_param_shape():
     """End-to-end: updates returned by the paired transform must match params shape."""
     params = {
-        "w_gate_up": jnp.ones((4, 8, 16), dtype=jnp.float32),
-        "w_down": jnp.ones((4, 16, 8), dtype=jnp.float32),
+        "w_gate": jnp.ones((4, 16, 8), dtype=jnp.float32),
+        "w_up": jnp.ones((4, 16, 8), dtype=jnp.float32),
+        "w_down": jnp.ones((4, 8, 16), dtype=jnp.float32),
         "dense_2d": jnp.ones((8, 16), dtype=jnp.float32),
     }
     updates = jax.tree.map(lambda x: jnp.full_like(x, 0.1), params)
@@ -265,7 +285,9 @@ def test_muonh_paired_update_preserves_param_shape():
 
 
 def test_grug_moe_muonh_paired_mask_matches_muonh_routing():
-    """Same routing as MuonH: matrix leaves -> muonh_paired, lm_head -> adamh, rest -> adam."""
+    """Same routing as MuonH: matrix leaves -> muonh_paired, lm_head -> adamh,
+    rest -> adam. With the split-storage model, w_gate and w_up are separate
+    leaves but both still route to muonh_paired."""
     params = {
         "token_embed": jnp.ones((128, 32), dtype=jnp.float32),
         "output_proj": jnp.ones((32, 128), dtype=jnp.float32),
@@ -279,8 +301,9 @@ def test_grug_moe_muonh_paired_mask_matches_muonh_routing():
                 "mlp": {
                     "router": jnp.ones((32, 4), dtype=jnp.float32),
                     "router_bias": jnp.ones((4,), dtype=jnp.float32),
-                    "w_gate_up": jnp.ones((4, 32, 64), dtype=jnp.float32),
-                    "w_down": jnp.ones((4, 64, 32), dtype=jnp.float32),
+                    "w_gate": jnp.ones((4, 32, 16), dtype=jnp.float32),
+                    "w_up": jnp.ones((4, 32, 16), dtype=jnp.float32),
+                    "w_down": jnp.ones((4, 16, 32), dtype=jnp.float32),
                 },
                 "shared": {
                     "w_up": jnp.ones((32, 64), dtype=jnp.float32),
@@ -300,7 +323,8 @@ def test_grug_moe_muonh_paired_mask_matches_muonh_routing():
     assert block_mask["attn"]["w_q"] == "muonh_paired"
     assert block_mask["attn"]["attn_gate"] == "adam"
     assert block_mask["mlp"]["router"] == "adam"
-    assert block_mask["mlp"]["w_gate_up"] == "muonh_paired"
+    assert block_mask["mlp"]["w_gate"] == "muonh_paired"
+    assert block_mask["mlp"]["w_up"] == "muonh_paired"
     assert block_mask["mlp"]["w_down"] == "muonh_paired"
     assert block_mask["shared"]["w_up"] == "muonh_paired"
     assert block_mask["mlp"]["router_bias"] == "adam"
@@ -336,7 +360,9 @@ def test_grug_moe_muonh_paired_optimizer_update_runs_on_single_device():
         "output_proj": jnp.ones((4, 8), dtype=jnp.float32),
         "block": {
             "router": jnp.ones((4, 2), dtype=jnp.float32),
-            "w_gate_up": jnp.ones((2, 4, 6), dtype=jnp.float32),
+            "w_gate": jnp.ones((2, 4, 2), dtype=jnp.float32),
+            "w_up": jnp.ones((2, 4, 2), dtype=jnp.float32),
+            "w_down": jnp.ones((2, 2, 4), dtype=jnp.float32),
             "norm": jnp.ones((4,), dtype=jnp.float32),
         },
     }
