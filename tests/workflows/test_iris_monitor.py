@@ -93,6 +93,45 @@ def test_wait_for_child_job_uses_runtime_timeout_after_child_start() -> None:
     assert status.state == iris_monitor.JOB_STATE_SUCCEEDED
 
 
+def test_wait_for_child_job_resets_timeouts_after_preemption() -> None:
+    parent_id = "/runner/parent"
+    child_id = f"{parent_id}/grug-train-canary-tpu-1"
+    polls = iter(
+        [
+            [
+                _job(parent_id, "JOB_STATE_RUNNING"),
+                _job(child_id, "JOB_STATE_RUNNING"),
+            ],
+            [
+                _job(parent_id, "JOB_STATE_RUNNING"),
+                _job(child_id, "JOB_STATE_PENDING", preemption_count=1),
+            ],
+            [
+                _job(parent_id, "JOB_STATE_RUNNING"),
+                _job(child_id, "JOB_STATE_RUNNING", preemption_count=1),
+            ],
+            [
+                _job(parent_id, "JOB_STATE_SUCCEEDED"),
+                _job(child_id, "JOB_STATE_SUCCEEDED", preemption_count=1),
+            ],
+        ]
+    )
+    monotonic = iter([0, 10, 90, 100, 110])
+
+    status = iris_monitor.wait_for_child_job(
+        parent_id,
+        iris_config=None,
+        poll_interval=0,
+        queue_timeout=50,
+        run_timeout=50,
+        repo_root=iris_monitor._REPO_ROOT,
+        list_job_rows=lambda: next(polls),
+        clock=lambda: next(monotonic),
+    )
+
+    assert status.state == iris_monitor.JOB_STATE_SUCCEEDED
+
+
 def test_wait_for_child_job_reports_queue_timeout() -> None:
     parent_id = "/runner/parent"
     child_id = f"{parent_id}/grug-train-canary-tpu-1"

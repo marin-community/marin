@@ -213,6 +213,9 @@ def wait_for_child_job(
             )
 
         if child is None or not _child_has_started(child):
+            if run_started is not None:
+                queue_started = now
+                run_started = None
             elapsed = now - queue_started
             message = _child_wait_message(
                 "waiting-for-child-start", parent, child, elapsed=elapsed, timeout=queue_timeout
