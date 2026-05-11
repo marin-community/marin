@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import gzip
 import json
+import sys
 from pathlib import Path
+from types import ModuleType
 
 # Intentional private import: exercise the truncation-cap heuristic directly.
 from marin.profiling.ingest import _trace_quality_warnings, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
 from marin.profiling.schema import PROFILE_SUMMARY_SCHEMA_VERSION, profile_summary_from_dict
+from marin.profiling.xplane import XPROF_TABLE_TOOLS, export_xplane_tables, summarize_xplane_tables
 
 
 def test_summarize_trace_produces_deterministic_breakdown_and_hot_ops(tmp_path: Path) -> None:
@@ -389,6 +392,122 @@ def test_gpu_stream_threads_and_nccl_ops(tmp_path: Path) -> None:
 
     # Gap analysis works on stream threads.
     assert len(summary.gap_before_ops) > 0
+
+
+def test_export_xplane_tables_accepts_text_and_counts_trace_events(tmp_path: Path, monkeypatch) -> None:
+    xplane_path = tmp_path / "profile.xplane.pb"
+    xplane_path.write_bytes(b"fake xplane bytes")
+
+    raw_to_tool_data_module = ModuleType("xprof.convert.raw_to_tool_data")
+    convert_module = ModuleType("xprof.convert")
+    xprof_module = ModuleType("xprof")
+    seen_tools: list[str] = []
+
+    def xspace_to_tool_data(paths, tool, options):
+        assert paths == [str(xplane_path)]
+        assert options == {"use_saved_result": False}
+        seen_tools.append(tool)
+        if tool == "trace_viewer@":
+            return b'{"returnedEventsSize":1000000}', "application/json"
+        if tool == "overview_page":
+            return '{"cols":[],"rows":[]}', "application/json"
+        return b'{"cols":[],"rows":[]}', "application/json"
+
+    raw_to_tool_data_module.__dict__["xspace_to_tool_data"] = xspace_to_tool_data
+    convert_module.__dict__["raw_to_tool_data"] = raw_to_tool_data_module
+    xprof_module.__dict__["convert"] = convert_module
+    monkeypatch.setitem(sys.modules, "xprof", xprof_module)
+    monkeypatch.setitem(sys.modules, "xprof.convert", convert_module)
+    monkeypatch.setitem(sys.modules, "xprof.convert.raw_to_tool_data", raw_to_tool_data_module)
+
+    export = export_xplane_tables(xplane_path, tmp_path / "tables", count_trace_events=True)
+
+    assert export.trace_event_count == 1_000_000
+    assert export.table_sizes["overview_page"] == len('{"cols":[],"rows":[]}')
+    assert (export.output_dir / "overview_page.json").read_text(encoding="utf-8") == '{"cols":[],"rows":[]}'
+    assert set(XPROF_TABLE_TOOLS).issubset(seen_tools)
+    assert "trace_viewer@" in seen_tools
+
+
+def test_xplane_table_summary_ignores_malformed_tables_and_handles_large_kernel_summary(tmp_path: Path) -> None:
+    output_dir = tmp_path / "tables"
+    output_dir.mkdir()
+    xplane_path = tmp_path / "profile.xplane.pb"
+    xplane_path.write_bytes(b"fake xplane bytes")
+
+    (output_dir / "overview_page.json").write_text(
+        json.dumps(
+            [
+                {"rows": [{"c": [{"v": "ignored"}]}]},
+                {
+                    "cols": [
+                        {"id": "stepnum"},
+                        {"id": "stepTimeMs"},
+                        {"id": "deviceCollectivesTimeMs"},
+                        {"id": "deviceComputeTimeMs"},
+                        {"id": "infeedTimeMs"},
+                        {"id": "otherTimeMs"},
+                    ],
+                    "rows": [
+                        {"c": [{"v": 0}, {"v": 1250.0}, {"v": 250.0}, {"v": 700.0}, {"v": 100.0}, {"v": 200.0}]},
+                        {"c": [{"v": 1}, {"v": 1500.0}, {"v": 300.0}, {"v": 800.0}, {"v": 150.0}, {"v": 250.0}]},
+                    ],
+                    "p": {"bottleneck": "collectives"},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    kernel_rows = [
+        {
+            "c": [
+                {"v": rank},
+                {"v": f"ncclAllGather_{rank}" if rank % 10 == 0 else f"_lambda_kernel_{rank}"},
+                {"v": 1000.0 + rank},
+                {"v": rank + 1},
+                {"v": rank % 3 == 0},
+            ]
+        }
+        for rank in range(5000)
+    ]
+    (output_dir / "kernel_stats.json").write_text(
+        json.dumps(
+            {
+                "cols": [
+                    {"id": "rank"},
+                    {"id": "kernel_name"},
+                    {"id": "total_duration_us"},
+                    {"id": "occurrences"},
+                    {"id": "is_kernel_using_tensor_core"},
+                ],
+                "rows": kernel_rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_xplane_tables(
+        output_dir,
+        xplane_path=xplane_path,
+        warmup_steps=1,
+        hot_op_limit=20,
+        trace_event_count=1_000_000,
+    )
+
+    assert summary.source_format == "xplane_pb_xprof_tables"
+    assert summary.trace_overview.suspected_truncation is True
+    assert any("xprof bottleneck: collectives" in warning for warning in summary.trace_overview.quality_warnings)
+    assert summary.trace_overview.num_complete_events == 5000
+    assert summary.step_time.all_steps.count == 2
+    assert summary.step_time.steady_state_steps.median == 1_500_000.0
+    assert summary.time_breakdown.communication.total_duration == 550_000.0
+    assert summary.time_breakdown.compute.total_duration == 1_500_000.0
+    assert summary.hot_ops[0].name == "_lambda_kernel_4999"
+    assert summary.hot_ops[0].exclusive_duration == 5999.0
+    assert summary.communication_ops[0].collective == "all-gather"
+    assert summary.communication_ops[0].total_duration > 0
+    assert summary.semantic_families
+    assert summary.optimization_candidates
 
 
 def _write_trace(path: Path, *, step_durations: list[float], softmax_duration: float) -> None:

@@ -266,14 +266,27 @@ def summarize_profile_artifact(
         warmup_steps: Number of initial steps to exclude from steady-state stats.
         hot_op_limit: Maximum number of hot ops to include.
     """
-    trace_path = find_profile_trace(profile_dir)
-    return summarize_trace(
-        trace_path,
-        run_metadata=run_metadata,
-        warmup_steps=warmup_steps,
-        hot_op_limit=hot_op_limit,
-        breakdown_mode=breakdown_mode,
-    )
+    try:
+        trace_path = find_profile_trace(profile_dir)
+        return summarize_trace(
+            trace_path,
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+        )
+    except FileNotFoundError as trace_error:
+        from marin.profiling.xplane import find_xplane_file, summarize_xplane
+
+        try:
+            return summarize_xplane(
+                find_xplane_file(profile_dir),
+                run_metadata=run_metadata,
+                warmup_steps=warmup_steps,
+                hot_op_limit=hot_op_limit,
+            )
+        except FileNotFoundError:
+            raise trace_error from None
 
 
 def summarize_trace(

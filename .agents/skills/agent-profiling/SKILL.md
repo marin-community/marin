@@ -15,13 +15,16 @@ Use this skill to turn a `jax_profile` artifact into a deterministic, agent-cons
 5. re-profile and compare.
 
 ## Scope
-MVP ingestion source of truth:
+Ingestion source of truth:
 - xprof-exported trace JSON inside Levanter `jax_profile` artifacts:
   - `plugins/profile/<timestamp>/perfetto_trace.json.gz` (preferred)
   - `plugins/profile/<timestamp>/*.trace.json.gz` (fallback)
+- direct XPlane protobuf summaries through xprof aggregate tables:
+  - `plugins/profile/<timestamp>/*.xplane.pb`
+  - explicit local `*.xplane.pb` files via `--xplane-file`
 
-MVP non-goal:
-- direct `*.xplane.pb` parsing (kept as a follow-up increment)
+Prefer Perfetto trace JSON for gap/hierarchical-region work. Use XPlane protobuf summaries when the trace JSON is missing,
+truncated, too large to process reliably, or when xprof kernel/step tables are the evidence you need.
 
 ## Capture Profiles
 Use Levanter profiler flags so profiles are uploaded consistently as `jax_profile` artifacts:
@@ -33,6 +36,22 @@ uv run ... \
   --trainer.profiler_num_steps 50 \
   --trainer.profiler_perfetto_link false
 ```
+
+For profiles where xprof/HLO protobuf tables matter, enable JAX profile options through the Levanter profiler config:
+
+```bash
+uv run ... \
+  --trainer.profiler true \
+  --trainer.profiler_start_step 5 \
+  --trainer.profiler_num_steps 50 \
+  --trainer.profiler.profile_options.host_tracer_level 1 \
+  --trainer.profiler.profile_options.python_tracer_level 0 \
+  --trainer.profiler.profile_options.device_tracer_level 0 \
+  --trainer.profiler.profile_options.enable_hlo_proto true
+```
+
+Keep the profiler window short when enabling HLO protobuf collection. It can make artifacts much larger and may increase
+profile upload/finalization time.
 
 Reference:
 - `lib/levanter/docs/Performance-Guide.md`
@@ -97,6 +116,9 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
+If the artifact directory has no trace JSON but does contain `*.xplane.pb`, `--profile-dir` automatically falls back to
+the XPlane/xprof table path.
+
 ### Option D: From a specific trace file
 
 ```bash
@@ -104,6 +126,23 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --trace-file /path/to/perfetto_trace.json.gz \
   --output /tmp/profile_summary.json
 ```
+
+### Option E: From a specific XPlane protobuf
+
+Direct XPlane ingestion requires the optional `xprof` and `protobuf` packages. It exports xprof table JSON first, then
+normalizes those tables into `profile_summary.v1`.
+
+```bash
+uv run --with xprof --with protobuf python lib/marin/tools/profile_summary.py summarize \
+  --xplane-file /path/to/profile.xplane.pb \
+  --xplane-output-dir /tmp/profile_xprof_tables \
+  --xplane-count-trace-events \
+  --output /tmp/profile_summary.json
+```
+
+XPlane summaries expose step timing, xprof bottleneck statements, kernel stats, collective breakdowns, and optimization
+candidates. They do not expose Perfetto-style pre-op gaps or hierarchical region context; the report marks this in
+`trace_overview.quality_warnings`.
 
 Summary version tag:
 - `profile_summary.v1`

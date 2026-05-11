@@ -23,6 +23,7 @@ from marin.profiling.tracking import (
     assess_profile_regression,
     summarize_regression_history,
 )
+from marin.profiling.xplane import summarize_xplane, summarize_xplane_tables
 
 __all__ = [
     "DEFAULT_ARTIFACT_ALIAS",
@@ -42,4 +43,6 @@ __all__ = [
     "summarize_profile_artifact",
     "summarize_regression_history",
     "summarize_trace",
+    "summarize_xplane",
+    "summarize_xplane_tables",
 ]
