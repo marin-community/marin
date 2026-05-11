@@ -31,6 +31,7 @@ from iris.cluster.constraints import (
     Constraint,
     ConstraintOp,
     PlacementRequirements,
+    ProtocolMode,
     WellKnownAttribute,
     constraints_from_resources,
     evaluate_constraint,
@@ -2198,6 +2199,18 @@ class Controller:
                 if row.job_id not in templates_by_job:
                     templates_by_job[row.job_id] = self._transitions.run_request_template(snap, row.job_id)
 
+        # Workers in reconcile-via-poll mode fetch per-attempt specs via
+        # GetTaskAttemptInfo on PollTasks rather than receiving them through
+        # StartTasks. Snapshot their protocol mode once per tick to gate
+        # the StartTasks materialization below; absent attribute means
+        # legacy ``start_stop``.
+        attrs_by_worker = self._db.get_worker_attributes()
+        skip_start_tasks: set[WorkerId] = set()
+        for wid in worker_ids:
+            mode_attr = attrs_by_worker.get(wid, {}).get(WellKnownAttribute.PROTOCOL_MODE)
+            if mode_attr is not None and str(mode_attr.value) == ProtocolMode.RECONCILE_VIA_POLL:
+                skip_start_tasks.add(wid)
+
         expected: dict[WorkerId, list[RunningTaskEntry]] = {wid: [] for wid in worker_ids}
         starts: dict[WorkerId, list[job_pb2.RunTaskRequest]] = {wid: [] for wid in worker_ids}
         attempt_by_worker_task: dict[tuple[WorkerId, str], int] = {}
@@ -2208,12 +2221,16 @@ class Controller:
                 if template is None:
                     # Reservation-holder task or a job that disappeared mid-tick.
                     continue
-                req = job_pb2.RunTaskRequest()
-                req.CopyFrom(template)
-                req.task_id = row.task_id.to_wire()
-                req.attempt_id = row.attempt_id
-                starts[row.worker_id].append(req)
-                attempt_by_worker_task[(row.worker_id, row.task_id.to_wire())] = row.attempt_id
+                if row.worker_id not in skip_start_tasks:
+                    req = job_pb2.RunTaskRequest()
+                    req.CopyFrom(template)
+                    req.task_id = row.task_id.to_wire()
+                    req.attempt_id = row.attempt_id
+                    starts[row.worker_id].append(req)
+                    attempt_by_worker_task[(row.worker_id, row.task_id.to_wire())] = row.attempt_id
+                # Reconcile-via-poll workers skip StartTasks; the row still
+                # flows through ``expected`` below so PollTasks delivers it
+                # and the worker fetches the spec via GetTaskAttemptInfo.
             # ASSIGNED rows go into ``expected`` too so PollTasks reports
             # current state. The worker's BUILDING push is best-effort
             # (worker.py:_on_state_change drops RPC failures); poll is the
