@@ -12,6 +12,8 @@ Files:
 - `pallas_token_gather_sum_port.py`: adapter around the current Levanter
   Pallas port in `lib/levanter/src/levanter/grug/sonic_moe.py` using the same
   fixed-top-k reverse-scatter contract.
+- `PORT_AWARE_DIFF.md`: semantic block-by-block map from real Sonic source to
+  the closest Pallas port blocks.
 - `compare_token_gather_sum.py`: runs both sides with identical shape flags in
   separate subprocesses.
 - `common.py`: shared CLI/config and timing helpers only.
