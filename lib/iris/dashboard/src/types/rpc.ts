@@ -227,8 +227,6 @@ export interface WorkerHealthStatus {
 
 export interface WorkerQuery {
   contains?: string
-  sortField?: string
-  sortDirection?: string
   offset?: number
   limit?: number
 }

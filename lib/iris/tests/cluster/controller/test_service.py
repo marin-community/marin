@@ -1189,43 +1189,20 @@ def test_worker_addresses_for_tasks(state, service):
 # =============================================================================
 
 
-def test_list_workers_returns_all(service, state):
-    """Verify list_workers returns all registered workers."""
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
+@pytest.fixture
+def mixed_fleet(service, state):
+    """Register two CPU + two GPU workers and one TPU worker with full metadata.
 
-    db = state._db
-    db.ensure_user("system:worker", Timestamp.now(), role="worker")
-    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
-    try:
-        for i in range(3):
-            request = controller_pb2.Controller.RegisterRequest(
-                address=f"host{i}:8080",
-                metadata=make_worker_metadata(),
-                worker_id=f"worker-{i}",
-            )
-            service.register(request, None)
-    finally:
-        _verified_identity.reset(token)
-
-    request = controller_pb2.Controller.ListWorkersRequest()
-    response = service.list_workers(request, None)
-
-    assert len(response.workers) == 3
-    assert response.total_count == 3
-    assert response.has_more is False
-
-    # All workers should be healthy after registration
-    for w in response.workers:
-        assert w.healthy is True
-
-
-def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
+    The TPU/GPU rows carry every field the dashboard fleet table reads (gpu
+    name/count/memory, tpu_name, gce_zone, device proto, ``zone`` attribute),
+    so a single fixture covers both paging shape and metadata projection.
+    """
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
-        for i in range(count_cpu):
+        for i in range(2):
             service.register(
                 controller_pb2.Controller.RegisterRequest(
                     address=f"cpu-host{i}:8080",
@@ -1234,221 +1211,89 @@ def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: in
                 ),
                 None,
             )
-        for i in range(count_gpu):
-            service.register(
-                controller_pb2.Controller.RegisterRequest(
-                    address=f"gpu-host{i}:8080",
-                    metadata=make_worker_metadata(gpu_count=1, gpu_name="h100"),
-                    worker_id=f"gpu-worker-{i:02d}",
-                ),
-                None,
-            )
-    finally:
-        _verified_identity.reset(token)
-
-
-def test_list_workers_pagination(service, state):
-    """list_workers respects offset/limit and reports total_count + has_more."""
-    _register_workers_for_query(service, state, count_cpu=7, count_gpu=0)
-
-    page1 = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(offset=0, limit=3),
-        ),
-        None,
-    )
-    assert [w.worker_id for w in page1.workers] == ["cpu-worker-00", "cpu-worker-01", "cpu-worker-02"]
-    assert page1.total_count == 7
-    assert page1.has_more is True
-
-    page2 = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(offset=3, limit=3),
-        ),
-        None,
-    )
-    assert [w.worker_id for w in page2.workers] == ["cpu-worker-03", "cpu-worker-04", "cpu-worker-05"]
-    assert page2.has_more is True
-
-    page3 = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(offset=6, limit=3),
-        ),
-        None,
-    )
-    assert [w.worker_id for w in page3.workers] == ["cpu-worker-06"]
-    assert page3.has_more is False
-
-
-def test_list_workers_filter_by_contains(service, state):
-    """contains matches worker_id substring (case-insensitive) and address."""
-    _register_workers_for_query(service, state, count_cpu=2, count_gpu=2)
-
-    by_id = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(contains="GPU-WORKER"),
-        ),
-        None,
-    )
-    assert by_id.total_count == 2
-    assert all(w.worker_id.startswith("gpu-worker-") for w in by_id.workers)
-
-    by_address = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(contains="cpu-host1"),
-        ),
-        None,
-    )
-    assert by_address.total_count == 1
-    assert by_address.workers[0].worker_id == "cpu-worker-01"
-
-    # Substring (not just prefix): a token that appears in the middle of
-    # worker_id should still match.
-    by_substring = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(contains="worker-0"),
-        ),
-        None,
-    )
-    assert by_substring.total_count == 4
-
-
-@pytest.mark.parametrize(
-    "sort_field,direction,expected_prefix_order",
-    [
-        # Default sort is by worker_id ascending: alpha order, cpu before gpu.
-        (
-            controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID,
-            controller_pb2.Controller.SORT_DIRECTION_ASC,
-            ["cpu", "cpu", "gpu", "gpu"],
-        ),
-        # Descending worker_id swaps the groups.
-        (
-            controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID,
-            controller_pb2.Controller.SORT_DIRECTION_DESC,
-            ["gpu", "gpu", "cpu", "cpu"],
-        ),
-        # CPU workers persist with device_type="", so they group before "gpu"
-        # under ascending device-type sort.
-        (
-            controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE,
-            controller_pb2.Controller.SORT_DIRECTION_ASC,
-            ["cpu", "cpu", "gpu", "gpu"],
-        ),
-        (
-            controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE,
-            controller_pb2.Controller.SORT_DIRECTION_DESC,
-            ["gpu", "gpu", "cpu", "cpu"],
-        ),
-    ],
-)
-def test_list_workers_sort_field(service, state, sort_field, direction, expected_prefix_order):
-    """ORDER BY in SQL produces the same shape as the old in-Python sort."""
-    _register_workers_for_query(service, state, count_cpu=2, count_gpu=2)
-
-    response = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(sort_field=sort_field, sort_direction=direction),
-        ),
-        None,
-    )
-    actual = [w.worker_id.split("-", 1)[0] for w in response.workers]
-    assert actual == expected_prefix_order
-
-
-def test_list_workers_sort_by_heartbeat_orders_by_health_tracker(service, state):
-    """Heartbeat sort uses the in-memory health tracker, not the DB.
-
-    Liveness is per-worker in ``WorkerHealthTracker``; for the SQL path to
-    cooperate with that we sort worker_ids in Python before fetching the page.
-    """
-    _register_workers_for_query(service, state, count_cpu=3, count_gpu=0)
-
-    # Stamp ascending heartbeats so the ordering is deterministic; the worker
-    # with the highest heartbeat is the "freshest" and should land last under
-    # ascending sort, first under descending.
-    workers = ["cpu-worker-00", "cpu-worker-01", "cpu-worker-02"]
-    for i, wid in enumerate(workers):
-        state._store.health.set_last_heartbeat_for_test(WorkerId(wid), 1000 + i * 1000)
-
-    asc = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(
-                sort_field=controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT,
-                sort_direction=controller_pb2.Controller.SORT_DIRECTION_ASC,
-            ),
-        ),
-        None,
-    )
-    assert [w.worker_id for w in asc.workers] == workers
-
-    desc = service.list_workers(
-        controller_pb2.Controller.ListWorkersRequest(
-            query=controller_pb2.Controller.WorkerQuery(
-                sort_field=controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT,
-                sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
-            ),
-        ),
-        None,
-    )
-    assert [w.worker_id for w in desc.workers] == list(reversed(workers))
-
-
-def test_list_workers_populates_fleet_metadata(service, state):
-    """The slim roster row surfaces every field the dashboard table reads.
-
-    Specifically: cpu_count, memory_bytes, tpu_name, gpu_count/name/memory,
-    the ``zone`` attribute (single batched per-page lookup), and the decoded
-    ``device`` proto. Dashboard/bug-report breaks if any of these go missing.
-    """
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
-    state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
-    token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
-    try:
         gpu_meta = make_worker_metadata(gpu_count=4, gpu_name="h100")
         gpu_meta.gpu_memory_mb = 80 * 1024
-        gpu_meta.attributes["zone"].string_value = "us-central2-b"
         gpu_meta.gce_zone = "us-central2-b"
+        gpu_meta.attributes["zone"].string_value = "us-central2-b"
         service.register(
             controller_pb2.Controller.RegisterRequest(
-                address="gpu-host:8080",
-                metadata=gpu_meta,
-                worker_id="gpu-worker-00",
+                address="gpu-host0:8080", metadata=gpu_meta, worker_id="gpu-worker-00"
             ),
             None,
         )
-
+        service.register(
+            controller_pb2.Controller.RegisterRequest(
+                address="gpu-host1:8080",
+                metadata=make_worker_metadata(gpu_count=1, gpu_name="h100"),
+                worker_id="gpu-worker-01",
+            ),
+            None,
+        )
         tpu_meta = make_worker_metadata(tpu_name="v5litepod-16")
         tpu_meta.attributes["zone"].string_value = "europe-west4-a"
         service.register(
             controller_pb2.Controller.RegisterRequest(
-                address="tpu-host:8080",
-                metadata=tpu_meta,
-                worker_id="tpu-worker-00",
+                address="tpu-host:8080", metadata=tpu_meta, worker_id="tpu-worker-00"
             ),
             None,
         )
     finally:
         _verified_identity.reset(token)
 
-    response = service.list_workers(controller_pb2.Controller.ListWorkersRequest(), None)
+
+def _list_workers(service, **query_kwargs):
+    return service.list_workers(
+        controller_pb2.Controller.ListWorkersRequest(
+            query=controller_pb2.Controller.WorkerQuery(**query_kwargs),
+        ),
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "query_kwargs,expected_ids,expected_total,expected_has_more",
+    [
+        # No query: everything in worker_id ASC order.
+        ({}, ["cpu-worker-00", "cpu-worker-01", "gpu-worker-00", "gpu-worker-01", "tpu-worker-00"], 5, False),
+        # First page.
+        ({"offset": 0, "limit": 2}, ["cpu-worker-00", "cpu-worker-01"], 5, True),
+        # Middle page.
+        ({"offset": 2, "limit": 2}, ["gpu-worker-00", "gpu-worker-01"], 5, True),
+        # Final page — fewer rows than limit; has_more is False.
+        ({"offset": 4, "limit": 2}, ["tpu-worker-00"], 5, False),
+        # contains matches worker_id (case-insensitive).
+        ({"contains": "GPU-WORKER"}, ["gpu-worker-00", "gpu-worker-01"], 2, False),
+        # contains matches address.
+        ({"contains": "cpu-host1"}, ["cpu-worker-01"], 1, False),
+    ],
+)
+def test_list_workers_query(mixed_fleet, service, query_kwargs, expected_ids, expected_total, expected_has_more):
+    response = _list_workers(service, **query_kwargs)
+    assert [w.worker_id for w in response.workers] == expected_ids
+    assert response.total_count == expected_total
+    assert response.has_more is expected_has_more
+
+
+def test_list_workers_projects_fleet_metadata(mixed_fleet, service):
+    """The slim roster row surfaces every field the dashboard fleet table /
+    bug-report worker block reads: cpu/memory, gpu identity, tpu_name, the
+    ``zone`` attribute (batched per page), and the decoded ``device`` proto."""
+    response = _list_workers(service)
     by_id = {w.worker_id: w for w in response.workers}
 
     gpu = by_id["gpu-worker-00"]
-    assert gpu.metadata.gpu_count == 4
-    assert gpu.metadata.gpu_name == "h100"
-    assert gpu.metadata.gpu_memory_mb == 80 * 1024
+    assert (gpu.metadata.gpu_count, gpu.metadata.gpu_name, gpu.metadata.gpu_memory_mb) == (4, "h100", 80 * 1024)
     assert gpu.metadata.gce_zone == "us-central2-b"
-    assert gpu.metadata.device.HasField("gpu")
     assert gpu.metadata.device.gpu.variant == "h100"
     assert gpu.metadata.attributes["zone"].string_value == "us-central2-b"
 
     tpu = by_id["tpu-worker-00"]
     assert tpu.metadata.tpu_name == "v5litepod-16"
-    assert tpu.metadata.device.HasField("tpu")
     assert tpu.metadata.device.tpu.variant == "v5litepod-16"
     assert tpu.metadata.attributes["zone"].string_value == "europe-west4-a"
+
+    # Liveness is wired through from the in-memory health tracker.
+    assert all(w.healthy for w in response.workers)
 
 
 # =============================================================================

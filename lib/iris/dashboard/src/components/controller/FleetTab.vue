@@ -16,18 +16,6 @@ import CopyButton from '@/components/shared/CopyButton.vue'
 // and keep the filter inputs in the URL so back-button + sharing work.
 const PAGE_SIZE = 50
 
-const SORT_FIELD_MAP: Record<string, string> = {
-  workerId: 'WORKER_SORT_FIELD_WORKER_ID',
-  lastHeartbeat: 'WORKER_SORT_FIELD_LAST_HEARTBEAT',
-  device: 'WORKER_SORT_FIELD_DEVICE_TYPE',
-}
-
-type SortField = 'workerId' | 'lastHeartbeat' | 'device'
-type SortDir = 'asc' | 'desc'
-
-const SORT_FIELDS: SortField[] = ['workerId', 'lastHeartbeat', 'device']
-const SORT_DIRS: SortDir[] = ['asc', 'desc']
-
 const route = useRoute()
 const router = useRouter()
 
@@ -36,28 +24,18 @@ function queryStr(v: string | string[] | null | undefined): string {
   return v ?? ''
 }
 
-function parseSort(v: string): SortField {
-  return SORT_FIELDS.includes(v as SortField) ? (v as SortField) : 'workerId'
-}
-function parseDir(v: string): SortDir {
-  return SORT_DIRS.includes(v as SortDir) ? (v as SortDir) : 'asc'
-}
 function parsePage(v: string): number {
   const n = Number(v)
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0
 }
 
 const page = ref(parsePage(queryStr(route.query.page)))
-const sortField = ref<SortField>(parseSort(queryStr(route.query.sort)))
-const sortDir = ref<SortDir>(parseDir(queryStr(route.query.dir)))
 const containsFilter = ref(queryStr(route.query.contains))
 const localContains = ref(queryStr(route.query.contains))
 
 const { data, loading, error, refresh } = useControllerRpc<ListWorkersResponse>('ListWorkers', () => ({
   query: {
     contains: containsFilter.value || undefined,
-    sortField: SORT_FIELD_MAP[sortField.value],
-    sortDirection: sortDir.value === 'asc' ? 'SORT_DIRECTION_ASC' : 'SORT_DIRECTION_DESC',
     offset: page.value * PAGE_SIZE,
     limit: PAGE_SIZE,
   } satisfies WorkerQuery,
@@ -71,7 +49,7 @@ const totalCount = computed(() => data.value?.totalCount ?? 0)
 const hasMore = computed(() => data.value?.hasMore ?? false)
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_SIZE)))
 
-watch([page, sortField, sortDir, containsFilter], () => {
+watch([page, containsFilter], () => {
   refresh()
 })
 
@@ -79,12 +57,10 @@ watch(containsFilter, () => {
   page.value = 0
 })
 
-watch([page, sortField, sortDir, containsFilter], () => {
+watch([page, containsFilter], () => {
   router.replace({
     query: {
       ...route.query,
-      sort: sortField.value !== 'workerId' ? sortField.value : undefined,
-      dir: sortDir.value !== 'asc' ? sortDir.value : undefined,
       page: page.value !== 0 ? String(page.value) : undefined,
       contains: containsFilter.value || undefined,
     },

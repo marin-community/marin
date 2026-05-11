@@ -652,95 +652,43 @@ class _WorkerPage:
     total_count: int
 
 
-def _worker_contains_clause(needle: str) -> tuple[str, tuple[str, str]]:
-    """SQL fragment + params for a case-insensitive ``contains`` filter."""
-    pattern = f"%{needle.lower()}%"
-    return ("(LOWER(w.worker_id) LIKE ? OR LOWER(w.address) LIKE ?)", (pattern, pattern))
-
-
-# ``device_type == ''`` is the CPU-baseline marker; under ascending sort we keep
-# CPU workers grouped first the same way the previous Python sort did. The
-# value is a tuple of column expressions; the same ASC/DESC direction is
-# appended to every column so the secondary sort flips with the primary.
-_WORKER_SORT_FIELD_TO_SQL: dict[int, tuple[str, ...]] = {
-    controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID: ("w.worker_id",),
-    controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE: ("w.device_type", "w.worker_id"),
-}
-
-
 def _query_workers_page(
     store: ControllerStore,
     query: controller_pb2.Controller.WorkerQuery,
-    liveness_by_id: dict[WorkerId, WorkerLiveness],
 ) -> _WorkerPage:
-    """Resolve a single ``ListWorkers`` page in two indexed SQL queries.
+    """Resolve a single ``ListWorkers`` page in one indexed SQL query.
 
-    ``last_heartbeat`` lives in the in-memory health tracker, not the DB, so
-    sorting by it still happens in Python — but only over a single ``worker_id``
-    column (no roster-wide ``SELECT *``).  Worker-id and device-type sorts run
-    entirely in SQL via ``ORDER BY ... LIMIT/OFFSET``.  Either path emits at
-    most one roster SELECT and one ``zone``-attribute SELECT keyed on the page.
+    Workers are always ordered by ``worker_id`` ascending; the fleet table is
+    a flat directory view and the per-column sort UI was more complexity than
+    it justified. One roster SELECT (with ``LIMIT/OFFSET``) plus one batched
+    ``zone``-attribute SELECT keyed on the page.
     """
-    needle = query.contains.lower() if query.contains else ""
-    where_parts: list[str] = []
-    where_params: list[object] = []
-    if needle:
-        clause, params = _worker_contains_clause(needle)
-        where_parts.append(clause)
-        where_params.extend(params)
-    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-
-    sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
-    descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
-    direction = "DESC" if descending else "ASC"
+    where_sql = ""
+    where_params: tuple[object, ...] = ()
+    if query.contains:
+        pattern = f"%{query.contains.lower()}%"
+        where_sql = "WHERE (LOWER(w.worker_id) LIKE ? OR LOWER(w.address) LIKE ?)"
+        where_params = (pattern, pattern)
 
     offset = max(query.offset, 0)
     limit = max(query.limit, 0)
     if limit > MAX_LIST_WORKERS_LIMIT:
         limit = MAX_LIST_WORKERS_LIMIT
 
+    select_sql = f"SELECT {WORKER_ROSTER_PROJECTION.select_clause()} FROM workers w {where_sql} ORDER BY w.worker_id ASC"
+    select_params: list[object] = list(where_params)
+    if limit > 0:
+        select_sql += " LIMIT ? OFFSET ?"
+        select_params.extend([limit, offset])
+    elif offset:
+        select_sql += " LIMIT -1 OFFSET ?"
+        select_params.append(offset)
+
     with store.read_snapshot() as q:
-        count_row = q.fetchone(f"SELECT COUNT(*) FROM workers w {where_sql}", tuple(where_params))
+        count_row = q.fetchone(f"SELECT COUNT(*) FROM workers w {where_sql}", where_params)
         total_count = int(count_row[0]) if count_row is not None else 0
 
-        if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
-            id_rows = q.fetchall(f"SELECT w.worker_id FROM workers w {where_sql}", tuple(where_params))
-            ordered_ids = [WorkerId(str(r["worker_id"])) for r in id_rows]
-            # In-memory secondary key on worker_id keeps the ordering stable for
-            # workers that share a heartbeat (e.g. never-seen workers all at 0).
-            ordered_ids.sort(
-                key=lambda wid: (
-                    (liveness_by_id.get(wid) or WorkerLiveness()).last_heartbeat_ms,
-                    str(wid),
-                ),
-                reverse=descending,
-            )
-            page_ids = ordered_ids[offset : offset + limit] if limit > 0 else ordered_ids[offset:]
-            if not page_ids:
-                return _WorkerPage(rows=[], total_count=total_count)
-            placeholders = ",".join("?" for _ in page_ids)
-            rows = q.fetchall(
-                f"SELECT {WORKER_ROSTER_PROJECTION.select_clause()} "
-                f"FROM workers w WHERE w.worker_id IN ({placeholders})",
-                tuple(str(wid) for wid in page_ids),
-            )
-            roster_by_id = {row.worker_id: row for row in WORKER_ROSTER_PROJECTION.decode(rows)}
-            roster = [roster_by_id[wid] for wid in page_ids if wid in roster_by_id]
-        else:
-            order_cols = _WORKER_SORT_FIELD_TO_SQL.get(sort_field, ("w.worker_id",))
-            order_expr = ", ".join(f"{col} {direction}" for col in order_cols)
-            select_sql = (
-                f"SELECT {WORKER_ROSTER_PROJECTION.select_clause()} " f"FROM workers w {where_sql} ORDER BY {order_expr}"
-            )
-            select_params = list(where_params)
-            if limit > 0:
-                select_sql += " LIMIT ? OFFSET ?"
-                select_params.extend([limit, offset])
-            elif offset:
-                select_sql += " LIMIT -1 OFFSET ?"
-                select_params.append(offset)
-            rows = q.fetchall(select_sql, tuple(select_params))
-            roster = WORKER_ROSTER_PROJECTION.decode(rows)
+        roster = WORKER_ROSTER_PROJECTION.decode(q.fetchall(select_sql, tuple(select_params)))
 
         if roster:
             placeholders = ",".join("?" for _ in roster)
@@ -1745,12 +1693,7 @@ class ControllerServiceImpl:
         if request.HasField("query"):
             query.CopyFrom(request.query)
 
-        # The heartbeat sort path needs liveness for the full filtered set;
-        # other paths only need it for the page. ``health.all()`` is a snapshot
-        # of an in-memory dict, so paying for it unconditionally is cheaper than
-        # branching to ``liveness_many`` after the SQL hit.
-        liveness_by_id = self._store.health.all()
-        page = _query_workers_page(self._store, query, liveness_by_id)
+        page = _query_workers_page(self._store, query)
 
         offset = max(query.offset, 0)
         limit = max(query.limit, 0)
@@ -1758,7 +1701,9 @@ class ControllerServiceImpl:
             limit = MAX_LIST_WORKERS_LIMIT
         has_more = limit > 0 and offset + limit < page.total_count
 
-        running = running_tasks_by_worker(self._db, {r.worker_id for r in page.rows}) if page.rows else {}
+        page_ids = [r.worker_id for r in page.rows]
+        liveness_by_id = self._store.health.liveness_many(page_ids) if page_ids else {}
+        running = running_tasks_by_worker(self._db, set(page_ids)) if page_ids else {}
         workers = []
         for row in page.rows:
             liveness = liveness_by_id.get(row.worker_id) or WorkerLiveness()

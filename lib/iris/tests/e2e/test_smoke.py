@@ -662,13 +662,17 @@ def test_capacity_type_propagates_to_worker_attributes(smoke_cluster):
 
     Catches regressions where config.capacity_type gets lost on the way to
     worker metadata (e.g. LOCAL-mode fake deriving it from the wrong source).
+    The full worker_attributes payload is served by ``GetWorkerStatus``;
+    ``ListWorkers`` returns a slim row for the fleet table.
     """
-    request = controller_pb2.Controller.ListWorkersRequest()
-    response = smoke_cluster.controller_client.list_workers(request)
-    assert response.workers, "Expected registered workers"
+    roster = smoke_cluster.controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest())
+    assert roster.workers, "Expected registered workers"
 
-    for w in response.workers:
-        attrs = w.metadata.attributes
+    for w in roster.workers:
+        detail = smoke_cluster.controller_client.get_worker_status(
+            controller_pb2.Controller.GetWorkerStatusRequest(id=w.worker_id),
+        )
+        attrs = detail.worker.metadata.attributes
         preemptible_attr = attrs.get(WellKnownAttribute.PREEMPTIBLE)
         assert preemptible_attr is not None, f"Worker {w.worker_id} missing preemptible attribute"
 
