@@ -593,6 +593,23 @@ def _weighted_accumulate_fma(
     return acc + jnp.sum(weighted_values, axis=0)
 
 
+def _load_faithful_dispatch_values(
+    dispatch_output_ref,
+    dispatch_rows: jax.Array,
+    hidden_offsets: jax.Array,
+    load_mask: jax.Array | None,
+) -> jax.Array:
+    if load_mask is None:
+        return pltriton.load(dispatch_output_ref.at[dispatch_rows[:, None], hidden_offsets[None, :]]).astype(
+            jnp.float32
+        )
+    return pltriton.load(
+        dispatch_output_ref.at[dispatch_rows[:, None], hidden_offsets[None, :]],
+        mask=load_mask,
+        other=0.0,
+    ).astype(jnp.float32)
+
+
 def _gather_sum_pallas_triton_faithful_kernel(
     dispatch_output_ref,
     dispatch_positions_ref,
@@ -612,10 +629,11 @@ def _gather_sum_pallas_triton_faithful_kernel(
 ) -> None:
     token_index = pl.program_id(0)
     metadata_base = token_index * topk
+    has_full_hidden_tiles = hidden % hidden_block_size == 0
 
     for hidden_tile in range(hidden_tiles):
         hidden_offsets = hidden_tile * hidden_block_size + jnp.arange(hidden_block_size)
-        hidden_mask = hidden_offsets < hidden
+        hidden_mask = None if has_full_hidden_tiles else hidden_offsets < hidden
         acc = jnp.zeros((hidden_block_size,), dtype=jnp.float32)
 
         for repeat_index in range(kernel_repeat):
@@ -625,11 +643,12 @@ def _gather_sum_pallas_triton_faithful_kernel(
                 if topk % k_block_size == 0:
                     metadata_offsets = metadata_base + k_offsets
                     dispatch_rows = pltriton.load(dispatch_positions_ref.at[metadata_offsets]) + repeat_offset
-                    values = pltriton.load(
-                        dispatch_output_ref.at[dispatch_rows[:, None], hidden_offsets[None, :]],
-                        mask=hidden_mask[None, :],
-                        other=0.0,
-                    ).astype(jnp.float32)
+                    values = _load_faithful_dispatch_values(
+                        dispatch_output_ref,
+                        dispatch_rows,
+                        hidden_offsets,
+                        None if hidden_mask is None else hidden_mask[None, :],
+                    )
                     if has_weights:
                         weights = pltriton.load(combine_weights_ref.at[metadata_offsets]).astype(jnp.float32)
                         if use_inline_fma:
@@ -656,11 +675,12 @@ def _gather_sum_pallas_triton_faithful_kernel(
                         )
                         + repeat_offset
                     )
-                    values = pltriton.load(
-                        dispatch_output_ref.at[dispatch_rows[:, None], hidden_offsets[None, :]],
-                        mask=k_mask[:, None] & hidden_mask[None, :],
-                        other=0.0,
-                    ).astype(jnp.float32)
+                    values = _load_faithful_dispatch_values(
+                        dispatch_output_ref,
+                        dispatch_rows,
+                        hidden_offsets,
+                        k_mask[:, None] if hidden_mask is None else k_mask[:, None] & hidden_mask[None, :],
+                    )
                     if has_weights:
                         weights = pltriton.load(
                             combine_weights_ref.at[metadata_offsets],
@@ -680,8 +700,15 @@ def _gather_sum_pallas_triton_faithful_kernel(
                     else:
                         acc = acc + jnp.sum(values, axis=0)
 
-        output = (acc * (1.0 / kernel_repeat)).astype(output_ref.dtype)
-        pltriton.store(output_ref.at[token_index, hidden_offsets], output, mask=hidden_mask)
+        output = (
+            acc.astype(output_ref.dtype)
+            if kernel_repeat == 1
+            else (acc * (1.0 / kernel_repeat)).astype(output_ref.dtype)
+        )
+        if hidden_mask is None:
+            pltriton.store(output_ref.at[token_index, hidden_offsets], output)
+        else:
+            pltriton.store(output_ref.at[token_index, hidden_offsets], output, mask=hidden_mask)
 
 
 def _gather_sum_pallas_triton_token_kblock_kernel(

@@ -280,6 +280,54 @@ measurement. The remaining gap is likely in address arithmetic, instruction
 scheduling, or other lowering differences rather than just missing vector loads
 or missing FMA contraction.
 
+### No-Mask And K-Tile Push, 2026-05-11
+
+Follow-up jobs:
+
+- `/dlwh/sonicmoe-pallas-flatdispatch-20260511-222720`: flattened
+  `dispatch_output` addressing; negative result.
+- `/dlwh/sonicmoe-pallas-hints2-20260511-223528`: `max_contiguous` /
+  `multiple_of` compiler hints; negative result.
+- `/dlwh/sonicmoe-pallas-kblock4-20260511-223657`: one K tile
+  (`BLOCK_K=4`) and inline FMA variants.
+- `/dlwh/sonicmoe-pallas-nomask-20260511-223933`: exact-hidden tile path
+  without load/store masks.
+- `/dlwh/sonicmoe-pallas-nomask-sweep-20260511-224102`: small
+  `BLOCK_H`/warps sweep after no-mask + inline FMA.
+- `/dlwh/sonicmoe-pallas-outputmul-20260511-225320`: exact-hidden no-mask
+  plus `kernel_repeat == 1` output multiply removal.
+
+The only source changes worth keeping were:
+
+- Skip hidden load/store masks when `hidden % hidden_block_size == 0`.
+- Skip the final `acc * (1 / kernel_repeat)` when `kernel_repeat == 1`.
+
+Negative source experiments:
+
+- Flattening `dispatch_output` into one-dimensional addressing produced the
+  same PTX counts and essentially the same runtime.
+- Adding Pallas/Triton contiguity and multiple-of hints produced the same PTX
+  counts and essentially the same runtime. The flat-address + hints variant
+  also exposed that `max_contiguous` must receive a rank-matching tuple for
+  rank-2 offsets.
+
+| Path | Config | PTX bytes | Lines | `ld.global` | `st.global` | `add.*` | `mul.*` | `cvt.*` | `fma.*` | Steady time |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Pallas fixed-K | `BLOCK_H=2048`, `BLOCK_K=2`, masks | `7.7KB` | `254` | `9` | `1` | `45` | `39` | `40` | `0` | `0.116-0.121ms` |
+| Pallas no hidden masks | `BLOCK_H=2048`, `BLOCK_K=2` | `7.7KB` | `251` | `9` | `1` | `45` | `39` | `40` | `0` | `0.117ms` |
+| Pallas one K tile | `BLOCK_H=2048`, `BLOCK_K=4` | `7.4KB` | `243` | `7` | `1` | `43` | `39` | `40` | `0` | `0.117ms` |
+| Pallas one K tile + inline FMA | `BLOCK_H=2048`, `BLOCK_K=4` | `9.1KB` | `312` | `7` | `1` | `47` | `7` | `40` | `32` | `0.114-0.117ms` |
+
+The `BLOCK_H`/warps sweep did not find a better point. Best median was still in
+the `0.116-0.117ms` band for `BLOCK_H=1024/2048` with `4-8` warps. Smaller
+hidden tiles or more warps were worse.
+
+This changes the diagnosis: the current faithful Pallas PTX can now have fewer
+textual global loads than the selected real Sonic PTX for the top-k-4 case, yet
+it remains slower. The remaining gap is not K metadata load scalarization. It is
+more likely instruction scheduling, register pressure/occupancy, SASS-level
+codegen, or the arithmetic/reduction lowering around the weighted sum.
+
 So the remaining isolated gather/sum gap is no longer explained by gross PTX
 size or by K-metadata scalarization for the fixed `K=2` shape. The more
 concrete PTX-level gap is duplicated address arithmetic, scheduling, and the
@@ -343,10 +391,10 @@ Use this map as the source alignment before looking at IR:
 
 1. Compare real Sonic [lines 142-166](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/.agents/scripts/sonicmoe_compare/real_sonic_token_gather_sum.py#L142-L166)
    against faithful Pallas
-   [lines 596-684](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L596-L684).
+   [lines 613-711](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L613-L711).
 2. Compare real Sonic [lines 147-163](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/.agents/scripts/sonicmoe_compare/real_sonic_token_gather_sum.py#L147-L163)
    against faithful Pallas
-   [lines 621-679](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L621-L679).
+   [lines 639-699](https://github.com/marin-community/marin/blob/codex/sonic-equivalent-pallas/lib/levanter/src/levanter/grug/sonic_moe.py#L639-L699).
 3. Compare matched-tile PTX first (`H=2048`, `K=2`, `warps=8`) before comparing
    fastest-tile PTX, otherwise autotuning differences obscure source-lowering
    differences.

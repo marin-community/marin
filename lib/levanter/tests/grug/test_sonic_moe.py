@@ -95,6 +95,15 @@ def test_sonic_gather_sum_pallas_interpret_matches_reference_and_grad():
         interpret=True,
     )
     np.testing.assert_allclose(np.asarray(y_faithful), np.asarray(y_ref), rtol=1e-6, atol=1e-6)
+    exact_hidden_block_sizes = SonicGatherSumBlockSizes(token_block_size=1, hidden_block_size=3, k_block_size=2)
+    y_exact_hidden = sonic_gather_sum_pallas_triton_faithful(
+        dispatch_output,
+        dispatch_positions,
+        combine_weights,
+        block_sizes=exact_hidden_block_sizes,
+        interpret=True,
+    )
+    np.testing.assert_allclose(np.asarray(y_exact_hidden), np.asarray(y_ref), rtol=1e-6, atol=1e-6)
 
     def loss(fn, dispatch_output, combine_weights):
         y = fn(dispatch_output, dispatch_positions, combine_weights)
