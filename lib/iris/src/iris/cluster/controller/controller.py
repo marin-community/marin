@@ -1263,21 +1263,21 @@ class Controller:
         return self._started
 
     def _start_local_log_server(self) -> str:
-        """Start a bundled in-process DuckDB-backed log + stats server and return its address.
+        """Start a bundled in-process log + stats server and return its address.
 
         Used as a fallback when ``cluster_config.endpoints`` does not declare
-        ``/system/log-server`` (and in tests). Backed by a ``DuckDBLogStore``
-        rooted under ``local_state_dir`` so logs survive controller restarts
-        within a single deployment and the stats RPC surface (RegisterTable /
-        WriteRows / Query / DropTable) is available — required for the
-        worker-pane cutover. For production-scale deployments, run
-        finelog-server out-of-band and point the endpoints config at it.
+        ``/system/log-server`` (and in tests). Backed by an in-memory
+        ``DuckDBLogStore`` — no segmentation, no flush thread, no compaction,
+        and logs are lost on controller restart. The stats RPC surface
+        (RegisterTable / WriteRows / Query / DropTable) is still available.
+        For any deployment that needs persistence or scale, run
+        ``finelog-server`` out-of-band (point it at a local dir with
+        ``remote_log_dir=""`` if you just want disk persistence without
+        remote sync) and point ``endpoints["/system/log-server"]`` at it.
         """
         log_server_port = find_free_port()
-        log_store_dir = self._config.local_state_dir / "embedded_log_store"
-        log_store_dir.mkdir(parents=True, exist_ok=True)
         log_store = DuckDBLogStore(
-            log_dir=log_store_dir,
+            log_dir=None,
             duckdb_memory_limit=EMBEDDED_DUCKDB_MEMORY_LIMIT,
             duckdb_threads=EMBEDDED_DUCKDB_THREADS,
         )
