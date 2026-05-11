@@ -4,6 +4,7 @@ import functools
 import inspect
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 import equinox as eqx
 import jax
@@ -18,6 +19,7 @@ from haliax.partitioning import _get_mesh
 
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
+GrugAttentionImplementation = Literal["reference", "tpu_splash", "gpu_xla", "gpu_cudnn", "gpu_flex_pallas"]
 
 
 @dataclass(frozen=True)
@@ -196,6 +198,117 @@ def reference_attention(
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
     ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
     return ctx.astype(v.dtype)
+
+
+def _dense_attention_mask_to_bnts(
+    mask: Bool[Array, "B Q K"] | Float[Array, "B Q K"],
+    *,
+    batch_size: int,
+    q_len: int,
+    k_len: int,
+) -> jax.Array:
+    if mask.ndim == 2:
+        mask = mask[None, :, :]
+    if mask.ndim != 3:
+        raise ValueError(f"explicit mask must have shape [batch, q, k], got shape={mask.shape}")
+    if mask.shape[0] not in (1, batch_size):
+        raise ValueError(f"explicit mask batch dim must be 1 or {batch_size}, got {mask.shape[0]}")
+    if mask.shape[1] != q_len or mask.shape[2] != k_len:
+        raise ValueError(
+            f"explicit mask must match attention shapes: got mask={mask.shape}, expected [batch,{q_len},{k_len}]"
+        )
+    return mask[:, None, :, :]
+
+
+def _mask_to_jax_dot_product_attention_args(
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    batch_size: int,
+    q_len: int,
+    k_len: int,
+) -> tuple[jax.Array | None, bool, tuple[int, int] | None]:
+    """Map Grug/Splash mask semantics onto `jax.nn.dot_product_attention` args."""
+    if mask is None:
+        return None, False, None
+
+    if isinstance(mask, AttentionMask):
+        if mask.sliding_window is not None and mask.sliding_window <= 0:
+            raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
+
+        if mask.segment_ids is not None:
+            raise NotImplementedError(
+                "JAX SDPA backends would require a dense segment_ids mask; use gpu_flex_pallas instead."
+            )
+
+        dense_mask = None
+        is_causal = mask.is_causal
+        local_window_size = None
+
+        if mask.sliding_window is not None:
+            if mask.is_causal:
+                local_window_size = (mask.sliding_window - 1, 0)
+            else:
+                q_idx = jnp.arange(q_len)[:, None]
+                k_idx = jnp.arange(k_len)[None, :]
+                sliding_mask = k_idx >= q_idx - (mask.sliding_window - 1)
+                sliding_mask = sliding_mask[None, None, :, :]
+                dense_mask = sliding_mask if dense_mask is None else jnp.logical_and(dense_mask, sliding_mask)
+
+        return dense_mask, is_causal, local_window_size
+
+    dense_mask = _dense_attention_mask_to_bnts(mask, batch_size=batch_size, q_len=q_len, k_len=k_len)
+    if dense_mask.dtype != jnp.bool_:
+        raise NotImplementedError("Additive dense masks are not supported by the native GPU attention prototype.")
+    return dense_mask, False, None
+
+
+def _jax_dot_product_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    implementation: Literal["xla", "cudnn"],
+) -> Float[Array, "B Q Hq D"]:
+    jax_mask, is_causal, local_window_size = _mask_to_jax_dot_product_attention_args(
+        mask,
+        batch_size=q.shape[0],
+        q_len=q.shape[1],
+        k_len=k.shape[1],
+    )
+    return jax.nn.dot_product_attention(
+        q,
+        k,
+        v,
+        mask=jax_mask,
+        is_causal=is_causal,
+        local_window_size=local_window_size,
+        implementation=implementation,
+    ).astype(v.dtype)
+
+
+def gpu_cudnn_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run Grug attention through JAX's native cuDNN SDPA path."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_cudnn_attention requires the JAX GPU backend.")
+    return _jax_dot_product_attention(q, k, v, mask, implementation="cudnn")
+
+
+def gpu_xla_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run Grug attention through JAX's GPU SDPA lowering for JAX-supported masks."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_xla_attention requires the JAX GPU backend.")
+    return _jax_dot_product_attention(q, k, v, mask, implementation="xla")
 
 
 def _spec_shard_factor(entry: str | tuple[str, ...] | None, mesh) -> int:
@@ -389,7 +502,26 @@ def attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    implementation: GrugAttentionImplementation | None = None,
 ) -> Float[Array, "B Q Hq D"]:
+    if implementation == "reference":
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if implementation == "gpu_xla":
+        return gpu_xla_attention(q, k, v, mask)
+    if implementation == "gpu_cudnn":
+        return gpu_cudnn_attention(q, k, v, mask)
+    if implementation == "gpu_flex_pallas":
+        if isinstance(mask, jax.Array):
+            raise NotImplementedError("gpu_flex_pallas does not support dense masks yet.")
+        from levanter.grug.flex_attention import gpu_flex_pallas_attention
+
+        return gpu_flex_pallas_attention(q, k, v, mask)
+    if implementation == "tpu_splash":
+        if isinstance(mask, jax.Array):
+            raise NotImplementedError("Dense masks are not supported for splash attention.")
+        return _tpu_splash_attention(q, k, v, mask)
+
     if jax.default_backend() == "tpu":
         if isinstance(mask, jax.Array):
             return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
@@ -399,9 +531,12 @@ def attention(
 
 __all__ = [
     "AttentionMask",
+    "GrugAttentionImplementation",
     "RotaryConfig",
     "align_kv_heads",
     "apply_rotary_embedding",
     "attention",
+    "gpu_cudnn_attention",
+    "gpu_xla_attention",
     "reference_attention",
 ]

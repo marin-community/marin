@@ -99,6 +99,26 @@ conflicts = [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-fray", group = "fray_tpu_test" },
     ],
+    [
+        { package = "marin-levanter", extra = "kernels" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "kernels" },
+        { package = "marin", extra = "cpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "kernels" },
+        { package = "marin", extra = "tpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "kernels" },
+        { package = "marin", extra = "vllm" },
+    ],
+    [
+        { package = "marin-levanter", extra = "kernels" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
 ]
 
 [tool.uv.workspace]
@@ -125,6 +145,8 @@ marin-zephyr = { workspace = true }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+# Pin Tokamax to current main for JAX 0.10 Pallas/fuser API compatibility.
+tokamax = { git = "https://github.com/openxla/tokamax.git", rev = "253673862d83e67659f2e449d9c6f7b3b94f10c4" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
