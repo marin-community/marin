@@ -60,9 +60,19 @@ _DEFAULT_GRID: tuple[tuple[int, float, float, float], ...] = (
 # the cached outputs from the baseline-warmup grid are not reused.
 _NOWARMUP_GRID: tuple[tuple[int, float, float, float], ...] = _DEFAULT_GRID
 
+# Phase 3 d1024 LR sweep at the current MuonH:Adam ratio (13/3, i.e. the
+# v16 heuristic). Both multipliers move together. The 1.0x cell is the
+# existing baseline-adam-mask d1024 run from #5596 and is skipped here.
+_PHASE3_GRID: tuple[tuple[int, float, float, float], ...] = (
+    (1024, 9.00e18, 0.5, 0.5),
+    (1024, 9.00e18, 2.0, 2.0),
+    (1024, 9.00e18, 4.0, 4.0),
+)
+
 _BASELINE_TARGET_STEPS: int = 2**14
 _GROUP: str = "muonh-lr-sweep"
 _GROUP_NOWARMUP: str = "muonh-lr-sweep-nowarmup"
+_GROUP_PHASE3: str = "muonh-lr-sweep-d1024"
 
 
 def _format_budget(budget: float) -> str:
@@ -196,8 +206,17 @@ def _build_step(
     )
 
 
+_VARIANT_GRIDS: dict[str, tuple[tuple[int, float, float, float], ...]] = {
+    "baseline": _DEFAULT_GRID,
+    "nowarmup": _NOWARMUP_GRID,
+    "phase3": _PHASE3_GRID,
+}
+
+
 def _select_points(spec: str, variant: str) -> list[tuple[int, float, float, float]]:
-    grid = _NOWARMUP_GRID if variant == "nowarmup" else _DEFAULT_GRID
+    if variant not in _VARIANT_GRIDS:
+        raise ValueError(f"MUONH_LR_SWEEP_VARIANT must be one of {sorted(_VARIANT_GRIDS)}, got {variant!r}")
+    grid = _VARIANT_GRIDS[variant]
     if spec == "all":
         return list(grid)
     try:
@@ -227,8 +246,6 @@ def _build_steps(spec: str, variant: str, run_suffix: str = "") -> list[Executor
 if __name__ == "__main__":
     spec = os.environ.get("MUONH_LR_SWEEP_INDEX", "all")
     variant = os.environ.get("MUONH_LR_SWEEP_VARIANT", "baseline")
-    if variant not in {"baseline", "nowarmup"}:
-        raise ValueError(f"MUONH_LR_SWEEP_VARIANT must be 'baseline' or 'nowarmup', got {variant!r}")
     run_suffix = os.environ.get("MUONH_LR_SWEEP_RUN_SUFFIX", "")
     steps = _build_steps(spec, variant=variant, run_suffix=run_suffix)
     executor_main(
