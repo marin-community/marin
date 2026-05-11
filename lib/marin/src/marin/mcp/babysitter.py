@@ -685,10 +685,6 @@ def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]
     return summary
 
 
-def _job_matches_prefix(job_id: str, prefix: JobName) -> bool:
-    return prefix.is_ancestor_of(JobName.from_wire(job_id), include_self=True)
-
-
 def _token_provider(cluster: str, *, store_path: Path | None = None) -> TokenProvider | None:
     credential = load_token(cluster, store_path=store_path)
     if credential is None:
