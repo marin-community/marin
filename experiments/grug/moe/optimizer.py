@@ -80,7 +80,13 @@ class GrugMoeAdamHConfig(OptimizerConfig):
             path_lower = path_str.lower()
             if "token_embed" in path_lower:
                 return "adam"
-            if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
+            # Use endswith for ``attn_gate`` so we hit only the actual attention
+            # gate leaf (path ends ``...attn.attn_gate``) and NOT
+            # ``attn_gated_norm.w_{up,down}`` whose paths happen to start the same
+            # way. Effect: per-block ``attn_gated_norm`` now falls through to the
+            # adamh matrix branch, matching the routing of the other three
+            # GatedNorm instances (mlp / embed / final).
+            if "router_bias" in path_lower or path_lower.endswith(".attn_gate") or ".router" in path_lower:
                 return "adam"
             if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
