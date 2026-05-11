@@ -60,7 +60,10 @@ message Controller {
     // When a task fails (non-zero exit code), retry up to this many times before marking permanently failed
     int32 max_retries_failure = 12;  // Default: 0 (no retries on task failure)
 
-    // When a task is preempted (worker dies), retry up to this many times
+    // When a task is preempted (worker dies), retry up to this many times.
+    // Capped at MAX_RETRIES_PREEMPTION_CAP (1000) on the controller; higher values
+    // are clamped at submission. Sentinel-like values (e.g. INT32_MAX) used to
+    // mean "retry forever" overflowed counter arithmetic — pick a real number.
     int32 max_retries_preemption = 13;  // Default: 100 (generous preemption tolerance)
 
     // Constraints for filtering workers by attribute.

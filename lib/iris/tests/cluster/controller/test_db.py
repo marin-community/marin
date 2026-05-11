@@ -778,3 +778,70 @@ def test_drop_resource_history_tables_migration(tmp_path: Path) -> None:
     mod.migrate(conn)
     conn.commit()
     conn.close()
+
+
+def test_clamp_preemption_counters_migration(tmp_path: Path) -> None:
+    """0047 clamps legacy oversized preemption / failure counters to 1000.
+
+    Reproduces the historical ListJobs overflow: clients passed
+    ``max_retries_preemption = INT32_MAX``, the sibling-termination path wrote
+    ``INT32_MAX + 1`` (= 2_147_483_648) into ``preemption_count``, and the
+    aggregated SUM blew the int32 JobStatus field. The migration rewrites all
+    columns that fed that aggregate so old rows stop tripping serialization.
+    """
+    import importlib
+
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite3"))
+    conn.executescript(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY,
+            preemption_count INTEGER NOT NULL,
+            failure_count INTEGER NOT NULL,
+            max_retries_preemption INTEGER NOT NULL
+        );
+        CREATE TABLE job_config (
+            job_id TEXT PRIMARY KEY,
+            max_retries_preemption INTEGER NOT NULL
+        );
+        """
+    )
+    # Overflow row (the actual production pattern), in-range rows that must
+    # stay untouched, and a precisely-1000 boundary row that must also stay.
+    conn.executemany(
+        "INSERT INTO tasks(task_id, preemption_count, failure_count, max_retries_preemption) VALUES (?, ?, ?, ?)",
+        [
+            ("/u/overflow", 2_147_483_648, 0, 2_147_483_647),
+            ("/u/over_cap", 1_500, 1_200, 5_000),
+            ("/u/healthy", 3, 0, 100),
+            ("/u/boundary", 1_000, 1_000, 1_000),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO job_config(job_id, max_retries_preemption) VALUES (?, ?)",
+        [("/u/overflow", 2_147_483_647), ("/u/healthy", 100)],
+    )
+    conn.commit()
+
+    mod = importlib.import_module("iris.cluster.controller.migrations.0047_clamp_preemption_counters")
+    mod.migrate(conn)
+    conn.commit()
+
+    tasks = {
+        row[0]: row[1:]
+        for row in conn.execute(
+            "SELECT task_id, preemption_count, failure_count, max_retries_preemption FROM tasks"
+        ).fetchall()
+    }
+    assert tasks["/u/overflow"] == (1000, 0, 1000)
+    assert tasks["/u/over_cap"] == (1000, 1000, 1000)
+    assert tasks["/u/healthy"] == (3, 0, 100)
+    assert tasks["/u/boundary"] == (1000, 1000, 1000)
+
+    jobs = dict(conn.execute("SELECT job_id, max_retries_preemption FROM job_config").fetchall())
+    assert jobs == {"/u/overflow": 1000, "/u/healthy": 100}
+
+    # Idempotent.
+    mod.migrate(conn)
+    conn.commit()
+    conn.close()

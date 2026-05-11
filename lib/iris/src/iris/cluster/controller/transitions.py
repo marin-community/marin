@@ -128,6 +128,17 @@ MAX_REPLICAS_PER_JOB = 10000
 DEFAULT_MAX_RETRIES_PREEMPTION = 100
 """Default preemption retries. High because worker failures are typically transient."""
 
+MAX_RETRIES_PREEMPTION_CAP = 1000
+"""Hard upper bound on per-task preemption retries.
+
+Clients used to pass values like ``INT32_MAX`` to mean "retry forever"; the
+sibling-termination path then writes ``max_retries_preemption + 1`` into
+``tasks.preemption_count`` as a tombstone, which overflowed the int32 wire
+type on ``JobStatus`` and tripped ``ListJobs``. 1000 is well above any
+realistic transient-failure budget and leaves headroom for the ``+1`` write
+without coming anywhere near int32.
+"""
+
 RESERVATION_HOLDER_JOB_NAME = ":reservation:"
 """Well-known name component for synthetic reservation holder child jobs.
 
@@ -967,6 +978,11 @@ class ControllerTransitions:
             validation_error = f"Job {job_id} replicas={replicas} exceeds max {MAX_REPLICAS_PER_JOB}"
             replicas = 0
 
+        # Clamp preemption retries at submission so downstream counter arithmetic
+        # (e.g. sibling-termination's ``preemption_count = max_retries_preemption + 1``
+        # tombstone) cannot overflow the int32 wire type on ``JobStatus``.
+        max_retries_preemption = min(int(request.max_retries_preemption), MAX_RETRIES_PREEMPTION_CAP)
+
         state = job_pb2.JOB_STATE_PENDING if validation_error is None else job_pb2.JOB_STATE_FAILED
         finished_ms = None if validation_error is None else effective_submission_ms
         has_reservation = _has_reservation_flag(request)
@@ -1036,7 +1052,7 @@ class ControllerTransitions:
                 bundle_id=request.bundle_id,
                 ports_json=ports_json,
                 max_retries_failure=int(request.max_retries_failure),
-                max_retries_preemption=int(request.max_retries_preemption),
+                max_retries_preemption=max_retries_preemption,
                 timeout_ms=timeout_ms,
                 preemption_policy=int(request.preemption_policy),
                 existing_job_policy=int(request.existing_job_policy),
@@ -1065,7 +1081,7 @@ class ControllerTransitions:
                         state=job_pb2.TASK_STATE_PENDING,
                         submitted_at_ms=effective_submission_ms,
                         max_retries_failure=int(request.max_retries_failure),
-                        max_retries_preemption=int(request.max_retries_preemption),
+                        max_retries_preemption=max_retries_preemption,
                         priority_neg_depth=-job_id.depth,
                         priority_root_submitted_ms=root_submitted_ms,
                         priority_insertion=insertion_base + idx,

@@ -1380,3 +1380,29 @@ def test_late_heartbeat_after_preempt_to_pending_does_not_revive_attempt():
             f"error={attempt_final.error!r}, finished_at={attempt_final.finished_at}"
         )
         assert attempt_final.error == "Preempted by /bob/prod-job:0"
+
+
+def test_max_retries_preemption_capped_at_submission():
+    """``LaunchJobRequest.max_retries_preemption`` is clamped to MAX_RETRIES_PREEMPTION_CAP.
+
+    Submitting a job that asks for ``INT32_MAX`` retries (the legacy "retry
+    forever" sentinel) must persist as 1000. The sibling-termination tombstone
+    write of ``+ 1`` then stays well within int32, so the JobStatus overflow
+    that caused the ListJobs regression cannot recur.
+    """
+    from iris.cluster.controller.transitions import MAX_RETRIES_PREEMPTION_CAP
+
+    with make_controller_state() as state:
+        harness = ControllerTestHarness(state)
+        tasks = harness.submit(
+            "/alice/clamped",
+            cpu=1,
+            replicas=2,
+            max_retries_preemption=(1 << 31) - 1,
+        )
+        for task in tasks:
+            row = query_task(state, task.task_id)
+            assert row.max_retries_preemption == MAX_RETRIES_PREEMPTION_CAP
+
+        job = query_job(state, tasks[0].job_id)
+        assert job.max_retries_preemption == MAX_RETRIES_PREEMPTION_CAP
