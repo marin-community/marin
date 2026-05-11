@@ -4,8 +4,12 @@
 """Tests for the registry migrations runner.
 
 The runner backs every catalog schema change after the baseline; pinning
-its core invariants (idempotency, transactional apply, partial-failure
-rollback, legacy-database adoption) keeps future migration authors honest.
+its core invariants (idempotency, legacy-database adoption, retry on
+failure) keeps future migration authors honest. The runner does not
+wrap migrations in an outer transaction — migrations manage their own
+atomicity and must be idempotent — so the tests assert that a failed
+migration leaves ``schema_migrations`` untouched and is retried on the
+next apply, rather than that its side effects are rolled back.
 """
 
 from __future__ import annotations
@@ -108,15 +112,18 @@ def test_pre_migrations_database_inherits_baseline(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Transactional apply: a failing migration leaves no row in schema_migrations.
+# Failed migrations leave no row in ``schema_migrations`` (so they retry).
+# Per-statement side effects from a partially-applied migration ARE visible
+# — the runner does not wrap migrations in a transaction. Migrations must
+# be idempotent so that the next apply converges over the half-applied state.
 # ---------------------------------------------------------------------------
 
 
-def test_failing_migration_rolls_back(tmp_path):
+def test_failing_migration_is_not_recorded(tmp_path):
     fake_dir = tmp_path / "migs"
     fake_dir.mkdir()
-    # 0001 succeeds, 0002 fails. Both should be observable via the runner;
-    # only 0001 should be marked applied.
+    # 0001 succeeds, 0002 partially applies then fails. Only 0001 is
+    # recorded as applied; 0002's pre-failure side effect is still visible.
     (fake_dir / "0001_ok.py").write_text(
         "import duckdb\n"
         "def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir) -> None:\n"
@@ -125,7 +132,7 @@ def test_failing_migration_rolls_back(tmp_path):
     (fake_dir / "0002_boom.py").write_text(
         "import duckdb\n"
         "def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir) -> None:\n"
-        "    conn.execute('CREATE TABLE will_be_rolled_back (n INTEGER)')\n"
+        "    conn.execute('CREATE TABLE IF NOT EXISTS partial_side_effect (n INTEGER)')\n"
         "    raise RuntimeError('simulated migration failure')\n"
     )
 
@@ -137,14 +144,22 @@ def test_failing_migration_rolls_back(tmp_path):
         # 0001 is recorded and its table exists.
         assert _applied_migrations(conn) == ["0001_ok.py"]
         assert "ok_marker" in _list_tables(conn)
-        # 0002's side-effect was rolled back: neither the table nor a row.
-        assert "will_be_rolled_back" not in _list_tables(conn)
+        # 0002 left a partial side effect on disk; idempotent re-run is the
+        # migration author's responsibility. The runner just declines to
+        # record it as applied so the next ``apply_migrations`` retries it.
+        assert "partial_side_effect" in _list_tables(conn)
+        assert "0002_boom.py" not in _applied_migrations(conn)
     finally:
         conn.close()
 
 
 def test_failed_migration_retries_on_next_apply(tmp_path):
-    """A migration that failed once must run again on the next open."""
+    """A migration that failed once must run again on the next open.
+
+    Idempotent statements (``CREATE TABLE IF NOT EXISTS`` here) make a
+    re-run safe even though the partial side effect from the first pass
+    is still on disk.
+    """
     fake_dir = tmp_path / "migs"
     fake_dir.mkdir()
     migration_path = fake_dir / "0001_flaky.py"

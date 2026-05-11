@@ -3,12 +3,20 @@
 
 """Versioned migrations for the finelog registry DuckDB sidecar.
 
-Each ``NNNN_name.py`` file defines a ``migrate(conn)`` callable. The
-:func:`apply_migrations` runner in :mod:`._runner` walks the directory in
-filename order and applies any not yet recorded in the ``schema_migrations``
-table. Each migration runs inside a transaction that also inserts the
-``schema_migrations`` row, so partial application can't leave the catalog
-in a half-migrated state.
+Each ``NNNN_name.py`` file defines a ``migrate(conn, *, data_dir)``
+callable. The :func:`apply_migrations` runner in :mod:`._runner` walks
+the directory in filename order and applies any not yet recorded in the
+``schema_migrations`` table. After a successful ``migrate`` the runner
+inserts a row in ``schema_migrations``; a raised exception leaves the
+row out so the next open re-runs the migration.
+
+The runner does not wrap migrations in an outer transaction. DuckDB
+rejects several useful statement sequences (notably multiple
+schema-altering DDLs + DML on the same table) inside a single
+transaction, so each migration is responsible for its own atomicity and
+must be idempotent under partial application. Migrations that *can*
+benefit from a multi-statement transaction can call
+:func:`transactional` themselves.
 
 Migration files must be idempotent against any pre-migrations on-disk
 state: pre-existing deployments are bootstrapped through 0001 even though

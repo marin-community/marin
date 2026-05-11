@@ -32,6 +32,20 @@ the only row-removal path, so every surviving row had a local file.
 Non-null is enforced at the application layer rather than via DuckDB's
 ``SET NOT NULL`` because the existing ``segments_level_idx`` blocks
 schema-altering DDL on the table.
+
+Idempotency
+-----------
+Each statement is a no-op against a partially-applied state, so a crash
+between any two statements is recovered by simply re-running. The runner
+does not wrap migrations in a transaction (DuckDB rejects multiple
+DDLs + DML on the same table in one txn), so resumability is the
+migration's responsibility:
+
+* ``DROP INDEX IF EXISTS`` / ``CREATE INDEX IF NOT EXISTS`` / ``ADD COLUMN
+  IF NOT EXISTS`` are inherently idempotent.
+* The backfill ``UPDATE`` is gated on ``location IS NULL``, so a re-run
+  after partial backfill only touches the un-backfilled remainder.
+* ``DROP COLUMN IF EXISTS`` is a no-op once the column is gone.
 """
 
 from __future__ import annotations
@@ -57,5 +71,5 @@ def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir: Path | None) -> None:
          WHERE location IS NULL
         """
     )
-    conn.execute("ALTER TABLE segments DROP COLUMN copied_at_ms")
+    conn.execute("ALTER TABLE segments DROP COLUMN IF EXISTS copied_at_ms")
     conn.execute("CREATE INDEX IF NOT EXISTS segments_ns_level_minseq ON segments (namespace, level, min_seq)")

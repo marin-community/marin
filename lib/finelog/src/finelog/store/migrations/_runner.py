@@ -4,16 +4,29 @@
 """Versioned migrations runner for the registry DuckDB sidecar.
 
 Migration files live next to this module as ``NNNN_name.py`` and define a
-``migrate(conn)`` function. The runner discovers them in filename order,
-filters out any already recorded in the ``schema_migrations`` table, and
-applies the remainder. Each migration runs inside a transaction that also
-inserts its ``schema_migrations`` row — a crash mid-migration leaves no
-half-applied state.
+``migrate(conn, *, data_dir)`` function. The runner discovers them in
+filename order, filters out any already recorded in the
+``schema_migrations`` table, and applies the remainder. After ``migrate``
+returns the runner inserts the ``schema_migrations`` row.
 
-Migrations must be idempotent (``CREATE TABLE IF NOT EXISTS``,
-``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``, etc.). Existing deployments
-may already have tables created by an earlier release that pre-dates this
-runner; the first migration just records that v1 has been observed.
+The runner does **not** wrap ``migrate()`` in an outer transaction. DuckDB
+rejects several useful sequences inside a single transaction — most
+notably multiple schema-altering DDLs interleaved with DML on the same
+table — so each migration manages its own atomicity. Two consequences:
+
+* Migrations must be idempotent (``CREATE TABLE IF NOT EXISTS``,
+  ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``, ``DROP COLUMN IF EXISTS``,
+  conditional UPDATE filters). A crash mid-migration may leave partial
+  side effects on disk; on the next open, the migration runs again and
+  the idempotent statements converge.
+* When a migration needs multi-statement atomicity for a block that
+  DuckDB *does* accept (e.g. compaction's swap of input/output rows),
+  it can call :func:`transactional` itself. The helper is exported for
+  exactly this case.
+
+The ``schema_migrations`` row insert lands only if ``migrate()`` returned
+without raising, so a failed migration is naturally re-run on the next
+open.
 """
 
 from __future__ import annotations
@@ -36,8 +49,8 @@ def transactional(conn: duckdb.DuckDBPyConnection) -> Iterator[duckdb.DuckDBPyCo
 
     Any exception triggers ``ROLLBACK`` and propagates; a clean exit
     ``COMMIT``s. Useful for callers that want all-or-nothing semantics
-    over multiple statements (compaction's segment swap, the migration
-    runner's apply-and-record pair).
+    over multiple statements (compaction's segment swap, a migration's
+    multi-row backfill where partial visibility would be wrong).
     """
     conn.execute("BEGIN")
     try:
@@ -86,9 +99,14 @@ def apply_migrations(
     """Apply pending migrations from ``migrations_dir`` to ``conn``.
 
     ``migrations_dir`` defaults to this package's directory. ``data_dir``
-    is the parent directory of the registry DB and is forwarded to any
-    migration whose ``migrate`` signature declares a ``data_dir`` parameter.
-    Migrations that need to rename on-disk parquet files use it.
+    is the parent directory of the registry DB and is forwarded to every
+    migration's ``migrate(conn, *, data_dir=...)`` signature; migrations
+    that need to rename on-disk parquet files use it.
+
+    Each ``migrate`` runs without an enclosing transaction (see module
+    docstring). If it raises, the ``schema_migrations`` row is not
+    inserted, so the migration will re-run on the next open — and must
+    therefore be idempotent.
     """
     if migrations_dir is None:
         migrations_dir = Path(__file__).parent
@@ -105,10 +123,9 @@ def apply_migrations(
     for path in pending:
         t0 = time.monotonic()
         migrate = _load_migration(path)
-        with transactional(conn):
-            migrate(conn, data_dir=data_dir)
-            conn.execute(
-                "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                [path.name, int(time.time() * 1000)],
-            )
+        migrate(conn, data_dir=data_dir)
+        conn.execute(
+            "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
+            [path.name, int(time.time() * 1000)],
+        )
         logger.info("finelog migration %s applied in %.3fs", path.name, time.monotonic() - t0)

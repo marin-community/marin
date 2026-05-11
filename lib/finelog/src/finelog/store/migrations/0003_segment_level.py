@@ -17,10 +17,13 @@ After this migration there is no ``state`` column and no ``tmp_*`` /
 
 Resumability
 ------------
-The DB-level work (ADD/DROP COLUMN, UPDATE) runs inside the migration
-runner's enclosing transaction, so it's atomic. The filesystem rename is
-not, but each ``os.rename`` is. We walk every segment row, derive the
-target filename from ``(level, min_seq)``, and rename the file:
+The runner does not wrap migrations in a transaction, so the SQL phase
+relies on each statement being idempotent: ``ADD COLUMN IF NOT EXISTS``
+is a no-op on re-run, the ``UPDATE`` is gated on the still-present
+``state`` column, and ``DROP COLUMN`` runs only when that column still
+exists. The filesystem rename is also not atomic, but each ``os.rename``
+is. We walk every segment row, derive the target filename from
+``(level, min_seq)``, and rename the file:
 
 * If the source still exists and the destination doesn't, ``os.rename``.
 * If the destination already exists (a prior crashed pass moved it),
@@ -56,12 +59,13 @@ def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir: Path | None) -> None:
     # ``level`` on every insert going forward. Backfill (only when ``state``
     # is still present, i.e. first-time apply): ``finalized`` rows become
     # L1, ``tmp`` rows become L0. A re-run after a partial crash is a
-    # clean no-op for the SQL phase.
+    # clean no-op for the SQL phase: each statement is idempotent and the
+    # ``state_present`` gate skips the UPDATE+DROP once the column is gone.
     # The companion index on (namespace, level, min_seq) is created in
-    # migration 0005, in its own transaction: DuckDB rejects CREATE INDEX
-    # while there are outstanding UPDATEs in the same txn, and rejects
-    # DROP COLUMN if a later column is indexed — there is no single
-    # ordering that satisfies both constraints in one transaction.
+    # migration 0005: DuckDB rejects CREATE INDEX while there are
+    # outstanding UPDATEs in the same txn, and rejects DROP COLUMN if a
+    # later column is indexed — there is no single ordering that satisfies
+    # both constraints in one transaction.
     conn.execute("ALTER TABLE segments ADD COLUMN IF NOT EXISTS level INTEGER")
     state_present = bool(
         conn.execute(

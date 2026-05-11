@@ -22,6 +22,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -1181,16 +1182,27 @@ class DiskLogNamespace:
         reconstruct row metadata, then insert at ``location=REMOTE``.
         Files whose basename is already in the catalog are left alone
         (the local-disk pass already attached them).
+
+        Parquet footer reads dominate the wall-time here — each segment
+        is one network round-trip. ``fs.find(detail=True)`` returns the
+        file size in the listing response so we don't also pay a
+        ``fs.info`` per file. The footer fetches run on a thread pool
+        (network I/O releases the GIL); catalog upserts then run on the
+        main thread because ``Catalog._conn`` is a single DuckDB
+        connection.
         """
         try:
             fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
-            remote_paths = list(fs.find(root))
+            # detail=True returns a dict keyed by path with size/info inline,
+            # eliminating the per-file fs.info() round trip below.
+            remote_info = fs.find(root, detail=True)
         except Exception:
             logger.warning("remote adopt list failed for %s", self.name, exc_info=True)
             return
 
         catalog_basenames = {Path(r.path).name for r in self._catalog.list_segments(self.name)}
-        for fs_path in remote_paths:
+        candidates: list[tuple[str, int, int, int]] = []  # (fs_path, level, min_seq, byte_size)
+        for fs_path, info in remote_info.items():
             basename = Path(fs_path).name
             if basename in catalog_basenames:
                 continue
@@ -1199,18 +1211,37 @@ class DiskLogNamespace:
                 logger.warning("ignoring unparseable remote file %s/%s", self.name, basename)
                 continue
             level, min_seq = parsed
+            byte_size = int(info.get("size", 0) or 0)
+            candidates.append((fs_path, level, min_seq, byte_size))
+
+        if not candidates:
+            return
+
+        def _fetch_footer(fs_path: str) -> tuple[str, pq.FileMetaData | None]:
             try:
                 with fs.open(fs_path, "rb") as f:
-                    metadata = pq.read_metadata(f)
+                    return fs_path, pq.read_metadata(f)
             except Exception:
-                logger.warning("failed reading remote parquet footer %s/%s", self.name, basename, exc_info=True)
+                logger.warning(
+                    "failed reading remote parquet footer %s/%s", self.name, Path(fs_path).name, exc_info=True
+                )
+                return fs_path, None
+
+        # Parquet footers are tiny; the wall-time is round-trip latency, so a
+        # modest pool already saturates bucket throughput. Cap pool size by
+        # candidate count to avoid spinning idle threads for small adopts.
+        max_workers = min(32, len(candidates))
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="adopt-remote") as pool:
+            footers = dict(pool.map(_fetch_footer, [c[0] for c in candidates]))
+
+        now_ms = int(time.time() * 1000)
+        for fs_path, level, min_seq, byte_size in candidates:
+            metadata = footers.get(fs_path)
+            if metadata is None:
                 continue
+            basename = Path(fs_path).name
             num_rows = metadata.num_rows
             min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
-            try:
-                byte_size = fs.info(fs_path).get("size", 0)
-            except Exception:
-                byte_size = 0
             local_path = self._data_dir / basename
             self._catalog.upsert_segment(
                 SegmentRow(
@@ -1220,14 +1251,18 @@ class DiskLogNamespace:
                     min_seq=min_seq,
                     max_seq=min_seq + max(num_rows - 1, 0),
                     row_count=num_rows,
-                    byte_size=int(byte_size),
-                    created_at_ms=int(time.time() * 1000),
+                    byte_size=byte_size,
+                    created_at_ms=now_ms,
                     location=SegmentLocation.REMOTE,
                     min_key_value=None if min_key is None else str(min_key),
                     max_key_value=None if max_key is None else str(max_key),
                 )
             )
-            logger.info("Adopted remote segment %s/%s as REMOTE", self.name, basename)
+        logger.info(
+            "Adopted %d remote segment(s) for namespace %s as REMOTE",
+            sum(1 for fs_path, *_ in candidates if footers.get(fs_path) is not None),
+            self.name,
+        )
 
     def _sync_step(self) -> None:
         """Reconcile the remote namespace prefix with the catalog.
@@ -1748,8 +1783,10 @@ def _scope_query(
     Returns ``(where_parts, params, include_key_in_select, exact_key)``.
 
     The in-process Python default is ``MATCH_SCOPE_EXACT``; the RPC server
-    boundary maps wire-level ``MATCH_SCOPE_UNSPECIFIED`` to ``PREFIX`` before
-    invoking ``get_logs``. Either of those resolves to one of the four
+    boundary maps wire-level ``MATCH_SCOPE_UNSPECIFIED`` to ``REGEX`` (the
+    historical default, kept so older dashboard / client builds that encode
+    their query as a regex source keep working across a finelog upgrade)
+    before invoking ``get_logs``. Either of those resolves to one of the
     branches below — ``UNSPECIFIED`` never reaches the query layer.
     """
     if match_scope == logging_pb2.MATCH_SCOPE_EXACT:

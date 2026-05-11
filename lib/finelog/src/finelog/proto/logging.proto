@@ -67,15 +67,17 @@ message PushLogsResponse {}
 //
 // `source` is always treated as a literal string for EXACT and PREFIX. The
 // server never inspects it for regex metacharacters; literal `+`, `.`, etc.
-// match themselves. UNSPECIFIED is treated as PREFIX so old callers get
-// path-style reads (everything under `/job/<job>/<task>`); set EXACT
-// explicitly when only the literal key should match. Use REGEX explicitly
-// when regex semantics are wanted.
+// match themselves. UNSPECIFIED is treated as REGEX by the server — the
+// historical pre-MatchScope default — so an in-flight older client (whose
+// build encodes its query as a regex `source` and doesn't yet know about
+// this field) keeps working across a finelog upgrade. New code should set
+// MATCH_SCOPE_EXACT or MATCH_SCOPE_PREFIX explicitly; that's how the
+// metacharacter-literal-key bug (#5392) stays fixed.
 enum MatchScope {
-  // Treated as MATCH_SCOPE_PREFIX by the server. Old callers that pass a
-  // path-style key (`/job/<job>/<task>`) without a scope read every entry
-  // under that path. Set MATCH_SCOPE_EXACT explicitly when only the
-  // literal key should match.
+  // Wire-level default. Treated as MATCH_SCOPE_REGEX by the server so old
+  // clients that pre-date this enum (and encode their query as a regex
+  // pattern in `source`) keep working. New code must set EXACT or PREFIX
+  // explicitly instead of relying on this fallback.
   MATCH_SCOPE_UNSPECIFIED = 0;
   // Exact match: read entries whose key equals `source` byte-for-byte.
   MATCH_SCOPE_EXACT = 1;
@@ -98,7 +100,7 @@ message FetchLogsRequest {
   int32 max_lines = 5;         // Max entries to return (0 = server default 1000)
   bool tail = 6;               // Return last N entries instead of first N
   string min_level = 7;        // Minimum level (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-  MatchScope match_scope = 8;  // How `source` is interpreted (UNSPECIFIED == PREFIX)
+  MatchScope match_scope = 8;  // How `source` is interpreted (UNSPECIFIED == REGEX, legacy)
 }
 
 message FetchLogsResponse {

@@ -110,11 +110,15 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
         svc.close()
 
 
-def test_fetch_logs_wire_unspecified_reads_as_prefix(tmp_path: Path):
-    """RPC clients that omit ``match_scope`` (wire-level UNSPECIFIED) must
-    read path-style: ``/job/<job>/<task>`` should pick up every attempt.
-    The in-process Python default is EXACT, so the server boundary maps
-    UNSPECIFIED → PREFIX before delegating.
+def test_fetch_logs_wire_unspecified_reads_as_regex(tmp_path: Path):
+    """RPC clients that omit ``match_scope`` (wire-level UNSPECIFIED) get
+    legacy regex semantics — the pre-MatchScope default. This is what keeps
+    an in-flight older dashboard build working across a finelog upgrade:
+    its FetchLogs payload still encodes the query as a regex ``source``
+    pattern, and the server interprets it accordingly.
+
+    New code should set MATCH_SCOPE_EXACT or MATCH_SCOPE_PREFIX explicitly;
+    relying on this fallback is the deprecated path.
     """
     svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
     try:
@@ -129,11 +133,12 @@ def test_fetch_logs_wire_unspecified_reads_as_prefix(tmp_path: Path):
                     },
                     headers={"Content-Type": "application/json"},
                 )
-            # No match_scope field on the wire (proto-default 0 == UNSPECIFIED).
-            # Server must read this as PREFIX so we see both attempts.
+            # No match_scope field on the wire (proto-default 0 == UNSPECIFIED)
+            # and a regex-style source — the exact shape that older dashboards
+            # send. The server falls back to REGEX so we still see both attempts.
             resp = client.post(
                 "/finelog.logging.LogService/FetchLogs",
-                json={"source": "/job/test/0:"},
+                json={"source": r"/job/test/0:\d+"},
                 headers={"Content-Type": "application/json"},
             )
             assert resp.status_code == 200
