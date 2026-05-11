@@ -45,6 +45,7 @@ from iris.cluster.controller.db import (
     QuerySnapshot,
     TransactionCursor,
 )
+from iris.cluster.controller.job_state import compute_job_state
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     ENDPOINT_PROJECTION,
@@ -695,6 +696,34 @@ class JobStore:
             state=int(row["state"]),
             started_at_ms=int(row["started_at_ms"]) if row["started_at_ms"] is not None else None,
             max_task_failures=int(row["max_task_failures"]),
+        )
+
+    def read_state(self, tx: Tx, job_id: JobName) -> int | None:
+        """Return the derived ``JobState`` for ``job_id`` without writing.
+
+        Computed via :func:`compute_job_state` from current per-task-state
+        counts plus the job's ``max_task_failures`` / ``started_at_ms``
+        basis. The result agrees with ``SELECT state FROM jobs_with_state``
+        for the same job. Returns ``None`` when the job row is missing.
+        """
+        row = tx.fetchone(
+            f"SELECT j.started_at_ms, jc.max_task_failures " f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
+            (job_id.to_wire(),),
+        )
+        if row is None:
+            return None
+        # ``state_counts_for_job`` lives on TaskStore but only reads the
+        # tasks table; sharing the same cursor is safe.
+        counts_rows = tx.fetchall(
+            "SELECT state, COUNT(*) AS c FROM tasks WHERE job_id = ? GROUP BY state",
+            (job_id.to_wire(),),
+        )
+        counts = {int(r["state"]): int(r["c"]) for r in counts_rows}
+        started_at_ms = int(row["started_at_ms"]) if row["started_at_ms"] is not None else None
+        return compute_job_state(
+            counts,
+            max_task_failures=int(row["max_task_failures"]),
+            started_at_ms=started_at_ms,
         )
 
     def get_detail(self, tx: Tx, job_id: JobName) -> JobDetailRow | None:

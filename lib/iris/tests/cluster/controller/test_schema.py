@@ -12,6 +12,7 @@ import pytest
 from iris.cluster.controller.schema import (
     JOBS,
     MAIN_TABLES,
+    MAIN_VIEWS,
     generate_full_ddl,
 )
 
@@ -20,7 +21,7 @@ def _create_db() -> sqlite3.Connection:
     """Create an in-memory SQLite DB with the full schema registry."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    ddl = generate_full_ddl(MAIN_TABLES)
+    ddl = generate_full_ddl(MAIN_TABLES, MAIN_VIEWS)
     conn.executescript(ddl)
     return conn
 

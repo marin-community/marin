@@ -19,6 +19,7 @@ from typing import Any, Generic, TypeVar
 
 from rigging.timing import Timestamp
 
+from iris.cluster.controller.job_state import JOBS_WITH_STATE_VIEW_SQL
 from iris.cluster.types import JobName, WorkerId
 
 T = TypeVar("T")
@@ -470,9 +471,15 @@ def adhoc_projection(*fields: tuple[str, type]) -> Projection:
     return Projection(table, columns)
 
 
-def generate_full_ddl(tables: Sequence[Table]) -> str:
-    """Concatenate all table DDLs into a single SQL script."""
-    return "\n\n".join(t.ddl() for t in tables)
+def generate_full_ddl(tables: Sequence[Table], views: Sequence[str] = ()) -> str:
+    """Concatenate all table DDLs (and any views) into a single SQL script.
+
+    ``views`` is an iterable of ``CREATE VIEW ...`` statements appended after
+    the table DDL so views can reference the tables they depend on.
+    """
+    parts = [t.ddl() for t in tables]
+    parts.extend(views)
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -1102,6 +1109,9 @@ MAIN_TABLES: tuple[Table, ...] = (
     RESERVATION_CLAIMS,
     USER_BUDGETS,
 )
+
+
+MAIN_VIEWS: tuple[str, ...] = (JOBS_WITH_STATE_VIEW_SQL,)
 
 AUTH_TABLES: tuple[Table, ...] = (
     AUTH_API_KEYS,
