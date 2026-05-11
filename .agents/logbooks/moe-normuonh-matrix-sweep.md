@@ -78,3 +78,30 @@
 - Result: Both corrected NorMuonH children are running with zero failures/preemptions. W&B runs are live at `normuonh-matrix-baseline-adam-mask-d512-2.19e17` and `normuonh-matrix-baseline-adam-mask-d768-1.70e18`. No `Traceback` or `ShardingTypeError` appeared in the recent log scan.
 - Interpretation: Corrected NorMuonH reached W&B startup for both gate-1 points; wait for step metrics before assessing quality/throughput.
 - Next action: Monitor W&B until both runs log `global_step`, `throughput/tokens_per_second`, and eval metrics.
+
+### 2026-05-11 16:30 - MOE-NMH-007 gate-1 completion and verdict
+
+- Hypothesis: NorMuonH baseline-adam-mask passes gate 1 against the v16 AdamH README baseline.
+- Command: wandb pull from `marin-community/marin_moe`. d768 resumed from preemption via parent `/kaiyue/iris-run-job-20260511-162245` (preemptible v5p-8, `--region us-east5`).
+- Config: PR #5597 commit on branch `research/moe-muonh-lr-sweep`, suffix `baseline-adam-mask`.
+- Result: Both gate-1 runs `state=finished`. d768 absorbed several preemptions before completing (Iris auto-restart from checkpoints; no manual intervention required).
+
+| Scale | Run | macro_loss | tps | step |
+|---|---|---|---|---|
+| d512 (2.19e17) | v16 AdamH baseline | 3.8104 | 405,630 | 6386 |
+| d512 (2.19e17) | MuonH baseline-adam-mask (#5596) | 3.7542 | 411,620 | 6386 |
+| d512 (2.19e17) | NorMuonH baseline-adam-mask | 3.7512 | 407,697 | 6386 |
+| d768 (1.70e18) | v16 AdamH baseline | 3.4339 | 273,532 | 10342 |
+| d768 (1.70e18) | MuonH baseline-adam-mask (#5596) | 3.3988 | 281,211 | 10342 |
+| d768 (1.70e18) | NorMuonH baseline-adam-mask | 3.3964 | 280,626 | 10342 |
+
+Effective speedup (`L_inf=1.6, alpha=0.0941`):
+
+| Scale | vs v16 AdamH (wall) | vs v16 AdamH (step) | vs MuonH (wall) | vs MuonH (step) |
+|---|---|---|---|---|
+| d512 | 1.34 | 1.33 | 1.005 | 1.01 |
+| d768 | 1.28 | 1.25 | 1.012 | 1.01 |
+
+- Interpretation: NorMuonH passes gate 1 cleanly against the v16 AdamH baseline and is essentially tied with MuonH at d512 / slightly better (~+1% wall-clock) at d768. The output-axis normalization is at worst neutral and may help marginally at larger scale.
+- W&B report: https://wandb.ai/marin-community/marin_moe/reports/NorMuonH-vs-MuonH-vs-v16-AdamH-—-gate-1--VmlldzoxNjg0Nzc3Nw==
+- Next action: Auto-launched gate 2 (d1024 at 9.00e18 and d1280 at 2.83e19) under parent `/kaiyue/iris-run-job-20260511-232705` without waiting for confirmation, per user's standing instruction. A gate-2 babysitter is running it to completion with auto-build of the W&B report, scaling-law fit, projection vs baseline at 1e21/1e23, and PushNotification on completion.
