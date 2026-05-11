@@ -11,7 +11,6 @@ aggregated from task states.
 import dataclasses
 import json
 import logging
-import re
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -22,7 +21,6 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
-from finelog.rpc import logging_pb2
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 
 from iris.cluster.bundle import BundleStore
@@ -86,7 +84,6 @@ from iris.cluster.controller.transitions import (
     task_updates_from_proto,
 )
 from iris.cluster.controller.worker_health import WorkerLiveness
-from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
@@ -104,7 +101,6 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
-from iris.rpc import logging_pb2 as iris_logging_pb2
 from iris.rpc.async_adapter import on_loop
 from iris.rpc.auth import (
     AuthzAction,
@@ -119,22 +115,6 @@ from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
-
-def _to_iris_log_entries(entries) -> list[iris_logging_pb2.LogEntry]:
-    """Transcode finelog.logging.LogEntry messages to iris.logging.LogEntry.
-
-    The wire formats are identical (matching field numbers/types); we round-trip
-    through the binary serializer to switch Python types at the iris RPC boundary.
-    """
-    out: list[iris_logging_pb2.LogEntry] = []
-    for e in entries:
-        dst = iris_logging_pb2.LogEntry()
-        dst.ParseFromString(e.SerializeToString())
-        out.append(dst)
-    return out
-
-
-DEFAULT_MAX_TOTAL_LINES = 100000
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
@@ -1877,63 +1857,6 @@ class ControllerServiceImpl:
         return provider.get_cluster_status()  # type: ignore[union-attr]
 
     # --- VM Logs ---
-
-    # --- Task/Job Logs (batch fetching) ---
-
-    def get_task_logs(
-        self,
-        request: controller_pb2.Controller.GetTaskLogsRequest,
-        ctx: RequestContext,
-    ) -> controller_pb2.Controller.GetTaskLogsResponse:
-        """DEPRECATED: use FetchLogs directly. Scheduled for removal 2026-05-01.
-
-        Forwards to fetch_logs internally, wrapping the response in the legacy format.
-        """
-        job_name = JobName.from_wire(request.id)
-
-        # Build the literal source + match scope from the legacy request fields.
-        match_scope = logging_pb2.MATCH_SCOPE_PREFIX
-        if job_name.is_task:
-            source, match_scope = build_log_source(job_name, request.attempt_id)
-        elif request.include_children:
-            source, match_scope = build_log_source(job_name)
-        else:
-            # Direct tasks only: match keys like /user/job/0:attempt but not
-            # /user/job/child-job/0:attempt. Use \d+ to restrict to numeric
-            # task indices, pushing the filter into DuckDB. This is the only
-            # case that genuinely needs regex semantics.
-            escaped_wire = re.escape(job_name.to_wire())
-            source = f"{escaped_wire}/\\d+:.*"
-            match_scope = logging_pb2.MATCH_SCOPE_REGEX
-
-        max_lines = request.max_total_lines if request.max_total_lines > 0 else DEFAULT_MAX_TOTAL_LINES
-
-        fetch_request = logging_pb2.FetchLogsRequest(
-            source=source,
-            match_scope=match_scope,
-            since_ms=request.since_ms,
-            cursor=request.cursor,
-            substring=request.substring,
-            max_lines=max_lines,
-            tail=request.tail,
-            min_level=request.min_level,
-        )
-
-        fetch_response = self._log_client.fetch_logs(fetch_request)
-        entries = fetch_response.entries
-
-        batch = controller_pb2.Controller.TaskLogBatch(
-            task_id=request.id,
-            logs=_to_iris_log_entries(entries),
-        )
-
-        truncated = max_lines > 0 and len(fetch_response.entries) >= max_lines
-
-        return controller_pb2.Controller.GetTaskLogsResponse(
-            task_logs=[batch],
-            truncated=truncated,
-            cursor=fetch_response.cursor,
-        )
 
     # --- Profiling ---
 
