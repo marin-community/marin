@@ -187,7 +187,8 @@ def test_sonic_gather_sum_faithful_pallas_interpret_matches_topk_four_reference(
     np.testing.assert_allclose(np.asarray(y_faithful), np.asarray(y_ref), rtol=1e-6, atol=1e-6)
 
 
-def test_moe_mlp_sonic_xla_matches_scatter_values_and_gradients():
+def test_moe_mlp_sonic_xla_matches_scatter_values_and_gradients(monkeypatch):
+    monkeypatch.setenv("RAGGED_DOT_IMPL", "xla")
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_moe_inputs()
 
     y_scatter = moe_mlp(
@@ -302,7 +303,8 @@ def test_sonic_topk_metadata_pallas_interpret_matches_reference():
         np.testing.assert_array_equal(np.asarray(pallas_value), np.asarray(ref_value))
 
 
-def test_moe_mlp_sonic_xla_gather_w13_matches_scatter_values_and_gradients():
+def test_moe_mlp_sonic_xla_gather_w13_matches_scatter_values_and_gradients(monkeypatch):
+    monkeypatch.setenv("RAGGED_DOT_IMPL", "xla")
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_moe_inputs()
 
     y_scatter = moe_mlp(
