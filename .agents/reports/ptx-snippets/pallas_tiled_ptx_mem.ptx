@@ -1,0 +1,100 @@
+# PTX entry
+11: .visible .entry sonic_gather_sum_pallas_triton(
+12: 	.param .u64 .ptr .align 16 sonic_gather_sum_pallas_triton_param_0,
+13: 	.param .u64 .ptr .align 16 sonic_gather_sum_pallas_triton_param_1,
+14: 	.param .u64 .ptr .align 16 sonic_gather_sum_pallas_triton_param_2,
+15: 	.param .u64 .ptr .align 16 sonic_gather_sum_pallas_triton_param_3,
+16: 	.param .u64 .ptr .align 256 sonic_gather_sum_pallas_triton_param_4
+17: )
+
+# Global memory instructions
+48: 	ld.global.b32 { %r1 }, [ %rd1 + 0 ];
+58: 	ld.global.b32 { %r2 }, [ %rd2 + 0 ];
+62: 	ld.global.b32 { %r3 }, [ %rd3 + 0 ];
+72: 	ld.global.b16 { %rs1 }, [ %rd4 + 0 ];
+76: 	ld.global.b16 { %rs2 }, [ %rd5 + 0 ];
+91: 	ld.global.v4.b32 { %r4, %r5, %r6, %r7 }, [ %rd6 + 0 ];
+102: 	ld.global.v4.b32 { %r8, %r9, %r10, %r11 }, [ %rd7 + 0 ];
+145: 	ld.global.b32 { %r12 }, [ %rd8 + 0 ];
+149: 	ld.global.b32 { %r13 }, [ %rd9 + 0 ];
+157: 	ld.global.b16 { %rs3 }, [ %rd10 + 0 ];
+161: 	ld.global.b16 { %rs4 }, [ %rd11 + 0 ];
+176: 	ld.global.v4.b32 { %r14, %r15, %r16, %r17 }, [ %rd12 + 0 ];
+187: 	ld.global.v4.b32 { %r18, %r19, %r20, %r21 }, [ %rd13 + 0 ];
+228: 	ld.global.b32 { %r22 }, [ %rd14 + 0 ];
+245: 	ld.global.v4.b32 { %r23, %r24, %r25, %r26 }, [ %rd15 + 0 ];
+256: 	ld.global.v4.b32 { %r27, %r28, %r29, %r30 }, [ %rd16 + 0 ];
+309: 	ld.global.v4.b32 { %r31, %r32, %r33, %r34 }, [ %rd17 + 0 ];
+320: 	ld.global.v4.b32 { %r35, %r36, %r37, %r38 }, [ %rd18 + 0 ];
+361: 	ld.global.b32 { %r39 }, [ %rd19 + 0 ];
+378: 	ld.global.v4.b32 { %r40, %r41, %r42, %r43 }, [ %rd20 + 0 ];
+389: 	ld.global.v4.b32 { %r44, %r45, %r46, %r47 }, [ %rd21 + 0 ];
+442: 	ld.global.v4.b32 { %r48, %r49, %r50, %r51 }, [ %rd22 + 0 ];
+453: 	ld.global.v4.b32 { %r52, %r53, %r54, %r55 }, [ %rd23 + 0 ];
+494: 	ld.global.b32 { %r56 }, [ %rd24 + 0 ];
+511: 	ld.global.v4.b32 { %r57, %r58, %r59, %r60 }, [ %rd25 + 0 ];
+522: 	ld.global.v4.b32 { %r61, %r62, %r63, %r64 }, [ %rd26 + 0 ];
+575: 	ld.global.v4.b32 { %r65, %r66, %r67, %r68 }, [ %rd27 + 0 ];
+586: 	ld.global.v4.b32 { %r69, %r70, %r71, %r72 }, [ %rd28 + 0 ];
+627: 	ld.global.b32 { %r73 }, [ %rd29 + 0 ];
+644: 	ld.global.v4.b32 { %r74, %r75, %r76, %r77 }, [ %rd30 + 0 ];
+655: 	ld.global.v4.b32 { %r78, %r79, %r80, %r81 }, [ %rd31 + 0 ];
+708: 	ld.global.v4.b32 { %r82, %r83, %r84, %r85 }, [ %rd32 + 0 ];
+719: 	ld.global.v4.b32 { %r86, %r87, %r88, %r89 }, [ %rd33 + 0 ];
+760: 	ld.global.b32 { %r90 }, [ %rd34 + 0 ];
+777: 	ld.global.v4.b32 { %r91, %r92, %r93, %r94 }, [ %rd35 + 0 ];
+788: 	ld.global.v4.b32 { %r95, %r96, %r97, %r98 }, [ %rd36 + 0 ];
+841: 	ld.global.v4.b32 { %r99, %r100, %r101, %r102 }, [ %rd37 + 0 ];
+852: 	ld.global.v4.b32 { %r103, %r104, %r105, %r106 }, [ %rd38 + 0 ];
+893: 	ld.global.b32 { %r107 }, [ %rd39 + 0 ];
+910: 	ld.global.v4.b32 { %r108, %r109, %r110, %r111 }, [ %rd40 + 0 ];
+921: 	ld.global.v4.b32 { %r112, %r113, %r114, %r115 }, [ %rd41 + 0 ];
+974: 	ld.global.v4.b32 { %r116, %r117, %r118, %r119 }, [ %rd42 + 0 ];
+985: 	ld.global.v4.b32 { %r120, %r121, %r122, %r123 }, [ %rd43 + 0 ];
+1026: 	ld.global.b32 { %r124 }, [ %rd44 + 0 ];
+1043: 	ld.global.v4.b32 { %r125, %r126, %r127, %r128 }, [ %rd45 + 0 ];
+1054: 	ld.global.v4.b32 { %r129, %r130, %r131, %r132 }, [ %rd46 + 0 ];
+1107: 	ld.global.v4.b32 { %r133, %r134, %r135, %r136 }, [ %rd47 + 0 ];
+1118: 	ld.global.v4.b32 { %r137, %r138, %r139, %r140 }, [ %rd48 + 0 ];
+1159: 	ld.global.b32 { %r141 }, [ %rd49 + 0 ];
+1176: 	ld.global.v4.b32 { %r142, %r143, %r144, %r145 }, [ %rd50 + 0 ];
+1187: 	ld.global.v4.b32 { %r146, %r147, %r148, %r149 }, [ %rd51 + 0 ];
+1240: 	ld.global.v4.b32 { %r150, %r151, %r152, %r153 }, [ %rd52 + 0 ];
+1251: 	ld.global.v4.b32 { %r154, %r155, %r156, %r157 }, [ %rd53 + 0 ];
+1292: 	ld.global.b32 { %r158 }, [ %rd54 + 0 ];
+1309: 	ld.global.v4.b32 { %r159, %r160, %r161, %r162 }, [ %rd55 + 0 ];
+1320: 	ld.global.v4.b32 { %r163, %r164, %r165, %r166 }, [ %rd56 + 0 ];
+1373: 	ld.global.v4.b32 { %r167, %r168, %r169, %r170 }, [ %rd57 + 0 ];
+1384: 	ld.global.v4.b32 { %r171, %r172, %r173, %r174 }, [ %rd58 + 0 ];
+1425: 	ld.global.b32 { %r175 }, [ %rd59 + 0 ];
+1442: 	ld.global.v4.b32 { %r176, %r177, %r178, %r179 }, [ %rd60 + 0 ];
+1453: 	ld.global.v4.b32 { %r180, %r181, %r182, %r183 }, [ %rd61 + 0 ];
+1506: 	ld.global.v4.b32 { %r184, %r185, %r186, %r187 }, [ %rd62 + 0 ];
+1517: 	ld.global.v4.b32 { %r188, %r189, %r190, %r191 }, [ %rd63 + 0 ];
+1558: 	ld.global.b32 { %r192 }, [ %rd64 + 0 ];
+1575: 	ld.global.v4.b32 { %r193, %r194, %r195, %r196 }, [ %rd65 + 0 ];
+1586: 	ld.global.v4.b32 { %r197, %r198, %r199, %r200 }, [ %rd66 + 0 ];
+1639: 	ld.global.v4.b32 { %r201, %r202, %r203, %r204 }, [ %rd67 + 0 ];
+1650: 	ld.global.v4.b32 { %r205, %r206, %r207, %r208 }, [ %rd68 + 0 ];
+1691: 	ld.global.b32 { %r209 }, [ %rd69 + 0 ];
+1708: 	ld.global.v4.b32 { %r210, %r211, %r212, %r213 }, [ %rd70 + 0 ];
+1719: 	ld.global.v4.b32 { %r214, %r215, %r216, %r217 }, [ %rd71 + 0 ];
+1772: 	ld.global.v4.b32 { %r218, %r219, %r220, %r221 }, [ %rd72 + 0 ];
+1783: 	ld.global.v4.b32 { %r222, %r223, %r224, %r225 }, [ %rd73 + 0 ];
+1824: 	ld.global.b32 { %r226 }, [ %rd74 + 0 ];
+1841: 	ld.global.v4.b32 { %r227, %r228, %r229, %r230 }, [ %rd75 + 0 ];
+1852: 	ld.global.v4.b32 { %r231, %r232, %r233, %r234 }, [ %rd76 + 0 ];
+1905: 	ld.global.v4.b32 { %r235, %r236, %r237, %r238 }, [ %rd77 + 0 ];
+1916: 	ld.global.v4.b32 { %r239, %r240, %r241, %r242 }, [ %rd78 + 0 ];
+1957: 	ld.global.b32 { %r243 }, [ %rd79 + 0 ];
+1974: 	ld.global.v4.b32 { %r244, %r245, %r246, %r247 }, [ %rd80 + 0 ];
+1985: 	ld.global.v4.b32 { %r248, %r249, %r250, %r251 }, [ %rd81 + 0 ];
+2038: 	ld.global.v4.b32 { %r252, %r253, %r254, %r255 }, [ %rd82 + 0 ];
+2049: 	ld.global.v4.b32 { %r256, %r257, %r258, %r259 }, [ %rd83 + 0 ];
+2090: 	ld.global.b32 { %r260 }, [ %rd84 + 0 ];
+2107: 	ld.global.v4.b32 { %r261, %r262, %r263, %r264 }, [ %rd85 + 0 ];
+2118: 	ld.global.v4.b32 { %r265, %r266, %r267, %r268 }, [ %rd86 + 0 ];
+2171: 	ld.global.v4.b32 { %r269, %r270, %r271, %r272 }, [ %rd87 + 0 ];
+2182: 	ld.global.v4.b32 { %r273, %r274, %r275, %r276 }, [ %rd88 + 0 ];
+2250: 	st.global.v4.b32 [ %rd89 + 0 ], { %r277, %r278, %r279, %r280 };
+2257: 	st.global.v4.b32 [ %rd90 + 0 ], { %r281, %r282, %r283, %r284 };

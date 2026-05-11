@@ -23,19 +23,37 @@ from typing import Literal, TypeAlias, cast, get_args
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call, tree_checkpoint_name
+from jax.experimental import pallas as pl
 from jax import shard_map
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
+from levanter.grug.sonic_moe import sonic_gather_ragged_dot, sonic_gather_sum
 from levanter.utils.activation import ActivationFunctionEnum
+
+try:
+    from jax.experimental.pallas import triton as pltriton
+except (ImportError, ModuleNotFoundError):
+    pltriton = None  # type: ignore[assignment]
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
+_DP_AXIS_ORDER = ("replica_dcn", "replica", "data")
+_PADDED_UNPACK_BWD_ROW_BLOCK_SIZE = 64
+_PADDED_UNPACK_BWD_HIDDEN_BLOCK_SIZE = 128
 
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal["ring", "ragged_all_to_all"]
+MoeLocalImplementation: TypeAlias = Literal[
+    "scatter",
+    "sonic_xla",
+    "sonic_pallas",
+    "sonic_xla_gather_w13",
+    "sonic_pallas_gather_w13",
+]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
+_VALID_MOE_LOCAL_IMPLEMENTATIONS = get_args(MoeLocalImplementation)
 
 
 def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
@@ -60,10 +78,30 @@ def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: st
     return int(mesh.shape.get(axis_name, 1))
 
 
-def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
+def _axis_partition(axes: tuple[str, ...]) -> str | tuple[str, ...]:
+    if len(axes) == 1:
+        return axes[0]
+    return axes
+
+
+def _data_axes(mesh: Mesh | jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
+    if mesh is None or mesh.empty:
+        return ("data",)
+    axes = tuple(axis for axis in _DP_AXIS_ORDER if axis in mesh.shape)
+    if not axes:
+        raise ValueError("Grug MoE requires at least one data-parallel mesh axis")
+    return axes
+
+
+def _batch_axes(mesh: Mesh | jax.sharding.AbstractMesh | None) -> tuple[str, ...]:
+    axes = _data_axes(mesh)
     if _mesh_has_axis(mesh, "expert"):
-        return P(("data", "expert"))
-    return P(("data",))
+        axes += ("expert",)
+    return axes
+
+
+def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
+    return P(_axis_partition(_batch_axes(mesh)))
 
 
 def resolve_moe_implementation(
@@ -77,6 +115,17 @@ def resolve_moe_implementation(
         return cast(MoeImplementation, implementation)
 
     return "ring"
+
+
+def resolve_moe_local_implementation(
+    local_implementation: MoeLocalImplementation | str | None,
+) -> MoeLocalImplementation:
+    if local_implementation is None:
+        return "scatter"
+    if local_implementation not in _VALID_MOE_LOCAL_IMPLEMENTATIONS:
+        valid = ", ".join(repr(choice) for choice in _VALID_MOE_LOCAL_IMPLEMENTATIONS)
+        raise ValueError(f"local_implementation must be one of {valid} or None, got {local_implementation!r}")
+    return cast(MoeLocalImplementation, local_implementation)
 
 
 @named_call
@@ -108,6 +157,54 @@ def _prepare_moe_dispatch(
     return x_sort, w_sort, token_ids_sort, group_sizes
 
 
+@named_call
+def _prepare_moe_dispatch_for_gather_sum(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    *,
+    num_experts: int,
+) -> tuple[
+    Float[Array, "TK D"],
+    Int[Array, "TK"],
+    Int[Array, "T K"],
+    Int[Array, "E"],
+]:
+    """Prepare expert-sorted rows plus reverse positions for gather-sum combine."""
+    token_ids_sort, dispatch_positions, group_sizes = _prepare_moe_dispatch_indices(
+        selected_experts,
+        num_experts=num_experts,
+    )
+    x_sort = x[token_ids_sort]
+    return x_sort, token_ids_sort, dispatch_positions, group_sizes
+
+
+@named_call
+def _prepare_moe_dispatch_indices(
+    selected_experts: Int[Array, "T K"],
+    *,
+    num_experts: int,
+) -> tuple[
+    Int[Array, "TK"],
+    Int[Array, "T K"],
+    Int[Array, "E"],
+]:
+    """Prepare expert-sorted token ids plus reverse positions without gathering x."""
+    tokens, topk = selected_experts.shape
+    assignments = tokens * topk
+    expert_ids = selected_experts.reshape(assignments)
+
+    sort_idx = jnp.argsort(expert_ids, axis=0)
+    token_ids = jnp.arange(assignments, dtype=jnp.int32) // topk
+    token_ids_sort = token_ids[sort_idx]
+
+    sorted_positions = jnp.arange(assignments, dtype=jnp.int32)
+    dispatch_positions = jnp.zeros((assignments,), dtype=jnp.int32).at[sort_idx].set(sorted_positions)
+    dispatch_positions = dispatch_positions.reshape(tokens, topk)
+
+    group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
+    return token_ids_sort, dispatch_positions, group_sizes
+
+
 def _moe_mlp_local(
     x: Float[Array, "T D"],
     selected_experts: Int[Array, "T K"],
@@ -117,18 +214,68 @@ def _moe_mlp_local(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    w13_local_expert_capacity: int | None = None,
+    local_implementation: MoeLocalImplementation | str | None = None,
 ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Per-shard non-EP MoE FFN path with argsort routing + grouped matmul."""
-    x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
-        x,
-        selected_experts,
-        combine_weights,
-        num_experts=num_experts,
-    )
-    x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
+    resolved_local_implementation = resolve_moe_local_implementation(local_implementation)
+    gather_w13 = resolved_local_implementation in ("sonic_xla_gather_w13", "sonic_pallas_gather_w13")
+    if resolved_local_implementation == "scatter":
+        x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
+            x,
+            selected_experts,
+            combine_weights,
+            num_experts=num_experts,
+        )
+        dispatch_positions = None
+        token_ids_sort = None
+    else:
+        token_ids_sort, dispatch_positions, group_sizes = _prepare_moe_dispatch_indices(
+            selected_experts,
+            num_experts=num_experts,
+        )
+        x_dispatch = None if gather_w13 else x[token_ids_sort]
+        w_dispatch = None
+        token_dispatch = None
+    if x_dispatch is not None:
+        x_dispatch = tree_checkpoint_name(x_dispatch, "grug_moe_dispatch_input")
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
+        if gather_w13:
+            if w13_local_expert_capacity is not None:
+                raise ValueError("sonic_*_gather_w13 local implementations do not support w13_local_expert_capacity")
+            assert token_ids_sort is not None
+            if moe_w13.shape[1] == x.shape[-1]:
+                moe_w13_prepared = moe_w13
+            elif moe_w13.shape[2] == x.shape[-1]:
+                moe_w13_prepared = jnp.swapaxes(moe_w13, 1, 2)
+            else:
+                raise ValueError(
+                    "w13 weight layout must contract against the hidden dimension of x; "
+                    f"got x.shape={x.shape}, moe_w13.shape={moe_w13.shape}"
+                )
+            gather_ragged_impl = "xla" if resolved_local_implementation == "sonic_xla_gather_w13" else "pallas_triton"
+            w13_out = tree_checkpoint_name(
+                sonic_gather_ragged_dot(
+                    x,
+                    token_ids_sort,
+                    moe_w13_prepared,
+                    group_sizes,
+                    implementation=gather_ragged_impl,
+                ),
+                "grug_moe_expert_hidden",
+            )
+        else:
+            assert x_dispatch is not None
+            w13_out = tree_checkpoint_name(
+                _w13_ragged_dot(
+                    x_dispatch,
+                    moe_w13,
+                    group_sizes,
+                    local_expert_capacity=w13_local_expert_capacity,
+                ),
+                "grug_moe_expert_hidden",
+            )
         moe_dim = moe_w2.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
@@ -137,7 +284,21 @@ def _moe_mlp_local(
         )
 
     with jax.named_scope("scatter"):
-        out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+        if resolved_local_implementation == "scatter":
+            assert token_dispatch is not None
+            assert w_dispatch is not None
+            out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
+        else:
+            assert dispatch_positions is not None
+            gather_sum_impl = (
+                "xla" if resolved_local_implementation in ("sonic_xla", "sonic_xla_gather_w13") else "pallas_triton"
+            )
+            out = sonic_gather_sum(
+                out_dispatch,
+                dispatch_positions,
+                combine_weights,
+                implementation=gather_sum_impl,
+            )
     return out, jnp.array(0, dtype=jnp.int32)
 
 
@@ -147,6 +308,20 @@ def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | No
     if spec is not None and len(spec) > 0 and spec[0] is not None:
         return P(spec[0])
     return _batch_spec(mesh)
+
+
+def _axis_names_from_partition(partition: object) -> tuple[str, ...]:
+    if partition is None:
+        return ()
+    if isinstance(partition, str):
+        return (partition,)
+    return tuple(cast(tuple[str, ...], partition))
+
+
+def _batch_axes_from_spec(batch_spec: P) -> tuple[str, ...]:
+    if len(batch_spec) == 0:
+        return ()
+    return _axis_names_from_partition(batch_spec[0])
 
 
 def _is_replicated_spec(spec: P) -> bool:
@@ -275,6 +450,377 @@ def _local_permute_from_counts(
     return sorted_inputs, sorted_indices, group_sizes
 
 
+def _w13_ragged_dot(
+    x_dispatch: jax.Array,
+    moe_w13_local: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    local_expert_capacity: int | None = None,
+) -> jax.Array:
+    hidden = x_dispatch.shape[-1]
+    if moe_w13_local.shape[1] == hidden:
+        rhs_contract_axis = 1
+    elif moe_w13_local.shape[2] == hidden:
+        rhs_contract_axis = 2
+    else:
+        raise ValueError(
+            "w13 weight layout must contract against the hidden dimension of x_dispatch; "
+            f"got x_dispatch.shape={x_dispatch.shape}, moe_w13_local.shape={moe_w13_local.shape}"
+        )
+    if local_expert_capacity is None:
+        rhs_prepared = moe_w13_local if rhs_contract_axis == 1 else jnp.swapaxes(moe_w13_local, 1, 2)
+        return ragged_dot(x_dispatch, rhs_prepared, group_sizes)
+    return _ragged_dot_expert_padded_batched(
+        x_dispatch,
+        moe_w13_local,
+        group_sizes,
+        local_expert_capacity=local_expert_capacity,
+        rhs_contract_axis=rhs_contract_axis,
+    )
+
+
+_EXPERT_PADDED_DLHS_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
+    dot_dimension_numbers=(((1,), (2,)), ((), ())),
+    lhs_ragged_dimensions=(0,),
+    rhs_group_dimensions=(0,),
+)
+
+_EXPERT_PADDED_DRHS_DIM_NUMS = jax.lax.RaggedDotDimensionNumbers(
+    dot_dimension_numbers=(((0,), (0,)), ((), ())),
+    lhs_ragged_dimensions=(0,),
+    rhs_group_dimensions=[],
+)
+
+
+def _ragged_dot_expert_padded_indices(
+    group_sizes: jax.Array,
+    *,
+    total_rows: int,
+    local_experts: int,
+    local_expert_capacity: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    row_ids = jnp.arange(total_rows, dtype=jnp.int32)
+    segment_ends = jnp.cumsum(group_sizes, dtype=jnp.int32)
+    total_valid = jnp.sum(group_sizes, dtype=jnp.int32)
+    valid = row_ids < total_valid
+
+    expert_ids = jnp.searchsorted(segment_ends, row_ids, side="right").astype(jnp.int32)
+    segment_starts = jnp.concatenate(
+        [jnp.zeros((1,), dtype=jnp.int32), segment_ends[:-1].astype(jnp.int32)],
+        axis=0,
+    )
+    expert_ids_clipped = jnp.clip(expert_ids, 0, max(0, local_experts - 1))
+    within_expert = row_ids - jnp.take(segment_starts, expert_ids_clipped, axis=0)
+    valid = valid & (expert_ids < local_experts) & (within_expert < local_expert_capacity)
+
+    flat_indices = expert_ids * local_expert_capacity + within_expert
+    scatter_indices = jnp.where(valid, flat_indices, local_experts * local_expert_capacity)
+    gather_indices = jnp.where(valid, flat_indices, 0)
+    return valid, scatter_indices, gather_indices
+
+
+def _padded_unpack_bwd_scatter(
+    dout: jax.Array,
+    gather_indices: jax.Array,
+    valid: jax.Array,
+    *,
+    flat_capacity: int,
+) -> jax.Array:
+    scatter_values = jnp.where(valid[:, None], dout, 0)
+    packed_grad = jnp.zeros((flat_capacity, dout.shape[-1]), dtype=dout.dtype)
+    return packed_grad.at[gather_indices].add(scatter_values, mode="drop")
+
+
+def _padded_unpack_bwd_pallas_triton_kernel(
+    dout_ref,
+    gather_indices_ref,
+    valid_ref,
+    packed_grad_ref,
+    *,
+    row_block_size: int,
+    hidden_block_size: int,
+    flat_capacity: int,
+) -> None:
+    row_offsets = pl.program_id(0) * row_block_size + jnp.arange(row_block_size)
+    hidden_offsets = pl.program_id(1) * hidden_block_size + jnp.arange(hidden_block_size)
+    row_mask = row_offsets < dout_ref.shape[0]
+    hidden_mask = hidden_offsets < dout_ref.shape[1]
+    flat_indices = pltriton.load(gather_indices_ref.at[row_offsets], mask=row_mask, other=flat_capacity)
+    valid_rows = pltriton.load(valid_ref.at[row_offsets], mask=row_mask, other=False)
+    values = pltriton.load(
+        dout_ref.at[row_offsets[:, None], hidden_offsets[None, :]],
+        mask=row_mask[:, None] & hidden_mask[None, :],
+        other=0.0,
+    )
+    # Accepted expert-padded rows have unique flat indices by construction.
+    # Direct stores avoid the generic scatter-add lowering used by autodiff.
+    pltriton.store(
+        packed_grad_ref.at[flat_indices[:, None], hidden_offsets[None, :]],
+        values,
+        mask=(row_mask & valid_rows & (flat_indices < flat_capacity))[:, None] & hidden_mask[None, :],
+    )
+
+
+def _padded_unpack_bwd_pallas_cost_estimate(
+    dout: jax.Array,
+    gather_indices: jax.Array,
+    valid: jax.Array,
+    *,
+    flat_capacity: int,
+) -> pl.CostEstimate:
+    dtype_bytes = dout.dtype.itemsize
+    bytes_accessed = (
+        dout.size * dtype_bytes
+        + gather_indices.size * gather_indices.dtype.itemsize
+        + valid.size * valid.dtype.itemsize
+        + flat_capacity * dout.shape[-1] * dtype_bytes
+    )
+    return pl.CostEstimate(flops=0, transcendentals=0, bytes_accessed=bytes_accessed)
+
+
+def _padded_unpack_bwd_pallas_triton(
+    dout: jax.Array,
+    gather_indices: jax.Array,
+    valid: jax.Array,
+    *,
+    flat_capacity: int,
+) -> jax.Array:
+    if pltriton is None or jax.default_backend() != "gpu":
+        return _padded_unpack_bwd_scatter(dout, gather_indices, valid, flat_capacity=flat_capacity)
+
+    packed_grad = pl.pallas_call(
+        lambda dout_ref, gather_indices_ref, valid_ref, packed_grad_ref: _padded_unpack_bwd_pallas_triton_kernel(
+            dout_ref,
+            gather_indices_ref,
+            valid_ref,
+            packed_grad_ref,
+            row_block_size=_PADDED_UNPACK_BWD_ROW_BLOCK_SIZE,
+            hidden_block_size=_PADDED_UNPACK_BWD_HIDDEN_BLOCK_SIZE,
+            flat_capacity=flat_capacity,
+        ),
+        out_shape=jax.ShapeDtypeStruct((flat_capacity, dout.shape[-1]), dout.dtype),
+        grid=(
+            pl.cdiv(dout.shape[0], _PADDED_UNPACK_BWD_ROW_BLOCK_SIZE),
+            pl.cdiv(dout.shape[1], _PADDED_UNPACK_BWD_HIDDEN_BLOCK_SIZE),
+        ),
+        compiler_params=pltriton.CompilerParams(num_warps=4, num_stages=4),
+        cost_estimate=_padded_unpack_bwd_pallas_cost_estimate(
+            dout,
+            gather_indices,
+            valid,
+            flat_capacity=flat_capacity,
+        ),
+        name="grug_expert_padded_unpack_bwd_pallas_triton",
+    )(dout, gather_indices, valid)
+    used = jnp.zeros((flat_capacity,), dtype=bool).at[gather_indices].set(valid, mode="drop")
+    return jnp.where(used[:, None], packed_grad, 0)
+
+
+def _ragged_dot_expert_padded_unpack(
+    packed_out: jax.Array,
+    gather_indices: jax.Array,
+    valid: jax.Array,
+    *,
+    flat_capacity: int,
+) -> jax.Array:
+    packed_out_flat = packed_out.reshape(flat_capacity, packed_out.shape[-1])
+    if pltriton is None or jax.default_backend() != "gpu":
+        out = jnp.take(packed_out_flat, gather_indices, axis=0)
+        return jnp.where(valid[:, None], out, 0)
+
+    @jax.custom_vjp
+    def _call(packed_out_flat: jax.Array, gather_indices: jax.Array, valid: jax.Array) -> jax.Array:
+        out = jnp.take(packed_out_flat, gather_indices, axis=0)
+        return jnp.where(valid[:, None], out, 0)
+
+    def _fwd(
+        packed_out_flat: jax.Array,
+        gather_indices: jax.Array,
+        valid: jax.Array,
+    ) -> tuple[jax.Array, tuple[jax.Array, jax.Array]]:
+        out = jnp.take(packed_out_flat, gather_indices, axis=0)
+        return jnp.where(valid[:, None], out, 0), (gather_indices, valid)
+
+    def _bwd(residuals: tuple[jax.Array, jax.Array], dout: jax.Array) -> tuple[jax.Array, None, None]:
+        gather_indices, valid = residuals
+        packed_grad = _padded_unpack_bwd_pallas_triton(
+            dout,
+            gather_indices,
+            valid,
+            flat_capacity=flat_capacity,
+        )
+        return packed_grad, None, None
+
+    _call.defvjp(_fwd, _bwd)
+    return _call(packed_out_flat, gather_indices, valid)
+
+
+def _ragged_dot_expert_padded_batched_impl(
+    lhs: jax.Array,
+    rhs_prepared: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    local_expert_capacity: int,
+) -> jax.Array:
+    local_experts = rhs_prepared.shape[0]
+    flat_capacity = local_experts * local_expert_capacity
+    valid, scatter_indices, gather_indices = _ragged_dot_expert_padded_indices(
+        group_sizes,
+        total_rows=lhs.shape[0],
+        local_experts=local_experts,
+        local_expert_capacity=local_expert_capacity,
+    )
+
+    with jax.named_scope("expert_padded_pack"):
+        packed_lhs = jnp.zeros((flat_capacity, lhs.shape[-1]), dtype=lhs.dtype)
+        packed_lhs = packed_lhs.at[scatter_indices].add(lhs, mode="drop")
+        packed_lhs = packed_lhs.reshape(local_experts, local_expert_capacity, lhs.shape[-1])
+
+    with jax.named_scope("expert_padded_bmm"):
+        packed_out = jax.lax.dot_general(
+            packed_lhs,
+            rhs_prepared,
+            dimension_numbers=(((2,), (1,)), ((0,), (0,))),
+        )
+
+    with jax.named_scope("expert_padded_unpack"):
+        return _ragged_dot_expert_padded_unpack(
+            packed_out,
+            gather_indices,
+            valid,
+            flat_capacity=flat_capacity,
+        )
+
+
+def _ragged_dot_expert_padded_batched_bwd(
+    lhs: jax.Array,
+    rhs_prepared: jax.Array,
+    group_sizes: jax.Array,
+    dout: jax.Array,
+    *,
+    local_expert_capacity: int,
+) -> tuple[jax.Array, jax.Array]:
+    valid, _, _ = _ragged_dot_expert_padded_indices(
+        group_sizes,
+        total_rows=lhs.shape[0],
+        local_experts=rhs_prepared.shape[0],
+        local_expert_capacity=local_expert_capacity,
+    )
+    lhs_valid = jnp.where(valid[:, None], lhs, 0)
+    dout_valid = jnp.where(valid[:, None], dout, 0)
+    dlhs = jax.lax.ragged_dot_general(
+        lhs=dout_valid,
+        rhs=rhs_prepared,
+        group_sizes=group_sizes,
+        ragged_dot_dimension_numbers=_EXPERT_PADDED_DLHS_DIM_NUMS,
+    )
+    drhs_prepared = jax.lax.ragged_dot_general(
+        lhs=lhs_valid,
+        rhs=dout_valid,
+        group_sizes=group_sizes,
+        ragged_dot_dimension_numbers=_EXPERT_PADDED_DRHS_DIM_NUMS,
+    )
+    return dlhs, drhs_prepared
+
+
+def _ragged_dot_expert_padded_batched(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    local_expert_capacity: int,
+    rhs_contract_axis: int,
+) -> jax.Array:
+    if local_expert_capacity <= 0:
+        raise ValueError(f"local_expert_capacity must be positive, got {local_expert_capacity}")
+
+    if rhs_contract_axis == 1:
+        rhs_prepared = rhs
+    elif rhs_contract_axis == 2:
+        rhs_prepared = jnp.swapaxes(rhs, 1, 2)
+    else:
+        raise ValueError(f"Unsupported rhs_contract_axis={rhs_contract_axis} for expert-padded batched dot")
+
+    local_experts = rhs_prepared.shape[0]
+    if group_sizes.shape[0] != local_experts:
+        raise ValueError(
+            f"group_sizes.shape[0]={group_sizes.shape[0]} must match local_experts={local_experts} "
+            "for padded batched dot"
+        )
+
+    return _ragged_dot_expert_padded_batched_impl(
+        lhs,
+        rhs_prepared,
+        group_sizes,
+        local_expert_capacity=local_expert_capacity,
+    )
+
+
+def _ragged_dot_expert_padded_batched_custom_vjp(
+    lhs: jax.Array,
+    rhs: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    local_expert_capacity: int,
+    rhs_contract_axis: int,
+) -> jax.Array:
+    if local_expert_capacity <= 0:
+        raise ValueError(f"local_expert_capacity must be positive, got {local_expert_capacity}")
+
+    if rhs_contract_axis == 1:
+        rhs_prepared = rhs
+    elif rhs_contract_axis == 2:
+        rhs_prepared = jnp.swapaxes(rhs, 1, 2)
+    else:
+        raise ValueError(f"Unsupported rhs_contract_axis={rhs_contract_axis} for expert-padded batched dot")
+
+    local_experts = rhs_prepared.shape[0]
+    if group_sizes.shape[0] != local_experts:
+        raise ValueError(
+            f"group_sizes.shape[0]={group_sizes.shape[0]} must match local_experts={local_experts} "
+            "for padded batched dot"
+        )
+
+    @jax.custom_vjp
+    def _call(lhs: jax.Array, rhs_prepared: jax.Array, group_sizes: jax.Array) -> jax.Array:
+        return _ragged_dot_expert_padded_batched_impl(
+            lhs,
+            rhs_prepared,
+            group_sizes,
+            local_expert_capacity=local_expert_capacity,
+        )
+
+    def _fwd(
+        lhs: jax.Array,
+        rhs_prepared: jax.Array,
+        group_sizes: jax.Array,
+    ) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array]]:
+        out = _ragged_dot_expert_padded_batched_impl(
+            lhs,
+            rhs_prepared,
+            group_sizes,
+            local_expert_capacity=local_expert_capacity,
+        )
+        return out, (lhs, rhs_prepared, group_sizes)
+
+    def _bwd(
+        residuals: tuple[jax.Array, jax.Array, jax.Array],
+        dout: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, None]:
+        lhs, rhs_prepared, group_sizes = residuals
+        dlhs, drhs_prepared = _ragged_dot_expert_padded_batched_bwd(
+            lhs,
+            rhs_prepared,
+            group_sizes,
+            dout,
+            local_expert_capacity=local_expert_capacity,
+        )
+        return dlhs, drhs_prepared, None
+
+    _call.defvjp(_fwd, _bwd)
+    return _call(lhs, rhs_prepared, group_sizes)
+
+
 def _clip_receiver_group_sizes(
     global_group_sizes: Int[Array, "S E"],
     *,
@@ -354,6 +900,8 @@ def _moe_mlp_ep_ring_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    batch_axes: tuple[str, ...],
+    w13_local_expert_capacity: int | None = None,
 ) -> tuple[Float[Array, "TL D"], Int[Array, ""]]:
     """Ring-style EP routed path: all-gather dispatch + psum-scatter collect."""
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
@@ -422,7 +970,15 @@ def _moe_mlp_ep_ring_local(
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
 
     with jax.named_scope("moe_up_down"):
-        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13_local, group_sizes), "grug_moe_expert_hidden")
+        w13_out = tree_checkpoint_name(
+            _w13_ragged_dot(
+                x_dispatch,
+                moe_w13_local,
+                group_sizes,
+                local_expert_capacity=w13_local_expert_capacity,
+            ),
+            "grug_moe_expert_hidden",
+        )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = tree_checkpoint_name(
@@ -435,7 +991,7 @@ def _moe_mlp_ep_ring_local(
         # #2710 ring EP strategy: collect only this shard's token slice after
         # reducing contributions from experts across the EP mesh.
         out_local = jax.lax.psum_scatter(out_global, "expert", scatter_dimension=0, tiled=True)
-        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+        dropped_total = jax.lax.psum(dropped_local, batch_axes)
     return out_local, dropped_total
 
 
@@ -449,6 +1005,8 @@ def _moe_mlp_ep_ragged_a2a_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
     capacity_factor: float,
+    batch_axes: tuple[str, ...],
+    w13_local_expert_capacity: int | None = None,
 ) -> tuple[jax.Array, jax.Array]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -505,7 +1063,12 @@ def _moe_mlp_ep_ragged_a2a_local(
         )
 
     with jax.named_scope("moe_up_down"):
-        w13_out = ragged_dot(x_dispatch, moe_w13_local, local_group_sizes)
+        w13_out = _w13_ragged_dot(
+            x_dispatch,
+            moe_w13_local,
+            local_group_sizes,
+            local_expert_capacity=w13_local_expert_capacity,
+        )
         moe_dim = moe_w2_local.shape[1]
         gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
         out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, local_group_sizes)
@@ -534,7 +1097,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             topk=topk,
         ).astype(x_local.dtype)
         dropped_local = jnp.sum(group_sizes, dtype=jnp.int32) - jnp.sum(sender_group_sizes, dtype=jnp.int32)
-        dropped_total = jax.lax.psum(dropped_local, ("data", "expert"))
+        dropped_total = jax.lax.psum(dropped_local, batch_axes)
     return out_local, dropped_total
 
 
@@ -551,6 +1114,8 @@ def moe_mlp(
     mesh: jax.sharding.AbstractMesh | None = None,
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
+    w13_local_expert_capacity: int | None = None,
+    local_implementation: MoeLocalImplementation | str | None = None,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -561,6 +1126,7 @@ def moe_mlp(
     Set `report_capacity_overflow=True` to also return a scalar count of
     dropped expert assignments from EP capacity clipping.
     """
+    resolved_local_implementation = resolve_moe_local_implementation(local_implementation)
     if mesh is None:
         mesh = _current_mesh()
 
@@ -603,14 +1169,22 @@ def moe_mlp(
             w_down,
             activation_fn=activation_fn,
             num_experts=num_experts,
+            w13_local_expert_capacity=w13_local_expert_capacity,
+            local_implementation=resolved_local_implementation,
         )
         if report_capacity_overflow:
             return out, dropped
         return out
 
     batch_spec = _batch_spec_from_x(x, mesh)
+    batch_axes = _batch_axes_from_spec(batch_spec)
 
     if has_expert_axis and expert_axis_size > 1:
+        if resolved_local_implementation != "scatter":
+            raise ValueError(
+                "local_implementation is only supported for the non-EP local Grug MoE path; "
+                f"got local_implementation={resolved_local_implementation!r} with expert axis size={expert_axis_size}"
+            )
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
@@ -636,6 +1210,8 @@ def moe_mlp(
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
+                batch_axes=batch_axes,
+                w13_local_expert_capacity=w13_local_expert_capacity,
             ),
             mesh=mesh,
             in_specs=(
@@ -674,6 +1250,8 @@ def moe_mlp(
             _moe_mlp_local,
             activation_fn=activation_fn,
             num_experts=num_experts,
+            w13_local_expert_capacity=w13_local_expert_capacity,
+            local_implementation=resolved_local_implementation,
         ),
         mesh=mesh,
         in_specs=(
@@ -695,6 +1273,8 @@ def moe_mlp(
 __all__ = [
     "MoeActivation",
     "MoeImplementation",
+    "MoeLocalImplementation",
     "moe_mlp",
     "resolve_moe_implementation",
+    "resolve_moe_local_implementation",
 ]

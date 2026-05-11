@@ -1,0 +1,9 @@
+34:     %acc_6 = scf.for %repeat_index = %c0_i32 to %c16_i32 step %c1_i32 iter_args(%acc_10 = %acc) -> (tensor<2048xf32>)  : i32 {
+36:       %repeat_offset_11 = tt.load %repeat_offset : !tt.ptr<i32> loc(#loc65)
+38:       %acc_13 = scf.for %k_tile = %c0_i32 to %c2_i32 step %c1_i32 iter_args(%acc_14 = %acc_10) -> (tensor<2048xf32>)  : i32 {
+45:         %perm_idx_17 = tt.load %perm_idx_16, %k_mask_15, %cst_3 : tensor<1x!tt.ptr<i32>> loc(#loc72)
+59:         %x_vals = tt.load %x_ptrs_26, %x_mask_28, %cst_0 : tensor<1x2048x!tt.ptr<bf16>> loc(#loc83)
+63:         %w_vals_31 = tt.load %w_vals_30, %k_mask_15, %cst : tensor<1x!tt.ptr<bf16>> loc(#loc86)
+68:         %acc_36 = "tt.reduce"(%acc_35) <{axis = 0 : i32}> ({
+71:           tt.reduce.return %acc_40 : f32 loc(#loc97)
+84:     tt.store %out_ptrs_9, %1, %h_mask_5 : tensor<2048x!tt.ptr<bf16>> loc(#loc47)

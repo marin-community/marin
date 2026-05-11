@@ -1,0 +1,3 @@
+%0 = stablehlo.custom_call @__gpu$xla.gpu.triton(%arg0, %arg1, %arg2, %arg3) {backend_config = "", mhlo.backend_config = {debug = false, grid_x = 8192 : i32, grid_y = 1 : i32, grid_z = 1 : i32, ir = "<embedded Triton bytecode omitted>", name = "sonic_gather_sum_pallas_triton_token_loop", num_stages = 4 : i32, num_warps = 4 : i32}, operand_layouts = [dense<[1, 0]> : tensor<2xindex>, dense<[1, 0]> : tensor<2xindex>, dense<[1, 0]> : tensor<2xindex>, dense<0> : tensor<1xindex>], result_layouts = [dense<[1, 0]> : tensor<2xindex>]} : (tensor<262144x2048xbf16>, tensor<8192x2xi32>, tensor<8192x2xbf16>, tensor<16xi32>) -> tensor<8192x2048xbf16>
+
+contains_xla_gpu_triton=True

@@ -1,0 +1,25 @@
+# PTX entry
+11: .visible .entry token_gather_sum_kernel(
+12: 	.param .u64 .ptr .global .align 1 token_gather_sum_kernel_param_0,
+13: 	.param .u64 .ptr .global .align 1 token_gather_sum_kernel_param_1,
+14: 	.param .u64 .ptr .global .align 1 token_gather_sum_kernel_param_2,
+15: 	.param .u64 .ptr .global .align 1 token_gather_sum_kernel_param_3,
+16: 	.param .u64 .ptr .global .align 1 token_gather_sum_kernel_param_4,
+17: 	.param .u64 .ptr .global .align 1 token_gather_sum_kernel_param_5,
+18: 	.param .u32 token_gather_sum_kernel_param_6,
+19: 	.param .u64 .ptr .global .align 1 token_gather_sum_kernel_param_7,
+20: 	.param .u64 .ptr .global .align 1 token_gather_sum_kernel_param_8
+21: )
+
+# Global memory instructions
+76: 	ld.global.b32 { %r5 }, [ %rd8 + 0 ];
+84: 	@%p2 ld.global.b32 { %r6 }, [ %rd9 + 0 ];
+104: 	@%p2 ld.global.v4.b32 { %r7, %r8, %r9, %r10 }, [ %rd10 + 0 ];
+111: 	@%p2 ld.global.v4.b32 { %r12, %r13, %r14, %r15 }, [ %rd11 + 0 ];
+117: 	@%p2 ld.global.b16 { %rs1 }, [ %rd12 + 0 ];
+124: 	@%p2 ld.global.b32 { %r16 }, [ %rd13 + 0 ];
+142: 	@%p2 ld.global.v4.b32 { %r17, %r18, %r19, %r20 }, [ %rd14 + 0 ];
+149: 	@%p2 ld.global.v4.b32 { %r21, %r22, %r23, %r24 }, [ %rd15 + 0 ];
+154: 	@%p2 ld.global.b16 { %rs3 }, [ %rd16 + 0 ];
+294: 	@%p2 st.global.v4.b32 [ %rd27 + 0 ], { %r75, %r76, %r77, %r78 };
+297: 	@%p2 st.global.v4.b32 [ %rd28 + 0 ], { %r79, %r80, %r81, %r82 };
