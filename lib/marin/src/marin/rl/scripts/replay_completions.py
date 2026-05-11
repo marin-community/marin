@@ -172,7 +172,7 @@ async def send_batch_requests(
             "failing_requests": [],
         }
 
-    except (asyncio.TimeoutError, Exception):
+    except Exception:
         logger.error(f"Failing batch contained {len(requests)} requests, writing to /tmp/failing_batch.json")
         # write bad batch to disk
         with open("/tmp/failing_batch.json", "w") as f:

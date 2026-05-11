@@ -773,7 +773,7 @@ _patch_autoconfig_for_gcs()
             if hasattr(vllm.distributed, "destroy_model_parallel"):
                 vllm.distributed.destroy_model_parallel()
                 logger.info("Destroyed vLLM model parallel state")
-        except (ImportError, Exception) as e:
+        except Exception as e:
             logger.debug(f"vLLM cleanup skipped: {e}")
 
     def _get_max_model_len_from_config(self, config_dir: str) -> int | None:
