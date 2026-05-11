@@ -48,30 +48,16 @@ DCLM_COMPONENTS = [
         "download_override_path": "raw/starcoderdata-720c8c",
         "text_field": "content",
         "file_extensions": (".parquet",),
-        # starcoderdata's 87 lang subdirs have heterogeneous schemas: most
-        # have content/id + max_stars_*, but git-commits-cleaned has only
-        # (content, id), jupyter-* dirs add chain_length / hexsha / size /
-        # avg_line_length / etc. Different per-record column sets break the
-        # parquet writer ("Table schema does not match schema used to create
-        # file") and PyArrow's null-vs-typed widening. Drop every column
-        # except content (-> text) and id (-> source_id) so the normalized
-        # schema is uniform across all subdirs.
-        "drop_fields": (
-            "alphanum_fraction",
-            "avg_line_length",
-            "chain_length",
-            "ext",
-            "hexsha",
-            "lang",
-            "license",
-            "max_stars_count",
-            "max_stars_repo_licenses",
-            "max_stars_repo_name",
-            "max_stars_repo_path",
-            "path",
-            "repo_name",
-            "size",
-        ),
+        # starcoderdata's 87 lang subdirs have heterogeneous schemas:
+        # git-commits-cleaned ships only (content, id); most langs have
+        # content/id + max_stars_*; jupyter-* dirs add chain_length /
+        # hexsha / size / avg_line_length / etc. Different per-record
+        # column sets break the parquet writer ("Table schema does not
+        # match schema used to create file") and PyArrow's null-vs-typed
+        # widening. ``bare=True`` strips every column except id / text /
+        # source_id so the normalized schema is uniform.
+        "drop_fields": (),
+        "bare": True,
     },
     {
         "name": "proofpile_2",
@@ -86,6 +72,7 @@ DCLM_COMPONENTS = [
         # PyArrow's null-vs-typed schema widening blows up the reduce stage
         # (``pyarrow.lib.ArrowInvalid: Invalid null value``).
         "drop_fields": ("meta",),
+        "bare": False,
     },
 ]
 
@@ -148,6 +135,7 @@ def main() -> None:
             id_field="id",
             file_extensions=component["file_extensions"],
             drop_fields=component["drop_fields"],
+            bare=component["bare"],
             max_workers=MAX_WORKERS,
             worker_resources=NORMALIZE_WORKER_RESOURCES,
             version="v2",
