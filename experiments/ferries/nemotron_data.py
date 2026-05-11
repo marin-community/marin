@@ -48,7 +48,12 @@ DCLM_COMPONENTS = [
         "download_override_path": "raw/starcoderdata-720c8c",
         "text_field": "content",
         "file_extensions": (".parquet",),
-        "drop_fields": (),
+        # ``max_stars_count`` is double in batches whose first 8 records have
+        # null values (inferred as double for nullable) and int64 elsewhere.
+        # PyArrow's reduce-stage schema widening blows up with:
+        #   pyarrow.lib.ArrowInvalid: schema mismatch -- expected double, got int64
+        # Drop these GitHub-meta fields rather than try to coerce types.
+        "drop_fields": ("max_stars_count", "max_stars_repo_path", "max_stars_repo_name"),
     },
     {
         "name": "proofpile_2",
