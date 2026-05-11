@@ -51,12 +51,9 @@ DCLM_COMPONENTS = [
         # starcoderdata's 87 lang subdirs have heterogeneous schemas:
         # git-commits-cleaned ships only (content, id); most langs have
         # content/id + max_stars_*; jupyter-* dirs add chain_length /
-        # hexsha / size / avg_line_length / etc. Different per-record
-        # column sets break the parquet writer ("Table schema does not
-        # match schema used to create file") and PyArrow's null-vs-typed
-        # widening. ``bare=True`` strips every column except id / text /
-        # source_id so the normalized schema is uniform.
-        "drop_fields": (),
+        # hexsha / size / avg_line_length / etc. The parquet writer can't
+        # add columns mid-write, so ``bare=True`` strips every column
+        # except id / text / source_id for a uniform schema.
         "bare": True,
     },
     {
@@ -68,11 +65,11 @@ DCLM_COMPONENTS = [
         # HF proof-pile-2 ships as compressed JSONL, not Parquet.
         "file_extensions": (".jsonl.zst",),
         # ``meta`` is a nested dict whose optional int fields (e.g.
-        # ``max_stars_count``) are null in some shards and typed in others;
-        # PyArrow's null-vs-typed schema widening blows up the reduce stage
-        # (``pyarrow.lib.ArrowInvalid: Invalid null value``).
-        "drop_fields": ("meta",),
-        "bare": False,
+        # ``max_stars_count``) are null in some shards and typed in
+        # others; PyArrow's reduce-stage widening blows up
+        # (``ArrowInvalid: Invalid null value``). ``bare=True`` strips it
+        # along with anything else non-canonical.
+        "bare": True,
     },
 ]
 
@@ -134,7 +131,6 @@ def main() -> None:
             text_field=component["text_field"],
             id_field="id",
             file_extensions=component["file_extensions"],
-            drop_fields=component["drop_fields"],
             bare=component["bare"],
             max_workers=MAX_WORKERS,
             worker_resources=NORMALIZE_WORKER_RESOURCES,

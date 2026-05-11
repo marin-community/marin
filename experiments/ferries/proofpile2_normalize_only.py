@@ -35,7 +35,6 @@ def main() -> None:
         text_field=component["text_field"],
         id_field="id",
         file_extensions=component["file_extensions"],
-        drop_fields=component["drop_fields"],
         bare=component["bare"],
         max_workers=MAX_WORKERS,
         worker_resources=NORMALIZE_WORKER_RESOURCES,

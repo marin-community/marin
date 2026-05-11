@@ -103,7 +103,6 @@ def generate_id(text: str) -> str:
 def _make_normalize_fn(
     text_field: str,
     id_field: str,
-    drop_fields: tuple[str, ...] = (),
     bare: bool = False,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Return a record-level transform function.
@@ -112,24 +111,19 @@ def _make_normalize_fn(
     1. Extracts ``text`` from *text_field*.
     2. Generates a deterministic ``id`` via xxh3_128.
     3. If *id_field* exists in the record, preserves it as ``source_id``.
-    4. Keeps all other columns except those named in *drop_fields*
-       (unless *bare* is set, see below).
-
-    *drop_fields* is useful when a source carries nested-dict metadata
-    (e.g. proof-pile-2's ``meta``) whose schema isn't stable across shards
-    and breaks PyArrow's null-widening downstream.
+    4. Keeps all other columns unless *bare* is set (see below).
 
     *bare* takes the strict path: drop every column that isn't ``id``,
     ``text``, or ``source_id``. Use this for sources whose extra columns
     vary across shards (e.g. starcoderdata's 87 language subdirs each
-    ship a different set of GitHub-meta columns); the parquet writer
-    can't add columns mid-write, so a uniform schema is the only safe
-    option. When ``bare`` is set, ``drop_fields`` is ignored.
+    ship a different set of GitHub-meta columns, or proof-pile-2's
+    nested ``meta`` dict with optional-typed fields); the parquet writer
+    can't add columns mid-write and the reduce stage can't widen
+    null-vs-typed, so a uniform schema is the only safe option.
 
     Records with missing or blank text must be filtered out before calling
     the returned function.
     """
-    drop_set = set(drop_fields)
 
     def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
         # --- text ---
@@ -142,13 +136,11 @@ def _make_normalize_fn(
         out: dict[str, Any] = {}
 
         if not bare:
-            # Copy all original columns except the ones we're replacing or dropping
+            # Copy all original columns except the ones we're replacing
             for k, v in record.items():
                 if k == id_field:
                     continue
                 if k == text_field and text_field != "text":
-                    continue
-                if k in drop_set:
                     continue
                 out[k] = v
 
@@ -333,11 +325,10 @@ def _build_pipeline(
     id_field: str | None,
     dedup_mode: DedupMode,
     max_whitespace_run_chars: int,
-    drop_fields: tuple[str, ...] = (),
     bare: bool = False,
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
-    normalize_record = _make_normalize_fn(text_field, id_field, drop_fields, bare=bare)
+    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare)
 
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
@@ -391,7 +382,6 @@ def normalize_to_parquet(
     max_workers: int | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
-    drop_fields: tuple[str, ...] = (),
     bare: bool = False,
 ) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
@@ -463,7 +453,6 @@ def normalize_to_parquet(
         id_field,
         dedup_mode,
         max_whitespace_run_chars,
-        drop_fields=drop_fields,
         bare=bare,
     )
     ctx_kwargs: dict = {"name": "normalize", "resources": resources}
@@ -506,7 +495,6 @@ def normalize_step(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     version: str | None = None,
-    drop_fields: tuple[str, ...] = (),
     bare: bool = False,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
@@ -557,10 +545,8 @@ def normalize_step(
         "file_extensions": file_extensions,
         "dedup_mode": dedup_mode,
     }
-    # Only include drop_fields/bare in hash when set so default callers' hash_id
-    # stays identical to pre-feature step specs (cache identity).
-    if drop_fields:
-        hash_attrs["drop_fields"] = drop_fields
+    # Only include bare in hash when set so default callers' hash_id stays
+    # identical to pre-feature step specs (cache identity).
     if bare:
         hash_attrs["bare"] = bare
     # Only include the version key when the caller explicitly opts in, so
@@ -581,7 +567,6 @@ def normalize_step(
             max_workers=max_workers,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
-            drop_fields=drop_fields,
             bare=bare,
         ),
         deps=[download],
