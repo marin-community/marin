@@ -47,6 +47,7 @@ DCLM_COMPONENTS = [
         "revision": "9fc30b5",
         "download_override_path": "raw/starcoderdata-720c8c",
         "text_field": "content",
+        "file_extensions": (".parquet",),
     },
     {
         "name": "proofpile_2",
@@ -54,6 +55,8 @@ DCLM_COMPONENTS = [
         "revision": "901a927",
         "download_override_path": "raw/proof-pile-2-f1b1d8",
         "text_field": "text",
+        # HF proof-pile-2 ships as compressed JSONL, not Parquet.
+        "file_extensions": (".jsonl.zst",),
     },
 ]
 
@@ -114,7 +117,7 @@ def main() -> None:
             download=download_spec,
             text_field=component["text_field"],
             id_field="id",
-            file_extensions=(".parquet",),
+            file_extensions=component["file_extensions"],
             max_workers=MAX_WORKERS,
             worker_resources=NORMALIZE_WORKER_RESOURCES,
             version="v2",
