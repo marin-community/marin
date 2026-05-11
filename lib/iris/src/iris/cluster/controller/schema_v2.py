@@ -1,15 +1,433 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright The Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-
 """SQLAlchemy Core schema for the controller database.
 
-Holds the shared ``MetaData`` registry that future stages will populate with
-``Table`` declarations matching today's hand-rolled migrations.
+Mirrors the on-disk schema produced by ``controller/migrations/`` (current
+HEAD: 0046). Every column, foreign key, check constraint, default, and
+index has a counterpart here so SA Core can drive SELECT/INSERT/UPDATE
+statements without round-tripping through the hand-rolled ``schema.py``.
+
+Auth tables live on a separate ``auth_metadata`` because they are stored
+in the attached ``auth.sqlite3`` database, not the main controller DB.
 """
 
-from sqlalchemy import MetaData
+from typing import Any
+
+from rigging.timing import Timestamp
+from sqlalchemy import (
+    CheckConstraint,
+    Column,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    LargeBinary,
+    MetaData,
+    PrimaryKeyConstraint,
+    String,
+    Table,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.types import TypeDecorator
+
+from iris.cluster.types import JobName, WorkerId
+
+USER_ROLE_DEFAULT = "user"
+USER_ROLE_CHECK = "role IN ('admin', 'user', 'worker')"
+WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
+IS_RESERVATION_HOLDER_CHECK = "is_reservation_holder IN (0, 1)"
+
+
+class JobNameType(TypeDecorator):
+    """Adapts ``JobName`` to/from a TEXT column."""
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return value.to_wire()
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return JobName.from_wire(value)
+
+
+class WorkerIdType(TypeDecorator):
+    """Adapts ``WorkerId`` to/from a TEXT column."""
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return str(value)
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return WorkerId(str(value))
+
+
+class TimestampMsType(TypeDecorator):
+    """Adapts ``Timestamp`` to/from an INTEGER (epoch milliseconds)."""
+
+    impl = Integer
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return value.epoch_ms()
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return Timestamp.from_ms(int(value))
+
+
+class BoolIntType(TypeDecorator):
+    """Adapts ``bool`` to/from an INTEGER column storing 0 or 1."""
+
+    impl = Integer
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return 1 if value else 0
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return bool(int(value))
+
 
 metadata = MetaData()
+auth_metadata = MetaData()
+
+
+schema_migrations_table = Table(
+    "schema_migrations",
+    metadata,
+    Column("name", String, primary_key=True),
+    Column("applied_at_ms", Integer, nullable=False),
+)
+
+
+meta_table = Table(
+    "meta",
+    metadata,
+    Column("key", String, primary_key=True),
+    Column("value", Integer, nullable=False),
+)
+
+
+users_table = Table(
+    "users",
+    metadata,
+    Column("user_id", String, primary_key=True),
+    Column("created_at_ms", TimestampMsType, nullable=False),
+    Column("display_name", String),
+    Column("role", String, nullable=False, server_default=f"'{USER_ROLE_DEFAULT}'"),
+    CheckConstraint(USER_ROLE_CHECK, name="users_role_check"),
+)
+
+
+jobs_table = Table(
+    "jobs",
+    metadata,
+    Column("job_id", JobNameType, primary_key=True),
+    Column("user_id", String, ForeignKey("users.user_id"), nullable=False),
+    Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
+    Column("root_job_id", String, nullable=False),
+    Column("depth", Integer, nullable=False),
+    Column("state", Integer, nullable=False),
+    Column("submitted_at_ms", TimestampMsType, nullable=False),
+    Column("root_submitted_at_ms", TimestampMsType, nullable=False),
+    Column("started_at_ms", TimestampMsType),
+    Column("finished_at_ms", TimestampMsType),
+    Column("scheduling_deadline_epoch_ms", Integer),
+    Column("error", String),
+    Column("exit_code", Integer),
+    Column("num_tasks", Integer, nullable=False),
+    Column("is_reservation_holder", BoolIntType, nullable=False),
+    Column("name", String, nullable=False, server_default="''"),
+    Column("has_reservation", BoolIntType, nullable=False, server_default="0"),
+    CheckConstraint(IS_RESERVATION_HOLDER_CHECK, name="jobs_is_reservation_holder_check"),
+    Index("idx_jobs_parent", "parent_job_id"),
+    Index("idx_jobs_state", text("state"), text("submitted_at_ms DESC")),
+    Index("idx_jobs_depth_state", text("depth"), text("state"), text("submitted_at_ms DESC")),
+    Index("idx_jobs_user_state", "user_id", "state"),
+    Index("idx_jobs_root_depth", "root_job_id", "depth"),
+    Index("idx_jobs_depth_submitted", text("depth"), text("submitted_at_ms DESC")),
+    Index("idx_jobs_name", "name"),
+    Index(
+        "idx_jobs_has_reservation",
+        "has_reservation",
+        "state",
+        sqlite_where=text("has_reservation = 1"),
+    ),
+    Index(
+        "idx_jobs_reservation_holder",
+        "job_id",
+        sqlite_where=text("is_reservation_holder = 1"),
+    ),
+)
+
+
+job_config_table = Table(
+    "job_config",
+    metadata,
+    Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), primary_key=True),
+    Column("name", String, nullable=False, server_default="''"),
+    Column("has_reservation", BoolIntType, nullable=False, server_default="0"),
+    Column("res_cpu_millicores", Integer, nullable=False, server_default="0"),
+    Column("res_memory_bytes", Integer, nullable=False, server_default="0"),
+    Column("res_disk_bytes", Integer, nullable=False, server_default="0"),
+    Column("res_device_json", String),
+    Column("constraints_json", String),
+    Column("has_coscheduling", BoolIntType, nullable=False, server_default="0"),
+    Column("coscheduling_group_by", String, nullable=False, server_default="''"),
+    Column("scheduling_timeout_ms", Integer),
+    Column("max_task_failures", Integer, nullable=False, server_default="0"),
+    Column("entrypoint_json", String, nullable=False, server_default="'{}'"),
+    Column("environment_json", String, nullable=False, server_default="'{}'"),
+    Column("bundle_id", String, nullable=False, server_default="''"),
+    Column("ports_json", String, nullable=False, server_default="'[]'"),
+    Column("max_retries_failure", Integer, nullable=False, server_default="0"),
+    Column("max_retries_preemption", Integer, nullable=False, server_default="100"),
+    Column("timeout_ms", Integer),
+    Column("preemption_policy", Integer, nullable=False, server_default="0"),
+    Column("existing_job_policy", Integer, nullable=False, server_default="0"),
+    Column("priority_band", Integer, nullable=False, server_default="0"),
+    Column("task_image", String, nullable=False, server_default="''"),
+    Column("submit_argv_json", String, nullable=False, server_default="'[]'"),
+    Column("reservation_json", String),
+    Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
+    Index("idx_job_config_name", "name"),
+    Index(
+        "idx_job_config_has_reservation",
+        "has_reservation",
+        "job_id",
+        sqlite_where=text("has_reservation = 1"),
+    ),
+)
+
+
+job_workdir_files_table = Table(
+    "job_workdir_files",
+    metadata,
+    Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False),
+    Column("filename", String, nullable=False),
+    Column("data", LargeBinary, nullable=False),
+    PrimaryKeyConstraint("job_id", "filename"),
+)
+
+
+tasks_table = Table(
+    "tasks",
+    metadata,
+    Column("task_id", JobNameType, primary_key=True),
+    Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False),
+    Column("task_index", Integer, nullable=False),
+    Column("state", Integer, nullable=False),
+    Column("error", String),
+    Column("exit_code", Integer),
+    Column("submitted_at_ms", TimestampMsType, nullable=False),
+    Column("started_at_ms", TimestampMsType),
+    Column("finished_at_ms", TimestampMsType),
+    Column("max_retries_failure", Integer, nullable=False),
+    Column("max_retries_preemption", Integer, nullable=False),
+    Column("failure_count", Integer, nullable=False),
+    Column("preemption_count", Integer, nullable=False),
+    Column("current_attempt_id", Integer, nullable=False, server_default="-1"),
+    Column("priority_neg_depth", Integer, nullable=False),
+    Column("priority_root_submitted_ms", Integer, nullable=False),
+    Column("priority_insertion", Integer, nullable=False),
+    Column("priority_band", Integer, nullable=False, server_default="2"),
+    Column("container_id", String),
+    Column("current_worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
+    Column("current_worker_address", String),
+    UniqueConstraint("job_id", "task_index", name="tasks_job_id_task_index_key"),
+    Index("idx_tasks_job_state", "job_id", "state"),
+    Index(
+        "idx_tasks_pending",
+        "state",
+        "priority_band",
+        "priority_neg_depth",
+        "priority_root_submitted_ms",
+        "submitted_at_ms",
+        "priority_insertion",
+    ),
+    Index("idx_tasks_state", "state"),
+    Index("idx_tasks_state_attempt", "state", "task_id", "current_attempt_id", "job_id"),
+    Index("idx_tasks_job_failures", "job_id", "failure_count", "preemption_count"),
+    Index(
+        "idx_tasks_current_worker",
+        "current_worker_id",
+        sqlite_where=text("current_worker_id IS NOT NULL"),
+    ),
+    Index("idx_tasks_job_state_counts", "job_id", "state", "failure_count", "preemption_count"),
+)
+
+
+task_attempts_table = Table(
+    "task_attempts",
+    metadata,
+    Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE"), nullable=False),
+    Column("attempt_id", Integer, nullable=False),
+    Column("worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="SET NULL")),
+    Column("state", Integer, nullable=False),
+    Column("created_at_ms", TimestampMsType, nullable=False),
+    Column("started_at_ms", TimestampMsType),
+    Column("finished_at_ms", TimestampMsType),
+    Column("exit_code", Integer),
+    Column("error", String),
+    PrimaryKeyConstraint("task_id", "attempt_id"),
+    Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),
+    Index(
+        "idx_task_attempts_live_workerbound",
+        "worker_id",
+        sqlite_where=text("worker_id IS NOT NULL AND finished_at_ms IS NULL"),
+    ),
+)
+
+
+workers_table = Table(
+    "workers",
+    metadata,
+    Column("worker_id", WorkerIdType, primary_key=True),
+    Column("address", String, nullable=False),
+    Column("md_hostname", String, nullable=False, server_default="''"),
+    Column("md_ip_address", String, nullable=False, server_default="''"),
+    Column("md_cpu_count", Integer, nullable=False, server_default="0"),
+    Column("md_memory_bytes", Integer, nullable=False, server_default="0"),
+    Column("md_disk_bytes", Integer, nullable=False, server_default="0"),
+    Column("md_tpu_name", String, nullable=False, server_default="''"),
+    Column("md_tpu_worker_hostnames", String, nullable=False, server_default="''"),
+    Column("md_tpu_worker_id", String, nullable=False, server_default="''"),
+    Column("md_tpu_chips_per_host_bounds", String, nullable=False, server_default="''"),
+    Column("md_gpu_count", Integer, nullable=False, server_default="0"),
+    Column("md_gpu_name", String, nullable=False, server_default="''"),
+    Column("md_gpu_memory_mb", Integer, nullable=False, server_default="0"),
+    Column("md_gce_instance_name", String, nullable=False, server_default="''"),
+    Column("md_gce_zone", String, nullable=False, server_default="''"),
+    Column("md_git_hash", String, nullable=False, server_default="''"),
+    Column("md_device_json", String, nullable=False, server_default="'{}'"),
+    Column("total_cpu_millicores", Integer, nullable=False, server_default="0"),
+    Column("total_memory_bytes", Integer, nullable=False, server_default="0"),
+    Column("total_gpu_count", Integer, nullable=False, server_default="0"),
+    Column("total_tpu_count", Integer, nullable=False, server_default="0"),
+    Column("device_type", String, nullable=False, server_default="''"),
+    Column("device_variant", String, nullable=False, server_default="''"),
+    Column("slice_id", String, nullable=False, server_default="''"),
+    Column("scale_group", String, nullable=False, server_default="''"),
+)
+
+
+worker_attributes_table = Table(
+    "worker_attributes",
+    metadata,
+    Column("worker_id", WorkerIdType, ForeignKey("workers.worker_id", ondelete="CASCADE"), nullable=False),
+    Column("key", String, nullable=False),
+    Column("value_type", String, nullable=False),
+    Column("str_value", String),
+    Column("int_value", Integer),
+    Column("float_value", Float),
+    PrimaryKeyConstraint("worker_id", "key"),
+    CheckConstraint(WORKER_ATTR_VALUE_TYPE_CHECK, name="worker_attributes_value_type_check"),
+)
+
+
+endpoints_table = Table(
+    "endpoints",
+    metadata,
+    Column("endpoint_id", String, primary_key=True),
+    Column("name", String, nullable=False),
+    Column("address", String, nullable=False),
+    Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False),
+    Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE")),
+    Column("metadata_json", String, nullable=False),
+    Column("registered_at_ms", TimestampMsType, nullable=False),
+    Index("idx_endpoints_name", "name"),
+    Index("idx_endpoints_task", "task_id"),
+    Index("idx_endpoints_job_id", "job_id"),
+)
+
+
+scaling_groups_table = Table(
+    "scaling_groups",
+    metadata,
+    Column("name", String, primary_key=True),
+    Column("consecutive_failures", Integer, nullable=False, server_default="0"),
+    Column("backoff_until_ms", Integer, nullable=False, server_default="0"),
+    Column("last_scale_up_ms", Integer, nullable=False, server_default="0"),
+    Column("last_scale_down_ms", Integer, nullable=False, server_default="0"),
+    Column("quota_exceeded_until_ms", Integer, nullable=False, server_default="0"),
+    Column("quota_reason", String, nullable=False, server_default="''"),
+    Column("updated_at_ms", Integer, nullable=False, server_default="0"),
+)
+
+
+slices_table = Table(
+    "slices",
+    metadata,
+    Column("slice_id", String, primary_key=True),
+    Column("scale_group", String, nullable=False),
+    Column("lifecycle", String, nullable=False),
+    Column("worker_ids", String, nullable=False, server_default="'[]'"),
+    Column("created_at_ms", Integer, nullable=False, server_default="0"),
+    Column("error_message", String, nullable=False, server_default="''"),
+    Index("idx_slices_scale_group", "scale_group"),
+)
+
+
+reservation_claims_table = Table(
+    "reservation_claims",
+    metadata,
+    Column("worker_id", WorkerIdType, primary_key=True),
+    Column("job_id", String, nullable=False),
+    Column("entry_idx", Integer, nullable=False),
+)
+
+
+user_budgets_table = Table(
+    "user_budgets",
+    metadata,
+    Column("user_id", String, ForeignKey("users.user_id"), primary_key=True),
+    Column("budget_limit", Integer, nullable=False, server_default="0"),
+    Column("max_band", Integer, nullable=False, server_default="2"),
+    Column("updated_at_ms", TimestampMsType, nullable=False),
+)
+
+
+auth_api_keys_table = Table(
+    "api_keys",
+    auth_metadata,
+    Column("key_id", String, primary_key=True),
+    Column("key_hash", String, nullable=False, unique=True),
+    Column("key_prefix", String, nullable=False),
+    Column("user_id", String, nullable=False),
+    Column("name", String, nullable=False),
+    Column("created_at_ms", TimestampMsType, nullable=False),
+    Column("last_used_at_ms", TimestampMsType),
+    Column("expires_at_ms", TimestampMsType),
+    Column("revoked_at_ms", TimestampMsType),
+    Index("idx_api_keys_hash", "key_hash"),
+    Index("idx_api_keys_user", "user_id"),
+)
+
+
+auth_controller_secrets_table = Table(
+    "controller_secrets",
+    auth_metadata,
+    Column("key", String, primary_key=True),
+    Column("value", String, nullable=False),
+    Column("created_at_ms", TimestampMsType, nullable=False),
+)
