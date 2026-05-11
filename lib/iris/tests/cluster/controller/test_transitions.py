@@ -1122,11 +1122,60 @@ def test_coscheduled_task_failure_kills_siblings(state):
     # Fail task-0 (terminal failure with no retries)
     txn = transition_task(state, tasks[0].task_id, job_pb2.TASK_STATE_FAILED, error="OOM")
 
-    # Task-0 should be FAILED, all other tasks should be WORKER_FAILED
+    # Task-0 should be FAILED. Siblings cascade to COSCHED_FAILED — a
+    # dedicated terminal state so we don't have to lie about
+    # ``preemption_count`` (the historical "+1 tombstone" pattern), and so
+    # dashboards can distinguish cascade kills from operator-initiated
+    # terminations.
     assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_FAILED
     for task in tasks[1:]:
-        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
+        sib = _query_task(state, task.task_id)
+        assert sib.state == job_pb2.TASK_STATE_COSCHED_FAILED
+        assert sib.preemption_count == 0, "sibling counter must stay honest"
+        assert check_task_is_finished(sib), "COSCHED_FAILED must be unconditionally terminal"
         assert task.task_id in txn.tasks_to_kill
+
+
+def test_coscheduled_cascade_ignores_late_sibling_heartbeats(state):
+    """A late heartbeat for a cascade-killed sibling does not resurrect it.
+
+    The worker's container is still up until the next poll diff stops it, so
+    heartbeats for the sibling task may arrive after the cascade has marked
+    it COSCHED_FAILED. The heartbeat update loop short-circuits via
+    ``task_row_is_finished``; without an unconditionally-terminal sibling
+    state, a stale ``WORKER_FAILED`` heartbeat with retry budget remaining
+    would flip the sibling back to PENDING and undo the cascade.
+    """
+    for i in range(4):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="late-heartbeat",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=4,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_preemption=100,  # plenty of budget — the tombstone, not the budget, must guard the cascade
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "j-late", req)
+    for i, task in enumerate(tasks):
+        dispatch_task(state, task, WorkerId(f"w{i}"))
+
+    transition_task(state, tasks[0].task_id, job_pb2.TASK_STATE_FAILED, error="OOM")
+    for task in tasks[1:]:
+        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_COSCHED_FAILED
+
+    # Late heartbeat for a sibling — the worker hasn't been diffed off yet
+    # and reports its container is still WORKER_FAILED'ing into the void.
+    transition_task(state, tasks[1].task_id, job_pb2.TASK_STATE_WORKER_FAILED, error="stale heartbeat")
+
+    sib = _query_task(state, tasks[1].task_id)
+    assert sib.state == job_pb2.TASK_STATE_COSCHED_FAILED, "late heartbeat must not un-kill the sibling"
+    assert sib.preemption_count == 0, "no spurious budget consumption on a terminal task"
 
 
 def test_coscheduled_cascade_holds_sibling_resources_until_heartbeat(state):
@@ -1234,7 +1283,9 @@ def test_coscheduled_task_worker_failure_kills_siblings(state):
     assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
     assert check_task_is_finished(_query_task(state, tasks[0].task_id))
     for task in tasks[1:]:
-        assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_WORKER_FAILED
+        sib = _query_task(state, task.task_id)
+        assert sib.state == job_pb2.TASK_STATE_COSCHED_FAILED
+        assert sib.preemption_count == 0, "sibling counter must stay honest"
         assert task.task_id in txn.tasks_to_kill
 
 

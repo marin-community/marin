@@ -605,6 +605,7 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
         job_pb2.TASK_STATE_UNSCHEDULABLE,
         job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_COSCHED_FAILED,
     }
 )
 

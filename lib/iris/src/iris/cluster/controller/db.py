@@ -123,7 +123,7 @@ def task_is_finished(
     """Whether a task has reached a terminal state with no remaining retries."""
     if state == job_pb2.TASK_STATE_SUCCEEDED:
         return True
-    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE):
+    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE, job_pb2.TASK_STATE_COSCHED_FAILED):
         return True
     if state == job_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure

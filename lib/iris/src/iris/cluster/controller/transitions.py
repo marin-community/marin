@@ -570,9 +570,17 @@ def _terminate_coscheduled_siblings(
 ) -> tuple[set[JobName], dict[JobName, WorkerId]]:
     """Terminate coscheduled siblings.
 
-    Each sibling is marked WORKER_FAILED with exhausted preemption count so it
-    will not be retried. Capacity stays held by the unfinished attempt rows
-    until heartbeats finalize them.
+    Each sibling is moved to ``TASK_STATE_COSCHED_FAILED``, which is
+    unconditionally terminal in :func:`task_is_finished`. Capacity stays held
+    by the unfinished attempt rows until the worker's next poll diffs the
+    task out of its ``expected_tasks`` and the heartbeat path finalizes the
+    attempt.
+
+    A dedicated state is used instead of ``WORKER_FAILED`` so we don't lie
+    about ``preemption_count`` (the historical "tombstone = +1" sentinel
+    overflowed int32 when ``max_retries_preemption`` was INT32_MAX), and not
+    ``KILLED`` so dashboards can distinguish controller-cascade kills from
+    operator-initiated terminations.
     """
     tasks_to_kill: set[JobName] = set()
     task_kill_workers: dict[JobName, WorkerId] = {}
@@ -587,11 +595,10 @@ def _terminate_coscheduled_siblings(
             registry,
             sib.task_id.to_wire(),
             sib.current_attempt_id,
-            job_pb2.TASK_STATE_WORKER_FAILED,
+            job_pb2.TASK_STATE_COSCHED_FAILED,
             error,
             now_ms,
             finalize_attempt=False,
-            preemption_count=sib.max_retries_preemption + 1,
         )
         if sib.current_worker_id is not None:
             task_kill_workers[sib.task_id] = sib.current_worker_id
@@ -876,9 +883,18 @@ class ControllerTransitions:
             new_state = job_pb2.JOB_STATE_KILLED
         elif (
             total > 0
-            and (counts.get(job_pb2.TASK_STATE_WORKER_FAILED, 0) + counts.get(job_pb2.TASK_STATE_PREEMPTED, 0)) > 0
+            and (
+                counts.get(job_pb2.TASK_STATE_WORKER_FAILED, 0)
+                + counts.get(job_pb2.TASK_STATE_PREEMPTED, 0)
+                + counts.get(job_pb2.TASK_STATE_COSCHED_FAILED, 0)
+            )
+            > 0
             and all(s in TERMINAL_TASK_STATES for s in counts)
         ):
+            # COSCHED_FAILED counts toward this bucket: the cascade was
+            # triggered by a worker-failure pattern on the originating task,
+            # so the job-level signal is the same as a multi-task worker
+            # failure, not an operator kill.
             new_state = job_pb2.JOB_STATE_WORKER_FAILED
         elif (
             counts.get(job_pb2.TASK_STATE_ASSIGNED, 0) > 0
