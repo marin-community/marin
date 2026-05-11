@@ -251,7 +251,7 @@ class TransactionCursor:
 
     Post-commit hooks registered via :meth:`on_commit` run after the wrapping
     ``ControllerDB.transaction()`` block commits successfully. They are used
-    by caches (e.g. ``EndpointStore``) to update in-memory state atomically
+    by caches (e.g. ``EndpointsProjection``) to update in-memory state atomically
     with the DB write: rollback suppresses the hook so memory never drifts
     from disk.
     """
@@ -489,7 +489,7 @@ class ControllerDB:
 
         On successful commit, any hooks registered via ``TransactionCursor.on_commit``
         fire while the write lock is still held — keeping in-memory caches
-        (e.g. ``EndpointStore``) in sync with the DB without exposing a
+        (e.g. ``EndpointsProjection``) in sync with the DB without exposing a
         torn snapshot to concurrent readers.
         """
         with self._lock:

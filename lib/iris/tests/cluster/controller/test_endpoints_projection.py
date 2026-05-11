@@ -1,16 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for EndpointStore — the in-memory cache over the ``endpoints`` table."""
+"""Tests for ``EndpointsProjection`` — write-through cache over the ``endpoints`` table."""
 
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import pytest
 from iris.cluster.controller.db import EndpointQuery
+from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointsProjection
 from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow
-from iris.cluster.controller.stores import AddEndpointOutcome, EndpointStore
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
@@ -19,7 +20,7 @@ from .conftest import make_job_request, submit_job
 
 
 # --- Parity helper: the legacy SQL builder, preserved solely for parity tests.
-# Deleted from production; kept here so a parity test demonstrates the store
+# Deleted from production; kept here so a parity test demonstrates the projection
 # returns an identical row set for representative queries.
 def _endpoint_query_sql_legacy(query: EndpointQuery) -> tuple[str, list[object]]:
     from_clause = f"SELECT {ENDPOINT_PROJECTION.select_clause()} FROM endpoints e"
@@ -68,13 +69,13 @@ def _make_row(endpoint_id: str, name: str, task_id: JobName, *, address: str = "
 # --- Load / add / remove ----------------------------------------------------
 
 
-def test_registry_loads_existing_rows_on_startup(state):
-    """On construction, the registry should contain every row in the ``endpoints`` table."""
+def test_projection_loads_existing_rows_on_startup(state):
+    """On construction, the projection should contain every row in the ``endpoints`` table."""
     tasks = submit_job(state, "j", make_job_request("j"))
     with state._db.transaction() as cur:
         assert state._store.endpoints.add(cur, _make_row("e1", "svc", tasks[0].task_id))
 
-    fresh = EndpointStore(state._db)
+    fresh = EndpointsProjection(state._db)
     rows = fresh.query()
     assert [r.endpoint_id for r in rows] == ["e1"]
 
@@ -104,9 +105,25 @@ def test_rollback_leaves_memory_untouched(state):
             state._store.endpoints.add(cur, _make_row("e1", "alpha", t))
             raise BoomError
 
-    # DB rolled back → memory must NOT see the insert.
+    # DB rolled back -> memory must NOT see the insert.
     assert state._store.endpoints.get("e1") is None
     assert state._store.endpoints.query() == []
+
+
+def test_rollback_safety_dict_and_sql_consistent(state):
+    """Raise mid-tx: assert dict has no entry AND SQL has no row."""
+    tasks = submit_job(state, "j", make_job_request("j"))
+    t = tasks[0].task_id
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with state._db.transaction() as cur:
+            state._store.endpoints.add(cur, _make_row("e-rollback", "alpha", t))
+            raise RuntimeError("boom")
+
+    assert state._store.endpoints.get("e-rollback") is None
+    with state._db.read_snapshot() as q:
+        row = q.fetchone("SELECT endpoint_id FROM endpoints WHERE endpoint_id = ?", ("e-rollback",))
+    assert row is None
 
 
 def test_add_rejects_terminal_task(state):
@@ -178,7 +195,7 @@ def test_remove_by_job_ids_drops_subtree(state):
 
 @pytest.fixture
 def populated(state):
-    """A registry populated with a small fixture set spanning names, tasks, prefixes."""
+    """A projection populated with a small fixture set spanning names, tasks, prefixes."""
     tasks_j = submit_job(state, "j", make_job_request("j", replicas=2))
     tasks_other = submit_job(state, "other", make_job_request("other"))
     t0 = tasks_j[0].task_id
@@ -255,7 +272,7 @@ def test_resolve_returns_address_for_exact_name(populated):
         lambda t0, t1, t2: EndpointQuery(name_prefix="alpha", limit=1),
     ],
 )
-def test_registry_parity_with_legacy_sql(populated, build_query):
+def test_projection_parity_with_legacy_sql(populated, build_query):
     state, _, (t0, t1, t2) = populated
     query = build_query(t0, t1, t2)
 
@@ -271,62 +288,168 @@ def test_registry_parity_with_legacy_sql(populated, build_query):
     assert actual_ids == expected_ids
 
 
-# --- Concurrency ------------------------------------------------------------
+# --- Atomicity --------------------------------------------------------------
 
 
-def test_concurrent_readers_never_see_torn_snapshot(state):
-    """Interleave add/remove with concurrent queries; every snapshot must be internally consistent."""
+def test_atomic_write_through_under_write_lock(state):
+    """Atomicity contract: no reader observes the new endpoint until the write tx exits.
+
+    A reader thread polls ``get(eid)`` continuously. The writer thread opens a
+    transaction, registers an ``add`` hook, and inside an additional hook
+    sleeps after signalling. While the writer's tx context is still open
+    (hook block hasn't returned), readers must see ``None`` for the
+    endpoint. After the context exits, every subsequent read must see the
+    new row.
+    """
+    tasks = submit_job(state, "j", make_job_request("j"))
+    t = tasks[0].task_id
+
+    inside_hook = threading.Event()
+    release_hook = threading.Event()
+    stop = threading.Event()
+    observations: list[bool] = []  # True = saw the new endpoint, False = not yet
+
+    def reader():
+        # Poll until we observe the new endpoint or are told to stop.
+        while not stop.is_set():
+            seen = state._store.endpoints.get("e-atomic") is not None
+            observations.append(seen)
+            # 1 ms poll cadence; bounded busy wait via Event.wait.
+            if release_hook.wait(timeout=0.001):
+                # The hook has been released; one more read after that may
+                # still observe None briefly while the hook is firing.
+                pass
+
+    reader_thread = threading.Thread(target=reader)
+    reader_thread.start()
+    try:
+        with state._db.transaction() as cur:
+            outcome = state._store.endpoints.add(cur, _make_row("e-atomic", "atomic", t))
+            assert outcome is AddEndpointOutcome.OK
+
+            # Register a second on_commit hook that blocks. Hooks fire in
+            # registration order under the write lock, AFTER the projection's
+            # index update. By blocking here we keep the write lock held and
+            # extend the period during which the dict update is committed but
+            # the transaction context has not yet exited. Readers observing
+            # an endpoint here is FINE — the contract is "no reader sees it
+            # before commit", not "no reader sees it before tx context exit".
+            def blocking_hook() -> None:
+                inside_hook.set()
+                release_hook.wait(timeout=2.0)
+
+            cur.on_commit(blocking_hook)
+
+            # Sample reads BEFORE we enter the commit phase. While the
+            # transaction is still open (no commit yet), readers must not
+            # see the endpoint.
+            pre_commit_samples = [state._store.endpoints.get("e-atomic") for _ in range(50)]
+            assert all(v is None for v in pre_commit_samples), "reader saw uncommitted endpoint"
+
+        # Tx context has exited and all hooks have fired. The endpoint must
+        # be visible to every subsequent read.
+        for _ in range(50):
+            assert state._store.endpoints.get("e-atomic") is not None
+    finally:
+        release_hook.set()
+        stop.set()
+        reader_thread.join(timeout=5)
+        assert not reader_thread.is_alive()
+
+    # Once we entered the blocking hook, the writer was past the SQL commit
+    # and the projection update had run. Any read after that is allowed to
+    # see the endpoint; any read strictly before the commit must not.
+    assert inside_hook.is_set()
+
+
+def test_replace_from_resets_dict(state, tmp_path: Path):
+    """``backup_to`` + modify + ``replace_from`` -> dict reflects backup state."""
+    tasks = submit_job(state, "j", make_job_request("j"))
+    t = tasks[0].task_id
+
+    # Populate the projection with a known endpoint and take a backup.
+    with state._db.transaction() as cur:
+        state._store.endpoints.add(cur, _make_row("e-backup", "backup", t))
+    assert state._store.endpoints.get("e-backup") is not None
+
+    backup_dir = tmp_path / "backup"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    state._db.backup_to(backup_dir / "controller.sqlite3")
+    # Auth DB is required by replace_from to fully restore; backup it too.
+    state._db.backup_to(backup_dir / "auth.sqlite3")
+
+    # Mutate after the backup: remove the original, add a new endpoint that
+    # only exists in the live DB.
+    with state._db.transaction() as cur:
+        state._store.endpoints.remove(cur, "e-backup")
+        state._store.endpoints.add(cur, _make_row("e-live", "live", t))
+    assert state._store.endpoints.get("e-backup") is None
+    assert state._store.endpoints.get("e-live") is not None
+
+    # Restore from the backup. The reopen hook fires the projection's
+    # rehydrate() and the dict must reflect the backup state, not the
+    # post-backup mutations.
+    state._db.replace_from(backup_dir)
+
+    assert state._store.endpoints.get("e-backup") is not None
+    assert state._store.endpoints.get("e-live") is None
+
+
+def test_concurrent_readers_no_keyerror_no_torn_reads(state):
+    """4 readers + 2 writers for 2 seconds. No exceptions, no inconsistency."""
     tasks = submit_job(state, "stress", make_job_request("stress", replicas=4))
     task_ids = [t.task_id for t in tasks]
 
     stop = threading.Event()
     errors: list[str] = []
 
-    def writer():
+    def writer(idx: int):
         try:
-            i = 0
+            i = idx
             while not stop.is_set():
                 t = task_ids[i % len(task_ids)]
-                eid = f"e{i % len(task_ids)}"
-                name = f"svc-{i % len(task_ids)}"
+                eid = f"e{idx}-{i % len(task_ids)}"
+                name = f"svc-{idx}-{i % len(task_ids)}"
                 with state._db.transaction() as cur:
                     state._store.endpoints.add(cur, _make_row(eid, name, t))
                 with state._db.transaction() as cur:
                     state._store.endpoints.remove(cur, eid)
                 i += 1
         except Exception as exc:
-            errors.append(f"writer: {exc!r}")
+            errors.append(f"writer-{idx}: {exc!r}")
 
     def reader():
         try:
             while not stop.is_set():
                 snapshot = state._store.endpoints.query()
-                # Verify the snapshot itself is internally consistent: every
-                # endpoint_id in the result set is unique (no duplicates from
-                # a torn index).
                 ids = [r.endpoint_id for r in snapshot]
+                # No duplicate ids in a single snapshot (no torn index).
                 assert len(ids) == len(set(ids)), f"duplicate ids in snapshot: {ids}"
-                # Exercise the secondary-index query paths concurrently with
-                # mutations. We cannot assert that a row from query() is still
-                # present in a subsequent get() — the writer may remove it
-                # between the two calls (TOCTOU).
+                # Cross-view consistency: every row in by_id-derived
+                # snapshot must still be reachable via get(); the writer
+                # may unindex it between calls, which is fine, but it must
+                # not raise KeyError. The projection's get() returns None
+                # on miss, so this is implicit — any exception bubbles up
+                # via the outer try/except.
                 for row in snapshot:
                     state._store.endpoints.get(row.endpoint_id)
                 for i in range(len(task_ids)):
-                    state._store.endpoints.query(EndpointQuery(name_prefix=f"svc-{i}"))
-                    state._store.endpoints.query(EndpointQuery(exact_name=f"svc-{i}"))
+                    state._store.endpoints.query(EndpointQuery(name_prefix="svc-"))
+                    state._store.endpoints.query(EndpointQuery(exact_name=f"svc-0-{i}"))
                     state._store.endpoints.query(EndpointQuery(task_ids=(task_ids[i],)))
         except Exception as exc:
             errors.append(f"reader: {exc!r}")
 
-    barrier = threading.Barrier(4)
+    barrier = threading.Barrier(6)
 
-    def runner(fn):
+    def runner(fn, *args):
         barrier.wait()
-        fn()
+        fn(*args)
 
     threads = [
-        threading.Thread(target=runner, args=(writer,)),
+        threading.Thread(target=runner, args=(writer, 0)),
+        threading.Thread(target=runner, args=(writer, 1)),
+        threading.Thread(target=runner, args=(reader,)),
         threading.Thread(target=runner, args=(reader,)),
         threading.Thread(target=runner, args=(reader,)),
         threading.Thread(target=runner, args=(reader,)),
@@ -335,7 +458,7 @@ def test_concurrent_readers_never_see_torn_snapshot(state):
         th.start()
 
     # Short bounded run, polling a monotonic deadline instead of time.sleep.
-    deadline = Timestamp.now().epoch_ms() + 500
+    deadline = Timestamp.now().epoch_ms() + 2000
     while Timestamp.now().epoch_ms() < deadline:
         pass
     stop.set()

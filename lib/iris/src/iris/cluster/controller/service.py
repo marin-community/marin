@@ -57,6 +57,7 @@ from iris.cluster.controller.db import (
     running_tasks_by_worker,
     task_row_can_be_scheduled,
 )
+from iris.cluster.controller.projections.endpoints import AddEndpointOutcome
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.query import execute_raw_query
 from iris.cluster.controller.scheduler import SchedulingContext
@@ -77,7 +78,7 @@ from iris.cluster.controller.schema import (
     WorkerDetailRow,
     tasks_with_attempts,
 )
-from iris.cluster.controller.stores import AddEndpointOutcome, ControllerStore
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
@@ -1727,7 +1728,7 @@ class ControllerServiceImpl:
         )
 
         # Validation runs inside the writer transaction in
-        # :meth:`EndpointStore.add`: NOT_FOUND if the task row is missing,
+        # :meth:`EndpointsProjection.add`: NOT_FOUND if the task row is missing,
         # FAILED_PRECONDITION if the task is terminal or the attempt is stale.
         with self._store.transaction() as cur:
             outcome = self._transitions.add_endpoint(cur, endpoint, expected_attempt_id=request.attempt_id)

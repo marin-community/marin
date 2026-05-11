@@ -383,7 +383,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
 
             def _reset_endpoint():
                 write_db.execute("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'")
-                write_store.endpoints._load_all()
+                write_store.endpoints.rehydrate()
 
             bench("RPC: RegisterEndpoint (1 write)", _register_endpoint_one, reset=_reset_endpoint)
 
@@ -868,7 +868,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
 
         def _reset_endpoints():
             write_db.execute("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'")
-            write_store.endpoints._load_all()
+            write_store.endpoints.rehydrate()
 
         for burst_n in (50, 200):
             if len(sample) < burst_n:

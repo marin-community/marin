@@ -38,6 +38,7 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointsProjection
 from iris.cluster.controller.schema import (
     AttemptRow,
     EndpointRow,
@@ -47,9 +48,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.stores import (
     ActiveTaskRow,
-    AddEndpointOutcome,
     ControllerStore,
-    EndpointStore,
     JobConfigInsertParams,
     JobInsertParams,
     JobStore,
@@ -347,8 +346,8 @@ def _has_reservation_flag(request: controller_pb2.Controller.LaunchJobRequest) -
     return 1 if request.HasField("reservation") and request.reservation.entries else 0
 
 
-def delete_task_endpoints(cur: TransactionCursor, endpoints: EndpointStore, task_id: str) -> None:
-    """Remove all registered endpoints for a task through the endpoint store."""
+def delete_task_endpoints(cur: TransactionCursor, endpoints: EndpointsProjection, task_id: str) -> None:
+    """Remove all registered endpoints for a task through the endpoints projection."""
     endpoints.remove_by_task(cur, JobName.from_wire(task_id))
 
 
