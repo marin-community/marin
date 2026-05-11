@@ -204,6 +204,12 @@ enum TaskState {
   TASK_STATE_UNSCHEDULABLE = 8;
   TASK_STATE_ASSIGNED = 9;
   TASK_STATE_PREEMPTED = 10;
+  // Terminal: this task was cancelled by the controller because a coscheduled
+  // sibling hit its terminal failure budget. The task itself was healthy —
+  // distinguishing this from KILLED (operator-initiated) avoids spurious
+  // "user killed my job" tickets, and from WORKER_FAILED (real worker death)
+  // avoids polluting the preemption counter.
+  TASK_STATE_COSCHED_FAILED = 11;
 }
 
 // Status of a single task within a job
