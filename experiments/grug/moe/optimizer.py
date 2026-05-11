@@ -7,6 +7,8 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 import optax
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from levanter.optim import OptimizerConfig
 from levanter.optim.grugmuon import _grug_scale_with_muon
 from levanter.optim.util import CoefficientType
@@ -155,6 +157,38 @@ def _pair_axis(shape: tuple[int, ...]) -> int | None:
     return 1 if A <= B else 2
 
 
+def _named_sharding(x) -> NamedSharding | None:
+    """Return ``x``'s NamedSharding, or ``None`` if it isn't NamedSharding-typed.
+
+    Inside ``jax.jit`` / ``jax.eval_shape`` the array is a tracer with no
+    ``.sharding`` attribute; we then fall back to ``jax.typeof(x).sharding``
+    which exposes the abstract-mesh-axes sharding.
+    """
+    if not hasattr(x, "shape"):
+        return None
+    sharding = getattr(x, "sharding", None)
+    if sharding is None:
+        aval = jax.typeof(x)
+        sharding = getattr(aval, "sharding", None)
+    if isinstance(sharding, NamedSharding):
+        return sharding
+    return None
+
+
+def _reshape_with_spec(x, new_shape: tuple[int, ...], out_spec: P | None):
+    """Reshape ``x`` to ``new_shape`` carrying ``out_spec`` as output PartitionSpec.
+
+    Under explicit-mesh-axes mode JAX requires ``out_sharding`` for reshapes
+    that merge a local axis with a sharded axis (or vice versa). When the
+    input lacks a NamedSharding, ``out_spec`` is ignored and a plain reshape
+    is used.
+    """
+    sharding = _named_sharding(x)
+    if sharding is None or out_spec is None:
+        return jnp.reshape(x, new_shape)
+    return jax.lax.reshape(x, new_shape, out_sharding=NamedSharding(sharding.mesh, out_spec))
+
+
 def _pair_3d_leading(x):
     """Reshape a 3D expert array so adjacent experts share one NS op.
 
@@ -169,8 +203,12 @@ def _pair_3d_leading(x):
     - ``w_down`` shape ``(E, i, d)`` -> pair along axis 1:
       ``(E // 2, 2 * i, d) = (32, d, d)``.
 
-    All three are square per pair. Falls through unchanged for non-3D
-    arrays or odd ``E``.
+    Output sharding mirrors the input's PartitionSpec across the rearranged
+    axes (semantic preservation): every axis carries the same mesh-axis
+    label it had before, with the local size-2 axis folded into the
+    chosen pair axis.
+
+    Falls through unchanged for non-3D arrays or odd ``E``.
     """
     if not hasattr(x, "shape") or len(x.shape) != 3:
         return x
@@ -178,20 +216,29 @@ def _pair_3d_leading(x):
     if axis is None:
         return x
     E, A, B = x.shape
+    sharding = _named_sharding(x)
+    in_spec = sharding.spec if sharding is not None else None
     if axis == 1:
-        return x.reshape(E // 2, 2 * A, B)
-    # axis == 2: interleave adjacent experts along the trailing axis.
-    # Reshape (E, A, B) -> (E // 2, 2, A, B), transpose to (E // 2, A, 2, B),
-    # then flatten the last two axes to (E // 2, A, 2 * B).
-    return x.reshape(E // 2, 2, A, B).transpose(0, 2, 1, 3).reshape(E // 2, A, 2 * B)
+        out_spec = P(in_spec[0], in_spec[1], in_spec[2]) if in_spec is not None else None
+        return _reshape_with_spec(x, (E // 2, 2 * A, B), out_spec)
+    # axis == 2: rearrange via two reshapes + a transpose.
+    # (E, A, B) -> (E // 2, 2, A, B): split the leading sharded axis into
+    # (pair_idx, within_pair); within_pair is local. Then transpose to
+    # (E // 2, A, 2, B). Then reshape to (E // 2, A, 2 * B), merging the
+    # local within-pair axis with B.
+    mid_4d_spec = P(in_spec[0], None, in_spec[1], in_spec[2]) if in_spec is not None else None
+    x_4d = _reshape_with_spec(x, (E // 2, 2, A, B), mid_4d_spec)
+    x_t = jnp.transpose(x_4d, (0, 2, 1, 3))
+    out_spec = P(in_spec[0], in_spec[1], in_spec[2]) if in_spec is not None else None
+    return _reshape_with_spec(x_t, (E // 2, A, 2 * B), out_spec)
 
 
 def _unpair_to_original(x_paired, original):
     """Inverse of ``_pair_3d_leading`` — reshape back to ``original`` shape.
 
-    The ``original`` argument supplies the target shape (the pre-pair
-    parameter or update); we reuse its shape to drive the reshape so
-    non-3D leaves pass through.
+    ``original`` supplies the target shape and PartitionSpec; the paired
+    tensor's intermediate reshapes carry that same spec on each rearranged
+    axis so explicit-mesh-axes JAX accepts them.
     """
     if not hasattr(original, "shape") or len(original.shape) != 3:
         return x_paired
@@ -199,10 +246,17 @@ def _unpair_to_original(x_paired, original):
     if axis is None:
         return x_paired
     E, A, B = original.shape
+    sharding = _named_sharding(original)
+    orig_spec = sharding.spec if sharding is not None else None
     if axis == 1:
-        return x_paired.reshape(E, A, B)
+        out_spec = orig_spec
+        return _reshape_with_spec(x_paired, (E, A, B), out_spec)
     # axis == 2: reverse the interleave from _pair_3d_leading.
-    return x_paired.reshape(E // 2, A, 2, B).transpose(0, 2, 1, 3).reshape(E, A, B)
+    mid_4d_spec = P(orig_spec[0], orig_spec[1], None, orig_spec[2]) if orig_spec is not None else None
+    x_4d = _reshape_with_spec(x_paired, (E // 2, A, 2, B), mid_4d_spec)
+    x_t = jnp.transpose(x_4d, (0, 2, 1, 3))
+    out_spec = orig_spec
+    return _reshape_with_spec(x_t, (E, A, B), out_spec)
 
 
 def scale_with_grug_muonh_paired(
