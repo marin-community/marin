@@ -52,9 +52,10 @@ def main() -> None:
     parser.add_argument("--install-deps", action="store_true")
     parser.add_argument("--skip-real-sonic", action="store_true")
     parser.add_argument("--skip-pallas", action="store_true")
-    parser.add_argument("--pallas-backends", default="pallas_triton_token_kblock,pallas_triton")
+    parser.add_argument("--pallas-backends", default="pallas_triton_faithful,pallas_triton_token_kblock,pallas_triton")
     parser.add_argument("--token-block", type=int, default=16)
     parser.add_argument("--hidden-block", type=int, default=64)
+    parser.add_argument("--k-block", type=int, default=4)
     parser.add_argument("--num-warps", type=int, default=4)
     parser.add_argument("--write-ir-dir", type=Path)
     add_common_arguments(parser)
@@ -83,6 +84,8 @@ def main() -> None:
                 str(args.token_block),
                 "--hidden-block",
                 str(args.hidden_block),
+                "--k-block",
+                str(args.k_block),
                 "--num-warps",
                 str(args.num_warps),
             ]

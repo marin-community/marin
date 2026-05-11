@@ -31,7 +31,7 @@ except (ImportError, ModuleNotFoundError):
     pltriton = None  # type: ignore[assignment]
 
 
-SonicGatherSumImplementation: TypeAlias = Literal["xla", "pallas_triton", "pallas_mgpu"]
+SonicGatherSumImplementation: TypeAlias = Literal["xla", "pallas_triton", "pallas_triton_faithful", "pallas_mgpu"]
 SonicGatherRaggedDotImplementation: TypeAlias = Literal["xla", "pallas_triton"]
 SonicMetadataImplementation: TypeAlias = Literal["xla", "pallas_triton"]
 
@@ -46,6 +46,7 @@ class SonicGatherSumBlockSizes:
 
     token_block_size: int = 16
     hidden_block_size: int = 64
+    k_block_size: int = 4
     kernel_repeat: int = 1
     num_warps: int = 4
 
@@ -103,6 +104,8 @@ def _validate_block_sizes(block_sizes: SonicGatherSumBlockSizes) -> None:
         raise ValueError(f"token_block_size must be positive, got {block_sizes.token_block_size}")
     if block_sizes.hidden_block_size <= 0:
         raise ValueError(f"hidden_block_size must be positive, got {block_sizes.hidden_block_size}")
+    if block_sizes.k_block_size <= 0:
+        raise ValueError(f"k_block_size must be positive, got {block_sizes.k_block_size}")
     if block_sizes.kernel_repeat <= 0:
         raise ValueError(f"kernel_repeat must be positive, got {block_sizes.kernel_repeat}")
     if block_sizes.num_warps <= 0:
@@ -557,6 +560,62 @@ def _gather_sum_pallas_triton_token_loop_kernel(
         pltriton.store(output_ref.at[token_index, hidden_offsets], output)
 
 
+def _gather_sum_pallas_triton_faithful_kernel(
+    dispatch_output_ref,
+    dispatch_positions_ref,
+    combine_weights_ref,
+    repeat_offsets_ref,
+    output_ref,
+    *,
+    topk: int,
+    hidden: int,
+    hidden_block_size: int,
+    hidden_tiles: int,
+    k_block_size: int,
+    k_tiles: int,
+    kernel_repeat: int,
+    has_weights: bool,
+) -> None:
+    token_index = pl.program_id(0)
+
+    for hidden_tile in range(hidden_tiles):
+        hidden_offsets = hidden_tile * hidden_block_size + jnp.arange(hidden_block_size)
+        hidden_mask = hidden_offsets < hidden
+        acc = jnp.zeros((hidden_block_size,), dtype=jnp.float32)
+
+        for repeat_index in range(kernel_repeat):
+            repeat_offset = pltriton.load(repeat_offsets_ref.at[repeat_index])
+            for k_tile in range(k_tiles):
+                k_offsets = k_tile * k_block_size + jnp.arange(k_block_size)
+                k_mask = k_offsets < topk
+                safe_k_offsets = jnp.minimum(k_offsets, topk - 1)
+                dispatch_rows = (
+                    pltriton.load(
+                        dispatch_positions_ref.at[token_index, safe_k_offsets],
+                        mask=k_mask,
+                        other=0,
+                    )
+                    + repeat_offset
+                )
+                values = pltriton.load(
+                    dispatch_output_ref.at[dispatch_rows[:, None], hidden_offsets[None, :]],
+                    mask=k_mask[:, None] & hidden_mask[None, :],
+                    other=0.0,
+                ).astype(jnp.float32)
+                if has_weights:
+                    weights = pltriton.load(
+                        combine_weights_ref.at[token_index, safe_k_offsets],
+                        mask=k_mask,
+                        other=0.0,
+                    ).astype(jnp.float32)
+                    acc = acc + jnp.sum(values * weights[:, None], axis=0)
+                else:
+                    acc = acc + jnp.sum(values, axis=0)
+
+        output = (acc * (1.0 / kernel_repeat)).astype(output_ref.dtype)
+        pltriton.store(output_ref.at[token_index, hidden_offsets], output, mask=hidden_mask)
+
+
 def _gather_sum_pallas_triton_token_kblock_kernel(
     dispatch_output_ref,
     dispatch_positions_ref,
@@ -925,6 +984,77 @@ def _sonic_gather_sum_pallas_triton_token_loop_call(
     return out[:tokens, :hidden]
 
 
+def _sonic_gather_sum_pallas_triton_faithful_call(
+    dispatch_output: jax.Array,
+    dispatch_positions: jax.Array,
+    combine_weights: jax.Array | None,
+    *,
+    block_sizes: SonicGatherSumBlockSizes,
+    interpret: bool,
+    repeat_offsets: jax.Array | None = None,
+) -> jax.Array:
+    if pltriton is None:
+        raise PallasUnsupportedError("Pallas Triton backend is not available.")
+    _validate_block_sizes(block_sizes)
+    if jax.default_backend() != "gpu" and not interpret:
+        raise PallasUnsupportedError("Pallas Triton faithful SonicMoE gather-sum requires GPU unless interpret=True.")
+    if dispatch_output.ndim != 2:
+        raise ValueError(f"dispatch_output must be rank-2 [TK, D], got shape={dispatch_output.shape}")
+    if dispatch_positions.ndim != 2:
+        raise ValueError(f"dispatch_positions must be rank-2 [T, K], got shape={dispatch_positions.shape}")
+    if combine_weights is not None and combine_weights.shape != dispatch_positions.shape:
+        raise ValueError(
+            "combine_weights and dispatch_positions must have identical [T, K] shapes; "
+            f"got {combine_weights.shape} vs {dispatch_positions.shape}"
+        )
+
+    tokens, topk = dispatch_positions.shape
+    hidden = dispatch_output.shape[1]
+    if topk <= 0:
+        raise ValueError("dispatch_positions must have at least one top-k column")
+    hidden_tiles = math.ceil(hidden / block_sizes.hidden_block_size)
+    k_tiles = math.ceil(topk / block_sizes.k_block_size)
+    if repeat_offsets is None:
+        repeat_offsets = jnp.zeros((block_sizes.kernel_repeat,), dtype=jnp.int32)
+    has_weights = combine_weights is not None
+    if combine_weights is None:
+        combine_weights = jnp.zeros(dispatch_positions.shape, dtype=dispatch_output.dtype)
+
+    out = pl.pallas_call(
+        lambda dispatch_output_ref, dispatch_positions_ref, combine_weights_ref, repeat_offsets_ref, output_ref: (
+            _gather_sum_pallas_triton_faithful_kernel(
+                dispatch_output_ref,
+                dispatch_positions_ref,
+                combine_weights_ref,
+                repeat_offsets_ref,
+                output_ref,
+                topk=topk,
+                hidden=hidden,
+                hidden_block_size=block_sizes.hidden_block_size,
+                hidden_tiles=hidden_tiles,
+                k_block_size=block_sizes.k_block_size,
+                k_tiles=k_tiles,
+                kernel_repeat=block_sizes.kernel_repeat,
+                has_weights=has_weights,
+            )
+        ),
+        out_shape=jax.ShapeDtypeStruct((tokens, hidden), dispatch_output.dtype),
+        grid=(tokens,),
+        compiler_params=pltriton.CompilerParams(num_warps=block_sizes.num_warps, num_stages=4),
+        cost_estimate=_gather_sum_cost_estimate(
+            dispatch_output,
+            dispatch_positions,
+            combine_weights,
+            hidden=hidden,
+            kernel_repeat=block_sizes.kernel_repeat,
+            output_dtype=dispatch_output.dtype,
+        ),
+        interpret=interpret,
+        name="sonic_gather_sum_pallas_triton_faithful",
+    )(dispatch_output, dispatch_positions, combine_weights, repeat_offsets)
+    return out
+
+
 def _sonic_gather_sum_pallas_triton_token_kblock_call(
     dispatch_output: jax.Array,
     dispatch_positions: jax.Array,
@@ -1034,6 +1164,37 @@ def sonic_gather_sum_pallas_triton(
         block_sizes = SonicGatherSumBlockSizes.get_default()
     return _with_xla_backward(
         lambda dispatch_output, dispatch_positions, combine_weights: _sonic_gather_sum_pallas_triton_call(
+            dispatch_output,
+            dispatch_positions,
+            combine_weights,
+            block_sizes=block_sizes,
+            interpret=interpret,
+        ),
+        dispatch_output,
+        dispatch_positions,
+        combine_weights,
+    )
+
+
+def sonic_gather_sum_pallas_triton_faithful(
+    dispatch_output: Float[Array, "TK D"],
+    dispatch_positions: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    *,
+    block_sizes: SonicGatherSumBlockSizes | None = None,
+    interpret: bool = False,
+) -> Float[Array, "T D"]:
+    """Source-faithful Pallas Triton port of SonicMoE token gather/sum.
+
+    This path keeps Sonic's one-program-per-token launch, inner hidden-tile
+    loop, explicit ``BLOCK_K`` loop, masks, and fp32 accumulator. It is meant
+    as a comparison control, not as the default production gather-sum backend.
+    """
+    _validate_shapes(dispatch_output, dispatch_positions, combine_weights)
+    if block_sizes is None:
+        block_sizes = SonicGatherSumBlockSizes.get_default()
+    return _with_xla_backward(
+        lambda dispatch_output, dispatch_positions, combine_weights: _sonic_gather_sum_pallas_triton_faithful_call(
             dispatch_output,
             dispatch_positions,
             combine_weights,
@@ -1318,6 +1479,25 @@ def sonic_gather_sum(
                 if implementation is not None:
                     raise
                 continue
+        if impl == "pallas_triton_faithful":
+            try:
+                return sonic_gather_sum_pallas_triton_faithful(
+                    dispatch_output,
+                    dispatch_positions,
+                    combine_weights,
+                    block_sizes=block_sizes,
+                    interpret=interpret,
+                )
+            except PallasUnsupportedError as exc:
+                errors.append(exc)
+                if implementation is not None:
+                    raise
+                continue
+            except NotImplementedError as exc:
+                errors.append(exc)
+                if implementation is not None:
+                    raise
+                continue
         if impl == "pallas_mgpu":
             try:
                 return sonic_gather_sum_pallas_mgpu(
@@ -1359,6 +1539,7 @@ __all__ = [
     "sonic_gather_sum",
     "sonic_gather_sum_pallas_mgpu",
     "sonic_gather_sum_pallas_triton",
+    "sonic_gather_sum_pallas_triton_faithful",
     "sonic_gather_sum_reference",
     "sonic_topk_metadata",
     "sonic_topk_metadata_pallas_triton",

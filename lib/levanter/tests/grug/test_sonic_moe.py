@@ -15,6 +15,7 @@ from levanter.grug.sonic_moe import (
     sonic_gather_ragged_dot_reference,
     sonic_gather_sum_pallas_mgpu,
     sonic_gather_sum_pallas_triton,
+    sonic_gather_sum_pallas_triton_faithful,
     sonic_gather_sum_reference,
     sonic_topk_metadata_pallas_triton,
     sonic_topk_metadata_reference,
@@ -85,6 +86,16 @@ def test_sonic_gather_sum_pallas_interpret_matches_reference_and_grad():
     )
     np.testing.assert_allclose(np.asarray(y_triton), np.asarray(y_ref), rtol=1e-6, atol=1e-6)
 
+    faithful_block_sizes = SonicGatherSumBlockSizes(token_block_size=1, hidden_block_size=5, k_block_size=2)
+    y_faithful = sonic_gather_sum_pallas_triton_faithful(
+        dispatch_output,
+        dispatch_positions,
+        combine_weights,
+        block_sizes=faithful_block_sizes,
+        interpret=True,
+    )
+    np.testing.assert_allclose(np.asarray(y_faithful), np.asarray(y_ref), rtol=1e-6, atol=1e-6)
+
     def loss(fn, dispatch_output, combine_weights):
         y = fn(dispatch_output, dispatch_positions, combine_weights)
         return jnp.sum(y * y)
@@ -121,11 +132,59 @@ def test_sonic_gather_sum_pallas_interpret_matches_reference_and_grad():
         ),
         argnums=(0, 1),
     )(dispatch_output, combine_weights)
+    faithful_grads = jax.grad(
+        lambda out, weights: loss(
+            lambda y, pos, w: sonic_gather_sum_pallas_triton_faithful(
+                y,
+                pos,
+                w,
+                block_sizes=faithful_block_sizes,
+                interpret=True,
+            ),
+            out,
+            weights,
+        ),
+        argnums=(0, 1),
+    )(dispatch_output, combine_weights)
 
     np.testing.assert_allclose(np.asarray(pallas_grads[0]), np.asarray(ref_grads[0]), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(pallas_grads[1]), np.asarray(ref_grads[1]), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(triton_grads[0]), np.asarray(ref_grads[0]), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(triton_grads[1]), np.asarray(ref_grads[1]), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(faithful_grads[0]), np.asarray(ref_grads[0]), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(faithful_grads[1]), np.asarray(ref_grads[1]), rtol=1e-6, atol=1e-6)
+
+
+def test_sonic_gather_sum_faithful_pallas_interpret_matches_topk_four_reference():
+    dispatch_output = jnp.arange(12 * 7, dtype=jnp.float32).reshape(12, 7) / 10
+    dispatch_positions = jnp.array(
+        [
+            [2, 4, 1, 7],
+            [0, 8, 3, 6],
+            [5, 9, 10, 11],
+        ],
+        dtype=jnp.int32,
+    )
+    combine_weights = jnp.array(
+        [
+            [0.4, 0.3, 0.2, 0.1],
+            [0.1, 0.2, 0.3, 0.4],
+            [0.25, 0.25, 0.25, 0.25],
+        ],
+        dtype=jnp.float32,
+    )
+    block_sizes = SonicGatherSumBlockSizes(token_block_size=1, hidden_block_size=5, k_block_size=3)
+
+    y_ref = sonic_gather_sum_reference(dispatch_output, dispatch_positions, combine_weights)
+    y_faithful = sonic_gather_sum_pallas_triton_faithful(
+        dispatch_output,
+        dispatch_positions,
+        combine_weights,
+        block_sizes=block_sizes,
+        interpret=True,
+    )
+
+    np.testing.assert_allclose(np.asarray(y_faithful), np.asarray(y_ref), rtol=1e-6, atol=1e-6)
 
 
 def test_moe_mlp_sonic_xla_matches_scatter_values_and_gradients():

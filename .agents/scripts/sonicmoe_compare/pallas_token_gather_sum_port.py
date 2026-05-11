@@ -27,7 +27,13 @@ from common import (
     time_blocking_call,
 )
 
-PallasBackend = Literal["xla", "pallas_triton", "pallas_triton_token_loop", "pallas_triton_token_kblock"]
+PallasBackend = Literal[
+    "xla",
+    "pallas_triton",
+    "pallas_triton_faithful",
+    "pallas_triton_token_loop",
+    "pallas_triton_token_kblock",
+]
 
 
 def _jax_dtype(dtype: str):
@@ -64,11 +70,13 @@ def _call_port(
     config: TokenGatherSumConfig,
     token_block_size: int,
     hidden_block_size: int,
+    k_block_size: int,
     num_warps: int,
 ):
     import jax.numpy as jnp
     from levanter.grug.sonic_moe import (
         SonicGatherSumBlockSizes,
+        _sonic_gather_sum_pallas_triton_faithful_call,
         _sonic_gather_sum_pallas_triton_token_kblock_call,
         _sonic_gather_sum_pallas_triton_token_loop_call,
         sonic_gather_sum,
@@ -78,6 +86,7 @@ def _call_port(
     block_sizes = SonicGatherSumBlockSizes(
         token_block_size=token_block_size,
         hidden_block_size=hidden_block_size,
+        k_block_size=k_block_size,
         kernel_repeat=config.kernel_repeat,
         num_warps=num_warps,
     )
@@ -97,6 +106,16 @@ def _call_port(
             combine_weights,
             implementation="pallas_triton",
             block_sizes=block_sizes,
+        )
+    if backend == "pallas_triton_faithful":
+        weights = combine_weights if config.weighted else None
+        return _sonic_gather_sum_pallas_triton_faithful_call(
+            repeated_output,
+            dispatch_positions,
+            weights,
+            block_sizes=block_sizes,
+            interpret=False,
+            repeat_offsets=repeat_offsets,
         )
     if backend == "pallas_triton_token_loop":
         return _sonic_gather_sum_pallas_triton_token_loop_call(
@@ -130,6 +149,11 @@ def _write_port_sources(directory: Path, *, backend: PallasBackend) -> list[dict
             "sonic_gather_sum_pallas_triton",
             "_sonic_gather_sum_pallas_triton_call",
             "_gather_sum_pallas_triton_kernel",
+        ],
+        "pallas_triton_faithful": [
+            "sonic_gather_sum_pallas_triton_faithful",
+            "_sonic_gather_sum_pallas_triton_faithful_call",
+            "_gather_sum_pallas_triton_faithful_kernel",
         ],
         "pallas_triton_token_loop": [
             "_sonic_gather_sum_pallas_triton_token_loop_call",
@@ -166,6 +190,7 @@ def run_case(
     backend: PallasBackend,
     token_block_size: int,
     hidden_block_size: int,
+    k_block_size: int,
     num_warps: int,
     write_ir_dir: Path | None = None,
 ) -> dict[str, Any]:
@@ -185,6 +210,7 @@ def run_case(
             config=config,
             token_block_size=token_block_size,
             hidden_block_size=hidden_block_size,
+            k_block_size=k_block_size,
             num_warps=num_warps,
         )
 
@@ -202,6 +228,7 @@ def run_case(
         "compile_inclusive_s": compile_inclusive,
         "token_block_size": token_block_size,
         "hidden_block_size": hidden_block_size,
+        "k_block_size": k_block_size,
         "num_warps": num_warps,
         "max_abs_vs_reference": float(jnp.max(jnp.abs(diff))),
         "mean_abs_vs_reference": float(jnp.mean(jnp.abs(diff))),
@@ -217,11 +244,18 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--backend",
-        choices=("xla", "pallas_triton", "pallas_triton_token_loop", "pallas_triton_token_kblock"),
+        choices=(
+            "xla",
+            "pallas_triton",
+            "pallas_triton_faithful",
+            "pallas_triton_token_loop",
+            "pallas_triton_token_kblock",
+        ),
         default="pallas_triton_token_kblock",
     )
     parser.add_argument("--token-block", type=int, default=16)
     parser.add_argument("--hidden-block", type=int, default=64)
+    parser.add_argument("--k-block", type=int, default=4)
     parser.add_argument("--num-warps", type=int, default=4)
     parser.add_argument("--write-ir-dir", type=Path)
     add_common_arguments(parser)
@@ -233,6 +267,7 @@ def main() -> None:
             backend=args.backend,
             token_block_size=args.token_block,
             hidden_block_size=args.hidden_block,
+            k_block_size=args.k_block,
             num_warps=args.num_warps,
             write_ir_dir=args.write_ir_dir,
         )
