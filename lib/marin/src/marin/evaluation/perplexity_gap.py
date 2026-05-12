@@ -50,6 +50,7 @@ class RawTextEvaluationDataset:
     input_path: str | InputName | ExecutorStep | None = None
     hf_dataset_id: str | None = None
     hf_dataset_name: str | None = None
+    hf_dataset_revision: str | None = None
     text_key: str = "text"
     input_key: str | None = None
     target_key: str | None = None
@@ -95,6 +96,7 @@ def raw_text_dataset(
         return RawTextEvaluationDataset(
             hf_dataset_id=source.id,
             hf_dataset_name=source.name,
+            hf_dataset_revision=source.revision,
             text_key=text_key,
             split=split,
             tags=tags,
@@ -116,6 +118,7 @@ def supervised_text_dataset(
         return RawTextEvaluationDataset(
             hf_dataset_id=source.id,
             hf_dataset_name=source.name,
+            hf_dataset_revision=source.revision,
             input_key=input_key,
             target_key=target_key,
             split=split,
@@ -295,6 +298,7 @@ def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
         source = HfDatasetSourceConfig(
             id=config.hf_dataset_id,
             name=config.hf_dataset_name,
+            revision=config.hf_dataset_revision,
             format=dataset_format,
             splits=[config.split],
         )
