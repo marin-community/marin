@@ -306,8 +306,8 @@ def _make_marker(
 
 def decon_to_parquet(
     *,
-    source: NormalizedData,
-    decontaminate_source: str | list[str],
+    normalized_data: NormalizedData,
+    eval_data_sources: str | list[str],
     output_path: str,
     text_field: str = "text",
     ngram: NGramConfig | None = None,
@@ -316,15 +316,17 @@ def decon_to_parquet(
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> DeconAttributes:
-    """Mark records in *source* that overlap with text in *decontaminate_source*.
+    """Mark records in *normalized_data* that overlap with text in *eval_data_sources*.
 
     Args:
-        source: Upstream :class:`NormalizedData` artifact. Reads from
-            ``source.main_output_dir`` (the flat, co-partitioned Parquet
-            directory produced by datakit normalize). Records must have
-            ``id``, ``text``, and ``partition_id`` columns.
-        decontaminate_source: Eval source directory (or list of dirs). Any
+        normalized_data: Upstream :class:`NormalizedData` artifact. Reads from
+            ``normalized_data.main_output_dir`` (the flat, co-partitioned
+            Parquet directory produced by datakit normalize). Records must
+            have ``id``, ``text``, and ``partition_id`` columns.
+        eval_data_sources: Eval source directory or list of directories. Any
             zephyr-readable file format. Read once to build the bloom filter.
+            Multiple sources are merged into one filter; attribution stays
+            per-eval-record via the ``eval_hash_index`` sidecar.
         output_path: Directory for co-partitioned Parquet attributes. One
             output file is written per input partition, preserving filenames.
         text_field: Text column name in both input and eval records.
@@ -341,11 +343,11 @@ def decon_to_parquet(
     Returns:
         :class:`DeconAttributes` describing the output dataset and counters.
     """
-    eval_paths = [decontaminate_source] if isinstance(decontaminate_source, str) else list(decontaminate_source)
+    eval_paths = [eval_data_sources] if isinstance(eval_data_sources, str) else list(eval_data_sources)
     if not eval_paths:
-        raise ValueError("decontaminate_source must be non-empty")
+        raise ValueError("eval_data_sources must be non-empty")
 
-    input_path = source.main_output_dir
+    input_path = normalized_data.main_output_dir
     files = _discover_parquet_partitions(input_path)
     if not files:
         raise FileNotFoundError(f"No .parquet files found under {input_path}")
@@ -389,7 +391,7 @@ def decon_step(
     *,
     name: str,
     normalized: StepSpec,
-    decontaminate_source: list[StepSpec],
+    eval_data_sources: list[StepSpec],
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
@@ -405,8 +407,10 @@ def decon_step(
     Args:
         name: Step name (e.g. ``"fineweb/decon"``).
         normalized: Upstream datakit normalize step whose output is the input.
-        decontaminate_source: List of eval source steps (any zephyr-readable
-            format) to build the bloom filter from.
+        eval_data_sources: List of eval source steps (any zephyr-readable
+            format) to build the bloom filter from. All eval sources are
+            merged into one bloom; per-eval attribution is preserved in the
+            ``eval_hash_index`` sidecar.
         text_field: Text column name in both input and eval records.
         ngram_length: Word ngram length. ``None`` = exact whole-paragraph match.
         overlap_threshold: Per-paragraph overlap fraction needed to mark a record
@@ -430,8 +434,8 @@ def decon_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: decon_to_parquet(
-            source=Artifact.load(normalized, NormalizedData),
-            decontaminate_source=[s.output_path for s in decontaminate_source],
+            normalized_data=Artifact.load(normalized, NormalizedData),
+            eval_data_sources=[s.output_path for s in eval_data_sources],
             output_path=output_path,
             text_field=text_field,
             ngram=ngram,
@@ -440,7 +444,7 @@ def decon_step(
             worker_resources=worker_resources,
             max_workers=max_workers,
         ),
-        deps=[normalized, *decontaminate_source],
+        deps=[normalized, *eval_data_sources],
         hash_attrs=hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,

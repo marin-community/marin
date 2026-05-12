@@ -113,8 +113,8 @@ def fox_corpus(tmp_path: Path):
 def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
     """n=3 with threshold=0.5: verbatim and high-overlap records flagged; low-overlap and unique gated out."""
     attrs = decon_to_parquet(
-        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
-        decontaminate_source=fox_corpus["eval_dir"],
+        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=0.5),
         estimated_doc_count=10_000,
@@ -138,8 +138,8 @@ def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
 def test_decon_exact_paragraph_match(fox_corpus):
     """ngram=None: whole-paragraph match. Verbatim records flagged; near-match gated out (different bytes)."""
     decon_to_parquet(
-        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
-        decontaminate_source=fox_corpus["eval_dir"],
+        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=None,
         estimated_doc_count=10_000,
@@ -159,8 +159,8 @@ def test_decon_exact_paragraph_match(fox_corpus):
 def test_decon_preserves_partition_filenames(fox_corpus):
     """Output partition filenames mirror input filenames 1:1 (co-partitioning invariant)."""
     decon_to_parquet(
-        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
-        decontaminate_source=fox_corpus["eval_dir"],
+        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
@@ -174,8 +174,8 @@ def test_decon_preserves_partition_filenames(fox_corpus):
 def test_decon_output_schema(fox_corpus):
     """Output Parquet has exactly {id, partition_id, contaminated, max_overlap, matched_hashes}."""
     decon_to_parquet(
-        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
-        decontaminate_source=fox_corpus["eval_dir"],
+        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
@@ -197,8 +197,8 @@ def test_decon_output_schema(fox_corpus):
 def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
     """Build writes a hash → eval_id Parquet sidecar with the expected schema."""
     attrs = decon_to_parquet(
-        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
-        decontaminate_source=fox_corpus["eval_dir"],
+        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
@@ -220,8 +220,8 @@ def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
 def test_decon_matched_hashes_join_recovers_eval_id(fox_corpus):
     """A contaminated record's matched_hashes joined with the sidecar attributes back to its eval."""
     attrs = decon_to_parquet(
-        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
-        decontaminate_source=fox_corpus["eval_dir"],
+        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
         estimated_doc_count=10_000,
@@ -257,8 +257,8 @@ def test_decon_overlap_threshold_gates(fox_corpus, threshold, expect_high_flagge
     It's flagged at thresholds ≤ 0.89 and gated above; pin the gate behavior across thresholds.
     """
     decon_to_parquet(
-        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
-        decontaminate_source=fox_corpus["eval_dir"],
+        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=threshold),
         estimated_doc_count=10_000,
@@ -280,8 +280,8 @@ def test_decon_empty_input_raises(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         decon_to_parquet(
-            source=_as_source(input_dir, num_partitions=1),
-            decontaminate_source=str(eval_dir),
+            normalized_data=_as_source(input_dir, num_partitions=1),
+            eval_data_sources=str(eval_dir),
             output_path=str(output_dir),
             ngram=NGramConfig(ngram_length=3),
         )
@@ -308,8 +308,8 @@ def test_decon_short_eval_paragraph_still_detected(tmp_path: Path):
     )
 
     decon_to_parquet(
-        source=_as_source(input_dir, num_partitions=1),
-        decontaminate_source=str(eval_dir),
+        normalized_data=_as_source(input_dir, num_partitions=1),
+        eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
         estimated_doc_count=1_000,
@@ -344,8 +344,8 @@ def _run_decon_one_shot(
     _write_eval_jsonl(eval_dir / "eval.jsonl.gz", eval_records)
     _write_input_parquet(input_dir / "part-00000-of-00001.parquet", input_records)
     decon_to_parquet(
-        source=_as_source(input_dir, num_partitions=1),
-        decontaminate_source=str(eval_dir),
+        normalized_data=_as_source(input_dir, num_partitions=1),
+        eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=ngram,
         estimated_doc_count=10_000,
