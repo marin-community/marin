@@ -26,7 +26,7 @@ This directory contains thin trigger YAML around behavior implemented in `script
 | `marin-lint.yaml` | Marin - Lint | PR + push to main | lint | marin | `./infra/pre-commit.py --all-files` |
 | `marin-release-libs-wheels.yaml` | Marin - Release Libs Wheels | PR + push to main + schedule + workflow_dispatch | release | marin | see job steps |
 | `marin-smoke-datakit.yaml` | Marin - Smoke - Datakit | schedule + workflow_dispatch | smoke | marin | see job steps |
-| `marin-unit.yaml` | Marin - Unit | PR + push to main | unit | marin | `uv run --package marin --extra cpu --frozen pytest -n 4 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci and not integration' -v tests/` |
+| `marin-unit.yaml` | Marin - Unit | PR + push to main | unit | marin | `uv run --package marin-core --extra cpu --frozen pytest -n 4 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci and not integration' -v tests/` |
 | `ops-claude-review.yaml` | Ops - Claude Review | PR + issue_comment | ops | claude | see job steps |
 | `ops-claude.yaml` | Ops - Claude | issue_comment + issues | ops | claude | see job steps |
 | `ops-codeql.yaml` | Ops - CodeQL | PR + push to main + schedule | ops | ops | see job steps |
