@@ -121,11 +121,16 @@ def _make_read_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
 
 
 class Tx:
-    """Wraps a SA ``Connection`` and accumulates post-commit hooks.
+    """Canonical write/read transaction context for the Iris controller.
 
-    Read paths use ``Tx.execute`` / ``Tx.executemany`` exactly the same as
-    write paths; ``register`` is only meaningful inside ``write_transaction``
-    (hooks fire after ``COMMIT`` while the write lock is still held).
+    Wraps a SQLAlchemy ``Connection``. Accepts only SA Core constructs
+    (``insert``/``update``/``delete``/``select``/``text``). Raw strings are
+    rejected — use ``sqlalchemy.text()`` if you need to pass literal SQL.
+
+    Post-commit hooks registered via :meth:`register` fire after ``COMMIT``,
+    while the write lock is still held (see ``write_transaction``). The
+    :attr:`on_commit` attribute is an alias for :meth:`register`; both names
+    are first-class and used at different call sites.
     """
 
     def __init__(self, conn: Connection):
@@ -133,26 +138,42 @@ class Tx:
         self._hooks: list[Callable[[], None]] = []
 
     def execute(self, stmt, params=None) -> CursorResult:
-        """Execute ``stmt``. ``params`` may be a dict or omitted.
+        """Execute a SA Core construct. Returns a ``CursorResult``.
 
-        ``stmt`` may be a SA construct (``text(...)``, ``select(...)``, …)
-        or a plain SQL string. Plain strings are wrapped in ``text(...)``
-        so call sites that haven't migrated to SA constructs can still
-        funnel through this ``Tx`` (Phase 1 of Stage 13).
+        ``stmt`` must be a SQLAlchemy expression (``Select``, ``Insert``,
+        ``Update``, ``Delete``, ``TextClause``, CTE, etc.). Raw strings are
+        rejected — use ``sqlalchemy.text()`` if you really need a string.
         """
         if isinstance(stmt, str):
-            stmt = text(stmt)
+            raise TypeError(
+                "Tx.execute does not accept raw SQL strings. "
+                "Pass a SQLAlchemy construct (select/insert/update/delete/text)."
+            )
         return self.conn.execute(stmt, params or {})
 
     def executemany(self, stmt, params_list) -> CursorResult:
         """Execute ``stmt`` repeatedly against ``params_list``.
 
-        ``stmt`` may be a SA construct or a plain SQL string (see
-        :meth:`execute`).
+        ``stmt`` must be a SA Core construct (see :meth:`execute`).
         """
         if isinstance(stmt, str):
-            stmt = text(stmt)
+            raise TypeError(
+                "Tx.executemany does not accept raw SQL strings. "
+                "Pass a SQLAlchemy construct (insert/update/delete/text)."
+            )
         return self.conn.execute(stmt, params_list)
+
+    def fetchone(self, stmt, params=None):
+        """Execute and return the first row, or ``None``."""
+        return self.execute(stmt, params).first()
+
+    def fetchall(self, stmt, params=None) -> list:
+        """Execute and return all rows as a list."""
+        return list(self.execute(stmt, params).all())
+
+    def scalar(self, stmt, params=None):
+        """Execute and return the first column of the first row, or ``None``."""
+        return self.execute(stmt, params).scalar()
 
     def register(self, hook: Callable[[], None]) -> None:
         """Register a post-commit hook.
@@ -161,6 +182,10 @@ class Tx:
         ``read_snapshot`` never fires hooks.
         """
         self._hooks.append(hook)
+
+    # Both names are first-class; ``on_commit`` is used by projection write
+    # helpers, ``register`` by inline call sites in writes/*.py.
+    on_commit = register
 
     def _fire_hooks(self) -> None:
         for hook in self._hooks:

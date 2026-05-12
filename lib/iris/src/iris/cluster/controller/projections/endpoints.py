@@ -3,17 +3,16 @@
 
 """EndpointsProjection — write-through in-memory cache over the ``endpoints`` table.
 
-Stage 6 of the SA Core migration. Same atomicity model as the original
-``EndpointStore``: writes execute SQL inside the caller's transaction and
-schedule the in-memory update via ``TransactionCursor.on_commit``. Hooks
-fire while the write lock is still held, so concurrent readers cannot
-observe the new state until the SQL has committed and the dicts have been
-updated. A rollback suppresses the hook and the dicts stay in sync with
-disk.
+M3 of the SA Core migration. Every SQL statement is expressed as an SA Core
+construct; no raw ``text("...")`` strings appear in this module. The
+TypeDecorators on ``endpoints_table`` (``JobNameType``, ``TimestampMsType``)
+handle column decoding transparently so ``rehydrate`` can build
+``EndpointRow`` directly from SA row attributes.
 
-Stage 11 will flip every write through the SA Core ``Tx`` wrapper; this
-stage is intentionally a code-reorg + atomicity-test fortification under
-the existing ``TransactionCursor`` mechanism.
+Atomicity model: mutating methods call ``cur.execute(SA_construct)`` inside
+the caller's ``Tx`` and register an in-memory update via ``cur.register``.
+Hooks fire under the write lock after COMMIT; a ROLLBACK suppresses them so
+the dicts stay in sync with disk.
 """
 
 from __future__ import annotations
@@ -25,10 +24,14 @@ from enum import StrEnum
 from threading import RLock
 from typing import ClassVar
 
-from iris.cluster.controller.db import ControllerDB, EndpointQuery, TransactionCursor
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from iris.cluster.controller import db_v2
+from iris.cluster.controller.db import ControllerDB, EndpointQuery
 from iris.cluster.controller.projections import PROJECTIONS
-from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow
-from iris.cluster.controller.schema_v2 import endpoints_table
+from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.schema_v2 import endpoints_table, tasks_table
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName
 
 logger = logging.getLogger(__name__)
@@ -51,15 +54,10 @@ class EndpointsProjection:
     """Process-local write-through cache over the ``endpoints`` table.
 
     Reads serve the latest committed state from in-memory dicts guarded
-    by an ``RLock``. Writes execute SQL on the caller's
-    :class:`TransactionCursor` and register an ``on_commit`` hook that
-    re-indexes the dicts; the hook fires under the DB write lock after the
-    SQL commit so readers cannot observe a torn state.
-
-    Method signatures are identical to the legacy ``EndpointStore``: this
-    stage is a code reorg and atomicity-test fortification, not a
-    transaction-layer migration. Stage 11 swaps every mutating call site
-    to the SA Core ``Tx`` wrapper in one commit.
+    by an ``RLock``. Mutating methods accept a :class:`db_v2.Tx` and
+    execute SA Core constructs; the TypeDecorators on ``endpoints_table``
+    handle all encode/decode so no manual wire-format conversion appears
+    here.
     """
 
     sources: ClassVar = (endpoints_table,)
@@ -69,8 +67,7 @@ class EndpointsProjection:
         self._lock = RLock()
         self._by_id: dict[str, EndpointRow] = {}
         # One name can map to multiple endpoint_ids — the schema does not
-        # enforce uniqueness on ``name`` and ``INSERT OR REPLACE`` keys off
-        # endpoint_id.
+        # enforce uniqueness on ``name`` and the upsert keys off endpoint_id.
         self._by_name: dict[str, set[str]] = {}
         self._by_task: dict[JobName, set[str]] = {}
         PROJECTIONS.append(self)
@@ -81,23 +78,29 @@ class EndpointsProjection:
     # -- Loading --------------------------------------------------------------
 
     def rehydrate(self) -> None:
-        """Reload the dicts from SQL.
+        """Reload the dicts from SQL via the SA read engine.
 
         Called once at construction and again after ``ControllerDB.replace_from``
-        has swapped the underlying database file. Uses the legacy
-        ``read_snapshot`` path; Stage 11 will switch to SA Core.
+        has swapped the underlying database file. TypeDecorators on
+        ``endpoints_table`` decode ``JobNameType`` and ``TimestampMsType``
+        columns; ``metadata_json`` is decoded here with ``json.loads``.
         """
-        with self._db.read_snapshot() as q:
-            rows = ENDPOINT_PROJECTION.decode(
-                q.fetchall(f"SELECT {ENDPOINT_PROJECTION.select_clause()} FROM endpoints e"),
-            )
         with self._lock:
             self._by_id.clear()
             self._by_name.clear()
             self._by_task.clear()
-            for row in rows:
-                self._index(row)
-        logger.info("EndpointsProjection loaded %d endpoint(s) from DB", len(rows))
+            with db_v2.read_snapshot(self._db.sa_read_engine) as tx:
+                for row in tx.execute(select(endpoints_table)).all():
+                    endpoint = EndpointRow(
+                        endpoint_id=row.endpoint_id,
+                        name=row.name,
+                        address=row.address,
+                        task_id=row.task_id,
+                        metadata=json.loads(row.metadata_json),
+                        registered_at=row.registered_at_ms,
+                    )
+                    self._index(endpoint)
+        logger.info("EndpointsProjection loaded %d endpoint(s) from DB", len(self._by_id))
 
     def _index(self, row: EndpointRow) -> None:
         self._by_id[row.endpoint_id] = row
@@ -174,7 +177,7 @@ class EndpointsProjection:
 
     def add(
         self,
-        cur: TransactionCursor,
+        cur: db_v2.Tx,
         endpoint: EndpointRow,
         *,
         expected_attempt_id: int | None = None,
@@ -188,34 +191,43 @@ class EndpointsProjection:
         - ``TERMINAL`` if the task is in a terminal state.
         - ``STALE_ATTEMPT`` if ``expected_attempt_id`` doesn't match the
           task's current attempt.
-        - ``OK`` after a successful insert; the in-memory index is updated
+        - ``OK`` after a successful upsert; the in-memory index is updated
           via a post-commit hook.
         """
         task_id = endpoint.task_id
         job_id, _ = task_id.require_task()
-        row = cur.execute(
-            "SELECT state, current_attempt_id FROM tasks WHERE task_id = ?", (task_id.to_wire(),)
+        task_row = cur.execute(
+            select(tasks_table.c.state, tasks_table.c.current_attempt_id).where(tasks_table.c.task_id == task_id)
         ).fetchone()
-        if row is None:
+        if task_row is None:
             return AddEndpointOutcome.NOT_FOUND
-        if int(row["state"]) in TERMINAL_TASK_STATES:
+        if int(task_row.state) in TERMINAL_TASK_STATES:
             return AddEndpointOutcome.TERMINAL
-        if expected_attempt_id is not None and int(row["current_attempt_id"]) != int(expected_attempt_id):
+        if expected_attempt_id is not None and int(task_row.current_attempt_id) != int(expected_attempt_id):
             return AddEndpointOutcome.STALE_ATTEMPT
 
         cur.execute(
-            "INSERT OR REPLACE INTO endpoints("
-            "endpoint_id, name, address, job_id, task_id, metadata_json, registered_at_ms"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                endpoint.endpoint_id,
-                endpoint.name,
-                endpoint.address,
-                job_id.to_wire(),
-                task_id.to_wire(),
-                json.dumps(endpoint.metadata),
-                endpoint.registered_at.epoch_ms(),
-            ),
+            sqlite_insert(endpoints_table)
+            .values(
+                endpoint_id=endpoint.endpoint_id,
+                name=endpoint.name,
+                address=endpoint.address,
+                job_id=job_id,
+                task_id=task_id,
+                metadata_json=json.dumps(endpoint.metadata),
+                registered_at_ms=endpoint.registered_at,
+            )
+            .on_conflict_do_update(
+                index_elements=["endpoint_id"],
+                set_={
+                    "name": endpoint.name,
+                    "address": endpoint.address,
+                    "job_id": job_id,
+                    "task_id": task_id,
+                    "metadata_json": json.dumps(endpoint.metadata),
+                    "registered_at_ms": endpoint.registered_at,
+                },
+            )
         )
 
         def apply() -> None:
@@ -225,60 +237,54 @@ class EndpointsProjection:
                 self._unindex(endpoint.endpoint_id)
                 self._index(endpoint)
 
-        cur.on_commit(apply)
+        cur.register(apply)
         return AddEndpointOutcome.OK
 
-    def remove(self, cur: TransactionCursor, endpoint_id: str) -> EndpointRow | None:
+    def remove(self, cur: db_v2.Tx, endpoint_id: str) -> EndpointRow | None:
         """Remove a single endpoint by id. Returns the removed row snapshot, if any."""
         existing = self.get(endpoint_id)
         if existing is None:
             return None
-        cur.execute("DELETE FROM endpoints WHERE endpoint_id = ?", (endpoint_id,))
+        cur.execute(delete(endpoints_table).where(endpoints_table.c.endpoint_id == endpoint_id))
 
         def apply() -> None:
             with self._lock:
                 self._unindex(endpoint_id)
 
-        cur.on_commit(apply)
+        cur.register(apply)
         return existing
 
-    def remove_by_task(self, cur: TransactionCursor, task_id: JobName) -> list[str]:
+    def remove_by_task(self, cur: db_v2.Tx, task_id: JobName) -> list[str]:
         """Remove all endpoints owned by a task. Returns the removed endpoint_ids."""
         with self._lock:
             ids = list(self._by_task.get(task_id, ()))
+        # Issue the DELETE even if ids is empty: belt-and-suspenders for any
+        # rows the projection might not have observed yet (unlikely race with
+        # an in-flight concurrent writer).
+        cur.execute(delete(endpoints_table).where(endpoints_table.c.task_id == task_id))
         if not ids:
-            # Still issue the DELETE to stay consistent with any rows the
-            # projection might not have observed yet (belt-and-suspenders
-            # for the unlikely race of an in-flight concurrent writer).
-            # This costs nothing on the common path.
-            cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id.to_wire(),))
             return []
-        cur.execute("DELETE FROM endpoints WHERE task_id = ?", (task_id.to_wire(),))
 
         def apply() -> None:
             with self._lock:
                 for eid in ids:
                     self._unindex(eid)
 
-        cur.on_commit(apply)
+        cur.register(apply)
         return ids
 
-    def remove_by_job_ids(self, cur: TransactionCursor, job_ids: Sequence[JobName]) -> list[str]:
+    def remove_by_job_ids(self, cur: db_v2.Tx, job_ids: Sequence[JobName]) -> list[str]:
         """Remove all endpoints owned by any of ``job_ids``. Used by cancel_job and prune."""
         if not job_ids:
             return []
-        wire_ids = [jid.to_wire() for jid in job_ids]
+        job_id_set = set(jid.to_wire() for jid in job_ids)
         with self._lock:
             to_remove: list[str] = []
             for row in self._by_id.values():
                 owning_job, _ = row.task_id.require_task()
-                if owning_job.to_wire() in wire_ids:
+                if owning_job.to_wire() in job_id_set:
                     to_remove.append(row.endpoint_id)
-        placeholders = ",".join("?" for _ in wire_ids)
-        cur.execute(
-            f"DELETE FROM endpoints WHERE job_id IN ({placeholders})",
-            tuple(wire_ids),
-        )
+        cur.execute(delete(endpoints_table).where(endpoints_table.c.job_id.in_(list(job_ids))))
         if not to_remove:
             return []
 
@@ -287,5 +293,5 @@ class EndpointsProjection:
                 for eid in to_remove:
                     self._unindex(eid)
 
-        cur.on_commit(apply)
+        cur.register(apply)
         return to_remove

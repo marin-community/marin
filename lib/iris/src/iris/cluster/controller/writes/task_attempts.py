@@ -3,59 +3,40 @@
 
 """SA Core write helpers for ``task_attempts``.
 
-Stage 11 of the SA Core migration. Ports every write on
-:class:`iris.cluster.controller.stores.TaskAttemptStore` into
-module-level functions taking a :class:`iris.cluster.controller.db_v2.Tx`.
+Stage M2 of the SA Core migration: replaces raw ``text("INSERT/UPDATE ...")``
+strings with SA Core expression-language constructs. TypeDecorators handle
+all bind-side conversions automatically.
 """
 
 from collections.abc import Sequence
 
-from sqlalchemy import text
+from sqlalchemy import func, insert, select, update
 
 from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import task_attempts_table
-from iris.cluster.controller.stores import TaskAttemptInsertParams, TaskAttemptUpdateParams
+from iris.cluster.controller.schema_v2 import task_attempts_table, tasks_table
 from iris.cluster.controller.writes import writes_to
-from iris.cluster.types import JobName
-
-_INSERT_ATTEMPT_SQL = text(
-    "INSERT INTO task_attempts(task_id, attempt_id, worker_id, state, created_at_ms) "
-    "VALUES (:task_id, :attempt_id, :worker_id, :state, :created_at_ms)"
-)
-
-_MARK_FINISHED_SQL = text(
-    "UPDATE task_attempts SET state = :state, "
-    "finished_at_ms = COALESCE(finished_at_ms, :finished_at_ms), error = :error "
-    "WHERE task_id = :task_id AND attempt_id = :attempt_id"
-)
-
-_APPLY_ATTEMPT_STATE_SQL = text(
-    "UPDATE task_attempts SET state = :state, error = COALESCE(:error, error) "
-    "WHERE task_id = :task_id AND attempt_id = :attempt_id"
-)
-
-_APPLY_UPDATE_SQL = text(
-    "UPDATE task_attempts SET state = :state, "
-    "started_at_ms = COALESCE(started_at_ms, :started_at_ms), "
-    "finished_at_ms = COALESCE(finished_at_ms, :finished_at_ms), "
-    "exit_code = COALESCE(:exit_code, exit_code), "
-    "error = COALESCE(:error, error) "
-    "WHERE task_id = :task_id AND attempt_id = :attempt_id"
-)
+from iris.cluster.types import JobName, WorkerId
 
 
 @writes_to(task_attempts_table)
-def insert_attempt(tx: Tx, params: TaskAttemptInsertParams) -> None:
+def insert_attempt(
+    tx: Tx,
+    *,
+    task_id: JobName,
+    attempt_id: int,
+    worker_id: WorkerId | None,
+    state: int,
+    created_at_ms: int,
+) -> None:
     """Insert one row into ``task_attempts``."""
     tx.execute(
-        _INSERT_ATTEMPT_SQL,
-        {
-            "task_id": params.task_id.to_wire(),
-            "attempt_id": params.attempt_id,
-            "worker_id": str(params.worker_id) if params.worker_id is not None else None,
-            "state": params.state,
-            "created_at_ms": params.created_at_ms,
-        },
+        insert(task_attempts_table).values(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            worker_id=worker_id,
+            state=state,
+            created_at_ms=created_at_ms,
+        )
     )
 
 
@@ -70,14 +51,16 @@ def mark_finished(
 ) -> None:
     """Stamp ``finished_at_ms`` and final state on an attempt."""
     tx.execute(
-        _MARK_FINISHED_SQL,
-        {
-            "state": state,
-            "finished_at_ms": finished_at_ms,
-            "error": error,
-            "task_id": task_id.to_wire(),
-            "attempt_id": attempt_id,
-        },
+        update(task_attempts_table)
+        .where(
+            task_attempts_table.c.task_id == task_id,
+            task_attempts_table.c.attempt_id == attempt_id,
+        )
+        .values(
+            state=state,
+            finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, finished_at_ms),
+            error=error,
+        )
     )
 
 
@@ -97,30 +80,44 @@ def apply_attempt_state(
     :func:`mark_finished` once the worker confirms termination.
     """
     tx.execute(
-        _APPLY_ATTEMPT_STATE_SQL,
-        {
-            "state": state,
-            "error": error,
-            "task_id": task_id.to_wire(),
-            "attempt_id": attempt_id,
-        },
+        update(task_attempts_table)
+        .where(
+            task_attempts_table.c.task_id == task_id,
+            task_attempts_table.c.attempt_id == attempt_id,
+        )
+        .values(
+            state=state,
+            error=func.coalesce(error, task_attempts_table.c.error),
+        )
     )
 
 
 @writes_to(task_attempts_table)
-def apply_update(tx: Tx, params: TaskAttemptUpdateParams) -> None:
+def apply_update(
+    tx: Tx,
+    *,
+    task_id: JobName,
+    attempt_id: int,
+    state: int,
+    started_at_ms: int | None,
+    finished_at_ms: int | None,
+    exit_code: int | None,
+    error: str | None,
+) -> None:
     """Apply a worker/direct-provider attempt update."""
     tx.execute(
-        _APPLY_UPDATE_SQL,
-        {
-            "state": params.state,
-            "started_at_ms": params.started_at_ms,
-            "finished_at_ms": params.finished_at_ms,
-            "exit_code": params.exit_code,
-            "error": params.error,
-            "task_id": params.task_id.to_wire(),
-            "attempt_id": params.attempt_id,
-        },
+        update(task_attempts_table)
+        .where(
+            task_attempts_table.c.task_id == task_id,
+            task_attempts_table.c.attempt_id == attempt_id,
+        )
+        .values(
+            state=state,
+            started_at_ms=func.coalesce(task_attempts_table.c.started_at_ms, started_at_ms),
+            finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, finished_at_ms),
+            exit_code=func.coalesce(exit_code, task_attempts_table.c.exit_code),
+            error=func.coalesce(error, task_attempts_table.c.error),
+        )
     )
 
 
@@ -135,19 +132,14 @@ def bulk_apply_attempt_state(
     """Update reporting state on every active attempt under ``job_ids``."""
     if not job_ids:
         return
-    wire_ids = [jid.to_wire() for jid in job_ids]
-    active = tuple(active_states)
-    job_keys = [f"j{i}" for i in range(len(wire_ids))]
-    active_keys = [f"a{i}" for i in range(len(active))]
-    stmt = text(
-        "UPDATE task_attempts SET state = :state, error = COALESCE(error, :error) "
-        "WHERE task_id IN ("
-        f"  SELECT task_id FROM tasks WHERE job_id IN ({','.join(f':{k}' for k in job_keys)})"
-        f") AND state IN ({','.join(f':{k}' for k in active_keys)})"
+    tx.execute(
+        update(task_attempts_table)
+        .where(
+            task_attempts_table.c.task_id.in_(select(tasks_table.c.task_id).where(tasks_table.c.job_id.in_(job_ids))),
+            task_attempts_table.c.state.in_(active_states),
+        )
+        .values(
+            state=state,
+            error=func.coalesce(task_attempts_table.c.error, error),
+        )
     )
-    params: dict[str, object] = {"state": state, "error": error}
-    for k, v in zip(job_keys, wire_ids, strict=True):
-        params[k] = v
-    for k, v in zip(active_keys, active, strict=True):
-        params[k] = v
-    tx.execute(stmt, params)

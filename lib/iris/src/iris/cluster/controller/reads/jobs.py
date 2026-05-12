@@ -1,95 +1,102 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Job and job_config read helpers (SA Core port).
+"""Job and job_config read helpers (SA Core expression language).
 
-Named ``text(...)`` SQL constants plus small dataclass-constructing
-helpers for every read that today lives on
-:class:`iris.cluster.controller.stores.JobStore`. Stage 8 of the
-SQLAlchemy Core migration introduces this module alongside the legacy
-``JobStore`` reads; parity tests in
-``tests/cluster/controller/test_reads_jobs.py`` assert the two paths
-return identical results against the same DB state. The legacy methods
-remain unchanged in this stage — call-site switchover happens in stage
-13 once every read path has an SA Core equivalent.
+Every query uses ``select(table.c.col, ...)`` rather than ``text("SELECT
+...")``. TypeDecorators on the schema_v2 columns decode values on read so
+callers receive ``JobName``, ``Timestamp``, and ``bool`` directly without
+manual conversion.
 
-Implementation notes:
+Return shapes:
 
-* Simple lookups use ``text("SELECT ... WHERE ... = :jid")`` with
-  bindparams. This matches the idiom established in
-  ``reads/scheduler.py`` (Stage 5). ``text()`` avoids ~370 µs/call of
-  ``select(...)`` compilation overhead even with the SA statement
-  cache enabled.
-* Recursive CTEs (``get_priority_bands``, ``list_descendants``,
-  ``list_subtree``, ``has_unfinished_worker_attempts``) use ``text()``
-  directly. The CTE SQL is short and matches the legacy queries
-  verbatim, which is more readable than the SA Core
-  ``select().cte(recursive=True)`` API for a one-shot port.
-* ``get_detail`` builds a :class:`JobDetailRow` by hand using the same
-  decoder helpers (``decode_timestamp_ms``, ``_decode_bool_int``,
-  ``_nullable``) as the legacy ``JOB_DETAIL_PROJECTION``. The two
-  paths must produce equal dataclasses for parity tests to pass.
+* ``get_state`` — ``int | None``
+* ``get_root_submitted_at_ms`` — ``int | None`` (epoch-ms)
+* ``get_preemption_info`` — ``tuple[int, int] | None``
+* ``get_recompute_basis`` — ``JobRecomputeBasis | None``
+* ``get_detail`` — SA ``Row`` with TypeDecorator-decoded fields, or ``None``
+* ``get_config`` — ``dict[str, Any] | None`` (raw mapping from job_config)
+* ``get_priority_bands`` — ``dict[JobName, int]``
+* ``list_descendants`` / ``list_subtree`` — ``list[JobName]``
+* ``find_prunable`` — ``JobName | None``
+* ``get_workdir_files`` — ``dict[str, bytes]``
+* ``has_unfinished_worker_attempts`` — ``bool``
+
+Recursive CTEs (``get_priority_bands``, ``list_descendants``,
+``list_subtree``, ``has_unfinished_worker_attempts``) use ``text()``
+because the self-referential SQL is cleaner than the SA Core
+``select().cte(recursive=True)`` spelling for these specific shapes.
 """
 
 from collections.abc import Iterable
 
-from sqlalchemy import bindparam, text
+from rigging.timing import Timestamp
+from sqlalchemy import bindparam, select, text
 
 from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema import (
-    JobDetailRow,
-    _decode_bool_int,
-    _nullable,
-    decode_timestamp_ms,
+from iris.cluster.controller.schema_v2 import (
+    job_config_table,
+    job_workdir_files_table,
+    jobs_table,
 )
 from iris.cluster.controller.stores import JobRecomputeBasis
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
 from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
-# Simple lookups
+# Simple scalar lookups
 # ---------------------------------------------------------------------------
 
-_GET_STATE_SQL = text("SELECT state FROM jobs WHERE job_id = :jid")
-_GET_ROOT_SUBMITTED_AT_SQL = text("SELECT root_submitted_at_ms FROM jobs WHERE job_id = :jid")
-_GET_PREEMPTION_INFO_SQL = text(
-    "SELECT jc.preemption_policy AS preemption_policy, j.num_tasks AS num_tasks "
-    "FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id WHERE j.job_id = :jid"
+GET_STATE_QUERY = select(jobs_table.c.state).where(jobs_table.c.job_id == bindparam("job_id"))
+
+GET_ROOT_SUBMITTED_AT_QUERY = select(jobs_table.c.root_submitted_at_ms).where(jobs_table.c.job_id == bindparam("job_id"))
+
+GET_PREEMPTION_INFO_QUERY = (
+    select(job_config_table.c.preemption_policy, jobs_table.c.num_tasks)
+    .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
+    .where(jobs_table.c.job_id == bindparam("job_id"))
 )
-_GET_RECOMPUTE_BASIS_SQL = text(
-    "SELECT j.state AS state, j.started_at_ms AS started_at_ms, jc.max_task_failures AS max_task_failures "
-    "FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id WHERE j.job_id = :jid"
+
+GET_RECOMPUTE_BASIS_QUERY = (
+    select(jobs_table.c.state, jobs_table.c.started_at_ms, job_config_table.c.max_task_failures)
+    .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
+    .where(jobs_table.c.job_id == bindparam("job_id"))
 )
 
 
 def get_state(tx: Tx, job_id: JobName) -> int | None:
     """Return the ``state`` column for ``job_id``, or None if absent."""
-    row = tx.execute(_GET_STATE_SQL, {"jid": job_id.to_wire()}).first()
+    row = tx.execute(GET_STATE_QUERY, {"job_id": job_id}).first()
     return int(row.state) if row is not None else None
 
 
 def get_root_submitted_at_ms(tx: Tx, job_id: JobName) -> int | None:
-    """Return ``root_submitted_at_ms`` for ``job_id``, or None if absent."""
-    row = tx.execute(_GET_ROOT_SUBMITTED_AT_SQL, {"jid": job_id.to_wire()}).first()
-    return int(row.root_submitted_at_ms) if row is not None else None
+    """Return ``root_submitted_at_ms`` (epoch-ms int) for ``job_id``, or None if absent."""
+    row = tx.execute(GET_ROOT_SUBMITTED_AT_QUERY, {"job_id": job_id}).first()
+    # TimestampMsType decodes to Timestamp; convert back to int for legacy callers.
+    return row.root_submitted_at_ms.epoch_ms() if row is not None else None
 
 
 def get_preemption_info(tx: Tx, job_id: JobName) -> tuple[int, int] | None:
-    """Return ``(preemption_policy, num_tasks)`` or None if the job is gone."""
-    row = tx.execute(_GET_PREEMPTION_INFO_SQL, {"jid": job_id.to_wire()}).first()
+    """Return ``(preemption_policy, num_tasks)`` or None if the job is absent."""
+    row = tx.execute(GET_PREEMPTION_INFO_QUERY, {"job_id": job_id}).first()
     if row is None:
         return None
     return int(row.preemption_policy), int(row.num_tasks)
 
 
 def get_recompute_basis(tx: Tx, job_id: JobName) -> JobRecomputeBasis | None:
-    """Return the inputs to ``_recompute_job_state`` for ``job_id``."""
-    row = tx.execute(_GET_RECOMPUTE_BASIS_SQL, {"jid": job_id.to_wire()}).first()
+    """Return the inputs to ``_recompute_job_state`` for ``job_id``.
+
+    Returns JobRecomputeBasis with ``started_at_ms`` as an epoch-ms int or None.
+    """
+    row = tx.execute(GET_RECOMPUTE_BASIS_QUERY, {"job_id": job_id}).first()
     if row is None:
         return None
+    started_at = row.started_at_ms
     return JobRecomputeBasis(
         state=int(row.state),
-        started_at_ms=int(row.started_at_ms) if row.started_at_ms is not None else None,
+        started_at_ms=started_at.epoch_ms() if started_at is not None else None,
         max_task_failures=int(row.max_task_failures),
     )
 
@@ -98,123 +105,85 @@ def get_recompute_basis(tx: Tx, job_id: JobName) -> JobRecomputeBasis | None:
 # Full job detail / job_config
 # ---------------------------------------------------------------------------
 
-# Column list and aliases match ``schema.JOB_DETAIL_PROJECTION`` exactly:
-# duplicated columns (name, has_reservation) come from ``jobs`` (alias ``j``)
-# because ``_job_columns`` resolves JOBS before JOB_CONFIG in the lookup.
-_JOB_DETAIL_SQL = text(
-    "SELECT "
-    "j.job_id AS job_id, "
-    "j.state AS state, "
-    "j.submitted_at_ms AS submitted_at_ms, "
-    "j.root_submitted_at_ms AS root_submitted_at_ms, "
-    "j.started_at_ms AS started_at_ms, "
-    "j.finished_at_ms AS finished_at_ms, "
-    "j.scheduling_deadline_epoch_ms AS scheduling_deadline_epoch_ms, "
-    "j.error AS error, "
-    "j.exit_code AS exit_code, "
-    "j.num_tasks AS num_tasks, "
-    "j.is_reservation_holder AS is_reservation_holder, "
-    "j.has_reservation AS has_reservation, "
-    "j.name AS name, "
-    "j.depth AS depth, "
-    "jc.res_cpu_millicores AS res_cpu_millicores, "
-    "jc.res_memory_bytes AS res_memory_bytes, "
-    "jc.res_disk_bytes AS res_disk_bytes, "
-    "jc.res_device_json AS res_device_json, "
-    "jc.constraints_json AS constraints_json, "
-    "jc.has_coscheduling AS has_coscheduling, "
-    "jc.coscheduling_group_by AS coscheduling_group_by, "
-    "jc.scheduling_timeout_ms AS scheduling_timeout_ms, "
-    "jc.max_task_failures AS max_task_failures, "
-    "jc.entrypoint_json AS entrypoint_json, "
-    "jc.environment_json AS environment_json, "
-    "jc.bundle_id AS bundle_id, "
-    "jc.ports_json AS ports_json, "
-    "jc.max_retries_failure AS max_retries_failure, "
-    "jc.max_retries_preemption AS max_retries_preemption, "
-    "jc.timeout_ms AS timeout_ms, "
-    "jc.preemption_policy AS preemption_policy, "
-    "jc.existing_job_policy AS existing_job_policy, "
-    "jc.priority_band AS priority_band, "
-    "jc.task_image AS task_image, "
-    "jc.submit_argv_json AS submit_argv_json, "
-    "jc.reservation_json AS reservation_json, "
-    "jc.fail_if_exists AS fail_if_exists "
-    "FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id "
-    "WHERE j.job_id = :jid"
+# 37-column join of jobs + job_config. TypeDecorators decode:
+#   job_id -> JobName, *_at_ms -> Timestamp, is_reservation_holder -> bool, etc.
+JOB_DETAIL_QUERY = (
+    select(
+        jobs_table.c.job_id,
+        jobs_table.c.state,
+        jobs_table.c.submitted_at_ms,
+        jobs_table.c.root_submitted_at_ms,
+        jobs_table.c.started_at_ms,
+        jobs_table.c.finished_at_ms,
+        jobs_table.c.scheduling_deadline_epoch_ms,
+        jobs_table.c.error,
+        jobs_table.c.exit_code,
+        jobs_table.c.num_tasks,
+        jobs_table.c.is_reservation_holder,
+        jobs_table.c.has_reservation,
+        jobs_table.c.name,
+        jobs_table.c.depth,
+        job_config_table.c.res_cpu_millicores,
+        job_config_table.c.res_memory_bytes,
+        job_config_table.c.res_disk_bytes,
+        job_config_table.c.res_device_json,
+        job_config_table.c.constraints_json,
+        job_config_table.c.has_coscheduling,
+        job_config_table.c.coscheduling_group_by,
+        job_config_table.c.scheduling_timeout_ms,
+        job_config_table.c.max_task_failures,
+        job_config_table.c.entrypoint_json,
+        job_config_table.c.environment_json,
+        job_config_table.c.bundle_id,
+        job_config_table.c.ports_json,
+        job_config_table.c.max_retries_failure,
+        job_config_table.c.max_retries_preemption,
+        job_config_table.c.timeout_ms,
+        job_config_table.c.preemption_policy,
+        job_config_table.c.existing_job_policy,
+        job_config_table.c.priority_band,
+        job_config_table.c.task_image,
+        job_config_table.c.submit_argv_json,
+        job_config_table.c.reservation_json,
+        job_config_table.c.fail_if_exists,
+    )
+    .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
+    .where(jobs_table.c.job_id == bindparam("job_id"))
 )
 
-_NULL_TIMESTAMP_MS = _nullable(decode_timestamp_ms)
-_NULL_INT = _nullable(int)
-_NULL_STR = _nullable(str)
+
+def get_detail(tx: Tx, job_id: JobName):
+    """Return SA Row for ``job_id`` or None.
+
+    Row fields (TypeDecorator-decoded): job_id (JobName), submitted_at_ms
+    (Timestamp), root_submitted_at_ms (Timestamp), started_at_ms (Timestamp|None),
+    finished_at_ms (Timestamp|None), is_reservation_holder (bool),
+    has_reservation (bool), has_coscheduling (bool), fail_if_exists (bool).
+    Remaining fields are plain int/str/None as stored.
+    """
+    return tx.execute(JOB_DETAIL_QUERY, {"job_id": job_id}).first()
 
 
-def get_detail(tx: Tx, job_id: JobName) -> JobDetailRow | None:
-    """Return the full :class:`JobDetailRow` for ``job_id`` (37-column projection)."""
-    row = tx.execute(_JOB_DETAIL_SQL, {"jid": job_id.to_wire()}).first()
-    if row is None:
-        return None
-    return JobDetailRow(
-        job_id=JobName.from_wire(str(row.job_id)),
-        state=int(row.state),
-        submitted_at=decode_timestamp_ms(row.submitted_at_ms),
-        root_submitted_at=decode_timestamp_ms(row.root_submitted_at_ms),
-        started_at=_NULL_TIMESTAMP_MS(row.started_at_ms),
-        finished_at=_NULL_TIMESTAMP_MS(row.finished_at_ms),
-        scheduling_deadline_epoch_ms=_NULL_INT(row.scheduling_deadline_epoch_ms),
-        error=_NULL_STR(row.error),
-        exit_code=_NULL_INT(row.exit_code),
-        num_tasks=int(row.num_tasks),
-        is_reservation_holder=_decode_bool_int(row.is_reservation_holder),
-        has_reservation=_decode_bool_int(row.has_reservation),
-        name=str(row.name),
-        depth=int(row.depth),
-        res_cpu_millicores=int(row.res_cpu_millicores),
-        res_memory_bytes=int(row.res_memory_bytes),
-        res_disk_bytes=int(row.res_disk_bytes),
-        res_device_json=_NULL_STR(row.res_device_json),
-        constraints_json=_NULL_STR(row.constraints_json),
-        has_coscheduling=_decode_bool_int(row.has_coscheduling),
-        coscheduling_group_by=str(row.coscheduling_group_by),
-        scheduling_timeout_ms=_NULL_INT(row.scheduling_timeout_ms),
-        max_task_failures=int(row.max_task_failures),
-        entrypoint_json=str(row.entrypoint_json),
-        environment_json=str(row.environment_json),
-        bundle_id=str(row.bundle_id),
-        ports_json=str(row.ports_json),
-        max_retries_failure=int(row.max_retries_failure),
-        max_retries_preemption=int(row.max_retries_preemption),
-        timeout_ms=_NULL_INT(row.timeout_ms),
-        preemption_policy=int(row.preemption_policy),
-        existing_job_policy=int(row.existing_job_policy),
-        priority_band=int(row.priority_band),
-        task_image=str(row.task_image),
-        submit_argv_json=str(row.submit_argv_json),
-        reservation_json=_NULL_STR(row.reservation_json),
-        fail_if_exists=_decode_bool_int(row.fail_if_exists),
-    )
-
-
-_GET_CONFIG_SQL = text("SELECT * FROM job_config WHERE job_id = :jid")
+GET_CONFIG_QUERY = select(job_config_table).where(job_config_table.c.job_id == bindparam("job_id"))
 
 
 def get_config(tx: Tx, job_id: JobName) -> dict | None:
-    """Return the raw ``job_config`` row as ``{column_name: value}``, or None.
+    """Return the ``job_config`` row as ``{column_name: value}``, or None.
 
-    Mirrors :meth:`stores.JobStore.get_config` — callers currently
-    access fields by string key (e.g. ``jc["res_cpu_millicores"]``).
+    Values are TypeDecorator-decoded (job_id -> JobName, has_reservation -> bool, etc.).
+    Callers access fields by string key, e.g. ``jc["res_cpu_millicores"]``.
     """
-    row = tx.execute(_GET_CONFIG_SQL, {"jid": job_id.to_wire()}).mappings().first()
+    row = tx.execute(GET_CONFIG_QUERY, {"job_id": job_id}).mappings().first()
     return dict(row) if row is not None else None
 
 
 # ---------------------------------------------------------------------------
-# Recursive CTEs
+# Recursive CTEs — text() is cleaner than SA Core CTE API for these shapes.
 # ---------------------------------------------------------------------------
 
 # Walks parent_job_id chain until a non-UNSPECIFIED priority_band is found.
-# Inputs whose entire ancestor chain is UNSPECIFIED are absent from the
-# result; the caller substitutes INTERACTIVE for those.
+# Inputs whose entire ancestor chain is UNSPECIFIED are absent from the result;
+# the caller substitutes INTERACTIVE for those.
 _PRIORITY_BANDS_SQL = text(
     "WITH RECURSIVE chain(input_id, current_id, current_band, parent_id) AS ("
     "  SELECT j.job_id, j.job_id, jc.priority_band, j.parent_job_id "
@@ -234,9 +203,9 @@ _PRIORITY_BANDS_SQL = text(
 def get_priority_bands(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
     """Return ``{job_id: resolved priority_band}`` for the given jobs.
 
-    See :meth:`stores.JobStore.get_priority_bands` for the resolution
-    rule. ``UNSPECIFIED`` (0) inputs whose entire ancestor chain is
-    also UNSPECIFIED fall back to ``PRIORITY_BAND_INTERACTIVE``.
+    Walks the parent_job_id chain for UNSPECIFIED (0) jobs until a non-zero
+    band is found. Jobs whose entire ancestor chain is UNSPECIFIED fall back
+    to ``PRIORITY_BAND_INTERACTIVE``.
     """
     ids = list(job_ids)
     if not ids:
@@ -277,8 +246,8 @@ def list_descendants(
 ) -> list[JobName]:
     """Return all transitive descendants of ``parent_id`` (not ``parent_id`` itself).
 
-    See :meth:`stores.JobStore.list_descendants` for the semantics of
-    ``exclude_reservation_holders``.
+    When ``exclude_reservation_holders=True``, reservation-holder nodes and
+    their subtrees are pruned. Returns list[JobName].
     """
     stmt = _LIST_DESCENDANTS_EXCLUDE_HOLDERS_SQL if exclude_reservation_holders else _LIST_DESCENDANTS_SQL
     rows = tx.execute(stmt, {"parent": parent_id.to_wire()}).all()
@@ -295,7 +264,7 @@ _LIST_SUBTREE_SQL = text(
 
 
 def list_subtree(tx: Tx, root_id: JobName) -> list[JobName]:
-    """Return ``root_id`` and all its transitive descendants."""
+    """Return ``root_id`` and all its transitive descendants. Returns list[JobName]."""
     rows = tx.execute(_LIST_SUBTREE_SQL, {"root": root_id.to_wire()}).all()
     return [JobName.from_wire(str(row.job_id)) for row in rows]
 
@@ -304,30 +273,45 @@ def list_subtree(tx: Tx, root_id: JobName) -> list[JobName]:
 # Misc reads
 # ---------------------------------------------------------------------------
 
-_FIND_PRUNABLE_SQL = text(
-    "SELECT job_id FROM jobs WHERE state IN :terminal_states "
-    "AND finished_at_ms IS NOT NULL AND finished_at_ms < :before_ms LIMIT 1"
-).bindparams(bindparam("terminal_states", expanding=True))
+FIND_PRUNABLE_QUERY = (
+    select(jobs_table.c.job_id)
+    .where(
+        jobs_table.c.state.in_(bindparam("terminal_states", expanding=True)),
+        jobs_table.c.finished_at_ms.is_not(None),
+        jobs_table.c.finished_at_ms < bindparam("before_ts"),
+    )
+    .limit(1)
+)
 
 
 def find_prunable(tx: Tx, before_ms: int) -> JobName | None:
-    """Return one terminal job whose ``finished_at_ms < before_ms``, or None."""
+    """Return one terminal job whose ``finished_at_ms < before_ms``, or None.
+
+    ``before_ms`` is an epoch-millisecond integer; it is converted to a
+    ``Timestamp`` so the TimestampMsType bind processor can call ``.epoch_ms()``.
+    Returns JobName or None.
+    """
     row = tx.execute(
-        _FIND_PRUNABLE_SQL,
-        {"terminal_states": list(TERMINAL_JOB_STATES), "before_ms": before_ms},
+        FIND_PRUNABLE_QUERY,
+        {"terminal_states": list(TERMINAL_JOB_STATES), "before_ts": Timestamp.from_ms(before_ms)},
     ).first()
-    return JobName.from_wire(str(row.job_id)) if row is not None else None
+    return row.job_id if row is not None else None
 
 
-_GET_WORKDIR_FILES_SQL = text("SELECT filename, data FROM job_workdir_files WHERE job_id = :jid")
+GET_WORKDIR_FILES_QUERY = select(job_workdir_files_table.c.filename, job_workdir_files_table.c.data).where(
+    job_workdir_files_table.c.job_id == bindparam("job_id")
+)
 
 
 def get_workdir_files(tx: Tx, job_id: JobName) -> dict[str, bytes]:
     """Return ``{filename: data}`` for all workdir files attached to ``job_id``."""
-    rows = tx.execute(_GET_WORKDIR_FILES_SQL, {"jid": job_id.to_wire()}).all()
+    rows = tx.execute(GET_WORKDIR_FILES_QUERY, {"job_id": job_id}).all()
     return {str(row.filename): bytes(row.data) for row in rows}
 
 
+# Recursive CTE: true if any task in the subtree rooted at job_id has a
+# worker-bound unfinished attempt. Kept as text() for the same reason as the
+# other recursive CTEs above.
 _HAS_UNFINISHED_WORKER_ATTEMPTS_SQL = text(
     "WITH RECURSIVE subtree(job_id) AS ("
     "  SELECT job_id FROM jobs WHERE job_id = :jid "
@@ -344,10 +328,6 @@ _HAS_UNFINISHED_WORKER_ATTEMPTS_SQL = text(
 
 
 def has_unfinished_worker_attempts(tx: Tx, job_id: JobName) -> bool:
-    """True if any task under ``job_id`` (subtree) still has a worker-bound attempt.
-
-    See :meth:`stores.JobStore.has_unfinished_worker_attempts` for the
-    reason this gate exists.
-    """
+    """Return True if any task under ``job_id`` (subtree) has a worker-bound unfinished attempt."""
     row = tx.execute(_HAS_UNFINISHED_WORKER_ATTEMPTS_SQL, {"jid": job_id.to_wire()}).first()
     return row is not None

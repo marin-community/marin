@@ -3,19 +3,17 @@
 
 """WorkerAttrsProjection — write-through in-memory cache over ``worker_attributes``.
 
-Stage 7 of the SA Core migration. Mirrors :class:`EndpointsProjection`'s
-atomicity model: every mutating method registers an ``on_commit`` hook on
-the caller's :class:`TransactionCursor` so the dict update fires under the
-DB write lock after the SQL commit. Rollbacks suppress the hook and the
-dict stays in sync with disk.
+M3 of the SA Core migration. ``rehydrate`` uses ``select(worker_attributes_table)``
+and iterates SA rows; ``WorkerIdType`` on the ``worker_id`` column decodes the
+string to ``WorkerId`` automatically. The ``value_type`` column has no TypeDecorator
+(it encodes a three-way dispatch among int/float/str columns) so the decode branch
+is handled explicitly here.
 
-Unlike :class:`EndpointsProjection`, mutating methods here do not issue
-their own SQL — today the ``worker_attributes`` writes happen in
-:class:`WorkerStore.replace_attributes`. This projection is responsible
-only for the in-memory cache that ``healthy_active_workers_with_attributes``
-reads on the scheduler hot path. Stage 11 may pull the SQL inside the
-projection; for now the surface matches the legacy ``_attr_cache``
-shape exactly so call sites change minimally.
+Unlike :class:`EndpointsProjection`, mutating methods do not issue SQL — the
+corresponding ``worker_attributes`` writes happen in
+:class:`WorkerStore.replace_attributes`. This projection is responsible only for
+the in-memory cache that ``healthy_active_workers_with_attributes`` reads on the
+scheduler hot path.
 """
 
 from __future__ import annotations
@@ -25,8 +23,11 @@ import threading
 from collections.abc import Callable
 from typing import ClassVar, Protocol
 
+from sqlalchemy import select
+
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.db import ControllerDB, TransactionCursor, _decode_attribute_rows
+from iris.cluster.controller import db_v2
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.schema_v2 import worker_attributes_table
 from iris.cluster.types import WorkerId
@@ -35,17 +36,29 @@ from iris.cluster.types import WorkerId
 class PostCommitRegistrar(Protocol):
     """Structural type for any transaction wrapper that schedules post-commit hooks.
 
-    Both legacy :class:`TransactionCursor` and v2 :class:`db_v2.Tx` expose
-    a ``register(callable)`` method that fires after the surrounding write
-    transaction commits, under the write lock. Projection invalidation
-    methods accept this Protocol so the same hook works for both
-    transaction types during the SA Core migration.
+    Both :class:`db_v2.Tx` and legacy :class:`TransactionCursor` expose a
+    ``register(callable)`` method that fires after the surrounding write
+    transaction commits, under the write lock. Projection invalidation methods
+    accept this Protocol so the same hook works for both transaction types.
     """
 
     def register(self, hook: Callable[[], None]) -> None: ...
 
 
 logger = logging.getLogger(__name__)
+
+
+def _decode_value(row) -> AttributeValue:
+    """Decode a single ``worker_attributes`` SA row to an ``AttributeValue``.
+
+    ``value_type`` is a plain string column (CHECK 'str'/'int'/'float');
+    no TypeDecorator handles the three-way dispatch so it is done here.
+    """
+    if row.value_type == "int":
+        return AttributeValue(int(row.int_value))
+    if row.value_type == "float":
+        return AttributeValue(float(row.float_value))
+    return AttributeValue(str(row.str_value or ""))
 
 
 class WorkerAttrsProjection:
@@ -72,17 +85,17 @@ class WorkerAttrsProjection:
     # -- Loading --------------------------------------------------------------
 
     def rehydrate(self) -> None:
-        """Reload the cache from SQL.
+        """Reload the cache from SQL via the SA read engine.
 
         Called once at construction and again after ``ControllerDB.replace_from``
-        has swapped the underlying database file. Uses the legacy
-        ``read_snapshot`` path; Stage 11 will switch to SA Core.
+        has swapped the underlying database file. ``WorkerIdType`` on
+        ``worker_id`` decodes the string automatically; ``value_type`` dispatch
+        is handled by :func:`_decode_value`.
         """
-        with self._db.read_snapshot() as q:
-            rows = q.raw(
-                "SELECT worker_id, key, value_type, str_value, int_value, float_value FROM worker_attributes",
-            )
-        decoded = _decode_attribute_rows(rows)
+        decoded: dict[WorkerId, dict[str, AttributeValue]] = {}
+        with db_v2.read_snapshot(self._db.sa_read_engine) as tx:
+            for row in tx.execute(select(worker_attributes_table)).all():
+                decoded.setdefault(row.worker_id, {})[row.key] = _decode_value(row)
         with self._lock:
             self._cache.clear()
             self._cache.update(decoded)
@@ -108,7 +121,7 @@ class WorkerAttrsProjection:
 
     def set(
         self,
-        cur: TransactionCursor,
+        cur: PostCommitRegistrar,
         worker_id: WorkerId,
         attrs: dict[str, AttributeValue],
     ) -> None:
@@ -125,28 +138,24 @@ class WorkerAttrsProjection:
             with self._lock:
                 self._cache[worker_id] = snapshot
 
-        cur.on_commit(apply)
+        cur.register(apply)
 
-    def remove(self, cur: TransactionCursor, worker_id: WorkerId) -> None:
+    def remove(self, cur: PostCommitRegistrar, worker_id: WorkerId) -> None:
         """Schedule a dict pop for ``worker_id`` after commit."""
 
         def apply() -> None:
             with self._lock:
                 self._cache.pop(worker_id, None)
 
-        cur.on_commit(apply)
+        cur.register(apply)
 
     def invalidate_for_worker(self, tx: PostCommitRegistrar, worker_id: WorkerId) -> None:
         """Drop ``worker_id`` from the cache after commit (FK-cascade hook).
 
         Semantically distinct from :meth:`remove`: ``remove`` is used by the
         explicit worker-removal path, while ``invalidate_for_worker`` is the
-        Stage 12 hook for callers that delete from ``workers`` and rely on
-        the ``ON DELETE CASCADE`` to clear ``worker_attributes``.
-
-        Accepts any :class:`PostCommitRegistrar` — covers both
-        :class:`db_v2.Tx` and legacy :class:`TransactionCursor` while
-        Stage 13 finishes the transaction-type collapse.
+        hook for callers that delete from ``workers`` and rely on the
+        ``ON DELETE CASCADE`` to clear ``worker_attributes``.
         """
 
         def apply() -> None:

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-import queue
 import sqlite3
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -19,14 +18,28 @@ from typing import Any, Protocol
 
 import fsspec.core
 from rigging.timing import Deadline, Duration, Timestamp
-from sqlalchemy import Engine
+from sqlalchemy import Engine, select, text, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.db_v2 import _make_read_engine, _make_write_engine
+from iris.cluster.controller.db_v2 import (
+    Tx,
+    _make_read_engine,
+    _make_write_engine,
+    write_transaction,
+)
+from iris.cluster.controller.db_v2 import (
+    read_snapshot as _read_snapshot,
+)
 from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
     WORKER_ROW_PROJECTION,
     decode_worker_id,
+)
+from iris.cluster.controller.schema_v2 import (
+    meta_table,
+    user_budgets_table,
+    users_table,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
@@ -35,8 +48,28 @@ from iris.rpc import job_pb2
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Legacy types preserved for import compatibility.
+#
+# ``TransactionCursor``, ``QuerySnapshot``, and ``Row`` are still imported by
+# ``transitions.py``, ``service.py``, ``auth.py``, and test conftest files.
+# Removing them from the module would break those imports.
+#
+# M5/M6/M11 will update all call sites to use ``Tx``; after that M12 deletes
+# these classes. Until then, keep them here so imports succeed at module load
+# time even though ``ControllerDB.transaction()`` now yields ``Tx`` (not
+# ``TransactionCursor``) and ``ControllerDB.read_snapshot()`` yields ``Tx``
+# (not ``QuerySnapshot``).  Runtime calls that relied on the old behaviour
+# (e.g. ``cur.execute("raw SQL?")``) will raise ``TypeError``; that is the
+# expected M11 breakage.
+# ---------------------------------------------------------------------------
+
+
 class Row:
-    """Lightweight result row with attribute access for raw query results."""
+    """Lightweight result row with attribute access for raw query results.
+
+    Kept for import compatibility. M8 deletes this once all call sites migrate.
+    """
 
     __slots__ = ("_data",)
 
@@ -53,8 +86,28 @@ class Row:
         return f"Row({self._data!r})"
 
 
+def _sa_stmt_to_sql(stmt: Any) -> str:
+    """Lower a SA ``text(...)``/``select(...)`` construct to a SQL string.
+
+    Used by the legacy ``TransactionCursor`` and ``QuerySnapshot``. Kept for
+    import compatibility; deleted in M12 once those classes are gone.
+    """
+    text_attr = getattr(stmt, "text", None)
+    if isinstance(text_attr, str):
+        return text_attr
+    compiled = stmt.compile(compile_kwargs={"literal_binds": False})
+    return str(compiled)
+
+
 class QuerySnapshot:
-    """Read-only snapshot over the controller DB."""
+    """Read-only snapshot over the controller DB.
+
+    Kept for import compatibility. ``ControllerDB.read_snapshot()`` now yields
+    ``Tx``; this class remains so ``from iris.cluster.controller.db import
+    QuerySnapshot`` in ``transitions.py`` / ``service.py`` / ``auth.py`` does
+    not raise ``ImportError``. M5/M6/M11 migrate the call sites; M12 deletes
+    this class.
+    """
 
     def __init__(self, conn: sqlite3.Connection, lock: RLock | None):
         self._conn = conn
@@ -74,29 +127,19 @@ class QuerySnapshot:
                 self._lock.release()
 
     def execute_sql(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
-        """Execute raw SQL and return the cursor for result inspection."""
         return self._conn.execute(sql, params)
 
     def execute(self, sql, params=None) -> sqlite3.Cursor:
-        """Execute ``sql`` and return the cursor.
-
-        ``sql`` may be a string or a SA Core construct (``text(...)`` /
-        ``select(...)``); ``params`` may be a tuple or a dict. Lets the
-        new ``reads.*`` helpers run against a legacy :class:`QuerySnapshot`
-        without going through ``db_v2.Tx`` (Phase 1 of Stage 13).
-        """
         if not isinstance(sql, str):
             sql = _sa_stmt_to_sql(sql)
         return self._conn.execute(sql, params if params is not None else ())
 
     def fetchall(self, sql, params=None) -> list[sqlite3.Row]:
-        """Execute SQL and return all rows."""
         if not isinstance(sql, str):
             sql = _sa_stmt_to_sql(sql)
         return list(self._conn.execute(sql, params if params is not None else ()).fetchall())
 
     def fetchone(self, sql, params=None) -> sqlite3.Row | None:
-        """Execute SQL and return the first row, or None."""
         if not isinstance(sql, str):
             sql = _sa_stmt_to_sql(sql)
         return self._conn.execute(sql, params if params is not None else ()).fetchone()
@@ -110,11 +153,6 @@ class QuerySnapshot:
         params: tuple = (),
         decoders: dict[str, Callable] | None = None,
     ) -> list[Row]:
-        """Execute raw SQL and return decoded rows with attribute access.
-
-        Each key in `decoders` maps a column name to a decoder function.
-        Columns without decoders are returned as-is from SQLite.
-        """
         cursor = self._conn.execute(sql, params)
         col_names = [desc[0] for desc in cursor.description]
         active_decoders = decoders or {}
@@ -126,6 +164,99 @@ class QuerySnapshot:
             }
             rows.append(Row(data))
         return rows
+
+
+class TransactionCursor:
+    """Wraps a raw sqlite3.Cursor for use within controller transactions.
+
+    Kept for import compatibility. ``ControllerDB.transaction()`` now yields
+    ``Tx``; this class remains so ``from iris.cluster.controller.db import
+    TransactionCursor`` in ``transitions.py`` / ``stores.py`` / ``budget.py``
+    does not raise ``ImportError``. M5/M6/M11 migrate the call sites; M12
+    deletes this class.
+    """
+
+    def __init__(self, cursor: sqlite3.Cursor):
+        self._cursor = cursor
+        self._commit_hooks: list[Callable[[], None]] = []
+
+    def execute(self, sql, params=None) -> sqlite3.Cursor:
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return self._cursor.execute(sql, params if params is not None else ())
+
+    def executemany(self, sql, params: Iterable[tuple | Mapping[str, object]]) -> sqlite3.Cursor:
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return self._cursor.executemany(sql, params)
+
+    def executescript(self, sql: str) -> sqlite3.Cursor:
+        return self._cursor.executescript(sql)
+
+    def fetchall(self, sql, params=None) -> list[sqlite3.Row]:
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return list(self._cursor.execute(sql, params if params is not None else ()).fetchall())
+
+    def fetchone(self, sql, params=None) -> sqlite3.Row | None:
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return self._cursor.execute(sql, params if params is not None else ()).fetchone()
+
+    def on_commit(self, hook: Callable[[], None]) -> None:
+        self._commit_hooks.append(hook)
+
+    def register(self, hook: Callable[[], None]) -> None:
+        self._commit_hooks.append(hook)
+
+    def _run_commit_hooks(self) -> None:
+        for hook in self._commit_hooks:
+            hook()
+
+    @property
+    def lastrowid(self) -> int | None:
+        return self._cursor.lastrowid
+
+    @property
+    def rowcount(self) -> int:
+        return self._cursor.rowcount
+
+
+class _LegacySnapshot(QuerySnapshot):
+    """``QuerySnapshot`` adapter backed by a SA raw connection fairy.
+
+    Closes the fairy on ``__exit__`` so the pooled connection is returned.
+    Used only by ``ControllerDB.snapshot()`` for backward compatibility.
+    Deleted in M12.
+    """
+
+    def __init__(self, fairy: Any, raw_conn: sqlite3.Connection):
+        super().__init__(raw_conn, lock=None)
+        self._fairy = fairy
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        try:
+            super().__exit__(exc_type, exc, tb)
+        finally:
+            self._fairy.close()
+
+
+def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, AttributeValue]]:
+    """Decode worker attribute rows into a nested dict.
+
+    Kept for import compatibility with conftest.py and stores.py. M7/M12
+    delete this once the legacy Projection-based read path is gone.
+    """
+    attrs_by_worker: dict[WorkerId, dict[str, AttributeValue]] = {}
+    for row in rows:
+        worker_attrs = attrs_by_worker.setdefault(row.worker_id, {})
+        if row.value_type == "int":
+            worker_attrs[row.key] = AttributeValue(int(row.int_value))
+        elif row.value_type == "float":
+            worker_attrs[row.key] = AttributeValue(float(row.float_value))
+        else:
+            worker_attrs[row.key] = AttributeValue(str(row.str_value or ""))
+    return attrs_by_worker
 
 
 # ---------------------------------------------------------------------------
@@ -249,119 +380,9 @@ class EndpointQuery:
     limit: int | None = None
 
 
-def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, AttributeValue]]:
-    attrs_by_worker: dict[WorkerId, dict[str, AttributeValue]] = {}
-    for row in rows:
-        worker_attrs = attrs_by_worker.setdefault(row.worker_id, {})
-        if row.value_type == "int":
-            worker_attrs[row.key] = AttributeValue(int(row.int_value))
-        elif row.value_type == "float":
-            worker_attrs[row.key] = AttributeValue(float(row.float_value))
-        else:
-            worker_attrs[row.key] = AttributeValue(str(row.str_value or ""))
-    return attrs_by_worker
-
-
-def _sa_stmt_to_sql(stmt: Any) -> str:
-    """Lower a SA ``text(...)``/``select(...)`` construct to a SQL string.
-
-    SQLite accepts ``:name`` bind placeholders natively, so a SA construct
-    compiled with ``literal_binds=False`` lands on the same wire form the
-    legacy code already passes to ``sqlite3.Cursor.execute``. Pure-``text``
-    constructs are returned via their ``.text`` attribute (zero overhead).
-    """
-    text_attr = getattr(stmt, "text", None)
-    if isinstance(text_attr, str):
-        return text_attr
-    compiled = stmt.compile(compile_kwargs={"literal_binds": False})
-    return str(compiled)
-
-
-class TransactionCursor:
-    """Wraps a raw sqlite3.Cursor for use within controller transactions.
-
-    Post-commit hooks registered via :meth:`on_commit` run after the wrapping
-    ``ControllerDB.transaction()`` block commits successfully. They are used
-    by caches (e.g. ``EndpointsProjection``) to update in-memory state atomically
-    with the DB write: rollback suppresses the hook so memory never drifts
-    from disk.
-
-    Phase 1 of Stage 13: :meth:`execute` and :meth:`executemany` now also
-    accept SA Core constructs (``text(...)``, ``select(...)``) and dict
-    bind params, so the new ``writes.*`` / ``reads.*`` helpers in
-    ``iris.cluster.controller.{writes,reads}`` work against a legacy
-    ``TransactionCursor`` without being re-routed through ``db_v2.Tx``.
-    """
-
-    def __init__(self, cursor: sqlite3.Cursor):
-        self._cursor = cursor
-        self._commit_hooks: list[Callable[[], None]] = []
-
-    def execute(self, sql, params=None) -> sqlite3.Cursor:
-        """Raw SQL escape hatch.
-
-        ``sql`` may be a string or a SA Core construct; ``params`` may be
-        a tuple or a dict (dict required when ``sql`` uses ``:named``
-        placeholders).
-        """
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return self._cursor.execute(sql, params if params is not None else ())
-
-    def executemany(self, sql, params: Iterable[tuple | Mapping[str, object]]) -> sqlite3.Cursor:
-        """Raw SQL batch escape hatch."""
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return self._cursor.executemany(sql, params)
-
-    def executescript(self, sql: str) -> sqlite3.Cursor:
-        """Raw SQL script escape hatch."""
-        return self._cursor.executescript(sql)
-
-    def fetchall(self, sql, params=None) -> list[sqlite3.Row]:
-        """Execute ``sql`` and return all rows. Mirrors :meth:`QuerySnapshot.fetchall`."""
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return list(self._cursor.execute(sql, params if params is not None else ()).fetchall())
-
-    def fetchone(self, sql, params=None) -> sqlite3.Row | None:
-        """Execute ``sql`` and return the first row, or None. Mirrors :meth:`QuerySnapshot.fetchone`."""
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return self._cursor.execute(sql, params if params is not None else ()).fetchone()
-
-    def on_commit(self, hook: Callable[[], None]) -> None:
-        """Register ``hook`` to run after the transaction commits successfully."""
-        self._commit_hooks.append(hook)
-
-    def register(self, hook: Callable[[], None]) -> None:
-        """SA Core ``Tx``-compatible alias for :meth:`on_commit`.
-
-        Lets projection invalidation hooks accept either a legacy
-        :class:`TransactionCursor` or a v2 :class:`db_v2.Tx` via a single
-        ``register``-named entry point. Stage 13 deletes
-        :class:`TransactionCursor`; until then this alias keeps the
-        Projection write surface uniform across both transaction types.
-        """
-        self._commit_hooks.append(hook)
-
-    def _run_commit_hooks(self) -> None:
-        for hook in self._commit_hooks:
-            hook()
-
-    @property
-    def lastrowid(self) -> int | None:
-        return self._cursor.lastrowid
-
-    @property
-    def rowcount(self) -> int:
-        return self._cursor.rowcount
-
-
 class ControllerDB:
     """Thread-safe SQLite wrapper with typed query and migration helpers."""
 
-    _READ_POOL_SIZE = 32
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
 
@@ -372,12 +393,11 @@ class ControllerDB:
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
 
+        # Build SA engines first so apply_migrations can use raw_connection().
         t0 = time.monotonic()
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._configure(self._conn)
-        self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
-        logger.info("DB opened in %.2fs (path=%s)", time.monotonic() - t0, self._db_path)
+        self._sa_write_engine: Engine = _make_write_engine(self._db_path, self._auth_db_path)
+        self._sa_read_engine: Engine = _make_read_engine(self._db_path, self._auth_db_path)
+        logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
 
         t0 = time.monotonic()
         self.apply_migrations()
@@ -387,24 +407,12 @@ class ControllerDB:
         # Without this, queries like running_tasks_by_worker scan thousands of
         # rows instead of using the narrower index path.
         t0 = time.monotonic()
-        self._conn.execute("ANALYZE")
+        raw_conn = self._sa_write_engine.raw_connection()
+        try:
+            raw_conn.execute("ANALYZE")
+        finally:
+            raw_conn.close()
         logger.info("ANALYZE completed in %.2fs", time.monotonic() - t0)
-
-        t0 = time.monotonic()
-        self._read_pool: queue.Queue[sqlite3.Connection] = queue.Queue()
-        self._init_read_pool()
-        logger.info("Read pool initialized in %.2fs", time.monotonic() - t0)
-
-        # SA Core engines for the v2 data layer. Coexist with ``_conn`` and
-        # ``_read_pool`` during the staged migration. Split into a write
-        # engine (pool size 1, no query_only) and a read engine (pool size
-        # 32+4, ``PRAGMA query_only = ON`` pinned at connect time). Mirrors
-        # today's ``_init_read_pool`` so the SA read path doesn't pay a
-        # per-call pragma round-trip.
-        t0 = time.monotonic()
-        self._sa_write_engine: Engine = _make_write_engine(self._db_path, self._auth_db_path)
-        self._sa_read_engine: Engine = _make_read_engine(self._db_path, self._auth_db_path)
-        logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
 
         # Callables invoked at the end of ``replace_from`` so callers with
         # caches over DB contents (e.g. ``ControllerStore``) can reload them
@@ -426,20 +434,6 @@ class ControllerDB:
     def register_reopen_hook(self, hook: Callable[[], None]) -> None:
         """Register a no-arg callable to run at the end of ``replace_from``."""
         self._reopen_hooks.append(hook)
-
-    def _init_read_pool(self) -> None:
-        """Create (or recreate) the read-only connection pool."""
-        while True:
-            try:
-                self._read_pool.get_nowait().close()
-            except queue.Empty:
-                break
-        for _ in range(self._READ_POOL_SIZE):
-            conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            self._configure(conn)
-            conn.execute("PRAGMA query_only = ON")
-            self._read_pool.put(conn)
 
     @property
     def sa_read_engine(self) -> Engine:
@@ -463,18 +457,6 @@ class ControllerDB:
     def auth_db_path(self) -> Path:
         return self._auth_db_path
 
-    @staticmethod
-    def _configure(conn: sqlite3.Connection) -> None:
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA foreign_keys = ON")
-        # Default page cache (2000 pages ≈ 8 MB) is too small for an 815 MB
-        # controller DB. With 32 read connections each caching independently
-        # the working set rotates fast and "warm" reads keep going to disk.
-        # 64 MB per connection caps total cache at ~2 GB on a 32 GB host.
-        conn.execute("PRAGMA cache_size = -65536")
-
     def optimize(self) -> None:
         """Run PRAGMA optimize to refresh statistics for tables with stale data.
 
@@ -482,7 +464,11 @@ class ControllerDB:
         connection close. Only re-analyzes tables whose stats have drifted.
         """
         with self._lock:
-            self._conn.execute("PRAGMA optimize")
+            raw_conn = self._sa_write_engine.raw_connection()
+            try:
+                raw_conn.execute("PRAGMA optimize")
+            finally:
+                raw_conn.close()
 
     def wal_checkpoint(self) -> tuple[int, int, int]:
         """Reclaim freelist pages, flush WAL into the main DB, and truncate it.
@@ -500,76 +486,102 @@ class ControllerDB:
         # Pin to the main schema so the attached auth/profiles DBs (which may
         # not even be in WAL mode) cannot raise SQLITE_LOCKED here.
         with self._lock:
-            self._conn.executescript("PRAGMA main.incremental_vacuum")
-            row = self._conn.execute("PRAGMA main.wal_checkpoint(TRUNCATE)").fetchone()
+            raw_conn = self._sa_write_engine.raw_connection()
+            try:
+                raw_conn.executescript("PRAGMA main.incremental_vacuum")
+                row = raw_conn.execute("PRAGMA main.wal_checkpoint(TRUNCATE)").fetchone()
+            finally:
+                raw_conn.close()
         return (int(row[0]), int(row[1]), int(row[2]))
 
     def close(self) -> None:
-        with self._lock:
-            self._conn.close()
-        for _ in range(self._READ_POOL_SIZE):
-            try:
-                self._read_pool.get(timeout=1).close()
-            except queue.Empty:
-                break
         self._sa_write_engine.dispose()
         self._sa_read_engine.dispose()
 
     @contextmanager
-    def transaction(self):
-        """Open an IMMEDIATE transaction and yield a TransactionCursor.
+    def transaction(self) -> Iterator[Tx]:
+        """Open an IMMEDIATE transaction and yield a ``Tx``.
 
-        On successful commit, any hooks registered via ``TransactionCursor.on_commit``
-        fire while the write lock is still held — keeping in-memory caches
-        (e.g. ``EndpointsProjection``) in sync with the DB without exposing a
-        torn snapshot to concurrent readers.
+        On successful commit, any hooks registered via ``Tx.register`` or
+        ``Tx.on_commit`` fire while the write lock is still held — keeping
+        in-memory caches (e.g. ``EndpointsProjection``) in sync with the DB
+        without exposing a torn snapshot to concurrent readers.
         """
-        with self._lock:
-            cur = self._conn.cursor()
-            cur.execute("BEGIN IMMEDIATE")
-            tx_cur = TransactionCursor(cur)
-            try:
-                yield tx_cur
-            except Exception:
-                self._conn.rollback()
-                raise
-            else:
-                self._conn.commit()
-                tx_cur._run_commit_hooks()
-
-    def fetchall(self, query: str, params: tuple | list = ()) -> list[sqlite3.Row]:
-        with self._lock:
-            return list(self._conn.execute(query, params).fetchall())
-
-    def fetchone(self, query: str, params: tuple | list = ()) -> sqlite3.Row | None:
-        with self._lock:
-            return self._conn.execute(query, params).fetchone()
-
-    def execute(self, query: str, params: tuple | list = ()) -> None:
-        with self.transaction() as cur:
-            cur.execute(query, params)
-
-    def snapshot(self) -> QuerySnapshot:
-        return QuerySnapshot(self._conn, self._lock)
+        with write_transaction(self._sa_write_engine, self._lock) as tx:
+            yield tx
 
     @contextmanager
-    def read_snapshot(self) -> Iterator[QuerySnapshot]:
+    def read_snapshot(self) -> Iterator[Tx]:
         """Read-only snapshot that does NOT acquire the write lock.
 
         Uses a pooled read-only connection with WAL isolation. Safe for
         concurrent use from dashboard/RPC threads while the scheduling
         loop holds the write lock.
         """
-        conn = self._read_pool.get()
+        with _read_snapshot(self._sa_read_engine) as tx:
+            yield tx
+
+    def snapshot(self) -> QuerySnapshot:
+        """Return a legacy ``QuerySnapshot`` over a raw read connection.
+
+        Preserved for import compatibility with ``auth.py`` and ``service.py``.
+        M5/M6 will migrate those call sites to ``read_snapshot()``; this method
+        will be removed in M12.
+
+        The returned snapshot uses a fresh raw sqlite3 connection checked out
+        of the write engine (no query_only pin). Callers must use it as a
+        context manager (``with db.snapshot() as q:``).
+        """
+        raw_fairy = self._sa_write_engine.raw_connection()
+        raw_conn = raw_fairy.driver_connection
+        raw_conn.row_factory = sqlite3.Row
+        # Wrap in a QuerySnapshot; we don't pass a lock so the snapshot does
+        # not block writers. The raw_fairy is closed in __exit__ below via
+        # a thin adapter.
+        snap = _LegacySnapshot(raw_fairy, raw_conn)
+        return snap
+
+    def fetchall(self, query: str, params: tuple | list = ()) -> list:
+        """Execute raw SQL and return all rows.
+
+        Accepts ``?``-placeholder SQL for call sites not yet migrated to SA
+        Core. The raw connection bypasses ``Tx`` intentionally — this method
+        is a compatibility escape hatch used by the legacy layer and some
+        tests. Prefer ``read_snapshot()`` + SA Core for new code.
+        """
+        raw_fairy = self._sa_write_engine.raw_connection()
         try:
-            conn.execute("BEGIN")
-            yield QuerySnapshot(conn, lock=None)
+            raw_fairy.driver_connection.row_factory = sqlite3.Row
+            return list(raw_fairy.execute(query, params).fetchall())
         finally:
+            raw_fairy.close()
+
+    def fetchone(self, query: str, params: tuple | list = ()):
+        """Execute raw SQL and return the first row, or ``None``."""
+        raw_fairy = self._sa_write_engine.raw_connection()
+        try:
+            raw_fairy.driver_connection.row_factory = sqlite3.Row
+            return raw_fairy.execute(query, params).fetchone()
+        finally:
+            raw_fairy.close()
+
+    def execute(self, query: str, params: tuple | list = ()) -> None:
+        """Execute raw SQL in a transaction.
+
+        Accepts ``?``-placeholder SQL for call sites not yet migrated to SA
+        Core. Prefer ``transaction()`` + SA Core for new code.
+        """
+        raw_fairy = self._sa_write_engine.raw_connection()
+        try:
+            raw_fairy.execute("BEGIN IMMEDIATE")
             try:
-                conn.rollback()
-            except sqlite3.OperationalError:
-                logging.getLogger(__name__).warning("read_snapshot rollback failed", exc_info=True)
-            self._read_pool.put(conn)
+                raw_fairy.execute(query, params)
+                raw_fairy.execute("COMMIT")
+            except Exception:
+                raw_fairy.execute("ROLLBACK")
+                raise
+        finally:
+            raw_fairy.close()
 
     @staticmethod
     def decode_task(row: sqlite3.Row):
@@ -592,8 +604,13 @@ class ControllerDB:
         migrations_dir = Path(__file__).with_name("migrations")
         migrations_dir.mkdir(parents=True, exist_ok=True)
 
-        with self.transaction() as cur:
-            cur.execute(
+        # Use a raw sqlite3 connection so we can call executescript() and flip
+        # PRAGMAs outside any SA transaction context. The pool_size=1 write
+        # engine is used; we hold this connection for the entire migration run
+        # and close it before returning so the pool is free afterwards.
+        raw_conn = self._sa_write_engine.raw_connection()
+        try:
+            raw_conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     name TEXT PRIMARY KEY,
@@ -601,11 +618,23 @@ class ControllerDB:
                 )
                 """
             )
-            applied = {row[0] for row in cur.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()}
+            raw_conn.commit()
+            applied = {row[0] for row in raw_conn.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()}
 
-        # Match by stem so a migration previously recorded as .sql is not
-        # re-run after conversion to .py.
-        applied_stems = {Path(name).stem for name in applied}
+            # Match by stem so a migration previously recorded as .sql is not
+            # re-run after conversion to .py.
+            applied_stems = {Path(name).stem for name in applied}
+
+<<<<<<< HEAD
+        pending = []
+        for path in sorted(migrations_dir.glob("*.py")):
+            if path.name.startswith("__"):
+                continue
+            if path.stem in applied_stems:
+                continue
+            pending.append(path)
+||||||| parent of 2d270e409 ([iris] M1-M4: rewrite reads/writes/projections to pure SA Core; tighten Tx)
+        import time
 
         pending = []
         for path in sorted(migrations_dir.glob("*.py")):
@@ -614,70 +643,89 @@ class ControllerDB:
             if path.stem in applied_stems:
                 continue
             pending.append(path)
+=======
+            pending = []
+            for path in sorted(migrations_dir.glob("*.py")):
+                if path.name.startswith("__"):
+                    continue
+                if path.stem in applied_stems:
+                    continue
+                pending.append(path)
 
-        if not pending:
-            return
+            if not pending:
+                return
+>>>>>>> 2d270e409 ([iris] M1-M4: rewrite reads/writes/projections to pure SA Core; tighten Tx)
 
-        logger.info("Applying %d pending migration(s): %s", len(pending), [p.name for p in pending])
+            logger.info("Applying %d pending migration(s): %s", len(pending), [p.name for p in pending])
 
-        # Flip to fast-mode PRAGMAs for the duration of the migration loop.
-        # Safe: migrations run at startup before any concurrent access, and a
-        # crash re-runs the migration from schema_migrations. journal_mode
-        # cannot change inside a transaction, so commit first and restore at
-        # the end.
-        self._conn.commit()
-        self._conn.execute("PRAGMA synchronous=OFF")
-        # journal_mode returns a row; consume it so the cursor is closed and
-        # cannot hold a statement-level lock that would block wal_checkpoint.
-        self._conn.execute("PRAGMA journal_mode=MEMORY").fetchall()
-        self._conn.execute("PRAGMA temp_store=MEMORY")
-        # Legacy migrations 0005/0014/0020/0023 reference `profiles.task_profiles`,
-        # so attach the legacy file for the migration loop. 0046 + the finally
-        # block below detach and unlink it.
-        profiles_path = self._db_dir / "profiles.sqlite3"
-        self._conn.execute("ATTACH DATABASE ? AS profiles", (str(profiles_path),))
-        try:
-            for path in pending:
-                t0 = time.monotonic()
-                spec = importlib.util.spec_from_file_location(path.stem, path)
-                assert spec is not None and spec.loader is not None
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                module.migrate(self._conn)
-                # Commit any implicit transaction left open by migrate() (e.g.
-                # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
-                self._conn.commit()
-                logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
+            # Flip to fast-mode PRAGMAs for the duration of the migration loop.
+            # Safe: migrations run at startup before any concurrent access, and a
+            # crash re-runs the migration from schema_migrations. journal_mode
+            # cannot change inside a transaction, so commit first and restore at
+            # the end.
+            raw_conn.commit()
+            raw_conn.execute("PRAGMA synchronous=OFF")
+            # journal_mode returns a row; consume it so the cursor is closed and
+            # cannot hold a statement-level lock that would block wal_checkpoint.
+            raw_conn.execute("PRAGMA journal_mode=MEMORY").fetchall()
+            raw_conn.execute("PRAGMA temp_store=MEMORY")
+            # Legacy migrations 0005/0014/0020/0023 reference `profiles.task_profiles`,
+            # so attach the legacy file for the migration loop. 0046 + the finally
+            # block below detach and unlink it.
+            profiles_path = self._db_dir / "profiles.sqlite3"
+            raw_conn.execute("ATTACH DATABASE ? AS profiles", (str(profiles_path),))
+            try:
+                for path in pending:
+                    t0 = time.monotonic()
+                    spec = importlib.util.spec_from_file_location(path.stem, path)
+                    assert spec is not None and spec.loader is not None
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    module.migrate(raw_conn)
+                    # Commit any implicit transaction left open by migrate() (e.g.
+                    # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
+                    raw_conn.commit()
+                    logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
 
-                with self.transaction() as cur:
-                    cur.execute(
-                        "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                        (path.name, Timestamp.now().epoch_ms()),
-                    )
+                    raw_conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        raw_conn.execute(
+                            "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
+                            (path.name, Timestamp.now().epoch_ms()),
+                        )
+                        raw_conn.commit()
+                    except Exception:
+                        raw_conn.execute("ROLLBACK")
+                        raise
+            finally:
+                raw_conn.commit()
+                raw_conn.execute("PRAGMA synchronous=NORMAL")
+                raw_conn.execute("PRAGMA journal_mode=WAL").fetchall()
+                # Detach + unlink the legacy profiles DB. Idempotent — 0046 may
+                # already have detached and unlinked.
+                try:
+                    raw_conn.execute("DETACH DATABASE profiles")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    profiles_path.unlink()
+                except FileNotFoundError:
+                    pass
+                # Checkpoint inline: must release raw_conn back to the pool first
+                # because wal_checkpoint() acquires a new raw_connection() and the
+                # write engine pool_size=1 would deadlock if we held raw_conn here.
+                raw_conn.close()
+                raw_conn = None
+                busy, log_frames, checkpointed = self.wal_checkpoint()
+                logger.info(
+                    "Post-migration wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
+                    busy,
+                    log_frames,
+                    checkpointed,
+                )
         finally:
-            self._conn.commit()
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA journal_mode=WAL").fetchall()
-            # Detach + unlink the legacy profiles DB. Idempotent — 0046 may
-            # already have detached and unlinked.
-            try:
-                self._conn.execute("DETACH DATABASE profiles")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                profiles_path.unlink()
-            except FileNotFoundError:
-                pass
-            # Checkpoint and truncate the WAL so the migration's write volume
-            # does not linger as a giant WAL file that every subsequent reader
-            # must walk to build a snapshot.
-            busy, log_frames, checkpointed = self.wal_checkpoint()
-            logger.info(
-                "Post-migration wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
-                busy,
-                log_frames,
-                checkpointed,
-            )
+            if raw_conn is not None:
+                raw_conn.close()
 
     @property
     def api_keys_table(self) -> str:
@@ -689,32 +737,36 @@ class ControllerDB:
 
     def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
         """Create user if not exists. Does not update role for existing users."""
-        self.execute(
-            "INSERT OR IGNORE INTO users (user_id, created_at_ms, role) VALUES (?, ?, ?)",
-            (user_id, now.epoch_ms(), role),
+        stmt = sqlite_insert(users_table).values(
+            user_id=user_id,
+            created_at_ms=now,
+            role=role,
         )
+        stmt = stmt.on_conflict_do_nothing(index_elements=["user_id"])
+        with self.transaction() as tx:
+            tx.execute(stmt)
 
     def set_user_role(self, user_id: str, role: str) -> None:
         """Update the role for an existing user."""
-        self.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
+        stmt = update(users_table).where(users_table.c.user_id == user_id).values(role=role)
+        with self.transaction() as tx:
+            tx.execute(stmt)
 
     def get_user_role(self, user_id: str) -> str:
         """Get a user's role. Returns 'user' if not found."""
-        with self.read_snapshot() as q:
-            rows = q.raw(
-                "SELECT role FROM users WHERE user_id = ?",
-                (user_id,),
-                decoders={"role": str},
-            )
-            return rows[0].role if rows else "user"
+        stmt = select(users_table.c.role).where(users_table.c.user_id == user_id)
+        with self.read_snapshot() as tx:
+            row = tx.fetchone(stmt)
+        return row[0] if row is not None else "user"
 
-    def next_sequence(self, key: str, *, cur: TransactionCursor) -> int:
-        row = cur.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    def next_sequence(self, key: str, *, cur: Tx) -> int:
+        stmt = select(meta_table.c.value).where(meta_table.c.key == key)
+        row = cur.fetchone(stmt)
         if row is None:
-            cur.execute("INSERT INTO meta(key, value) VALUES (?, ?)", (key, 1))
+            cur.execute(sqlite_insert(meta_table).values(key=key, value=1))
             return 1
         value = int(row[0]) + 1
-        cur.execute("UPDATE meta SET value = ? WHERE key = ?", (value, key))
+        cur.execute(update(meta_table).where(meta_table.c.key == key).values(value=value))
         return value
 
     def backup_to(self, destination: Path) -> None:
@@ -733,7 +785,7 @@ class ControllerDB:
         already-written backup file -- no redundant copy is required.
 
         The backup runs through a dedicated read-only source connection,
-        so writers on ``self._conn`` proceed concurrently under SQLite's
+        so writers on the write engine proceed concurrently under SQLite's
         WAL semantics -- no controller-level lock is held for the
         duration of the copy.  Batched page copying (``pages=500``)
         yields between steps so a sustained write stream cannot starve
@@ -742,7 +794,11 @@ class ControllerDB:
         destination.parent.mkdir(parents=True, exist_ok=True)
         src = sqlite3.connect(str(self._db_path), check_same_thread=False)
         try:
-            self._configure(src)
+            src.execute("PRAGMA journal_mode = WAL")
+            src.execute("PRAGMA synchronous = NORMAL")
+            src.execute("PRAGMA busy_timeout = 5000")
+            src.execute("PRAGMA foreign_keys = ON")
+            src.execute("PRAGMA cache_size = -65536")
             src.execute("PRAGMA query_only = ON")
             dest = sqlite3.connect(str(destination))
             try:
@@ -765,13 +821,6 @@ class ControllerDB:
         for sidecar in ControllerDB._sidecar_paths(path):
             sidecar.unlink(missing_ok=True)
 
-    def _close_read_pool_connections(self) -> None:
-        while True:
-            try:
-                self._read_pool.get_nowait().close()
-            except queue.Empty:
-                break
-
     def replace_from(self, source_dir: str | Path) -> None:
         """Replace current DB files from ``source_dir`` and reopen connection.
 
@@ -783,8 +832,9 @@ class ControllerDB:
         source_dir_str = str(source_dir).rstrip("/")
 
         with self._lock:
-            self._close_read_pool_connections()
-            self._conn.close()
+            # Dispose existing SA pools before swapping files.
+            self._sa_write_engine.dispose()
+            self._sa_read_engine.dispose()
 
             # Download main DB
             main_source = f"{source_dir_str}/{self.DB_FILENAME}"
@@ -804,22 +854,15 @@ class ControllerDB:
                 self._remove_sidecars(self._auth_db_path)
                 auth_tmp.rename(self._auth_db_path)
 
-            self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            self._configure(self._conn)
-            self._conn.execute("ATTACH DATABASE ? AS auth", (str(self._auth_db_path),))
-            self._init_read_pool()
-            # Dispose the old SA pools (still pointed at the previous file)
-            # and rebuild against the freshly-installed DB.
-            self._sa_write_engine.dispose()
-            self._sa_read_engine.dispose()
+            # Rebuild SA engines against the freshly-installed DB.
             self._sa_write_engine = _make_write_engine(self._db_path, self._auth_db_path)
             self._sa_read_engine = _make_read_engine(self._db_path, self._auth_db_path)
+
         self.apply_migrations()
         for hook in self._reopen_hooks:
             hook()
 
-    # SQL-canonical read access is exposed through ``snapshot()`` and typed table
+    # SQL-canonical read access is exposed through ``read_snapshot()`` and typed table
     # metadata at module scope. Legacy list/get/count helper methods were removed
     # to keep relation assembly explicit in controller/service/state query flows.
 
@@ -827,39 +870,54 @@ class ControllerDB:
 
     def set_user_budget(self, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
         """Insert or update a user's budget configuration."""
-        self.execute(
-            "INSERT INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET budget_limit=?, max_band=?, updated_at_ms=?",
-            (user_id, budget_limit, max_band, now.epoch_ms(), budget_limit, max_band, now.epoch_ms()),
+        stmt = sqlite_insert(user_budgets_table).values(
+            user_id=user_id,
+            budget_limit=budget_limit,
+            max_band=max_band,
+            updated_at_ms=now,
         )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["user_id"],
+            set_={"budget_limit": budget_limit, "max_band": max_band, "updated_at_ms": now},
+        )
+        with self.transaction() as tx:
+            tx.execute(stmt)
 
     def get_user_budget(self, user_id: str) -> UserBudget | None:
         """Get budget config for a user. Returns None if user has no budget row."""
-        with self.read_snapshot() as q:
-            row = q.fetchone(
-                "SELECT user_id, budget_limit, max_band, updated_at_ms FROM user_budgets WHERE user_id = ?",
-                (user_id,),
-            )
+        stmt = select(
+            user_budgets_table.c.user_id,
+            user_budgets_table.c.budget_limit,
+            user_budgets_table.c.max_band,
+            user_budgets_table.c.updated_at_ms,
+        ).where(user_budgets_table.c.user_id == user_id)
+        with self.read_snapshot() as tx:
+            row = tx.fetchone(stmt)
         if row is None:
             return None
         return UserBudget(
-            user_id=row["user_id"],
-            budget_limit=row["budget_limit"],
-            max_band=row["max_band"],
-            updated_at=Timestamp.from_ms(row["updated_at_ms"]),
+            user_id=row[0],
+            budget_limit=row[1],
+            max_band=row[2],
+            updated_at=row[3],
         )
 
     def list_user_budgets(self) -> list[UserBudget]:
         """List all user budgets."""
-        with self.read_snapshot() as q:
-            rows = q.fetchall("SELECT user_id, budget_limit, max_band, updated_at_ms FROM user_budgets", ())
+        stmt = select(
+            user_budgets_table.c.user_id,
+            user_budgets_table.c.budget_limit,
+            user_budgets_table.c.max_band,
+            user_budgets_table.c.updated_at_ms,
+        )
+        with self.read_snapshot() as tx:
+            rows = tx.fetchall(stmt)
         return [
             UserBudget(
-                user_id=row["user_id"],
-                budget_limit=row["budget_limit"],
-                max_band=row["max_band"],
-                updated_at=Timestamp.from_ms(row["updated_at_ms"]),
+                user_id=row[0],
+                budget_limit=row[1],
+                max_band=row[2],
+                updated_at=row[3],
             )
             for row in rows
         ]
@@ -882,17 +940,26 @@ def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict
     """Return the set of currently-running task IDs for each worker."""
     if not worker_ids:
         return {}
-    placeholders = ",".join("?" for _ in worker_ids)
-    with db.read_snapshot() as q:
-        rows = q.raw(
-            f"SELECT t.current_worker_id AS worker_id, t.task_id FROM tasks t "
-            f"WHERE t.current_worker_id IN ({placeholders}) AND t.state IN (?, ?, ?)",
-            (*[str(wid) for wid in worker_ids], *ACTIVE_TASK_STATES),
-            decoders={"worker_id": decode_worker_id, "task_id": JobName.from_wire},
-        )
+    worker_id_strs = [str(wid) for wid in worker_ids]
+    active_states = sorted(ACTIVE_TASK_STATES)
+    placeholders_w = ",".join(f":w{i}" for i in range(len(worker_id_strs)))
+    placeholders_s = ",".join(f":s{i}" for i in range(len(active_states)))
+    params: dict[str, Any] = {}
+    for i, wid in enumerate(worker_id_strs):
+        params[f"w{i}"] = wid
+    for i, s in enumerate(active_states):
+        params[f"s{i}"] = s
+    sql = text(
+        f"SELECT t.current_worker_id AS worker_id, t.task_id FROM tasks t "
+        f"WHERE t.current_worker_id IN ({placeholders_w}) AND t.state IN ({placeholders_s})"
+    )
+    with db.read_snapshot() as tx:
+        rows = tx.fetchall(sql, params)
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:
-        running[row.worker_id].add(row.task_id)
+        wid = decode_worker_id(row[0])
+        task_id = JobName.from_wire(row[1])
+        running[wid].add(task_id)
     return running
 
 
@@ -911,30 +978,30 @@ def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOut
     started_at_ms so that retried tasks get a fresh timeout budget per attempt.
     """
     now_ms = now.epoch_ms()
-    executing_states = tuple(sorted(EXECUTING_TASK_STATES))
-    placeholders = ",".join("?" for _ in executing_states)
-    with db.read_snapshot() as q:
-        rows = q.raw(
-            f"SELECT t.task_id, t.current_worker_id AS worker_id, "
-            f"ta.started_at_ms AS attempt_started_at_ms, jc.timeout_ms "
-            f"FROM tasks t "
-            f"JOIN job_config jc ON jc.job_id = t.job_id "
-            f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
-            f"WHERE t.state IN ({placeholders}) "
-            f"AND jc.timeout_ms IS NOT NULL AND jc.timeout_ms > 0 "
-            f"AND ta.started_at_ms IS NOT NULL",
-            (*executing_states,),
-            decoders={
-                "task_id": JobName.from_wire,
-                "worker_id": lambda v: WorkerId(v) if v is not None else None,
-                "attempt_started_at_ms": int,
-                "timeout_ms": int,
-            },
-        )
+    executing_states = sorted(EXECUTING_TASK_STATES)
+    placeholders = ",".join(f":s{i}" for i in range(len(executing_states)))
+    params: dict[str, Any] = {f"s{i}": s for i, s in enumerate(executing_states)}
+    params["now_ms"] = now_ms
+    sql = text(
+        f"SELECT t.task_id, t.current_worker_id AS worker_id, "
+        f"ta.started_at_ms AS attempt_started_at_ms, jc.timeout_ms "
+        f"FROM tasks t "
+        f"JOIN job_config jc ON jc.job_id = t.job_id "
+        f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
+        f"WHERE t.state IN ({placeholders}) "
+        f"AND jc.timeout_ms IS NOT NULL AND jc.timeout_ms > 0 "
+        f"AND ta.started_at_ms IS NOT NULL"
+    )
+    with db.read_snapshot() as tx:
+        rows = tx.fetchall(sql, params)
     result: list[TimedOutTask] = []
     for row in rows:
-        if row.attempt_started_at_ms + row.timeout_ms <= now_ms:
-            result.append(TimedOutTask(task_id=row.task_id, worker_id=row.worker_id))
+        attempt_started_at_ms = int(row[2])
+        timeout_ms = int(row[3])
+        if attempt_started_at_ms + timeout_ms <= now_ms:
+            task_id = JobName.from_wire(row[0])
+            worker_id = WorkerId(row[1]) if row[1] is not None else None
+            result.append(TimedOutTask(task_id=task_id, worker_id=worker_id))
     return result
 
 
@@ -988,16 +1055,14 @@ def healthy_active_workers_with_attributes(
     healthy_active = {wid for wid, l in liveness.items() if l.healthy and l.active}
     if not healthy_active:
         return []
-    placeholders = ",".join("?" for _ in healthy_active)
-    with db.read_snapshot() as q:
-        rows = WORKER_ROW_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT {_worker_row_select()} FROM workers w WHERE w.worker_id IN ({placeholders})",
-                tuple(str(wid) for wid in healthy_active),
-            ),
-        )
-        if not rows:
-            return []
+    worker_id_strs = [str(wid) for wid in healthy_active]
+    placeholders = ",".join(f":w{i}" for i in range(len(worker_id_strs)))
+    params = {f"w{i}": wid for i, wid in enumerate(worker_id_strs)}
+    sql = text(f"SELECT {_worker_row_select()} FROM workers w WHERE w.worker_id IN ({placeholders})")
+    with db.read_snapshot() as tx:
+        rows = WORKER_ROW_PROJECTION.decode(tx.fetchall(sql, params))
+    if not rows:
+        return []
     attrs_by_worker = attrs.all()
     out: list[SchedulableWorker] = []
     for w in rows:
