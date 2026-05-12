@@ -189,9 +189,8 @@ def _reduce_gen(
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
-    cols_set = set(columns)
     for item in stream:
-        yield {k: item[k] for k in cols_set if k in item}
+        yield {k: item[k] for k in columns if k in item}
 
 
 def _load_file_gen(stream: Iterator) -> Iterator:
