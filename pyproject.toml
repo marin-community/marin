@@ -15,7 +15,7 @@ dependencies = [
     "marin-fray",
     "marin-haliax",
     "marin-levanter",
-    "marin",
+    "marin-core",
     "marin-rigging",
     "marin-zephyr",
     # top level deps. try to keep these small.
@@ -77,22 +77,22 @@ conflicts = [
     # Remove these once CPU, TPU, vLLM, and Fray TPU test paths can share the GPU JAX line.
     [
         { package = "marin-levanter", extra = "gpu" },
-        { package = "marin", extra = "cpu" },
+        { package = "marin-core", extra = "cpu" },
     ],
     [
         { package = "marin-levanter", extra = "gpu" },
-        { package = "marin", extra = "tpu" },
+        { package = "marin-core", extra = "tpu" },
     ],
     [
         { package = "marin-levanter", extra = "gpu" },
-        { package = "marin", extra = "vllm" },
+        { package = "marin-core", extra = "vllm" },
     ],
     [
-        { package = "marin", extra = "gpu" },
+        { package = "marin-core", extra = "gpu" },
         { package = "marin-levanter", extra = "tpu" },
     ],
     [
-        { package = "marin", extra = "gpu" },
+        { package = "marin-core", extra = "gpu" },
         { package = "marin-fray", group = "fray_tpu_test" },
     ],
     [
@@ -119,7 +119,7 @@ marin-finelog = { workspace = true }
 marin-fray = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
-marin = { workspace = true }
+marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
 # NOTE: harbor is a pinned git dependency (not a workspace member).

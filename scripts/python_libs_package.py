@@ -68,7 +68,7 @@ REPO = "marin-community/marin"
 # kind = "pyproject" -> patch  version = "..."  in pyproject.toml
 # kind = "about_py"  -> patch  __version__ = "..."  in src/<pkg>/__about__.py
 PACKAGES: dict[str, dict[str, str]] = {
-    "marin": {"path": "lib/marin", "version_file": "pyproject.toml", "kind": "pyproject"},
+    "marin-core": {"path": "lib/marin", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-iris": {"path": "lib/iris", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-fray": {"path": "lib/fray", "version_file": "pyproject.toml", "kind": "pyproject"},
     "marin-rigging": {"path": "lib/rigging", "version_file": "pyproject.toml", "kind": "pyproject"},
