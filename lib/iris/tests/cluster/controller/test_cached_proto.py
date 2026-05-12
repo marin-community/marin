@@ -13,7 +13,7 @@ so we exercise that explicitly.
 import threading
 
 import pytest
-from iris.cluster.controller.schema_v2 import CachedProto
+from iris.cluster.controller.schema import CachedProto
 from iris.rpc.job_pb2 import LoginRequest, WorkerTaskStatus
 
 

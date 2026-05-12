@@ -1,13 +1,40 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SQLite access layer and typed query models for controller state."""
+"""SQLAlchemy-backed controller database wrapper.
+
+Hosts the SA ``Engine`` factories, the ``Tx`` wrapper, and the two
+transaction context managers (``write_transaction`` / ``read_snapshot``)
+used by the v2 data layer.
+
+The engine is split into a **write engine** and a **read engine**,
+matching today's ``ControllerDB._init_read_pool`` design exactly:
+
+* The write engine uses a tiny pool (size 1) so writes are funneled
+  through a single connection. Serialization between writers is enforced
+  by an external ``threading.RLock`` passed into ``write_transaction``.
+* The read engine uses ``QueuePool(pool_size=32, max_overflow=4)`` with
+  ``PRAGMA query_only = ON`` **pinned at connect time**. Pinning avoids
+  toggling the pragma on every ``read_snapshot`` call — those pragma
+  round-trips dominate the per-call cost of the slim reservation read.
+
+Both engines use ``isolation_level="AUTOCOMMIT"`` so callers issue
+``BEGIN`` / ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK`` explicitly,
+mirroring today's ``ControllerDB`` discipline.
+
+Post-commit hooks registered via ``Tx.register`` fire *under the write
+lock*, after ``COMMIT``. That keeps the atomicity contract from today's
+``ControllerDB.transaction()`` byte-for-byte: a concurrent thread cannot
+observe the SQL-committed-but-cache-not-yet-updated window because the
+lock is held until every hook has run.
+"""
 
 from __future__ import annotations
 
 import importlib.util
 import logging
 import sqlite3
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -18,24 +45,12 @@ from typing import Any
 
 import fsspec.core
 from rigging.timing import Deadline, Duration, Timestamp
-from sqlalchemy import Engine, select, update
+from sqlalchemy import Engine, create_engine, event, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Connection
+from sqlalchemy.engine.cursor import CursorResult
 
-from iris.cluster.controller.db_v2 import (
-    Tx,
-    _make_read_engine,
-    _make_write_engine,
-    write_transaction,
-)
-from iris.cluster.controller.db_v2 import (
-    read_snapshot as _read_snapshot,
-)
 from iris.cluster.controller.schema import (
-    TASK_DETAIL_PROJECTION,
-    WORKER_ROW_PROJECTION,
-    decode_worker_id,
-)
-from iris.cluster.controller.schema_v2 import (
     meta_table,
     user_budgets_table,
     users_table,
@@ -44,6 +59,209 @@ from iris.cluster.types import TERMINAL_TASK_STATES, JobName
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
+
+
+def _install_pragmas(dbapi_conn, auth_path_str: str | None) -> None:
+    """Run the four startup PRAGMAs and ATTACH the auth DB if provided.
+
+    Mirrors ``ControllerDB._configure`` + the per-conn ATTACH at
+    ``db.py:313`` / ``db.py:399``.
+    """
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA journal_mode = WAL")
+        cur.execute("PRAGMA synchronous = NORMAL")
+        cur.execute("PRAGMA busy_timeout = 5000")
+        cur.execute("PRAGMA foreign_keys = ON")
+        cur.execute("PRAGMA cache_size = -65536")
+        if auth_path_str is not None:
+            cur.execute("ATTACH DATABASE ? AS auth", (auth_path_str,))
+    finally:
+        cur.close()
+
+
+def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
+    """Build the controller's SA **write** engine.
+
+    Pool size 1: writes are serialized by an external ``RLock`` so the
+    extra connections from the previous shared pool were unused.
+    ``isolation_level="AUTOCOMMIT"`` disables SA's autoBEGIN behaviour so
+    callers issue ``BEGIN IMMEDIATE`` explicitly. ``query_only`` is
+    **not** set — writes need to mutate the DB.
+    """
+    auth_path_str = str(auth_db_path) if auth_db_path is not None else None
+
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False, "timeout": 5.0},
+        pool_size=1,
+        max_overflow=0,
+        isolation_level="AUTOCOMMIT",
+        future=True,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _on_connect(dbapi_conn, _record):  # pyrefly: ignore  # event hook
+        _install_pragmas(dbapi_conn, auth_path_str)
+
+    return engine
+
+
+def _make_read_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
+    """Build the controller's SA **read** engine.
+
+    ``QueuePool(pool_size=32, max_overflow=4)`` matches today's
+    ``ControllerDB._READ_POOL_SIZE = 32`` plus a small overflow.
+    ``PRAGMA query_only = ON`` is pinned at **connect time** so that
+    accidental writes raise, but ``read_snapshot`` does not pay the
+    pragma round-trip cost on every call. ``isolation_level="AUTOCOMMIT"``
+    lets callers open / close transactions with explicit BEGIN/ROLLBACK.
+    """
+    auth_path_str = str(auth_db_path) if auth_db_path is not None else None
+
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False, "timeout": 5.0},
+        pool_size=32,
+        max_overflow=4,
+        isolation_level="AUTOCOMMIT",
+        future=True,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _on_connect(dbapi_conn, _record):  # pyrefly: ignore  # event hook
+        _install_pragmas(dbapi_conn, auth_path_str)
+        # Pin query_only at connect time so accidental writes raise
+        # without paying a pragma round-trip per snapshot.
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("PRAGMA query_only = ON")
+        finally:
+            cur.close()
+
+    return engine
+
+
+class Tx:
+    """Canonical write/read transaction context for the Iris controller.
+
+    Wraps a SQLAlchemy ``Connection``. Accepts only SA Core constructs
+    (``insert``/``update``/``delete``/``select``/``text``). Raw strings are
+    rejected — use ``sqlalchemy.text()`` if you need to pass literal SQL.
+
+    Post-commit hooks registered via :meth:`register` fire after ``COMMIT``,
+    while the write lock is still held (see ``write_transaction``). The
+    :attr:`on_commit` attribute is an alias for :meth:`register`; both names
+    are first-class and used at different call sites.
+    """
+
+    def __init__(self, conn: Connection):
+        self.conn = conn
+        self._hooks: list[Callable[[], None]] = []
+
+    def execute(self, stmt, params=None) -> CursorResult:
+        """Execute a SA Core construct. Returns a ``CursorResult``.
+
+        ``stmt`` must be a SQLAlchemy expression (``Select``, ``Insert``,
+        ``Update``, ``Delete``, ``TextClause``, CTE, etc.). Raw strings are
+        rejected — use ``sqlalchemy.text()`` if you really need a string.
+        """
+        if isinstance(stmt, str):
+            raise TypeError(
+                "Tx.execute does not accept raw SQL strings. "
+                "Pass a SQLAlchemy construct (select/insert/update/delete/text)."
+            )
+        return self.conn.execute(stmt, params or {})
+
+    def executemany(self, stmt, params_list) -> CursorResult:
+        """Execute ``stmt`` repeatedly against ``params_list``.
+
+        ``stmt`` must be a SA Core construct (see :meth:`execute`).
+        """
+        if isinstance(stmt, str):
+            raise TypeError(
+                "Tx.executemany does not accept raw SQL strings. "
+                "Pass a SQLAlchemy construct (insert/update/delete/text)."
+            )
+        return self.conn.execute(stmt, params_list)
+
+    def fetchone(self, stmt, params=None):
+        """Execute and return the first row, or ``None``."""
+        return self.execute(stmt, params).first()
+
+    def fetchall(self, stmt, params=None) -> list:
+        """Execute and return all rows as a list."""
+        return list(self.execute(stmt, params).all())
+
+    def scalar(self, stmt, params=None):
+        """Execute and return the first column of the first row, or ``None``."""
+        return self.execute(stmt, params).scalar()
+
+    def register(self, hook: Callable[[], None]) -> None:
+        """Register a post-commit hook.
+
+        Hook fires once after commit, under the write lock. Write-tx only;
+        ``read_snapshot`` never fires hooks.
+        """
+        self._hooks.append(hook)
+
+    # Both names are first-class; ``on_commit`` is used by projection write
+    # helpers, ``register`` by inline call sites in writes/*.py.
+    on_commit = register
+
+    def _fire_hooks(self) -> None:
+        for hook in self._hooks:
+            hook()
+
+
+@contextmanager
+def write_transaction(write_engine: Engine, write_lock: threading.RLock) -> Iterator[Tx]:
+    """Open a write transaction backed by ``write_engine``.
+
+    Acquires ``write_lock`` (matching today's ``ControllerDB._lock``),
+    checks out a connection, emits ``BEGIN IMMEDIATE``, yields a ``Tx``,
+    and commits on clean exit. Post-commit hooks registered via
+    ``Tx.register`` fire **while the lock is still held**, preserving the
+    atomicity contract from today's ``ControllerDB.transaction()`` at
+    ``db.py:476``.
+    """
+    write_lock.acquire()
+    conn: Connection | None = None
+    try:
+        conn = write_engine.connect()
+        conn.execute(text("BEGIN IMMEDIATE"))
+        tx = Tx(conn)
+        try:
+            yield tx
+        except Exception:
+            conn.execute(text("ROLLBACK"))
+            raise
+        conn.execute(text("COMMIT"))
+        tx._fire_hooks()
+    finally:
+        if conn is not None:
+            conn.close()
+        write_lock.release()
+
+
+@contextmanager
+def read_snapshot(read_engine: Engine) -> Iterator[Tx]:
+    """Open a read-only snapshot against ``read_engine``.
+
+    ``query_only`` is pinned at connect time on the read engine, so this
+    path only pays for the BEGIN/ROLLBACK round-trips per call. Yields a
+    ``Tx`` over a pooled connection and rolls back on exit so the
+    snapshot does not leak into the next checkout from the pool.
+    """
+    conn = read_engine.connect()
+    try:
+        conn.execute(text("BEGIN"))
+        try:
+            yield Tx(conn)
+        finally:
+            conn.execute(text("ROLLBACK"))
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +276,7 @@ def task_is_finished(
     """Whether a task has reached a terminal state with no remaining retries."""
     if state == job_pb2.TASK_STATE_SUCCEEDED:
         return True
-    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE, job_pb2.TASK_STATE_COSCHED_FAILED):
+    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE):
         return True
     if state == job_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure
@@ -304,147 +522,9 @@ class ControllerDB:
         concurrent use from dashboard/RPC threads while the scheduling
         loop holds the write lock.
         """
-        with _read_snapshot(self._sa_read_engine) as tx:
+        with read_snapshot(self._sa_read_engine) as tx:
             yield tx
 
-<<<<<<< HEAD
-    def snapshot(self) -> QuerySnapshot:
-        """Return a legacy ``QuerySnapshot`` over a raw read connection.
-
-        Preserved for import compatibility with ``auth.py`` and ``service.py``.
-        M5/M6 will migrate those call sites to ``read_snapshot()``; this method
-        will be removed in M12.
-
-        The returned snapshot uses a fresh raw sqlite3 connection checked out
-        of the write engine (no query_only pin). Callers must use it as a
-        context manager (``with db.snapshot() as q:``).
-        """
-        raw_fairy = self._sa_write_engine.raw_connection()
-        raw_conn = raw_fairy.driver_connection
-        raw_conn.row_factory = sqlite3.Row
-        # Wrap in a QuerySnapshot; we don't pass a lock so the snapshot does
-        # not block writers. The raw_fairy is closed in __exit__ below via
-        # a thin adapter.
-        snap = _LegacySnapshot(raw_fairy, raw_conn)
-        return snap
-
-    def fetchall(self, query: str, params: tuple | list = ()) -> list:
-        """Execute raw SQL and return all rows.
-
-        Accepts ``?``-placeholder SQL for call sites not yet migrated to SA
-        Core. The raw connection bypasses ``Tx`` intentionally — this method
-        is a compatibility escape hatch used by the legacy layer and some
-        tests. Prefer ``read_snapshot()`` + SA Core for new code.
-        """
-        raw_fairy = self._sa_write_engine.raw_connection()
-        try:
-            raw_fairy.driver_connection.row_factory = sqlite3.Row
-            return list(raw_fairy.execute(query, params).fetchall())
-        finally:
-            raw_fairy.close()
-
-    def fetchone(self, query: str, params: tuple | list = ()):
-        """Execute raw SQL and return the first row, or ``None``."""
-        raw_fairy = self._sa_write_engine.raw_connection()
-        try:
-            raw_fairy.driver_connection.row_factory = sqlite3.Row
-            return raw_fairy.execute(query, params).fetchone()
-        finally:
-            raw_fairy.close()
-
-    def execute(self, query: str, params: tuple | list = ()) -> None:
-        """Execute raw SQL in a transaction.
-
-        Accepts ``?``-placeholder SQL for call sites not yet migrated to SA
-        Core. Prefer ``transaction()`` + SA Core for new code.
-        """
-        raw_fairy = self._sa_write_engine.raw_connection()
-        try:
-            raw_fairy.execute("BEGIN IMMEDIATE")
-            try:
-                raw_fairy.execute(query, params)
-                raw_fairy.execute("COMMIT")
-            except Exception:
-                raw_fairy.execute("ROLLBACK")
-                raise
-        finally:
-            raw_fairy.close()
-
-    @staticmethod
-    def decode_task(row: sqlite3.Row):
-        return TASK_DETAIL_PROJECTION.decode_one([row])
-
-||||||| parent of 3b0a47365 ([iris] M8: delete legacy Projection/Table/decoder machinery)
-    def snapshot(self) -> QuerySnapshot:
-        """Return a legacy ``QuerySnapshot`` over a raw read connection.
-
-        Preserved for import compatibility with ``auth.py`` and ``service.py``.
-        M5/M6 will migrate those call sites to ``read_snapshot()``; this method
-        will be removed in M12.
-
-        The returned snapshot uses a fresh raw sqlite3 connection checked out
-        of the write engine (no query_only pin). Callers must use it as a
-        context manager (``with db.snapshot() as q:``).
-        """
-        raw_fairy = self._sa_write_engine.raw_connection()
-        raw_conn = raw_fairy.driver_connection
-        raw_conn.row_factory = sqlite3.Row
-        # Wrap in a QuerySnapshot; we don't pass a lock so the snapshot does
-        # not block writers. The raw_fairy is closed in __exit__ below via
-        # a thin adapter.
-        snap = _LegacySnapshot(raw_fairy, raw_conn)
-        return snap
-
-    def fetchall(self, query: str, params: tuple | list = ()) -> list:
-        """Execute raw SQL and return all rows.
-
-        Accepts ``?``-placeholder SQL for call sites not yet migrated to SA
-        Core. The raw connection bypasses ``Tx`` intentionally — this method
-        is a compatibility escape hatch used by the legacy layer and some
-        tests. Prefer ``read_snapshot()`` + SA Core for new code.
-        """
-        raw_fairy = self._sa_write_engine.raw_connection()
-        try:
-            raw_fairy.driver_connection.row_factory = sqlite3.Row
-            return list(raw_fairy.execute(query, params).fetchall())
-        finally:
-            raw_fairy.close()
-
-    def fetchone(self, query: str, params: tuple | list = ()):
-        """Execute raw SQL and return the first row, or ``None``."""
-        raw_fairy = self._sa_write_engine.raw_connection()
-        try:
-            raw_fairy.driver_connection.row_factory = sqlite3.Row
-            return raw_fairy.execute(query, params).fetchone()
-        finally:
-            raw_fairy.close()
-
-    def execute(self, query: str, params: tuple | list = ()) -> None:
-        """Execute raw SQL in a transaction.
-
-        Accepts ``?``-placeholder SQL for call sites not yet migrated to SA
-        Core. Prefer ``transaction()`` + SA Core for new code.
-        """
-        raw_fairy = self._sa_write_engine.raw_connection()
-        try:
-            raw_fairy.execute("BEGIN IMMEDIATE")
-            try:
-                raw_fairy.execute(query, params)
-                raw_fairy.execute("COMMIT")
-            except Exception:
-                raw_fairy.execute("ROLLBACK")
-                raise
-        finally:
-            raw_fairy.close()
-
-    @staticmethod
-    def decode_task(row: sqlite3.Row):
-        from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
-
-        return TASK_DETAIL_PROJECTION.decode_one([row])
-
-=======
->>>>>>> 3b0a47365 ([iris] M8: delete legacy Projection/Table/decoder machinery)
     def apply_migrations(self) -> None:
         """Apply pending migrations from the migrations/ directory.
 
@@ -483,25 +563,6 @@ class ControllerDB:
             # re-run after conversion to .py.
             applied_stems = {Path(name).stem for name in applied}
 
-<<<<<<< HEAD
-        pending = []
-        for path in sorted(migrations_dir.glob("*.py")):
-            if path.name.startswith("__"):
-                continue
-            if path.stem in applied_stems:
-                continue
-            pending.append(path)
-||||||| parent of 2d270e409 ([iris] M1-M4: rewrite reads/writes/projections to pure SA Core; tighten Tx)
-        import time
-
-        pending = []
-        for path in sorted(migrations_dir.glob("*.py")):
-            if path.name.startswith("__"):
-                continue
-            if path.stem in applied_stems:
-                continue
-            pending.append(path)
-=======
             pending = []
             for path in sorted(migrations_dir.glob("*.py")):
                 if path.name.startswith("__"):
@@ -512,7 +573,6 @@ class ControllerDB:
 
             if not pending:
                 return
->>>>>>> 2d270e409 ([iris] M1-M4: rewrite reads/writes/projections to pure SA Core; tighten Tx)
 
             logger.info("Applying %d pending migration(s): %s", len(pending), [p.name for p in pending])
 
@@ -784,319 +844,3 @@ class ControllerDB:
         """Return ``{user_id: budget_limit}`` for every user with a budget row."""
         rows = self.list_user_budgets()
         return {row.user_id: row.budget_limit for row in rows}
-<<<<<<< HEAD
-
-
-# ---------------------------------------------------------------------------
-# Shared read-only query helpers
-#
-# Pure DB reads that are used by both controller.py and service.py.
-# Each takes a ControllerDB and returns domain objects.
-# ---------------------------------------------------------------------------
-
-
-def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-    """Return the set of currently-running task IDs for each worker."""
-    if not worker_ids:
-        return {}
-    worker_id_strs = [str(wid) for wid in worker_ids]
-    active_states = sorted(ACTIVE_TASK_STATES)
-    placeholders_w = ",".join(f":w{i}" for i in range(len(worker_id_strs)))
-    placeholders_s = ",".join(f":s{i}" for i in range(len(active_states)))
-    params: dict[str, Any] = {}
-    for i, wid in enumerate(worker_id_strs):
-        params[f"w{i}"] = wid
-    for i, s in enumerate(active_states):
-        params[f"s{i}"] = s
-    sql = text(
-        f"SELECT t.current_worker_id AS worker_id, t.task_id FROM tasks t "
-        f"WHERE t.current_worker_id IN ({placeholders_w}) AND t.state IN ({placeholders_s})"
-    )
-    with db.read_snapshot() as tx:
-        rows = tx.fetchall(sql, params)
-    running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
-    for row in rows:
-        wid = decode_worker_id(row[0])
-        task_id = JobName.from_wire(row[1])
-        running[wid].add(task_id)
-    return running
-
-
-@dataclass(frozen=True, slots=True)
-class TimedOutTask:
-    """A running task that has exceeded its execution timeout."""
-
-    task_id: JobName
-    worker_id: WorkerId | None
-
-
-def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
-    """Find executing tasks whose current attempt has exceeded the job's execution timeout.
-
-    Reads the timeout from job_config.timeout_ms. Uses the current attempt's
-    started_at_ms so that retried tasks get a fresh timeout budget per attempt.
-    """
-    now_ms = now.epoch_ms()
-    executing_states = sorted(EXECUTING_TASK_STATES)
-    placeholders = ",".join(f":s{i}" for i in range(len(executing_states)))
-    params: dict[str, Any] = {f"s{i}": s for i, s in enumerate(executing_states)}
-    params["now_ms"] = now_ms
-    sql = text(
-        f"SELECT t.task_id, t.current_worker_id AS worker_id, "
-        f"ta.started_at_ms AS attempt_started_at_ms, jc.timeout_ms "
-        f"FROM tasks t "
-        f"JOIN job_config jc ON jc.job_id = t.job_id "
-        f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
-        f"WHERE t.state IN ({placeholders}) "
-        f"AND jc.timeout_ms IS NOT NULL AND jc.timeout_ms > 0 "
-        f"AND ta.started_at_ms IS NOT NULL"
-    )
-    with db.read_snapshot() as tx:
-        rows = tx.fetchall(sql, params)
-    result: list[TimedOutTask] = []
-    for row in rows:
-        attempt_started_at_ms = int(row[2])
-        timeout_ms = int(row[3])
-        if attempt_started_at_ms + timeout_ms <= now_ms:
-            task_id = JobName.from_wire(row[0])
-            worker_id = WorkerId(row[1]) if row[1] is not None else None
-            result.append(TimedOutTask(task_id=task_id, worker_id=worker_id))
-    return result
-
-
-def _worker_row_select() -> str:
-    """Return WORKER_ROW_PROJECTION.select_clause()."""
-    return WORKER_ROW_PROJECTION.select_clause()
-
-
-class WorkerAttrsSource(Protocol):
-    """Read-only view over the worker_attributes cache.
-
-    Declared as a ``Protocol`` so :func:`healthy_active_workers_with_attributes`
-    can stay in ``db.py`` without importing the concrete
-    :class:`WorkerAttrsProjection` (which itself imports from ``db.py``).
-    """
-
-    def all(self) -> dict[WorkerId, dict[str, AttributeValue]]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulableWorker:
-    """Worker shape consumed by the scheduler.
-
-    Field names mirror the :class:`scheduler.WorkerSnapshot` protocol so
-    instances flow into ``Scheduler.create_scheduling_context`` without
-    an adapter.
-    """
-
-    worker_id: WorkerId
-    address: str
-    total_cpu_millicores: int
-    total_memory_bytes: int
-    total_gpu_count: int
-    total_tpu_count: int
-    device_type: str
-    device_variant: str
-    attributes: dict[str, AttributeValue]
-
-
-def healthy_active_workers_with_attributes(
-    db: ControllerDB,
-    health: WorkerHealthTracker,
-    attrs: WorkerAttrsSource,
-) -> list[SchedulableWorker]:
-    """Return healthy + active workers with attributes.
-
-    ``attrs`` is the live :class:`WorkerAttrsProjection` (declared as a
-    ``Protocol`` to break the db → projection import cycle).
-    """
-    liveness = health.all()
-    healthy_active = {wid for wid, l in liveness.items() if l.healthy and l.active}
-    if not healthy_active:
-        return []
-    worker_id_strs = [str(wid) for wid in healthy_active]
-    placeholders = ",".join(f":w{i}" for i in range(len(worker_id_strs)))
-    params = {f"w{i}": wid for i, wid in enumerate(worker_id_strs)}
-    sql = text(f"SELECT {_worker_row_select()} FROM workers w WHERE w.worker_id IN ({placeholders})")
-    with db.read_snapshot() as tx:
-        rows = WORKER_ROW_PROJECTION.decode(tx.fetchall(sql, params))
-    if not rows:
-        return []
-    attrs_by_worker = attrs.all()
-    out: list[SchedulableWorker] = []
-    for w in rows:
-        out.append(
-            SchedulableWorker(
-                worker_id=w.worker_id,
-                address=w.address,
-                total_cpu_millicores=w.total_cpu_millicores,
-                total_memory_bytes=w.total_memory_bytes,
-                total_gpu_count=w.total_gpu_count,
-                total_tpu_count=w.total_tpu_count,
-                device_type=w.device_type,
-                device_variant=w.device_variant,
-                attributes=attrs_by_worker.get(w.worker_id, {}),
-            )
-        )
-    return out
-||||||| parent of 3b0a47365 ([iris] M8: delete legacy Projection/Table/decoder machinery)
-
-
-# ---------------------------------------------------------------------------
-# Shared read-only query helpers
-#
-# Pure DB reads that are used by both controller.py and service.py.
-# Each takes a ControllerDB and returns domain objects.
-# ---------------------------------------------------------------------------
-
-
-def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
-    """Return the set of currently-running task IDs for each worker."""
-    if not worker_ids:
-        return {}
-    worker_id_strs = [str(wid) for wid in worker_ids]
-    active_states = sorted(ACTIVE_TASK_STATES)
-    placeholders_w = ",".join(f":w{i}" for i in range(len(worker_id_strs)))
-    placeholders_s = ",".join(f":s{i}" for i in range(len(active_states)))
-    params: dict[str, Any] = {}
-    for i, wid in enumerate(worker_id_strs):
-        params[f"w{i}"] = wid
-    for i, s in enumerate(active_states):
-        params[f"s{i}"] = s
-    sql = text(
-        f"SELECT t.current_worker_id AS worker_id, t.task_id FROM tasks t "
-        f"WHERE t.current_worker_id IN ({placeholders_w}) AND t.state IN ({placeholders_s})"
-    )
-    with db.read_snapshot() as tx:
-        rows = tx.fetchall(sql, params)
-    running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
-    for row in rows:
-        wid = decode_worker_id(row[0])
-        task_id = JobName.from_wire(row[1])
-        running[wid].add(task_id)
-    return running
-
-
-@dataclass(frozen=True, slots=True)
-class TimedOutTask:
-    """A running task that has exceeded its execution timeout."""
-
-    task_id: JobName
-    worker_id: WorkerId | None
-
-
-def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
-    """Find executing tasks whose current attempt has exceeded the job's execution timeout.
-
-    Reads the timeout from job_config.timeout_ms. Uses the current attempt's
-    started_at_ms so that retried tasks get a fresh timeout budget per attempt.
-    """
-    now_ms = now.epoch_ms()
-    executing_states = sorted(EXECUTING_TASK_STATES)
-    placeholders = ",".join(f":s{i}" for i in range(len(executing_states)))
-    params: dict[str, Any] = {f"s{i}": s for i, s in enumerate(executing_states)}
-    params["now_ms"] = now_ms
-    sql = text(
-        f"SELECT t.task_id, t.current_worker_id AS worker_id, "
-        f"ta.started_at_ms AS attempt_started_at_ms, jc.timeout_ms "
-        f"FROM tasks t "
-        f"JOIN job_config jc ON jc.job_id = t.job_id "
-        f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
-        f"WHERE t.state IN ({placeholders}) "
-        f"AND jc.timeout_ms IS NOT NULL AND jc.timeout_ms > 0 "
-        f"AND ta.started_at_ms IS NOT NULL"
-    )
-    with db.read_snapshot() as tx:
-        rows = tx.fetchall(sql, params)
-    result: list[TimedOutTask] = []
-    for row in rows:
-        attempt_started_at_ms = int(row[2])
-        timeout_ms = int(row[3])
-        if attempt_started_at_ms + timeout_ms <= now_ms:
-            task_id = JobName.from_wire(row[0])
-            worker_id = WorkerId(row[1]) if row[1] is not None else None
-            result.append(TimedOutTask(task_id=task_id, worker_id=worker_id))
-    return result
-
-
-def _worker_row_select() -> str:
-    """Lazily resolve WORKER_ROW_PROJECTION.select_clause() to break the db -> schema cycle."""
-    from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
-
-    return WORKER_ROW_PROJECTION.select_clause()
-
-
-class WorkerAttrsSource(Protocol):
-    """Read-only view over the worker_attributes cache.
-
-    Declared as a ``Protocol`` so :func:`healthy_active_workers_with_attributes`
-    can stay in ``db.py`` without importing the concrete
-    :class:`WorkerAttrsProjection` (which itself imports from ``db.py``).
-    """
-
-    def all(self) -> dict[WorkerId, dict[str, AttributeValue]]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulableWorker:
-    """Worker shape consumed by the scheduler.
-
-    Field names mirror the :class:`scheduler.WorkerSnapshot` protocol so
-    instances flow into ``Scheduler.create_scheduling_context`` without
-    an adapter.
-    """
-
-    worker_id: WorkerId
-    address: str
-    total_cpu_millicores: int
-    total_memory_bytes: int
-    total_gpu_count: int
-    total_tpu_count: int
-    device_type: str
-    device_variant: str
-    attributes: dict[str, AttributeValue]
-
-
-def healthy_active_workers_with_attributes(
-    db: ControllerDB,
-    health: WorkerHealthTracker,
-    attrs: WorkerAttrsSource,
-) -> list[SchedulableWorker]:
-    """Return healthy + active workers with attributes.
-
-    ``attrs`` is the live :class:`WorkerAttrsProjection` (declared as a
-    ``Protocol`` to break the db → projection import cycle).
-    """
-    from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
-
-    liveness = health.all()
-    healthy_active = {wid for wid, l in liveness.items() if l.healthy and l.active}
-    if not healthy_active:
-        return []
-    worker_id_strs = [str(wid) for wid in healthy_active]
-    placeholders = ",".join(f":w{i}" for i in range(len(worker_id_strs)))
-    params = {f"w{i}": wid for i, wid in enumerate(worker_id_strs)}
-    sql = text(f"SELECT {_worker_row_select()} FROM workers w WHERE w.worker_id IN ({placeholders})")
-    with db.read_snapshot() as tx:
-        rows = WORKER_ROW_PROJECTION.decode(tx.fetchall(sql, params))
-    if not rows:
-        return []
-    attrs_by_worker = attrs.all()
-    out: list[SchedulableWorker] = []
-    for w in rows:
-        out.append(
-            SchedulableWorker(
-                worker_id=w.worker_id,
-                address=w.address,
-                total_cpu_millicores=w.total_cpu_millicores,
-                total_memory_bytes=w.total_memory_bytes,
-                total_gpu_count=w.total_gpu_count,
-                total_tpu_count=w.total_tpu_count,
-                device_type=w.device_type,
-                device_variant=w.device_variant,
-                attributes=attrs_by_worker.get(w.worker_id, {}),
-            )
-        )
-    return out
-=======
->>>>>>> 3b0a47365 ([iris] M8: delete legacy Projection/Table/decoder machinery)

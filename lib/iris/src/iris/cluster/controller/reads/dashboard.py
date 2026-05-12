@@ -29,9 +29,8 @@ from collections.abc import Iterable
 
 from sqlalchemy import Integer, bindparam, case, cast, func, select
 
-from iris.cluster.controller.db import TaskJobSummary
-from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import (
+from iris.cluster.controller.db import TaskJobSummary, Tx
+from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
     tasks_table,

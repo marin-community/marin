@@ -19,7 +19,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 )
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, TrackedWorkerRow, restore_tracked_workers
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema_v2 import scaling_groups_table, slices_table, workers_table
+from iris.cluster.controller.schema import scaling_groups_table, slices_table, workers_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import SliceHandle
 

@@ -21,7 +21,7 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema_v2 import auth_api_keys_table, auth_controller_secrets_table
+from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_secrets_table
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
     GcpAccessTokenVerifier,

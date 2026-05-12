@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller.db import (
     ControllerDB,
+    Tx,
 )
-from iris.cluster.controller.db_v2 import Tx
 from sqlalchemy import text
 
 

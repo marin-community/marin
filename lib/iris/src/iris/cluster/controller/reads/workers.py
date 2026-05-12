@@ -34,8 +34,8 @@ from typing import Protocol
 from sqlalchemy import bindparam, select
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import workers_table
+from iris.cluster.controller.db import Tx
+from iris.cluster.controller.schema import workers_table
 from iris.cluster.types import WorkerId
 
 # ---------------------------------------------------------------------------

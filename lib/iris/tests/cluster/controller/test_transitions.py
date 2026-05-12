@@ -31,8 +31,7 @@ from iris.cluster.controller.reads import task_attempts as reads_task_attempts
 from iris.cluster.controller.reads import tasks as reads_tasks
 from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
-from iris.cluster.controller.schema import EndpointRow
-from iris.cluster.controller.schema_v2 import jobs_table, workers_table
+from iris.cluster.controller.schema import EndpointRow, jobs_table, workers_table
 from iris.cluster.controller.transitions import (
     MAX_REPLICAS_PER_JOB,
     Assignment,

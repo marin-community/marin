@@ -12,8 +12,8 @@ from collections.abc import Sequence
 
 from sqlalchemy import and_, func, insert, update
 
-from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import task_attempts_table, tasks_table
+from iris.cluster.controller.db import Tx
+from iris.cluster.controller.schema import task_attempts_table, tasks_table
 from iris.cluster.controller.writes import writes_to
 from iris.cluster.controller.writes.task_attempts import insert_attempt
 from iris.cluster.types import JobName, WorkerId

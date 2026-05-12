@@ -29,10 +29,10 @@ from rigging.timing import Timestamp
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.controller import db_v2
+from iris.cluster.controller import db
 from iris.cluster.controller.db import ControllerDB, EndpointQuery
 from iris.cluster.controller.projections import PROJECTIONS
-from iris.cluster.controller.schema_v2 import endpoints_table, tasks_table
+from iris.cluster.controller.schema import endpoints_table, tasks_table
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName
 
 
@@ -68,7 +68,7 @@ class EndpointsProjection:
     """Process-local write-through cache over the ``endpoints`` table.
 
     Reads serve the latest committed state from in-memory dicts guarded
-    by an ``RLock``. Mutating methods accept a :class:`db_v2.Tx` and
+    by an ``RLock``. Mutating methods accept a :class:`db.Tx` and
     execute SA Core constructs; the TypeDecorators on ``endpoints_table``
     handle all encode/decode so no manual wire-format conversion appears
     here.
@@ -103,7 +103,7 @@ class EndpointsProjection:
             self._by_id.clear()
             self._by_name.clear()
             self._by_task.clear()
-            with db_v2.read_snapshot(self._db.sa_read_engine) as tx:
+            with db.read_snapshot(self._db.sa_read_engine) as tx:
                 for row in tx.execute(select(endpoints_table)).all():
                     endpoint = EndpointRow(
                         endpoint_id=row.endpoint_id,
@@ -191,7 +191,7 @@ class EndpointsProjection:
 
     def add(
         self,
-        cur: db_v2.Tx,
+        cur: db.Tx,
         endpoint: EndpointRow,
         *,
         expected_attempt_id: int | None = None,
@@ -254,7 +254,7 @@ class EndpointsProjection:
         cur.register(apply)
         return AddEndpointOutcome.OK
 
-    def remove(self, cur: db_v2.Tx, endpoint_id: str) -> EndpointRow | None:
+    def remove(self, cur: db.Tx, endpoint_id: str) -> EndpointRow | None:
         """Remove a single endpoint by id. Returns the removed row snapshot, if any."""
         existing = self.get(endpoint_id)
         if existing is None:
@@ -268,7 +268,7 @@ class EndpointsProjection:
         cur.register(apply)
         return existing
 
-    def remove_by_task(self, cur: db_v2.Tx, task_id: JobName) -> list[str]:
+    def remove_by_task(self, cur: db.Tx, task_id: JobName) -> list[str]:
         """Remove all endpoints owned by a task. Returns the removed endpoint_ids."""
         with self._lock:
             ids = list(self._by_task.get(task_id, ()))
@@ -287,7 +287,7 @@ class EndpointsProjection:
         cur.register(apply)
         return ids
 
-    def remove_by_job_ids(self, cur: db_v2.Tx, job_ids: Sequence[JobName]) -> list[str]:
+    def remove_by_job_ids(self, cur: db.Tx, job_ids: Sequence[JobName]) -> list[str]:
         """Remove all endpoints owned by any of ``job_ids``. Used by cancel_job and prune."""
         if not job_ids:
             return []

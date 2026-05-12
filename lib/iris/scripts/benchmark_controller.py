@@ -50,7 +50,7 @@ from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.reads import workers as reads_workers
 from iris.cluster.controller.reads.workers import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.schema_v2 import (
+from iris.cluster.controller.schema import (
     endpoints_table,
     job_config_table,
     jobs_table,
@@ -585,9 +585,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        from iris.cluster.controller import db_v2
+        from iris.cluster.controller import db
 
-        with db_v2.read_snapshot(db.sa_read_engine) as snap:
+        with db.read_snapshot(db.sa_read_engine) as snap:
             reads_scheduler.resource_usage_by_worker(snap)
 
     bench("Scheduling: resource_usage_by_worker (NEW derived query)", _usage_new)
@@ -611,12 +611,12 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-        from iris.cluster.controller import db_v2
+        from iris.cluster.controller import db
 
         _schedulable_tasks(db)
         with db.read_snapshot() as _rtx:
             ws = reads_workers.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
-        with db_v2.read_snapshot(db.sa_read_engine) as snap:
+        with db.read_snapshot(db.sa_read_engine) as snap:
             usage = reads_scheduler.resource_usage_by_worker(snap)
         return ws, usage
 
@@ -742,9 +742,9 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-            from iris.cluster.controller import db_v2
+            from iris.cluster.controller import db
 
-            with db_v2.read_snapshot(db.sa_read_engine) as snap:
+            with db.read_snapshot(db.sa_read_engine) as snap:
                 reads_scheduler.reconcile_rows_for_workers(snap, _ids)
 
         bench(f"Polling: reconcile_rows_for_workers (batch={batch_size})", _reconcile)
@@ -823,9 +823,9 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            from iris.cluster.controller import db_v2
+            from iris.cluster.controller import db
 
-            with db_v2.read_snapshot(db.sa_read_engine) as snap:
+            with db.read_snapshot(db.sa_read_engine) as snap:
                 reads_jobs.has_unfinished_worker_attempts(snap, drain_jid)
 
         bench("Polling: has_unfinished_worker_attempts (drain gate)", _has_unfinished)

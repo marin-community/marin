@@ -30,9 +30,9 @@ from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select
 
 from iris.cluster.controller.codec import device_counts_from_json
-from iris.cluster.controller.db_v2 import Tx
+from iris.cluster.controller.db import Tx
 from iris.cluster.controller.rows import ReconcileRow, WorkerResourceUsage
-from iris.cluster.controller.schema_v2 import (
+from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
     task_attempts_table,

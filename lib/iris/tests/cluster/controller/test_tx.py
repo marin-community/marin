@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db_v2 import (
+from iris.cluster.controller.db import (
     _make_read_engine,
     _make_write_engine,
     read_snapshot,

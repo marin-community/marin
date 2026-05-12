@@ -20,8 +20,7 @@ from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.reads.workers import healthy_active_workers_with_attributes
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
-from iris.cluster.controller.schema import EndpointRow
-from iris.cluster.controller.schema_v2 import jobs_table, task_attempts_table, tasks_table
+from iris.cluster.controller.schema import EndpointRow, jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.providers.k8s.types import K8sResource

@@ -19,7 +19,7 @@ from iris.cluster.controller.scheduler import (
     SchedulingResult,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema_v2 import worker_attributes_table
+from iris.cluster.controller.schema import worker_attributes_table
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2

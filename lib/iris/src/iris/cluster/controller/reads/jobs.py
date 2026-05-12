@@ -33,9 +33,9 @@ from collections.abc import Iterable
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select, text
 
-from iris.cluster.controller.db_v2 import Tx
+from iris.cluster.controller.db import Tx
 from iris.cluster.controller.rows import JobRecomputeBasis
-from iris.cluster.controller.schema_v2 import (
+from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
     jobs_table,

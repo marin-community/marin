@@ -35,10 +35,10 @@ from iris.cluster.controller.db import (
     FAILURE_TASK_STATES,
     NON_TERMINAL_TASK_STATES,
     ControllerDB,
+    Tx,
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
-from iris.cluster.controller.db_v2 import Tx
 from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import jobs as read_jobs
@@ -50,7 +50,7 @@ from iris.cluster.controller.rows import (
     TaskScope,
     WorkerAttributeParams,
 )
-from iris.cluster.controller.schema_v2 import worker_attributes_table
+from iris.cluster.controller.schema import worker_attributes_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.writes import jobs as write_jobs
 from iris.cluster.controller.writes import reservations as write_reservations
@@ -2693,7 +2693,7 @@ class ControllerTransitions:
         """Test helper: set task state directly in DB."""
         from sqlalchemy import update as _sa_update
 
-        from iris.cluster.controller.schema_v2 import tasks_table as _tasks_table
+        from iris.cluster.controller.schema import tasks_table as _tasks_table
 
         with self._db.transaction() as cur:
             values: dict = {"state": state, "error": error, "exit_code": exit_code}

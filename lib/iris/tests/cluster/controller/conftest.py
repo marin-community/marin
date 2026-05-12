@@ -49,12 +49,10 @@ from iris.cluster.controller.schema import (
     JobDetailRow,
     TaskDetailRow,
     WorkerRow,
-    tasks_with_attempts,
-)
-from iris.cluster.controller.schema_v2 import (
     jobs_table,
     task_attempts_table,
     tasks_table,
+    tasks_with_attempts,
     worker_attributes_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl

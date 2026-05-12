@@ -19,9 +19,9 @@ inline so the cascade and the dict update commit atomically.
 from sqlalchemy import delete, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.controller.db_v2 import Tx
+from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema_v2 import task_attempts_table, tasks_table, workers_table
+from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.writes import writes_to
 from iris.cluster.types import WorkerId

@@ -6,7 +6,7 @@
 Stage 11 of the SA Core migration moves every write that today lives on
 the per-entity ``*Store`` classes into module-level functions under
 ``writes/<entity>.py``. Each function takes a :class:`iris.cluster.
-controller.db_v2.Tx` and uses SA Core ``text(...)`` with named binds.
+controller.db.Tx` and uses SA Core ``text(...)`` with named binds.
 
 The :func:`writes_to` decorator is pure metadata: it records the table
 set on the function as ``fn.writes_to`` / ``fn.cascades_into`` and

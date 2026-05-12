@@ -25,8 +25,8 @@ from collections.abc import Sequence
 
 from sqlalchemy import bindparam, select, tuple_
 
-from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import task_attempts_table
+from iris.cluster.controller.db import Tx
+from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.types import JobName, WorkerId
 
 # ---------------------------------------------------------------------------

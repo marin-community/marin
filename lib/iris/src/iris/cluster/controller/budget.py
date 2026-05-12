@@ -15,9 +15,8 @@ from typing import Generic, TypeVar
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, func, select
 
-from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB
-from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import job_config_table, tasks_table
+from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB, Tx
+from iris.cluster.controller.schema import job_config_table, tasks_table
 from iris.rpc import config_pb2, job_pb2
 
 logger = logging.getLogger(__name__)

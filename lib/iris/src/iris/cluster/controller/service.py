@@ -64,7 +64,7 @@ from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.reads import workers as reads_workers
 from iris.cluster.controller.reads.workers import SchedulableWorker
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.schema_v2 import (
+from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
     task_attempts_table,

@@ -15,8 +15,7 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import TaskDetailRow
-from iris.cluster.controller.schema_v2 import task_attempts_table, tasks_table, workers_table
+from iris.cluster.controller.schema import TaskDetailRow, task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,

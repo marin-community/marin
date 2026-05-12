@@ -11,8 +11,7 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller.db import EndpointQuery
 from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointsProjection
-from iris.cluster.controller.schema import EndpointRow
-from iris.cluster.controller.schema_v2 import tasks_table
+from iris.cluster.controller.schema import EndpointRow, tasks_table
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
@@ -79,7 +78,7 @@ def test_rollback_leaves_memory_untouched(state):
 
 def test_rollback_safety_dict_and_sql_consistent(state):
     """Raise mid-tx: assert dict has no entry AND SQL has no row."""
-    from iris.cluster.controller.schema_v2 import endpoints_table
+    from iris.cluster.controller.schema import endpoints_table
 
     tasks = submit_job(state, "j", make_job_request("j"))
     t = tasks[0].task_id

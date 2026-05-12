@@ -26,17 +26,17 @@ from typing import ClassVar, Protocol
 from sqlalchemy import select
 
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import db_v2
+from iris.cluster.controller import db
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
-from iris.cluster.controller.schema_v2 import worker_attributes_table
+from iris.cluster.controller.schema import worker_attributes_table
 from iris.cluster.types import WorkerId
 
 
 class PostCommitRegistrar(Protocol):
     """Structural type for any transaction wrapper that schedules post-commit hooks.
 
-    Both :class:`db_v2.Tx` and legacy :class:`TransactionCursor` expose a
+    Both :class:`db.Tx` and legacy :class:`TransactionCursor` expose a
     ``register(callable)`` method that fires after the surrounding write
     transaction commits, under the write lock. Projection invalidation methods
     accept this Protocol so the same hook works for both transaction types.
@@ -93,7 +93,7 @@ class WorkerAttrsProjection:
         is handled by :func:`_decode_value`.
         """
         decoded: dict[WorkerId, dict[str, AttributeValue]] = {}
-        with db_v2.read_snapshot(self._db.sa_read_engine) as tx:
+        with db.read_snapshot(self._db.sa_read_engine) as tx:
             for row in tx.execute(select(worker_attributes_table)).all():
                 decoded.setdefault(row.worker_id, {})[row.key] = _decode_value(row)
         with self._lock:

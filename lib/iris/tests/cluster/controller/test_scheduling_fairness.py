@@ -12,7 +12,7 @@ from iris.cluster.controller.controller import (
     _sort_pending_tasks_by_resolved_band,
 )
 from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.schema_v2 import user_budgets_table
+from iris.cluster.controller.schema import user_budgets_table
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp

@@ -16,7 +16,7 @@ from pathlib import Path
 from time import perf_counter
 
 import pytest
-from iris.cluster.controller import db_v2
+from iris.cluster.controller import db
 from iris.cluster.controller.controller import _jobs_with_reservations
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.reads import scheduler as reads_scheduler
@@ -227,7 +227,7 @@ def test_resource_usage_by_worker_perf(perf_db: ControllerDB) -> None:
     worker_count = _RESOURCE_WORKER_COUNT
 
     def _sa_call() -> int:
-        with db_v2.read_snapshot(perf_db.sa_read_engine) as tx:
+        with db.read_snapshot(perf_db.sa_read_engine) as tx:
             return len(reads_scheduler.resource_usage_by_worker(tx))
 
     assert _sa_call() == worker_count
@@ -239,7 +239,7 @@ def test_reconcile_rows_for_workers_perf(perf_db: ControllerDB) -> None:
     expected_rows = _RESOURCE_WORKER_COUNT * _TASKS_PER_WORKER
 
     def _sa_call() -> int:
-        with db_v2.read_snapshot(perf_db.sa_read_engine) as tx:
+        with db.read_snapshot(perf_db.sa_read_engine) as tx:
             return len(reads_scheduler.reconcile_rows_for_workers(tx, worker_ids))
 
     assert _sa_call() == expected_rows

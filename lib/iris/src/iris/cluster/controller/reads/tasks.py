@@ -27,13 +27,13 @@ from collections.abc import Iterable
 from sqlalchemy import bindparam, func, select, tuple_
 
 from iris.cluster.controller.codec import resource_spec_from_scalars
-from iris.cluster.controller.db_v2 import Tx
+from iris.cluster.controller.db import Tx
 from iris.cluster.controller.rows import (
     ActiveTaskRow,
     PendingDispatchRow,
     TaskScope,
 )
-from iris.cluster.controller.schema_v2 import job_config_table, jobs_table, tasks_table
+from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_table
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 

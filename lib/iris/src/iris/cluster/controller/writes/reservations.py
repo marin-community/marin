@@ -10,8 +10,8 @@ all bind-side conversions automatically.
 
 from sqlalchemy import delete, insert, select, update
 
-from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import meta_table, reservation_claims_table
+from iris.cluster.controller.db import Tx
+from iris.cluster.controller.schema import meta_table, reservation_claims_table
 from iris.cluster.controller.writes import writes_to
 from iris.cluster.types import WorkerId
 

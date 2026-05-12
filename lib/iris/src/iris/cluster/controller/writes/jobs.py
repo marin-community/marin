@@ -15,8 +15,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from sqlalchemy import case, delete, func, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import (
+from iris.cluster.controller.db import Tx
+from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
     jobs_table,

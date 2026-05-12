@@ -43,7 +43,7 @@ from iris.cluster.constraints import (
 from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
-from iris.cluster.controller import db_v2
+from iris.cluster.controller import db
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -88,7 +88,7 @@ from iris.cluster.controller.scheduler import (
     WorkerSnapshot,
     worker_snapshot_from_row,
 )
-from iris.cluster.controller.schema_v2 import (
+from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
     reservation_claims_table,
@@ -544,7 +544,7 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
     reads. Filters via ``jobs.has_reservation`` (no scan of ``job_config``)
     and joins ``job_config`` solely to pull ``reservation_json``.
     """
-    with db_v2.read_snapshot(queries.sa_read_engine) as tx:
+    with db.read_snapshot(queries.sa_read_engine) as tx:
         return reads_scheduler.jobs_with_reservations(tx, states)
 
 

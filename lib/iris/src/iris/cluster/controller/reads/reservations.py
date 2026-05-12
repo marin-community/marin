@@ -18,8 +18,8 @@ Return shapes:
 
 from sqlalchemy import bindparam, func, select
 
-from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema_v2 import meta_table, reservation_claims_table
+from iris.cluster.controller.db import Tx
+from iris.cluster.controller.schema import meta_table, reservation_claims_table
 from iris.cluster.types import WorkerId
 
 # ---------------------------------------------------------------------------
