@@ -1,12 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from pathlib import Path
 
 import pytest
-from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
-from marin.utils import fsspec_exists
+from marin.processing.classification.decon import DeconConfig, NGramConfig, decontaminate
 from zephyr import load_jsonl
 
 
@@ -36,13 +34,11 @@ def test_decontamination(fox_corpus):
         attribute_name="contaminated",
         estimated_doc_count=20,
         false_positive_rate=0.01,
-        mode=DeconMode.DECONTAMINATE,
         processes=2,
     )
 
     result = decontaminate(config)
     assert result["success"]
-    assert result["mode"] == "decontamination"
 
     # Read output
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
@@ -70,13 +66,11 @@ def test_ngram_decontamination(fox_corpus):
         estimated_doc_count=20,
         false_positive_rate=0.01,
         ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=0.5),
-        mode=DeconMode.DECONTAMINATE,
         processes=1,
     )
 
     result = decontaminate(config)
     assert result["success"]
-    assert result["mode"] == "decontamination"
 
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
 
@@ -107,7 +101,6 @@ def test_overlap_threshold_gates_spans(fox_corpus, threshold, expect_high_flagge
         estimated_doc_count=20,
         false_positive_rate=0.01,
         ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=threshold),
-        mode=DeconMode.DECONTAMINATE,
         processes=1,
     )
     decontaminate(config)
@@ -120,47 +113,6 @@ def test_overlap_threshold_gates_spans(fox_corpus, threshold, expect_high_flagge
         assert spans == [], f"expected test_high_overlap gated out at threshold={threshold}"
 
 
-def test_train_test_overlap(fox_corpus):
-    """Test train-test overlap with multiple n-gram sizes"""
-    # Run train-test overlap with multiple n-gram sizes
-    config = DeconConfig(
-        input_path=fox_corpus["test_dir"],
-        output_path=fox_corpus["output_dir"],
-        decontaminate_source=fox_corpus["train_dir"],
-        attribute_name="overlap",
-        estimated_doc_count=20,
-        false_positive_rate=0.01,
-        ngram=NGramConfig(ngram_length=[3, 5], stride=0, overlap_threshold=0.0),  # Show all overlaps
-        mode=DeconMode.TRAIN_TEST_OVERLAP,
-        processes=1,
-    )
-
-    result = decontaminate(config)
-    assert result["success"]
-    assert result["mode"] == "train_test_overlap"
-    assert result["ngram_lengths_processed"] == [3, 5]
-
-    # Check outputs for each n-gram size
-    for ngram_len in [3, 5]:
-        ngram_dir = os.path.join(fox_corpus["output_dir"], str(ngram_len))
-        assert fsspec_exists(ngram_dir)
-
-        results_by_id = load_dedup_outputs(ngram_dir)
-        assert len(results_by_id) > 0
-
-        # test_high_overlap should have some overlap with train
-        assert len(results_by_id["test_high_overlap"]["attributes"][f"overlap_{ngram_len}"]) == 1
-        high_score = results_by_id["test_high_overlap"]["attributes"][f"overlap_{ngram_len}"][0][2]
-        assert high_score > 0.0
-
-        # test_unique_1 should have much less overlap than test_high_overlap
-        # (may have small overlap due to common words, but significantly less)
-        unique_attrs = results_by_id["test_unique_1"]["attributes"][f"overlap_{ngram_len}"]
-        if len(unique_attrs) > 0:
-            unique_score = unique_attrs[0][2]
-            assert unique_score < high_score, f"Expected unique ({unique_score}) < high overlap ({high_score})"
-
-
 def test_multi_paragraph_decontamination(fox_corpus):
     """Test decontamination with multi-paragraph documents"""
     # Run decontamination (exact paragraph matching)
@@ -171,13 +123,11 @@ def test_multi_paragraph_decontamination(fox_corpus):
         attribute_name="contaminated",
         estimated_doc_count=20,
         false_positive_rate=0.01,
-        mode=DeconMode.DECONTAMINATE,
         processes=1,
     )
 
     result = decontaminate(config)
     assert result["success"]
-    assert result["mode"] == "decontamination"
 
     # Read output
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
