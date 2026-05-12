@@ -159,7 +159,7 @@ def _build_steps(gate: str, run_suffix: str = "") -> list[ExecutorStep]:
 # Sweep scope is pinned here (no env-var indirection). Edit and resubmit
 # rather than relying on the launch command.
 _GATE: str = "1"  # "1" | "2" | "both"
-_RUN_SUFFIX: str = "v2"
+_RUN_SUFFIX: str = "v3"
 
 
 if __name__ == "__main__":
