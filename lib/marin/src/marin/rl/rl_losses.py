@@ -266,6 +266,12 @@ def compute_dapo_loss(
     return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
 
 
+def masked_token_mean(values: jax.Array, loss_masks: jax.Array) -> jax.Array:
+    """Average values over all masked tokens in the batch."""
+    total_tokens = jnp.sum(loss_masks)
+    return jnp.sum(values * loss_masks) / jnp.maximum(total_tokens, 1)
+
+
 def importance_sampling_ratio(
     current_logprobs: jax.Array,
     policy_logprobs_array: jax.Array,
@@ -291,6 +297,7 @@ def rloo_loss_with_importance_sampling(
     *,
     key: jax.Array | None,
     kl: KLConfig,
+    entropy_coef: float = 0.0,
     clip_epsilon_low: float,
     clip_epsilon_high: float,
     tis_importance_sampling_ratio_max: float,
@@ -307,6 +314,7 @@ def rloo_loss_with_importance_sampling(
         batch: Training batch containing rollout data with RLOO advantages
         key: JAX random key for dropout
         kl: KL regularization configuration
+        entropy_coef: Coefficient for entropy regularization
         clip_epsilon_low: Lower clipping epsilon for importance sampling ratio
         clip_epsilon_high: Upper clipping epsilon for importance sampling ratio
         log_policy_entropy: Whether to log exact full-vocabulary policy entropy
@@ -315,13 +323,16 @@ def rloo_loss_with_importance_sampling(
     Returns:
         Tuple of (loss, aux_metrics)
     """
+    if entropy_coef < 0:
+        raise ValueError("entropy_coef must be non-negative")
+
     policy_logprobs_array = batch.policy_logprobs.array
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
     # Get logits from current policy
     current_logprobs, current_policy_entropy = compute_policy_stats_fn(
-        model, batch, key, compute_entropy=log_policy_entropy
+        model, batch, key, compute_entropy=entropy_coef > 0 or log_policy_entropy
     )
     current_logprobs = current_logprobs * loss_masks_array
 
@@ -391,7 +402,20 @@ def rloo_loss_with_importance_sampling(
         kl_statistics = kl_statistics_from_log_ratio(log_ratio, loss_masks_array)
         kl_loss = kl.beta * masked_response_mean(kl_penalty, loss_masks_array)
 
-    loss = reinforce_loss + kl_loss
+    if entropy_coef > 0:
+        if current_policy_entropy is None:
+            raise ValueError("compute_policy_stats_fn must return entropy when entropy_coef > 0")
+        entropy_masks = loss_masks_array
+        if do_overlong_filtering:
+            batch_size, _ = entropy_masks.shape
+            keep_responses = 1.0 - jnp.asarray(batch.truncated, dtype=entropy_masks.dtype).reshape(batch_size, 1)
+            entropy_masks = entropy_masks * keep_responses
+
+        entropy_loss = masked_token_mean(current_policy_entropy, entropy_masks)
+        entropy_bonus = entropy_coef * entropy_loss
+        loss = reinforce_loss + kl_loss - entropy_bonus
+    else:
+        loss = reinforce_loss + kl_loss
 
     trainer_inference_importance_sampling_ratio_mean = jnp.mean(
         jnp.sum(trainer_inference_importance_sampling_ratio * loss_masks_array, axis=1)
@@ -431,6 +455,19 @@ def rloo_loss_with_importance_sampling(
             jax.lax.stop_gradient(policy_entropy).astype(jnp.float32), ReductionType.MEAN
         )
 
+    if entropy_coef > 0:
+        metrics.update(
+            {
+                "entropy_loss": Metric.from_value(
+                    jax.lax.stop_gradient(entropy_loss).astype(jnp.float32), ReductionType.MEAN
+                ),
+                "entropy_bonus": Metric.from_value(
+                    jax.lax.stop_gradient(entropy_bonus).astype(jnp.float32), ReductionType.MEAN
+                ),
+                "entropy_coef": Metric.from_value(jnp.asarray(entropy_coef, dtype=jnp.float32), ReductionType.MEAN),
+            }
+        )
+
     return loss, metrics
 
 
@@ -453,6 +490,7 @@ class RLOOLoss(RLLossModule):
     """RLOO loss with importance sampling."""
 
     kl: KLConfig
+    entropy_coef: float = 0.0
     clip_epsilon_low: float = 0.2
     clip_epsilon_high: float = 0.2
     tis_importance_sampling_ratio_max: float = 2.0
@@ -476,9 +514,11 @@ class RLOOLoss(RLLossModule):
 
     def create_loss_fn(self, reference_model: eqx.Module | None, train_model: eqx.Module) -> Callable:
         """Create the loss function for training."""
+        if self.entropy_coef < 0:
+            raise ValueError("entropy_coef must be non-negative")
         if self.needs_reference_model() and reference_model is None:
             raise ValueError("reference_model is required when KL regularization is enabled")
-        if self.log_policy_entropy and self.vocab_tile_size is not None:
+        if (self.entropy_coef > 0 or self.log_policy_entropy) and self.vocab_tile_size is not None:
             raise ValueError(
                 "Exact policy entropy is not supported with vocab_tile_size yet. "
                 "Set vocab_tile_size=None or implement chunked entropy first."
@@ -501,6 +541,7 @@ class RLOOLoss(RLLossModule):
                 batch,
                 key=key,
                 kl=self.kl,
+                entropy_coef=self.entropy_coef,
                 clip_epsilon_low=self.clip_epsilon_low,
                 clip_epsilon_high=self.clip_epsilon_high,
                 tis_importance_sampling_ratio_max=self.tis_importance_sampling_ratio_max,
