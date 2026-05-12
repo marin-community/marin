@@ -11,7 +11,7 @@ modify state, or run threads.
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
-from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.scheduler import (
     JobRequirements,
@@ -62,10 +62,13 @@ from .conftest import (
 
 
 def _job_requirements_from_job(job) -> JobRequirements:
+    dc = device_counts_from_json(job.res_device_json)
     return JobRequirements(
-        resources=resource_spec_from_scalars(
-            job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
-        ),
+        req_cpu_millicores=job.res_cpu_millicores,
+        req_memory_bytes=job.res_memory_bytes,
+        req_gpu_count=dc.gpu,
+        req_tpu_count=dc.tpu,
+        device_variant=device_variant_from_json(job.res_device_json),
         constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,

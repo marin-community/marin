@@ -19,7 +19,7 @@ Production incident timeline (Incident B, v5p-256):
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import SchedulingOutcome
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.rows import WorkerResourceUsage
@@ -30,10 +30,9 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.controller.writes import task_attempts as write_attempts
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from .conftest import (
     building_counts as _building_counts,
@@ -89,10 +88,13 @@ def _make_gang_request(name):
 
 
 def _job_requirements_from_job(job):
+    dc = device_counts_from_json(job.res_device_json)
     return JobRequirements(
-        resources=resource_spec_from_scalars(
-            job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
-        ),
+        req_cpu_millicores=job.res_cpu_millicores,
+        req_memory_bytes=job.res_memory_bytes,
+        req_gpu_count=dc.gpu,
+        req_tpu_count=dc.tpu,
+        device_variant=device_variant_from_json(job.res_device_json),
         constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
@@ -353,13 +355,18 @@ class TestPreemptionReassignment:
             )
         with state._db.transaction() as cur:
             for row in unfinished:
-                write_attempts.mark_finished(
-                    cur,
-                    JobName.from_wire(str(row.task_id)),
-                    int(row.attempt_id),
-                    job_pb2.TASK_STATE_KILLED,
-                    1,
-                    "terminal heartbeat (test)",
+                # Heartbeat-equivalent stamp: finalize the attempt row.
+                cur.execute(
+                    update(task_attempts_table)
+                    .where(
+                        task_attempts_table.c.task_id == JobName.from_wire(str(row.task_id)),
+                        task_attempts_table.c.attempt_id == int(row.attempt_id),
+                    )
+                    .values(
+                        state=job_pb2.TASK_STATE_KILLED,
+                        finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, 1),
+                        error="terminal heartbeat (test)",
+                    )
                 )
 
         usage_after_drain = _read_usage_by_worker(state)
@@ -502,13 +509,18 @@ class TestPreemptionReassignment:
                 )
             with state._db.transaction() as cur:
                 for row in rows:
-                    write_attempts.mark_finished(
-                        cur,
-                        JobName.from_wire(str(row.task_id)),
-                        int(row.attempt_id),
-                        job_pb2.TASK_STATE_KILLED,
-                        1,
-                        "terminal heartbeat (test)",
+                    # Heartbeat-equivalent stamp: finalize the attempt row.
+                    cur.execute(
+                        update(task_attempts_table)
+                        .where(
+                            task_attempts_table.c.task_id == JobName.from_wire(str(row.task_id)),
+                            task_attempts_table.c.attempt_id == int(row.attempt_id),
+                        )
+                        .values(
+                            state=job_pb2.TASK_STATE_KILLED,
+                            finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, 1),
+                            error="terminal heartbeat (test)",
+                        )
                     )
 
         usage = _read_usage_by_worker(state)

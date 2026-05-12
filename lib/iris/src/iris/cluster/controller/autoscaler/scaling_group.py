@@ -11,7 +11,6 @@ helpers.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Sequence
@@ -374,7 +373,7 @@ class ScalingGroup:
                     slice_id=slice_id,
                     scale_group=self.name,
                     lifecycle=state.lifecycle.value,
-                    worker_ids=json.dumps(list(state.worker_ids)),
+                    worker_ids=list(state.worker_ids),
                     created_at_ms=state.handle.created_at.epoch_ms(),
                     error_message=state.error_message or "",
                 )
@@ -383,7 +382,7 @@ class ScalingGroup:
                     set_={
                         "scale_group": self.name,
                         "lifecycle": state.lifecycle.value,
-                        "worker_ids": json.dumps(list(state.worker_ids)),
+                        "worker_ids": list(state.worker_ids),
                         "created_at_ms": state.handle.created_at.epoch_ms(),
                         "error_message": state.error_message or "",
                     },

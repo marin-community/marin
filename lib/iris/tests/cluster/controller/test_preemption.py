@@ -8,8 +8,8 @@ from iris.cluster.controller.controller import (
     PreemptionCandidate,
     RunningTaskInfo,
     _get_running_tasks_with_band_and_value,
+    _pending_tasks_with_jobs,
     _run_preemption_pass,
-    _schedulable_tasks,
     _sort_pending_tasks_by_resolved_band,
 )
 from iris.cluster.controller.reads import jobs as reads_jobs
@@ -54,29 +54,26 @@ class FakeSchedulingContext:
         self.capacities = capacities
 
 
-def _cpu_resources(cpu_cores: int = 1) -> job_pb2.ResourceSpecProto:
-    return job_pb2.ResourceSpecProto(cpu_millicores=cpu_cores * 1000, memory_bytes=1024**3)
-
-
 def _cpu_requirements(cpu_cores: int = 1) -> JobRequirements:
     return JobRequirements(
-        resources=_cpu_resources(cpu_cores),
+        req_cpu_millicores=cpu_cores * 1000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=0,
+        req_tpu_count=0,
+        device_variant=None,
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
     )
 
 
-def _tpu_resources(variant: str, count: int = 4) -> job_pb2.ResourceSpecProto:
-    spec = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
-    spec.device.tpu.variant = variant
-    spec.device.tpu.count = count
-    return spec
-
-
-def _tpu_requirements(variant: str, *, is_coscheduled: bool = False) -> JobRequirements:
+def _tpu_requirements(variant: str, *, count: int = 4, is_coscheduled: bool = False) -> JobRequirements:
     return JobRequirements(
-        resources=_tpu_resources(variant),
+        req_cpu_millicores=1000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=0,
+        req_tpu_count=count,
+        device_variant=variant,
         constraints=[],
         is_coscheduled=is_coscheduled,
         coscheduling_group_by="tpu-name" if is_coscheduled else None,
@@ -118,7 +115,10 @@ def test_production_preempts_batch():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
@@ -149,7 +149,10 @@ def test_interactive_preempts_batch():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor_id = JobName.from_wire("/bob/interactive-job:0")
@@ -180,7 +183,10 @@ def test_interactive_does_not_preempt_production():
         band_sort_key=job_pb2.PRIORITY_BAND_PRODUCTION,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor_id = JobName.from_wire("/bob/interactive-job:0")
@@ -211,7 +217,10 @@ def test_batch_never_preempts():
         band_sort_key=job_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor_id = JobName.from_wire("/bob/batch-job:0")
@@ -241,7 +250,10 @@ def test_same_band_no_preemption():
         band_sort_key=job_pb2.PRIORITY_BAND_INTERACTIVE,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor_id = JobName.from_wire("/bob/job-b:0")
@@ -271,7 +283,10 @@ def test_coscheduled_not_preempted():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=True,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
@@ -299,7 +314,10 @@ def test_solo_preempts_same_variant_tpu():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_tpu_resources("v5p-8"),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=4,
         device_variant="v5p-8",
     )
 
@@ -323,7 +341,10 @@ def test_solo_does_not_preempt_different_variant():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_tpu_resources("v5p-8"),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=4,
         device_variant="v5p-8",
     )
 
@@ -350,7 +371,10 @@ def test_coscheduled_preemptor_evicts_same_variant_slice():
             band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
-            resources=_tpu_resources("v5p-8"),
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            gpu_count=0,
+            tpu_count=4,
             device_variant="v5p-8",
         )
         for i in range(4)
@@ -385,7 +409,10 @@ def test_coscheduled_preemptor_does_not_evict_different_variant_slice():
             band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
-            resources=_tpu_resources("v5p-8"),
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            gpu_count=0,
+            tpu_count=4,
             device_variant="v5p-8",
         )
         for i in range(4)
@@ -414,7 +441,10 @@ def test_coscheduled_preemptor_skips_undersized_slice():
             band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
-            resources=_tpu_resources("v5p-8"),
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            gpu_count=0,
+            tpu_count=4,
             device_variant="v5p-8",
         )
         for i in range(2)
@@ -444,7 +474,10 @@ def test_solo_preemptor_does_not_tear_down_slice():
             band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
             resource_value=1000,
             is_coscheduled=True,
-            resources=_tpu_resources("v5p-8"),
+            cpu_millicores=1000,
+            memory_bytes=1024**3,
+            gpu_count=0,
+            tpu_count=4,
             device_variant="v5p-8",
         )
         for i in range(4)
@@ -538,7 +571,10 @@ def test_preemption_skips_if_capacity_available():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
@@ -569,7 +605,10 @@ def test_preemption_picks_cheapest_victim():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=5000,
         is_coscheduled=False,
-        resources=_cpu_resources(4),
+        cpu_millicores=4000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
     cheap_victim = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/small-batch:0"),
@@ -577,7 +616,10 @@ def test_preemption_picks_cheapest_victim():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor_id = JobName.from_wire("/bob/prod-job:0")
@@ -640,7 +682,10 @@ def test_over_budget_user_tasks_preemptible():
         band_sort_key=effective,  # BATCH due to budget
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     # Bob's INTERACTIVE task should be able to preempt alice's downgraded task
@@ -715,7 +760,7 @@ def test_demoted_task_re_promotes_after_user_returns_under_budget():
 
         # Scheduler decides alice is over budget and stamps BATCH at assign
         # time. We bypass the over-budget computation by passing the band
-        # directly; ``mark_assigned`` is the same code path the scheduler hits.
+        # directly; ``assign_task`` is the same code path the scheduler hits.
         _dispatch_with_band(state, task, w1, job_pb2.PRIORITY_BAND_BATCH)
 
         # Confirm tasks.priority_band has been overwritten to BATCH.
@@ -780,7 +825,7 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
         child_task = query_tasks_for_job(state, child_id)[0]
         assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
-        ordered = _sort_pending_tasks_by_resolved_band(state._db, _schedulable_tasks(state._db))
+        ordered = _sort_pending_tasks_by_resolved_band(state._db, _pending_tasks_with_jobs(state._db))
         ordered_ids = [task.task_id for task in ordered]
 
         assert ordered_ids.index(child_task.task_id) < ordered_ids.index(interactive_tasks[0].task_id)
@@ -854,7 +899,10 @@ def test_preemption_multiple_victims_one_pass():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
     victim2 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-job-2:0"),
@@ -862,7 +910,10 @@ def test_preemption_multiple_victims_one_pass():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=2000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     preemptor1 = PreemptionCandidate(
@@ -909,7 +960,10 @@ def test_preemption_across_multiple_workers():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=1000,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
     victim_w2 = RunningTaskInfo(
         task_id=JobName.from_wire("/alice/batch-w2:0"),
@@ -917,7 +971,10 @@ def test_preemption_across_multiple_workers():
         band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
         resource_value=500,
         is_coscheduled=False,
-        resources=_cpu_resources(1),
+        cpu_millicores=1000,
+        memory_bytes=1024**3,
+        gpu_count=0,
+        tpu_count=0,
     )
 
     # Preemptor needs 1 CPU — should pick cheapest victim (w2)

@@ -47,7 +47,6 @@ def writes_to(
 # unimported module would leave a silent gap in the startup invariant check.
 from iris.cluster.controller.writes import (
     jobs,
-    reservations,
     task_attempts,
     tasks,
     workers,

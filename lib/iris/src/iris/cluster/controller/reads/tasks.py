@@ -7,29 +7,19 @@ Return shapes:
 
 * ``get_detail`` — SA ``Row`` or ``None``
 * ``bulk_get_detail`` — ``dict[JobName, Row]``
-* ``state_counts_for_job`` — ``dict[int, int]``
-* ``first_error_for_job`` — ``str | None``
 * ``list_active`` — ``list[ActiveTaskRow]``
-* ``get_with_resources`` — ``ActiveTaskRow | None``
-* ``list_pending_for_direct_provider`` — ``list[PendingDispatchRow]``
-* ``list_assigned_null_worker_for_direct_provider`` — ``list[PendingDispatchRow]``
 """
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from sqlalchemy import bindparam, func, select
+from sqlalchemy import bindparam, select
 
-from iris.cluster.controller.codec import resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.rows import (
-    ActiveTaskRow,
-    PendingDispatchRow,
-)
+from iris.cluster.controller.rows import ActiveTaskRow
 from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_table
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import job_pb2
 
 # ---------------------------------------------------------------------------
 # TaskScope — query-builder parameter for list_active
@@ -126,7 +116,7 @@ def bulk_get_detail(tx: Tx, task_ids: Iterable[JobName]) -> dict[JobName, TaskDe
 
 
 # ---------------------------------------------------------------------------
-# Active / dispatch projections
+# Active task projection
 # ---------------------------------------------------------------------------
 
 # Columns for the active-task join projection (tasks + jobs + job_config).
@@ -142,10 +132,6 @@ _ACTIVE_TASK_COLS = (
     tasks_table.c.max_retries_preemption,
     jobs_table.c.is_reservation_holder,
     job_config_table.c.has_coscheduling,
-    job_config_table.c.res_cpu_millicores,
-    job_config_table.c.res_memory_bytes,
-    job_config_table.c.res_disk_bytes,
-    job_config_table.c.res_device_json,
 )
 
 _ACTIVE_TASK_FROM = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
@@ -166,12 +152,6 @@ def _row_to_active_task(row) -> ActiveTaskRow:
         max_retries_preemption=int(row.max_retries_preemption),
         is_reservation_holder=bool(row.is_reservation_holder),
         has_coscheduling=bool(row.has_coscheduling),
-        resources=resource_spec_from_scalars(
-            int(row.res_cpu_millicores),
-            int(row.res_memory_bytes),
-            int(row.res_disk_bytes),
-            row.res_device_json,
-        ),
     )
 
 
@@ -236,135 +216,3 @@ def list_active(
 
     rows = tx.execute(stmt).all()
     return [_row_to_active_task(row) for row in rows]
-
-
-def get_with_resources(tx: Tx, task_id: JobName) -> ActiveTaskRow | None:
-    """Fetch a single task with its job_config resource projection.
-
-    No state filter; callers (``preempt_task``) check ``state`` themselves.
-    Returns ActiveTaskRow or None.
-    """
-    row = tx.execute(
-        select(*_ACTIVE_TASK_COLS).select_from(_ACTIVE_TASK_FROM).where(tasks_table.c.task_id == bindparam("task_id")),
-        {"task_id": task_id},
-    ).first()
-    return _row_to_active_task(row) if row is not None else None
-
-
-# ---------------------------------------------------------------------------
-# Dispatch projection (direct-provider paths)
-# ---------------------------------------------------------------------------
-
-_DISPATCH_COLS = (
-    tasks_table.c.task_id,
-    tasks_table.c.job_id,
-    tasks_table.c.current_attempt_id,
-    jobs_table.c.num_tasks,
-    job_config_table.c.res_cpu_millicores,
-    job_config_table.c.res_memory_bytes,
-    job_config_table.c.res_disk_bytes,
-    job_config_table.c.res_device_json,
-    job_config_table.c.entrypoint_json,
-    job_config_table.c.environment_json,
-    job_config_table.c.bundle_id,
-    job_config_table.c.ports_json,
-    job_config_table.c.constraints_json,
-    job_config_table.c.task_image,
-    job_config_table.c.timeout_ms,
-)
-
-_DISPATCH_FROM = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
-    job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
-)
-
-
-def _row_to_dispatch(row) -> PendingDispatchRow:
-    timeout_ms = row.timeout_ms
-    return PendingDispatchRow(
-        task_id=row.task_id,
-        job_id=row.job_id,
-        current_attempt_id=int(row.current_attempt_id),
-        num_tasks=int(row.num_tasks),
-        resources=resource_spec_from_scalars(
-            int(row.res_cpu_millicores),
-            int(row.res_memory_bytes),
-            int(row.res_disk_bytes),
-            row.res_device_json,
-        ),
-        entrypoint_json=str(row.entrypoint_json),
-        environment_json=str(row.environment_json),
-        bundle_id=str(row.bundle_id),
-        ports_json=str(row.ports_json),
-        constraints_json=row.constraints_json,
-        task_image=str(row.task_image),
-        timeout_ms=int(timeout_ms) if timeout_ms is not None else None,
-    )
-
-
-def list_pending_for_direct_provider(tx: Tx, limit: int) -> list[PendingDispatchRow]:
-    """Return pending non-holder tasks eligible for direct-provider dispatch.
-
-    Returns list[PendingDispatchRow].
-    """
-    if limit <= 0:
-        return []
-    rows = tx.execute(
-        select(*_DISPATCH_COLS)
-        .select_from(_DISPATCH_FROM)
-        .where(
-            tasks_table.c.state == bindparam("state"),
-            jobs_table.c.is_reservation_holder == False,  # noqa: E712
-        )
-        .limit(bindparam("limit")),
-        {"state": int(job_pb2.TASK_STATE_PENDING), "limit": limit},
-    ).all()
-    return [_row_to_dispatch(row) for row in rows]
-
-
-def list_assigned_null_worker_for_direct_provider(tx: Tx) -> list[PendingDispatchRow]:
-    """Return ASSIGNED+null-worker rows with full runtime payload for redrive.
-
-    Returns list[PendingDispatchRow].
-    """
-    rows = tx.execute(
-        select(*_DISPATCH_COLS)
-        .select_from(_DISPATCH_FROM)
-        .where(
-            tasks_table.c.state == bindparam("state"),
-            tasks_table.c.current_worker_id.is_(None),
-            jobs_table.c.is_reservation_holder == False,  # noqa: E712
-        ),
-        {"state": int(job_pb2.TASK_STATE_ASSIGNED)},
-    ).all()
-    return [_row_to_dispatch(row) for row in rows]
-
-
-# ---------------------------------------------------------------------------
-# Simple scalar lookups (inlined at call sites in transitions.py)
-# ---------------------------------------------------------------------------
-
-
-def state_counts_for_job(tx: Tx, job_id: JobName) -> dict[int, int]:
-    """Return ``{state: count}`` for every task state of ``job_id``."""
-    rows = tx.execute(
-        select(tasks_table.c.state, func.count().label("c"))
-        .where(tasks_table.c.job_id == bindparam("job_id"))
-        .group_by(tasks_table.c.state),
-        {"job_id": job_id},
-    ).all()
-    return {int(row.state): int(row.c) for row in rows}
-
-
-def first_error_for_job(tx: Tx, job_id: JobName) -> str | None:
-    """Return the first non-null ``error`` (ordered by task_index) for ``job_id``."""
-    row = tx.execute(
-        select(tasks_table.c.error)
-        .where(
-            tasks_table.c.job_id == bindparam("job_id"),
-            tasks_table.c.error.is_not(None),
-        )
-        .order_by(tasks_table.c.task_index)
-        .limit(1),
-        {"job_id": job_id},
-    ).first()
-    return str(row.error) if row is not None else None

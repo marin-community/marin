@@ -34,10 +34,7 @@ from iris.cluster.constraints import (
 from iris.cluster.types import (
     JobName,
     WorkerId,
-    get_gpu_count,
-    get_tpu_count,
 )
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -184,28 +181,20 @@ class RejectionReason:
 class JobRequirements:
     """What a job needs from a worker. Scheduler's input type.
 
-    The four cached scalars (`req_cpu_millicores`, `req_memory_bytes`,
-    `req_gpu_count`, `req_tpu_count`) are derived once from the proto in
-    `__post_init__` so the scheduler's per-(task, worker) `can_fit` hot loop
-    does not pay protobuf attribute access overhead. The hot loop runs
-    ~pending x workers times per scheduling cycle (≈10^5 on the marin cluster).
+    Scalar resource fields are used directly in the per-(task, worker) `can_fit`
+    hot loop, which runs ~pending x workers times per scheduling cycle (≈10^5 on
+    the marin cluster). `device_variant` carries the device variant string (e.g.
+    ``"v5p-64"``) for preemption same-variant gating; None means CPU-only.
     """
 
-    resources: job_pb2.ResourceSpecProto
+    req_cpu_millicores: int
+    req_memory_bytes: int
+    req_gpu_count: int
+    req_tpu_count: int
+    device_variant: str | None
     constraints: list[Constraint]
     is_coscheduled: bool
     coscheduling_group_by: str | None
-
-    req_cpu_millicores: int = field(init=False)
-    req_memory_bytes: int = field(init=False)
-    req_gpu_count: int = field(init=False)
-    req_tpu_count: int = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.req_cpu_millicores = self.resources.cpu_millicores
-        self.req_memory_bytes = self.resources.memory_bytes
-        self.req_gpu_count = get_gpu_count(self.resources.device)
-        self.req_tpu_count = get_tpu_count(self.resources.device)
 
 
 _evaluate_constraint = evaluate_constraint
@@ -551,16 +540,14 @@ def explain_unfittable(
         if rejection.kind not in rejection_samples:
             rejection_samples[rejection.kind] = rejection
 
-    res = req.resources
-
     if rejection_counts:
         if RejectionKind.BUILDING_LIMIT in rejection_counts:
             workers_with_capacity = sum(
                 1
                 for cwid in candidates
                 if context.assignment_counts.get(cwid, 0) < max_per_worker
-                and context.capacities[cwid].available_cpu_millicores >= res.cpu_millicores
-                and context.capacities[cwid].available_memory >= res.memory_bytes
+                and context.capacities[cwid].available_cpu_millicores >= req.req_cpu_millicores
+                and context.capacities[cwid].available_memory >= req.req_memory_bytes
             )
             if workers_with_capacity > 0:
                 count = rejection_counts[RejectionKind.BUILDING_LIMIT]
@@ -585,12 +572,12 @@ def explain_unfittable(
         constraint_keys = [c.key for c in hard_constraints]
         return (
             f"No worker matches constraints and has sufficient resources "
-            f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
+            f"(need cpu={req.req_cpu_millicores / 1000:g} cores, memory={req.req_memory_bytes}, "
             f"constraints={constraint_keys})"
         )
     return (
         f"No worker has sufficient resources "
-        f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes})"
+        f"(need cpu={req.req_cpu_millicores / 1000:g} cores, memory={req.req_memory_bytes})"
     )
 
 

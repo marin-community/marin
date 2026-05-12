@@ -8,7 +8,7 @@ from collections import defaultdict
 from iris.cluster.controller.budget import UserBudgetDefaults, UserTask, compute_effective_band, interleave_by_user
 from iris.cluster.controller.controller import (
     SchedulingOutcome,
-    _schedulable_tasks,
+    _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
 )
 from iris.cluster.controller.reads import jobs as reads_jobs
@@ -45,7 +45,7 @@ def test_production_scheduled_before_interactive():
         # Submit production tasks second
         prod_tasks = _submit_user_job(state, "bob", "prod-job", replicas=2, band=job_pb2.PRIORITY_BAND_PRODUCTION)
 
-        schedulable = _sort_pending_tasks_by_resolved_band(state._db, _schedulable_tasks(state._db))
+        schedulable = _sort_pending_tasks_by_resolved_band(state._db, _pending_tasks_with_jobs(state._db))
         task_ids = [t.task_id for t in schedulable]
 
         # All production tasks should come before all interactive tasks
@@ -71,7 +71,7 @@ def test_batch_scheduled_after_interactive():
             state, "bob", "interactive-job", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE
         )
 
-        schedulable = _sort_pending_tasks_by_resolved_band(state._db, _schedulable_tasks(state._db))
+        schedulable = _sort_pending_tasks_by_resolved_band(state._db, _pending_tasks_with_jobs(state._db))
         task_ids = [t.task_id for t in schedulable]
 
         batch_ids = {t.task_id for t in batch_tasks}
@@ -95,7 +95,7 @@ def test_single_task_user_beats_hundred_task_user():
         # User A submits 1 task second
         a_tasks = _submit_user_job(state, "user-a", "small-job", replicas=1)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending_tasks_with_jobs(state._db)
 
         # Simulate user-b having higher spend (e.g. from running other tasks)
         user_spend = {"user-b": 5000, "user-a": 0}
@@ -140,7 +140,7 @@ def test_depth_boost_within_band():
             state.submit_job(cur, child_id, child_req, Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending_tasks_with_jobs(state._db)
         task_ids = [t.task_id for t in schedulable]
 
         child_task_ids = {t.task_id for t in child_tasks}
@@ -225,7 +225,7 @@ def test_user_over_budget_tasks_become_batch():
         alice_tasks = _submit_user_job(state, "alice", "alice-job", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
         bob_tasks = _submit_user_job(state, "bob", "bob-job", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending_tasks_with_jobs(state._db)
 
         # Simulate alice being over budget
         user_spend = {"alice": 10000, "bob": 1000}
@@ -254,7 +254,7 @@ def test_user_within_budget_keeps_interactive():
     with make_controller_state() as state:
         _submit_user_job(state, "alice", "within-budget", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending_tasks_with_jobs(state._db)
         user_spend = {"alice": 3000}
         user_budget_limits = {"alice": 50000}
 
@@ -270,7 +270,7 @@ def test_production_never_downgraded_by_budget():
     with make_controller_state() as state:
         _submit_user_job(state, "alice", "prod-job", replicas=1, band=job_pb2.PRIORITY_BAND_PRODUCTION)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending_tasks_with_jobs(state._db)
         user_spend = {"alice": 999999}
         user_budget_limits = {"alice": 100}
 
@@ -360,7 +360,7 @@ def test_zero_budget_means_unlimited():
     with make_controller_state() as state:
         _submit_user_job(state, "alice", "unlimited", replicas=1, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending_tasks_with_jobs(state._db)
         user_spend = {"alice": 999999}
         user_budget_limits = {"alice": 0}
 

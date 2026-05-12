@@ -744,8 +744,40 @@ def benchmark_polling(db: ControllerDB) -> None:
         def _reconcile(_ids=ids):
             from iris.cluster.controller import db
 
+            target_ids = set(_ids)
             with db.read_snapshot(db.sa_read_engine) as snap:
-                reads_scheduler.reconcile_rows_for_workers(snap, _ids)
+                # Worker filter applied in Python to keep the partial index
+                # ``idx_task_attempts_live_workerbound`` in play (a long IN
+                # list on worker_id degrades to a scan).
+                raw_rows = snap.execute(
+                    select(
+                        task_attempts_table.c.worker_id,
+                        tasks_table.c.task_id,
+                        task_attempts_table.c.attempt_id,
+                        tasks_table.c.state.label("task_state"),
+                        task_attempts_table.c.state.label("attempt_state"),
+                        tasks_table.c.job_id,
+                    )
+                    .select_from(
+                        task_attempts_table.join(
+                            tasks_table,
+                            (tasks_table.c.task_id == task_attempts_table.c.task_id)
+                            & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
+                        )
+                    )
+                    .where(
+                        task_attempts_table.c.worker_id.is_not(None),
+                        task_attempts_table.c.finished_at_ms.is_(None),
+                        tasks_table.c.state.in_(
+                            [
+                                int(job_pb2.TASK_STATE_ASSIGNED),
+                                int(job_pb2.TASK_STATE_BUILDING),
+                                int(job_pb2.TASK_STATE_RUNNING),
+                            ]
+                        ),
+                    ),
+                ).all()
+                _ = [row for row in raw_rows if row.worker_id in target_ids]
 
         bench(f"Polling: reconcile_rows_for_workers (batch={batch_size})", _reconcile)
 

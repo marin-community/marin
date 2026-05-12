@@ -6,7 +6,6 @@
 Return shapes:
 
 * ``resource_usage_by_worker`` — ``dict[WorkerId, WorkerResourceUsage]``
-* ``reconcile_rows_for_workers`` — ``list[ReconcileRow]``
 * ``running_tasks_by_worker`` — ``dict[WorkerId, set[JobName]]``
 
 Performance notes:
@@ -14,17 +13,13 @@ Performance notes:
 * ``resource_usage_by_worker`` uses a two-step approach (fetch
   reservation-holder ids, then filter in Python) to avoid a JOIN-driven
   full-table scan — see inline comment.
-* ``reconcile_rows_for_workers`` filters workers in Python to keep the
-  partial index ``idx_task_attempts_live_workerbound`` in play.
 """
-
-from collections.abc import Sequence
 
 from sqlalchemy import select
 
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import Tx
-from iris.cluster.controller.rows import ReconcileRow, WorkerResourceUsage
+from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
@@ -95,66 +90,6 @@ def resource_usage_by_worker(tx: Tx) -> dict[WorkerId, WorkerResourceUsage]:
         )
         for wid in cpu.keys() | mem.keys() | gpu.keys() | tpu.keys()
     }
-
-
-# ---------------------------------------------------------------------------
-# Per-worker reconcile rows
-# ---------------------------------------------------------------------------
-
-_RECONCILE_TASK_STATES = (
-    int(job_pb2.TASK_STATE_ASSIGNED),
-    int(job_pb2.TASK_STATE_BUILDING),
-    int(job_pb2.TASK_STATE_RUNNING),
-)
-
-
-def reconcile_rows_for_workers(tx: Tx, worker_ids: Sequence[WorkerId]) -> list[ReconcileRow]:
-    """Snapshot current attempts for ``worker_ids``.
-
-    Returns list[ReconcileRow]. Workers not in ``worker_ids`` are filtered
-    in Python so the partial index ``idx_task_attempts_live_workerbound``
-    remains active rather than falling back to a scan on a long IN list.
-    """
-    if not worker_ids:
-        return []
-    target_ids: set[WorkerId] = set(worker_ids)
-    # ASSIGNED/BUILDING/RUNNING filter is static; worker_ids are filtered in Python
-    # to keep the partial index ``idx_task_attempts_live_workerbound`` in play —
-    # a long IN list on worker_id degrades to a scan.
-    rows = tx.execute(
-        select(
-            task_attempts_table.c.worker_id,
-            tasks_table.c.task_id,
-            task_attempts_table.c.attempt_id,
-            tasks_table.c.state.label("task_state"),
-            task_attempts_table.c.state.label("attempt_state"),
-            tasks_table.c.job_id,
-        )
-        .select_from(
-            task_attempts_table.join(
-                tasks_table,
-                (tasks_table.c.task_id == task_attempts_table.c.task_id)
-                & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
-            )
-        )
-        .where(
-            task_attempts_table.c.worker_id.is_not(None),
-            task_attempts_table.c.finished_at_ms.is_(None),
-            tasks_table.c.state.in_(list(_RECONCILE_TASK_STATES)),
-        ),
-    ).all()
-    return [
-        ReconcileRow(
-            worker_id=row.worker_id,
-            task_id=row.task_id,
-            attempt_id=int(row.attempt_id),
-            task_state=int(row.task_state),
-            attempt_state=int(row.attempt_state),
-            job_id=row.job_id,
-        )
-        for row in rows
-        if row.worker_id in target_ids
-    ]
 
 
 # ---------------------------------------------------------------------------

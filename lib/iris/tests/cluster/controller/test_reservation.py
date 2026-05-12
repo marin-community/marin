@@ -634,7 +634,11 @@ def test_taint_injection_does_not_mutate_original():
 
 def _make_job_requirements() -> JobRequirements:
     return JobRequirements(
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        req_cpu_millicores=1000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=0,
+        req_tpu_count=0,
+        device_variant=None,
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
@@ -710,7 +714,11 @@ def test_taint_constraint_preserves_existing_constraints():
     existing = Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-central1")
     jobs = {
         JobName.root("test-user", "regular"): JobRequirements(
-            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            req_cpu_millicores=1000,
+            req_memory_bytes=1024**3,
+            req_gpu_count=0,
+            req_tpu_count=0,
+            device_variant=None,
             constraints=[existing],
             is_coscheduled=False,
             coscheduling_group_by=None,
@@ -780,7 +788,11 @@ def test_preference_pass_falls_through_on_no_capacity():
     task_id = job_id.task(0)
     # Request more CPU than the worker has
     req = JobRequirements(
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=999_000, memory_bytes=1024**3),
+        req_cpu_millicores=999_000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=0,
+        req_tpu_count=0,
+        device_variant=None,
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
@@ -827,7 +839,11 @@ def test_preference_pass_skips_coscheduled_jobs():
     job_id = JobName.root("test-user", "cosched-job")
     task_id = job_id.task(0)
     req = JobRequirements(
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        req_cpu_millicores=1000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=0,
+        req_tpu_count=0,
+        device_variant=None,
         constraints=[],
         is_coscheduled=True,
         coscheduling_group_by=WellKnownAttribute.TPU_NAME,
@@ -875,7 +891,11 @@ def test_preference_pass_deducts_capacity():
     task_id_1 = job_id.task(1)
     # Each task wants 4000m CPU; w1 has 8000m, so only one fits.
     req = JobRequirements(
-        resources=job_pb2.ResourceSpecProto(cpu_millicores=4000, memory_bytes=1024**3),
+        req_cpu_millicores=4000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=0,
+        req_tpu_count=0,
+        device_variant=None,
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
@@ -1314,11 +1334,11 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
     # Unrelated job DOES get NOT_EXISTS constraint
     unrelated_jid = JobName.root("test-user", "unrelated")
     unrelated_req = JobRequirements(
-        resources=job_pb2.ResourceSpecProto(
-            cpu_millicores=1000,
-            memory_bytes=1024**3,
-            device=_gpu_device("H100"),
-        ),
+        req_cpu_millicores=1000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=8,
+        req_tpu_count=0,
+        device_variant="H100",
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,
@@ -1349,11 +1369,11 @@ def test_unrelated_job_blocked_when_all_workers_claimed(ctrl):
     # Unrelated job requesting GPU
     unrelated_jid = JobName.root("test-user", "unrelated")
     unrelated_req = JobRequirements(
-        resources=job_pb2.ResourceSpecProto(
-            cpu_millicores=1000,
-            memory_bytes=1024**3,
-            device=_gpu_device("H100"),
-        ),
+        req_cpu_millicores=1000,
+        req_memory_bytes=1024**3,
+        req_gpu_count=8,
+        req_tpu_count=0,
+        device_variant="H100",
         constraints=[],
         is_coscheduled=False,
         coscheduling_group_by=None,

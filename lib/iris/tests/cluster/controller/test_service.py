@@ -20,7 +20,7 @@ from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.db import TaskJobSummary
 from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.schema import jobs_table
+from iris.cluster.controller.schema import jobs_table, task_attempts_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
@@ -35,10 +35,10 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.controller.writes import task_attempts as write_attempts
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import func
 from sqlalchemy import update as sa_update
 
 from tests.cluster.conftest import fake_log_client_from_service
@@ -343,17 +343,23 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
             fut.result(timeout=0.3)
 
         # Synthesize the finalizing heartbeat that the production worker would
-        # have eventually sent. mark_finished stamps finished_at_ms, which
-        # releases the predicate ``_wait_until_job_drained`` polls.
+        # have eventually sent. Stamping finished_at_ms releases the predicate
+        # ``_wait_until_job_drained`` polls.
         child_task_after_preempt = _query_tasks_with_attempts(state, child_job)[0]
         with state._db.transaction() as cur:
-            write_attempts.mark_finished(
-                cur,
-                child_task_after_preempt.task_id,
-                child_task_after_preempt.current_attempt_id,
-                job_pb2.TASK_STATE_PREEMPTED,
-                finished_at_ms=int(time.time() * 1000),
-                error="finalized after preemption",
+            # Heartbeat-equivalent stamp: set finished_at_ms (COALESCE preserves
+            # any earlier stamp) and final state so the drain predicate fires.
+            cur.execute(
+                sa_update(task_attempts_table)
+                .where(
+                    task_attempts_table.c.task_id == child_task_after_preempt.task_id,
+                    task_attempts_table.c.attempt_id == child_task_after_preempt.current_attempt_id,
+                )
+                .values(
+                    state=job_pb2.TASK_STATE_PREEMPTED,
+                    finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, int(time.time() * 1000)),
+                    error="finalized after preemption",
+                )
             )
 
         # The blocked launch should now wake up and succeed within one backoff
@@ -1171,31 +1177,6 @@ def test_live_user_stats_sql_aggregation(state, service):
     # 3 tasks total (2 + 1)
     total_tasks = sum(s.task_state_counts.values())
     assert total_tasks == 3
-
-
-def test_worker_addresses_for_tasks(state, service):
-    """_worker_addresses_for_tasks fetches only referenced workers."""
-    from iris.cluster.controller.service import _worker_addresses_for_tasks
-
-    # Register workers
-    _register_worker(state, WorkerId("w-1"))
-    _register_worker(state, WorkerId("w-2"))
-    _register_worker(state, WorkerId("w-3"))
-
-    # Launch job and assign one task to w-1
-    service.launch_job(make_job_request("assigned-job"), None)
-    job_id = JobName.root("test-user", "assigned-job")
-    task_id = JobName.from_wire(job_id.to_wire() + "/0")
-    with state._db.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
-
-    # Get tasks with attempts
-    tasks = _query_tasks_with_attempts(state, job_id)
-    addresses = _worker_addresses_for_tasks(state._db, tasks)
-
-    # Should only have w-1
-    assert WorkerId("w-1") in addresses
-    assert len(addresses) == 1
 
 
 # =============================================================================

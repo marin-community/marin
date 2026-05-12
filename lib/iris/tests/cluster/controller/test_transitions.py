@@ -15,7 +15,7 @@ import threading
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
 from iris.cluster.controller.autoscaler.models import DemandEntry
-from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
     ControllerDB,
@@ -28,7 +28,6 @@ from iris.cluster.controller.projections.endpoints import EndpointRow
 # Test Helpers
 # =============================================================================
 from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.reads import task_attempts as reads_task_attempts
 from iris.cluster.controller.reads import tasks as reads_tasks
 from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
@@ -112,14 +111,13 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
         if job_id and job_id not in jobs:
             job = _query_job(state, job_id)
             if job:
-                resources = resource_spec_from_scalars(
-                    job.res_cpu_millicores,
-                    job.res_memory_bytes,
-                    job.res_disk_bytes,
-                    job.res_device_json,
-                )
+                dc = device_counts_from_json(job.res_device_json)
                 jobs[job_id] = JobRequirements(
-                    resources=resources,
+                    req_cpu_millicores=job.res_cpu_millicores,
+                    req_memory_bytes=job.res_memory_bytes,
+                    req_gpu_count=dc.gpu,
+                    req_tpu_count=dc.tpu,
+                    device_variant=device_variant_from_json(job.res_device_json),
                     constraints=constraints_from_json(job.constraints_json),
                     is_coscheduled=job.has_coscheduling,
                     coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
@@ -1582,7 +1580,21 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
     assert _query_task(state, task.task_id).current_attempt_id == 1
     # The old attempt (0) is still in RUNNING state (non-terminal)
     with state._db.read_snapshot() as tx:
-        attempts = reads_task_attempts.list_for_task(tx, task.task_id)
+        attempts = tx.execute(
+            select(
+                task_attempts_table.c.task_id,
+                task_attempts_table.c.attempt_id,
+                task_attempts_table.c.worker_id,
+                task_attempts_table.c.state,
+                task_attempts_table.c.created_at_ms,
+                task_attempts_table.c.started_at_ms,
+                task_attempts_table.c.finished_at_ms,
+                task_attempts_table.c.exit_code,
+                task_attempts_table.c.error,
+            )
+            .where(task_attempts_table.c.task_id == task.task_id)
+            .order_by(task_attempts_table.c.attempt_id.asc())
+        ).all()
     assert not attempt_is_terminal(attempts[0].state)
 
     with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.transitions"):
@@ -3630,7 +3642,21 @@ def test_apply_failed_with_retry(state):
     # itself rolled back to PENDING. Otherwise the row is indistinguishable from
     # a still-assigned attempt. Regression guard for the terminal_ms conflation.
     with state._db.read_snapshot() as tx:
-        attempts = reads_task_attempts.list_for_task(tx, task_id)
+        attempts = tx.execute(
+            select(
+                task_attempts_table.c.task_id,
+                task_attempts_table.c.attempt_id,
+                task_attempts_table.c.worker_id,
+                task_attempts_table.c.state,
+                task_attempts_table.c.created_at_ms,
+                task_attempts_table.c.started_at_ms,
+                task_attempts_table.c.finished_at_ms,
+                task_attempts_table.c.exit_code,
+                task_attempts_table.c.error,
+            )
+            .where(task_attempts_table.c.task_id == task_id)
+            .order_by(task_attempts_table.c.attempt_id.asc())
+        ).all()
     assert len(attempts) == 1
     assert attempts[0].state == job_pb2.TASK_STATE_FAILED
     assert attempts[0].finished_at_ms is not None

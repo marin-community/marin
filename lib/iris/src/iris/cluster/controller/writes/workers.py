@@ -13,7 +13,6 @@ update commits atomically with the SQL delete.
 """
 
 from sqlalchemy import delete, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -21,83 +20,6 @@ from iris.cluster.controller.schema import task_attempts_table, tasks_table, wor
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.writes import writes_to
 from iris.cluster.types import WorkerId
-
-
-@writes_to(workers_table)
-def upsert_worker(
-    tx: Tx,
-    *,
-    worker_id: WorkerId,
-    address: str,
-    total_cpu_millicores: int,
-    total_memory_bytes: int,
-    total_gpu_count: int,
-    total_tpu_count: int,
-    device_type: str,
-    device_variant: str,
-    slice_id: str,
-    scale_group: str,
-    md_hostname: str,
-    md_ip_address: str,
-    md_cpu_count: int,
-    md_memory_bytes: int,
-    md_disk_bytes: int,
-    md_tpu_name: str,
-    md_tpu_worker_hostnames: str,
-    md_tpu_worker_id: str,
-    md_tpu_chips_per_host_bounds: str,
-    md_gpu_count: int,
-    md_gpu_name: str,
-    md_gpu_memory_mb: int,
-    md_gce_instance_name: str,
-    md_gce_zone: str,
-    md_git_hash: str,
-    md_device_json: str,
-    now_ms: int,
-    health: WorkerHealthTracker,
-) -> None:
-    """Insert or refresh durable identity / capability metadata for a worker.
-
-    Resource usage is derived per-cycle from unfinished worker-bound
-    ``task_attempts``. A post-commit hook registers the worker in the
-    liveness tracker so in-memory state advances atomically with the DB row.
-    """
-    row_values = {
-        "worker_id": worker_id,
-        "address": address,
-        "total_cpu_millicores": total_cpu_millicores,
-        "total_memory_bytes": total_memory_bytes,
-        "total_gpu_count": total_gpu_count,
-        "total_tpu_count": total_tpu_count,
-        "device_type": device_type,
-        "device_variant": device_variant,
-        "slice_id": slice_id,
-        "scale_group": scale_group,
-        "md_hostname": md_hostname,
-        "md_ip_address": md_ip_address,
-        "md_cpu_count": md_cpu_count,
-        "md_memory_bytes": md_memory_bytes,
-        "md_disk_bytes": md_disk_bytes,
-        "md_tpu_name": md_tpu_name,
-        "md_tpu_worker_hostnames": md_tpu_worker_hostnames,
-        "md_tpu_worker_id": md_tpu_worker_id,
-        "md_tpu_chips_per_host_bounds": md_tpu_chips_per_host_bounds,
-        "md_gpu_count": md_gpu_count,
-        "md_gpu_name": md_gpu_name,
-        "md_gpu_memory_mb": md_gpu_memory_mb,
-        "md_gce_instance_name": md_gce_instance_name,
-        "md_gce_zone": md_gce_zone,
-        "md_git_hash": md_git_hash,
-        "md_device_json": md_device_json,
-    }
-    # ON CONFLICT(worker_id) DO UPDATE SET all columns except the PK.
-    update_set = {k: v for k, v in row_values.items() if k != "worker_id"}
-    tx.execute(
-        sqlite_insert(workers_table)
-        .values(**row_values)
-        .on_conflict_do_update(index_elements=["worker_id"], set_=update_set)
-    )
-    tx.register(lambda: health.register(worker_id, now_ms=now_ms))
 
 
 @writes_to(workers_table, cascades_into=(task_attempts_table,))

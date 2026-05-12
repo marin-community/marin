@@ -4,9 +4,9 @@
 """Performance baselines for the SA Core data-layer migration.
 
 Gates the SA Core path of ``_jobs_with_reservations`` and the scheduler
-reads (``resource_usage_by_worker``, ``reconcile_rows_for_workers``) against
-a fixed workload to catch regressions. The legacy comparison path has been
-deleted — only the SA Core timings are measured.
+reads (``resource_usage_by_worker`` and the inline reconcile-rows query)
+against a fixed workload to catch regressions. The legacy comparison path
+has been deleted — only the SA Core timings are measured.
 """
 
 import shutil
@@ -20,9 +20,10 @@ from iris.cluster.controller import db
 from iris.cluster.controller.controller import _jobs_with_reservations
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.reads import scheduler as reads_scheduler
+from iris.cluster.controller.schema import task_attempts_table, tasks_table
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 _RESERVATION_JOB_COUNT = 200
 _NON_RESERVATION_JOB_COUNT = 200
@@ -234,12 +235,44 @@ def test_resource_usage_by_worker_perf(perf_db: ControllerDB) -> None:
 
 
 def test_reconcile_rows_for_workers_perf(perf_db: ControllerDB) -> None:
-    """Smoke-test SA ``reconcile_rows_for_workers`` returns expected row count."""
+    """Smoke-test the inline reconcile-rows query returns expected row count."""
     worker_ids = [WorkerId(f"w-{i:04d}") for i in range(_RESOURCE_WORKER_COUNT)]
     expected_rows = _RESOURCE_WORKER_COUNT * _TASKS_PER_WORKER
 
     def _sa_call() -> int:
+        target_ids = set(worker_ids)
         with db.read_snapshot(perf_db.sa_read_engine) as tx:
-            return len(reads_scheduler.reconcile_rows_for_workers(tx, worker_ids))
+            # Worker filter applied in Python to keep the partial index
+            # ``idx_task_attempts_live_workerbound`` in play (a long IN list
+            # on worker_id degrades to a scan).
+            raw_rows = tx.execute(
+                select(
+                    task_attempts_table.c.worker_id,
+                    tasks_table.c.task_id,
+                    task_attempts_table.c.attempt_id,
+                    tasks_table.c.state.label("task_state"),
+                    task_attempts_table.c.state.label("attempt_state"),
+                    tasks_table.c.job_id,
+                )
+                .select_from(
+                    task_attempts_table.join(
+                        tasks_table,
+                        (tasks_table.c.task_id == task_attempts_table.c.task_id)
+                        & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
+                    )
+                )
+                .where(
+                    task_attempts_table.c.worker_id.is_not(None),
+                    task_attempts_table.c.finished_at_ms.is_(None),
+                    tasks_table.c.state.in_(
+                        [
+                            int(job_pb2.TASK_STATE_ASSIGNED),
+                            int(job_pb2.TASK_STATE_BUILDING),
+                            int(job_pb2.TASK_STATE_RUNNING),
+                        ]
+                    ),
+                ),
+            ).all()
+            return sum(1 for row in raw_rows if row.worker_id in target_ids)
 
     assert _sa_call() == expected_rows

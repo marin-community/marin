@@ -8,6 +8,7 @@ HEAD: 0046). Auth tables live on a separate ``auth_metadata`` because they
 are stored in the attached ``auth.sqlite3`` database, not the main controller DB.
 """
 
+import json
 import threading
 from typing import Any, ClassVar
 
@@ -162,6 +163,60 @@ class CachedProto(TypeDecorator):
         return decoded
 
 
+class JSONList(TypeDecorator):
+    """Adapts a JSON-encoded list to/from a TEXT column.
+
+    On write: accepts a list and stores it as a JSON string.
+    On read: decodes the JSON string back to a list.
+
+    Does not enforce element types at runtime — the ``element_type``
+    argument is a documentation aid only.
+
+    Only for plain list columns (e.g. ``list[int]``, ``list[str]``).
+    Proto-encoded JSON columns use ``CachedProto`` instead.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def __init__(self, _element_type: type | None = None) -> None:
+        super().__init__()
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return json.dumps(list(value))
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return []
+        return json.loads(value)
+
+
+class JSONDict(TypeDecorator):
+    """Adapts a JSON-encoded dict to/from a TEXT column.
+
+    On write: accepts a dict and stores it as a JSON string.
+    On read: decodes the JSON string back to a dict.
+
+    Only for plain dict columns (e.g. ``dict[str, str]``).
+    Proto-encoded JSON columns use ``CachedProto`` instead.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        return json.dumps(value)
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return {}
+        return json.loads(value)
+
+
 metadata = MetaData()
 auth_metadata = MetaData()
 
@@ -253,7 +308,7 @@ job_config_table = Table(
     Column("entrypoint_json", String, nullable=False, server_default="'{}'"),
     Column("environment_json", String, nullable=False, server_default="'{}'"),
     Column("bundle_id", String, nullable=False, server_default="''"),
-    Column("ports_json", String, nullable=False, server_default="'[]'"),
+    Column("ports_json", JSONList(int), nullable=False, server_default="'[]'"),
     Column("max_retries_failure", Integer, nullable=False, server_default="0"),
     Column("max_retries_preemption", Integer, nullable=False, server_default="100"),
     Column("timeout_ms", Integer),
@@ -261,7 +316,7 @@ job_config_table = Table(
     Column("existing_job_policy", Integer, nullable=False, server_default="0"),
     Column("priority_band", Integer, nullable=False, server_default="0"),
     Column("task_image", String, nullable=False, server_default="''"),
-    Column("submit_argv_json", String, nullable=False, server_default="'[]'"),
+    Column("submit_argv_json", JSONList(str), nullable=False, server_default="'[]'"),
     Column("reservation_json", String),
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
     Index("idx_job_config_name", "name"),
@@ -407,7 +462,7 @@ endpoints_table = Table(
     Column("address", String, nullable=False),
     Column("job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False),
     Column("task_id", JobNameType, ForeignKey("tasks.task_id", ondelete="CASCADE")),
-    Column("metadata_json", String, nullable=False),
+    Column("metadata_json", JSONDict, nullable=False),
     Column("registered_at_ms", TimestampMsType, nullable=False),
     Index("idx_endpoints_name", "name"),
     Index("idx_endpoints_task", "task_id"),
@@ -435,7 +490,7 @@ slices_table = Table(
     Column("slice_id", String, primary_key=True),
     Column("scale_group", String, nullable=False),
     Column("lifecycle", String, nullable=False),
-    Column("worker_ids", String, nullable=False, server_default="'[]'"),
+    Column("worker_ids", JSONList(str), nullable=False, server_default="'[]'"),
     Column("created_at_ms", Integer, nullable=False, server_default="0"),
     Column("error_message", String, nullable=False, server_default="''"),
     Index("idx_slices_scale_group", "scale_group"),

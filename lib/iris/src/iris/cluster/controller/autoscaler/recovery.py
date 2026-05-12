@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 
@@ -78,7 +77,7 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
                 slice_id=row.slice_id,
                 scale_group=row.scale_group,
                 lifecycle=row.lifecycle,
-                worker_ids=json.loads(row.worker_ids) if row.worker_ids else [],
+                worker_ids=row.worker_ids,
                 created_at_ms=int(row.created_at_ms),
                 error_message=row.error_message,
             )

@@ -6,7 +6,6 @@
 Read-only queries do NOT belong here — callers use db.read_snapshot() directly.
 """
 
-import json
 import logging
 import threading
 import time
@@ -16,7 +15,8 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, NamedTuple, TypeVar
 
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import bindparam, delete, func, insert, select, text
+from sqlalchemy import bindparam, case, delete, func, insert, select, text
+from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.constraints import AttributeValue, Constraint, constraints_from_resources, merge_constraints
@@ -53,15 +53,18 @@ from iris.cluster.controller.rows import (
 )
 from iris.cluster.controller.schema import (
     job_config_table,
+    job_workdir_files_table,
     jobs_table,
+    meta_table,
+    reservation_claims_table,
     task_attempts_table,
     tasks_table,
+    users_table,
     worker_attributes_table,
     workers_table,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.writes import jobs as write_jobs
-from iris.cluster.controller.writes import reservations as write_reservations
 from iris.cluster.controller.writes import task_attempts as write_attempts
 from iris.cluster.controller.writes import tasks as write_tasks
 from iris.cluster.controller.writes import workers as write_workers
@@ -182,6 +185,19 @@ The direct provider relies on the Kubernetes scheduler (and the cloud
 autoscaler) for placement and capacity management.  Pods that cannot be
 scheduled immediately stay Pending — that signal drives node provisioning.
 This rate limit exists only to bound API server pressure."""
+
+_LAST_SUBMISSION_KEY = "last_submission_ms"
+"""``meta`` key holding the monotone submission-timestamp counter."""
+
+_ERROR_STATES: frozenset[int] = frozenset(
+    [
+        job_pb2.JOB_STATE_FAILED,
+        job_pb2.JOB_STATE_KILLED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE,
+        job_pb2.JOB_STATE_WORKER_FAILED,
+    ]
+)
+"""Job states that warrant recording an error message on ``finished_at_ms``."""
 
 
 @dataclass(frozen=True)
@@ -444,33 +460,59 @@ def _terminate_task(
     effective_attempt_state = attempt_state if attempt_state is not None else state
 
     if attempt_id is not None and attempt_id >= 0:
+        _task_name = JobName.from_wire(task_id)
         if finalize_attempt:
-            write_attempts.mark_finished(
-                cur,
-                JobName.from_wire(task_id),
-                attempt_id,
-                effective_attempt_state,
-                now_ms,
-                error,
+            # Heartbeat-equivalent path: stamp finished_at_ms (preserving any
+            # earlier stamp via COALESCE) and final state. Releases the
+            # worker resources held against this attempt.
+            cur.execute(
+                sa_update(task_attempts_table)
+                .where(
+                    task_attempts_table.c.task_id == _task_name,
+                    task_attempts_table.c.attempt_id == attempt_id,
+                )
+                .values(
+                    state=effective_attempt_state,
+                    finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, now_ms),
+                    error=error,
+                )
             )
         else:
-            write_attempts.apply_attempt_state(
-                cur,
-                JobName.from_wire(task_id),
-                attempt_id,
-                effective_attempt_state,
-                error,
+            # Producing transition (cancel, preempt, timeout, gang cascade):
+            # update reporting state only; leave finished_at_ms NULL until
+            # the heartbeat path confirms termination so the scheduler keeps
+            # the worker capacity reserved.
+            cur.execute(
+                sa_update(task_attempts_table)
+                .where(
+                    task_attempts_table.c.task_id == _task_name,
+                    task_attempts_table.c.attempt_id == attempt_id,
+                )
+                .values(
+                    state=effective_attempt_state,
+                    error=func.coalesce(error, task_attempts_table.c.error),
+                )
             )
 
-    write_tasks.mark_terminal(
-        cur,
-        JobName.from_wire(task_id),
-        state,
-        error,
-        finished_at_ms,
-        failure_count=failure_count,
-        preemption_count=preemption_count,
-        active_states=ACTIVE_TASK_STATES,
+    # Move the task to its terminal-style state. Preserve an existing
+    # ``finished_at_ms`` via COALESCE; clear ``current_worker_*`` when the
+    # target state is not active.
+    _terminal_values: dict = {
+        "state": state,
+        "error": error,
+        "finished_at_ms": (
+            func.coalesce(tasks_table.c.finished_at_ms, finished_at_ms) if finished_at_ms is not None else finished_at_ms
+        ),
+    }
+    if failure_count is not None:
+        _terminal_values["failure_count"] = failure_count
+    if preemption_count is not None:
+        _terminal_values["preemption_count"] = preemption_count
+    if state not in ACTIVE_TASK_STATES:
+        _terminal_values["current_worker_id"] = None
+        _terminal_values["current_worker_address"] = None
+    cur.execute(
+        sa_update(tasks_table).where(tasks_table.c.task_id == JobName.from_wire(task_id)).values(**_terminal_values)
     )
 
     delete_task_endpoints(cur, endpoints, task_id)
@@ -541,7 +583,19 @@ def _cascade_children(
         )
         tasks_to_kill.update(child_tasks_to_kill)
         task_kill_workers.update(child_task_kill_workers)
-        write_jobs.update_state_if_not_terminal(cur, child_job_id, job_pb2.JOB_STATE_KILLED, reason, now_ms)
+        # Move the child job to KILLED unless already terminal.
+        cur.execute(
+            sa_update(jobs_table)
+            .where(
+                jobs_table.c.job_id == child_job_id,
+                jobs_table.c.state.not_in(TERMINAL_JOB_STATES),
+            )
+            .values(
+                state=job_pb2.JOB_STATE_KILLED,
+                error=reason,
+                finished_at_ms=func.coalesce(jobs_table.c.finished_at_ms, now_ms),
+            )
+        )
     return tasks_to_kill, task_kill_workers
 
 
@@ -867,7 +921,7 @@ class ControllerTransitions:
             environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
             bundle_id=job.bundle_id,
             resources=resources,
-            ports=json.loads(job.ports_json),
+            ports=job.ports_json,
             constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
             task_image=job.task_image,
         )
@@ -947,14 +1001,38 @@ class ControllerTransitions:
             {"job_id": job_id},
         ).first()
         error = str(_err_row.error) if _err_row is not None else None
-        write_jobs.apply_recomputed_state(cur, job_id, new_state, now_ms, error)
+        # Write the recomputed state back. ``started_at_ms`` is stamped
+        # only when moving to RUNNING; ``finished_at_ms`` is stamped only
+        # when moving to a terminal state; ``error`` is recorded only for
+        # terminal states that warrant a reason. A single UPDATE handles
+        # every conditional column.
+        cur.execute(
+            sa_update(jobs_table)
+            .where(jobs_table.c.job_id == job_id)
+            .values(
+                state=new_state,
+                started_at_ms=(
+                    func.coalesce(jobs_table.c.started_at_ms, now_ms)
+                    if new_state == job_pb2.JOB_STATE_RUNNING
+                    else jobs_table.c.started_at_ms
+                ),
+                finished_at_ms=now_ms if new_state in TERMINAL_JOB_STATES else jobs_table.c.finished_at_ms,
+                error=error if new_state in _ERROR_STATES else jobs_table.c.error,
+            )
+        )
         return new_state
 
     def replace_reservation_claims(self, cur: Tx, claims: dict[WorkerId, ReservationClaim]) -> None:
         """Replace all reservation claims."""
-        write_reservations.replace_claims(
-            cur,
-            {worker_id: (claim.job_id, claim.entry_idx) for worker_id, claim in claims.items()},
+        cur.execute(delete(reservation_claims_table))
+        if not claims:
+            return
+        cur.execute(
+            insert(reservation_claims_table),
+            [
+                {"worker_id": worker_id, "job_id": claim.job_id, "entry_idx": claim.entry_idx}
+                for worker_id, claim in claims.items()
+            ],
         )
 
     # =========================================================================
@@ -976,7 +1054,20 @@ class ControllerTransitions:
         submitted_ms = ts.epoch_ms()
         created_task_ids: list[JobName] = []
 
-        effective_submission_ms = write_reservations.next_submission_ms(cur, submitted_ms)
+        # Bump ``meta.last_submission_ms`` to ``max(submitted_ms, last + 1)`` to
+        # guarantee strictly-monotone submission timestamps across reservation
+        # holders.
+        _meta_row = cur.execute(select(meta_table.c.value).where(meta_table.c.key == _LAST_SUBMISSION_KEY)).fetchone()
+        _last_submission_ms = int(_meta_row[0]) if _meta_row is not None else 0
+        effective_submission_ms = max(submitted_ms, _last_submission_ms + 1)
+        if _meta_row is None:
+            cur.execute(insert(meta_table).values(key=_LAST_SUBMISSION_KEY, value=effective_submission_ms))
+        else:
+            cur.execute(
+                sa_update(meta_table)
+                .where(meta_table.c.key == _LAST_SUBMISSION_KEY)
+                .values(value=effective_submission_ms)
+            )
 
         parent_job_id = job_id.parent.to_wire() if job_id.parent is not None else None
         root_submitted_ms = effective_submission_ms
@@ -1000,7 +1091,16 @@ class ControllerTransitions:
                 .epoch_ms()
             )
 
-        write_jobs.ensure_user(cur, job_id.user, effective_submission_ms)
+        # Idempotently create a ``users`` row at submission time.
+        cur.execute(
+            sqlite_insert(users_table)
+            .values(
+                user_id=job_id.user,
+                created_at_ms=Timestamp.from_ms(effective_submission_ms),
+                role="user",
+            )
+            .on_conflict_do_nothing(index_elements=["user_id"])
+        )
         # No user_budgets row is created here: absence means "apply
         # UserBudgetDefaults". Rows exist only for tier seeds from cluster
         # config (see reconcile_user_budget_tiers) and admin overrides via
@@ -1046,7 +1146,7 @@ class ControllerTransitions:
         # Serialize dispatch config fields for job_config.
         entrypoint_json = entrypoint_to_json(request.entrypoint)
         environment_json = proto_to_json(request.environment)
-        ports_json = json.dumps(list(request.ports)) if request.ports else "[]"
+        ports_json = list(request.ports)
         reservation_json = reservation_to_json(request)
         timeout_ms: int | None = int(request.timeout.milliseconds) if request.timeout.milliseconds > 0 else None
 
@@ -1096,13 +1196,18 @@ class ControllerTransitions:
             existing_job_policy=int(request.existing_job_policy),
             priority_band=int(request.priority_band),
             task_image=request.task_image,
-            submit_argv_json=json.dumps(list(request.submit_argv)),
+            submit_argv_json=list(request.submit_argv),
             reservation_json=reservation_json,
             fail_if_exists=bool(request.fail_if_exists),
         )
 
         # Store workdir files in separate table.
-        write_jobs.insert_workdir_files(cur, job_id, dict(request.entrypoint.workdir_files))
+        _workdir_files = dict(request.entrypoint.workdir_files)
+        if _workdir_files:
+            cur.execute(
+                insert(job_workdir_files_table),
+                [{"job_id": job_id, "filename": name, "data": data} for name, data in _workdir_files.items()],
+            )
 
         if validation_error is None:
             insertion_base = write_jobs.reserve_priority_insertion_base(cur)
@@ -1186,7 +1291,7 @@ class ControllerTransitions:
                     entrypoint_json=holder_entrypoint_json,
                     environment_json=holder_environment_json,
                     bundle_id="",
-                    ports_json="[]",
+                    ports_json=[],
                     max_retries_failure=0,
                     max_retries_preemption=DEFAULT_MAX_RETRIES_PREEMPTION,
                     timeout_ms=None,
@@ -1238,22 +1343,57 @@ class ControllerTransitions:
         # capacity stays held until the worker confirms termination via
         # heartbeat or the worker-failure synthesis path stamps finished_at_ms.
         now_ms = Timestamp.now().epoch_ms()
-        write_tasks.bulk_kill_non_terminal(cur, subtree, reason, now_ms, TERMINAL_TASK_STATES)
+        # Mark all non-terminal tasks under the subtree as KILLED. The
+        # COALESCE preserves any existing ``finished_at_ms``; we also clear
+        # ``current_worker_*`` since the target state is non-active.
+        if subtree:
+            cur.execute(
+                sa_update(tasks_table)
+                .where(
+                    tasks_table.c.job_id.in_(subtree),
+                    tasks_table.c.state.not_in(TERMINAL_TASK_STATES),
+                )
+                .values(
+                    state=job_pb2.TASK_STATE_KILLED,
+                    error=reason,
+                    finished_at_ms=func.coalesce(tasks_table.c.finished_at_ms, now_ms),
+                    current_worker_id=None,
+                    current_worker_address=None,
+                )
+            )
         # Roll the attempt to KILLED for dashboard accuracy; leave
         # ``finished_at_ms`` NULL so the scheduler counts the worker's
         # resources as held until the heartbeat path confirms termination.
-        write_attempts.bulk_apply_attempt_state(cur, subtree, job_pb2.TASK_STATE_KILLED, reason, set(ACTIVE_TASK_STATES))
+        if subtree:
+            cur.execute(
+                sa_update(task_attempts_table)
+                .where(
+                    task_attempts_table.c.task_id.in_(
+                        select(tasks_table.c.task_id).where(tasks_table.c.job_id.in_(subtree))
+                    ),
+                    task_attempts_table.c.state.in_(set(ACTIVE_TASK_STATES)),
+                )
+                .values(
+                    state=job_pb2.TASK_STATE_KILLED,
+                    error=func.coalesce(task_attempts_table.c.error, reason),
+                )
+            )
         # Allow worker-failed jobs to transition to KILLED on cancel —
         # exclude that state from the cancel guard.
         cancel_guard_states = TERMINAL_JOB_STATES - {job_pb2.JOB_STATE_WORKER_FAILED}
-        write_jobs.bulk_update_state(
-            cur,
-            subtree,
-            job_pb2.JOB_STATE_KILLED,
-            reason,
-            now_ms,
-            cancel_guard_states,
-        )
+        if subtree:
+            cur.execute(
+                sa_update(jobs_table)
+                .where(
+                    jobs_table.c.job_id.in_(subtree),
+                    jobs_table.c.state.not_in(list(cancel_guard_states)),
+                )
+                .values(
+                    state=job_pb2.JOB_STATE_KILLED,
+                    error=reason,
+                    finished_at_ms=func.coalesce(jobs_table.c.finished_at_ms, now_ms),
+                )
+            )
         self._endpoints.remove_by_job_ids(cur, subtree)
         log_event("job_cancelled", job_id.to_wire(), reason=reason)
         return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
@@ -1296,37 +1436,47 @@ class ControllerTransitions:
         else:
             device_type = ""
             device_variant = ""
-        write_workers.upsert_worker(
-            cur,
-            worker_id=worker_id,
-            address=address,
-            total_cpu_millicores=metadata.cpu_count * 1000,
-            total_memory_bytes=metadata.memory_bytes,
-            total_gpu_count=gpu_count,
-            total_tpu_count=tpu_count,
-            device_type=device_type,
-            device_variant=device_variant,
-            slice_id=slice_id,
-            scale_group=scale_group,
-            md_hostname=metadata.hostname,
-            md_ip_address=metadata.ip_address,
-            md_cpu_count=metadata.cpu_count,
-            md_memory_bytes=metadata.memory_bytes,
-            md_disk_bytes=metadata.disk_bytes,
-            md_tpu_name=metadata.tpu_name,
-            md_tpu_worker_hostnames=metadata.tpu_worker_hostnames,
-            md_tpu_worker_id=metadata.tpu_worker_id,
-            md_tpu_chips_per_host_bounds=metadata.tpu_chips_per_host_bounds,
-            md_gpu_count=metadata.gpu_count,
-            md_gpu_name=metadata.gpu_name,
-            md_gpu_memory_mb=metadata.gpu_memory_mb,
-            md_gce_instance_name=metadata.gce_instance_name,
-            md_gce_zone=metadata.gce_zone,
-            md_git_hash=metadata.git_hash,
-            md_device_json=proto_to_json(metadata.device),
-            now_ms=now_ms,
-            health=self._health,
+        # Insert or refresh durable identity / capability metadata for the
+        # worker. Resource usage is derived per-cycle from unfinished
+        # worker-bound ``task_attempts``. ON CONFLICT(worker_id) DO UPDATE
+        # all columns except the primary key. The post-commit hook registers
+        # the worker in the liveness tracker so in-memory state advances
+        # atomically with the DB row.
+        _worker_row_values = {
+            "worker_id": worker_id,
+            "address": address,
+            "total_cpu_millicores": metadata.cpu_count * 1000,
+            "total_memory_bytes": metadata.memory_bytes,
+            "total_gpu_count": gpu_count,
+            "total_tpu_count": tpu_count,
+            "device_type": device_type,
+            "device_variant": device_variant,
+            "slice_id": slice_id,
+            "scale_group": scale_group,
+            "md_hostname": metadata.hostname,
+            "md_ip_address": metadata.ip_address,
+            "md_cpu_count": metadata.cpu_count,
+            "md_memory_bytes": metadata.memory_bytes,
+            "md_disk_bytes": metadata.disk_bytes,
+            "md_tpu_name": metadata.tpu_name,
+            "md_tpu_worker_hostnames": metadata.tpu_worker_hostnames,
+            "md_tpu_worker_id": metadata.tpu_worker_id,
+            "md_tpu_chips_per_host_bounds": metadata.tpu_chips_per_host_bounds,
+            "md_gpu_count": metadata.gpu_count,
+            "md_gpu_name": metadata.gpu_name,
+            "md_gpu_memory_mb": metadata.gpu_memory_mb,
+            "md_gce_instance_name": metadata.gce_instance_name,
+            "md_gce_zone": metadata.gce_zone,
+            "md_git_hash": metadata.git_hash,
+            "md_device_json": proto_to_json(metadata.device),
+        }
+        _worker_update_set = {k: v for k, v in _worker_row_values.items() if k != "worker_id"}
+        cur.execute(
+            sqlite_insert(workers_table)
+            .values(**_worker_row_values)
+            .on_conflict_do_update(index_elements=["worker_id"], set_=_worker_update_set)
         )
+        cur.register(lambda: self._health.register(worker_id, now_ms=now_ms))
         # Replace worker_attributes rows and update the in-memory projection.
         cur.execute(delete(worker_attributes_table).where(worker_attributes_table.c.worker_id == worker_id))
         for attr in attrs:
@@ -1435,7 +1585,19 @@ class ControllerTransitions:
             jobs_to_update.add(job_id_wire)
             accepted.append(assignment)
         for job_id_wire in jobs_to_update:
-            write_jobs.mark_running_if_pending(cur, JobName.from_wire(job_id_wire), now_ms)
+            # Advance PENDING → RUNNING and stamp started_at_ms (preserving
+            # any prior stamp via COALESCE). Non-PENDING rows keep state.
+            cur.execute(
+                sa_update(jobs_table)
+                .where(jobs_table.c.job_id == JobName.from_wire(job_id_wire))
+                .values(
+                    state=case(
+                        (jobs_table.c.state == job_pb2.JOB_STATE_PENDING, job_pb2.JOB_STATE_RUNNING),
+                        else_=jobs_table.c.state,
+                    ),
+                    started_at_ms=func.coalesce(jobs_table.c.started_at_ms, now_ms),
+                )
+            )
         for a in accepted:
             log_event("assignment_queued", a.task_id.to_wire(), worker=str(a.worker_id))
         return AssignmentResult(
@@ -2012,10 +2174,6 @@ class ControllerTransitions:
                 tasks_table.c.max_retries_preemption,
                 jobs_table.c.is_reservation_holder,
                 job_config_table.c.has_coscheduling,
-                job_config_table.c.res_cpu_millicores,
-                job_config_table.c.res_memory_bytes,
-                job_config_table.c.res_disk_bytes,
-                job_config_table.c.res_device_json,
             )
             .select_from(_preempt_from)
             .where(tasks_table.c.task_id == bindparam("task_id")),
@@ -2034,12 +2192,6 @@ class ControllerTransitions:
                 max_retries_preemption=int(_preempt_raw.max_retries_preemption),
                 is_reservation_holder=bool(_preempt_raw.is_reservation_holder),
                 has_coscheduling=bool(_preempt_raw.has_coscheduling),
-                resources=resource_spec_from_scalars(
-                    int(_preempt_raw.res_cpu_millicores),
-                    int(_preempt_raw.res_memory_bytes),
-                    int(_preempt_raw.res_disk_bytes),
-                    _preempt_raw.res_device_json,
-                ),
             )
             if _preempt_raw is not None
             else None
@@ -2621,7 +2773,7 @@ class ControllerTransitions:
                 entrypoint_json=str(r.entrypoint_json),
                 environment_json=str(r.environment_json),
                 bundle_id=str(r.bundle_id),
-                ports_json=str(r.ports_json),
+                ports_json=r.ports_json,
                 constraints_json=r.constraints_json,
                 task_image=str(r.task_image),
                 timeout_ms=int(_tms) if _tms is not None else None,
@@ -2718,7 +2870,7 @@ class ControllerTransitions:
             environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
             bundle_id=row.bundle_id,
             resources=row.resources,
-            ports=json.loads(row.ports_json),
+            ports=row.ports_json,
             attempt_id=attempt_id,
             constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
             task_image=row.task_image,
@@ -2792,7 +2944,11 @@ class ControllerTransitions:
                 continue
 
             if update.container_id is not None:
-                write_tasks.update_container_id(cur, update.task_id, update.container_id)
+                cur.execute(
+                    sa_update(tasks_table)
+                    .where(tasks_table.c.task_id == update.task_id)
+                    .values(container_id=update.container_id)
+                )
 
             terminal_ms: int | None = None
             started_ms: int | None = None
@@ -2928,14 +3084,12 @@ class ControllerTransitions:
         exit_code: int | None = None,
     ) -> None:
         """Test helper: set task state directly in DB."""
-        from sqlalchemy import update as _sa_update
-
         with self._db.transaction() as cur:
             values: dict = {"state": state, "error": error, "exit_code": exit_code}
             if state not in ACTIVE_TASK_STATES:
                 values["current_worker_id"] = None
                 values["current_worker_address"] = None
-            cur.execute(_sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
+            cur.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
 
     def create_attempt_for_test(self, task_id: JobName, worker_id: WorkerId) -> int:
         """Test helper: append a new task_attempt without finalizing prior attempt."""

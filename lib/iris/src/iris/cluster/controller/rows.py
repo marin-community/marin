@@ -29,10 +29,10 @@ class ActiveTaskRow:
 
     Shared by every cascade/scheduling query (``_kill_non_terminal_tasks``,
     ``_find_coscheduled_siblings``, ``cancel_job``, ``preempt_task``,
-    ``cancel_tasks_for_timeout``, ``_remove_failed_worker``, poll paths). The
-    resource columns are decoded into a single ``ResourceSpecProto`` by
-    ``reads.tasks``. Reservation-holder rows carry a populated ``resources``
-    that callers are expected to ignore (they never commit resources).
+    ``cancel_tasks_for_timeout``, ``_remove_failed_worker``, poll paths).
+    Callers that need resource info for RPC payloads use ``PendingDispatchRow``
+    instead; ``ActiveTaskRow`` carries only the fields needed for state-machine
+    and cascade logic.
     """
 
     task_id: JobName
@@ -46,7 +46,6 @@ class ActiveTaskRow:
     max_retries_preemption: int
     is_reservation_holder: bool
     has_coscheduling: bool
-    resources: job_pb2.ResourceSpecProto
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +68,7 @@ class PendingDispatchRow:
     entrypoint_json: str
     environment_json: str
     bundle_id: str
-    ports_json: str
+    ports_json: list
     constraints_json: str | None
     task_image: str
     timeout_ms: int | None
@@ -87,20 +86,3 @@ class WorkerResourceUsage:
     memory_bytes: int
     gpu_count: int
     tpu_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class ReconcileRow:
-    """One (task, attempt, worker) tuple driving per-worker reconcile.
-
-    Returned by ``reads.scheduler.reconcile_rows_for_workers``; rows whose
-    task is in ASSIGNED produce start payloads, rows in BUILDING/RUNNING
-    populate the worker's expected-task set.
-    """
-
-    worker_id: WorkerId
-    task_id: JobName
-    attempt_id: int
-    task_state: int
-    attempt_state: int
-    job_id: JobName

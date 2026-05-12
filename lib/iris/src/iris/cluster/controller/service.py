@@ -8,7 +8,6 @@ creates N tasks). Tasks are the unit of scheduling and execution. Job state is
 aggregated from task states.
 """
 
-import json
 import logging
 import secrets
 import uuid
@@ -343,7 +342,11 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAtte
         task_row = reads_tasks.get_detail(tx, task_id)
         if task_row is None:
             return None
-        attempt_rows = reads_attempts.list_for_task(tx, task_id)
+        attempt_rows = tx.execute(
+            select(*reads_attempts._ATTEMPT_COLS)
+            .where(task_attempts_table.c.task_id == task_id)
+            .order_by(task_attempts_table.c.attempt_id.asc())
+        ).all()
     return TaskWithAttempts(task_row, tuple(attempt_rows))
 
 
@@ -399,9 +402,9 @@ def _reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobR
 
     for c in constraints_from_json(job.constraints_json):
         req.constraints.append(c.to_proto())
-    for port in json.loads(job.ports_json):
+    for port in job.ports_json:
         req.ports.append(port)
-    for arg in json.loads(job.submit_argv_json):
+    for arg in job.submit_argv_json:
         req.submit_argv.append(arg)
 
     if job.has_coscheduling:
@@ -536,21 +539,6 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAtt
     for a in attempt_rows:
         attempts_by_task.setdefault(a.task_id, []).append(a)
     return [TaskWithAttempts(r, tuple(attempts_by_task.get(r.task_id, ()))) for r in task_rows]
-
-
-def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskWithAttempts]) -> dict[WorkerId, str]:
-    """Fetch addresses only for workers referenced by the given tasks."""
-    worker_ids = {_task_worker_id(t) for t in tasks}
-    worker_ids.discard(None)
-    if not worker_ids:
-        return {}
-    with db.read_snapshot() as tx:
-        rows = tx.execute(
-            select(workers_table.c.worker_id, workers_table.c.address).where(
-                workers_table.c.worker_id.in_(list(worker_ids))
-            )
-        ).all()
-    return {row.worker_id: str(row.address) for row in rows}
 
 
 MAX_LIST_JOBS_LIMIT = 500
@@ -1474,12 +1462,14 @@ class ControllerServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, "job_id is required")
         job_id = JobName.from_wire(request.job_id)
         tasks = _tasks_for_listing(self._db, job_id=job_id)
-        worker_addr_by_id = _worker_addresses_for_tasks(self._db, tasks)
 
         task_statuses = []
         for task in tasks:
-            twid = _task_worker_id(task)
-            proto_task_status = task_to_proto(task, worker_address=worker_addr_by_id.get(twid, "") if twid else "")
+            # task.current_worker_address is denormalized into the tasks row at
+            # assignment time and is identical to the workers.address for active tasks.
+            # task_to_proto uses it as a fallback when worker_address="" so no
+            # extra workers-table lookup is needed here.
+            proto_task_status = task_to_proto(task)
 
             # Don't add scheduling diagnostics in list view - too expensive
             # Users should check job detail page for scheduling diagnostics

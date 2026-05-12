@@ -15,7 +15,6 @@ disk.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -94,7 +93,7 @@ class EndpointsProjection:
         Called once at construction and again after ``ControllerDB.replace_from``
         has swapped the underlying database file. TypeDecorators on
         ``endpoints_table`` decode ``JobNameType`` and ``TimestampMsType``
-        columns; ``metadata_json`` is decoded here with ``json.loads``.
+        columns; ``metadata_json`` is decoded by the ``JSONDict`` TypeDecorator.
         """
         with self._lock:
             self._by_id.clear()
@@ -107,7 +106,7 @@ class EndpointsProjection:
                         name=row.name,
                         address=row.address,
                         task_id=row.task_id,
-                        metadata=json.loads(row.metadata_json),
+                        metadata=row.metadata_json,
                         registered_at=row.registered_at_ms,
                     )
                     self._index(endpoint)
@@ -225,7 +224,7 @@ class EndpointsProjection:
                 address=endpoint.address,
                 job_id=job_id,
                 task_id=task_id,
-                metadata_json=json.dumps(endpoint.metadata),
+                metadata_json=endpoint.metadata,
                 registered_at_ms=endpoint.registered_at,
             )
             .on_conflict_do_update(
@@ -235,7 +234,7 @@ class EndpointsProjection:
                     "address": endpoint.address,
                     "job_id": job_id,
                     "task_id": task_id,
-                    "metadata_json": json.dumps(endpoint.metadata),
+                    "metadata_json": endpoint.metadata,
                     "registered_at_ms": endpoint.registered_at,
                 },
             )

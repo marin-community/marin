@@ -3,9 +3,7 @@
 
 """Write helpers for the ``tasks`` table."""
 
-from collections.abc import Sequence
-
-from sqlalchemy import and_, func, insert, update
+from sqlalchemy import func, insert, update
 
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.schema import task_attempts_table, tasks_table
@@ -56,35 +54,6 @@ def insert_task(
     )
 
 
-@writes_to(tasks_table)
-def mark_assigned(
-    tx: Tx,
-    task_id: JobName,
-    attempt_id: int,
-    worker_id: WorkerId | None,
-    worker_address: str | None,
-    now_ms: int,
-    priority_band: int | None = None,
-) -> None:
-    """Move a task to ``TASK_STATE_ASSIGNED`` and stamp worker / attempt fields.
-
-    ``priority_band`` is stamped at assign time so the preemption pass
-    treats a running task's band as fixed. ``None`` leaves the column
-    untouched (paths that do not run the budget computation).
-    """
-    values: dict = {
-        "state": job_pb2.TASK_STATE_ASSIGNED,
-        "current_attempt_id": attempt_id,
-        "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, now_ms),
-    }
-    if worker_id is not None:
-        values["current_worker_id"] = worker_id
-        values["current_worker_address"] = worker_address
-    if priority_band is not None:
-        values["priority_band"] = priority_band
-    tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
-
-
 @writes_to(tasks_table, task_attempts_table)
 def assign_task(
     tx: Tx,
@@ -98,7 +67,9 @@ def assign_task(
     """Insert a fresh ``task_attempts`` row and move the task to ASSIGNED.
 
     A single transaction creates the attempt row and stamps the task with
-    the worker / attempt fields.
+    the worker / attempt fields. ``priority_band`` is stamped at assign
+    time so the preemption pass treats a running task's band as fixed;
+    ``None`` leaves the column untouched.
     """
     insert_attempt(
         tx,
@@ -108,7 +79,17 @@ def assign_task(
         state=job_pb2.TASK_STATE_ASSIGNED,
         created_at_ms=now_ms,
     )
-    mark_assigned(tx, task_id, attempt_id, worker_id, worker_address, now_ms, priority_band=priority_band)
+    values: dict = {
+        "state": job_pb2.TASK_STATE_ASSIGNED,
+        "current_attempt_id": attempt_id,
+        "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, now_ms),
+    }
+    if worker_id is not None:
+        values["current_worker_id"] = worker_id
+        values["current_worker_address"] = worker_address
+    if priority_band is not None:
+        values["priority_band"] = priority_band
+    tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
 
 
 @writes_to(tasks_table)
@@ -144,72 +125,3 @@ def apply_state_update(
         values["current_worker_id"] = None
         values["current_worker_address"] = None
     tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
-
-
-@writes_to(tasks_table)
-def mark_terminal(
-    tx: Tx,
-    task_id: JobName,
-    state: int,
-    error: str | None,
-    finished_at_ms: int | None,
-    *,
-    failure_count: int | None = None,
-    preemption_count: int | None = None,
-    active_states: set[int],
-) -> None:
-    """Move a task to a terminal-style state, optionally updating counters.
-
-    Clears ``current_worker_*`` when the target state is not active.
-    Preserves an existing ``finished_at_ms`` via COALESCE.
-    """
-    values: dict = {
-        "state": state,
-        "error": error,
-        "finished_at_ms": (
-            func.coalesce(tasks_table.c.finished_at_ms, finished_at_ms) if finished_at_ms is not None else finished_at_ms
-        ),
-    }
-    if failure_count is not None:
-        values["failure_count"] = failure_count
-    if preemption_count is not None:
-        values["preemption_count"] = preemption_count
-    if state not in active_states:
-        values["current_worker_id"] = None
-        values["current_worker_address"] = None
-    tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
-
-
-@writes_to(tasks_table)
-def bulk_kill_non_terminal(
-    tx: Tx,
-    job_ids: Sequence[JobName],
-    reason: str,
-    finished_at_ms: int,
-    terminal_states: set[int],
-) -> None:
-    """Mark all non-terminal tasks under ``job_ids`` as ``TASK_STATE_KILLED``."""
-    if not job_ids:
-        return
-    tx.execute(
-        update(tasks_table)
-        .where(
-            and_(
-                tasks_table.c.job_id.in_(job_ids),
-                tasks_table.c.state.not_in(terminal_states),
-            )
-        )
-        .values(
-            state=job_pb2.TASK_STATE_KILLED,
-            error=reason,
-            finished_at_ms=func.coalesce(tasks_table.c.finished_at_ms, finished_at_ms),
-            current_worker_id=None,
-            current_worker_address=None,
-        )
-    )
-
-
-@writes_to(tasks_table)
-def update_container_id(tx: Tx, task_id: JobName, container_id: str) -> None:
-    """Update ``tasks.container_id`` for ``task_id``."""
-    tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(container_id=container_id))

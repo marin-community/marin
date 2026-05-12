@@ -14,7 +14,7 @@ from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import jobs as reads_jobs
@@ -145,10 +145,13 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
             return None
         if job.state != job_pb2.JOB_STATE_PENDING:
             return None
+        dc = device_counts_from_json(job.res_device_json)
         req = JobRequirements(
-            resources=resource_spec_from_scalars(
-                job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
-            ),
+            req_cpu_millicores=job.res_cpu_millicores,
+            req_memory_bytes=job.res_memory_bytes,
+            req_gpu_count=dc.gpu,
+            req_tpu_count=dc.tpu,
+            device_variant=device_variant_from_json(job.res_device_json),
             constraints=constraints_from_json(job.constraints_json),
             is_coscheduled=job.has_coscheduling,
             coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,

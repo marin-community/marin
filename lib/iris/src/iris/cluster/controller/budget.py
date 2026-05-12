@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
@@ -15,6 +14,7 @@ from typing import Generic, TypeVar
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, func, select
 
+from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB, Tx
 from iris.cluster.controller.schema import job_config_table, tasks_table
 from iris.rpc import config_pb2, job_pb2
@@ -22,18 +22,6 @@ from iris.rpc import config_pb2, job_pb2
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-
-def _accel_from_device_json(device_json: str | None) -> int:
-    """Count GPU + TPU accelerators from a device JSON column."""
-    if not device_json:
-        return 0
-    data = json.loads(device_json)
-    if "gpu" in data:
-        return data["gpu"].get("count", 0)
-    if "tpu" in data:
-        return data["tpu"].get("count", 0)
-    return 0
 
 
 @dataclass(frozen=True)
@@ -107,7 +95,8 @@ def compute_user_spend(tx: Tx) -> dict[str, int]:
         user_id = row.job_id.user
         cpu = row.res_cpu_millicores
         mem = row.res_memory_bytes
-        accel = _accel_from_device_json(row.res_device_json)
+        counts = device_counts_from_json(row.res_device_json)
+        accel = counts.gpu + counts.tpu
         value = resource_value(cpu, mem, accel)
         spend[user_id] += value * int(row.task_count)
     return dict(spend)

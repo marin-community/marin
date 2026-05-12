@@ -5,7 +5,6 @@
 
 Return shapes:
 
-* ``list_for_task`` — ``list[Row]`` ordered by attempt_id ASC
 * ``bulk_get_for_updates`` — ``dict[(JobName, int), Row]``
 
 ``bulk_get_for_updates`` chunks at 450 (task_id, attempt_id) pairs to keep
@@ -14,7 +13,7 @@ the per-statement parameter count under SQLite's 999-parameter limit (2 binds pe
 
 from collections.abc import Sequence
 
-from sqlalchemy import bindparam, select, tuple_
+from sqlalchemy import select, tuple_
 
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.schema import task_attempts_table
@@ -35,21 +34,6 @@ _ATTEMPT_COLS = (
     task_attempts_table.c.exit_code,
     task_attempts_table.c.error,
 )
-
-# ---------------------------------------------------------------------------
-# Single-attempt lookup
-# ---------------------------------------------------------------------------
-
-
-def list_for_task(tx: Tx, task_id: JobName) -> list:
-    """Return every attempt Row for ``task_id`` ordered by attempt_id ascending."""
-    return tx.execute(
-        select(*_ATTEMPT_COLS)
-        .where(task_attempts_table.c.task_id == bindparam("task_id"))
-        .order_by(task_attempts_table.c.attempt_id.asc()),
-        {"task_id": task_id},
-    ).all()
-
 
 # ---------------------------------------------------------------------------
 # Bulk attempt lookup for the heartbeat update path
