@@ -4,7 +4,7 @@
 """Task read helpers (SA Core expression language).
 
 All queries use ``select(table.c.col, ...)`` rather than ``text("SELECT
-...")``. TypeDecorators on the schema_v2 columns decode values on read so
+...")``. TypeDecorators on the schema columns decode values on read so
 callers receive ``JobName``, ``Timestamp``, and ``WorkerId`` directly.
 
 Return shapes:

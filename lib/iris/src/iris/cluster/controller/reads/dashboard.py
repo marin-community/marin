@@ -4,7 +4,7 @@
 """Dashboard composite reads (SA Core expression language).
 
 All queries use ``select(table.c.col, ...)`` rather than ``text("SELECT
-...")``. TypeDecorators on schema_v2 columns decode values on read so
+...")``. TypeDecorators on schema columns decode values on read so
 callers receive ``JobName``, ``Timestamp``, and ``bool`` directly.
 
 Return shapes:

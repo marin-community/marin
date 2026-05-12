@@ -3,7 +3,7 @@
 
 """Add partial indexes that make the per-tick scheduling reads cheap.
 
-``TaskAttemptStore.resource_usage_by_worker`` runs every scheduling tick
+``reads.scheduler.resource_usage_by_worker`` runs every scheduling tick
 and reads exactly the rows where ``worker_id IS NOT NULL`` and
 ``finished_at_ms IS NULL``. Without an index SQLite picks ``jobs`` as
 the driving table and scans all ~24k rows; with the partial index here

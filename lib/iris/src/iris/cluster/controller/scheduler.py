@@ -71,7 +71,7 @@ class WorkerSnapshot:
     The ``committed_*`` fields hold the resources reserved by unfinished
     worker-bound attempts at cycle start; they are *not* persisted on the
     workers table — the controller fetches them per cycle from
-    ``TaskAttemptStore.resource_usage_by_worker``.
+    ``reads.scheduler.resource_usage_by_worker``.
     """
 
     worker_id: WorkerId

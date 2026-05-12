@@ -4,7 +4,7 @@
 """Worker read helpers (SA Core expression language).
 
 All queries use ``select(table.c.col, ...)`` rather than ``text("SELECT
-...")``. TypeDecorators on the schema_v2 columns decode worker_id to
+...")``. TypeDecorators on the schema columns decode worker_id to
 WorkerId on read.
 
 Return shapes:

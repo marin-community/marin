@@ -102,7 +102,7 @@ def assign_task(
 ) -> None:
     """Insert a fresh ``task_attempts`` row and move the task to ASSIGNED.
 
-    Composite write that mirrors :meth:`TaskStore.assign`: a single
+    Composite write that mirrors `writes.tasks.assign_task`: a single
     transaction creates the attempt row and stamps the task with the
     worker / attempt fields.
     """
@@ -166,7 +166,7 @@ def mark_terminal(
 ) -> None:
     """Move a task to a terminal-style state, optionally updating counters.
 
-    Mirrors :meth:`TaskStore.mark_terminal`: clears ``current_worker_*``
+    Mirrors `writes.tasks.mark_terminal`: clears ``current_worker_*``
     when the target state is not active; preserves the existing
     ``finished_at_ms`` if one is already set and ``finished_at_ms`` is
     not None (COALESCE), otherwise sets it directly.

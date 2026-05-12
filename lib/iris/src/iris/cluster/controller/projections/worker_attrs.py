@@ -11,7 +11,7 @@ is handled explicitly here.
 
 Unlike :class:`EndpointsProjection`, mutating methods do not issue SQL — the
 corresponding ``worker_attributes`` writes happen in
-:class:`WorkerStore.replace_attributes`. This projection is responsible only for
+`writes.workers.replace_attributes`. This projection is responsible only for
 the in-memory cache that ``healthy_active_workers_with_attributes`` reads on the
 scheduler hot path.
 """
@@ -36,10 +36,10 @@ from iris.cluster.types import WorkerId
 class PostCommitRegistrar(Protocol):
     """Structural type for any transaction wrapper that schedules post-commit hooks.
 
-    Both :class:`db.Tx` and legacy :class:`TransactionCursor` expose a
-    ``register(callable)`` method that fires after the surrounding write
-    transaction commits, under the write lock. Projection invalidation methods
-    accept this Protocol so the same hook works for both transaction types.
+    :class:`db.Tx` exposes a ``register(callable)`` method that fires after
+    the surrounding write transaction commits, under the write lock. Projection
+    invalidation methods accept this Protocol so the hook works for any
+    transaction wrapper that follows the same shape.
     """
 
     def register(self, hook: Callable[[], None]) -> None: ...
@@ -128,7 +128,7 @@ class WorkerAttrsProjection:
         """Schedule a dict update for ``worker_id``'s attributes after commit.
 
         Does not issue SQL — the corresponding ``worker_attributes`` writes
-        are still emitted by :class:`WorkerStore.replace_attributes`. The
+        are still emitted by `writes.workers.replace_attributes`. The
         new value replaces any prior entry for ``worker_id`` so the dict
         matches the SQL post-image.
         """

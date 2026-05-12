@@ -118,7 +118,7 @@ class PendingDispatchRow:
     / task_image / timeout) so the caller can assemble a
     ``RunTaskRequest``. Kept separate so other active-task queries don't
     pay for loading these JSON blobs. Used for both PENDING-promotion and
-    ASSIGNED-redrive paths (see ``TaskStore.list_*_for_direct_provider``).
+    ASSIGNED-redrive paths (see `reads.tasks.list_*_for_direct_provider`).
     """
 
     task_id: JobName

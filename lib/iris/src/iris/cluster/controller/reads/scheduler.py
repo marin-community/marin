@@ -4,7 +4,7 @@
 """Scheduler-tick read helpers (SA Core expression language).
 
 All queries use ``select(table.c.col, ...)`` rather than ``text("SELECT
-...")``. TypeDecorators on schema_v2 columns decode values on read.
+...")``. TypeDecorators on schema columns decode values on read.
 
 Return shapes:
 
@@ -72,7 +72,7 @@ def jobs_with_reservations(tx: Tx, states: tuple[int, ...]) -> list:
 # Per-worker resource usage
 # ---------------------------------------------------------------------------
 
-# Two-step query mirroring ``TaskAttemptStore.resource_usage_by_worker``:
+# Two-step query mirroring ``reads.scheduler.resource_usage_by_worker``:
 # the inline ``JOIN jobs ON is_reservation_holder = 0`` is intentionally
 # avoided because it drives SQLite from the ``jobs`` table (full scan ~24k
 # rows on production) and pushes the read from ~3 ms to ~380 ms. The small

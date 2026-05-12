@@ -60,7 +60,7 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
             )
         ).all()
 
-        # Failed workers have their DB row deleted (WorkerStore.remove), so
+        # Failed workers have their DB row deleted (writes.workers.remove_worker), so
         # surviving rows with a slice are by definition the live tracked set.
         tracked_rows = tx.execute(
             select(

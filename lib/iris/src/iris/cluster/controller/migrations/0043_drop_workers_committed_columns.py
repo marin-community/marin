@@ -5,7 +5,7 @@
 
 Worker resource usage is now derived from unfinished worker-bound
 ``task_attempts`` (``worker_id IS NOT NULL AND finished_at_ms IS NULL``)
-via ``TaskAttemptStore.resource_usage_by_worker``. The ``committed_*``
+via ``reads.scheduler.resource_usage_by_worker``. The ``committed_*``
 counters were a redundant cache that drifted out of sync with reality on
 producer/heartbeat path splits — see #5470 — so they are removed.
 

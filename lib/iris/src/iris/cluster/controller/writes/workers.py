@@ -122,7 +122,7 @@ def remove_worker(
     :meth:`WorkerAttrsProjection.invalidate_for_worker` inline so the
     dict update commits under the same write lock as the SQL. The
     pre-emptive ``UPDATE`` on ``task_attempts`` / ``tasks`` matches
-    today's :meth:`WorkerStore.remove` byte-for-byte: it sets
+    today's `writes.workers.remove_worker` byte-for-byte: it sets
     ``current_worker_*`` to NULL before the cascade so the row history
     is observable to readers in the same write transaction.
     """

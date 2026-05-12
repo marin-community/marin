@@ -559,7 +559,7 @@ def _get_running_tasks_with_band_and_value(
 
     The reported band is the value persisted in ``tasks.priority_band``, which
     is stamped at assignment time (see ``_commit_assignments`` and
-    ``TaskStore.mark_assigned``). The over-budget downgrade is applied at that
+    ``writes.tasks.mark_assigned``). The over-budget downgrade is applied at that
     stamping point, not on every scheduling tick, which prevents a running
     task from oscillating into BATCH and back as its own user crosses the
     budget cliff — the source of mutual same-band preemption between two

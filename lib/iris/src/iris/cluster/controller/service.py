@@ -2732,7 +2732,7 @@ class ControllerServiceImpl:
     ) -> job_pb2.SetTaskStatusTextResponse:
         """Task pushes a markdown status string to the coordinator.
 
-        Status text lives entirely in the in-memory ``TaskStore`` dict; the
+        Status text lives entirely in the in-memory in-memory dict on ControllerTransitions; the
         write is idempotent and stale task IDs are evicted by
         ``remove_status_text_by_job_ids`` during pruning.
         """

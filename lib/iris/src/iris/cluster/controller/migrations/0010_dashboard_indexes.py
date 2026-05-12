@@ -29,8 +29,8 @@ def migrate(conn: sqlite3.Connection) -> None:
     )
 
     # Historical: this also created idx_worker_resource_history_ts on
-    # worker_resource_history. The table is dropped in 0040 and no longer
-    # appears in MAIN_TABLES, so a fresh DB never has the table here. The
+    # worker_resource_history. The table is dropped in 0040 and is no
+    # longer in the schema, so a fresh DB never has the table here. The
     # index drop is handled by 0040 for legacy DBs.
     has_table = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_resource_history'"

@@ -4,7 +4,7 @@
 """User-budget and user-role read helpers (SA Core expression language).
 
 All queries use ``select(table.c.col, ...)`` rather than ``text("SELECT
-...")``. TypeDecorators on schema_v2 columns decode updated_at_ms to
+...")``. TypeDecorators on schema columns decode updated_at_ms to
 Timestamp on read.
 
 Return shapes:

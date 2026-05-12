@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ``CachedProto`` TypeDecorator on ``schema_v2``.
+"""Tests for the ``CachedProto`` TypeDecorator on the SA Core ``schema``.
 
-Covers the same invariants today's ``ProtoCache`` (``schema.py:34-66``)
-holds: bytes-keyed identity reuse, 8192-entry bound, 25% eviction
+Covers bytes-keyed identity reuse, 8192-entry bound, 25% eviction
 batches, thread-safe decode, and per-row None passthrough. The global
 cache is class-wide and shared across every ``CachedProto`` instance,
 so we exercise that explicitly.

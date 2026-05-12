@@ -46,24 +46,25 @@ uv run iris build dashboard
 
 Always run `build:check` after editing `.vue` or `.ts` files to catch type errors before committing.
 
-## Data Layer (post SA Core migration)
+## Data Layer
 
-The controller is mid-migration from a hand-rolled SQLite layer (legacy
-`stores.py`, `schema.py`'s `Projection`, `db.py`'s `TransactionCursor`) to
-SQLAlchemy Core. Both code paths coexist; new code should target the SA Core
-path.
+The controller uses **SQLAlchemy Core** end to end. There is no legacy
+hand-rolled SQLite layer — all reads, writes, and projections build SA Core
+expressions against tables defined in `controller/schema.py`.
 
-- **Schema:** SA Core `Table` objects live in `schema_v2.py`. TypeDecorators
-  (`JobNameType`, `WorkerIdType`, `TimestampMsType`, `BoolIntType`,
-  `CachedProto`) adapt Python types to SQL. To add a column, edit `schema_v2.py`
-  **and** add a migration under `controller/migrations/`. Migrations remain the
-  source of truth for on-disk DDL; `schema_v2` is for SELECT generation and
-  documentation.
-- **Reads:** SA Core readers live in `controller/reads/<area>.py`. Hot-path
-  readers use `text(...).bindparams(...)` for low fixed overhead; ad-hoc
-  composites (dashboard, recursive CTEs) use `text()` or `select(...)`
-  freely. Every read takes a `tx: db_v2.Tx` (or anything ducked to
-  `execute(stmt, params)`) as its first argument.
+- **Schema:** SA Core `Table` objects + `Index` declarations live in
+  `controller/schema.py`. TypeDecorators (`JobNameType`, `WorkerIdType`,
+  `TimestampMsType`, `BoolIntType`, `CachedProto`) adapt Python types to SQL.
+  To add a column, edit `schema.py` **and** add a Python migration under
+  `controller/migrations/`. Migrations are the source of truth for on-disk
+  DDL; `schema.py` is the source for query generation. Migration 0001
+  bootstraps a fresh DB from `schema.metadata` via `CreateTable(...,
+  if_not_exists=True)` so the SA model and on-disk DDL never diverge.
+- **Reads:** module-level functions in `controller/reads/<area>.py` taking
+  `tx: db.Tx` as the first argument and returning SA `Row` objects (or
+  `Sequence[Row]`). Callers use `row.column_name` attribute access; there
+  are no wrapper dataclasses. Hot-path readers use `select(table.c.col)`
+  directly; ad-hoc composites (dashboard, recursive CTEs) use `text(...)`.
 - **Writes:** module-level functions in `controller/writes/<entity>.py`,
   decorated with `@writes_to(*tables, cascades_into=())`. The decorator is
   pure metadata; `assert_owned_tables_not_externally_written()` runs at
@@ -71,25 +72,26 @@ path.
   table from outside the owning Projection. Cascade hooks (e.g.
   `worker_attrs.invalidate_for_worker`) are called inline by the write
   function and registered via `tx.register(...)` so the dict update fires
-  under the write lock after commit.
+  under the write lock after commit. Use `sqlalchemy.dialects.sqlite.insert`
+  for UPSERT (`on_conflict_do_update` / `on_conflict_do_nothing`).
 - **Projections (`endpoints`, `worker_attributes`):** write-through caches in
   `controller/projections/<name>.py`. Never write to these tables outside
   the projection. Read methods take no `tx` and serve latest-committed
   state from the in-memory dict. Mutating methods register post-commit
   hooks for atomic dict updates.
-- **Transactions:** `db_v2.write_transaction(engine, lock)` for writes
-  (holds the lock across COMMIT + post-commit hooks). `db_v2.read_snapshot(
-  engine)` for reads (pooled query-only conns, no lock). The legacy
-  `ControllerDB.transaction()` / `ControllerDB.read_snapshot()` continue to
-  work via shim — both `TransactionCursor` and `Tx` accept either raw SQL
-  strings or SA constructs.
-- **Returning rows:** by default, return frozen dataclasses (`JobDetailRow`,
-  `TaskRow`, etc.) defined in `schema.py` — they're still the canonical row
-  types. SA `Row` objects work too if you don't need a named shape.
+- **Transactions:** `db.write_transaction(engine, lock)` for writes (holds
+  the lock across COMMIT + post-commit hooks); `db.read_snapshot(engine)`
+  for reads (pooled query-only conns, no lock). `ControllerDB.transaction()`
+  / `.read_snapshot()` are thin wrappers around those. `Tx.execute()` only
+  accepts SA Core constructs — raw SQL strings raise `TypeError`. Use
+  `sqlalchemy.text(...)` if you genuinely need literal SQL.
+- **Returning rows:** SA `Row` objects from `select(...)` are the canonical
+  return type. There are no wrapper dataclasses to construct. Use
+  `row._mapping` if you need dict access; otherwise just `row.column_name`.
 
 Design context: `.agents/projects/20260511_iris_store_view_refactor_v2.md`
-and `_critique.md` / `_addendum_fit.md` / `_sa_eval.md`. The migration plan
-itself is `.agents/projects/20260511_iris_store_view_refactor_tasks.md`.
+and the migration enumeration at
+`.agents/projects/20260512_iris_rewiring_enumeration.md`.
 
 ## Code Conventions
 

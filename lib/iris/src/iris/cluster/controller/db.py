@@ -423,7 +423,7 @@ class ControllerDB:
         logger.info("ANALYZE completed in %.2fs", time.monotonic() - t0)
 
         # Callables invoked at the end of ``replace_from`` so callers with
-        # caches over DB contents (e.g. ``ControllerStore``) can reload them
+        # caches over DB contents (e.g. projections) can reload them
         # after a checkpoint restore. Registered via ``register_reopen_hook``.
         self._reopen_hooks: list[Callable[[], None]] = []
 
@@ -431,7 +431,7 @@ class ControllerDB:
         # package re-exports every entity module so REGISTERED_WRITE_FUNCTIONS
         # is fully populated. Projection classes load via the projections
         # package re-export; instances appear in PROJECTIONS only after
-        # ControllerStore (or a test) constructs them. The check is safe
+        # Anyone (or a test) constructs them. The check is safe
         # to run pre-instantiation — owned will be empty and no violations
         # can fire — and is re-runnable from any caller after projections
         # are built.

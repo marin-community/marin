@@ -4,7 +4,7 @@
 """Job and job_config read helpers (SA Core expression language).
 
 Every query uses ``select(table.c.col, ...)`` rather than ``text("SELECT
-...")``. TypeDecorators on the schema_v2 columns decode values on read so
+...")``. TypeDecorators on the schema columns decode values on read so
 callers receive ``JobName``, ``Timestamp``, and ``bool`` directly without
 manual conversion.
 

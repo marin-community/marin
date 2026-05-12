@@ -128,7 +128,7 @@ def compute_effective_band(
     Defense-in-depth: a leaked UNSPECIFIED (0) is normalized to INTERACTIVE
     so it cannot sort ahead of PRODUCTION under ``ORDER BY priority_band
     ASC``. Callers should resolve UNSPECIFIED upstream (parent inheritance,
-    then INTERACTIVE default) — see ``JobStore.get_priority_bands``.
+    then INTERACTIVE default) — see ``reads.jobs.get_priority_bands``.
     """
     if task_band == job_pb2.PRIORITY_BAND_UNSPECIFIED:
         task_band = job_pb2.PRIORITY_BAND_INTERACTIVE
