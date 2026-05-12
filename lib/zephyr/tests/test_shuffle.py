@@ -7,6 +7,8 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
+import logging
+
 from zephyr.plan import deterministic_hash
 from zephyr.shuffle import (
     ScatterFileIterator,
@@ -202,6 +204,41 @@ def test_scatter_byte_budget_flushes_mid_write(tmp_path):
     scatter_paths = [data_path]
     total_chunks = sum(ScatterReader.from_sidecars(scatter_paths, s).total_chunks for s in range(num_shards))
     assert total_chunks > 2, f"expected >2 chunks with 1-byte budget, got {total_chunks}"
+
+
+def test_scatter_progress_log_is_rate_limited(tmp_path, caplog):
+    """High-fanout flushes must not emit one progress log line per chunk.
+
+    Regression test for #5678: a 1-byte budget forces a flush on every write,
+    which under the old `% 10` gate produced one log line per ten chunks. With
+    time-based rate limiting, all chunks written in a fast test should produce
+    at most one per-flush progress line (the first call to should_run()).
+    """
+    num_shards = 2
+    items = [{"k": i % num_shards, "v": i} for i in range(200)]
+    data_path = str(tmp_path / "shard-0000.shuffle")
+
+    writer = ScatterWriter(
+        data_path=data_path,
+        key_fn=_key,
+        num_output_shards=num_shards,
+        buffer_limit_bytes=1,
+    )
+
+    with caplog.at_level(logging.INFO, logger="zephyr.shuffle"):
+        for item in items:
+            writer.write(item)
+        writer.close()
+
+    progress_lines = [r for r in caplog.records if "scatter chunks so far" in r.getMessage()]
+    assert writer._n_chunks_written > 10, "test setup should produce many chunks"
+    # All chunks complete well within the 5s throttle interval, so only the
+    # first flush is allowed to log. Asserting <=1 catches any regression that
+    # re-introduces per-chunk or per-N-chunk logging.
+    assert len(progress_lines) <= 1, (
+        f"expected <=1 progress line under rate limit; got {len(progress_lines)} "
+        f"for {writer._n_chunks_written} chunks"
+    )
 
 
 def test_scatter_estimate_tracks_skewed_items(tmp_path):
