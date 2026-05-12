@@ -11,9 +11,12 @@ store.
 
 Levels are time-ordered: every fresh flush emits an L0 segment. The
 planner promotes L_n → L_{n+1} when the longest contiguous run of L_n
-segments hits the byte target for that tier (or, for L0 only, when the
-oldest run has been sitting longer than ``max_l0_age_sec`` — the lever
-that keeps low-volume namespaces from leaking small files).
+segments hits the byte target for that tier, or when the oldest run
+has been sitting longer than ``max_segment_age_sec`` — the lever that
+keeps low-volume / bursty namespaces from leaking small files at any
+non-terminal tier. Without an age trigger at L1+ the byte-target alone
+strands hundreds of sub-target L1 files for namespaces whose L0 ages
+out in small pieces.
 
 The terminal level is ``len(level_targets)``: segments at that tier
 never re-compact. They are also the only tier eligible for eviction
@@ -65,7 +68,7 @@ class CompactionConfig:
 
     level_targets: tuple[int, ...] = (64 * _MiB, 256 * _MiB)
     check_interval_sec: float = 30.0
-    max_l0_age_sec: float = 300.0
+    max_segment_age_sec: float = 300.0
     max_segments_per_namespace: int = 1000
     max_bytes_per_namespace: int = 100 * 1024**3
 
@@ -117,9 +120,9 @@ class Compactor:
             for run in _contiguous_runs(at_level):
                 if _run_bytes(run) >= target:
                     return _build_job(_take_until_target(run, target), output_level=n + 1)
-                if n == 0 and self.config.max_l0_age_sec > 0:
+                if self.config.max_segment_age_sec > 0:
                     oldest_age_sec = (now_ms - run[0].created_at_ms) / 1000.0
-                    if oldest_age_sec >= self.config.max_l0_age_sec:
+                    if oldest_age_sec >= self.config.max_segment_age_sec:
                         return _build_job(_take_until_target(run, target), output_level=n + 1)
         return None
 

@@ -41,13 +41,13 @@ def _row(
 
 
 def test_plan_returns_none_when_under_target():
-    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_l0_age_sec=0))
+    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_segment_age_sec=0))
     rows = [_row(level=0, min_seq=1, max_seq=1, byte_size=128)]
     assert compactor.plan(rows, now_ms=0) is None
 
 
 def test_plan_promotes_when_byte_target_reached():
-    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_l0_age_sec=0))
+    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_segment_age_sec=0))
     rows = [
         _row(level=0, min_seq=1, max_seq=1, byte_size=512),
         _row(level=0, min_seq=2, max_seq=2, byte_size=512),
@@ -59,14 +59,14 @@ def test_plan_promotes_when_byte_target_reached():
 
 
 def test_plan_promotes_aged_l0_below_target():
-    """L0 segments past ``max_l0_age_sec`` promote regardless of byte target.
+    """L0 segments past ``max_segment_age_sec`` promote regardless of byte target.
 
     Regression for the bug where ``_segment_to_row`` overwrote
     ``created_at_ms`` with ``time.time()`` on every tick — under that bug
     this case would never fire because each plan tick would observe a
     "freshly created" row.
     """
-    compactor = Compactor(CompactionConfig(level_targets=(1 << 30,), max_l0_age_sec=300.0))
+    compactor = Compactor(CompactionConfig(level_targets=(1 << 30,), max_segment_age_sec=300.0))
     rows = [
         _row(level=0, min_seq=1, max_seq=1, byte_size=128, created_at_ms=0),
         _row(level=0, min_seq=2, max_seq=2, byte_size=128, created_at_ms=0),
@@ -79,9 +79,27 @@ def test_plan_promotes_aged_l0_below_target():
 
 
 def test_plan_does_not_age_terminal_level():
-    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_l0_age_sec=300.0))
+    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_segment_age_sec=300.0))
     rows = [_row(level=1, min_seq=1, max_seq=1, byte_size=128, created_at_ms=0)]
     assert compactor.plan(rows, now_ms=10**12) is None
+
+
+def test_plan_ages_non_terminal_l1_below_target():
+    """L1 segments past ``max_segment_age_sec`` promote when L2 is non-terminal.
+
+    Regression for the bug where aging applied only to L0 — non-terminal
+    L1 segments accumulated indefinitely for namespaces whose L0 ages out
+    in small pieces (so L1 never sums to its byte target).
+    """
+    compactor = Compactor(CompactionConfig(level_targets=(64, 256), max_segment_age_sec=300.0))
+    rows = [
+        _row(level=1, min_seq=1, max_seq=1, byte_size=8, created_at_ms=0),
+        _row(level=1, min_seq=2, max_seq=2, byte_size=8, created_at_ms=0),
+    ]
+    job = compactor.plan(rows, now_ms=300_000)
+    assert job is not None
+    assert job.output_level == 2
+    assert [r.min_seq for r in job.inputs] == [1, 2]
 
 
 def test_aggregate_key_bounds_preserves_numeric_ordering():

@@ -271,7 +271,7 @@ class LocalSegment:
     row_count: int
     # ``created_at_ms`` is stamped once at flush/merge time and preserved
     # across level bumps and catalog reconcile so the planner can age out
-    # quiet L0 segments via ``CompactionConfig.max_l0_age_sec``.
+    # quiet non-terminal segments via ``CompactionConfig.max_segment_age_sec``.
     created_at_ms: int = 0
     # Typed key-column bounds (Python int / str / float / bool / bytes
     # depending on schema). Stringified only at the catalog boundary in
@@ -826,9 +826,18 @@ class DiskLogNamespace:
                 # Drain promotable runs back-to-back on the same tick: a
                 # large flush burst can leave several tiers eligible at once,
                 # and waiting another check_interval per merge needlessly
-                # extends per-read fanout.
+                # extends per-read fanout. Yield to flush between jobs so a
+                # long L>=1 merge (seconds to tens of seconds) doesn't starve
+                # writers — under sustained load the ram buffer would
+                # otherwise grow past ``segment_target_bytes`` while we keep
+                # merging.
                 while self._compaction_step():
-                    pass
+                    with self._insertion_lock:
+                        ram_bytes = self._buffers.ram_bytes()
+                    if ram_bytes >= self._segment_target_bytes:
+                        self._flush_step()
+                        self._flush_rl.mark_run()
+                        last_flush_at = time.monotonic()
                 self._compaction_rl.mark_run()
                 last_compact_at = time.monotonic()
                 self._sync_step()
@@ -921,7 +930,7 @@ class DiskLogNamespace:
         """Build the catalog row that mirrors ``seg``.
 
         ``created_at_ms`` reflects the segment's stamped birth time, never
-        ``now`` — overwriting it would defeat ``max_l0_age_sec`` aging,
+        ``now`` — overwriting it would defeat ``max_segment_age_sec`` aging,
         which the planner reads from the round-trip catalog snapshot every
         tick. Key bounds are stringified here because the catalog stores
         them in a generic TEXT column.
