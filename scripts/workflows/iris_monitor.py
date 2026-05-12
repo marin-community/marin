@@ -28,10 +28,12 @@ from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
 from iris.rpc.auth import StaticTokenProvider, TokenProvider
 from rigging.redaction import redact_value
+from rigging.timing import ExponentialBackoff
 
 _REPO_ROOT = Path(__file__).parents[2]
 
 JOB_STATE_SUCCEEDED = job_pb2.JobState.Name(job_pb2.JOB_STATE_SUCCEEDED)
+_MAX_CHILD_WAIT_POLL_INTERVAL = 30.0
 
 _HOST_SSH_COMMAND = """\
 set +e
@@ -46,13 +48,6 @@ sudo journalctl -u google-startup-scripts.service --no-pager 2>&1 | tail -n 2000
 echo '=== cloud-final journal ==='
 sudo journalctl -u cloud-final.service --no-pager 2>&1 | tail -n 500
 """
-
-
-@dataclass(frozen=True)
-class IrisJobStatus:
-    job_id: str
-    state: str  # iris proto state name, e.g. "JOB_STATE_RUNNING"
-    error: str | None
 
 
 @dataclass(frozen=True)
@@ -132,14 +127,6 @@ def _open_iris_client(
             yield client
 
 
-def _status_from_job(job: job_pb2.JobStatus) -> IrisJobStatus:
-    return IrisJobStatus(
-        job_id=job.job_id,
-        state=job_pb2.JobState.Name(job.state),
-        error=job.error or None,
-    )
-
-
 def _row(job: job_pb2.JobStatus | None) -> str:
     if job is None:
         return "null"
@@ -168,11 +155,11 @@ def job_status(
     iris_config: Path | None,
     repo_root: Path,
     controller_url: str | None = None,
-) -> IrisJobStatus:
+) -> job_pb2.JobStatus:
     with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
         for job in client.list_jobs(prefix=JobName.from_wire(job_id)):
             if job.job_id == job_id:
-                return _status_from_job(job)
+                return job
 
     raise LookupError(f"Job not found in Iris job list: {job_id!r}")
 
@@ -185,7 +172,7 @@ def wait_for_job(
     timeout: float | None,
     repo_root: Path,
     controller_url: str | None = None,
-) -> IrisJobStatus:
+) -> job_pb2.JobStatus:
     """Poll until the job reaches a terminal state. Raises TimeoutError if `timeout` elapses."""
     prefix = JobName.from_wire(job_id)
     start = time.monotonic()
@@ -195,7 +182,7 @@ def wait_for_job(
             if job is None:
                 raise LookupError(f"Job not found in Iris job list: {job_id!r}")
             if is_job_finished(job.state):
-                return _status_from_job(job)
+                return job
             if timeout is not None and (time.monotonic() - start) >= timeout:
                 raise TimeoutError(f"Timed out waiting for job {job_id!r} after {timeout}s")
             time.sleep(poll_interval)
@@ -207,17 +194,22 @@ def wait_for_child_job(
     iris_config: Path | None,
     controller_url: str | None,
     poll_interval: float,
-    queue_timeout: float,
+    child_wait_timeout: float,
     repo_root: Path,
-) -> IrisJobStatus:
+) -> job_pb2.JobStatus:
     """Wait for a parent job to reach a terminal state.
 
-    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within ``queue_timeout``.
-    Once any child has started, the queue timeout is dropped — total runtime is bounded by the caller's
+    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within ``child_wait_timeout``.
+    Once any child has started, the child wait timeout is dropped — total runtime is bounded by the caller's
     wall clock (e.g. GitHub ``timeout-minutes``).
     """
     prefix = JobName.from_wire(job_id)
-    deadline = time.monotonic() + queue_timeout
+    deadline = time.monotonic() + child_wait_timeout
+    backoff = ExponentialBackoff(
+        initial=min(poll_interval, _MAX_CHILD_WAIT_POLL_INTERVAL),
+        maximum=_MAX_CHILD_WAIT_POLL_INTERVAL,
+        jitter=0.0,
+    )
     child_running = False
     with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
         while True:
@@ -226,7 +218,7 @@ def wait_for_child_job(
             if parent is None:
                 raise LookupError(f"Job not found in Iris job list: {job_id!r}")
             if is_job_finished(parent.state):
-                return _status_from_job(parent)
+                return parent
 
             child = _pick_child(job_id, jobs)
             if not child_running and child is not None and _child_started(child):
@@ -240,11 +232,11 @@ def wait_for_child_job(
 
             if not child_running and time.monotonic() >= deadline:
                 raise TimeoutError(
-                    f"No child reached RUNNING within {queue_timeout:.0f}s. "
+                    f"No child reached RUNNING within {child_wait_timeout:.0f}s. "
                     f"parent={_row(parent)} child={_row(child)}"
                 )
 
-            time.sleep(poll_interval)
+            time.sleep(backoff.next_interval())
 
 
 def _list_managed_instances(
@@ -669,8 +661,9 @@ def cli() -> None:
 def status(job_id: str, iris_config: Path | None, controller_url: str | None) -> None:
     """Print the current state of an Iris job."""
     s = job_status(job_id, iris_config=iris_config, controller_url=controller_url, repo_root=_REPO_ROOT)
+    state = job_pb2.JobState.Name(s.state)
     click.echo(f"job_id: {s.job_id}")
-    click.echo(f"state:  {s.state}")
+    click.echo(f"state:  {state}")
     if s.error:
         click.echo(f"error:  {s.error}")
 
@@ -690,20 +683,13 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     help="Write job_id, state, and succeeded to $GITHUB_OUTPUT on terminal exit.",
 )
 @click.option(
-    "--queue-timeout",
+    "--child-wait-timeout",
     default=None,
     type=float,
     help=(
         "Fail fast if no child reaches RUNNING within this many seconds. Mutually exclusive with --timeout; "
         "once a child runs, total runtime is bounded by the caller's wall clock."
     ),
-)
-@click.option(
-    "--run-timeout",
-    default=None,
-    type=float,
-    hidden=True,
-    help="Deprecated no-op kept for in-flight workflows. Remove once .github/workflows stop passing it.",
 )
 def wait(
     job_id: str,
@@ -712,18 +698,15 @@ def wait(
     poll_interval: float,
     timeout: float | None,
     github_output: bool,
-    queue_timeout: float | None,
-    run_timeout: float | None,
+    child_wait_timeout: float | None,
 ) -> None:
     """Poll until an Iris job reaches a terminal state. Exit non-zero unless SUCCEEDED."""
-    if run_timeout is not None:
-        click.echo("--run-timeout is deprecated and ignored; the GitHub timeout-minutes bounds runtime.", err=True)
-    if queue_timeout is not None and timeout is not None:
-        raise click.UsageError("--queue-timeout and --timeout are mutually exclusive")
+    if child_wait_timeout is not None and timeout is not None:
+        raise click.UsageError("--child-wait-timeout and --timeout are mutually exclusive")
 
-    if queue_timeout is not None:
+    if child_wait_timeout is not None:
         click.echo(
-            f"Waiting for {job_id!r}: queue/start timeout {queue_timeout:.0f}s, polling every {poll_interval}s.",
+            f"Waiting for {job_id!r}: child wait timeout {child_wait_timeout:.0f}s, polling up to every 30s.",
             err=True,
         )
         s = wait_for_child_job(
@@ -731,7 +714,7 @@ def wait(
             iris_config=iris_config,
             controller_url=controller_url,
             poll_interval=poll_interval,
-            queue_timeout=queue_timeout,
+            child_wait_timeout=child_wait_timeout,
             repo_root=_REPO_ROOT,
         )
     else:
@@ -745,15 +728,16 @@ def wait(
             repo_root=_REPO_ROOT,
         )
 
+    state = job_pb2.JobState.Name(s.state)
     if github_output and (path := os.environ.get("GITHUB_OUTPUT")):
-        succeeded = "true" if s.state == JOB_STATE_SUCCEEDED else "false"
+        succeeded = "true" if state == JOB_STATE_SUCCEEDED else "false"
         with open(path, "a") as fh:
-            fh.write(f"job_id={s.job_id}\nstate={s.state}\nsucceeded={succeeded}\n")
+            fh.write(f"job_id={s.job_id}\nstate={state}\nsucceeded={succeeded}\n")
 
-    click.echo(f"Job {job_id!r} finished with state: {s.state}", err=True)
+    click.echo(f"Job {job_id!r} finished with state: {state}", err=True)
     if s.error:
         click.echo(f"Error: {s.error}", err=True)
-    if s.state != JOB_STATE_SUCCEEDED:
+    if state != JOB_STATE_SUCCEEDED:
         sys.exit(1)
 
 

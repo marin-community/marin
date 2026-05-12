@@ -58,7 +58,7 @@ def test_settled_coreweave_controller_requires_exactly_one_ready_pod() -> None:
 
 
 def test_wait_for_child_job_times_out_when_no_child_starts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the parent is queued long enough that no child reaches RUNNING, fail fast with a queue timeout."""
+    """If the parent waits too long without a running child, fail fast."""
     parent_id = "/runner/parent"
     child_id = f"{parent_id}/grug-train-canary-tpu-1"
     fake = _FakeClient(
@@ -82,8 +82,8 @@ def test_wait_for_child_job_times_out_when_no_child_starts(monkeypatch: pytest.M
             parent_id,
             iris_config=None,
             controller_url=None,
-            poll_interval=0,
-            queue_timeout=3000,
+            poll_interval=1,
+            child_wait_timeout=3000,
             repo_root=iris_monitor._REPO_ROOT,
         )
 
