@@ -31,7 +31,7 @@ from sqlalchemy import Integer, bindparam, case, cast, func, select
 
 from iris.cluster.controller.db import TaskJobSummary
 from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema import JobRow, _nullable
+from iris.cluster.controller.schema import JobRow
 from iris.cluster.controller.schema_v2 import (
     job_config_table,
     jobs_table,
@@ -107,9 +107,6 @@ _JOB_ROW_COLUMNS = (
     job_config_table.c.res_device_json,
 )
 
-_NULL_INT = _nullable(int)
-_NULL_STR = _nullable(str)
-
 
 def _row_to_job_row(row) -> JobRow:
     # SA Core's TypeDecorators have already produced ``Timestamp`` / ``JobName``
@@ -120,14 +117,14 @@ def _row_to_job_row(row) -> JobRow:
         submitted_at=row.submitted_at_ms,
         started_at=row.started_at_ms,
         finished_at=row.finished_at_ms,
-        error=_NULL_STR(row.error),
-        exit_code=_NULL_INT(row.exit_code),
+        error=None if row.error is None else str(row.error),
+        exit_code=None if row.exit_code is None else int(row.exit_code),
         name=str(row.name),
         depth=int(row.depth),
         res_cpu_millicores=int(row.res_cpu_millicores),
         res_memory_bytes=int(row.res_memory_bytes),
         res_disk_bytes=int(row.res_disk_bytes),
-        res_device_json=_NULL_STR(row.res_device_json),
+        res_device_json=None if row.res_device_json is None else str(row.res_device_json),
     )
 
 

@@ -15,10 +15,8 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import (
-    TASK_DETAIL_PROJECTION,
-    WORKER_DETAIL_PROJECTION,
-)
+from iris.cluster.controller.schema import TaskDetailRow
+from iris.cluster.controller.schema_v2 import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -32,6 +30,7 @@ from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+from sqlalchemy import select
 
 
 class _FakeLogClientFromService:
@@ -131,6 +130,28 @@ def make_worker_attrs(
 # ---------------------------------------------------------------------------
 # ServiceTestHarness — parameterized GCP / K8s controller service harness
 # ---------------------------------------------------------------------------
+
+
+def _task_row_to_detail(row) -> TaskDetailRow:
+    """Convert a tasks_table SA row to a TaskDetailRow."""
+    return TaskDetailRow(
+        task_id=row.task_id,
+        job_id=row.job_id,
+        state=int(row.state),
+        current_attempt_id=int(row.current_attempt_id) if row.current_attempt_id is not None else -1,
+        failure_count=int(row.failure_count),
+        preemption_count=int(row.preemption_count),
+        max_retries_failure=int(row.max_retries_failure),
+        max_retries_preemption=int(row.max_retries_preemption),
+        submitted_at=row.submitted_at_ms,
+        priority_band=int(row.priority_band),
+        error=None if row.error is None else str(row.error),
+        exit_code=None if row.exit_code is None else int(row.exit_code),
+        started_at=row.started_at_ms,
+        finished_at=row.finished_at_ms,
+        current_worker_id=row.current_worker_id,
+        current_worker_address=None if row.current_worker_address is None else str(row.current_worker_address),
+    )
 
 
 class _HarnessController:
@@ -238,10 +259,10 @@ class ServiceTestHarness:
     def sync_k8s(self) -> None:
         """Run one K8s direct provider sync cycle."""
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
-        with self.state._store.transaction() as cur:
+        with self.db.transaction() as cur:
             batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
-        with self.state._store.transaction() as cur:
+        with self.db.transaction() as cur:
             self.state.apply_direct_provider_updates(cur, result.updates)
 
     # ── GCP-specific ────────────────────────────────────────────
@@ -267,21 +288,21 @@ class ServiceTestHarness:
         metadata.attributes["device-type"].string_value = device_type
         metadata.attributes["preemptible"].string_value = str(preemptible).lower()
         metadata.attributes["region"].string_value = region
-        with self.state._store.transaction() as cur:
+        with self.db.transaction() as cur:
             self.state.register_or_refresh_worker(cur, wid, f"{worker_id}:8080", metadata, Timestamp.now())
         return wid
 
     # ── Private drivers ─────────────────────────────────────────
 
-    def _query_tasks(self, job_id: JobName):
-        with self.db.snapshot() as q:
-            return TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
+    def _query_tasks(self, job_id: JobName) -> list[TaskDetailRow]:
+        with self.db.read_snapshot() as tx:
+            rows = tx.fetchall(select(tasks_table).where(tasks_table.c.job_id == job_id))
+        return [_task_row_to_detail(r) for r in rows]
 
-    def _query_task(self, task_id: JobName):
-        with self.db.snapshot() as q:
-            return TASK_DETAIL_PROJECTION.decode_one(
-                q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
-            )
+    def _query_task(self, task_id: JobName) -> TaskDetailRow | None:
+        with self.db.read_snapshot() as tx:
+            row = tx.fetchone(select(tasks_table).where(tasks_table.c.task_id == task_id))
+        return _task_row_to_detail(row) if row is not None else None
 
     def _drive_k8s(self, task_id: JobName, new_state: int) -> None:
         """K8s: drain to create pod, transition pod, sync to apply."""
@@ -333,18 +354,19 @@ class ServiceTestHarness:
     def _current_attempt_info(self, task_id: JobName) -> tuple[WorkerId | None, int]:
         """Read current worker_id and attempt_id from the task_attempts table.
 
-        SELECT * FROM tasks doesn't join with task_attempts, so
-        TaskDetailRow.current_worker_id may be None when read via _query_task. We read
-        the attempt row directly instead.
+        Tasks table current_worker_id may be None for ASSIGNED tasks; we read
+        the latest attempt row directly to get the actual worker assignment.
         """
-        with self.db.snapshot() as q:
-            rows = q.raw(
-                "SELECT worker_id, attempt_id FROM task_attempts " "WHERE task_id = ? ORDER BY attempt_id DESC LIMIT 1",
-                (task_id.to_wire(),),
+        with self.db.read_snapshot() as tx:
+            row = tx.fetchone(
+                select(task_attempts_table.c.worker_id, task_attempts_table.c.attempt_id)
+                .where(task_attempts_table.c.task_id == task_id)
+                .order_by(task_attempts_table.c.attempt_id.desc())
+                .limit(1)
             )
-        if not rows:
+        if row is None:
             return None, 0
-        return WorkerId(rows[0].worker_id), int(rows[0].attempt_id)
+        return (WorkerId(str(row.worker_id)) if row.worker_id is not None else None), int(row.attempt_id)
 
     def _drive_gcp(self, task_id: JobName, new_state: int) -> None:
         """GCP: find the assigned worker and simulate a heartbeat update."""
@@ -354,14 +376,12 @@ class ServiceTestHarness:
 
         # If still PENDING, assign to an available worker.
         if task.state == job_pb2.TASK_STATE_PENDING:
-            with self.db.snapshot() as q:
-                workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))
-            if not workers:
+            with self.db.read_snapshot() as tx:
+                worker_row = tx.fetchone(select(workers_table.c.worker_id).limit(1))
+            if worker_row is None:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
-            with self.state._store.transaction() as cur:
-                self.state.queue_assignments(
-                    cur, [Assignment(task_id=task_id, worker_id=WorkerId(workers[0].worker_id))]
-                )
+            with self.db.transaction() as cur:
+                self.state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_row.worker_id)])
 
         worker_id, attempt_id = self._current_attempt_info(task_id)
         if worker_id is None:
@@ -377,7 +397,7 @@ class ServiceTestHarness:
             )
             and task.state != job_pb2.TASK_STATE_RUNNING
         ):
-            with self.state._store.transaction() as cur:
+            with self.db.transaction() as cur:
                 self.state.apply_task_updates(
                     cur,
                     HeartbeatApplyRequest(
@@ -392,7 +412,7 @@ class ServiceTestHarness:
                     ),
                 )
 
-        with self.state._store.transaction() as cur:
+        with self.db.transaction() as cur:
             self.state.apply_task_updates(
                 cur,
                 HeartbeatApplyRequest(

@@ -26,15 +26,13 @@ from iris.cluster.controller.db import (
 # =============================================================================
 # Test Helpers
 # =============================================================================
+from iris.cluster.controller.reads import jobs as reads_jobs
+from iris.cluster.controller.reads import task_attempts as reads_task_attempts
+from iris.cluster.controller.reads import tasks as reads_tasks
 from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
-from iris.cluster.controller.schema import (
-    ATTEMPT_PROJECTION,
-    JOB_DETAIL_PROJECTION,
-    TASK_DETAIL_PROJECTION,
-    WORKER_DETAIL_PROJECTION,
-    EndpointRow,
-)
+from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.schema_v2 import jobs_table, workers_table
 from iris.cluster.controller.transitions import (
     MAX_REPLICAS_PER_JOB,
     Assignment,
@@ -46,6 +44,7 @@ from iris.cluster.controller.transitions import (
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import select
 
 from .conftest import (
     building_counts as _building_counts,
@@ -90,12 +89,14 @@ _ZERO_USAGE = WorkerResourceUsage(0, 0, 0, 0)
 
 def _usage_for_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerResourceUsage:
     """Derived per-worker usage (replaces the old ``workers.committed_*`` cache)."""
+    from iris.cluster.controller.reads import scheduler as reads_scheduler
+
     with state._db.read_snapshot() as snap:
-        return state._store.attempts.resource_usage_by_worker(snap).get(worker_id, _ZERO_USAGE)
+        return reads_scheduler.resource_usage_by_worker(snap).get(worker_id, _ZERO_USAGE)
 
 
 def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
-    rows = state._store.endpoints.query(query)
+    rows = state._endpoints.query(query)
     # Mirror the original helper's ordering (registered_at DESC, endpoint_id ASC).
     return sorted(rows, key=lambda r: (-r.registered_at.epoch_ms(), r.endpoint_id))
 
@@ -122,8 +123,10 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
                     is_coscheduled=job.has_coscheduling,
                     coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
                 )
+    from iris.cluster.controller.reads import scheduler as reads_scheduler
+
     with state._db.read_snapshot() as snap:
-        usage = state._store.attempts.resource_usage_by_worker(snap)
+        usage = reads_scheduler.resource_usage_by_worker(snap)
     snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
     return scheduler.create_scheduling_context(
         snapshots,
@@ -133,22 +136,24 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
     )
 
 
-def test_db_snapshot_select_returns_typed_rows(state) -> None:
+def test_sa_core_select_returns_typed_rows(state) -> None:
+    """SA Core reads return TypeDecorator-decoded values (JobName, Timestamp, etc.)."""
     request = make_job_request("typed-rows")
     tasks = submit_job(state, "typed-rows", request)
 
-    job_wire = JobName.root("test-user", "typed-rows").to_wire()
-    with state._db.snapshot() as q:
-        jobs = JOB_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM jobs WHERE job_id = ?", (job_wire,)))
-        task_count = q.fetchone("SELECT COUNT(*) FROM tasks WHERE job_id = ?", (job_wire,))[0]
+    job_id = JobName.root("test-user", "typed-rows")
+    with state._db.read_snapshot() as tx:
+        job_row = reads_jobs.get_detail(tx, job_id)
+        task_count = tx.fetchone(select(jobs_table.c.num_tasks).where(jobs_table.c.job_id == job_id))
 
-    assert len(jobs) == 1
-    assert jobs[0].submitted_at is not None
-    assert jobs[0].job_id == JobName.root("test-user", "typed-rows")
-    assert task_count == len(tasks)
+    assert job_row is not None
+    assert job_row.submitted_at_ms is not None
+    assert job_row.job_id == job_id
+    assert task_count.num_tasks == len(tasks)
 
 
-def test_db_snapshot_projection_inferrs_typed_values(state) -> None:
+def test_sa_core_typed_values_roundtrip(state) -> None:
+    """TypeDecorators round-trip correctly through SA Core read+write paths."""
     wid = register_worker(state, "proj-worker", "addr", make_worker_metadata())
     request = controller_pb2.Controller.LaunchJobRequest(
         name=JobName.root("test-user", "projection").to_wire(),
@@ -158,7 +163,7 @@ def test_db_snapshot_projection_inferrs_typed_values(state) -> None:
         replicas=1,
     )
     [task] = submit_job(state, "projection", request)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=wid)])
 
     running = worker_running_tasks(state, wid)
@@ -167,11 +172,12 @@ def test_db_snapshot_projection_inferrs_typed_values(state) -> None:
     assert task.task_id in running
 
 
-def test_db_snapshot_exists_for_workers(state) -> None:
+def test_sa_core_read_snapshot_finds_workers(state) -> None:
     register_worker(state, "exists-worker", "addr", make_worker_metadata())
 
-    with state._db.snapshot() as q:
-        assert q.fetchone("SELECT 1 FROM workers WHERE worker_id = ?", ("exists-worker",)) is not None
+    with state._db.read_snapshot() as tx:
+        row = tx.fetchone(select(workers_table.c.worker_id).where(workers_table.c.worker_id == "exists-worker"))
+    assert row is not None
 
 
 # =============================================================================
@@ -457,8 +463,8 @@ def test_failed_worker_is_pruned_from_state(state):
     assert _query_worker(state, w2) is not None
 
     # list_all_workers only returns w2
-    with state._db.snapshot() as q:
-        all_workers = WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))
+    with state._db.read_snapshot() as tx:
+        all_workers = tx.fetchall(select(workers_table.c.worker_id))
     assert len(all_workers) == 1
     assert all_workers[0].worker_id == w2
 
@@ -470,8 +476,8 @@ def test_failed_worker_is_pruned_from_state(state):
     w1_again = register_worker(state, "w1", "host1:8080", make_worker_metadata())
     assert _query_worker(state, w1_again) is not None
     assert _query_worker(state, w1_again).healthy is True
-    with state._db.snapshot() as q:
-        assert len(WORKER_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM workers"))) == 2
+    with state._db.read_snapshot() as tx:
+        assert len(tx.fetchall(select(workers_table.c.worker_id))) == 2
 
 
 def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
@@ -907,9 +913,9 @@ def test_hierarchical_job_tracking(state):
     submit_job(state, "/test-user/parent/child1/grandchild", grandchild_req)
 
     # get_children only returns direct children
-    parent_wire = JobName.root("test-user", "parent").to_wire()
-    with state._db.snapshot() as q:
-        children = JOB_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (parent_wire,)))
+    parent_id = JobName.root("test-user", "parent")
+    with state._db.read_snapshot() as tx:
+        children = tx.fetchall(select(jobs_table.c.job_id).where(jobs_table.c.parent_job_id == parent_id))
     assert len(children) == 2
     assert {c.job_id for c in children} == {
         JobName.from_string("/test-user/parent/child1"),
@@ -917,11 +923,9 @@ def test_hierarchical_job_tracking(state):
     }
 
     # No children for leaf nodes
-    grandchild_wire = JobName.from_string("/test-user/parent/child1/grandchild").to_wire()
-    with state._db.snapshot() as q:
-        leaf_children = JOB_DETAIL_PROJECTION.decode(
-            q.fetchall("SELECT * FROM jobs WHERE parent_job_id = ?", (grandchild_wire,)),
-        )
+    grandchild_id = JobName.from_string("/test-user/parent/child1/grandchild")
+    with state._db.read_snapshot() as tx:
+        leaf_children = tx.fetchall(select(jobs_table.c.job_id).where(jobs_table.c.parent_job_id == grandchild_id))
     assert leaf_children == []
 
 
@@ -1576,10 +1580,8 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
     state.create_attempt_for_test(task.task_id, worker_id)
     assert _query_task(state, task.task_id).current_attempt_id == 1
     # The old attempt (0) is still in RUNNING state (non-terminal)
-    with state._db.snapshot() as q:
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall("SELECT * FROM task_attempts WHERE task_id = ?", (task.task_id.to_wire(),))
-        )
+    with state._db.read_snapshot() as tx:
+        attempts = reads_task_attempts.list_for_task(tx, task.task_id)
     assert not attempt_is_terminal(attempts[0].state)
 
     with caplog.at_level(logging.ERROR, logger="iris.cluster.controller.transitions"):
@@ -3423,17 +3425,17 @@ def _submit_job_direct(
 
 
 def _task_state_direct(state: ControllerTransitions, task_id: JobName) -> int:
-    with state._db.snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
-    assert len(tasks) == 1
-    return tasks[0].state
+    with state._db.read_snapshot() as tx:
+        row = reads_tasks.get_detail(tx, task_id)
+    assert row is not None
+    return int(row.state)
 
 
 def _task_row_direct(state: ControllerTransitions, task_id: JobName):
-    with state._db.snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (task_id.to_wire(),)))
-    assert len(tasks) == 1
-    return tasks[0]
+    with state._db.read_snapshot() as tx:
+        row = reads_tasks.get_detail(tx, task_id)
+    assert row is not None
+    return row
 
 
 def _run_direct_tasks(state: ControllerTransitions, task_ids: list[JobName]) -> None:
@@ -3621,13 +3623,11 @@ def test_apply_failed_with_retry(state):
     # The dead attempt 0 must have finished_at_ms stamped even though the task
     # itself rolled back to PENDING. Otherwise the row is indistinguishable from
     # a still-assigned attempt. Regression guard for the terminal_ms conflation.
-    with state._db.snapshot() as q:
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall("SELECT * FROM task_attempts WHERE task_id = ?", (task_id.to_wire(),))
-        )
+    with state._db.read_snapshot() as tx:
+        attempts = reads_task_attempts.list_for_task(tx, task_id)
     assert len(attempts) == 1
     assert attempts[0].state == job_pb2.TASK_STATE_FAILED
-    assert attempts[0].finished_at is not None
+    assert attempts[0].finished_at_ms is not None
 
     # Draining again should promote it for a second attempt.
     with state._store.transaction() as cur:

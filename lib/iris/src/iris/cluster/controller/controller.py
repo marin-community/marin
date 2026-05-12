@@ -68,7 +68,6 @@ from iris.cluster.controller.codec import (
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     ControllerDB,
-    SchedulableWorker,
     job_scheduling_deadline,
     task_row_can_be_scheduled,
 )
@@ -79,6 +78,7 @@ from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.reads import workers as reads_workers
+from iris.cluster.controller.reads.workers import SchedulableWorker
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -88,6 +88,7 @@ from iris.cluster.controller.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import (
+    AttemptRow,
     JobReservationRow,
     JobRow,
     JobSchedulingRow,
@@ -422,8 +423,6 @@ def _row_to_task_detail(row) -> TaskDetailRow:
 
 def _row_to_attempt(row):
     """Map an SA Core row from ``_ATTEMPT_QUERY`` to ``AttemptRow``."""
-    from iris.cluster.controller.schema import AttemptRow
-
     return AttemptRow(
         task_id=row.task_id,
         attempt_id=int(row.attempt_id),

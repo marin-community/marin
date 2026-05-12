@@ -35,8 +35,6 @@ from iris.cluster.controller.db import (
     FAILURE_TASK_STATES,
     NON_TERMINAL_TASK_STATES,
     ControllerDB,
-    QuerySnapshot,
-    TransactionCursor,
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
@@ -808,7 +806,7 @@ class ControllerTransitions:
 
     def run_request_template(
         self,
-        snap: QuerySnapshot | TransactionCursor,
+        snap: Tx,
         job_id: JobName,
     ) -> job_pb2.RunTaskRequest | None:
         """Return a cached per-job ``RunTaskRequest`` template.
@@ -2231,7 +2229,7 @@ class ControllerTransitions:
 
     def get_running_tasks_for_poll(
         self,
-        snap: QuerySnapshot | TransactionCursor,
+        snap: Tx,
     ) -> tuple[dict[WorkerId, list[RunningTaskEntry]], dict[WorkerId, str]]:
         """Snapshot running tasks and worker addresses for PollTasks RPCs.
 

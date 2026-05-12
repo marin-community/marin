@@ -28,6 +28,7 @@ Notes:
 """
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Protocol
 
 from sqlalchemy import bindparam, select
@@ -193,23 +194,36 @@ def filter_existing(tx: Tx, worker_ids: Iterable[WorkerId]) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# Schedulable worker composite (db.healthy_active_workers_with_attributes)
+# Schedulable worker composite
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulableWorker:
+    """Worker shape consumed by the scheduler.
+
+    Field names mirror the :class:`scheduler.WorkerSnapshot` protocol so
+    instances flow into ``Scheduler.create_scheduling_context`` without
+    an adapter.
+    """
+
+    worker_id: WorkerId
+    address: str
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    attributes: dict[str, AttributeValue]
 
 
 def healthy_active_workers_with_attributes(
     tx: Tx,
     health: WorkerLivenessSource,
     attrs: WorkerAttrsSource,
-) -> list:
-    """Return healthy + active workers with their attributes hydrated.
-
-    Mirrors :func:`iris.cluster.controller.db.healthy_active_workers_with_attributes`.
-    Returns ``list[iris.cluster.controller.db.SchedulableWorker]``; the
-    SchedulableWorker type is imported lazily to avoid an import cycle.
-    """
-    from iris.cluster.controller.db import SchedulableWorker
-
+) -> list[SchedulableWorker]:
+    """Return healthy + active workers with their attributes hydrated."""
     liveness = health.all()
     healthy_active = [wid for wid, ent in liveness.items() if ent.healthy and ent.active]
     if not healthy_active:

@@ -11,10 +11,13 @@ Exercises the two independent termination paths:
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db import ControllerDB, healthy_active_workers_with_attributes
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reads.workers import healthy_active_workers_with_attributes
+from iris.cluster.controller.schema_v2 import workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import WorkerId
+from sqlalchemy import insert, select
 
 
 @pytest.fixture
@@ -117,17 +120,17 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
     db = ControllerDB(db_dir=tmp_path)
     try:
         with db.transaction() as cur:
-            cur.execute("INSERT INTO workers (worker_id, address) VALUES (?, ?)", ("w-seed-1", "10.0.0.1:8080"))
-            cur.execute("INSERT INTO workers (worker_id, address) VALUES (?, ?)", ("w-seed-2", "10.0.0.2:8080"))
+            cur.execute(insert(workers_table).values(worker_id="w-seed-1", address="10.0.0.1:8080"))
+            cur.execute(insert(workers_table).values(worker_id="w-seed-2", address="10.0.0.2:8080"))
 
         health = WorkerHealthTracker()
         worker_attrs = WorkerAttrsProjection(db)
 
         # Replicate _seed_liveness_from_workers
         now_ms = Timestamp.now().epoch_ms()
-        with db.read_snapshot() as q:
-            rows = q.fetchall("SELECT worker_id FROM workers")
-        worker_ids = [WorkerId(str(row["worker_id"])) for row in rows]
+        with db.read_snapshot() as tx:
+            rows = tx.fetchall(select(workers_table.c.worker_id))
+        worker_ids = [row.worker_id for row in rows]
         health.heartbeat(worker_ids, now_ms)
 
         liveness_one = health.liveness(WorkerId("w-seed-1"))
@@ -137,7 +140,8 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
         assert liveness_one.last_heartbeat_ms > 0
         assert liveness_two.last_heartbeat_ms > 0
 
-        schedulable = healthy_active_workers_with_attributes(db, health, worker_attrs)
+        with db.read_snapshot() as tx:
+            schedulable = healthy_active_workers_with_attributes(tx, health, worker_attrs)
         ids = {str(w.worker_id) for w in schedulable}
         assert ids == {"w-seed-1", "w-seed-2"}
     finally:

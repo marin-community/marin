@@ -35,7 +35,8 @@ from iris.cluster.controller.controller import (
     _worker_matches_reservation_entry,
     job_requirements_from_job,
 )
-from iris.cluster.controller.db import SchedulableWorker, task_row_can_be_scheduled
+from iris.cluster.controller.db import task_row_can_be_scheduled
+from iris.cluster.controller.reads.workers import SchedulableWorker
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext, worker_snapshot_from_row
 from iris.cluster.controller.transitions import (
     RESERVATION_HOLDER_JOB_NAME,

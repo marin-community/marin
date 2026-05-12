@@ -9,19 +9,18 @@ import importlib.util
 import logging
 import sqlite3
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
-from typing import Any, Protocol
+from typing import Any
 
 import fsspec.core
 from rigging.timing import Deadline, Duration, Timestamp
-from sqlalchemy import Engine, select, text, update
+from sqlalchemy import Engine, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.db_v2 import (
     Tx,
     _make_read_engine,
@@ -41,222 +40,10 @@ from iris.cluster.controller.schema_v2 import (
     user_budgets_table,
     users_table,
 )
-from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Legacy types preserved for import compatibility.
-#
-# ``TransactionCursor``, ``QuerySnapshot``, and ``Row`` are still imported by
-# ``transitions.py``, ``service.py``, ``auth.py``, and test conftest files.
-# Removing them from the module would break those imports.
-#
-# M5/M6/M11 will update all call sites to use ``Tx``; after that M12 deletes
-# these classes. Until then, keep them here so imports succeed at module load
-# time even though ``ControllerDB.transaction()`` now yields ``Tx`` (not
-# ``TransactionCursor``) and ``ControllerDB.read_snapshot()`` yields ``Tx``
-# (not ``QuerySnapshot``).  Runtime calls that relied on the old behaviour
-# (e.g. ``cur.execute("raw SQL?")``) will raise ``TypeError``; that is the
-# expected M11 breakage.
-# ---------------------------------------------------------------------------
-
-
-class Row:
-    """Lightweight result row with attribute access for raw query results.
-
-    Kept for import compatibility. M8 deletes this once all call sites migrate.
-    """
-
-    __slots__ = ("_data",)
-
-    def __init__(self, data: dict[str, Any]):
-        object.__setattr__(self, "_data", data)
-
-    def __getattr__(self, name: str) -> Any:
-        try:
-            return self._data[name]
-        except KeyError:
-            raise AttributeError(f"Row has no column {name!r}") from None
-
-    def __repr__(self) -> str:
-        return f"Row({self._data!r})"
-
-
-def _sa_stmt_to_sql(stmt: Any) -> str:
-    """Lower a SA ``text(...)``/``select(...)`` construct to a SQL string.
-
-    Used by the legacy ``TransactionCursor`` and ``QuerySnapshot``. Kept for
-    import compatibility; deleted in M12 once those classes are gone.
-    """
-    text_attr = getattr(stmt, "text", None)
-    if isinstance(text_attr, str):
-        return text_attr
-    compiled = stmt.compile(compile_kwargs={"literal_binds": False})
-    return str(compiled)
-
-
-class QuerySnapshot:
-    """Read-only snapshot over the controller DB.
-
-    Kept for import compatibility. ``ControllerDB.read_snapshot()`` now yields
-    ``Tx``; this class remains so ``from iris.cluster.controller.db import
-    QuerySnapshot`` in ``transitions.py`` / ``service.py`` / ``auth.py`` does
-    not raise ``ImportError``. M5/M6/M11 migrate the call sites; M12 deletes
-    this class.
-    """
-
-    def __init__(self, conn: sqlite3.Connection, lock: RLock | None):
-        self._conn = conn
-        self._lock = lock
-
-    def __enter__(self) -> QuerySnapshot:
-        if self._lock is not None:
-            self._lock.acquire()
-        self._conn.execute("BEGIN")
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        try:
-            self._conn.rollback()
-        finally:
-            if self._lock is not None:
-                self._lock.release()
-
-    def execute_sql(self, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Cursor:
-        return self._conn.execute(sql, params)
-
-    def execute(self, sql, params=None) -> sqlite3.Cursor:
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return self._conn.execute(sql, params if params is not None else ())
-
-    def fetchall(self, sql, params=None) -> list[sqlite3.Row]:
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return list(self._conn.execute(sql, params if params is not None else ()).fetchall())
-
-    def fetchone(self, sql, params=None) -> sqlite3.Row | None:
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return self._conn.execute(sql, params if params is not None else ()).fetchone()
-
-    def _fetchall(self, sql: str, params: Sequence[object]) -> list[sqlite3.Row]:
-        return list(self._conn.execute(sql, tuple(params)).fetchall())
-
-    def raw(
-        self,
-        sql: str,
-        params: tuple = (),
-        decoders: dict[str, Callable] | None = None,
-    ) -> list[Row]:
-        cursor = self._conn.execute(sql, params)
-        col_names = [desc[0] for desc in cursor.description]
-        active_decoders = decoders or {}
-        rows = []
-        for raw_row in cursor.fetchall():
-            data = {
-                name: active_decoders[name](raw_row[name]) if name in active_decoders else raw_row[name]
-                for name in col_names
-            }
-            rows.append(Row(data))
-        return rows
-
-
-class TransactionCursor:
-    """Wraps a raw sqlite3.Cursor for use within controller transactions.
-
-    Kept for import compatibility. ``ControllerDB.transaction()`` now yields
-    ``Tx``; this class remains so ``from iris.cluster.controller.db import
-    TransactionCursor`` in ``transitions.py`` / ``stores.py`` / ``budget.py``
-    does not raise ``ImportError``. M5/M6/M11 migrate the call sites; M12
-    deletes this class.
-    """
-
-    def __init__(self, cursor: sqlite3.Cursor):
-        self._cursor = cursor
-        self._commit_hooks: list[Callable[[], None]] = []
-
-    def execute(self, sql, params=None) -> sqlite3.Cursor:
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return self._cursor.execute(sql, params if params is not None else ())
-
-    def executemany(self, sql, params: Iterable[tuple | Mapping[str, object]]) -> sqlite3.Cursor:
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return self._cursor.executemany(sql, params)
-
-    def executescript(self, sql: str) -> sqlite3.Cursor:
-        return self._cursor.executescript(sql)
-
-    def fetchall(self, sql, params=None) -> list[sqlite3.Row]:
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return list(self._cursor.execute(sql, params if params is not None else ()).fetchall())
-
-    def fetchone(self, sql, params=None) -> sqlite3.Row | None:
-        if not isinstance(sql, str):
-            sql = _sa_stmt_to_sql(sql)
-        return self._cursor.execute(sql, params if params is not None else ()).fetchone()
-
-    def on_commit(self, hook: Callable[[], None]) -> None:
-        self._commit_hooks.append(hook)
-
-    def register(self, hook: Callable[[], None]) -> None:
-        self._commit_hooks.append(hook)
-
-    def _run_commit_hooks(self) -> None:
-        for hook in self._commit_hooks:
-            hook()
-
-    @property
-    def lastrowid(self) -> int | None:
-        return self._cursor.lastrowid
-
-    @property
-    def rowcount(self) -> int:
-        return self._cursor.rowcount
-
-
-class _LegacySnapshot(QuerySnapshot):
-    """``QuerySnapshot`` adapter backed by a SA raw connection fairy.
-
-    Closes the fairy on ``__exit__`` so the pooled connection is returned.
-    Used only by ``ControllerDB.snapshot()`` for backward compatibility.
-    Deleted in M12.
-    """
-
-    def __init__(self, fairy: Any, raw_conn: sqlite3.Connection):
-        super().__init__(raw_conn, lock=None)
-        self._fairy = fairy
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        try:
-            super().__exit__(exc_type, exc, tb)
-        finally:
-            self._fairy.close()
-
-
-def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, AttributeValue]]:
-    """Decode worker attribute rows into a nested dict.
-
-    Kept for import compatibility with conftest.py and stores.py. M7/M12
-    delete this once the legacy Projection-based read path is gone.
-    """
-    attrs_by_worker: dict[WorkerId, dict[str, AttributeValue]] = {}
-    for row in rows:
-        worker_attrs = attrs_by_worker.setdefault(row.worker_id, {})
-        if row.value_type == "int":
-            worker_attrs[row.key] = AttributeValue(int(row.int_value))
-        elif row.value_type == "float":
-            worker_attrs[row.key] = AttributeValue(float(row.float_value))
-        else:
-            worker_attrs[row.key] = AttributeValue(str(row.str_value or ""))
-    return attrs_by_worker
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +308,7 @@ class ControllerDB:
         with _read_snapshot(self._sa_read_engine) as tx:
             yield tx
 
+<<<<<<< HEAD
     def snapshot(self) -> QuerySnapshot:
         """Return a legacy ``QuerySnapshot`` over a raw read connection.
 
@@ -587,6 +375,77 @@ class ControllerDB:
     def decode_task(row: sqlite3.Row):
         return TASK_DETAIL_PROJECTION.decode_one([row])
 
+||||||| parent of 3b0a47365 ([iris] M8: delete legacy Projection/Table/decoder machinery)
+    def snapshot(self) -> QuerySnapshot:
+        """Return a legacy ``QuerySnapshot`` over a raw read connection.
+
+        Preserved for import compatibility with ``auth.py`` and ``service.py``.
+        M5/M6 will migrate those call sites to ``read_snapshot()``; this method
+        will be removed in M12.
+
+        The returned snapshot uses a fresh raw sqlite3 connection checked out
+        of the write engine (no query_only pin). Callers must use it as a
+        context manager (``with db.snapshot() as q:``).
+        """
+        raw_fairy = self._sa_write_engine.raw_connection()
+        raw_conn = raw_fairy.driver_connection
+        raw_conn.row_factory = sqlite3.Row
+        # Wrap in a QuerySnapshot; we don't pass a lock so the snapshot does
+        # not block writers. The raw_fairy is closed in __exit__ below via
+        # a thin adapter.
+        snap = _LegacySnapshot(raw_fairy, raw_conn)
+        return snap
+
+    def fetchall(self, query: str, params: tuple | list = ()) -> list:
+        """Execute raw SQL and return all rows.
+
+        Accepts ``?``-placeholder SQL for call sites not yet migrated to SA
+        Core. The raw connection bypasses ``Tx`` intentionally — this method
+        is a compatibility escape hatch used by the legacy layer and some
+        tests. Prefer ``read_snapshot()`` + SA Core for new code.
+        """
+        raw_fairy = self._sa_write_engine.raw_connection()
+        try:
+            raw_fairy.driver_connection.row_factory = sqlite3.Row
+            return list(raw_fairy.execute(query, params).fetchall())
+        finally:
+            raw_fairy.close()
+
+    def fetchone(self, query: str, params: tuple | list = ()):
+        """Execute raw SQL and return the first row, or ``None``."""
+        raw_fairy = self._sa_write_engine.raw_connection()
+        try:
+            raw_fairy.driver_connection.row_factory = sqlite3.Row
+            return raw_fairy.execute(query, params).fetchone()
+        finally:
+            raw_fairy.close()
+
+    def execute(self, query: str, params: tuple | list = ()) -> None:
+        """Execute raw SQL in a transaction.
+
+        Accepts ``?``-placeholder SQL for call sites not yet migrated to SA
+        Core. Prefer ``transaction()`` + SA Core for new code.
+        """
+        raw_fairy = self._sa_write_engine.raw_connection()
+        try:
+            raw_fairy.execute("BEGIN IMMEDIATE")
+            try:
+                raw_fairy.execute(query, params)
+                raw_fairy.execute("COMMIT")
+            except Exception:
+                raw_fairy.execute("ROLLBACK")
+                raise
+        finally:
+            raw_fairy.close()
+
+    @staticmethod
+    def decode_task(row: sqlite3.Row):
+        from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
+
+        return TASK_DETAIL_PROJECTION.decode_one([row])
+
+=======
+>>>>>>> 3b0a47365 ([iris] M8: delete legacy Projection/Table/decoder machinery)
     def apply_migrations(self) -> None:
         """Apply pending migrations from the migrations/ directory.
 
@@ -926,6 +785,7 @@ class ControllerDB:
         """Return ``{user_id: budget_limit}`` for every user with a budget row."""
         rows = self.list_user_budgets()
         return {row.user_id: row.budget_limit for row in rows}
+<<<<<<< HEAD
 
 
 # ---------------------------------------------------------------------------
@@ -1080,3 +940,164 @@ def healthy_active_workers_with_attributes(
             )
         )
     return out
+||||||| parent of 3b0a47365 ([iris] M8: delete legacy Projection/Table/decoder machinery)
+
+
+# ---------------------------------------------------------------------------
+# Shared read-only query helpers
+#
+# Pure DB reads that are used by both controller.py and service.py.
+# Each takes a ControllerDB and returns domain objects.
+# ---------------------------------------------------------------------------
+
+
+def running_tasks_by_worker(db: ControllerDB, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
+    """Return the set of currently-running task IDs for each worker."""
+    if not worker_ids:
+        return {}
+    worker_id_strs = [str(wid) for wid in worker_ids]
+    active_states = sorted(ACTIVE_TASK_STATES)
+    placeholders_w = ",".join(f":w{i}" for i in range(len(worker_id_strs)))
+    placeholders_s = ",".join(f":s{i}" for i in range(len(active_states)))
+    params: dict[str, Any] = {}
+    for i, wid in enumerate(worker_id_strs):
+        params[f"w{i}"] = wid
+    for i, s in enumerate(active_states):
+        params[f"s{i}"] = s
+    sql = text(
+        f"SELECT t.current_worker_id AS worker_id, t.task_id FROM tasks t "
+        f"WHERE t.current_worker_id IN ({placeholders_w}) AND t.state IN ({placeholders_s})"
+    )
+    with db.read_snapshot() as tx:
+        rows = tx.fetchall(sql, params)
+    running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
+    for row in rows:
+        wid = decode_worker_id(row[0])
+        task_id = JobName.from_wire(row[1])
+        running[wid].add(task_id)
+    return running
+
+
+@dataclass(frozen=True, slots=True)
+class TimedOutTask:
+    """A running task that has exceeded its execution timeout."""
+
+    task_id: JobName
+    worker_id: WorkerId | None
+
+
+def timed_out_executing_tasks(db: ControllerDB, now: Timestamp) -> list[TimedOutTask]:
+    """Find executing tasks whose current attempt has exceeded the job's execution timeout.
+
+    Reads the timeout from job_config.timeout_ms. Uses the current attempt's
+    started_at_ms so that retried tasks get a fresh timeout budget per attempt.
+    """
+    now_ms = now.epoch_ms()
+    executing_states = sorted(EXECUTING_TASK_STATES)
+    placeholders = ",".join(f":s{i}" for i in range(len(executing_states)))
+    params: dict[str, Any] = {f"s{i}": s for i, s in enumerate(executing_states)}
+    params["now_ms"] = now_ms
+    sql = text(
+        f"SELECT t.task_id, t.current_worker_id AS worker_id, "
+        f"ta.started_at_ms AS attempt_started_at_ms, jc.timeout_ms "
+        f"FROM tasks t "
+        f"JOIN job_config jc ON jc.job_id = t.job_id "
+        f"JOIN task_attempts ta ON ta.task_id = t.task_id AND ta.attempt_id = t.current_attempt_id "
+        f"WHERE t.state IN ({placeholders}) "
+        f"AND jc.timeout_ms IS NOT NULL AND jc.timeout_ms > 0 "
+        f"AND ta.started_at_ms IS NOT NULL"
+    )
+    with db.read_snapshot() as tx:
+        rows = tx.fetchall(sql, params)
+    result: list[TimedOutTask] = []
+    for row in rows:
+        attempt_started_at_ms = int(row[2])
+        timeout_ms = int(row[3])
+        if attempt_started_at_ms + timeout_ms <= now_ms:
+            task_id = JobName.from_wire(row[0])
+            worker_id = WorkerId(row[1]) if row[1] is not None else None
+            result.append(TimedOutTask(task_id=task_id, worker_id=worker_id))
+    return result
+
+
+def _worker_row_select() -> str:
+    """Lazily resolve WORKER_ROW_PROJECTION.select_clause() to break the db -> schema cycle."""
+    from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
+
+    return WORKER_ROW_PROJECTION.select_clause()
+
+
+class WorkerAttrsSource(Protocol):
+    """Read-only view over the worker_attributes cache.
+
+    Declared as a ``Protocol`` so :func:`healthy_active_workers_with_attributes`
+    can stay in ``db.py`` without importing the concrete
+    :class:`WorkerAttrsProjection` (which itself imports from ``db.py``).
+    """
+
+    def all(self) -> dict[WorkerId, dict[str, AttributeValue]]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulableWorker:
+    """Worker shape consumed by the scheduler.
+
+    Field names mirror the :class:`scheduler.WorkerSnapshot` protocol so
+    instances flow into ``Scheduler.create_scheduling_context`` without
+    an adapter.
+    """
+
+    worker_id: WorkerId
+    address: str
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    device_type: str
+    device_variant: str
+    attributes: dict[str, AttributeValue]
+
+
+def healthy_active_workers_with_attributes(
+    db: ControllerDB,
+    health: WorkerHealthTracker,
+    attrs: WorkerAttrsSource,
+) -> list[SchedulableWorker]:
+    """Return healthy + active workers with attributes.
+
+    ``attrs`` is the live :class:`WorkerAttrsProjection` (declared as a
+    ``Protocol`` to break the db → projection import cycle).
+    """
+    from iris.cluster.controller.schema import WORKER_ROW_PROJECTION
+
+    liveness = health.all()
+    healthy_active = {wid for wid, l in liveness.items() if l.healthy and l.active}
+    if not healthy_active:
+        return []
+    worker_id_strs = [str(wid) for wid in healthy_active]
+    placeholders = ",".join(f":w{i}" for i in range(len(worker_id_strs)))
+    params = {f"w{i}": wid for i, wid in enumerate(worker_id_strs)}
+    sql = text(f"SELECT {_worker_row_select()} FROM workers w WHERE w.worker_id IN ({placeholders})")
+    with db.read_snapshot() as tx:
+        rows = WORKER_ROW_PROJECTION.decode(tx.fetchall(sql, params))
+    if not rows:
+        return []
+    attrs_by_worker = attrs.all()
+    out: list[SchedulableWorker] = []
+    for w in rows:
+        out.append(
+            SchedulableWorker(
+                worker_id=w.worker_id,
+                address=w.address,
+                total_cpu_millicores=w.total_cpu_millicores,
+                total_memory_bytes=w.total_memory_bytes,
+                total_gpu_count=w.total_gpu_count,
+                total_tpu_count=w.total_tpu_count,
+                device_type=w.device_type,
+                device_variant=w.device_variant,
+                attributes=attrs_by_worker.get(w.worker_id, {}),
+            )
+        )
+    return out
+=======
+>>>>>>> 3b0a47365 ([iris] M8: delete legacy Projection/Table/decoder machinery)

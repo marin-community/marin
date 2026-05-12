@@ -51,7 +51,6 @@ from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ControllerDB,
     EndpointQuery,
-    SchedulableWorker,
     TaskJobSummary,
     UserStats,
     attempt_is_worker_failure,
@@ -64,6 +63,7 @@ from iris.cluster.controller.query import execute_raw_query
 from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.reads import workers as reads_workers
+from iris.cluster.controller.reads.workers import SchedulableWorker
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     AttemptRow,
@@ -71,6 +71,7 @@ from iris.cluster.controller.schema import (
     JobDetailRow,
     JobRow,
     TaskDetailRow,
+    TaskRow,
     WorkerDetailRow,
     tasks_with_attempts,
 )
@@ -2660,13 +2661,11 @@ class ControllerServiceImpl:
                 tasks_table.c.root_submitted_at_ms,
                 tasks_table.c.priority_insertion,
             )
-            from iris.cluster.controller.schema import TaskRow as _TaskRow
-
             pending_raw = snap.execute(
                 select(*_TASK_ROW_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
             ).all()
             pending_rows = [
-                _TaskRow(
+                TaskRow(
                     task_id=r.task_id,
                     job_id=r.job_id,
                     state=int(r.state),

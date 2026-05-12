@@ -11,48 +11,15 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller.db import EndpointQuery
 from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointsProjection
-from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow
+from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.schema_v2 import tasks_table
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from .conftest import make_job_request, submit_job
-
-
-# --- Parity helper: the legacy SQL builder, preserved solely for parity tests.
-# Deleted from production; kept here so a parity test demonstrates the projection
-# returns an identical row set for representative queries.
-def _endpoint_query_sql_legacy(query: EndpointQuery) -> tuple[str, list[object]]:
-    from_clause = f"SELECT {ENDPOINT_PROJECTION.select_clause()} FROM endpoints e"
-    conditions: list[str] = []
-    params: list[object] = []
-
-    if query.task_ids:
-        from_clause += " JOIN endpoints et ON e.endpoint_id = et.endpoint_id"
-        placeholders = ",".join("?" for _ in query.task_ids)
-        conditions.append(f"et.task_id IN ({placeholders})")
-        params.extend(tid.to_wire() for tid in query.task_ids)
-
-    if query.endpoint_ids:
-        placeholders = ",".join("?" for _ in query.endpoint_ids)
-        conditions.append(f"e.endpoint_id IN ({placeholders})")
-        params.extend(query.endpoint_ids)
-
-    if query.name_prefix:
-        conditions.append("e.name LIKE ?")
-        params.append(f"{query.name_prefix}%")
-
-    if query.exact_name:
-        conditions.append("e.name = ?")
-        params.append(query.exact_name)
-
-    sql = from_clause
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-    if query.limit is not None:
-        sql += " LIMIT ?"
-        params.append(query.limit)
-    return sql, params
 
 
 def _make_row(endpoint_id: str, name: str, task_id: JobName, *, address: str = "h:1") -> EndpointRow:
@@ -73,7 +40,7 @@ def test_projection_loads_existing_rows_on_startup(state):
     """On construction, the projection should contain every row in the ``endpoints`` table."""
     tasks = submit_job(state, "j", make_job_request("j"))
     with state._db.transaction() as cur:
-        assert state._store.endpoints.add(cur, _make_row("e1", "svc", tasks[0].task_id))
+        assert state._endpoints.add(cur, _make_row("e1", "svc", tasks[0].task_id))
 
     fresh = EndpointsProjection(state._db)
     rows = fresh.query()
@@ -85,12 +52,12 @@ def test_add_updates_memory_after_commit(state):
     t = tasks[0].task_id
 
     with state._db.transaction() as cur:
-        assert state._store.endpoints.add(cur, _make_row("e1", "alpha", t))
+        assert state._endpoints.add(cur, _make_row("e1", "alpha", t))
         # Not yet committed; memory should not reflect the insert.
-        assert state._store.endpoints.get("e1") is None
+        assert state._endpoints.get("e1") is None
 
-    assert state._store.endpoints.get("e1") is not None
-    assert [r.endpoint_id for r in state._store.endpoints.query()] == ["e1"]
+    assert state._endpoints.get("e1") is not None
+    assert [r.endpoint_id for r in state._endpoints.query()] == ["e1"]
 
 
 def test_rollback_leaves_memory_untouched(state):
@@ -102,27 +69,29 @@ def test_rollback_leaves_memory_untouched(state):
 
     with pytest.raises(BoomError):
         with state._db.transaction() as cur:
-            state._store.endpoints.add(cur, _make_row("e1", "alpha", t))
+            state._endpoints.add(cur, _make_row("e1", "alpha", t))
             raise BoomError
 
     # DB rolled back -> memory must NOT see the insert.
-    assert state._store.endpoints.get("e1") is None
-    assert state._store.endpoints.query() == []
+    assert state._endpoints.get("e1") is None
+    assert state._endpoints.query() == []
 
 
 def test_rollback_safety_dict_and_sql_consistent(state):
     """Raise mid-tx: assert dict has no entry AND SQL has no row."""
+    from iris.cluster.controller.schema_v2 import endpoints_table
+
     tasks = submit_job(state, "j", make_job_request("j"))
     t = tasks[0].task_id
 
     with pytest.raises(RuntimeError, match="boom"):
         with state._db.transaction() as cur:
-            state._store.endpoints.add(cur, _make_row("e-rollback", "alpha", t))
+            state._endpoints.add(cur, _make_row("e-rollback", "alpha", t))
             raise RuntimeError("boom")
 
-    assert state._store.endpoints.get("e-rollback") is None
-    with state._db.read_snapshot() as q:
-        row = q.fetchone("SELECT endpoint_id FROM endpoints WHERE endpoint_id = ?", ("e-rollback",))
+    assert state._endpoints.get("e-rollback") is None
+    with state._db.read_snapshot() as tx:
+        row = tx.fetchone(select(endpoints_table.c.endpoint_id).where(endpoints_table.c.endpoint_id == "e-rollback"))
     assert row is None
 
 
@@ -131,29 +100,29 @@ def test_add_rejects_terminal_task(state):
     tasks = submit_job(state, "j", make_job_request("j"))
     task_id = tasks[0].task_id
     # Drive the task to SUCCEEDED to mark it terminal.
-    state._db.execute(
-        "UPDATE tasks SET state = ? WHERE task_id = ?",
-        (job_pb2.TASK_STATE_SUCCEEDED, task_id.to_wire()),
-    )
+    with state._db.transaction() as tx:
+        tx.execute(
+            sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(state=job_pb2.TASK_STATE_SUCCEEDED)
+        )
 
     with state._db.transaction() as cur:
-        outcome = state._store.endpoints.add(cur, _make_row("e1", "alpha", task_id))
+        outcome = state._endpoints.add(cur, _make_row("e1", "alpha", task_id))
         assert outcome is AddEndpointOutcome.TERMINAL
 
-    assert state._store.endpoints.get("e1") is None
+    assert state._endpoints.get("e1") is None
 
 
 def test_remove_drops_endpoint_by_id(state):
     tasks = submit_job(state, "j", make_job_request("j"))
     t = tasks[0].task_id
     with state._db.transaction() as cur:
-        state._store.endpoints.add(cur, _make_row("e1", "alpha", t))
-        state._store.endpoints.add(cur, _make_row("e2", "beta", t))
+        state._endpoints.add(cur, _make_row("e1", "alpha", t))
+        state._endpoints.add(cur, _make_row("e2", "beta", t))
 
     with state._db.transaction() as cur:
-        removed = state._store.endpoints.remove(cur, "e1")
+        removed = state._endpoints.remove(cur, "e1")
     assert removed is not None and removed.endpoint_id == "e1"
-    assert {r.endpoint_id for r in state._store.endpoints.query()} == {"e2"}
+    assert {r.endpoint_id for r in state._endpoints.query()} == {"e2"}
 
 
 def test_remove_by_task_drops_all_task_endpoints(state):
@@ -161,15 +130,15 @@ def test_remove_by_task_drops_all_task_endpoints(state):
     t1, t2 = tasks[0].task_id, tasks[1].task_id
 
     with state._db.transaction() as cur:
-        state._store.endpoints.add(cur, _make_row("e1", "alpha", t1))
-        state._store.endpoints.add(cur, _make_row("e2", "beta", t1))
-        state._store.endpoints.add(cur, _make_row("e3", "gamma", t2))
+        state._endpoints.add(cur, _make_row("e1", "alpha", t1))
+        state._endpoints.add(cur, _make_row("e2", "beta", t1))
+        state._endpoints.add(cur, _make_row("e3", "gamma", t2))
 
     with state._db.transaction() as cur:
-        removed = state._store.endpoints.remove_by_task(cur, t1)
+        removed = state._endpoints.remove_by_task(cur, t1)
 
     assert set(removed) == {"e1", "e2"}
-    assert {r.endpoint_id for r in state._store.endpoints.query()} == {"e3"}
+    assert {r.endpoint_id for r in state._endpoints.query()} == {"e3"}
 
 
 def test_remove_by_job_ids_drops_subtree(state):
@@ -180,14 +149,14 @@ def test_remove_by_job_ids_drops_subtree(state):
     t2 = tasks_b[0].task_id
 
     with state._db.transaction() as cur:
-        state._store.endpoints.add(cur, _make_row("e1", "alpha", t1))
-        state._store.endpoints.add(cur, _make_row("e2", "beta", t2))
+        state._endpoints.add(cur, _make_row("e1", "alpha", t1))
+        state._endpoints.add(cur, _make_row("e2", "beta", t2))
 
     with state._db.transaction() as cur:
-        removed = state._store.endpoints.remove_by_job_ids(cur, [ja])
+        removed = state._endpoints.remove_by_job_ids(cur, [ja])
 
     assert removed == ["e1"]
-    assert [r.endpoint_id for r in state._store.endpoints.query()] == ["e2"]
+    assert [r.endpoint_id for r in state._endpoints.query()] == ["e2"]
 
 
 # --- Query semantics --------------------------------------------------------
@@ -210,82 +179,51 @@ def populated(state):
     ]
     with state._db.transaction() as cur:
         for r in rows:
-            state._store.endpoints.add(cur, r)
+            state._endpoints.add(cur, r)
     return state, rows, (t0, t1, t2)
 
 
 def test_query_by_exact_name(populated):
     state, _, _ = populated
-    ids = {r.endpoint_id for r in state._store.endpoints.query(EndpointQuery(exact_name="alpha/svc"))}
+    ids = {r.endpoint_id for r in state._endpoints.query(EndpointQuery(exact_name="alpha/svc"))}
     assert ids == {"e1"}
 
 
 def test_query_by_prefix(populated):
     state, _, _ = populated
-    ids = {r.endpoint_id for r in state._store.endpoints.query(EndpointQuery(name_prefix="alpha/"))}
+    ids = {r.endpoint_id for r in state._endpoints.query(EndpointQuery(name_prefix="alpha/"))}
     assert ids == {"e1", "e2"}
 
 
 def test_query_by_task_ids(populated):
     state, _, (t0, _, t2) = populated
-    ids = {r.endpoint_id for r in state._store.endpoints.query(EndpointQuery(task_ids=(t0, t2)))}
+    ids = {r.endpoint_id for r in state._endpoints.query(EndpointQuery(task_ids=(t0, t2)))}
     assert ids == {"e1", "e2", "e4"}
 
 
 def test_query_by_endpoint_ids(populated):
     state, _, _ = populated
-    ids = {r.endpoint_id for r in state._store.endpoints.query(EndpointQuery(endpoint_ids=("e2", "e3")))}
+    ids = {r.endpoint_id for r in state._endpoints.query(EndpointQuery(endpoint_ids=("e2", "e3")))}
     assert ids == {"e2", "e3"}
 
 
 def test_query_limit(populated):
     state, _, _ = populated
-    rows = state._store.endpoints.query(EndpointQuery(limit=2))
+    rows = state._endpoints.query(EndpointQuery(limit=2))
     assert len(rows) == 2
 
 
 def test_query_empty_matches_all(populated):
     state, rows, _ = populated
-    assert {r.endpoint_id for r in state._store.endpoints.query()} == {r.endpoint_id for r in rows}
+    assert {r.endpoint_id for r in state._endpoints.query()} == {r.endpoint_id for r in rows}
 
 
 def test_resolve_returns_address_for_exact_name(populated):
     state, _, _ = populated
-    row = state._store.endpoints.resolve("alpha/svc")
+    row = state._endpoints.resolve("alpha/svc")
     assert row is not None
     assert row.endpoint_id == "e1"
-    assert state._store.endpoints.resolve("nope") is None
-
-
-# --- Parity with the legacy SQL builder -------------------------------------
-
-
-@pytest.mark.parametrize(
-    "build_query",
-    [
-        lambda t0, t1, t2: EndpointQuery(),
-        lambda t0, t1, t2: EndpointQuery(exact_name="alpha/svc"),
-        lambda t0, t1, t2: EndpointQuery(name_prefix="alpha"),
-        lambda t0, t1, t2: EndpointQuery(task_ids=(t0,)),
-        lambda t0, t1, t2: EndpointQuery(task_ids=(t0, t2)),
-        lambda t0, t1, t2: EndpointQuery(endpoint_ids=("e1", "e3")),
-        lambda t0, t1, t2: EndpointQuery(name_prefix="alpha", limit=1),
-    ],
-)
-def test_projection_parity_with_legacy_sql(populated, build_query):
-    state, _, (t0, t1, t2) = populated
-    query = build_query(t0, t1, t2)
-
-    sql, params = _endpoint_query_sql_legacy(query)
-    with state._db.read_snapshot() as q:
-        expected_ids = sorted(r.endpoint_id for r in ENDPOINT_PROJECTION.decode(q.fetchall(sql, tuple(params))))
-    actual_ids = sorted(r.endpoint_id for r in state._store.endpoints.query(query))
-
-    # For LIMIT queries, both sides just need to be a valid subset of matching rows.
-    if query.limit is not None:
-        assert len(actual_ids) == len(expected_ids)
-        return
-    assert actual_ids == expected_ids
+    assert state._endpoints.resolve("nope") is None
 
 
 # --- Atomicity --------------------------------------------------------------
@@ -312,7 +250,7 @@ def test_atomic_write_through_under_write_lock(state):
     def reader():
         # Poll until we observe the new endpoint or are told to stop.
         while not stop.is_set():
-            seen = state._store.endpoints.get("e-atomic") is not None
+            seen = state._endpoints.get("e-atomic") is not None
             observations.append(seen)
             # 1 ms poll cadence; bounded busy wait via Event.wait.
             if release_hook.wait(timeout=0.001):
@@ -324,7 +262,7 @@ def test_atomic_write_through_under_write_lock(state):
     reader_thread.start()
     try:
         with state._db.transaction() as cur:
-            outcome = state._store.endpoints.add(cur, _make_row("e-atomic", "atomic", t))
+            outcome = state._endpoints.add(cur, _make_row("e-atomic", "atomic", t))
             assert outcome is AddEndpointOutcome.OK
 
             # Register a second on_commit hook that blocks. Hooks fire in
@@ -343,13 +281,13 @@ def test_atomic_write_through_under_write_lock(state):
             # Sample reads BEFORE we enter the commit phase. While the
             # transaction is still open (no commit yet), readers must not
             # see the endpoint.
-            pre_commit_samples = [state._store.endpoints.get("e-atomic") for _ in range(50)]
+            pre_commit_samples = [state._endpoints.get("e-atomic") for _ in range(50)]
             assert all(v is None for v in pre_commit_samples), "reader saw uncommitted endpoint"
 
         # Tx context has exited and all hooks have fired. The endpoint must
         # be visible to every subsequent read.
         for _ in range(50):
-            assert state._store.endpoints.get("e-atomic") is not None
+            assert state._endpoints.get("e-atomic") is not None
     finally:
         release_hook.set()
         stop.set()
@@ -369,8 +307,8 @@ def test_replace_from_resets_dict(state, tmp_path: Path):
 
     # Populate the projection with a known endpoint and take a backup.
     with state._db.transaction() as cur:
-        state._store.endpoints.add(cur, _make_row("e-backup", "backup", t))
-    assert state._store.endpoints.get("e-backup") is not None
+        state._endpoints.add(cur, _make_row("e-backup", "backup", t))
+    assert state._endpoints.get("e-backup") is not None
 
     backup_dir = tmp_path / "backup"
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -381,18 +319,18 @@ def test_replace_from_resets_dict(state, tmp_path: Path):
     # Mutate after the backup: remove the original, add a new endpoint that
     # only exists in the live DB.
     with state._db.transaction() as cur:
-        state._store.endpoints.remove(cur, "e-backup")
-        state._store.endpoints.add(cur, _make_row("e-live", "live", t))
-    assert state._store.endpoints.get("e-backup") is None
-    assert state._store.endpoints.get("e-live") is not None
+        state._endpoints.remove(cur, "e-backup")
+        state._endpoints.add(cur, _make_row("e-live", "live", t))
+    assert state._endpoints.get("e-backup") is None
+    assert state._endpoints.get("e-live") is not None
 
     # Restore from the backup. The reopen hook fires the projection's
     # rehydrate() and the dict must reflect the backup state, not the
     # post-backup mutations.
     state._db.replace_from(backup_dir)
 
-    assert state._store.endpoints.get("e-backup") is not None
-    assert state._store.endpoints.get("e-live") is None
+    assert state._endpoints.get("e-backup") is not None
+    assert state._endpoints.get("e-live") is None
 
 
 def test_concurrent_readers_no_keyerror_no_torn_reads(state):
@@ -411,9 +349,9 @@ def test_concurrent_readers_no_keyerror_no_torn_reads(state):
                 eid = f"e{idx}-{i % len(task_ids)}"
                 name = f"svc-{idx}-{i % len(task_ids)}"
                 with state._db.transaction() as cur:
-                    state._store.endpoints.add(cur, _make_row(eid, name, t))
+                    state._endpoints.add(cur, _make_row(eid, name, t))
                 with state._db.transaction() as cur:
-                    state._store.endpoints.remove(cur, eid)
+                    state._endpoints.remove(cur, eid)
                 i += 1
         except Exception as exc:
             errors.append(f"writer-{idx}: {exc!r}")
@@ -421,7 +359,7 @@ def test_concurrent_readers_no_keyerror_no_torn_reads(state):
     def reader():
         try:
             while not stop.is_set():
-                snapshot = state._store.endpoints.query()
+                snapshot = state._endpoints.query()
                 ids = [r.endpoint_id for r in snapshot]
                 # No duplicate ids in a single snapshot (no torn index).
                 assert len(ids) == len(set(ids)), f"duplicate ids in snapshot: {ids}"
@@ -432,11 +370,11 @@ def test_concurrent_readers_no_keyerror_no_torn_reads(state):
                 # on miss, so this is implicit — any exception bubbles up
                 # via the outer try/except.
                 for row in snapshot:
-                    state._store.endpoints.get(row.endpoint_id)
+                    state._endpoints.get(row.endpoint_id)
                 for i in range(len(task_ids)):
-                    state._store.endpoints.query(EndpointQuery(name_prefix="svc-"))
-                    state._store.endpoints.query(EndpointQuery(exact_name=f"svc-0-{i}"))
-                    state._store.endpoints.query(EndpointQuery(task_ids=(task_ids[i],)))
+                    state._endpoints.query(EndpointQuery(name_prefix="svc-"))
+                    state._endpoints.query(EndpointQuery(exact_name=f"svc-0-{i}"))
+                    state._endpoints.query(EndpointQuery(task_ids=(task_ids[i],)))
         except Exception as exc:
             errors.append(f"reader: {exc!r}")
 

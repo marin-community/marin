@@ -12,20 +12,20 @@ import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
-from iris.cluster.controller.db import (
-    _decode_attribute_rows,
-)
+from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
     SchedulingResult,
     worker_snapshot_from_row,
 )
+from iris.cluster.controller.schema_v2 import worker_attributes_table
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import select
 
 from tests.cluster.conftest import eq_constraint, in_constraint
 
@@ -72,26 +72,37 @@ def _job_requirements_from_job(job) -> JobRequirements:
     )
 
 
+def _decode_worker_attr_value(row):
+    """Decode a worker_attributes row value by value_type."""
+    from iris.cluster.constraints import AttributeValue
+
+    if row.value_type == "int":
+        return AttributeValue(int(row.int_value))
+    if row.value_type == "float":
+        return AttributeValue(float(row.float_value))
+    return AttributeValue(str(row.str_value or ""))
+
+
 def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
-    with state._db.snapshot() as q:
-        rows = q.raw(
-            "SELECT worker_id, key, value_type, str_value, int_value, float_value"
-            " FROM worker_attributes WHERE worker_id = ? AND key = ?",
-            (str(worker_id), key),
+    with state._db.read_snapshot() as tx:
+        rows = tx.fetchall(
+            select(worker_attributes_table).where(
+                worker_attributes_table.c.worker_id == worker_id,
+                worker_attributes_table.c.key == key,
+            )
         )
     if not rows:
         return None
-    attrs = _decode_attribute_rows(rows)
-    return attrs.get(worker_id, {}).get(key)
+    return _decode_worker_attr_value(rows[0])
 
 
 def assign_task_to_worker(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
 
 
 def transition_task_to_running(state: ControllerTransitions, task) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -108,7 +119,7 @@ def transition_task_to_running(state: ControllerTransitions, task) -> None:
 
 
 def transition_task_to_state(state: ControllerTransitions, task, new_state: int) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -127,7 +138,7 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
 def _snapshots_with_usage(state, workers):
     """Project worker rows + per-cycle held-resource usage into bundled snapshots."""
     with state._db.read_snapshot() as snap:
-        usage_by_worker = state._store.attempts.resource_usage_by_worker(snap)
+        usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
     return [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
 
 

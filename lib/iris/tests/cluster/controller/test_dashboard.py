@@ -16,22 +16,21 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.db import (
-    healthy_active_workers_with_attributes,
-)
+from iris.cluster.controller.reads import jobs as reads_jobs
+from iris.cluster.controller.reads import scheduler as reads_scheduler
+from iris.cluster.controller.reads.workers import healthy_active_workers_with_attributes
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
-from iris.cluster.controller.schema import (
-    JOB_CONFIG_JOIN,
-    JOB_DETAIL_PROJECTION,
-    EndpointRow,
-)
+from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.schema_v2 import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.providers.k8s.types import K8sResource
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
 
 from tests.cluster.conftest import fake_log_client_from_service
@@ -59,7 +58,7 @@ def submit_job(
     """Submit a job through the state command API."""
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, jid, request, Timestamp.now())
     return jid
 
@@ -68,10 +67,13 @@ def set_job_state(
     state: ControllerTransitions, job_id: JobName, new_state: int, *, started_at_ms: int | None = None
 ) -> None:
     """Directly set job state in DB for dashboard-only read-model tests."""
-    state._db.execute(
-        "UPDATE jobs SET state = ?, started_at_ms = COALESCE(?, started_at_ms) WHERE job_id = ?",
-        (new_state, started_at_ms, job_id.to_wire()),
-    )
+    values: dict = {"state": new_state}
+    if started_at_ms is not None:
+        from rigging.timing import Timestamp
+
+        values["started_at_ms"] = Timestamp.from_ms(started_at_ms)
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(**values))
 
 
 def set_task_retry_counts(
@@ -82,19 +84,21 @@ def set_task_retry_counts(
     preemption_count: int | None = None,
 ) -> None:
     """Directly set retry counters in DB for read-model aggregate tests."""
-    state._db.execute(
-        "UPDATE tasks SET failure_count = COALESCE(?, failure_count), preemption_count = COALESCE(?, preemption_count) "
-        "WHERE task_id = ?",
-        (failure_count, preemption_count, task_id.to_wire()),
-    )
+    values: dict = {}
+    if failure_count is not None:
+        values["failure_count"] = failure_count
+    if preemption_count is not None:
+        values["preemption_count"] = preemption_count
+    if not values:
+        return
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
 
 
 def set_task_state(state: ControllerTransitions, task_id: JobName, new_state: int) -> None:
     """Directly set task state in DB for aggregate count tests."""
-    state._db.execute(
-        "UPDATE tasks SET state = ? WHERE task_id = ?",
-        (new_state, task_id.to_wire()),
-    )
+    with state._db.transaction() as tx:
+        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(state=new_state))
 
 
 @pytest.fixture
@@ -111,37 +115,34 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
     """
 
     def _create_scheduling_context(workers):
-        with state._db.snapshot() as q:
-            rows = q.raw(
-                "SELECT a.worker_id, COUNT(*) as c FROM tasks t "
-                "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
-                "JOIN jobs j ON t.job_id = j.job_id "
-                "WHERE t.state IN (?, ?) AND j.is_reservation_holder = 0 "
-                "GROUP BY a.worker_id ORDER BY a.worker_id ASC",
-                (
-                    job_pb2.TASK_STATE_BUILDING,
-                    job_pb2.TASK_STATE_ASSIGNED,
-                ),
-                decoders={"worker_id": WorkerId, "c": int},
+        with state._db.read_snapshot() as tx:
+            bc_rows = tx.fetchall(
+                select(task_attempts_table.c.worker_id, func.count().label("c"))
+                .join(
+                    tasks_table,
+                    (tasks_table.c.task_id == task_attempts_table.c.task_id)
+                    & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
+                )
+                .join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id)
+                .where(
+                    tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]),
+                    jobs_table.c.is_reservation_holder == False,  # noqa: E712
+                )
+                .group_by(task_attempts_table.c.worker_id)
+                .order_by(task_attempts_table.c.worker_id.asc())
             )
-        building_counts = {row.worker_id: row.c for row in rows}
-        with state._db.read_snapshot() as snap:
-            usage_by_worker = state._store.attempts.resource_usage_by_worker(snap)
+            building_counts = {row.worker_id: int(row.c) for row in bc_rows}
+            usage_by_worker = reads_scheduler.resource_usage_by_worker(tx)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return scheduler.create_scheduling_context(snapshots, building_counts=building_counts)
 
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
-        with state._db.snapshot() as q:
-            rows = JOB_DETAIL_PROJECTION.decode(
-                q.fetchall(
-                    f"SELECT {JOB_DETAIL_PROJECTION.select_clause()} FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ?",
-                    (job_wire_id,),
-                )
-            )
-        if not rows:
+        job_id = JobName.from_wire(job_wire_id)
+        with state._db.read_snapshot() as tx:
+            job = reads_jobs.get_detail(tx, job_id)
+        if job is None:
             return None
-        job = rows[0]
         if job.state != job_pb2.JOB_STATE_PENDING:
             return None
         req = JobRequirements(
@@ -154,7 +155,8 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)
-        workers = healthy_active_workers_with_attributes(state._db, state._store.health, state._store.worker_attrs)
+        with state._db.read_snapshot() as tx:
+            workers = healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
         context = _create_scheduling_context(workers)
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
@@ -175,13 +177,20 @@ def log_service() -> LogServiceImpl:
 
 @pytest.fixture
 def service(state, scheduler, tmp_path, log_service):
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
+
     controller_mock = _make_controller_mock(state, scheduler)
     return ControllerServiceImpl(
         state,
-        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
     )
 
 
@@ -307,7 +316,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     set_job_state(state, succeeded_id, job_pb2.JOB_STATE_SUCCEEDED)
 
     # Add endpoints only for non-terminal jobs
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.add_endpoint(
             cur,
             EndpointRow(
@@ -319,7 +328,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
                 registered_at=Timestamp.now(),
             ),
         )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.add_endpoint(
             cur,
             EndpointRow(
@@ -346,7 +355,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
     set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
 
     task_id = job_id.task(0)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.add_endpoint(
             cur,
             EndpointRow(
@@ -767,9 +776,9 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
     job_id = submit_job(state, "ts-job", job_request)
     task_id = job_id.task(0)
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -777,7 +786,7 @@ def test_get_worker_status_recent_attempts_have_timestamps(client, state, job_re
                 updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
             ),
         )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -818,9 +827,9 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
     task_id = job_id.task(0)
 
     # First attempt: BUILDING -> WORKER_FAILED (retriable, retries to PENDING).
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -830,7 +839,7 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
                 ],
             ),
         )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -846,9 +855,9 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
             ),
         )
     # Second attempt: re-dispatch to the same worker, RUNNING.
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -886,10 +895,10 @@ def test_get_worker_status_includes_running_tasks(client, state, job_request):
     wid = register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())
     job_id = submit_job(state, "worker-detail-res", job_request)
     task_id = job_id.task(0)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(cur, HeartbeatApplyRequest(worker_id=wid, updates=[]))
 
     resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
