@@ -161,7 +161,7 @@ def test_decon_preserves_partition_filenames(fox_corpus):
 
 
 def test_decon_output_schema(fox_corpus):
-    """Output Parquet has exactly {id, partition_id, contaminated, max_overlap}."""
+    """Output Parquet has exactly {id, partition_id, contaminated, max_overlap, matched_hashes}."""
     decon_to_parquet(
         input_path=fox_corpus["input_dir"],
         decontaminate_source=fox_corpus["eval_dir"],
@@ -173,11 +173,66 @@ def test_decon_output_schema(fox_corpus):
     output_files = sorted(Path(fox_corpus["output_dir"]).glob("part-*.parquet"))
     assert output_files, "expected at least one output partition"
     schema = pq.read_schema(str(output_files[0]))
-    assert set(schema.names) == {"id", "partition_id", "contaminated", "max_overlap"}
+    assert set(schema.names) == {"id", "partition_id", "contaminated", "max_overlap", "matched_hashes"}
     assert pa.types.is_string(schema.field("id").type)
     assert pa.types.is_integer(schema.field("partition_id").type)
     assert pa.types.is_boolean(schema.field("contaminated").type)
     assert pa.types.is_floating(schema.field("max_overlap").type)
+    matched_field = schema.field("matched_hashes")
+    assert pa.types.is_list(matched_field.type)
+    assert matched_field.type.value_type == pa.uint64()
+
+
+def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
+    """Build writes a hash → eval_id Parquet sidecar with the expected schema."""
+    attrs = decon_to_parquet(
+        input_path=fox_corpus["input_dir"],
+        decontaminate_source=fox_corpus["eval_dir"],
+        output_path=fox_corpus["output_dir"],
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    sidecar = Path(attrs.eval_hash_index_path)
+    assert sidecar.exists(), f"missing sidecar at {sidecar}"
+    schema = pq.read_schema(str(sidecar))
+    assert schema.field("hash").type == pa.uint64()
+    assert pa.types.is_string(schema.field("eval_id").type)
+
+    rows = pq.read_table(str(sidecar)).to_pylist()
+    assert rows, "expected at least one (hash, eval_id) row"
+    eval_ids = {r["eval_id"] for r in rows}
+    # Both eval records contribute to the sidecar.
+    assert eval_ids == {"eval_arctic", "eval_red"}
+
+
+def test_decon_matched_hashes_join_recovers_eval_id(fox_corpus):
+    """A contaminated record's matched_hashes joined with the sidecar attributes back to its eval."""
+    attrs = decon_to_parquet(
+        input_path=fox_corpus["input_dir"],
+        decontaminate_source=fox_corpus["eval_dir"],
+        output_path=fox_corpus["output_dir"],
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    rows = _read_attributes(Path(fox_corpus["output_dir"]))
+    hash_to_eval: dict[int, set[str]] = {}
+    for r in pq.read_table(attrs.eval_hash_index_path).to_pylist():
+        hash_to_eval.setdefault(r["hash"], set()).add(r["eval_id"])
+
+    arctic_evals: set[str] = set()
+    for h in rows["doc_arctic_exact"]["matched_hashes"]:
+        arctic_evals |= hash_to_eval.get(h, set())
+    assert arctic_evals == {"eval_arctic"}
+
+    red_evals: set[str] = set()
+    for h in rows["doc_red_exact"]["matched_hashes"]:
+        red_evals |= hash_to_eval.get(h, set())
+    assert red_evals == {"eval_red"}
+
+    # Clean record has no matched hashes.
+    assert rows["doc_unique"]["matched_hashes"] == []
 
 
 @pytest.mark.parametrize(

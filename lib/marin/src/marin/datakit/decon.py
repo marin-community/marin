@@ -8,10 +8,16 @@ in-memory bloom filter from the eval text, and emits a co-partitioned Parquet
 attributes dataset marking which records overlap with eval text.
 
 Schema of the emitted Parquet attributes:
-    id           : string  — matches source document id
-    partition_id : int     — matches source partition
-    contaminated : bool    — max paragraph overlap meets the threshold
-    max_overlap  : float   — highest paragraph overlap fraction in [0, 1]
+    id             : string         — matches source document id
+    partition_id   : int            — matches source partition
+    contaminated   : bool           — max paragraph overlap meets the threshold
+    max_overlap    : float          — highest paragraph overlap fraction in [0, 1]
+    matched_hashes : list[uint64]   — bloom-hit ngram hashes from this record
+
+Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
+``hash: uint64, eval_id: string`` (flattened, one row per (hash, eval_id) pair).
+Join ``matched_hashes`` against this sidecar to attribute contamination back
+to specific eval records.
 
 Output is co-partitioned with the source: one ``part-NNNNN-of-MMMMM.parquet``
 per input partition, preserving the source filenames so consolidate can
@@ -28,6 +34,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import dupekit
+import pyarrow as pa
 from fray import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
@@ -64,12 +71,16 @@ class DeconAttributes(BaseModel):
     Attributes:
         output_dir: Directory containing ``part-NNNNN-of-MMMMM.parquet`` files.
         num_partitions: Number of output partitions; matches the source.
+        eval_hash_index_path: Path to the ``hash → eval_id`` sidecar Parquet.
+            Join the per-record ``matched_hashes`` column against this to
+            attribute contamination to specific eval records.
         counters: Aggregated zephyr counters from the marking pipeline.
     """
 
     version: str = "v1"
     output_dir: str
     num_partitions: int
+    eval_hash_index_path: str
     counters: dict[str, int]
 
 
@@ -94,16 +105,26 @@ def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
             yield para
 
 
-def _paragraph_overlap(paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None) -> float:
-    """Fraction of ngrams in *paragraph* that hit the bloom; 0 or 1 for exact-paragraph mode."""
+def _paragraph_overlap_and_matches(
+    paragraph: str, bf: dupekit.Bloom, ngram: NGramConfig | None
+) -> tuple[float, list[int]]:
+    """Return ``(overlap_score, matched_hashes)`` for a single paragraph.
+
+    Score is 0.0 or 1.0 in exact-paragraph mode and the fraction of bloom-hit
+    ngrams otherwise. *matched_hashes* is the list of ngram hashes that hit
+    the bloom (in iteration order, with duplicates if the same ngram repeats).
+    """
     if ngram is None:
-        return 1.0 if _bloom_hash(paragraph) in bf else 0.0
+        h = _bloom_hash(paragraph)
+        return (1.0, [h]) if h in bf else (0.0, [])
     ngrams = list(_extract_ngrams(paragraph, ngram.ngram_length, ngram.stride))
     if not ngrams:
         # Paragraph too short for n-grams — fall back to exact paragraph match.
-        return 1.0 if _bloom_hash(paragraph) in bf else 0.0
-    matches = sum(1 for ng in ngrams if _bloom_hash(ng) in bf)
-    return matches / len(ngrams)
+        h = _bloom_hash(paragraph)
+        return (1.0, [h]) if h in bf else (0.0, [])
+    hashes = [_bloom_hash(ng) for ng in ngrams]
+    matched = [h for h in hashes if h in bf]
+    return len(matched) / len(hashes), matched
 
 
 def _discover_parquet_partitions(input_path: str) -> list[str]:
@@ -135,36 +156,83 @@ def _discover_eval_files(eval_paths: list[str]) -> Iterator[str]:
                 yield f"{protocol}://{full}" if protocol else full
 
 
+_INDEX_SCHEMA = pa.schema([pa.field("hash", pa.uint64()), pa.field("eval_id", pa.string())])
+
+
 def _build_filter(
     eval_paths: list[str],
     bloom_path: str,
+    index_path: str,
     text_field: str,
     ngram: NGramConfig | None,
     estimated_doc_count: int,
     false_positive_rate: float,
 ) -> None:
-    """Build a bloom filter from eval source(s) and persist it to *bloom_path*.
+    """Build a bloom filter and a streaming hash → eval_id sidecar.
 
-    Eval sets are small enough that we read them serially in-process. If this
-    becomes a bottleneck (very large eval suite), wrap in a Zephyr pipeline.
+    The hash index is written incrementally via :func:`write_parquet_file` so
+    build-time memory stays bounded to the writer's buffer (~64 MB) plus a
+    per-record dedup set (~10 KB). The eval suite size does not bound memory.
+
+    Sidecar schema: ``hash: uint64, eval_id: string`` (flattened — one row per
+    ``(hash, eval_id)`` pair, with the hash deduped *within* a single eval
+    record). Inter-record duplicates are allowed; joins handle them naturally.
     """
     bf = dupekit.Bloom(estimated_doc_count, false_positive_rate)
-    n_records = 0
-    for path in _discover_eval_files(eval_paths):
-        for record in load_file(path):
-            text = record.get(text_field)
-            if not text:
-                continue
-            for feat in _extract_features(str(text), ngram):
-                bf.add(_bloom_hash(feat))
-            n_records += 1
-    logger.info("decon: built bloom from %d eval records → %s", n_records, bloom_path)
-    fs, path = url_to_fs(bloom_path)
-    bloom_dir = os.path.dirname(path)
+    stats = {"n_records": 0, "n_index_rows": 0}
+
+    def emit_index_rows() -> Iterator[dict[str, Any]]:
+        for path in _discover_eval_files(eval_paths):
+            basename = os.path.basename(path)
+            for idx, record in enumerate(load_file(path)):
+                text = record.get(text_field)
+                if not text:
+                    continue
+                eval_id = str(record.get("id") or f"{basename}::{idx}")
+                seen_in_record: set[int] = set()
+                for feat in _extract_features(str(text), ngram):
+                    h = _bloom_hash(feat)
+                    bf.add(h)
+                    if h in seen_in_record:
+                        continue
+                    seen_in_record.add(h)
+                    stats["n_index_rows"] += 1
+                    yield {"hash": h, "eval_id": eval_id}
+                stats["n_records"] += 1
+
+    # Stream the index parquet; this iteration also fills the bloom.
+    fs_idx, ip = url_to_fs(index_path)
+    idx_dir = os.path.dirname(ip)
+    if idx_dir:
+        fs_idx.makedirs(idx_dir, exist_ok=True)
+    write_parquet_file(emit_index_rows(), output_path=index_path, schema=_INDEX_SCHEMA)
+
+    # Persist the populated bloom.
+    fs_bf, bp = url_to_fs(bloom_path)
+    bloom_dir = os.path.dirname(bp)
     if bloom_dir:
-        fs.makedirs(bloom_dir, exist_ok=True)
-    with fs.open(path, "wb") as f:
+        fs_bf.makedirs(bloom_dir, exist_ok=True)
+    with fs_bf.open(bp, "wb") as f:
         f.write(bf.save_bytes())
+
+    logger.info(
+        "decon: built bloom + index from %d eval records (%d index rows) → bloom=%s, index=%s",
+        stats["n_records"],
+        stats["n_index_rows"],
+        bloom_path,
+        index_path,
+    )
+
+
+_OUTPUT_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.string()),
+        pa.field("partition_id", pa.int64()),
+        pa.field("contaminated", pa.bool_()),
+        pa.field("max_overlap", pa.float64()),
+        pa.field("matched_hashes", pa.list_(pa.uint64())),
+    ]
+)
 
 
 def _make_marker(
@@ -189,9 +257,16 @@ def _make_marker(
 
             def rows_for(p: str) -> Iterator[dict[str, Any]]:
                 for record in load_file(p):
-                    text = record.get(text_field, "") or ""
-                    paragraph_scores = (_paragraph_overlap(para, bf, ngram) for para in str(text).split("\n") if para)
-                    max_score = max(paragraph_scores, default=0.0)
+                    text = str(record.get(text_field, "") or "")
+                    max_score = 0.0
+                    matched: set[int] = set()
+                    for para in text.split("\n"):
+                        if not para:
+                            continue
+                        score, hits = _paragraph_overlap_and_matches(para, bf, ngram)
+                        if score > max_score:
+                            max_score = score
+                        matched.update(hits)
                     contaminated = max_score > 0 and max_score >= threshold
                     counters.increment("decon/contaminated" if contaminated else "decon/clean")
                     yield {
@@ -199,11 +274,12 @@ def _make_marker(
                         "partition_id": record["partition_id"],
                         "contaminated": contaminated,
                         "max_overlap": max_score,
+                        "matched_hashes": list(matched),
                     }
 
             out_filename = os.path.basename(input_path)
             out_path = f"{output_dir.rstrip('/')}/{out_filename}"
-            result = write_parquet_file(rows_for(input_path), output_path=out_path)
+            result = write_parquet_file(rows_for(input_path), output_path=out_path, schema=_OUTPUT_SCHEMA)
             yield result
 
     return mark_shard
@@ -255,9 +331,11 @@ def decon_to_parquet(
     logger.info("decon: %s → %s, %d input partitions", input_path, output_path, num_partitions)
 
     bloom_path = os.path.join(output_path, "_bloom", "filter.bin")
+    index_path = os.path.join(output_path, "_bloom", "eval_hash_index.parquet")
     _build_filter(
         eval_paths=eval_paths,
         bloom_path=bloom_path,
+        index_path=index_path,
         text_field=text_field,
         ngram=ngram,
         estimated_doc_count=estimated_doc_count,
@@ -280,6 +358,7 @@ def decon_to_parquet(
     return DeconAttributes(
         output_dir=output_path,
         num_partitions=num_partitions,
+        eval_hash_index_path=index_path,
         counters=dict(outcome.counters),
     )
 
