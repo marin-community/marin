@@ -294,9 +294,12 @@ def _make_marker(
                         matched.update(hits)
                     contaminated = max_score > 0 and max_score >= threshold
                     counters.increment("decon/contaminated" if contaminated else "decon/clean")
+                    # Fall back to shard.shard_idx for legacy v1 NormalizedData (pre-partition_id).
+                    # With reshard(num_shards=N) on a sorted file list, shard.shard_idx matches
+                    # the input's "part-NNNNN-of-NNNNN" partition number.
                     yield {
                         "id": record["id"],
-                        "partition_id": record["partition_id"],
+                        "partition_id": record.get("partition_id", shard.shard_idx),
                         "contaminated": contaminated,
                         "max_overlap": max_score,
                         "matched_hashes": list(matched),

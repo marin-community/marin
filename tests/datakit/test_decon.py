@@ -287,6 +287,48 @@ def test_decon_empty_input_raises(tmp_path: Path):
         )
 
 
+def test_decon_v1_input_without_partition_id_column(tmp_path: Path):
+    """Legacy v1 NormalizedData (pre-partition_id) is supported via shard.shard_idx fallback.
+
+    Datasets normalized before the v2 partition_id stamp don't carry the column.
+    Decon should still produce co-partitioned output with synthesized partition_id
+    derived from the shard index (matches the input's part-NNNNN-of-MMMMM naming
+    when files are processed in sorted order).
+    """
+    eval_dir = tmp_path / "eval"
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "eval", "text": "Arctic predators have superior auditory."}])
+
+    # Two flat input partitions, but records do NOT include partition_id.
+    pq.write_table(
+        pa.Table.from_pylist([{"id": "doc0", "text": "Arctic predators have superior auditory."}]),
+        str(input_dir / "part-00000-of-00002.parquet"),
+    )
+    pq.write_table(
+        pa.Table.from_pylist([{"id": "doc1", "text": "Desert mammals possess oversized pinnae."}]),
+        str(input_dir / "part-00001-of-00002.parquet"),
+    )
+
+    decon_to_parquet(
+        normalized_data=_as_source(input_dir, num_partitions=2),
+        eval_data_sources=str(eval_dir),
+        output_path=str(output_dir),
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        estimated_doc_count=1_000,
+        false_positive_rate=1e-9,
+    )
+
+    rows = _read_attributes(output_dir)
+    # contaminated decisions still correct
+    assert rows["doc0"]["contaminated"] is True
+    assert rows["doc1"]["contaminated"] is False
+    # partition_id synthesized: doc0 came from shard 0, doc1 from shard 1
+    assert rows["doc0"]["partition_id"] == 0
+    assert rows["doc1"]["partition_id"] == 1
+
+
 def test_decon_short_eval_paragraph_still_detected(tmp_path: Path):
     """Eval paragraphs shorter than ngram_length must still be matchable.
 
