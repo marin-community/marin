@@ -318,3 +318,249 @@ def test_decon_short_eval_paragraph_still_detected(tmp_path: Path):
     rows = _read_attributes(output_dir)
     assert rows["doc_short_match"]["contaminated"] is True
     assert rows["doc_short_match"]["max_overlap"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Functional boundary tests
+#
+# These exercise reasonable real-world contamination scenarios. Positive cases
+# verify the algorithm catches what it should. Limitation cases are xfail with
+# strict=True — if a future change improves the algorithm enough to handle
+# them, the test will XPASS and force us to update the suite.
+# ---------------------------------------------------------------------------
+
+
+def _run_decon_one_shot(
+    tmp_path: Path,
+    *,
+    eval_records: list[dict],
+    input_records: list[dict],
+    ngram: NGramConfig | None,
+) -> dict[str, dict]:
+    """Build eval + input fixtures, run decon, return id → output row mapping."""
+    eval_dir = tmp_path / "eval"
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", eval_records)
+    _write_input_parquet(input_dir / "part-00000-of-00001.parquet", input_records)
+    decon_to_parquet(
+        source=_as_source(input_dir, num_partitions=1),
+        decontaminate_source=str(eval_dir),
+        output_path=str(output_dir),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+    return _read_attributes(output_dir)
+
+
+# ----- Positive cases (decon catches these) -----
+
+
+def test_decon_catches_eval_paragraph_among_other_paragraphs(tmp_path: Path):
+    """Pretraining record with the eval text as one of multiple paragraphs is flagged.
+
+    Per-record score takes the max across paragraphs, so even a single
+    matching paragraph among many is enough.
+    """
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "eval_q", "text": "What is the speed of light in vacuum"},
+        ],
+        input_records=[
+            {
+                "id": "doc_buried",
+                "partition_id": 0,
+                "text": (
+                    "Various unrelated physics notes go here.\n"
+                    "What is the speed of light in vacuum\n"
+                    "And here is some commentary after the question."
+                ),
+            },
+        ],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+    )
+    assert rows["doc_buried"]["contaminated"] is True
+    assert rows["doc_buried"]["max_overlap"] == 1.0
+
+
+def test_decon_catches_multi_paragraph_eval_against_single_paragraph_input(tmp_path: Path):
+    """Eval spans multiple paragraphs; pretraining has same content inline (no newlines).
+
+    Build adds ngrams from each eval paragraph independently. The pretraining
+    paragraph's ngrams that fall inside one eval paragraph's span hit the bloom;
+    boundary-spanning ngrams in pretraining don't (they were never in eval), but
+    enough of them DO hit to clear the threshold.
+    """
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "eval", "text": "What is the capital of France\nThe capital city is Paris"},
+        ],
+        input_records=[
+            {
+                "id": "doc_inline",
+                "partition_id": 0,
+                "text": "What is the capital of France The capital city is Paris",
+            },
+        ],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+    )
+    assert rows["doc_inline"]["contaminated"] is True
+    # 7 ngrams in input paragraph, 5 match (the cross-boundary 2 don't): 5/7 ≈ 0.71.
+    assert rows["doc_inline"]["max_overlap"] >= 0.5
+
+
+def test_decon_catches_near_verbatim_with_word_insertion(tmp_path: Path):
+    """Pretraining has eval text with one extra word inserted; most ngrams still match."""
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "eval", "text": "Arctic predators have superior auditory capabilities for hunting beneath snow"},
+        ],
+        input_records=[
+            {
+                "id": "doc_inserted",
+                "partition_id": 0,
+                # extra word "thick" before "snow"
+                "text": "Arctic predators have superior auditory capabilities for hunting beneath thick snow",
+            },
+        ],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+    )
+    assert rows["doc_inserted"]["contaminated"] is True
+    assert rows["doc_inserted"]["max_overlap"] >= 0.5
+
+
+# ----- Known limitations (xfail with strict=True — tripwire if behavior improves) -----
+
+
+@pytest.mark.xfail(
+    reason="hashing is case-sensitive; eval and pretraining differing only in case do not match",
+    strict=True,
+)
+def test_decon_misses_case_only_differences(tmp_path: Path):
+    """Pretraining text identical to eval modulo case is NOT detected (limitation)."""
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "eval", "text": "lorem ipsum dolor sit amet consectetur"},
+        ],
+        input_records=[
+            {
+                "id": "doc_uppercase",
+                "partition_id": 0,
+                "text": "LOREM IPSUM DOLOR SIT AMET CONSECTETUR",
+            },
+        ],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+    )
+    assert rows["doc_uppercase"]["contaminated"] is True
+
+
+@pytest.mark.xfail(
+    reason="punctuation is part of the token; eval with '?' vs pretraining without does not match",
+    strict=True,
+)
+def test_decon_misses_punctuation_only_differences(tmp_path: Path):
+    """Pretraining text identical to eval modulo trailing punctuation is NOT detected."""
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            # tokens end with "?" — every ngram that touches the last token differs
+            {"id": "eval", "text": "Who wrote the play Romeo and Juliet?"},
+        ],
+        input_records=[
+            {
+                "id": "doc_no_qmark",
+                "partition_id": 0,
+                "text": "Who wrote the play Romeo and Juliet",
+            },
+        ],
+        # Use n=8 so EVERY ngram includes the last token and thus changes.
+        ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
+    )
+    assert rows["doc_no_qmark"]["contaminated"] is True
+
+
+@pytest.mark.xfail(
+    reason="short eval embedded in a long single paragraph dilutes the overlap fraction below threshold",
+    strict=True,
+)
+def test_decon_misses_short_eval_diluted_in_long_paragraph(tmp_path: Path):
+    """Eval is a short fragment; pretraining wraps it inside a long single paragraph.
+
+    With n=4, the eval contributes ~1 ngram. The pretraining paragraph has many
+    ngrams (the prefix + the eval ngram + the suffix). Score = 1/N → below 0.5.
+    A length-decay or substring-aware scorer (cf. allenai/decon) would catch it.
+    """
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            # Eval is 4 tokens → exactly 1 ngram at n=4.
+            {"id": "eval", "text": "atomic number of gold"},
+        ],
+        input_records=[
+            {
+                "id": "doc_buried",
+                "partition_id": 0,
+                # The eval ngram appears verbatim, surrounded by long context.
+                "text": (
+                    "Various trivia facts collected from many encyclopedic sources mention "
+                    "the atomic number of gold among other periodic table chemistry topics "
+                    "alongside copper silver and platinum which are also widely discussed"
+                ),
+            },
+        ],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+    )
+    assert rows["doc_buried"]["contaminated"] is True
+
+
+@pytest.mark.xfail(
+    reason="paraphrasing changes most tokens; ngram overlap drops below threshold",
+    strict=True,
+)
+def test_decon_misses_paraphrased_eval(tmp_path: Path):
+    """Pretraining expresses the same idea as eval with different words (no ngram overlap)."""
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "eval", "text": "What is the capital of France"},
+        ],
+        input_records=[
+            {
+                "id": "doc_paraphrased",
+                "partition_id": 0,
+                # Same question, different phrasing — no shared 4-grams.
+                "text": "Which city serves as France's capital",
+            },
+        ],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+    )
+    assert rows["doc_paraphrased"]["contaminated"] is True
+
+
+@pytest.mark.xfail(
+    reason="word order swap breaks every n-gram window; not detected by sliding-window ngram match",
+    strict=True,
+)
+def test_decon_misses_word_order_permutation(tmp_path: Path):
+    """Pretraining has the same words as eval in a permuted order; ngrams don't match."""
+    rows = _run_decon_one_shot(
+        tmp_path,
+        eval_records=[
+            {"id": "eval", "text": "alpha beta gamma delta epsilon zeta"},
+        ],
+        input_records=[
+            {
+                "id": "doc_permuted",
+                "partition_id": 0,
+                # Same six words, fully reversed.
+                "text": "zeta epsilon delta gamma beta alpha",
+            },
+        ],
+        ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5),
+    )
+    assert rows["doc_permuted"]["contaminated"] is True
