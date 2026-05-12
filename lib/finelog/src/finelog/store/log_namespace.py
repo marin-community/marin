@@ -244,9 +244,21 @@ def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
 
 @dataclass
 class _SealedBuffer:
+    """An immutable, in-flight flush buffer.
+
+    ``nbytes`` and ``num_rows`` are snapshotted at construction so the hot
+    path (``RamBuffers.ram_bytes`` / ``ram_rows``) doesn't re-walk every
+    column buffer on each call — ``pa.Table.nbytes`` is O(chunks * columns)
+    and was the dominant cost under sustained write load.
+    """
+
     table: pa.Table
     min_seq: int
     max_seq: int
+
+    def __post_init__(self) -> None:
+        self.nbytes: int = self.table.nbytes
+        self.num_rows: int = self.table.num_rows
 
 
 @dataclass
@@ -321,6 +333,8 @@ class RamBuffers:
     primitive columns and shares string buffers via Arrow's reference
     counting, so total ``nbytes`` is conserved across merges. We can
     therefore maintain ``_ram_bytes`` incrementally rather than scanning.
+    The sealed in-flight buffer caches its own ``nbytes`` / ``num_rows``
+    (see ``_SealedBuffer``) so ``ram_bytes`` stays O(1) on the hot path.
     """
 
     def __init__(self, *, arrow_schema: pa.Schema, next_seq: int) -> None:
@@ -348,11 +362,11 @@ class RamBuffers:
         self._ram_rows += table.num_rows
 
     def ram_bytes(self) -> int:
-        flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
+        flushing_b = self._flushing.nbytes if self._flushing is not None else 0
         return self._ram_bytes + flushing_b
 
     def ram_rows(self) -> int:
-        flushing_n = self._flushing.table.num_rows if self._flushing is not None else 0
+        flushing_n = self._flushing.num_rows if self._flushing is not None else 0
         return self._ram_rows + flushing_n
 
     def chunk_count(self) -> int:
