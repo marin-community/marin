@@ -820,15 +820,18 @@ class TrainerConfig:
     crash_on_nan: bool = True
     crash_on_inf: bool = True
 
-    forward_progress_timeout: Optional[float] = None
+    forward_progress_timeout: Optional[float] = 600.0
     """If set, abort the process if no training step completes within this many seconds.
+
+    Defaults to 10 minutes, intentionally generous so it only fires on genuine
+    native hangs rather than slow-but-progressing steps. Set to ``None`` to
+    disable, or to a larger value if you have legitimately long inline
+    evals/checkpoints.
 
     Converts silent native hangs inside ``train_step`` (e.g. XLA command-buffer /
     CUDA-graph state corruption that leaves pods/GPUs alive but training stalled)
     into actionable failures. The deadline only begins after the first step has
-    completed, so warmup/compilation does not count against it. Set to a value
-    comfortably larger than the slowest expected step (including periodic evals
-    and checkpoints that run inline)."""
+    completed, so warmup/compilation does not count against it."""
 
     forward_progress_check_interval: float = 30.0
     """How often the forward-progress watchdog thread polls the heartbeat, in seconds."""
