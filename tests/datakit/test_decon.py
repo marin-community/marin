@@ -329,24 +329,28 @@ def test_decon_v1_input_without_partition_id_column(tmp_path: Path):
     assert rows["doc1"]["partition_id"] == 1
 
 
-def test_decon_short_eval_paragraph_still_detected(tmp_path: Path):
-    """Eval paragraphs shorter than ngram_length must still be matchable.
+def test_decon_short_paragraphs_below_ngram_length_contribute_nothing(tmp_path: Path):
+    """Paragraphs with < ngram_length tokens are silently skipped in n-gram mode.
 
-    Regression: _extract_features previously yielded nothing for short paragraphs,
-    so the bloom contained no features for them and exact-byte matches in the
-    input silently missed. Build-side and consumer-side now share the
-    "fall back to whole-paragraph hash" rule.
+    Earlier versions (PR #5656 mid-stack) fell back to whole-paragraph hashing
+    for paragraphs too short to form an n-gram. That created trivial collisions
+    on common short paragraphs like ``"..."``, ``"A."``, etc., generating
+    ~18% phantom-contamination flags in the MMLU vs nemotron-math smoke run.
+    The fallback was removed; this test pins the new behavior.
+
+    Trade-off: an eval with paragraphs shorter than ``ngram_length`` won't be
+    matchable in n-gram mode. Callers who need that should either lower
+    ``ngram_length`` or use ``ngram=None`` (exact paragraph mode).
     """
     eval_dir = tmp_path / "eval"
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
 
-    # Eval has a 2-token paragraph; with n=8 there are no ngrams. Without the
-    # fallback this paragraph would contribute nothing to the bloom.
+    # Eval has a 2-token paragraph; with n=8 there are no ngrams → no bloom adds.
     _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "short_eval", "text": "Hello world"}])
     _write_input_parquet(
         input_dir / "part-00000-of-00001.parquet",
-        [{"id": "doc_short_match", "text": "Hello world", "partition_id": 0}],
+        [{"id": "doc_short_text", "text": "Hello world", "partition_id": 0}],
     )
 
     decon_to_parquet(
@@ -358,8 +362,10 @@ def test_decon_short_eval_paragraph_still_detected(tmp_path: Path):
         false_positive_rate=1e-9,
     )
     rows = _read_attributes(output_dir)
-    assert rows["doc_short_match"]["contaminated"] is True
-    assert rows["doc_short_match"]["max_overlap"] == 1.0
+    # No matchable ngram → not contaminated, even though text is byte-identical to eval.
+    assert rows["doc_short_text"]["contaminated"] is False
+    assert rows["doc_short_text"]["max_overlap"] == 0.0
+    assert rows["doc_short_text"]["matched_hashes"] == []
 
 
 # ---------------------------------------------------------------------------

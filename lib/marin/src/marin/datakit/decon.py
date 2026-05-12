@@ -99,11 +99,13 @@ def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
     """Yield matchable features: ngrams within each paragraph, or whole paragraphs.
 
-    If a paragraph has fewer than ``ngram_length`` tokens we fall back to yielding
-    the whole paragraph — symmetric with the consumer-side fallback in
-    :func:`_paragraph_overlap_and_matches`. Without this, a short eval paragraph
-    would contribute zero hashes to the bloom and an exact-byte match in the
-    input would silently miss.
+    In n-gram mode, paragraphs with fewer than ``ngram_length`` tokens
+    contribute nothing — no fallback. A whole-paragraph fallback would be
+    symmetric with the consumer side but creates trivial collisions on very
+    short paragraphs (e.g. ``"..."``, ``"A."``, ``"##"`` that show up
+    routinely in eval and pretraining text alike). See PR #5656 for the
+    smoke-test finding (~18% phantom contamination on MMLU vs nemotron-math
+    came from the literal ``"..."`` short-paragraph artifact).
     """
     for para in text.split("\n"):
         if not para:
@@ -111,11 +113,7 @@ def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
         if ngram is None:
             yield para
             continue
-        ngrams = list(_extract_ngrams(para, ngram.ngram_length, ngram.stride))
-        if ngrams:
-            yield from ngrams
-        else:
-            yield para
+        yield from _extract_ngrams(para, ngram.ngram_length, ngram.stride)
 
 
 def _paragraph_overlap_and_matches(
@@ -126,15 +124,17 @@ def _paragraph_overlap_and_matches(
     Score is 0.0 or 1.0 in exact-paragraph mode and the fraction of bloom-hit
     ngrams otherwise. *matched_hashes* is the list of ngram hashes that hit
     the bloom (in iteration order, with duplicates if the same ngram repeats).
+
+    Paragraphs with fewer than ``ngram_length`` tokens in n-gram mode return
+    ``(0.0, [])`` — see :func:`_extract_features` for why we don't fall back
+    to whole-paragraph hashing.
     """
     if ngram is None:
         h = _bloom_hash(paragraph)
         return (1.0, [h]) if h in bf else (0.0, [])
     ngrams = list(_extract_ngrams(paragraph, ngram.ngram_length, ngram.stride))
     if not ngrams:
-        # Paragraph too short for n-grams — fall back to exact paragraph match.
-        h = _bloom_hash(paragraph)
-        return (1.0, [h]) if h in bf else (0.0, [])
+        return 0.0, []
     hashes = [_bloom_hash(ng) for ng in ngrams]
     matched = [h for h in hashes if h in bf]
     return len(matched) / len(hashes), matched
