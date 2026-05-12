@@ -1192,6 +1192,16 @@ def test_select_partial_columns(zephyr_ctx):
     assert results[1] == {"id": 2, "score": 60}
 
 
+def test_select_preserves_column_order(zephyr_ctx):
+    """Output dict keys follow the order passed to select(), not the source record order."""
+    ds = Dataset.from_list(
+        [{"id": 1, "name": "alice", "score": 80}],
+    ).select("score", "id", "name")
+
+    results = zephyr_ctx.execute(ds).results
+    assert list(results[0].keys()) == ["score", "id", "name"]
+
+
 def test_filter_and_select_combined(zephyr_ctx):
     """Test combined filter and select."""
     from zephyr import col

@@ -408,7 +408,7 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
             if filter_fn is not None and not filter_fn(record):
                 continue
             if spec.columns is not None:
-                yield {k: v for k, v in record.items() if k in spec.columns}
+                yield {k: record[k] for k in spec.columns if k in record}
             else:
                 yield record
 
