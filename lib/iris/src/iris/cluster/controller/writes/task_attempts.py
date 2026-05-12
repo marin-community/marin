@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SA Core write helpers for ``task_attempts``.
-
-Stage M2 of the SA Core migration: replaces raw ``text("INSERT/UPDATE ...")``
-strings with SA Core expression-language constructs. TypeDecorators handle
-all bind-side conversions automatically.
-"""
+"""Write helpers for ``task_attempts``."""
 
 from collections.abc import Sequence
 

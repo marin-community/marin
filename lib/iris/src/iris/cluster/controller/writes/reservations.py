@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SA Core write helpers for ``reservation_claims`` and the ``meta`` last-submission counter.
-
-Stage M2 of the SA Core migration: replaces raw ``text("INSERT/UPDATE/DELETE ...")``
-strings with SA Core expression-language constructs. TypeDecorators handle
-all bind-side conversions automatically.
-"""
+"""Write helpers for ``reservation_claims`` and the ``meta`` last-submission counter."""
 
 from sqlalchemy import delete, insert, select, update
 

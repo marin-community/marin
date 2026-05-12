@@ -3,16 +3,11 @@
 
 """Write-side helpers: module-level functions decorated with ``@writes_to``.
 
-Stage 11 of the SA Core migration moves every write that today lives on
-the per-entity ``*Store`` classes into module-level functions under
-``writes/<entity>.py``. Each function takes a :class:`iris.cluster.
-controller.db.Tx` and uses SA Core ``text(...)`` with named binds.
-
-The :func:`writes_to` decorator is pure metadata: it records the table
-set on the function as ``fn.writes_to`` / ``fn.cascades_into`` and
-appends the function to :data:`REGISTERED_WRITE_FUNCTIONS`. Stage 12's
-startup check walks that registry and the ``PROJECTIONS`` list to
-verify no Projection-owned table is written outside its Projection.
+The :func:`writes_to` decorator records the table set on the function as
+``fn.writes_to`` / ``fn.cascades_into`` and appends the function to
+:data:`REGISTERED_WRITE_FUNCTIONS`. The startup check in
+``projections/__init__.py`` walks that registry and the ``PROJECTIONS``
+list to verify no Projection-owned table is written outside its Projection.
 """
 
 from collections.abc import Callable
@@ -29,7 +24,7 @@ def writes_to(
     """Mark a write function with the tables it mutates.
 
     Pure metadata. The startup-time owned-table check in
-    ``projections/__init__.py`` (Stage 12) reads ``fn.writes_to`` and
+    ``projections/__init__.py`` reads ``fn.writes_to`` and
     ``fn.cascades_into`` to verify no Projection-owned table is written
     outside its Projection.
 
@@ -48,9 +43,8 @@ def writes_to(
 
 
 # Re-export entity modules so importing ``iris.cluster.controller.writes``
-# forces every ``@writes_to``-decorated function to register itself. The
-# Stage 12 startup check walks REGISTERED_WRITE_FUNCTIONS; an unimported
-# module would leave a silent gap in the invariant.
+# forces every ``@writes_to``-decorated function to register itself. An
+# unimported module would leave a silent gap in the startup invariant check.
 from iris.cluster.controller.writes import (
     jobs,
     reservations,

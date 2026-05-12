@@ -3,16 +3,14 @@
 
 """EndpointsProjection — write-through in-memory cache over the ``endpoints`` table.
 
-M3 of the SA Core migration. Every SQL statement is expressed as an SA Core
-construct; no raw ``text("...")`` strings appear in this module. The
 TypeDecorators on ``endpoints_table`` (``JobNameType``, ``TimestampMsType``)
 handle column decoding transparently so ``rehydrate`` can build
 ``EndpointRow`` directly from SA row attributes.
 
-Atomicity model: mutating methods call ``cur.execute(SA_construct)`` inside
-the caller's ``Tx`` and register an in-memory update via ``cur.register``.
-Hooks fire under the write lock after COMMIT; a ROLLBACK suppresses them so
-the dicts stay in sync with disk.
+Atomicity model: mutating methods execute SQL inside the caller's ``Tx`` and
+register an in-memory update via ``cur.register``. Hooks fire under the write
+lock after COMMIT; a ROLLBACK suppresses them so the dicts stay in sync with
+disk.
 """
 
 from __future__ import annotations
@@ -68,10 +66,9 @@ class EndpointsProjection:
     """Process-local write-through cache over the ``endpoints`` table.
 
     Reads serve the latest committed state from in-memory dicts guarded
-    by an ``RLock``. Mutating methods accept a :class:`db.Tx` and
-    execute SA Core constructs; the TypeDecorators on ``endpoints_table``
-    handle all encode/decode so no manual wire-format conversion appears
-    here.
+    by an ``RLock``. Mutating methods accept a :class:`db.Tx`; the
+    TypeDecorators on ``endpoints_table`` handle all encode/decode so no
+    manual wire-format conversion appears here.
     """
 
     sources: ClassVar = (endpoints_table,)

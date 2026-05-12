@@ -320,7 +320,12 @@ def query_task(state: ControllerTransitions, task_id: JobName):
 def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int):
     """Return the SA Row for the given attempt or None."""
     with state._db.read_snapshot() as tx:
-        return reads_attempts.get(tx, task_id, attempt_id)
+        return tx.execute(
+            select(*reads_attempts._ATTEMPT_COLS).where(
+                task_attempts_table.c.task_id == task_id,
+                task_attempts_table.c.attempt_id == attempt_id,
+            )
+        ).first()
 
 
 def query_job(state: ControllerTransitions, job_id: JobName):

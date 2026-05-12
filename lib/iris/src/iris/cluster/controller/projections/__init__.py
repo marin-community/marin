@@ -4,7 +4,7 @@
 """Projection registry: write-through caches owning specific tables.
 
 Each projection instance registers itself in :data:`PROJECTIONS` at
-construction. Stage 12 wires :func:`assert_owned_tables_not_externally_written`
+construction. :func:`assert_owned_tables_not_externally_written` is wired
 into ``ControllerDB.__init__`` to enforce the ``@writes_to`` invariant:
 no Projection-owned table may be mutated (directly or via FK cascade)
 from outside its owning Projection.

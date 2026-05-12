@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dashboard composite reads (SA Core expression language).
-
-All queries use ``select(table.c.col, ...)`` rather than ``text("SELECT
-...")``. TypeDecorators on schema columns decode values on read so
-callers receive ``JobName``, ``Timestamp``, and ``bool`` directly.
+"""Dashboard composite reads.
 
 Return shapes:
 
@@ -15,14 +11,11 @@ Return shapes:
 
 Implementation notes:
 
-* :func:`list_jobs` builds the SELECT dynamically with ``.where``,
-  ``.order_by``, ``.limit``, ``.offset``. The sort-field whitelist
-  (:data:`_SORT_FIELD_TO_COLUMN`) maps protobuf sort-field ints to SA
-  column expressions; the input integer is never spliced into SQL.
+* :func:`list_jobs` builds the SELECT dynamically. The sort-field whitelist
+  (:data:`_SORT_FIELD_TO_COLUMN`) maps protobuf sort-field ints to column
+  expressions; the input integer is never spliced into SQL.
 * :func:`task_summaries_for_jobs` aggregates per-job task counts via
   ``func.count``/``func.sum`` and ``group_by``.
-* :func:`parent_ids_with_children` uses SA Core ``.distinct()`` and
-  ``.in_(...)`` rather than ``text()``.
 """
 
 from collections.abc import Iterable
@@ -120,9 +113,7 @@ def list_jobs(
 
     ``state_ids`` is the pre-resolved state filter (always non-empty); the
     caller owns "unknown state -> empty page" handling so a bad filter never
-    reaches SQL. Returns (list[Row], int). Each Row exposes TypeDecorator-decoded
-    fields: job_id (JobName), submitted_at_ms (Timestamp), started_at_ms
-    (Timestamp|None), finished_at_ms (Timestamp|None).
+    reaches SQL.
     """
     assert state_ids, "list_jobs requires at least one state id"
 
@@ -168,9 +159,12 @@ def list_jobs(
     stmt = stmt.where(jobs_table.c.state.in_(list(state_ids)))
 
     if query.name_filter:
-        # Legacy lowercases the needle before LIKE; match is case-sensitive
-        # against the stored value, exactly as the legacy implementation.
+        # Needle is lowercased before LIKE; match is case-sensitive against stored value.
         stmt = stmt.where(jobs_table.c.name.like(f"%{query.name_filter.lower()}%"))
+
+    if query.job_id_prefix:
+        escaped = query.job_id_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = stmt.where(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
 
     if needs_task_agg:
         stmt = stmt.group_by(jobs_table.c.job_id)
@@ -187,6 +181,9 @@ def list_jobs(
     count_stmt = count_stmt.where(jobs_table.c.state.in_(list(state_ids)))
     if query.name_filter:
         count_stmt = count_stmt.where(jobs_table.c.name.like(f"%{query.name_filter.lower()}%"))
+    if query.job_id_prefix:
+        escaped = query.job_id_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        count_stmt = count_stmt.where(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
 
     offset = max(query.offset, 0)
     limit = max(query.limit, 0)
@@ -206,11 +203,7 @@ _COMPLETED_TASK_STATES = (job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_KILLE
 
 
 def task_summaries_for_jobs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, TaskJobSummary]:
-    """Return ``{job_id: TaskJobSummary}`` aggregating each job's tasks.
-
-    Returns dict[JobName, TaskJobSummary]. Uses func.count()/func.sum() with
-    group_by(job_id, state). job_id is decoded to JobName by JobNameType.
-    """
+    """Return ``{job_id: TaskJobSummary}`` aggregating each job's tasks."""
     ids = list(job_ids)
     if not ids:
         return {}
@@ -249,20 +242,16 @@ def task_summaries_for_jobs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName,
 # Parents that currently have at least one direct child
 # ---------------------------------------------------------------------------
 
-PARENT_IDS_WITH_CHILDREN_QUERY = (
-    select(jobs_table.c.parent_job_id)
-    .where(jobs_table.c.parent_job_id.in_(bindparam("parent_ids", expanding=True)))
-    .distinct()
-)
-
 
 def parent_ids_with_children(tx: Tx, job_ids: Iterable[JobName]) -> set[JobName]:
-    """Return the subset of ``job_ids`` that currently have at least one direct child.
-
-    Returns set[JobName]. TypeDecorators decode parent_job_id to JobName.
-    """
+    """Return the subset of ``job_ids`` that currently have at least one direct child."""
     ids = list(job_ids)
     if not ids:
         return set()
-    rows = tx.execute(PARENT_IDS_WITH_CHILDREN_QUERY, {"parent_ids": ids}).all()
+    rows = tx.execute(
+        select(jobs_table.c.parent_job_id)
+        .where(jobs_table.c.parent_job_id.in_(bindparam("parent_ids", expanding=True)))
+        .distinct(),
+        {"parent_ids": ids},
+    ).all()
     return {row.parent_job_id for row in rows if row.parent_job_id is not None}

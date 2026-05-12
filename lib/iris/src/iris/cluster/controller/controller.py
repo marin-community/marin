@@ -75,6 +75,7 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.projections import assert_owned_tables_not_externally_written
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.protocols import SchedulerTaskRow
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.reads import scheduler as reads_scheduler
@@ -184,7 +185,7 @@ class PreemptionCandidate:
 class _SchedulingStateRead:
     """Snapshot of pending tasks and workers read at the start of a scheduling cycle."""
 
-    pending_tasks: list  # SA Row objects from _TASK_ROW_QUERY
+    pending_tasks: list[SchedulerTaskRow]
     workers: list[WorkerSnapshot]
     state_read_ms: int
 
@@ -209,136 +210,12 @@ class _SchedulingOrder:
     user_budget_limits: dict[str, int]
 
 
-_JOB_SCHEDULING_QUERY = (
-    select(
-        jobs_table.c.job_id,
-        jobs_table.c.state,
-        jobs_table.c.submitted_at_ms,
-        jobs_table.c.root_submitted_at_ms,
-        jobs_table.c.started_at_ms,
-        jobs_table.c.finished_at_ms,
-        jobs_table.c.scheduling_deadline_epoch_ms,
-        jobs_table.c.error,
-        jobs_table.c.exit_code,
-        jobs_table.c.num_tasks,
-        jobs_table.c.is_reservation_holder,
-        jobs_table.c.has_reservation,
-        jobs_table.c.name,
-        jobs_table.c.depth,
-        job_config_table.c.res_cpu_millicores,
-        job_config_table.c.res_memory_bytes,
-        job_config_table.c.res_disk_bytes,
-        job_config_table.c.res_device_json,
-        job_config_table.c.constraints_json,
-        job_config_table.c.has_coscheduling,
-        job_config_table.c.coscheduling_group_by,
-        job_config_table.c.scheduling_timeout_ms,
-        job_config_table.c.max_task_failures,
-    )
-    .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
-    .where(jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True)))
-)
+@dataclass(frozen=True, slots=True)
+class _TimedOutTask:
+    """A running task that has exceeded its execution timeout."""
 
-_TASK_ROW_QUERY = (
-    select(
-        tasks_table.c.task_id,
-        tasks_table.c.job_id,
-        tasks_table.c.state,
-        tasks_table.c.current_attempt_id,
-        tasks_table.c.failure_count,
-        tasks_table.c.preemption_count,
-        tasks_table.c.max_retries_failure,
-        tasks_table.c.max_retries_preemption,
-        tasks_table.c.submitted_at_ms,
-        tasks_table.c.priority_band,
-        tasks_table.c.priority_neg_depth,
-        tasks_table.c.priority_root_submitted_ms,
-        tasks_table.c.priority_insertion,
-    )
-    .where(tasks_table.c.state == bindparam("state"))
-    .order_by(
-        tasks_table.c.priority_neg_depth.asc(),
-        tasks_table.c.priority_root_submitted_ms.asc(),
-        tasks_table.c.submitted_at_ms.asc(),
-        tasks_table.c.priority_insertion.asc(),
-    )
-)
-
-_TASK_DETAIL_QUERY = (
-    select(
-        tasks_table.c.task_id,
-        tasks_table.c.job_id,
-        tasks_table.c.state,
-        tasks_table.c.current_attempt_id,
-        tasks_table.c.failure_count,
-        tasks_table.c.preemption_count,
-        tasks_table.c.max_retries_failure,
-        tasks_table.c.max_retries_preemption,
-        tasks_table.c.submitted_at_ms,
-        tasks_table.c.priority_band,
-        tasks_table.c.error,
-        tasks_table.c.exit_code,
-        tasks_table.c.started_at_ms,
-        tasks_table.c.finished_at_ms,
-        tasks_table.c.current_worker_id,
-        tasks_table.c.current_worker_address,
-        tasks_table.c.container_id,
-    )
-    .where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
-    .order_by(tasks_table.c.task_id.asc())
-)
-
-_ATTEMPT_QUERY = (
-    select(
-        task_attempts_table.c.task_id,
-        task_attempts_table.c.attempt_id,
-        task_attempts_table.c.worker_id,
-        task_attempts_table.c.state,
-        task_attempts_table.c.created_at_ms,
-        task_attempts_table.c.started_at_ms,
-        task_attempts_table.c.finished_at_ms,
-        task_attempts_table.c.exit_code,
-        task_attempts_table.c.error,
-    )
-    .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
-    .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc())
-)
-
-_BUILDING_COUNTS_QUERY = (
-    select(
-        tasks_table.c.current_worker_id.label("worker_id"),
-        func.count().label("cnt"),
-    )
-    .select_from(tasks_table.join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id))
-    .where(
-        tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
-        tasks_table.c.state.in_(bindparam("states", expanding=True)),
-        jobs_table.c.is_reservation_holder == 0,
-    )
-    .group_by(tasks_table.c.current_worker_id)
-)
-
-_RESERVATION_ENTRY_COUNT_QUERY = select(job_config_table.c.reservation_json).where(
-    job_config_table.c.job_id == bindparam("job_id")
-)
-
-_RUNNING_TASKS_WITH_BAND_QUERY = (
-    select(
-        tasks_table.c.task_id,
-        tasks_table.c.priority_band,
-        tasks_table.c.current_worker_id.label("worker_id"),
-        job_config_table.c.res_cpu_millicores,
-        job_config_table.c.res_memory_bytes,
-        job_config_table.c.res_disk_bytes,
-        job_config_table.c.res_device_json,
-        job_config_table.c.has_coscheduling,
-    )
-    .select_from(tasks_table.join(job_config_table, tasks_table.c.job_id == job_config_table.c.job_id))
-    .where(
-        tasks_table.c.state == bindparam("state"),
-        tasks_table.c.current_worker_id.is_not(None),
-    )
-)
+    task_id: JobName
+    worker_id: WorkerId | None
 
 
 def _resource_spec_from_row(job: Any) -> job_pb2.ResourceSpecProto:
@@ -395,8 +272,8 @@ def compute_demand_entries(
     demand_entries: list[DemandEntry] = []
 
     # Collect all schedulable pending tasks, grouped by job.
-    tasks_by_job: dict[JobName, list] = defaultdict(list)
-    all_schedulable: list = []
+    tasks_by_job: dict[JobName, list[SchedulerTaskRow]] = defaultdict(list)
+    all_schedulable: list[SchedulerTaskRow] = []
     pending = _schedulable_tasks(queries)
     job_rows = list(_jobs_by_id(queries, {task.job_id for task in pending}).values()) if pending else []
     jobs_by_id = {job.job_id: job for job in job_rows}
@@ -534,7 +411,36 @@ def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, A
     if not job_ids:
         return {}
     with queries.read_snapshot() as tx:
-        rows = tx.execute(_JOB_SCHEDULING_QUERY, {"job_ids": list(job_ids)}).all()
+        rows = tx.execute(
+            select(
+                jobs_table.c.job_id,
+                jobs_table.c.state,
+                jobs_table.c.submitted_at_ms,
+                jobs_table.c.root_submitted_at_ms,
+                jobs_table.c.started_at_ms,
+                jobs_table.c.finished_at_ms,
+                jobs_table.c.scheduling_deadline_epoch_ms,
+                jobs_table.c.error,
+                jobs_table.c.exit_code,
+                jobs_table.c.num_tasks,
+                jobs_table.c.is_reservation_holder,
+                jobs_table.c.has_reservation,
+                jobs_table.c.name,
+                jobs_table.c.depth,
+                job_config_table.c.res_cpu_millicores,
+                job_config_table.c.res_memory_bytes,
+                job_config_table.c.res_disk_bytes,
+                job_config_table.c.res_device_json,
+                job_config_table.c.constraints_json,
+                job_config_table.c.has_coscheduling,
+                job_config_table.c.coscheduling_group_by,
+                job_config_table.c.scheduling_timeout_ms,
+                job_config_table.c.max_task_failures,
+            )
+            .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
+            .where(jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
+            {"job_ids": list(job_ids)},
+        ).all()
     return {row.job_id: row for row in rows}
 
 
@@ -546,7 +452,14 @@ def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> l
     and joins ``job_config`` solely to pull ``reservation_json``.
     """
     with db.read_snapshot(queries.sa_read_engine) as tx:
-        return reads_scheduler.jobs_with_reservations(tx, states)
+        return tx.execute(
+            select(jobs_table.c.job_id, job_config_table.c.reservation_json)
+            .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
+            .where(
+                jobs_table.c.state.in_(list(states)),
+                jobs_table.c.has_reservation == True,  # noqa: E712 — SQLAlchemy requires == not `is`
+            )
+        ).all()
 
 
 def _get_running_tasks_with_band_and_value(
@@ -566,7 +479,24 @@ def _get_running_tasks_with_band_and_value(
     users sitting at their limits.
     """
     with db.read_snapshot() as tx:
-        rows = tx.execute(_RUNNING_TASKS_WITH_BAND_QUERY, {"state": job_pb2.TASK_STATE_RUNNING}).all()
+        rows = tx.execute(
+            select(
+                tasks_table.c.task_id,
+                tasks_table.c.priority_band,
+                tasks_table.c.current_worker_id.label("worker_id"),
+                job_config_table.c.res_cpu_millicores,
+                job_config_table.c.res_memory_bytes,
+                job_config_table.c.res_disk_bytes,
+                job_config_table.c.res_device_json,
+                job_config_table.c.has_coscheduling,
+            )
+            .select_from(tasks_table.join(job_config_table, tasks_table.c.job_id == job_config_table.c.job_id))
+            .where(
+                tasks_table.c.state == bindparam("state"),
+                tasks_table.c.current_worker_id.is_not(None),
+            ),
+            {"state": job_pb2.TASK_STATE_RUNNING},
+        ).all()
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
@@ -764,14 +694,40 @@ def _run_preemption_pass(
     return preemptions
 
 
-def _schedulable_tasks(queries: ControllerDB) -> list:
+def _schedulable_tasks(queries: ControllerDB) -> list[SchedulerTaskRow]:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
     with queries.read_snapshot() as tx:
-        rows = tx.execute(_TASK_ROW_QUERY, {"state": job_pb2.TASK_STATE_PENDING}).all()
+        rows = tx.execute(
+            select(
+                tasks_table.c.task_id,
+                tasks_table.c.job_id,
+                tasks_table.c.state,
+                tasks_table.c.current_attempt_id,
+                tasks_table.c.failure_count,
+                tasks_table.c.preemption_count,
+                tasks_table.c.max_retries_failure,
+                tasks_table.c.max_retries_preemption,
+                tasks_table.c.submitted_at_ms,
+                tasks_table.c.priority_band,
+                tasks_table.c.priority_neg_depth,
+                tasks_table.c.priority_root_submitted_ms,
+                tasks_table.c.priority_insertion,
+            )
+            .where(tasks_table.c.state == bindparam("state"))
+            .order_by(
+                tasks_table.c.priority_neg_depth.asc(),
+                tasks_table.c.priority_root_submitted_ms.asc(),
+                tasks_table.c.submitted_at_ms.asc(),
+                tasks_table.c.priority_insertion.asc(),
+            ),
+            {"state": job_pb2.TASK_STATE_PENDING},
+        ).all()
     return [row for row in rows if task_row_can_be_scheduled(row)]
 
 
-def _sort_pending_tasks_by_resolved_band(db: ControllerDB, pending_tasks: list) -> list:
+def _sort_pending_tasks_by_resolved_band(
+    db: ControllerDB, pending_tasks: list[SchedulerTaskRow]
+) -> list[SchedulerTaskRow]:
     """Order pending rows using immutable job_config priority bands."""
     if not pending_tasks:
         return []
@@ -799,7 +755,17 @@ def _building_counts(
     worker_ids = [w.worker_id for w in workers]
     with queries.read_snapshot() as tx:
         rows = tx.execute(
-            _BUILDING_COUNTS_QUERY,
+            select(
+                tasks_table.c.current_worker_id.label("worker_id"),
+                func.count().label("cnt"),
+            )
+            .select_from(tasks_table.join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id))
+            .where(
+                tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
+                tasks_table.c.state.in_(bindparam("states", expanding=True)),
+                jobs_table.c.is_reservation_holder == 0,
+            )
+            .group_by(tasks_table.c.current_worker_id),
             {
                 "worker_ids": worker_ids,
                 "states": [job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED],
@@ -1708,7 +1674,10 @@ class Controller:
         Only called for the rare jobs that have reservations.
         """
         with self._db.read_snapshot() as tx:
-            row = tx.execute(_RESERVATION_ENTRY_COUNT_QUERY, {"job_id": job_id}).first()
+            row = tx.execute(
+                select(job_config_table.c.reservation_json).where(job_config_table.c.job_id == bindparam("job_id")),
+                {"job_id": job_id},
+            ).first()
         if row is None or row.reservation_json is None:
             return 0
         return len(reservation_entries_from_json(row.reservation_json))
@@ -2207,8 +2176,34 @@ class Controller:
         if now_ms - self._last_timeout_check_ms < self._TIMEOUT_CHECK_INTERVAL_MS:
             return
         self._last_timeout_check_ms = now_ms
+        _executing_states = [int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING)]
         with self._db.read_snapshot() as tx:
-            timed_out = reads_scheduler.timed_out_executing_tasks(tx, now)
+            _timeout_rows = tx.execute(
+                select(
+                    tasks_table.c.task_id,
+                    tasks_table.c.current_worker_id,
+                    task_attempts_table.c.started_at_ms,
+                    job_config_table.c.timeout_ms,
+                )
+                .select_from(
+                    tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id).join(
+                        task_attempts_table,
+                        (task_attempts_table.c.task_id == tasks_table.c.task_id)
+                        & (task_attempts_table.c.attempt_id == tasks_table.c.current_attempt_id),
+                    )
+                )
+                .where(
+                    tasks_table.c.state.in_(_executing_states),
+                    job_config_table.c.timeout_ms.is_not(None),
+                    job_config_table.c.timeout_ms > 0,
+                    task_attempts_table.c.started_at_ms.is_not(None),
+                )
+            ).all()
+        timed_out = [
+            _TimedOutTask(task_id=row.task_id, worker_id=row.current_worker_id)
+            for row in _timeout_rows
+            if row.started_at_ms.epoch_ms() + int(row.timeout_ms) <= now_ms
+        ]
         if not timed_out:
             return
         for task in timed_out:

@@ -1,12 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SA Core write helpers for the ``tasks`` table.
-
-Stage M2 of the SA Core migration: replaces raw ``text("UPDATE tasks ...")``
-strings with SA Core expression-language constructs. TypeDecorators handle
-all bind-side conversions automatically.
-"""
+"""Write helpers for the ``tasks`` table."""
 
 from collections.abc import Sequence
 
@@ -102,9 +97,8 @@ def assign_task(
 ) -> None:
     """Insert a fresh ``task_attempts`` row and move the task to ASSIGNED.
 
-    Composite write that mirrors `writes.tasks.assign_task`: a single
-    transaction creates the attempt row and stamps the task with the
-    worker / attempt fields.
+    A single transaction creates the attempt row and stamps the task with
+    the worker / attempt fields.
     """
     insert_attempt(
         tx,
@@ -166,10 +160,8 @@ def mark_terminal(
 ) -> None:
     """Move a task to a terminal-style state, optionally updating counters.
 
-    Mirrors `writes.tasks.mark_terminal`: clears ``current_worker_*``
-    when the target state is not active; preserves the existing
-    ``finished_at_ms`` if one is already set and ``finished_at_ms`` is
-    not None (COALESCE), otherwise sets it directly.
+    Clears ``current_worker_*`` when the target state is not active.
+    Preserves an existing ``finished_at_ms`` via COALESCE.
     """
     values: dict = {
         "state": state,

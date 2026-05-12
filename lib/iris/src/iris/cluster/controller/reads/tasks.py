@@ -1,19 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Task read helpers (SA Core expression language).
-
-All queries use ``select(table.c.col, ...)`` rather than ``text("SELECT
-...")``. TypeDecorators on the schema columns decode values on read so
-callers receive ``JobName``, ``Timestamp``, and ``WorkerId`` directly.
+"""Task read helpers.
 
 Return shapes:
 
 * ``get_detail`` — SA ``Row`` or ``None``
 * ``bulk_get_detail`` — ``dict[JobName, Row]``
-* ``get_job_id`` — ``JobName | None``
-* ``get_current_attempt_id`` — ``int | None``
-* ``get_priority_band_for_job`` — ``int | None``
 * ``state_counts_for_job`` — ``dict[int, int]``
 * ``first_error_for_job`` — ``str | None``
 * ``list_active`` — ``list[ActiveTaskRow]``
@@ -22,24 +15,74 @@ Return shapes:
 * ``list_assigned_null_worker_for_direct_provider`` — ``list[PendingDispatchRow]``
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Protocol
 
-from sqlalchemy import bindparam, func, select, tuple_
+from sqlalchemy import bindparam, func, select
 
 from iris.cluster.controller.codec import resource_spec_from_scalars
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.rows import (
     ActiveTaskRow,
     PendingDispatchRow,
-    TaskScope,
 )
 from iris.cluster.controller.schema import job_config_table, jobs_table, tasks_table
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
+
+# ---------------------------------------------------------------------------
+# TaskScope — query-builder parameter for list_active
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class TaskScope:
+    """Scope predicate for active-task queries.
+
+    Exactly one field must be set. The store validates at the call boundary.
+    ``null_worker=True`` matches rows where ``current_worker_id IS NULL``
+    (direct-provider-promoted tasks).
+    """
+
+    job_id: JobName | None = None
+    job_subtree: Sequence[JobName] | None = None
+    worker_id: WorkerId | None = None
+    worker_ids: Sequence[WorkerId] | None = None
+    task_ids: Sequence[JobName] | None = None
+    null_worker: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Task detail projection columns — shared by get_detail and bulk_get_detail
 # ---------------------------------------------------------------------------
+
+
+class TaskDetailRow(Protocol):
+    """Shape of the SA Row returned by ``get_detail`` and values in ``bulk_get_detail``.
+
+    Columns match ``_TASK_DETAIL_COLS``.  Consumers in ``transitions.py`` use
+    this Protocol as the value type of the task map.
+    """
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: object  # Timestamp from TimestampMsType; typed as object to avoid a circular dep
+    priority_band: int
+    error: str | None
+    exit_code: int | None
+    started_at_ms: object | None
+    finished_at_ms: object | None
+    current_worker_id: str | None
+    current_worker_address: str | None
+    container_id: str | None
+
 
 _TASK_DETAIL_COLS = (
     tasks_table.c.task_id,
@@ -61,94 +104,25 @@ _TASK_DETAIL_COLS = (
     tasks_table.c.container_id,
 )
 
-GET_TASK_DETAIL_QUERY = select(*_TASK_DETAIL_COLS).where(tasks_table.c.task_id == bindparam("task_id"))
 
-BULK_TASK_DETAIL_QUERY = select(*_TASK_DETAIL_COLS).where(
-    tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))
-)
-
-
-def get_detail(tx: Tx, task_id: JobName):
-    """Return SA Row for ``task_id`` or None.
-
-    Row fields (TypeDecorator-decoded): task_id (JobName), job_id (JobName),
-    submitted_at_ms (Timestamp), started_at_ms (Timestamp|None),
-    finished_at_ms (Timestamp|None), current_worker_id (WorkerId|None).
-    Remaining fields are plain int/str/None.
-    """
-    return tx.execute(GET_TASK_DETAIL_QUERY, {"task_id": task_id}).first()
+def get_detail(tx: Tx, task_id: JobName) -> TaskDetailRow | None:
+    """Return SA Row for ``task_id`` or None."""
+    return tx.execute(  # type: ignore[return-value]
+        select(*_TASK_DETAIL_COLS).where(tasks_table.c.task_id == bindparam("task_id")),
+        {"task_id": task_id},
+    ).first()
 
 
-def bulk_get_detail(tx: Tx, task_ids: Iterable[JobName]) -> dict[JobName, object]:
-    """Return ``{task_id: Row}`` for all ``task_ids`` that exist.
-
-    Missing keys are silently absent. SA's expanding bindparam handles the
-    SQLite parameter cap transparently; no manual chunking needed.
-    """
+def bulk_get_detail(tx: Tx, task_ids: Iterable[JobName]) -> dict[JobName, TaskDetailRow]:
+    """Return ``{task_id: TaskDetailRow}`` for all ``task_ids`` that exist. Missing keys are silently absent."""
     ids = list(task_ids)
     if not ids:
         return {}
-    rows = tx.execute(BULK_TASK_DETAIL_QUERY, {"task_ids": ids}).all()
-    return {row.task_id: row for row in rows}
-
-
-# ---------------------------------------------------------------------------
-# Simple scalar lookups
-# ---------------------------------------------------------------------------
-
-GET_JOB_ID_QUERY = select(tasks_table.c.job_id).where(tasks_table.c.task_id == bindparam("task_id"))
-
-GET_CURRENT_ATTEMPT_QUERY = select(tasks_table.c.current_attempt_id).where(tasks_table.c.task_id == bindparam("task_id"))
-
-GET_PRIORITY_BAND_FOR_JOB_QUERY = (
-    select(tasks_table.c.priority_band).where(tasks_table.c.job_id == bindparam("job_id")).limit(1)
-)
-
-STATE_COUNTS_FOR_JOB_QUERY = (
-    select(tasks_table.c.state, func.count().label("c"))
-    .where(tasks_table.c.job_id == bindparam("job_id"))
-    .group_by(tasks_table.c.state)
-)
-
-FIRST_ERROR_FOR_JOB_QUERY = (
-    select(tasks_table.c.error)
-    .where(
-        tasks_table.c.job_id == bindparam("job_id"),
-        tasks_table.c.error.is_not(None),
-    )
-    .order_by(tasks_table.c.task_index)
-    .limit(1)
-)
-
-
-def get_job_id(tx: Tx, task_id: JobName) -> JobName | None:
-    """Return the owning ``job_id`` for ``task_id``, or None."""
-    row = tx.execute(GET_JOB_ID_QUERY, {"task_id": task_id}).first()
-    return row.job_id if row is not None else None
-
-
-def get_current_attempt_id(tx: Tx, task_id: JobName) -> int | None:
-    """Return ``tasks.current_attempt_id`` for ``task_id``, or None."""
-    row = tx.execute(GET_CURRENT_ATTEMPT_QUERY, {"task_id": task_id}).first()
-    return int(row.current_attempt_id) if row is not None else None
-
-
-def get_priority_band_for_job(tx: Tx, job_id: JobName) -> int | None:
-    """Return one task's ``priority_band`` for ``job_id`` (all tasks share it), or None."""
-    row = tx.execute(GET_PRIORITY_BAND_FOR_JOB_QUERY, {"job_id": job_id}).first()
-    return int(row.priority_band) if row is not None else None
-
-
-def state_counts_for_job(tx: Tx, job_id: JobName) -> dict[int, int]:
-    """Return ``{state: count}`` for every task state of ``job_id``."""
-    rows = tx.execute(STATE_COUNTS_FOR_JOB_QUERY, {"job_id": job_id}).all()
-    return {int(row.state): int(row.c) for row in rows}
-
-
-def first_error_for_job(tx: Tx, job_id: JobName) -> str | None:
-    """Return the first non-null ``error`` (ordered by task_index) for ``job_id``."""
-    row = tx.execute(FIRST_ERROR_FOR_JOB_QUERY, {"job_id": job_id}).first()
-    return str(row.error) if row is not None else None
+    rows = tx.execute(
+        select(*_TASK_DETAIL_COLS).where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True))),
+        {"task_ids": ids},
+    ).all()
+    return {row.task_id: row for row in rows}  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -264,18 +238,16 @@ def list_active(
     return [_row_to_active_task(row) for row in rows]
 
 
-GET_WITH_RESOURCES_QUERY = (
-    select(*_ACTIVE_TASK_COLS).select_from(_ACTIVE_TASK_FROM).where(tasks_table.c.task_id == bindparam("task_id"))
-)
-
-
 def get_with_resources(tx: Tx, task_id: JobName) -> ActiveTaskRow | None:
     """Fetch a single task with its job_config resource projection.
 
     No state filter; callers (``preempt_task``) check ``state`` themselves.
     Returns ActiveTaskRow or None.
     """
-    row = tx.execute(GET_WITH_RESOURCES_QUERY, {"task_id": task_id}).first()
+    row = tx.execute(
+        select(*_ACTIVE_TASK_COLS).select_from(_ACTIVE_TASK_FROM).where(tasks_table.c.task_id == bindparam("task_id")),
+        {"task_id": task_id},
+    ).first()
     return _row_to_active_task(row) if row is not None else None
 
 
@@ -303,26 +275,6 @@ _DISPATCH_COLS = (
 
 _DISPATCH_FROM = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
     job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
-)
-
-LIST_PENDING_DISPATCH_QUERY = (
-    select(*_DISPATCH_COLS)
-    .select_from(_DISPATCH_FROM)
-    .where(
-        tasks_table.c.state == bindparam("state"),
-        jobs_table.c.is_reservation_holder == False,  # noqa: E712
-    )
-    .limit(bindparam("limit"))
-)
-
-LIST_ASSIGNED_NULL_WORKER_DISPATCH_QUERY = (
-    select(*_DISPATCH_COLS)
-    .select_from(_DISPATCH_FROM)
-    .where(
-        tasks_table.c.state == bindparam("state"),
-        tasks_table.c.current_worker_id.is_(None),
-        jobs_table.c.is_reservation_holder == False,  # noqa: E712
-    )
 )
 
 
@@ -357,7 +309,13 @@ def list_pending_for_direct_provider(tx: Tx, limit: int) -> list[PendingDispatch
     if limit <= 0:
         return []
     rows = tx.execute(
-        LIST_PENDING_DISPATCH_QUERY,
+        select(*_DISPATCH_COLS)
+        .select_from(_DISPATCH_FROM)
+        .where(
+            tasks_table.c.state == bindparam("state"),
+            jobs_table.c.is_reservation_holder == False,  # noqa: E712
+        )
+        .limit(bindparam("limit")),
         {"state": int(job_pb2.TASK_STATE_PENDING), "limit": limit},
     ).all()
     return [_row_to_dispatch(row) for row in rows]
@@ -369,36 +327,44 @@ def list_assigned_null_worker_for_direct_provider(tx: Tx) -> list[PendingDispatc
     Returns list[PendingDispatchRow].
     """
     rows = tx.execute(
-        LIST_ASSIGNED_NULL_WORKER_DISPATCH_QUERY,
+        select(*_DISPATCH_COLS)
+        .select_from(_DISPATCH_FROM)
+        .where(
+            tasks_table.c.state == bindparam("state"),
+            tasks_table.c.current_worker_id.is_(None),
+            jobs_table.c.is_reservation_holder == False,  # noqa: E712
+        ),
         {"state": int(job_pb2.TASK_STATE_ASSIGNED)},
     ).all()
     return [_row_to_dispatch(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------
-# Bulk attempt lookup (kept here for proximity with task reads)
+# Simple scalar lookups (inlined at call sites in transitions.py)
 # ---------------------------------------------------------------------------
 
-_BULK_GET_CHUNK_SIZE = 450
+
+def state_counts_for_job(tx: Tx, job_id: JobName) -> dict[int, int]:
+    """Return ``{state: count}`` for every task state of ``job_id``."""
+    rows = tx.execute(
+        select(tasks_table.c.state, func.count().label("c"))
+        .where(tasks_table.c.job_id == bindparam("job_id"))
+        .group_by(tasks_table.c.state),
+        {"job_id": job_id},
+    ).all()
+    return {int(row.state): int(row.c) for row in rows}
 
 
-def bulk_get_detail_chunked(
-    tx: Tx,
-    task_ids: Iterable[JobName],
-) -> dict[JobName, object]:
-    """Return ``{task_id: Row}`` for all ``task_ids`` that exist, chunked at 450.
-
-    Useful when the caller holds more than SQLite's parameter limit in ids.
-    For small lists ``bulk_get_detail`` is sufficient.
-    """
-    ids = list(task_ids)
-    if not ids:
-        return {}
-    result: dict[JobName, object] = {}
-    pair_col = tuple_(tasks_table.c.task_id)
-    for chunk_start in range(0, len(ids), _BULK_GET_CHUNK_SIZE):
-        chunk = ids[chunk_start : chunk_start + _BULK_GET_CHUNK_SIZE]
-        stmt = select(*_TASK_DETAIL_COLS).where(pair_col.in_([(tid,) for tid in chunk]))
-        for row in tx.execute(stmt).all():
-            result[row.task_id] = row
-    return result
+def first_error_for_job(tx: Tx, job_id: JobName) -> str | None:
+    """Return the first non-null ``error`` (ordered by task_index) for ``job_id``."""
+    row = tx.execute(
+        select(tasks_table.c.error)
+        .where(
+            tasks_table.c.job_id == bindparam("job_id"),
+            tasks_table.c.error.is_not(None),
+        )
+        .order_by(tasks_table.c.task_index)
+        .limit(1),
+        {"job_id": job_id},
+    ).first()
+    return str(row.error) if row is not None else None

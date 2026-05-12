@@ -4,12 +4,8 @@
 """SQLAlchemy Core schema for the controller database.
 
 Mirrors the on-disk schema produced by ``controller/migrations/`` (current
-HEAD: 0046). Every column, foreign key, check constraint, default, and
-index has a counterpart here so SA Core can drive SELECT/INSERT/UPDATE
-statements without round-tripping through the hand-rolled ``schema.py``.
-
-Auth tables live on a separate ``auth_metadata`` because they are stored
-in the attached ``auth.sqlite3`` database, not the main controller DB.
+HEAD: 0046). Auth tables live on a separate ``auth_metadata`` because they
+are stored in the attached ``auth.sqlite3`` database, not the main controller DB.
 """
 
 import threading
@@ -119,14 +115,12 @@ class CachedProto(TypeDecorator):
     Round-trip: ``message.SerializeToString()`` on the way in,
     ``message_cls.FromString(bytes)`` on the way out. Two rows whose
     blobs decode to identical bytes share the same Python object via a
-    process-wide cache — preserving today's ``ProtoCache`` invariant
-    (``schema.py``'s singleton in lines 34-66).
+    process-wide cache.
 
     The cache is global across every ``CachedProto`` instance regardless
     of ``message_cls``: a single dict, a single lock, a single eviction
-    policy. When the cache reaches ``_MAX_SIZE`` entries we drop the
-    oldest 25% in one batch (``_MAX_SIZE // 4``) — exact match to
-    today's behaviour.
+    policy. When the cache reaches ``_MAX_SIZE`` entries the oldest 25%
+    of entries (``_MAX_SIZE // 4``) are dropped in one batch.
     """
 
     impl = LargeBinary

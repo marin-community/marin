@@ -1,19 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SA Core write helpers for ``workers`` and ``worker_attributes``.
+"""Write helpers for ``workers`` and ``worker_attributes``.
 
-Stage M2 of the SA Core migration: replaces raw ``text("INSERT/UPDATE/DELETE ...")``
-strings with SA Core expression-language constructs. TypeDecorators handle
-all bind-side conversions automatically.
-
-The ``remove_worker`` function declares ``cascades_into=(task_attempts_table,)``
-only — the FK ``ON DELETE CASCADE`` from ``workers.worker_id`` also
-deletes from ``worker_attributes`` (Projection-owned), but Stage 12's
-startup check forbids declaring that cascade because it would route a
-mutation around :class:`WorkerAttrsProjection`. Instead,
-``remove_worker`` calls :meth:`WorkerAttrsProjection.invalidate_for_worker`
-inline so the cascade and the dict update commit atomically.
+``remove_worker`` declares ``cascades_into=(task_attempts_table,)`` only.
+The FK ``ON DELETE CASCADE`` from ``workers.worker_id`` also deletes from
+``worker_attributes`` (Projection-owned), but the startup invariant check
+forbids declaring that cascade because it would route a mutation around
+:class:`WorkerAttrsProjection`. Instead, ``remove_worker`` calls
+:meth:`WorkerAttrsProjection.invalidate_for_worker` inline so the cache
+update commits atomically with the SQL delete.
 """
 
 from sqlalchemy import delete, update
@@ -63,10 +59,8 @@ def upsert_worker(
     """Insert or refresh durable identity / capability metadata for a worker.
 
     Resource usage is derived per-cycle from unfinished worker-bound
-    ``task_attempts``; the legacy ``committed_*`` columns were dropped
-    by migration 0043. A post-commit hook registers the worker in the
-    liveness tracker so in-memory state advances atomically with the
-    DB row.
+    ``task_attempts``. A post-commit hook registers the worker in the
+    liveness tracker so in-memory state advances atomically with the DB row.
     """
     row_values = {
         "worker_id": worker_id,
@@ -115,15 +109,14 @@ def remove_worker(
 ) -> None:
     """Delete a worker row and clear back-references on attempts / tasks.
 
-    ``cascades_into`` records the FK fanout to ``task_attempts``
-    (``SET NULL`` via FK). The cascade into ``worker_attributes`` is
-    Projection-owned and therefore *not* declared on the decorator;
-    instead this function calls
+    ``cascades_into`` records the FK fanout to ``task_attempts``.
+    The cascade into ``worker_attributes`` is Projection-owned and therefore
+    not declared on the decorator; instead this function calls
     :meth:`WorkerAttrsProjection.invalidate_for_worker` inline so the
-    dict update commits under the same write lock as the SQL. The
-    pre-emptive ``UPDATE`` on ``task_attempts`` / ``tasks`` matches
-    today's `writes.workers.remove_worker` byte-for-byte: it sets
-    ``current_worker_*`` to NULL before the cascade so the row history
+    cache update commits under the same write lock as the SQL.
+
+    The pre-emptive ``UPDATE`` on ``task_attempts`` / ``tasks`` sets
+    ``current_worker_*`` to NULL before the delete so the row history
     is observable to readers in the same write transaction.
     """
     tx.execute(update(task_attempts_table).where(task_attempts_table.c.worker_id == worker_id).values(worker_id=None))

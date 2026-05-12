@@ -19,6 +19,7 @@ from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_va
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.db import TaskJobSummary
+from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.schema import jobs_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
@@ -34,6 +35,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
+from iris.cluster.controller.writes import task_attempts as write_attempts
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
@@ -322,12 +324,12 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     _register_worker(state, worker)
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.preempt_task(cur, child_task.task_id, reason="evicted by prod tenant")
 
     # Sanity: child is terminal but its attempt still holds the worker.
-    with state._store.read_snapshot() as snap:
-        assert state._store.jobs.has_unfinished_worker_attempts(snap, child_job)
+    with state._db.read_snapshot() as snap:
+        assert reads_jobs.has_unfinished_worker_attempts(snap, child_job)
 
     # Re-submit the child with KEEP. The unfinished attempt should make the
     # service block in the drain wait rather than raise FAILED_PRECONDITION.
@@ -344,8 +346,8 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
         # have eventually sent. mark_finished stamps finished_at_ms, which
         # releases the predicate ``_wait_until_job_drained`` polls.
         child_task_after_preempt = _query_tasks_with_attempts(state, child_job)[0]
-        with state._store.transaction() as cur:
-            state._store.attempts.mark_finished(
+        with state._db.transaction() as cur:
+            write_attempts.mark_finished(
                 cur,
                 child_task_after_preempt.task_id,
                 child_task_after_preempt.current_attempt_id,
@@ -380,7 +382,7 @@ def test_existing_job_policy_keep_drain_times_out_when_no_heartbeat(service, sta
     _register_worker(state, worker)
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.preempt_task(cur, child_task.task_id, reason="evicted, worker stuck")
 
     request = make_job_request(child_name)

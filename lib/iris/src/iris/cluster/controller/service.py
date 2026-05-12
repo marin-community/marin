@@ -21,7 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
-from sqlalchemy import func, select, text, tuple_
+from sqlalchemy import func, select, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -59,8 +59,11 @@ from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, En
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.query import execute_raw_query
+from iris.cluster.controller.reads import dashboard as reads_dashboard
 from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.reads import scheduler as reads_scheduler
+from iris.cluster.controller.reads import task_attempts as reads_attempts
+from iris.cluster.controller.reads import tasks as reads_tasks
 from iris.cluster.controller.reads import workers as reads_workers
 from iris.cluster.controller.reads.workers import SchedulableWorker
 from iris.cluster.controller.scheduler import SchedulingContext
@@ -185,11 +188,11 @@ USER_JOB_STATES = (
 
 
 class TaskWithAttempts:
-    """SA task Row with its attempt rows attached.
+    """Task row with its attempt rows attached.
 
-    Proxies attribute access to the inner SA Row so callers can use
-    ``task.state``, ``task.task_id``, etc. exactly as before.  The only
-    addition over a bare SA Row is the ``attempts`` tuple.
+    Proxies attribute access to the inner row so callers can use
+    ``task.state``, ``task.task_id``, etc. directly.  The only addition
+    over a bare row is the ``attempts`` tuple.
     """
 
     __slots__ = ("_row", "attempts")
@@ -330,54 +333,17 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 
 
 def _read_job(tx, job_id: JobName):
-    """Return SA Row for ``job_id`` from reads_jobs.get_detail, or None."""
+    """Return the job row for ``job_id`` from reads_jobs.get_detail, or None."""
     return reads_jobs.get_detail(tx, job_id)
-
-
-_TASK_DETAIL_COLS = (
-    tasks_table.c.task_id,
-    tasks_table.c.job_id,
-    tasks_table.c.state,
-    tasks_table.c.current_attempt_id,
-    tasks_table.c.failure_count,
-    tasks_table.c.preemption_count,
-    tasks_table.c.max_retries_failure,
-    tasks_table.c.max_retries_preemption,
-    tasks_table.c.submitted_at_ms,
-    tasks_table.c.priority_band,
-    tasks_table.c.error,
-    tasks_table.c.exit_code,
-    tasks_table.c.started_at_ms,
-    tasks_table.c.finished_at_ms,
-    tasks_table.c.current_worker_id,
-    tasks_table.c.current_worker_address,
-    tasks_table.c.container_id,
-)
-
-_ATTEMPT_COLS = (
-    task_attempts_table.c.task_id,
-    task_attempts_table.c.attempt_id,
-    task_attempts_table.c.worker_id,
-    task_attempts_table.c.state,
-    task_attempts_table.c.created_at_ms,
-    task_attempts_table.c.started_at_ms,
-    task_attempts_table.c.finished_at_ms,
-    task_attempts_table.c.exit_code,
-    task_attempts_table.c.error,
-)
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttempts | None:
     """Return a TaskWithAttempts for ``task_id``, or None if absent."""
     with db.read_snapshot() as tx:
-        task_row = tx.execute(select(*_TASK_DETAIL_COLS).where(tasks_table.c.task_id == task_id)).first()
+        task_row = reads_tasks.get_detail(tx, task_id)
         if task_row is None:
             return None
-        attempt_rows = tx.execute(
-            select(*_ATTEMPT_COLS)
-            .where(task_attempts_table.c.task_id == task_id)
-            .order_by(task_attempts_table.c.attempt_id.asc())
-        ).all()
+        attempt_rows = reads_attempts.list_for_task(tx, task_id)
     return TaskWithAttempts(task_row, tuple(attempt_rows))
 
 
@@ -396,7 +362,7 @@ def _worker_address(db: ControllerDB, worker_id: WorkerId) -> str | None:
 
 
 def _read_worker(db: ControllerDB, worker_id: WorkerId):
-    """Return a slim SA Row (worker_id, address) for ``worker_id``, or None."""
+    """Return a slim (worker_id, address) row for ``worker_id``, or None."""
     with db.read_snapshot() as tx:
         return tx.execute(
             select(workers_table.c.worker_id, workers_table.c.address).where(workers_table.c.worker_id == worker_id)
@@ -502,7 +468,7 @@ def _decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
 
 @dataclass(frozen=True)
 class _WorkerDetail:
-    worker: Any  # SA Row from _WORKER_DETAIL_COLS
+    worker: Any  # row from reads_workers.get_detail
     attributes: dict  # decoded from worker_attributes table
     running_tasks: frozenset[JobName]
 
@@ -552,13 +518,13 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAtt
     """
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
-            select(*_TASK_DETAIL_COLS)
+            select(*reads_tasks._TASK_DETAIL_COLS)
             .where(tasks_table.c.job_id == job_id)
             .order_by(tasks_table.c.job_id.asc(), tasks_table.c.task_index.asc())
         ).all()
         # Fetch only the current attempt for each task (task_index-ordered listing).
         attempt_rows = tx.execute(
-            select(*_ATTEMPT_COLS).where(
+            select(*reads_attempts._ATTEMPT_COLS).where(
                 tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
                     select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
                         tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id >= 0
@@ -585,33 +551,6 @@ def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskWithAttempts])
             )
         ).all()
     return {row.worker_id: str(row.address) for row in rows}
-
-
-# State display order for sorting (active states first). Rendered into
-# ``_STATE_SORT_EXPR`` as a CASE expression for the JOB_SORT_FIELD_STATE path.
-_STATE_SORT_ORDER: dict[int, int] = {
-    job_pb2.JOB_STATE_RUNNING: 0,
-    job_pb2.JOB_STATE_BUILDING: 1,
-    job_pb2.JOB_STATE_PENDING: 2,
-    job_pb2.JOB_STATE_SUCCEEDED: 3,
-    job_pb2.JOB_STATE_FAILED: 4,
-    job_pb2.JOB_STATE_KILLED: 5,
-    job_pb2.JOB_STATE_WORKER_FAILED: 6,
-    job_pb2.JOB_STATE_UNSCHEDULABLE: 7,
-}
-_STATE_SORT_EXPR = (
-    "CASE j.state"
-    + "".join(f" WHEN {state} THEN {order}" for state, order in _STATE_SORT_ORDER.items())
-    + " ELSE 99 END"
-)
-
-_SORT_FIELD_TO_SQL: dict[int, str] = {
-    controller_pb2.Controller.JOB_SORT_FIELD_DATE: "j.submitted_at_ms",
-    controller_pb2.Controller.JOB_SORT_FIELD_NAME: "j.name",
-    controller_pb2.Controller.JOB_SORT_FIELD_STATE: _STATE_SORT_EXPR,
-    controller_pb2.Controller.JOB_SORT_FIELD_FAILURES: "agg_failures",
-    controller_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS: "agg_preemptions",
-}
 
 
 MAX_LIST_JOBS_LIMIT = 500
@@ -722,23 +661,6 @@ def _resolve_state_filter(state_filter: str) -> tuple[int, ...] | None:
     return None
 
 
-_JOB_ROW_COLS = (
-    jobs_table.c.job_id,
-    jobs_table.c.state,
-    jobs_table.c.submitted_at_ms,
-    jobs_table.c.started_at_ms,
-    jobs_table.c.finished_at_ms,
-    jobs_table.c.error,
-    jobs_table.c.exit_code,
-    jobs_table.c.name,
-    jobs_table.c.depth,
-    job_config_table.c.res_cpu_millicores,
-    job_config_table.c.res_memory_bytes,
-    job_config_table.c.res_disk_bytes,
-    job_config_table.c.res_device_json,
-)
-
-
 def _query_jobs(
     tx,
     query: controller_pb2.Controller.JobQuery,
@@ -752,84 +674,12 @@ def _query_jobs(
     chains the SELECT, COUNT, and downstream summary/parent queries on a
     single snapshot to keep the per-connection page cache hot.
     """
-    assert state_ids, "_query_jobs requires at least one state id"
-
-    jobs_config_from = jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id)
-
-    # Build the WHERE conditions as SA Core expressions.
-    conditions = [jobs_table.c.state.in_(list(state_ids))]
-
-    scope = query.scope or controller_pb2.Controller.JOB_QUERY_SCOPE_ALL
-    if scope == controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS:
-        conditions.append(jobs_table.c.depth == 1)
-    elif scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN:
-        if not query.parent_job_id:
-            raise ConnectError(
-                Code.INVALID_ARGUMENT,
-                "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN",
-            )
-        conditions.append(jobs_table.c.parent_job_id == query.parent_job_id)
-    # JOB_QUERY_SCOPE_ALL: no ancestry constraint.
-
-    if query.name_filter:
-        conditions.append(jobs_table.c.name.like(f"%{query.name_filter.lower()}%"))
-
-    if query.job_id_prefix:
-        escaped = query.job_id_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        conditions.append(jobs_table.c.job_id.like(f"{escaped}%", escape="\\"))
-
-    sort_field = query.sort_field or controller_pb2.Controller.JOB_SORT_FIELD_DATE
-    sort_direction = query.sort_direction
-    if sort_direction == controller_pb2.Controller.SORT_DIRECTION_UNSPECIFIED:
-        sort_direction = (
-            controller_pb2.Controller.SORT_DIRECTION_DESC
-            if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_DATE
-            else controller_pb2.Controller.SORT_DIRECTION_ASC
+    if query.scope == controller_pb2.Controller.JOB_QUERY_SCOPE_CHILDREN and not query.parent_job_id:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN",
         )
-    descending = sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
-
-    # COUNT query — no join to job_config needed; FK guarantees row exists.
-    count_stmt = select(func.count()).select_from(jobs_table)
-    for cond in conditions:
-        count_stmt = count_stmt.where(cond)
-    total = tx.execute(count_stmt).scalar() or 0
-
-    # SELECT query — may join tasks for sort-by-failures/preemptions.
-    needs_task_agg = sort_field in (
-        controller_pb2.Controller.JOB_SORT_FIELD_FAILURES,
-        controller_pb2.Controller.JOB_SORT_FIELD_PREEMPTIONS,
-    )
-
-    if needs_task_agg:
-        agg_failures = func.coalesce(func.sum(tasks_table.c.failure_count), 0).label("agg_failures")
-        agg_preemptions = func.coalesce(func.sum(tasks_table.c.preemption_count), 0).label("agg_preemptions")
-        stmt = (
-            select(*_JOB_ROW_COLS, agg_failures, agg_preemptions)
-            .select_from(jobs_config_from.outerjoin(tasks_table, jobs_table.c.job_id == tasks_table.c.job_id))
-            .group_by(jobs_table.c.job_id)
-        )
-        sort_col = agg_failures if sort_field == controller_pb2.Controller.JOB_SORT_FIELD_FAILURES else agg_preemptions
-    else:
-        stmt = select(*_JOB_ROW_COLS).select_from(jobs_config_from)
-        sort_col_map = {
-            controller_pb2.Controller.JOB_SORT_FIELD_DATE: jobs_table.c.submitted_at_ms,
-            controller_pb2.Controller.JOB_SORT_FIELD_NAME: jobs_table.c.name,
-            controller_pb2.Controller.JOB_SORT_FIELD_STATE: text(_STATE_SORT_EXPR),
-        }
-        sort_col = sort_col_map.get(sort_field, jobs_table.c.submitted_at_ms)
-
-    for cond in conditions:
-        stmt = stmt.where(cond)
-
-    stmt = stmt.order_by(sort_col.desc() if descending else sort_col.asc())
-
-    offset = max(query.offset, 0)
-    limit = max(query.limit, 0)
-    if limit > 0:
-        stmt = stmt.limit(limit).offset(offset)
-
-    rows = tx.execute(stmt).all()
-    return rows, total
+    return reads_dashboard.list_jobs(tx, query, state_ids)
 
 
 def _query_from_list_jobs_request(
@@ -842,7 +692,7 @@ def _query_from_list_jobs_request(
 
     # Clamp paging: 0 (unset) or out-of-range values default to MAX. Unbounded
     # listing is not supported because downstream per-page work
-    # (_task_summaries_for_jobs, _parent_ids_with_children) grows an IN-clause
+    # (task_summaries_for_jobs, parent_ids_with_children) grows an IN-clause
     # with one placeholder per returned row.
     if query.limit <= 0 or query.limit > MAX_LIST_JOBS_LIMIT:
         query.limit = MAX_LIST_JOBS_LIMIT
@@ -858,47 +708,11 @@ def _query_from_list_jobs_request(
 
 
 def _parent_ids_with_children(tx, job_ids: list[JobName]) -> set[JobName]:
-    """Return the subset of *job_ids* that currently have direct children."""
-    if not job_ids:
-        return set()
-    rows = tx.execute(
-        select(jobs_table.c.parent_job_id).distinct().where(jobs_table.c.parent_job_id.in_(list(job_ids)))
-    ).all()
-    return {row.parent_job_id for row in rows if row.parent_job_id is not None}
+    return reads_dashboard.parent_ids_with_children(tx, job_ids)
 
 
 def _task_summaries_for_jobs(tx, job_ids: set[JobName]) -> dict[JobName, TaskJobSummary]:
-    """Aggregate task counts per job via a SQL GROUP BY."""
-    if not job_ids:
-        return {}
-    rows = tx.execute(
-        select(
-            tasks_table.c.job_id,
-            tasks_table.c.state,
-            func.count().label("cnt"),
-            func.sum(tasks_table.c.failure_count).label("total_failures"),
-            func.sum(tasks_table.c.preemption_count).label("total_preemptions"),
-        )
-        .where(tasks_table.c.job_id.in_(list(job_ids)))
-        .group_by(tasks_table.c.job_id, tasks_table.c.state)
-    ).all()
-    completed_states = (job_pb2.TASK_STATE_SUCCEEDED, job_pb2.TASK_STATE_KILLED)
-
-    summaries: dict[JobName, TaskJobSummary] = {}
-    for row in rows:
-        job_id = row.job_id  # JobNameType decodes to JobName
-        state = int(row.state)
-        cnt = int(row.cnt)
-        prev = summaries.get(job_id, TaskJobSummary(job_id=job_id))
-        summaries[job_id] = TaskJobSummary(
-            job_id=job_id,
-            task_count=prev.task_count + cnt,
-            completed_count=prev.completed_count + (cnt if state in completed_states else 0),
-            failure_count=prev.failure_count + (int(row.total_failures) if row.total_failures else 0),
-            preemption_count=prev.preemption_count + (int(row.total_preemptions) if row.total_preemptions else 0),
-            task_state_counts={**prev.task_state_counts, state: cnt},
-        )
-    return summaries
+    return reads_dashboard.task_summaries_for_jobs(tx, job_ids)
 
 
 def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
@@ -982,7 +796,7 @@ def _attempts_for_worker(
 
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(
-            select(*_ATTEMPT_COLS)
+            select(*reads_attempts._ATTEMPT_COLS)
             .where(task_attempts_table.c.worker_id == worker_id)
             .order_by(
                 case(
@@ -1516,7 +1330,7 @@ class ControllerServiceImpl:
         *,
         has_children: bool = False,
     ) -> job_pb2.JobStatus:
-        """Convert a job SA Row + its task summary into a JobStatus proto."""
+        """Convert a job row and its task summary into a JobStatus proto."""
         pending_reason = j.error or ""
         if j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())

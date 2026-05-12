@@ -4,29 +4,24 @@
 """SQLAlchemy-backed controller database wrapper.
 
 Hosts the SA ``Engine`` factories, the ``Tx`` wrapper, and the two
-transaction context managers (``write_transaction`` / ``read_snapshot``)
-used by the v2 data layer.
+transaction context managers (``write_transaction`` / ``read_snapshot``).
 
-The engine is split into a **write engine** and a **read engine**,
-matching today's ``ControllerDB._init_read_pool`` design exactly:
+The engine is split into a **write engine** and a **read engine**:
 
-* The write engine uses a tiny pool (size 1) so writes are funneled
-  through a single connection. Serialization between writers is enforced
-  by an external ``threading.RLock`` passed into ``write_transaction``.
+* The write engine uses pool size 1 so writes are funneled through a
+  single connection. Serialization between writers is enforced by an
+  external ``threading.RLock`` passed into ``write_transaction``.
 * The read engine uses ``QueuePool(pool_size=32, max_overflow=4)`` with
   ``PRAGMA query_only = ON`` **pinned at connect time**. Pinning avoids
-  toggling the pragma on every ``read_snapshot`` call — those pragma
-  round-trips dominate the per-call cost of the slim reservation read.
+  toggling the pragma on every ``read_snapshot`` call.
 
 Both engines use ``isolation_level="AUTOCOMMIT"`` so callers issue
-``BEGIN`` / ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK`` explicitly,
-mirroring today's ``ControllerDB`` discipline.
+``BEGIN`` / ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK`` explicitly.
 
 Post-commit hooks registered via ``Tx.register`` fire *under the write
-lock*, after ``COMMIT``. That keeps the atomicity contract from today's
-``ControllerDB.transaction()`` byte-for-byte: a concurrent thread cannot
-observe the SQL-committed-but-cache-not-yet-updated window because the
-lock is held until every hook has run.
+lock*, after ``COMMIT``. A concurrent thread cannot observe the
+SQL-committed-but-cache-not-yet-updated window because the lock is held
+until every hook has run.
 """
 
 from __future__ import annotations
@@ -62,11 +57,7 @@ logger = logging.getLogger(__name__)
 
 
 def _install_pragmas(dbapi_conn, auth_path_str: str | None) -> None:
-    """Run the four startup PRAGMAs and ATTACH the auth DB if provided.
-
-    Mirrors ``ControllerDB._configure`` + the per-conn ATTACH at
-    ``db.py:313`` / ``db.py:399``.
-    """
+    """Run startup PRAGMAs and ATTACH the auth DB if provided."""
     cur = dbapi_conn.cursor()
     try:
         cur.execute("PRAGMA journal_mode = WAL")
@@ -83,8 +74,7 @@ def _install_pragmas(dbapi_conn, auth_path_str: str | None) -> None:
 def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
     """Build the controller's SA **write** engine.
 
-    Pool size 1: writes are serialized by an external ``RLock`` so the
-    extra connections from the previous shared pool were unused.
+    Pool size 1: writes are serialized by an external ``RLock``.
     ``isolation_level="AUTOCOMMIT"`` disables SA's autoBEGIN behaviour so
     callers issue ``BEGIN IMMEDIATE`` explicitly. ``query_only`` is
     **not** set — writes need to mutate the DB.
@@ -110,12 +100,11 @@ def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
 def _make_read_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
     """Build the controller's SA **read** engine.
 
-    ``QueuePool(pool_size=32, max_overflow=4)`` matches today's
-    ``ControllerDB._READ_POOL_SIZE = 32`` plus a small overflow.
+    ``QueuePool(pool_size=32, max_overflow=4)``.
     ``PRAGMA query_only = ON`` is pinned at **connect time** so that
-    accidental writes raise, but ``read_snapshot`` does not pay the
-    pragma round-trip cost on every call. ``isolation_level="AUTOCOMMIT"``
-    lets callers open / close transactions with explicit BEGIN/ROLLBACK.
+    accidental writes raise without paying a pragma round-trip per call.
+    ``isolation_level="AUTOCOMMIT"`` lets callers open / close transactions
+    with explicit BEGIN/ROLLBACK.
     """
     auth_path_str = str(auth_db_path) if auth_db_path is not None else None
 
@@ -218,12 +207,10 @@ class Tx:
 def write_transaction(write_engine: Engine, write_lock: threading.RLock) -> Iterator[Tx]:
     """Open a write transaction backed by ``write_engine``.
 
-    Acquires ``write_lock`` (matching today's ``ControllerDB._lock``),
-    checks out a connection, emits ``BEGIN IMMEDIATE``, yields a ``Tx``,
-    and commits on clean exit. Post-commit hooks registered via
-    ``Tx.register`` fire **while the lock is still held**, preserving the
-    atomicity contract from today's ``ControllerDB.transaction()`` at
-    ``db.py:476``.
+    Acquires ``write_lock``, checks out a connection, emits
+    ``BEGIN IMMEDIATE``, yields a ``Tx``, and commits on clean exit.
+    Post-commit hooks registered via ``Tx.register`` fire **while the
+    lock is still held** so in-memory caches stay consistent with the DB.
     """
     write_lock.acquire()
     conn: Connection | None = None
@@ -276,7 +263,7 @@ def task_is_finished(
     """Whether a task has reached a terminal state with no remaining retries."""
     if state == job_pb2.TASK_STATE_SUCCEEDED:
         return True
-    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE):
+    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE, job_pb2.TASK_STATE_COSCHED_FAILED):
         return True
     if state == job_pb2.TASK_STATE_FAILED:
         return failure_count > max_retries_failure
@@ -427,14 +414,13 @@ class ControllerDB:
         # after a checkpoint restore. Registered via ``register_reopen_hook``.
         self._reopen_hooks: list[Callable[[], None]] = []
 
-        # Stage 12: enforce the @writes_to invariant. Importing the writes
-        # package re-exports every entity module so REGISTERED_WRITE_FUNCTIONS
-        # is fully populated. Projection classes load via the projections
+        # Enforce the @writes_to invariant. Importing the writes package
+        # re-exports every entity module so REGISTERED_WRITE_FUNCTIONS is
+        # fully populated. Projection classes load via the projections
         # package re-export; instances appear in PROJECTIONS only after
-        # Anyone (or a test) constructs them. The check is safe
-        # to run pre-instantiation — owned will be empty and no violations
-        # can fire — and is re-runnable from any caller after projections
-        # are built.
+        # construction. The check is safe pre-instantiation — owned will be
+        # empty and no violations can fire — and is re-runnable after
+        # projections are built.
         from iris.cluster.controller import projections, writes  # noqa: F401
 
         projections.assert_owned_tables_not_externally_written()
@@ -445,12 +431,12 @@ class ControllerDB:
 
     @property
     def sa_read_engine(self) -> Engine:
-        """SA Core read engine for the v2 data layer."""
+        """SA Core read engine."""
         return self._sa_read_engine
 
     @property
     def sa_write_engine(self) -> Engine:
-        """SA Core write engine for the v2 data layer."""
+        """SA Core write engine."""
         return self._sa_write_engine
 
     @property
@@ -509,12 +495,12 @@ class ControllerDB:
 
     @contextmanager
     def transaction(self) -> Iterator[Tx]:
-        """Open an IMMEDIATE transaction and yield a ``Tx``.
+        """Open an IMMEDIATE write transaction and yield a ``Tx``.
 
         On successful commit, any hooks registered via ``Tx.register`` or
         ``Tx.on_commit`` fire while the write lock is still held — keeping
-        in-memory caches (e.g. ``EndpointsProjection``) in sync with the DB
-        without exposing a torn snapshot to concurrent readers.
+        in-memory caches in sync with the DB without exposing a torn
+        snapshot to concurrent readers.
         """
         with write_transaction(self._sa_write_engine, self._lock) as tx:
             yield tx
@@ -546,8 +532,8 @@ class ControllerDB:
         """Apply pending migrations from the migrations/ directory.
 
         Supports Python migration files that define a ``migrate(conn)``
-        function. Migration names are matched by stem so that a migration
-        previously applied as .sql is not re-run when converted to .py.
+        function. Migration names are matched by stem so a migration recorded
+        under its ``.sql`` name is not re-run after conversion to ``.py``.
 
         Migrations run outside a transaction because executescript() implicitly
         commits. This is fine: migrations only run at startup before any
@@ -576,7 +562,7 @@ class ControllerDB:
             raw_conn.commit()
             applied = {row[0] for row in raw_conn.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()}
 
-            # Match by stem so a migration previously recorded as .sql is not
+            # Match by stem: a migration recorded under its .sql name is not
             # re-run after conversion to .py.
             applied_stems = {Path(name).stem for name in applied}
 
@@ -604,9 +590,9 @@ class ControllerDB:
             # cannot hold a statement-level lock that would block wal_checkpoint.
             raw_conn.execute("PRAGMA journal_mode=MEMORY").fetchall()
             raw_conn.execute("PRAGMA temp_store=MEMORY")
-            # Legacy migrations 0005/0014/0020/0023 reference `profiles.task_profiles`,
-            # so attach the legacy file for the migration loop. 0046 + the finally
-            # block below detach and unlink it.
+            # Migrations 0005/0014/0020/0023 reference `profiles.task_profiles`.
+            # Attach profiles.sqlite3 for the migration loop; 0046 and the
+            # finally block below detach and unlink it.
             profiles_path = self._db_dir / "profiles.sqlite3"
             raw_conn.execute("ATTACH DATABASE ? AS profiles", (str(profiles_path),))
             try:
@@ -636,8 +622,8 @@ class ControllerDB:
                 raw_conn.commit()
                 raw_conn.execute("PRAGMA synchronous=NORMAL")
                 raw_conn.execute("PRAGMA journal_mode=WAL").fetchall()
-                # Detach + unlink the legacy profiles DB. Idempotent — 0046 may
-                # already have detached and unlinked.
+                # Detach + unlink profiles.sqlite3. Idempotent — 0046 may
+                # already have detached and unlinked it.
                 try:
                     raw_conn.execute("DETACH DATABASE profiles")
                 except sqlite3.OperationalError:
@@ -799,9 +785,7 @@ class ControllerDB:
         for hook in self._reopen_hooks:
             hook()
 
-    # SQL-canonical read access is exposed through ``read_snapshot()`` and typed table
-    # metadata at module scope. Legacy list/get/count helper methods were removed
-    # to keep relation assembly explicit in controller/service/state query flows.
+    # Read access is through ``read_snapshot()`` and typed table metadata at module scope.
 
     # -- User budget accessors --------------------------------------------------
 

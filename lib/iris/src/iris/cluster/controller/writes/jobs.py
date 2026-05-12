@@ -1,13 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SA Core write helpers for ``jobs``, ``job_config``, ``job_workdir_files``,
-``users`` and the ``meta`` sequence counter.
+"""Write helpers for ``jobs``, ``job_config``, ``job_workdir_files``,
+``users``, and the ``meta`` sequence counter.
 
-Stage M2 of the SA Core migration: replaces raw ``text("INSERT INTO ...")``
-strings with SA Core expression-language constructs. TypeDecorators on the
-table columns handle all bind-side conversions (``JobName.to_wire()``,
-``Timestamp.epoch_ms()``, ``bool`` → 0/1) automatically.
+TypeDecorators on the table columns handle all bind-side conversions
+(``JobName.to_wire()``, ``Timestamp.epoch_ms()``, ``bool`` → 0/1) automatically.
 """
 
 from collections.abc import Iterable, Mapping, Sequence

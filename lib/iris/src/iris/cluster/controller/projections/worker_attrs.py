@@ -3,17 +3,16 @@
 
 """WorkerAttrsProjection — write-through in-memory cache over ``worker_attributes``.
 
-M3 of the SA Core migration. ``rehydrate`` uses ``select(worker_attributes_table)``
-and iterates SA rows; ``WorkerIdType`` on the ``worker_id`` column decodes the
-string to ``WorkerId`` automatically. The ``value_type`` column has no TypeDecorator
-(it encodes a three-way dispatch among int/float/str columns) so the decode branch
-is handled explicitly here.
+``WorkerIdType`` on the ``worker_id`` column decodes the string to ``WorkerId``
+automatically. The ``value_type`` column has no TypeDecorator (it encodes a
+three-way dispatch among int/float/str columns) so the decode branch is handled
+explicitly by :func:`_decode_value`.
 
 Unlike :class:`EndpointsProjection`, mutating methods do not issue SQL — the
-corresponding ``worker_attributes`` writes happen in
-`writes.workers.replace_attributes`. This projection is responsible only for
-the in-memory cache that ``healthy_active_workers_with_attributes`` reads on the
-scheduler hot path.
+corresponding ``worker_attributes`` writes are emitted by
+``writes.workers.replace_attributes``. This projection owns only the in-memory
+cache that ``healthy_active_workers_with_attributes`` reads on the scheduler hot
+path.
 """
 
 from __future__ import annotations
