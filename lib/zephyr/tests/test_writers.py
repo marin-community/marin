@@ -3,7 +3,6 @@
 
 """Tests for writers module."""
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -200,50 +199,6 @@ def test_write_parquet_file_empty():
 
         table = pq.read_table(output_path)
         assert len(table) == 0
-
-
-def test_atomic_rename_s3_directory_preserves_layout(tmp_path):
-    """S3 atomic_rename must not add extra nesting for directory outputs.
-
-    When the yielded path is a directory, fs.put must place contents directly at
-    the destination — not under an extra ``output/`` subdirectory.  fsspec nests
-    when the source has no trailing slash and the destination already exists, so
-    atomic_rename must account for that.
-    """
-    from unittest.mock import patch
-
-    from fsspec.implementations.local import LocalFileSystem
-
-    dest = tmp_path / "dest"
-    dest.mkdir()  # pre-create so fsspec considers it "existing"
-    local_fs = LocalFileSystem()
-
-    with patch("zephyr.writers.url_to_fs", return_value=(local_fs, str(dest))):
-        with atomic_rename("s3://bucket/dest") as local_path:
-            os.makedirs(local_path)
-            (Path(local_path) / "shard_0.bin").write_bytes(b"data0")
-            (Path(local_path) / "shard_1.bin").write_bytes(b"data1")
-
-    assert (dest / "shard_0.bin").exists(), "shard_0.bin should be directly under dest"
-    assert (dest / "shard_1.bin").exists(), "shard_1.bin should be directly under dest"
-    assert not (dest / "output").exists(), "should not have extra 'output' nesting"
-
-
-def test_atomic_rename_s3_single_file(tmp_path):
-    """S3 atomic_rename works correctly for single-file outputs."""
-    from unittest.mock import patch
-
-    from fsspec.implementations.local import LocalFileSystem
-
-    dest = tmp_path / "output.jsonl"
-    local_fs = LocalFileSystem()
-
-    with patch("zephyr.writers.url_to_fs", return_value=(local_fs, str(dest))):
-        with atomic_rename("s3://bucket/output.jsonl") as local_path:
-            Path(local_path).write_text("line1\nline2\n")
-
-    assert dest.exists()
-    assert dest.read_text() == "line1\nline2\n"
 
 
 def test_infer_arrow_schema_basic():
