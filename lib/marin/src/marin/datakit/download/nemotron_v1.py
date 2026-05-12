@@ -161,3 +161,19 @@ def normalize_nemotron_v1_step(download: StepSpec, *, split: str) -> StepSpec:
         file_extensions=(".jsonl.zst",),
         relative_input_path=f"{_NEMOTRON_V1_DATA_ROOT}/{rel_path}",
     )
+
+
+def nemotron_v1_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
+    """Full ``(download, normalize)`` chain per Nemotron-CC v1 split.
+
+    One download step is shared across every split (the entire Nemotron-CC
+    corpus is fetched as a single tree under ``raw/nemotro-cc-eeb783``); each
+    split gets its own normalize step pointing at its quality-subdirectory.
+    Returns ``{marin_name: (download, normalize)}`` where marin_name is
+    ``f"nemotron_v1/{split}"`` — matching the ``DatakitSource.name`` convention.
+    """
+    download = download_nemotron_v1_step()
+    return {
+        f"nemotron_v1/{split}": (download, normalize_nemotron_v1_step(download, split=split))
+        for split in NEMOTRON_V1_SPLITS
+    }

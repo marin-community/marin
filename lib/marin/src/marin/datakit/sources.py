@@ -32,6 +32,7 @@ from marin.datakit.download.institutional_books import institutional_books_norma
 from marin.datakit.download.massive import massive_normalize_steps
 from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
+from marin.datakit.download.nemotron_v1 import nemotron_v1_normalize_steps
 from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
@@ -235,6 +236,24 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
+    # Nemotron v1 (Nemotron-CC from Common Crawl): one family download shared
+    # across all 7 quality splits; each split has its own normalize.
+    # TODO: replace token counts with real Llama-3 token counts. These are TiB
+    # storage sizes from experiments/pretraining_datasets/nemotron.py used as a
+    # rough proxy for mixture weighting until proper counts are available.
+    nemotron_v1 = _rows_flat(
+        nemotron_v1_normalize_steps,
+        {
+            "nemotron_v1/hq_actual": 0.91351,
+            "nemotron_v1/hq_synth": 2.72,
+            "nemotron_v1/medium_high": 0.82471,
+            "nemotron_v1/medium": 3.38,
+            "nemotron_v1/medium_low": 1.54,
+            "nemotron_v1/low_actual": 0.70123,
+            "nemotron_v1/low_synth": 0.62771,
+        },
+    )
+
     # Nemotron v2 families: one family download shared across all subsets
     # (via ``@cache`` on ``download_nemotron_v2_step``); each subset has its
     # own normalize.
@@ -327,6 +346,7 @@ def all_sources() -> dict[str, DatakitSource]:
         *starcoder2_extras,
         *common_pile,
         *finepdfs,
+        *nemotron_v1,
         *nemotron_cc_v2,
         *nemotron_cc_v2_1,
         *nemotron_cc_code_v1,
