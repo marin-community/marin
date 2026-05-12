@@ -217,6 +217,11 @@ def mark_duplicates_bloom(
     base_path = input_path[0] if isinstance(input_path, list) else input_path
     all_files = _collect_input_files(input_paths=input_path, filetypes=DEFAULT_FILETYPES)
 
+    # Threshold gates which paragraphs get recorded as contaminated spans.
+    # Only meaningful for n-gram mode (score is a fraction in [0, 1]); in exact
+    # paragraph mode score is 0 or 1 so any non-zero match is always recorded.
+    threshold = config.ngram.overlap_threshold if config.ngram else 0.0
+
     def process_shard_with_bloom(records: Iterator[dict], _) -> Iterator[dict]:
         """Load bloom filter once per shard and mark duplicates."""
         # Load bloom filter from storage
@@ -238,7 +243,7 @@ def mark_duplicates_bloom(
                     continue
 
                 overlap_score = calculate_paragraph_overlap(para, bf, config.ngram)
-                if overlap_score > 0:
+                if overlap_score > 0 and overlap_score >= threshold:
                     duplicate_spans.append([offset, offset + len(para), overlap_score])
                 offset += len(para) + 1  # +1 for newline
 
