@@ -10,14 +10,23 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import click
+from google.protobuf import json_format
+from iris.cli.main import create_client_token_provider, resolve_cluster_name
+from iris.cli.token_store import cluster_name_from_url, load_any_token, load_token
+from iris.client import IrisClient
+from iris.cluster.config import IrisConfig
 from iris.cluster.providers.k8s.tasks import _sanitize_label_value
-from iris.cluster.types import is_job_finished
+from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.types import JobName, is_job_finished
 from iris.rpc import job_pb2
+from iris.rpc.auth import StaticTokenProvider, TokenProvider
 from rigging.redaction import redact_value
 
 _REPO_ROOT = Path(__file__).parents[2]
@@ -73,6 +82,86 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
+def _token_provider_for_url(controller_url: str) -> TokenProvider | None:
+    credential = load_token(cluster_name_from_url(controller_url))
+    if credential is None:
+        credential = load_any_token()
+    if credential is None:
+        return None
+    return StaticTokenProvider(credential.token)
+
+
+@contextmanager
+def _open_iris_client(
+    *,
+    iris_config: Path | None,
+    repo_root: Path,
+    controller_url: str | None = None,
+) -> Iterator[IrisClient]:
+    if controller_url is not None:
+        with IrisClient.remote(
+            controller_url,
+            workspace=repo_root,
+            token_provider=_token_provider_for_url(controller_url),
+        ) as client:
+            yield client
+        return
+
+    if iris_config is None:
+        raise click.ClickException("No controller specified. Pass --iris-config or --controller-url.")
+
+    config = IrisConfig.load(iris_config)
+    token_provider = None
+    cluster_name = resolve_cluster_name(config.proto, None, None)
+    if config.proto.HasField("auth"):
+        token_provider = create_client_token_provider(config.proto.auth, cluster_name=cluster_name)
+
+    if config.proto.controller.WhichOneof("controller") == "local":
+        cluster = LocalCluster(config.proto)
+        try:
+            with IrisClient.remote(cluster.start(), workspace=repo_root, token_provider=token_provider) as client:
+                yield client
+        finally:
+            cluster.close()
+        return
+
+    bundle = config.provider_bundle()
+    controller_address = config.controller_address() or bundle.controller.discover_controller(config.proto.controller)
+    with bundle.controller.tunnel(address=controller_address) as tunnel_url:
+        with IrisClient.remote(tunnel_url, workspace=repo_root, token_provider=token_provider) as client:
+            yield client
+
+
+def _status_from_job(job: job_pb2.JobStatus) -> IrisJobStatus:
+    return IrisJobStatus(
+        job_id=job.job_id,
+        state=job_pb2.JobState.Name(job.state),
+        error=job.error or None,
+    )
+
+
+def _row(job: job_pb2.JobStatus | None) -> str:
+    if job is None:
+        return "null"
+    return json.dumps(json_format.MessageToDict(job, preserving_proto_field_name=True), sort_keys=True)
+
+
+def _child_started(child: job_pb2.JobStatus) -> bool:
+    """A child has left the queue once it reaches RUNNING or a terminal state other than UNSCHEDULABLE."""
+    return child.state == job_pb2.JOB_STATE_RUNNING or (
+        is_job_finished(child.state) and child.state != job_pb2.JOB_STATE_UNSCHEDULABLE
+    )
+
+
+def _pick_child(parent_job_id: str, jobs: list[job_pb2.JobStatus]) -> job_pb2.JobStatus | None:
+    """Pick a representative child (prefer non-finished). Single-child today; arbitrary order otherwise."""
+    prefix = parent_job_id.rstrip("/") + "/"
+    children = [j for j in jobs if j.job_id.startswith(prefix)]
+    if not children:
+        return None
+    return next((c for c in children if not is_job_finished(c.state)), children[0])
+
+
 def job_status(
     job_id: str,
     *,
@@ -80,24 +169,12 @@ def job_status(
     repo_root: Path,
     controller_url: str | None = None,
 ) -> IrisJobStatus:
-    cmd = [
-        *iris_command(repo_root),
-        *_iris_flags(iris_config, controller_url),
-        "job",
-        "list",
-        "--json",
-        "--prefix",
-        job_id,
-    ]
-    result = _run(cmd)
-    if result.returncode != 0:
-        raise RuntimeError(f"iris job list failed (exit {result.returncode}): {result.stderr.strip()}")
+    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+        for job in client.list_jobs(prefix=JobName.from_wire(job_id)):
+            if job.job_id == job_id:
+                return _status_from_job(job)
 
-    for row in json.loads(result.stdout):
-        if row.get("job_id") == job_id:
-            return IrisJobStatus(job_id=job_id, state=row["state"], error=row.get("error") or None)
-
-    raise LookupError(f"Job not found in iris job list output: {job_id!r}")
+    raise LookupError(f"Job not found in Iris job list: {job_id!r}")
 
 
 def wait_for_job(
@@ -110,14 +187,64 @@ def wait_for_job(
     controller_url: str | None = None,
 ) -> IrisJobStatus:
     """Poll until the job reaches a terminal state. Raises TimeoutError if `timeout` elapses."""
+    prefix = JobName.from_wire(job_id)
     start = time.monotonic()
-    while True:
-        status = job_status(job_id, iris_config=iris_config, repo_root=repo_root, controller_url=controller_url)
-        if is_job_finished(job_pb2.JobState.Value(status.state)):
-            return status
-        if timeout is not None and (time.monotonic() - start) >= timeout:
-            raise TimeoutError(f"Timed out waiting for job {job_id!r} after {timeout}s")
-        time.sleep(poll_interval)
+    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+        while True:
+            job = next((j for j in client.list_jobs(prefix=prefix) if j.job_id == job_id), None)
+            if job is None:
+                raise LookupError(f"Job not found in Iris job list: {job_id!r}")
+            if is_job_finished(job.state):
+                return _status_from_job(job)
+            if timeout is not None and (time.monotonic() - start) >= timeout:
+                raise TimeoutError(f"Timed out waiting for job {job_id!r} after {timeout}s")
+            time.sleep(poll_interval)
+
+
+def wait_for_child_job(
+    job_id: str,
+    *,
+    iris_config: Path | None,
+    controller_url: str | None,
+    poll_interval: float,
+    queue_timeout: float,
+    repo_root: Path,
+) -> IrisJobStatus:
+    """Wait for a parent job to reach a terminal state.
+
+    Fail fast with ``TimeoutError`` if no child reaches ``JOB_STATE_RUNNING`` within ``queue_timeout``.
+    Once any child has started, the queue timeout is dropped — total runtime is bounded by the caller's
+    wall clock (e.g. GitHub ``timeout-minutes``).
+    """
+    prefix = JobName.from_wire(job_id)
+    deadline = time.monotonic() + queue_timeout
+    child_running = False
+    with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
+        while True:
+            jobs = client.list_jobs(prefix=prefix)
+            parent = next((j for j in jobs if j.job_id == job_id), None)
+            if parent is None:
+                raise LookupError(f"Job not found in Iris job list: {job_id!r}")
+            if is_job_finished(parent.state):
+                return _status_from_job(parent)
+
+            child = _pick_child(job_id, jobs)
+            if not child_running and child is not None and _child_started(child):
+                child_running = True
+                click.echo(
+                    f"Child {child.job_id} reached {job_pb2.JobState.Name(child.state)}; dropping queue timeout.",
+                    err=True,
+                )
+
+            click.echo(f"parent={_row(parent)} child={_row(child)}", err=True)
+
+            if not child_running and time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"No child reached RUNNING within {queue_timeout:.0f}s. "
+                    f"parent={_row(parent)} child={_row(child)}"
+                )
+
+            time.sleep(poll_interval)
 
 
 def _list_managed_instances(
@@ -562,6 +689,22 @@ def status(job_id: str, iris_config: Path | None, controller_url: str | None) ->
     default=False,
     help="Write job_id, state, and succeeded to $GITHUB_OUTPUT on terminal exit.",
 )
+@click.option(
+    "--queue-timeout",
+    default=None,
+    type=float,
+    help=(
+        "Fail fast if no child reaches RUNNING within this many seconds. Mutually exclusive with --timeout; "
+        "once a child runs, total runtime is bounded by the caller's wall clock."
+    ),
+)
+@click.option(
+    "--run-timeout",
+    default=None,
+    type=float,
+    hidden=True,
+    help="Deprecated no-op kept for in-flight workflows. Remove once .github/workflows stop passing it.",
+)
 def wait(
     job_id: str,
     iris_config: Path | None,
@@ -569,17 +712,38 @@ def wait(
     poll_interval: float,
     timeout: float | None,
     github_output: bool,
+    queue_timeout: float | None,
+    run_timeout: float | None,
 ) -> None:
     """Poll until an Iris job reaches a terminal state. Exit non-zero unless SUCCEEDED."""
-    click.echo(f"Polling job {job_id!r} every {poll_interval}s ...", err=True)
-    s = wait_for_job(
-        job_id,
-        iris_config=iris_config,
-        controller_url=controller_url,
-        poll_interval=poll_interval,
-        timeout=timeout,
-        repo_root=_REPO_ROOT,
-    )
+    if run_timeout is not None:
+        click.echo("--run-timeout is deprecated and ignored; the GitHub timeout-minutes bounds runtime.", err=True)
+    if queue_timeout is not None and timeout is not None:
+        raise click.UsageError("--queue-timeout and --timeout are mutually exclusive")
+
+    if queue_timeout is not None:
+        click.echo(
+            f"Waiting for {job_id!r}: queue/start timeout {queue_timeout:.0f}s, polling every {poll_interval}s.",
+            err=True,
+        )
+        s = wait_for_child_job(
+            job_id,
+            iris_config=iris_config,
+            controller_url=controller_url,
+            poll_interval=poll_interval,
+            queue_timeout=queue_timeout,
+            repo_root=_REPO_ROOT,
+        )
+    else:
+        click.echo(f"Waiting for {job_id!r} every {poll_interval}s ...", err=True)
+        s = wait_for_job(
+            job_id,
+            iris_config=iris_config,
+            controller_url=controller_url,
+            poll_interval=poll_interval,
+            timeout=timeout,
+            repo_root=_REPO_ROOT,
+        )
 
     if github_output and (path := os.environ.get("GITHUB_OUTPUT")):
         succeeded = "true" if s.state == JOB_STATE_SUCCEEDED else "false"
