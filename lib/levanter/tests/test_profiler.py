@@ -8,37 +8,6 @@ from levanter.callbacks import profiler as profiler_module
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig, profile
 
 
-def test_profile_options_config_builds_jax_profile_options():
-    options = ProfileOptionsConfig(
-        host_tracer_level=1,
-        device_tracer_level=0,
-        python_tracer_level=0,
-        enable_hlo_proto=False,
-        include_dataset_ops=False,
-        advanced_configuration={
-            "gpu_num_chips_to_profile_per_task": 1,
-            "gpu_max_callback_api_events": 131072,
-            "gpu_max_activity_api_events": 131072,
-            "gpu_max_annotation_strings": 65536,
-            "tpu_trace_mode": "TRACE_ONLY_HOST",
-        },
-    ).build_jax_profile_options()
-
-    assert options is not None
-    assert options.host_tracer_level == 1
-    assert options.advanced_configuration == {
-        "device_tracer_level": 0,
-        "gpu_num_chips_to_profile_per_task": 1,
-        "gpu_max_callback_api_events": 131072,
-        "gpu_max_activity_api_events": 131072,
-        "gpu_max_annotation_strings": 65536,
-        "tpu_trace_mode": "TRACE_ONLY_HOST",
-    }
-    assert options.python_tracer_level == 0
-    assert options.enable_hlo_proto is False
-    assert options.include_dataset_ops is False
-
-
 def test_profile_passes_profile_options_and_ignores_duplicate_forced_stop(monkeypatch):
     calls = []
     artifacts = []

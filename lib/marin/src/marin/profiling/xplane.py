@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Ingest XPlane protobuf profiles through xprof tables."""
+"""Ingest XPlane protobuf profiles directly and through xprof tables."""
 
 from __future__ import annotations
 
@@ -15,11 +15,15 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
 
+from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+
 from marin.profiling.ingest import (
     _collective_kind,
+    _CompleteTraceEvent,
     _derive_optimization_candidates,
     _op_category,
     _sha256_for_path,
+    _summarize_complete_events,
     _summarize_semantic_families,
     _trace_quality_warnings,
 )
@@ -51,6 +55,19 @@ XPROF_TABLE_TOOLS = (
 )
 
 _TRACE_COMPLETE_EVENT_TRUNCATION_THRESHOLD = 1_000_000
+_PICoseconds_PER_MICROSECOND = 1_000_000.0
+_XSPACE_MESSAGE_CLASS: Any | None = None
+
+
+@dataclass(frozen=True)
+class XPlaneTimeline:
+    """Normalized timeline events parsed directly from an XPlane protobuf."""
+
+    events: list[_CompleteTraceEvent]
+    process_names: dict[int, str]
+    thread_names: dict[tuple[int, int], str]
+    num_events_total: int
+    quality_warnings: list[str]
 
 
 @dataclass(frozen=True)
@@ -68,8 +85,11 @@ def find_xplane_file(profile_dir: Path) -> Path:
         raise FileNotFoundError(f"Profile directory does not exist: {profile_dir}")
 
     candidates = sorted(profile_dir.rglob("*.xplane.pb"))
-    if candidates:
+    if len(candidates) == 1:
         return candidates[0]
+    if len(candidates) > 1:
+        joined = ", ".join(str(path) for path in candidates)
+        raise ValueError(f"Found multiple *.xplane.pb files under '{profile_dir}': {joined}")
 
     raise FileNotFoundError(f"No *.xplane.pb file found under '{profile_dir}'.")
 
@@ -113,29 +133,137 @@ def summarize_xplane(
     warmup_steps: int = 5,
     hot_op_limit: int = 25,
     count_trace_events: bool = False,
+    breakdown_mode: str = "exclusive_per_track",
 ) -> ProfileSummary:
     """Summarize an XPlane protobuf into the normalized profile summary schema."""
-    if output_dir is not None:
-        export = export_xplane_tables(xplane_path, output_dir, count_trace_events=count_trace_events)
-        return summarize_xplane_tables(
-            export.output_dir,
-            xplane_path=xplane_path,
-            run_metadata=run_metadata,
-            warmup_steps=warmup_steps,
-            hot_op_limit=hot_op_limit,
-            trace_event_count=export.trace_event_count,
-        )
+    timeline_summary = summarize_xplane_timeline(
+        xplane_path,
+        run_metadata=run_metadata,
+        warmup_steps=warmup_steps,
+        hot_op_limit=hot_op_limit,
+        breakdown_mode=breakdown_mode,
+    )
+    table_summary = _try_summarize_xprof_tables(
+        xplane_path,
+        output_dir=output_dir,
+        run_metadata=run_metadata,
+        warmup_steps=warmup_steps,
+        hot_op_limit=hot_op_limit,
+        count_trace_events=count_trace_events,
+    )
+    if table_summary is None:
+        return timeline_summary
+    return _merge_timeline_and_xprof_summaries(timeline_summary, table_summary, hot_op_limit=hot_op_limit)
 
-    with tempfile.TemporaryDirectory(prefix="marin-xplane-tables-") as temp_dir:
-        export = export_xplane_tables(xplane_path, Path(temp_dir), count_trace_events=count_trace_events)
-        return summarize_xplane_tables(
-            export.output_dir,
-            xplane_path=xplane_path,
-            run_metadata=run_metadata,
-            warmup_steps=warmup_steps,
-            hot_op_limit=hot_op_limit,
-            trace_event_count=export.trace_event_count,
-        )
+
+def summarize_xplane_timeline(
+    xplane_path: Path,
+    *,
+    run_metadata: RunMetadata | None = None,
+    warmup_steps: int = 5,
+    hot_op_limit: int = 25,
+    breakdown_mode: str = "exclusive_per_track",
+) -> ProfileSummary:
+    """Summarize directly parsed XPlane timeline events."""
+    timeline = parse_xplane_timeline(xplane_path)
+    return _summarize_complete_events(
+        timeline.events,
+        source_format="xplane_pb",
+        source_path=xplane_path,
+        display_time_unit="us",
+        num_events_total=timeline.num_events_total,
+        process_names=timeline.process_names,
+        thread_names=timeline.thread_names,
+        trace_sha256=_sha256_for_path(xplane_path),
+        run_metadata=run_metadata,
+        warmup_steps=warmup_steps,
+        hot_op_limit=hot_op_limit,
+        breakdown_mode=breakdown_mode,
+        extra_quality_warnings=timeline.quality_warnings,
+    )
+
+
+def parse_xplane_timeline(xplane_path: Path) -> XPlaneTimeline:
+    """Parse XPlane protobuf timeline events into Marin's normalized event model."""
+    if not xplane_path.exists():
+        raise FileNotFoundError(f"XPlane protobuf does not exist: {xplane_path}")
+
+    xspace_class = _xspace_message_class()
+    xspace = xspace_class()
+    xspace.ParseFromString(xplane_path.read_bytes())
+
+    process_names: dict[int, str] = {}
+    thread_names: dict[tuple[int, int], str] = {}
+    events: list[_CompleteTraceEvent] = []
+    num_events_total = 0
+    quality_warnings = [str(warning) for warning in getattr(xspace, "warnings", [])]
+    quality_warnings.extend(str(error) for error in getattr(xspace, "errors", []))
+
+    for plane_index, plane in enumerate(xspace.planes):
+        pid = plane_index + 1
+        process_name = str(plane.name or f"xplane:{plane_index}")
+        process_names[pid] = process_name
+        stat_names = {int(key): str(value.name) for key, value in plane.stat_metadata.items()}
+
+        for line_index, line in enumerate(plane.lines):
+            tid = int(line.id or line_index + 1)
+            thread_name = str(line.display_name or line.name or f"xline:{line_index}")
+            thread_names[(pid, tid)] = thread_name
+            num_events_total += len(line.events)
+            line_start_us = float(line.timestamp_ns) / 1_000.0
+
+            for event in line.events:
+                if event.WhichOneof("data") != "offset_ps":
+                    continue
+                if event.duration_ps <= 0:
+                    continue
+
+                metadata = plane.event_metadata.get(event.metadata_id)
+                if metadata is None:
+                    continue
+
+                event_stats = _xplane_stats_to_mapping(
+                    list(metadata.stats) + list(event.stats),
+                    stat_names=stat_names,
+                )
+                display_name = str(metadata.display_name or "")
+                metadata_name = str(metadata.name or "")
+                name = display_name or metadata_name
+                if not name:
+                    continue
+
+                long_name = _string_stat(event_stats, "long_name") or (metadata_name if metadata_name != name else None)
+                events.append(
+                    _CompleteTraceEvent(
+                        name=name,
+                        canonical_name=canonical_op_name(name),
+                        deduplicated_name=_string_stat(event_stats, "deduplicated_name"),
+                        pid=pid,
+                        tid=tid,
+                        ts=line_start_us + (float(event.offset_ps) / _PICoseconds_PER_MICROSECOND),
+                        dur=float(event.duration_ps) / _PICoseconds_PER_MICROSECOND,
+                        tf_op=_string_stat(event_stats, "tf_op"),
+                        source=_string_stat(event_stats, "source", "source_file", "file_name"),
+                        source_stack=_string_stat(event_stats, "source_stack", "stack_frame"),
+                        hlo_category=_string_stat(event_stats, "hlo_category"),
+                        long_name=long_name,
+                        run_id=_string_like_stat(event_stats, "run_id"),
+                        process_name=process_name,
+                        thread_name=thread_name,
+                        step_num=_int_like_stat(event_stats, "step_num", "step"),
+                    )
+                )
+
+    if not events:
+        quality_warnings.append("XPlane protobuf contained no direct timeline events with offset/duration data.")
+
+    return XPlaneTimeline(
+        events=events,
+        process_names=process_names,
+        thread_names=thread_names,
+        num_events_total=num_events_total,
+        quality_warnings=quality_warnings,
+    )
 
 
 def summarize_xplane_tables(
@@ -201,6 +329,347 @@ def summarize_xplane_tables(
         gap_region_contexts=summary.gap_region_contexts,
         optimization_candidates=_derive_optimization_candidates(summary),
     )
+
+
+def _try_summarize_xprof_tables(
+    xplane_path: Path,
+    *,
+    output_dir: Path | None,
+    run_metadata: RunMetadata | None,
+    warmup_steps: int,
+    hot_op_limit: int,
+    count_trace_events: bool,
+) -> ProfileSummary | None:
+    try:
+        if output_dir is not None:
+            export = export_xplane_tables(xplane_path, output_dir, count_trace_events=count_trace_events)
+            return summarize_xplane_tables(
+                export.output_dir,
+                xplane_path=xplane_path,
+                run_metadata=run_metadata,
+                warmup_steps=warmup_steps,
+                hot_op_limit=hot_op_limit,
+                trace_event_count=export.trace_event_count,
+            )
+
+        with tempfile.TemporaryDirectory(prefix="marin-xplane-tables-") as temp_dir:
+            export = export_xplane_tables(xplane_path, Path(temp_dir), count_trace_events=count_trace_events)
+            return summarize_xplane_tables(
+                export.output_dir,
+                xplane_path=xplane_path,
+                run_metadata=run_metadata,
+                warmup_steps=warmup_steps,
+                hot_op_limit=hot_op_limit,
+                trace_event_count=export.trace_event_count,
+            )
+    except ImportError:
+        if output_dir is not None:
+            raise RuntimeError("--xplane-output-dir requires the optional xprof package.") from None
+        logger.info("xprof is not installed; continuing with direct XPlane timeline parsing only.")
+        return None
+
+
+def _merge_timeline_and_xprof_summaries(
+    timeline_summary: ProfileSummary,
+    table_summary: ProfileSummary,
+    *,
+    hot_op_limit: int,
+) -> ProfileSummary:
+    quality_warnings = list(timeline_summary.trace_overview.quality_warnings)
+    quality_warnings.extend(_xprof_quality_warnings(table_summary))
+
+    trace_overview = TraceOverview(
+        display_time_unit=timeline_summary.trace_overview.display_time_unit,
+        num_events_total=timeline_summary.trace_overview.num_events_total,
+        num_complete_events=timeline_summary.trace_overview.num_complete_events,
+        num_processes=timeline_summary.trace_overview.num_processes,
+        num_threads=timeline_summary.trace_overview.num_threads,
+        profile_start_ts=timeline_summary.trace_overview.profile_start_ts,
+        profile_end_ts=timeline_summary.trace_overview.profile_end_ts,
+        duration_basis=f"{timeline_summary.trace_overview.duration_basis}+xprof_aggregate_tables",
+        suspected_truncation=(
+            timeline_summary.trace_overview.suspected_truncation or table_summary.trace_overview.suspected_truncation
+        ),
+        quality_warnings=quality_warnings,
+    )
+    step_time = table_summary.step_time if table_summary.step_time.all_steps.count > 0 else timeline_summary.step_time
+    time_breakdown = (
+        table_summary.time_breakdown
+        if table_summary.time_breakdown.total_duration > 0
+        else timeline_summary.time_breakdown
+    )
+    hot_ops = _merge_hot_ops(timeline_summary.hot_ops, table_summary.hot_ops, limit=hot_op_limit)
+    communication_ops = (
+        table_summary.communication_ops if table_summary.communication_ops else timeline_summary.communication_ops
+    )
+    semantic_families = _summarize_semantic_families(
+        hot_ops,
+        total_duration=time_breakdown.total_duration,
+        limit=max(hot_op_limit, 50),
+    )
+
+    summary = ProfileSummary.create(
+        source_format="xplane_pb",
+        source_path=timeline_summary.source_path,
+        run_metadata=timeline_summary.run_metadata,
+        trace_overview=trace_overview,
+        trace_provenance=timeline_summary.trace_provenance,
+        step_time=step_time,
+        time_breakdown=time_breakdown,
+        hot_ops=hot_ops,
+        semantic_families=semantic_families,
+        communication_ops=communication_ops,
+        gap_before_ops=timeline_summary.gap_before_ops,
+        hierarchical_regions=timeline_summary.hierarchical_regions,
+        gap_region_contexts=timeline_summary.gap_region_contexts,
+        optimization_candidates=[],
+    )
+    return ProfileSummary(
+        schema_version=summary.schema_version,
+        generated_at_utc=summary.generated_at_utc,
+        source_format=summary.source_format,
+        source_path=summary.source_path,
+        run_metadata=summary.run_metadata,
+        trace_overview=summary.trace_overview,
+        trace_provenance=summary.trace_provenance,
+        step_time=summary.step_time,
+        time_breakdown=summary.time_breakdown,
+        hot_ops=summary.hot_ops,
+        semantic_families=summary.semantic_families,
+        communication_ops=summary.communication_ops,
+        gap_before_ops=summary.gap_before_ops,
+        hierarchical_regions=summary.hierarchical_regions,
+        gap_region_contexts=summary.gap_region_contexts,
+        optimization_candidates=_derive_optimization_candidates(summary),
+    )
+
+
+def _xprof_quality_warnings(summary: ProfileSummary) -> list[str]:
+    warnings = []
+    for warning in summary.trace_overview.quality_warnings:
+        if "pre-op gap and hierarchical region analysis are unavailable" in warning:
+            continue
+        warnings.append(warning)
+    if summary.step_time.all_steps.count > 0:
+        warnings.append("Step timing was augmented from xprof overview aggregate tables.")
+    if summary.hot_ops:
+        warnings.append("Kernel hotspot rows from xprof aggregate tables were merged into hot_ops.")
+    if summary.communication_ops:
+        warnings.append("Collective timing was augmented from xprof kernel aggregate tables.")
+    return warnings
+
+
+def _merge_hot_ops(timeline_hot_ops: list[HotOp], table_hot_ops: list[HotOp], *, limit: int) -> list[HotOp]:
+    merged = list(timeline_hot_ops)
+    seen = {op.name for op in merged}
+    for op in table_hot_ops:
+        if op.name in seen:
+            continue
+        merged.append(op)
+        seen.add(op.name)
+    return sorted(
+        merged,
+        key=lambda op: (-op.exclusive_duration, -op.total_duration, op.name),
+    )[:limit]
+
+
+def _xspace_message_class() -> Any:
+    global _XSPACE_MESSAGE_CLASS
+    if _XSPACE_MESSAGE_CLASS is None:
+        pool = descriptor_pool.DescriptorPool()
+        pool.Add(_xplane_file_descriptor())
+        _XSPACE_MESSAGE_CLASS = message_factory.GetMessageClass(pool.FindMessageTypeByName("tensorflow.profiler.XSpace"))
+    return _XSPACE_MESSAGE_CLASS
+
+
+def _xplane_file_descriptor() -> descriptor_pb2.FileDescriptorProto:
+    file_descriptor = descriptor_pb2.FileDescriptorProto(
+        name="tensorflow/profiler/xplane.proto",
+        package="tensorflow.profiler",
+        syntax="proto3",
+    )
+    label = descriptor_pb2.FieldDescriptorProto.Label
+    field_type = descriptor_pb2.FieldDescriptorProto.Type
+
+    xspace = file_descriptor.message_type.add(name="XSpace")
+    _add_field(xspace, "planes", 1, label.LABEL_REPEATED, field_type.TYPE_MESSAGE, ".tensorflow.profiler.XPlane")
+    _add_field(xspace, "errors", 2, label.LABEL_REPEATED, field_type.TYPE_STRING)
+    _add_field(xspace, "warnings", 3, label.LABEL_REPEATED, field_type.TYPE_STRING)
+    _add_field(xspace, "hostnames", 4, label.LABEL_REPEATED, field_type.TYPE_STRING)
+
+    xplane = file_descriptor.message_type.add(name="XPlane")
+    _add_field(xplane, "id", 1, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(xplane, "name", 2, label.LABEL_OPTIONAL, field_type.TYPE_STRING)
+    _add_field(xplane, "lines", 3, label.LABEL_REPEATED, field_type.TYPE_MESSAGE, ".tensorflow.profiler.XLine")
+    event_entry = xplane.nested_type.add(name="EventMetadataEntry")
+    event_entry.options.map_entry = True
+    _add_field(event_entry, "key", 1, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(
+        event_entry,
+        "value",
+        2,
+        label.LABEL_OPTIONAL,
+        field_type.TYPE_MESSAGE,
+        ".tensorflow.profiler.XEventMetadata",
+    )
+    _add_field(
+        xplane,
+        "event_metadata",
+        4,
+        label.LABEL_REPEATED,
+        field_type.TYPE_MESSAGE,
+        ".tensorflow.profiler.XPlane.EventMetadataEntry",
+    )
+    stat_entry = xplane.nested_type.add(name="StatMetadataEntry")
+    stat_entry.options.map_entry = True
+    _add_field(stat_entry, "key", 1, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(
+        stat_entry,
+        "value",
+        2,
+        label.LABEL_OPTIONAL,
+        field_type.TYPE_MESSAGE,
+        ".tensorflow.profiler.XStatMetadata",
+    )
+    _add_field(
+        xplane,
+        "stat_metadata",
+        5,
+        label.LABEL_REPEATED,
+        field_type.TYPE_MESSAGE,
+        ".tensorflow.profiler.XPlane.StatMetadataEntry",
+    )
+    _add_field(xplane, "stats", 6, label.LABEL_REPEATED, field_type.TYPE_MESSAGE, ".tensorflow.profiler.XStat")
+
+    xline = file_descriptor.message_type.add(name="XLine")
+    _add_field(xline, "id", 1, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(xline, "name", 2, label.LABEL_OPTIONAL, field_type.TYPE_STRING)
+    _add_field(xline, "timestamp_ns", 3, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(xline, "events", 4, label.LABEL_REPEATED, field_type.TYPE_MESSAGE, ".tensorflow.profiler.XEvent")
+    _add_field(xline, "duration_ps", 9, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(xline, "display_id", 10, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(xline, "display_name", 11, label.LABEL_OPTIONAL, field_type.TYPE_STRING)
+
+    xevent = file_descriptor.message_type.add(name="XEvent")
+    xevent.oneof_decl.add(name="data")
+    _add_field(xevent, "metadata_id", 1, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(xevent, "offset_ps", 2, label.LABEL_OPTIONAL, field_type.TYPE_INT64, oneof_index=0)
+    _add_field(xevent, "duration_ps", 3, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(xevent, "stats", 4, label.LABEL_REPEATED, field_type.TYPE_MESSAGE, ".tensorflow.profiler.XStat")
+    _add_field(xevent, "num_occurrences", 5, label.LABEL_OPTIONAL, field_type.TYPE_INT64, oneof_index=0)
+
+    xstat = file_descriptor.message_type.add(name="XStat")
+    xstat.oneof_decl.add(name="value")
+    _add_field(xstat, "metadata_id", 1, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(xstat, "double_value", 2, label.LABEL_OPTIONAL, field_type.TYPE_DOUBLE, oneof_index=0)
+    _add_field(xstat, "uint64_value", 3, label.LABEL_OPTIONAL, field_type.TYPE_UINT64, oneof_index=0)
+    _add_field(xstat, "int64_value", 4, label.LABEL_OPTIONAL, field_type.TYPE_INT64, oneof_index=0)
+    _add_field(xstat, "str_value", 5, label.LABEL_OPTIONAL, field_type.TYPE_STRING, oneof_index=0)
+    _add_field(xstat, "bytes_value", 6, label.LABEL_OPTIONAL, field_type.TYPE_BYTES, oneof_index=0)
+    _add_field(xstat, "ref_value", 7, label.LABEL_OPTIONAL, field_type.TYPE_UINT64, oneof_index=0)
+
+    event_metadata = file_descriptor.message_type.add(name="XEventMetadata")
+    _add_field(event_metadata, "id", 1, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(event_metadata, "name", 2, label.LABEL_OPTIONAL, field_type.TYPE_STRING)
+    _add_field(event_metadata, "metadata", 3, label.LABEL_OPTIONAL, field_type.TYPE_BYTES)
+    _add_field(event_metadata, "display_name", 4, label.LABEL_OPTIONAL, field_type.TYPE_STRING)
+    _add_field(
+        event_metadata,
+        "stats",
+        5,
+        label.LABEL_REPEATED,
+        field_type.TYPE_MESSAGE,
+        ".tensorflow.profiler.XStat",
+    )
+    _add_field(event_metadata, "child_id", 6, label.LABEL_REPEATED, field_type.TYPE_INT64)
+
+    stat_metadata = file_descriptor.message_type.add(name="XStatMetadata")
+    _add_field(stat_metadata, "id", 1, label.LABEL_OPTIONAL, field_type.TYPE_INT64)
+    _add_field(stat_metadata, "name", 2, label.LABEL_OPTIONAL, field_type.TYPE_STRING)
+    _add_field(stat_metadata, "description", 3, label.LABEL_OPTIONAL, field_type.TYPE_STRING)
+    return file_descriptor
+
+
+def _add_field(
+    message: descriptor_pb2.DescriptorProto,
+    name: str,
+    number: int,
+    label: descriptor_pb2.FieldDescriptorProto.Label.ValueType,
+    field_type: descriptor_pb2.FieldDescriptorProto.Type.ValueType,
+    type_name: str | None = None,
+    *,
+    oneof_index: int | None = None,
+) -> None:
+    field = message.field.add()
+    field.name = name
+    field.number = number
+    field.label = label
+    field.type = field_type
+    if type_name is not None:
+        field.type_name = type_name
+    if oneof_index is not None:
+        field.oneof_index = oneof_index
+
+
+def _xplane_stats_to_mapping(stats: list[Any], *, stat_names: dict[int, str]) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for stat in stats:
+        stat_name = stat_names.get(int(stat.metadata_id))
+        if not stat_name:
+            continue
+        value = _xplane_stat_value(stat, stat_names=stat_names)
+        if value is not None:
+            values[stat_name] = value
+    return values
+
+
+def _xplane_stat_value(stat: Any, *, stat_names: dict[int, str]) -> Any:
+    value_field = stat.WhichOneof("value")
+    if value_field is None:
+        return None
+    if value_field == "ref_value":
+        return stat_names.get(int(stat.ref_value), str(stat.ref_value))
+    value = getattr(stat, value_field)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _string_stat(stats: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = stats.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _string_like_stat(stats: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = stats.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            return value or None
+        if isinstance(value, (int, float)):
+            return str(int(value))
+    return None
+
+
+def _int_like_stat(stats: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = stats.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                continue
+    return None
 
 
 def _trace_event_count_from_xprof(xplane_path: Path) -> int | None:
@@ -459,7 +928,10 @@ def _ranked_kernel_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 def _load_tables(path: Path) -> list[tuple[list[str], list[dict[str, Any]], dict[str, Any]]]:
     if not path.exists():
         return []
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
     tables = data if isinstance(data, list) else [data]
     return [_table_rows(table) for table in tables if isinstance(table, dict) and "cols" in table]
 

@@ -9,12 +9,22 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import marin.profiling.cli as cli_module
+import marin.profiling.xplane as xplane_module
+import pytest
+
 # Intentional private import: exercise the truncation-cap heuristic directly.
-from marin.profiling.ingest import _trace_quality_warnings, summarize_trace
+from marin.profiling.ingest import _trace_quality_warnings, summarize_profile_artifact, summarize_trace
 from marin.profiling.query import compare_profile_summaries, query_profile_summary
 from marin.profiling.report import build_markdown_report
 from marin.profiling.schema import PROFILE_SUMMARY_SCHEMA_VERSION, profile_summary_from_dict
-from marin.profiling.xplane import XPROF_TABLE_TOOLS, export_xplane_tables, summarize_xplane_tables
+from marin.profiling.xplane import (
+    XPROF_TABLE_TOOLS,
+    _xspace_message_class,
+    export_xplane_tables,
+    summarize_xplane,
+    summarize_xplane_tables,
+)
 
 
 def test_summarize_trace_produces_deterministic_breakdown_and_hot_ops(tmp_path: Path) -> None:
@@ -394,6 +404,197 @@ def test_gpu_stream_threads_and_nccl_ops(tmp_path: Path) -> None:
     assert len(summary.gap_before_ops) > 0
 
 
+def test_direct_xplane_timeline_parser_recovers_perfetto_style_summary(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    xplane_path = tmp_path / "profile.xplane.pb"
+    _write_xplane(xplane_path)
+
+    summary = summarize_xplane(xplane_path, warmup_steps=1, hot_op_limit=10)
+
+    assert summary.source_format == "xplane_pb"
+    assert summary.trace_overview.display_time_unit == "us"
+    assert summary.trace_overview.num_complete_events == 6
+    assert summary.trace_overview.num_processes == 1
+    assert summary.trace_overview.num_threads == 2
+    assert summary.step_time.all_steps.count == 2
+    assert summary.step_time.steady_state_steps.median == 120.0
+
+    hot_op_names = {op.name for op in summary.hot_ops}
+    assert "fusion.1" in hot_op_names
+    assert "dot.1" in hot_op_names
+
+    assert summary.gap_before_ops
+    top_gap = summary.gap_before_ops[0]
+    assert top_gap.name == "dot.1"
+    assert top_gap.payload_op == "dot.1"
+    assert top_gap.marker_op == "iota.296"
+    assert top_gap.total_gap_duration == 70.0
+
+    region_paths = {region.path for region in summary.hierarchical_regions}
+    assert "train_step" in region_paths
+    assert "train_step=>block_0=>matmul" in region_paths
+    assert summary.trace_provenance.run_ids == ["7"]
+
+
+def test_profile_dir_prefers_xplane_over_capped_perfetto_trace(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    profile_dir = tmp_path / "artifact" / "plugins" / "profile" / "2026_05_11_12_00_00"
+    profile_dir.mkdir(parents=True)
+    _write_xplane(profile_dir / "host.xplane.pb")
+    (profile_dir / "perfetto_trace.json.gz").write_bytes(b"not a valid gzip trace")
+
+    summary = summarize_profile_artifact(tmp_path / "artifact", warmup_steps=1, hot_op_limit=10)
+
+    assert summary.source_format == "xplane_pb"
+    assert summary.trace_overview.num_complete_events == 6
+
+
+def test_profile_dir_rejects_multiple_xplane_files(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    profile_dir = tmp_path / "artifact" / "plugins" / "profile" / "2026_05_11_12_00_00"
+    profile_dir.mkdir(parents=True)
+    _write_xplane(profile_dir / "host-0.xplane.pb")
+    _write_xplane(profile_dir / "host-1.xplane.pb")
+
+    with pytest.raises(ValueError, match="multiple \\*\\.xplane\\.pb files"):
+        summarize_profile_artifact(tmp_path / "artifact")
+
+
+def test_profile_dir_falls_back_to_perfetto_when_xplane_is_malformed(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "artifact" / "plugins" / "profile" / "2026_05_11_12_00_00"
+    profile_dir.mkdir(parents=True)
+    (profile_dir / "host.xplane.pb").write_bytes(b"\xff")
+    _write_trace(profile_dir / "perfetto_trace.json.gz", step_durations=[100, 120, 140], softmax_duration=30)
+
+    summary = summarize_profile_artifact(tmp_path / "artifact", warmup_steps=1, hot_op_limit=10)
+
+    assert summary.source_format == "perfetto_trace_json"
+    assert summary.step_time.steady_state_steps.median == 130.0
+
+
+def test_xplane_summary_honors_breakdown_mode(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    xplane_path = tmp_path / "profile.xplane.pb"
+    _write_xplane(xplane_path)
+
+    summary = summarize_xplane(xplane_path, warmup_steps=0, hot_op_limit=10, breakdown_mode="exclusive_global")
+
+    assert summary.time_breakdown.duration_basis == "exclusive_duration_global_timeline"
+
+
+def test_xplane_summary_merges_timeline_regions_with_xprof_aggregates(tmp_path: Path, monkeypatch) -> None:
+    xplane_path = tmp_path / "profile.xplane.pb"
+    _write_xplane(xplane_path)
+    table_dir = tmp_path / "tables"
+    _write_xprof_tables(table_dir)
+    table_summary = summarize_xplane_tables(
+        table_dir,
+        xplane_path=xplane_path,
+        warmup_steps=1,
+        hot_op_limit=10,
+    )
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: table_summary)
+
+    summary = summarize_xplane(xplane_path, warmup_steps=1, hot_op_limit=10)
+
+    assert summary.source_format == "xplane_pb"
+    assert summary.trace_overview.duration_basis == "exclusive_duration_per_track+xprof_aggregate_tables"
+    assert summary.step_time.steady_state_steps.median == 2_000.0
+    assert summary.time_breakdown.duration_basis == "xprof_overview_step_time_us"
+    assert summary.time_breakdown.total_duration == 3_000.0
+    assert any(op.name == "xprof_kernel" for op in summary.hot_ops)
+    assert any(op.name == "dot.1" for op in summary.hot_ops)
+    assert summary.communication_ops[0].collective == "all-gather"
+    assert summary.gap_before_ops[0].name == "dot.1"
+    assert any(region.path == "train_step=>block_0=>matmul" for region in summary.hierarchical_regions)
+    assert any("Step timing was augmented from xprof" in warning for warning in summary.trace_overview.quality_warnings)
+
+
+def test_xplane_timeline_parser_separates_multiple_planes_with_reused_line_ids(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    xplane_path = tmp_path / "multi_host.xplane.pb"
+    _write_multi_plane_xplane(xplane_path)
+
+    summary = summarize_xplane(xplane_path, warmup_steps=0, hot_op_limit=10)
+
+    assert summary.trace_overview.num_processes == 2
+    assert summary.trace_overview.num_threads == 2
+    assert summary.trace_overview.num_complete_events == 2
+    assert {op.name for op in summary.hot_ops} == {"fusion.host0", "fusion.host1"}
+    assert summary.time_breakdown.total_duration == 30.0
+
+
+def test_summarize_cli_profile_dir_uses_xplane_default(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    artifact_dir = tmp_path / "artifact" / "plugins" / "profile" / "2026_05_11_12_00_00"
+    artifact_dir.mkdir(parents=True)
+    _write_xplane(artifact_dir / "host.xplane.pb")
+    output_path = tmp_path / "summary.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "profile_summary.py",
+            "summarize",
+            "--profile-dir",
+            str(tmp_path / "artifact"),
+            "--warmup-steps",
+            "1",
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    cli_module.main()
+
+    assert capsys.readouterr().out.strip() == str(output_path)
+    summary = profile_summary_from_dict(json.loads(output_path.read_text(encoding="utf-8")))
+    assert summary.source_format == "xplane_pb"
+    assert summary.trace_overview.num_complete_events == 6
+
+
+def test_summarize_cli_xplane_file_honors_breakdown_mode(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
+    xplane_path = tmp_path / "profile.xplane.pb"
+    output_path = tmp_path / "summary.json"
+    _write_xplane(xplane_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "profile_summary.py",
+            "summarize",
+            "--xplane-file",
+            str(xplane_path),
+            "--breakdown-mode",
+            "exclusive_global",
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    cli_module.main()
+
+    assert capsys.readouterr().out.strip() == str(output_path)
+    summary = profile_summary_from_dict(json.loads(output_path.read_text(encoding="utf-8")))
+    assert summary.time_breakdown.duration_basis == "exclusive_duration_global_timeline"
+
+
+def test_summarize_xplane_with_installed_xprof_exports_tables(tmp_path: Path) -> None:
+    pytest.importorskip("xprof")
+    xplane_path = tmp_path / "profile.xplane.pb"
+    output_dir = tmp_path / "xprof_tables"
+    _write_xplane(xplane_path)
+
+    summary = summarize_xplane(xplane_path, output_dir=output_dir, warmup_steps=1, hot_op_limit=10)
+
+    assert summary.source_format == "xplane_pb"
+    assert summary.trace_overview.duration_basis.endswith("+xprof_aggregate_tables")
+    assert output_dir.exists()
+    assert (output_dir / "overview_page.json").exists()
+    assert summary.trace_overview.num_complete_events == 6
+
+
 def test_export_xplane_tables_accepts_text_and_counts_trace_events(tmp_path: Path, monkeypatch) -> None:
     xplane_path = tmp_path / "profile.xplane.pb"
     xplane_path.write_bytes(b"fake xplane bytes")
@@ -434,6 +635,7 @@ def test_xplane_table_summary_ignores_malformed_tables_and_handles_large_kernel_
     output_dir.mkdir()
     xplane_path = tmp_path / "profile.xplane.pb"
     xplane_path.write_bytes(b"fake xplane bytes")
+    (output_dir / "memory_profile.json").write_text("", encoding="utf-8")
 
     (output_dir / "overview_page.json").write_text(
         json.dumps(
@@ -543,3 +745,133 @@ def _write_trace(path: Path, *, step_durations: list[float], softmax_duration: f
 
     with gzip.open(path, "wt", encoding="utf-8") as handle:
         json.dump(payload, handle)
+
+
+def _write_xplane(path: Path) -> None:
+    xspace = _xspace_message_class()()
+    xspace.hostnames.append("host-0")
+    plane = xspace.planes.add()
+    plane.id = 1
+    plane.name = "/device:TPU:0"
+
+    plane.stat_metadata[1].id = 1
+    plane.stat_metadata[1].name = "tf_op"
+    plane.stat_metadata[2].id = 2
+    plane.stat_metadata[2].name = "long_name"
+    plane.stat_metadata[3].id = 3
+    plane.stat_metadata[3].name = "run_id"
+
+    _add_xplane_event_metadata(plane, 1, "0")
+    _add_xplane_event_metadata(plane, 2, "1")
+    _add_xplane_event_metadata(plane, 3, "%fusion.1 = f32[8,8] fusion()", display_name="fusion.1")
+    _add_xplane_event_metadata(plane, 4, "%iota.296 = s32[8] iota()", display_name="iota.296")
+    _add_xplane_event_metadata(plane, 5, "%dot.1 = f32[8,8] dot()", display_name="dot.1")
+    _add_xplane_event_metadata(plane, 6, "all-reduce.1")
+
+    steps = plane.lines.add()
+    steps.id = 1
+    steps.name = "Steps"
+    _add_xplane_event(steps, 1, offset_us=0, duration_us=100)
+    _add_xplane_event(steps, 2, offset_us=100, duration_us=120)
+
+    ops = plane.lines.add()
+    ops.id = 2
+    ops.name = "XLA Ops"
+    fusion = _add_xplane_event(ops, 3, offset_us=0, duration_us=10)
+    _add_xplane_stat(fusion, 1, "train_step/block_0/fusion")
+    _add_xplane_stat(fusion, 2, "%fusion.1 = f32[8,8] fusion()")
+    _add_xplane_stat(fusion, 3, 7)
+    _add_xplane_event(ops, 6, offset_us=10, duration_us=20)
+    _add_xplane_event(ops, 4, offset_us=100, duration_us=1)
+    dot = _add_xplane_event(ops, 5, offset_us=101, duration_us=30)
+    _add_xplane_stat(dot, 1, "train_step/block_0/matmul")
+    _add_xplane_stat(dot, 2, "%dot.1 = f32[8,8] dot(f32[8,8] %lhs, f32[8,8] %rhs)")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(xspace.SerializeToString())
+
+
+def _write_multi_plane_xplane(path: Path) -> None:
+    xspace = _xspace_message_class()()
+    for plane_index in range(2):
+        plane = xspace.planes.add()
+        plane.id = plane_index + 1
+        plane.name = f"/device:TPU:{plane_index}"
+        _add_xplane_event_metadata(
+            plane,
+            1,
+            f"%fusion.host{plane_index} = f32[8,8] fusion()",
+            display_name=f"fusion.host{plane_index}",
+        )
+
+        ops = plane.lines.add()
+        ops.id = 7
+        ops.name = "XLA Ops"
+        _add_xplane_event(ops, 1, offset_us=plane_index * 100, duration_us=10 + plane_index * 10)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(xspace.SerializeToString())
+
+
+def _write_xprof_tables(output_dir: Path) -> None:
+    output_dir.mkdir(parents=True)
+    (output_dir / "overview_page.json").write_text(
+        json.dumps(
+            {
+                "cols": [
+                    {"id": "stepnum"},
+                    {"id": "stepTimeMs"},
+                    {"id": "deviceCollectivesTimeMs"},
+                    {"id": "deviceComputeTimeMs"},
+                    {"id": "infeedTimeMs"},
+                    {"id": "otherTimeMs"},
+                ],
+                "rows": [
+                    {"c": [{"v": 0}, {"v": 1.0}, {"v": 0.1}, {"v": 0.7}, {"v": 0.1}, {"v": 0.1}]},
+                    {"c": [{"v": 1}, {"v": 2.0}, {"v": 0.2}, {"v": 1.4}, {"v": 0.2}, {"v": 0.2}]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output_dir / "kernel_stats.json").write_text(
+        json.dumps(
+            {
+                "cols": [
+                    {"id": "rank"},
+                    {"id": "kernel_name"},
+                    {"id": "total_duration_us"},
+                    {"id": "occurrences"},
+                ],
+                "rows": [
+                    {"c": [{"v": 1}, {"v": "xprof_kernel"}, {"v": 5_000.0}, {"v": 5}]},
+                    {"c": [{"v": 2}, {"v": "ncclAllGather"}, {"v": 800.0}, {"v": 2}]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _add_xplane_event_metadata(plane, metadata_id: int, name: str, *, display_name: str = "") -> None:
+    metadata = plane.event_metadata[metadata_id]
+    metadata.id = metadata_id
+    metadata.name = name
+    metadata.display_name = display_name
+
+
+def _add_xplane_event(line, metadata_id: int, *, offset_us: int, duration_us: int):
+    event = line.events.add()
+    event.metadata_id = metadata_id
+    event.offset_ps = offset_us * 1_000_000
+    event.duration_ps = duration_us * 1_000_000
+    return event
+
+
+def _add_xplane_stat(event, metadata_id: int, value) -> None:
+    stat = event.stats.add()
+    stat.metadata_id = metadata_id
+    if isinstance(value, str):
+        stat.str_value = value
+    else:
+        stat.uint64_value = value

@@ -59,11 +59,15 @@ def parse_args() -> argparse.Namespace:
     summarize.add_argument("--download-root", type=Path, help="Optional root directory for downloaded artifacts.")
     summarize.add_argument("--profile-dir", type=Path, help="Path to a downloaded jax_profile artifact directory.")
     summarize.add_argument("--trace-file", type=Path, help="Path to an explicit trace JSON(.gz) file.")
-    summarize.add_argument("--xplane-file", type=Path, help="Path to an explicit *.xplane.pb protobuf profile.")
+    summarize.add_argument(
+        "--xplane-file",
+        type=Path,
+        help="Path to an explicit *.xplane.pb protobuf profile. Parsed directly; xprof tables augment when available.",
+    )
     summarize.add_argument(
         "--xplane-output-dir",
         type=Path,
-        help="Optional directory for xprof table JSON exported while summarizing --xplane-file.",
+        help="Optional directory for xprof table JSON exported while summarizing --xplane-file. Requires xprof.",
     )
     summarize.add_argument(
         "--xplane-count-trace-events",
@@ -393,6 +397,7 @@ def _handle_summarize(args: argparse.Namespace):
             warmup_steps=args.warmup_steps,
             hot_op_limit=args.hot_op_limit,
             count_trace_events=args.xplane_count_trace_events,
+            breakdown_mode=args.breakdown_mode,
         )
 
     if args.artifact:
