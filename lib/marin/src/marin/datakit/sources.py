@@ -237,20 +237,20 @@ def all_sources() -> dict[str, DatakitSource]:
     )
 
     # Nemotron v1 (Nemotron-CC from Common Crawl): one family download shared
-    # across all 7 quality splits; each split has its own normalize.
-    # TODO: replace token counts with real Llama-3 token counts. These are TiB
-    # storage sizes from experiments/pretraining_datasets/nemotron.py used as a
-    # rough proxy for mixture weighting until proper counts are available.
+    # across all 7 quality splits; each split has its own normalize. Token
+    # counts read directly off the existing Llama-3 tokenized caches at
+    # gs://marin-us-central2/tokenized/nemotron_cc/<split>-* (JaggedArrayStore
+    # data_size on input_ids).
     nemotron_v1 = _rows_flat(
         nemotron_v1_normalize_steps,
         {
-            "nemotron_v1/hq_actual": 0.91351,
-            "nemotron_v1/hq_synth": 2.72,
-            "nemotron_v1/medium_high": 0.82471,
-            "nemotron_v1/medium": 3.38,
-            "nemotron_v1/medium_low": 1.54,
-            "nemotron_v1/low_actual": 0.70123,
-            "nemotron_v1/low_synth": 0.62771,
+            "nemotron_v1/hq_actual": 537.62,
+            "nemotron_v1/hq_synth": 1497.53,
+            "nemotron_v1/medium_high": 489.05,
+            "nemotron_v1/medium": 1960.60,
+            "nemotron_v1/medium_low": 861.00,
+            "nemotron_v1/low_actual": 384.10,
+            "nemotron_v1/low_synth": 321.66,
         },
     )
 
