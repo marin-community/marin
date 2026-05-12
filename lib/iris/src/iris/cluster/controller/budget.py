@@ -13,9 +13,11 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from rigging.timing import Timestamp
+from sqlalchemy import bindparam, func, select
 
-from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB, QuerySnapshot
-from iris.cluster.types import JobName
+from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB
+from iris.cluster.controller.db_v2 import Tx
+from iris.cluster.controller.schema_v2 import job_config_table, tasks_table
 from iris.rpc import config_pb2, job_pb2
 
 logger = logging.getLogger(__name__)
@@ -76,7 +78,21 @@ def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: in
     return 1000 * accelerator_count + ram_gb + 5 * cpu_cores
 
 
-def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
+_USER_SPEND_QUERY = (
+    select(
+        tasks_table.c.job_id,
+        job_config_table.c.res_cpu_millicores,
+        job_config_table.c.res_memory_bytes,
+        job_config_table.c.res_device_json,
+        func.count().label("task_count"),
+    )
+    .select_from(tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id))
+    .where(tasks_table.c.state.in_(bindparam("states", expanding=True)))
+    .group_by(tasks_table.c.job_id)
+)
+
+
+def compute_user_spend(tx: Tx) -> dict[str, int]:
     """Compute per-user budget spend from active tasks.
 
     Joins tasks (in ASSIGNED/BUILDING/RUNNING states) with job_config to get
@@ -84,19 +100,11 @@ def compute_user_spend(snapshot: QuerySnapshot) -> dict[str, int]:
 
     Returns ``{user_id: total_resource_value}`` for users with active tasks.
     """
-    placeholders = ",".join("?" for _ in _ACTIVE_TASK_STATES)
-    rows = snapshot.raw(
-        f"SELECT jc.job_id, jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_device_json, "
-        f"COUNT(*) as task_count "
-        f"FROM tasks t JOIN job_config jc ON t.job_id = jc.job_id "
-        f"WHERE t.state IN ({placeholders}) "
-        f"GROUP BY jc.job_id",
-        tuple(_ACTIVE_TASK_STATES),
-        decoders={"job_id": JobName.from_wire},
-    )
+    rows = tx.execute(_USER_SPEND_QUERY, {"states": list(_ACTIVE_TASK_STATES)}).all()
 
     spend: dict[str, int] = defaultdict(int)
     for row in rows:
+        # job_id is decoded by JobNameType to JobName
         user_id = row.job_id.user
         cpu = row.res_cpu_millicores
         mem = row.res_memory_bytes

@@ -24,6 +24,7 @@ from finelog.server.stats_service import StatsServiceImpl
 from finelog.store.duckdb_store import EMBEDDED_DUCKDB_MEMORY_LIMIT, EMBEDDED_DUCKDB_THREADS, DuckDBLogStore
 from rigging.log_setup import slow_log
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
+from sqlalchemy import bindparam, func, select
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
@@ -68,15 +69,14 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import (
     ControllerDB,
     SchedulableWorker,
-    healthy_active_workers_with_attributes,
     job_scheduling_deadline,
-    running_tasks_by_worker,
     task_row_can_be_scheduled,
-    timed_out_executing_tasks,
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
+from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.reads import scheduler as reads_scheduler
+from iris.cluster.controller.reads import workers as reads_workers
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -86,21 +86,22 @@ from iris.cluster.controller.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import (
-    ATTEMPT_PROJECTION,
-    JOB_CONFIG_JOIN,
-    JOB_SCHEDULING_PROJECTION,
-    TASK_DETAIL_PROJECTION,
-    TASK_ROW_PROJECTION,
     JobReservationRow,
     JobRow,
     JobSchedulingRow,
     TaskDetailRow,
     TaskRow,
-    proto_decoder,
     tasks_with_attempts,
 )
+from iris.cluster.controller.schema_v2 import (
+    job_config_table,
+    jobs_table,
+    reservation_claims_table,
+    task_attempts_table,
+    tasks_table,
+)
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore, TaskAttemptStore
+from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -135,8 +136,6 @@ from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
-
-_RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
 
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
@@ -213,6 +212,228 @@ class _SchedulingOrder:
     task_band_map: dict[JobName, int]
     user_spend: dict[str, int]
     user_budget_limits: dict[str, int]
+
+
+_JOB_SCHEDULING_QUERY = (
+    select(
+        jobs_table.c.job_id,
+        jobs_table.c.state,
+        jobs_table.c.submitted_at_ms,
+        jobs_table.c.root_submitted_at_ms,
+        jobs_table.c.started_at_ms,
+        jobs_table.c.finished_at_ms,
+        jobs_table.c.scheduling_deadline_epoch_ms,
+        jobs_table.c.error,
+        jobs_table.c.exit_code,
+        jobs_table.c.num_tasks,
+        jobs_table.c.is_reservation_holder,
+        jobs_table.c.has_reservation,
+        jobs_table.c.name,
+        jobs_table.c.depth,
+        job_config_table.c.res_cpu_millicores,
+        job_config_table.c.res_memory_bytes,
+        job_config_table.c.res_disk_bytes,
+        job_config_table.c.res_device_json,
+        job_config_table.c.constraints_json,
+        job_config_table.c.has_coscheduling,
+        job_config_table.c.coscheduling_group_by,
+        job_config_table.c.scheduling_timeout_ms,
+        job_config_table.c.max_task_failures,
+    )
+    .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
+    .where(jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True)))
+)
+
+_TASK_ROW_QUERY = (
+    select(
+        tasks_table.c.task_id,
+        tasks_table.c.job_id,
+        tasks_table.c.state,
+        tasks_table.c.current_attempt_id,
+        tasks_table.c.failure_count,
+        tasks_table.c.preemption_count,
+        tasks_table.c.max_retries_failure,
+        tasks_table.c.max_retries_preemption,
+        tasks_table.c.submitted_at_ms,
+        tasks_table.c.priority_band,
+        tasks_table.c.priority_neg_depth,
+        tasks_table.c.priority_root_submitted_ms,
+        tasks_table.c.priority_insertion,
+    )
+    .where(tasks_table.c.state == bindparam("state"))
+    .order_by(
+        tasks_table.c.priority_neg_depth.asc(),
+        tasks_table.c.priority_root_submitted_ms.asc(),
+        tasks_table.c.submitted_at_ms.asc(),
+        tasks_table.c.priority_insertion.asc(),
+    )
+)
+
+_TASK_DETAIL_QUERY = (
+    select(
+        tasks_table.c.task_id,
+        tasks_table.c.job_id,
+        tasks_table.c.state,
+        tasks_table.c.current_attempt_id,
+        tasks_table.c.failure_count,
+        tasks_table.c.preemption_count,
+        tasks_table.c.max_retries_failure,
+        tasks_table.c.max_retries_preemption,
+        tasks_table.c.submitted_at_ms,
+        tasks_table.c.priority_band,
+        tasks_table.c.error,
+        tasks_table.c.exit_code,
+        tasks_table.c.started_at_ms,
+        tasks_table.c.finished_at_ms,
+        tasks_table.c.current_worker_id,
+        tasks_table.c.current_worker_address,
+        tasks_table.c.container_id,
+    )
+    .where(tasks_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
+    .order_by(tasks_table.c.task_id.asc())
+)
+
+_ATTEMPT_QUERY = (
+    select(
+        task_attempts_table.c.task_id,
+        task_attempts_table.c.attempt_id,
+        task_attempts_table.c.worker_id,
+        task_attempts_table.c.state,
+        task_attempts_table.c.created_at_ms,
+        task_attempts_table.c.started_at_ms,
+        task_attempts_table.c.finished_at_ms,
+        task_attempts_table.c.exit_code,
+        task_attempts_table.c.error,
+    )
+    .where(task_attempts_table.c.task_id.in_(bindparam("task_ids", expanding=True)))
+    .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc())
+)
+
+_BUILDING_COUNTS_QUERY = (
+    select(
+        tasks_table.c.current_worker_id.label("worker_id"),
+        func.count().label("cnt"),
+    )
+    .select_from(tasks_table.join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id))
+    .where(
+        tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
+        tasks_table.c.state.in_(bindparam("states", expanding=True)),
+        jobs_table.c.is_reservation_holder == 0,
+    )
+    .group_by(tasks_table.c.current_worker_id)
+)
+
+_RESERVATION_ENTRY_COUNT_QUERY = select(job_config_table.c.reservation_json).where(
+    job_config_table.c.job_id == bindparam("job_id")
+)
+
+_RUNNING_TASKS_WITH_BAND_QUERY = (
+    select(
+        tasks_table.c.task_id,
+        tasks_table.c.priority_band,
+        tasks_table.c.current_worker_id.label("worker_id"),
+        job_config_table.c.res_cpu_millicores,
+        job_config_table.c.res_memory_bytes,
+        job_config_table.c.res_disk_bytes,
+        job_config_table.c.res_device_json,
+        job_config_table.c.has_coscheduling,
+    )
+    .select_from(tasks_table.join(job_config_table, tasks_table.c.job_id == job_config_table.c.job_id))
+    .where(
+        tasks_table.c.state == bindparam("state"),
+        tasks_table.c.current_worker_id.is_not(None),
+    )
+)
+
+
+def _row_to_scheduling_row(row) -> JobSchedulingRow:
+    """Map an SA Core row from ``_JOB_SCHEDULING_QUERY`` to ``JobSchedulingRow``."""
+    return JobSchedulingRow(
+        job_id=row.job_id,
+        state=int(row.state),
+        submitted_at=row.submitted_at_ms,
+        root_submitted_at=row.root_submitted_at_ms,
+        started_at=row.started_at_ms,
+        finished_at=row.finished_at_ms,
+        scheduling_deadline_epoch_ms=(
+            int(row.scheduling_deadline_epoch_ms) if row.scheduling_deadline_epoch_ms is not None else None
+        ),
+        error=row.error,
+        exit_code=int(row.exit_code) if row.exit_code is not None else None,
+        num_tasks=int(row.num_tasks),
+        is_reservation_holder=bool(row.is_reservation_holder),
+        has_reservation=bool(row.has_reservation),
+        name=str(row.name) if row.name is not None else "",
+        depth=int(row.depth),
+        res_cpu_millicores=int(row.res_cpu_millicores),
+        res_memory_bytes=int(row.res_memory_bytes),
+        res_disk_bytes=int(row.res_disk_bytes),
+        res_device_json=row.res_device_json,
+        constraints_json=row.constraints_json,
+        has_coscheduling=bool(row.has_coscheduling),
+        coscheduling_group_by=str(row.coscheduling_group_by) if row.coscheduling_group_by is not None else "",
+        scheduling_timeout_ms=int(row.scheduling_timeout_ms) if row.scheduling_timeout_ms is not None else None,
+        max_task_failures=int(row.max_task_failures),
+    )
+
+
+def _row_to_task_row(row) -> TaskRow:
+    """Map an SA Core row from ``_TASK_ROW_QUERY`` to ``TaskRow``."""
+    return TaskRow(
+        task_id=row.task_id,
+        job_id=row.job_id,
+        state=int(row.state),
+        current_attempt_id=int(row.current_attempt_id),
+        failure_count=int(row.failure_count),
+        preemption_count=int(row.preemption_count),
+        max_retries_failure=int(row.max_retries_failure),
+        max_retries_preemption=int(row.max_retries_preemption),
+        submitted_at=row.submitted_at_ms,
+        priority_band=int(row.priority_band),
+        priority_neg_depth=int(row.priority_neg_depth),
+        priority_root_submitted_ms=int(row.priority_root_submitted_ms),
+        priority_insertion=int(row.priority_insertion),
+    )
+
+
+def _row_to_task_detail(row) -> TaskDetailRow:
+    """Map an SA Core row from ``_TASK_DETAIL_QUERY`` to ``TaskDetailRow``."""
+    return TaskDetailRow(
+        task_id=row.task_id,
+        job_id=row.job_id,
+        state=int(row.state),
+        current_attempt_id=int(row.current_attempt_id),
+        failure_count=int(row.failure_count),
+        preemption_count=int(row.preemption_count),
+        max_retries_failure=int(row.max_retries_failure),
+        max_retries_preemption=int(row.max_retries_preemption),
+        submitted_at=row.submitted_at_ms,
+        priority_band=int(row.priority_band),
+        error=row.error,
+        exit_code=int(row.exit_code) if row.exit_code is not None else None,
+        started_at=row.started_at_ms,
+        finished_at=row.finished_at_ms,
+        current_worker_id=row.current_worker_id,
+        current_worker_address=str(row.current_worker_address) if row.current_worker_address is not None else None,
+        container_id=str(row.container_id) if row.container_id is not None else None,
+    )
+
+
+def _row_to_attempt(row):
+    """Map an SA Core row from ``_ATTEMPT_QUERY`` to ``AttemptRow``."""
+    from iris.cluster.controller.schema import AttemptRow
+
+    return AttemptRow(
+        task_id=row.task_id,
+        attempt_id=int(row.attempt_id),
+        worker_id=row.worker_id,
+        state=int(row.state),
+        created_at=row.created_at_ms,
+        started_at=row.started_at_ms,
+        finished_at=row.finished_at_ms,
+        exit_code=int(row.exit_code) if row.exit_code is not None else None,
+        error=row.error,
+    )
 
 
 def _resource_spec_from_row(job: JobRow | JobSchedulingRow) -> job_pb2.ResourceSpecProto:
@@ -306,7 +527,7 @@ def compute_demand_entries(
     if scheduler is not None and workers is not None and workers:
         building_counts = _building_counts(queries, workers)
         with queries.read_snapshot() as snap:
-            usage_by_worker = TaskAttemptStore(queries).resource_usage_by_worker(snap)
+            usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
@@ -387,15 +608,18 @@ def compute_demand_entries(
 
 def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
     """Read reservation claims from the canonical DB table."""
-    with db.read_snapshot() as snapshot:
-        rows = snapshot.raw(
-            "SELECT rc.worker_id, rc.job_id, rc.entry_idx FROM reservation_claims rc",
-            decoders={"worker_id": WorkerId},
-        )
+    with db.read_snapshot() as tx:
+        rows = tx.execute(
+            select(
+                reservation_claims_table.c.worker_id,
+                reservation_claims_table.c.job_id,
+                reservation_claims_table.c.entry_idx,
+            )
+        ).all()
     return {
         row.worker_id: ReservationClaim(
-            job_id=row.job_id,
-            entry_idx=row.entry_idx,
+            job_id=str(row.job_id),
+            entry_idx=int(row.entry_idx),
         )
         for row in rows
     }
@@ -404,17 +628,9 @@ def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClai
 def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, JobSchedulingRow]:
     if not job_ids:
         return {}
-    wires = [job_id.to_wire() for job_id in job_ids]
-    placeholders = ",".join("?" for _ in wires)
-    with queries.read_snapshot() as snapshot:
-        jobs = JOB_SCHEDULING_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} "
-                f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id IN ({placeholders})",
-                tuple(wires),
-            ),
-        )
-    return {job.job_id: job for job in jobs}
+    with queries.read_snapshot() as tx:
+        rows = tx.execute(_JOB_SCHEDULING_QUERY, {"job_ids": list(job_ids)}).all()
+    return {row.job_id: _row_to_scheduling_row(row) for row in rows}
 
 
 def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobReservationRow]:
@@ -444,21 +660,8 @@ def _get_running_tasks_with_band_and_value(
     budget cliff — the source of mutual same-band preemption between two
     users sitting at their limits.
     """
-    with db.read_snapshot() as q:
-        rows = q.raw(
-            "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
-            "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
-            "jc.has_coscheduling "
-            "FROM tasks t "
-            "JOIN job_config jc ON jc.job_id = t.job_id "
-            "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
-            (job_pb2.TASK_STATE_RUNNING,),
-            decoders={
-                "task_id": JobName.from_wire,
-                "priority_band": int,
-                "worker_id": WorkerId,
-            },
-        )
+    with db.read_snapshot() as tx:
+        rows = tx.execute(_RUNNING_TASKS_WITH_BAND_QUERY, {"state": job_pb2.TASK_STATE_RUNNING}).all()
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
@@ -658,24 +861,18 @@ def _run_preemption_pass(
 
 def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
-    with queries.read_snapshot() as snapshot:
-        tasks = TASK_ROW_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
-                "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
-                "t.submitted_at_ms ASC, t.priority_insertion ASC",
-                (job_pb2.TASK_STATE_PENDING,),
-            ),
-        )
+    with queries.read_snapshot() as tx:
+        rows = tx.execute(_TASK_ROW_QUERY, {"state": job_pb2.TASK_STATE_PENDING}).all()
+    tasks = [_row_to_task_row(r) for r in rows]
     return [task for task in tasks if task_row_can_be_scheduled(task)]
 
 
-def _sort_pending_tasks_by_resolved_band(store: ControllerStore, pending_tasks: list[TaskRow]) -> list[TaskRow]:
+def _sort_pending_tasks_by_resolved_band(db: ControllerDB, pending_tasks: list[TaskRow]) -> list[TaskRow]:
     """Order pending rows using immutable job_config priority bands."""
     if not pending_tasks:
         return []
-    with store.read_snapshot() as snap:
-        requested_bands = store.jobs.get_priority_bands(snap, {task.job_id for task in pending_tasks})
+    with db.read_snapshot() as tx:
+        requested_bands = reads_jobs.get_priority_bands(tx, {task.job_id for task in pending_tasks})
     return sorted(
         pending_tasks,
         key=lambda task: (
@@ -691,24 +888,12 @@ def _sort_pending_tasks_by_resolved_band(store: ControllerStore, pending_tasks: 
 def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:
     if not task_ids:
         return {}
-    task_wires = [task_id.to_wire() for task_id in task_ids]
-    placeholders = ",".join("?" for _ in task_wires)
-    with queries.read_snapshot() as snapshot:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
-                f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
-                tuple(task_wires),
-            ),
-        )
-        attempts = ATTEMPT_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
-                f"WHERE ta.task_id IN ({placeholders}) "
-                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
-                tuple(task_wires),
-            ),
-        )
+    ids = list(task_ids)
+    with queries.read_snapshot() as tx:
+        task_rows = tx.execute(_TASK_DETAIL_QUERY, {"task_ids": ids}).all()
+        attempt_rows = tx.execute(_ATTEMPT_QUERY, {"task_ids": ids}).all()
+    tasks = [_row_to_task_detail(r) for r in task_rows]
+    attempts = [_row_to_attempt(r) for r in attempt_rows]
     return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
@@ -719,23 +904,16 @@ def _building_counts(
     """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
     if not workers:
         return {}
-    worker_ids = [str(w.worker_id) for w in workers]
-    placeholders = ",".join("?" for _ in worker_ids)
-    sql = (
-        "SELECT t.current_worker_id AS worker_id, COUNT(*) as cnt FROM tasks t "
-        "JOIN jobs j ON t.job_id = j.job_id "
-        f"WHERE t.current_worker_id IN ({placeholders}) "
-        "AND t.state IN (?, ?) "
-        "AND j.is_reservation_holder = 0 "
-        "GROUP BY t.current_worker_id"
-    )
-    with queries.read_snapshot() as q:
-        rows = q.raw(
-            sql,
-            (*worker_ids, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED),
-            decoders={"worker_id": WorkerId, "cnt": int},
-        )
-    return {row.worker_id: row.cnt for row in rows}
+    worker_ids = [w.worker_id for w in workers]
+    with queries.read_snapshot() as tx:
+        rows = tx.execute(
+            _BUILDING_COUNTS_QUERY,
+            {
+                "worker_ids": worker_ids,
+                "states": [job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED],
+            },
+        ).all()
+    return {row.worker_id: int(row.cnt) for row in rows}
 
 
 def _worker_matches_reservation_entry(
@@ -840,14 +1018,12 @@ def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobNam
     Returns the ancestor's JobName, or None if no ancestor has a reservation.
     Uses the has_reservation column on the jobs table.
     """
+    _has_reservation_query = select(jobs_table.c.has_reservation).where(jobs_table.c.job_id == bindparam("job_id"))
     current = job_id.parent
-    with queries.read_snapshot() as q:
+    with queries.read_snapshot() as tx:
         while current is not None:
-            row = q.execute_sql(
-                "SELECT has_reservation FROM jobs WHERE job_id = ?",
-                (current.to_wire(),),
-            ).fetchone()
-            if row is not None and row[0]:
+            row = tx.execute(_has_reservation_query, {"job_id": current}).first()
+            if row is not None and row.has_reservation:
                 return current
             current = current.parent
     return None
@@ -873,11 +1049,9 @@ def _reservation_region_constraints(
         return existing_constraints
 
     claimed_worker_ids = {worker_id for worker_id, claim in claims.items() if claim.job_id == job_id_wire}
-    workers_by_id = {
-        worker.worker_id: worker
-        for worker in healthy_active_workers_with_attributes(queries, health, worker_attrs)
-        if worker.worker_id in claimed_worker_ids
-    }
+    with queries.read_snapshot() as tx:
+        _all_workers = reads_workers.healthy_active_workers_with_attributes(tx, health, worker_attrs)
+    workers_by_id = {worker.worker_id: worker for worker in _all_workers if worker.worker_id in claimed_worker_ids}
     regions: set[str] = set()
     for worker in workers_by_id.values():
         if worker is None:
@@ -1576,7 +1750,7 @@ class Controller:
         assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         max_promotions = self._promotion_bucket.available
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             batch = self._transitions.drain_for_direct_provider(
                 cur,
                 max_promotions=max_promotions,
@@ -1584,7 +1758,7 @@ class Controller:
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         result = provider.sync(batch)
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.apply_direct_provider_updates(cur, result.updates)
         self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
         self._provider_capacity = result.capacity
@@ -1618,11 +1792,11 @@ class Controller:
 
         Only called for the rare jobs that have reservations.
         """
-        with self._db.read_snapshot() as q:
-            row = q.fetchone("SELECT reservation_json FROM job_config WHERE job_id = ?", (job_id.to_wire(),))
-        if row is None or row[0] is None:
+        with self._db.read_snapshot() as tx:
+            row = tx.execute(_RESERVATION_ENTRY_COUNT_QUERY, {"job_id": job_id}).first()
+        if row is None or row.reservation_json is None:
             return 0
-        return len(reservation_entries_from_json(row[0]))
+        return len(reservation_entries_from_json(row.reservation_json))
 
     def _cleanup_stale_claims(self, claims: dict[WorkerId, ReservationClaim] | None = None) -> bool:
         """Remove claims for workers that disappeared or jobs that finished."""
@@ -1645,7 +1819,7 @@ class Controller:
         for wid in stale:
             del claims[wid]
         if stale and persisted:
-            with self._store.transaction() as cur:
+            with self._db.transaction() as cur:
                 self._transitions.replace_reservation_claims(cur, claims)
             log_event("reservation_claims_cleaned", "controller", count=len(stale))
         return bool(stale)
@@ -1662,7 +1836,10 @@ class Controller:
             persisted = True
         claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
         claimed_worker_ids: set[WorkerId] = set(claims.keys())
-        all_workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.worker_attrs)
+        with self._db.read_snapshot() as tx:
+            all_workers = reads_workers.healthy_active_workers_with_attributes(
+                tx, self._health, self._store.worker_attrs
+            )
         changed = False
 
         reservable_states = (
@@ -1692,7 +1869,7 @@ class Controller:
                     changed = True
                     break
         if changed and persisted:
-            with self._store.transaction() as cur:
+            with self._db.transaction() as cur:
                 self._transitions.replace_reservation_claims(cur, claims)
             log_event("reservation_claims_updated", "controller", total_claims=len(claims))
         return changed
@@ -1789,7 +1966,7 @@ class Controller:
             if self._config.dry_run:
                 logger.info("[DRY-RUN] Would update %d reservation claims", len(claims))
             else:
-                with self._store.transaction() as cur:
+                with self._db.transaction() as cur:
                     self._transitions.replace_reservation_claims(cur, claims)
         return claims
 
@@ -1802,10 +1979,12 @@ class Controller:
         """
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
-            pending_tasks = _sort_pending_tasks_by_resolved_band(self._store, _schedulable_tasks(self._db))
-            workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.worker_attrs)
+            pending_tasks = _sort_pending_tasks_by_resolved_band(self._db, _schedulable_tasks(self._db))
             with self._db.read_snapshot() as snap:
-                usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
+                workers = reads_workers.healthy_active_workers_with_attributes(
+                    snap, self._health, self._store.worker_attrs
+                )
+                usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
             snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return _SchedulingStateRead(
             pending_tasks=pending_tasks,
@@ -1893,9 +2072,7 @@ class Controller:
             # downgraded to BATCH while its user was over budget would stay
             # BATCH forever after preemption — ``compute_effective_band`` only
             # demotes, never promotes back to the user's requested band.
-            requested_bands = self._store.jobs.get_priority_bands(
-                budget_snapshot, {task.job_id for task in pending_tasks}
-            )
+            requested_bands = reads_jobs.get_priority_bands(budget_snapshot, {task.job_id for task in pending_tasks})
         user_budget_limits = self._db.get_all_user_budget_limits()
         defaults = self._config.user_budget_defaults
         task_band_map: dict[JobName, int] = {
@@ -2020,7 +2197,7 @@ class Controller:
             )
             for task_id, worker_id in assignments
         ]
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.queue_assignments(cur, command)
         # Wake the polling thread; every tick reconciles every healthy worker,
         # so the new ASSIGNED rows turn into StartTasks RPCs on the next tick.
@@ -2053,7 +2230,7 @@ class Controller:
             # Apply all preemptions in one transaction so slice evictions
             # (N siblings of a coscheduled preemptor) are all-or-nothing.
             if preemptions:
-                with self._store.transaction() as cur:
+                with self._db.transaction() as cur:
                     for preemptor_name, victim_id in preemptions:
                         self._transitions.preempt_task(cur, victim_id, reason=f"Preempted by {preemptor_name}")
                 # Killed-task RPCs land on the next polling tick via the
@@ -2119,13 +2296,14 @@ class Controller:
         if now_ms - self._last_timeout_check_ms < self._TIMEOUT_CHECK_INTERVAL_MS:
             return
         self._last_timeout_check_ms = now_ms
-        timed_out = timed_out_executing_tasks(self._db, now)
+        with self._db.read_snapshot() as tx:
+            timed_out = reads_scheduler.timed_out_executing_tasks(tx, now)
         if not timed_out:
             return
         for task in timed_out:
             logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
         task_ids = {t.task_id for t in timed_out}
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
 
     def _mark_task_unschedulable(self, task: TaskRow) -> None:
@@ -2139,7 +2317,7 @@ class Controller:
         else:
             timeout = None
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.mark_task_unschedulable(
                 cur,
                 task.task_id,
@@ -2150,7 +2328,7 @@ class Controller:
         """Create a scheduling context for the given workers."""
         building_counts = _building_counts(self._db, workers)
         with self._db.read_snapshot() as snap:
-            usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
+            usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return self._scheduler.create_scheduling_context(
             snapshots,
@@ -2182,11 +2360,11 @@ class Controller:
 
         # ── Phase 1: snapshot every healthy worker ───────────────────────
         with self._db.read_snapshot() as snap:
-            addresses = self._store.workers.list_active_healthy(snap)
+            addresses = reads_workers.list_active_healthy(snap, self._health)
             if not addresses:
                 return
             worker_ids = list(addresses)
-            rows = self._store.attempts.reconcile_rows_for_workers(snap, worker_ids)
+            rows = reads_scheduler.reconcile_rows_for_workers(snap, worker_ids)
             templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
             for row in rows:
                 if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
@@ -2318,7 +2496,8 @@ class Controller:
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
-        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.worker_attrs)
+        with self._db.read_snapshot() as tx:
+            workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._store.worker_attrs)
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
@@ -2378,7 +2557,7 @@ class Controller:
         on the heartbeat. Polling-thread heartbeats firing every tick used
         to short-circuit the backoff entirely.
         """
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.apply_heartbeats_batch(cur, requests)
 
     def _terminate_workers(self, worker_ids: list[str], reason: str, sibling_reason: str) -> list[WorkerId]:
@@ -2428,7 +2607,8 @@ class Controller:
 
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
-        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.worker_attrs)
+        with self._db.read_snapshot() as tx:
+            workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._store.worker_attrs)
         demand_entries = compute_demand_entries(
             self._db,
             self._scheduler,
@@ -2441,7 +2621,8 @@ class Controller:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
         result: WorkerStatusMap = {}
         worker_ids = {wid for wid, l in self._health.all().items() if l.active}
-        running_by_worker = running_tasks_by_worker(self._db, worker_ids)
+        with self._db.read_snapshot() as tx:
+            running_by_worker = reads_scheduler.running_tasks_by_worker(tx, worker_ids)
         for wid in worker_ids:
             result[wid] = WorkerStatus(
                 worker_id=wid,

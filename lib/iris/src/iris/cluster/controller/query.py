@@ -13,6 +13,8 @@ import json
 import re
 from dataclasses import dataclass
 
+from sqlalchemy import text
+
 from iris.cluster.controller.db import ControllerDB
 from iris.rpc import query_pb2
 
@@ -53,20 +55,20 @@ def execute_raw_query(
         if re.search(rf"\b{keyword}\b", upper):
             raise ValueError(f"Forbidden SQL keyword: {keyword}")
 
-    with db.read_snapshot() as q:
-        cursor = q.execute_sql(stripped)
-        col_descriptions = cursor.description
-        raw_rows = cursor.fetchall()
+    with db.read_snapshot() as tx:
+        result = tx.execute(text(stripped))
+        col_names = list(result.keys())
+        raw_rows = result.all()
 
-    return _build_result(col_descriptions, raw_rows)
+    return _build_result(col_names, raw_rows)
 
 
 def _build_result(
-    col_descriptions: list[tuple],
-    raw_rows: list[tuple],
+    col_names: list[str],
+    raw_rows: list,
 ) -> QueryResult:
     """Encode cursor results into a QueryResult with JSON-serialized rows."""
-    columns = [query_pb2.ColumnMeta(name=desc[0], type="unknown") for desc in col_descriptions]
+    columns = [query_pb2.ColumnMeta(name=name, type="unknown") for name in col_names]
     rows = [json.dumps([_encode_cell(row[i]) for i in range(len(columns))]) for row in raw_rows]
     return QueryResult(columns=columns, rows=rows)
 
