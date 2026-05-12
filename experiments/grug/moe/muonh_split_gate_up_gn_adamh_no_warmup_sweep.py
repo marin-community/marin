@@ -50,7 +50,7 @@ from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfi
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _GATE_1_POINTS: tuple[tuple[int, float], ...] = (
-    (512, 2.19e17),
+    # Restricted to d768 only for the v2 re-kickoff; d512 already ran under v1.
     (768, 1.70e18),
 )
 _GATE_2_POINTS: tuple[tuple[int, float], ...] = (
@@ -110,7 +110,9 @@ def _build_step(hidden_dim: int, budget: float, run_suffix: str = "") -> Executo
             data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
             output_path=this_output_path(),
             run_id=run_id,
-            resources=versioned(ResourceConfig.with_tpu("v5p-8", regions=("us-east5", "us-central1"))),
+            # us-east5 only: matches the marin-us-east5 output bucket so all
+            # checkpoint reads / writes stay in-region (no cross-region GCS I/O).
+            resources=versioned(ResourceConfig.with_tpu("v5p-8", regions=("us-east5",))),
             steps=versioned(num_steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
@@ -157,7 +159,7 @@ def _build_steps(gate: str, run_suffix: str = "") -> list[ExecutorStep]:
 
 
 _GATE: str = "1"  # "1" | "2" | "both"
-_RUN_SUFFIX: str = "v1"
+_RUN_SUFFIX: str = "v2"
 
 
 if __name__ == "__main__":
