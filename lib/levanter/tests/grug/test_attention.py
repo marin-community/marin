@@ -16,6 +16,8 @@ from levanter.grug.attention import (
 )
 from levanter.grug.flex_attention import (
     grug_flex_mask_mod,
+    grug_tokamax_attention_mask,
+    tokamax_flash_attention,
     tokamax_flex_attention,
     tokamax_flex_attention_with_reference_vjp,
 )
@@ -225,6 +227,74 @@ def test_grug_flex_mask_mod_does_not_call_attention_mask_materialize(monkeypatch
 
     actual = mask_mod((2, 4, 6, 6))
     np.testing.assert_array_equal(jnp.broadcast_to(actual, (2, 4, 6, 6)), jnp.broadcast_to(expected, (2, 4, 6, 6)))
+
+
+def test_grug_tokamax_attention_mask_matches_attention_mask_materialization():
+    pytest.importorskip("tokamax")
+    segment_ids = jnp.array([[0, 0, 1, 1, 1, 2], [2, 2, 0, 0, 1, 1]], dtype=jnp.int32)
+    mask = AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids)
+
+    tokamax_mask = grug_tokamax_attention_mask(mask, q_len=6, k_len=6, batch_size=2)
+    actual = tokamax_mask.as_array(6, 6)
+    expected = mask.materialize_mask(q_len=6, k_len=6)[:, None, :, :]
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_grug_tokamax_attention_mask_rejects_noncontiguous_segment_runs():
+    pytest.importorskip("tokamax")
+    segment_ids = jnp.array([[0, 0, 1, 1, 0, 0]], dtype=jnp.int32)
+    mask = AttentionMask.causal().with_segment_ids(segment_ids)
+
+    with pytest.raises(NotImplementedError, match="contiguous segment-id runs"):
+        grug_tokamax_attention_mask(mask, q_len=6, k_len=6, batch_size=1)
+
+
+def test_grug_tokamax_attention_mask_allows_dynamic_packed_segment_ids_when_explicitly_assumed():
+    pytest.importorskip("tokamax")
+    segment_ids = jnp.array([[0, 0, 1, 1, 2, 2]], dtype=jnp.int32)
+
+    @jax.jit
+    def mask_array(dynamic_segment_ids):
+        mask = AttentionMask.causal(sliding_window=3).with_segment_ids(dynamic_segment_ids)
+        tokamax_mask = grug_tokamax_attention_mask(
+            mask,
+            q_len=6,
+            k_len=6,
+            batch_size=1,
+            assume_packed_segment_ids=True,
+        )
+        return tokamax_mask.as_array(6, 6)
+
+    actual = mask_array(segment_ids)
+    expected = (
+        AttentionMask.causal(sliding_window=3).with_segment_ids(segment_ids).materialize_mask(6, 6)[:, None, :, :]
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_tokamax_flash_xla_attention_grad_matches_reference_with_packed_segments():
+    pytest.importorskip("tokamax")
+    q, k, v = _make_qkv(batch=2, q_len=6, k_len=6, q_heads=4, kv_heads=2)
+    mask = AttentionMask.causal(sliding_window=3).with_segment_ids(
+        jnp.array([[0, 0, 1, 1, 1, 2], [2, 2, 0, 0, 1, 1]], dtype=jnp.int32)
+    )
+    cotangent = jax.random.normal(jax.random.PRNGKey(4), q.shape, dtype=jnp.float32)
+
+    def ref_loss(q_arg, k_arg, v_arg):
+        out = reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
+        return jnp.sum(out * cotangent)
+
+    def flash_loss(q_arg, k_arg, v_arg):
+        out = tokamax_flash_attention(q_arg, k_arg, v_arg, mask, implementation="xla")
+        return jnp.sum(out * cotangent)
+
+    actual = jax.jit(jax.grad(flash_loss, argnums=(0, 1, 2)))(q, k, v)
+    expected = jax.jit(jax.grad(ref_loss, argnums=(0, 1, 2)))(q, k, v)
+
+    for actual_grad, expected_grad in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(actual_grad, expected_grad, atol=2e-4, rtol=2e-4)
 
 
 @pytest.mark.parametrize(

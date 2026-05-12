@@ -432,3 +432,88 @@
   - Forward remains accelerated and avoids full-mask materialization through the index-derived flex `mask_mod`.
   - Backward is correct but not accelerated; the reference-derived pullback materializes the mask and erases the forward-only speedup at fwd+bwd level.
   - Need a follow-up fast-backward issue with acceptance criteria for a no-full-mask VJP kernel.
+
+### 2026-05-11 23:00 PDT - Packed-segment FlashAttention VJP fast path
+- Hypothesis: the representative Grug packed batch can avoid the flex reference pullback by converting causal sliding-window + packed `segment_ids` into Tokamax regular FlashAttention's range mask (`k_start`/`k_end`) and using Tokamax's shipped Pallas FlashAttention VJP.
+- Code changes:
+  - Added `grug_tokamax_attention_mask`, which maps packed self-attention segment IDs to per-token `k_start`/`k_end` ranges without materializing `[B, S, S]`.
+  - Added `tokamax_flash_attention(... implementation={"xla","triton","mosaic"})`.
+  - Made `gpu_flex_pallas_attention` prefer the Tokamax FlashAttention Triton fast path when the Grug mask is range-representable, with a fallback to the existing flex + reference-VJP path on `NotImplementedError`.
+  - Extended `.agents/scripts/grug_gpu_attention_bench.py` to report forward and forward+backward timings plus small q/k/v gradient correctness.
+- Local validation:
+  - `uv run ruff check --fix lib/levanter/src/levanter/grug/flex_attention.py lib/levanter/tests/grug/test_attention.py .agents/scripts/grug_gpu_attention_bench.py`
+  - `uv run --package marin-levanter python -m py_compile lib/levanter/src/levanter/grug/flex_attention.py lib/levanter/tests/grug/test_attention.py .agents/scripts/grug_gpu_attention_bench.py`
+  - `uv run --package marin-levanter pytest lib/levanter/tests/grug/test_attention.py -q`
+  - Result: `26 passed, 3 skipped in 40.70s`.
+  - `uv run pyrefly check lib/levanter/src/levanter/grug/flex_attention.py lib/levanter/tests/grug/test_attention.py .agents/scripts/grug_gpu_attention_bench.py`
+  - Result: `INFO 0 errors`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/flex_attention.py lib/levanter/tests/grug/test_attention.py .agents/scripts/grug_gpu_attention_bench.py`
+  - Result: `OK`.
+- GH200 jobs:
+  - Failed launch: `/dlwh/grug-gpu-attn-fast-bwd-20260512-054939`; inner command incorrectly used `uv run --package marin --extra gpu --extra kernels`, and failed with `Extra kernels is not defined`.
+  - Successful launch: `/dlwh/grug-gpu-attn-fast-bwd-20260512-055007`.
+  - Command:
+    - `KUBECONFIG=$HOME/.kube/cw-rno2a.yaml UV_NO_SYNC=1 uv run --package marin --group dev iris --cluster=coreweave-rno2a job run --job-name grug-gpu-attn-fast-bwd-20260512-055007 --no-wait --max-retries 0 --enable-extra-resources --gpu GH200x1 --cpu 32 --memory 256g --disk 128g -e RUN_ID grug-gpu-attn-fast-bwd-20260512-055007 -e WANDB_ENTITY marin-community -e WANDB_PROJECT marin -e XLA_PYTHON_CLIENT_MEM_FRACTION 0.90 -- uv run --package marin-levanter --extra gpu --extra kernels --group dev python .agents/scripts/grug_gpu_attention_bench.py --implementation all --iters 3 --warmup 1 --dtype bf16 --batch 8 --seq 1024 --q-heads 16 --kv-heads 4 --head-dim 128 --segments 4 --sliding-window 256`
+- GH200 result:
+  - Backend: `backend=gpu devices=['cuda:0']`.
+  - Shape: `B=8 S=1024 Hq=16 Hkv=4 D=128`, BF16, 4 packed segments, causal sliding window 256.
+  - Small correctness shape `B=2 S=64 Hq=4 Hkv=2 D=32`, BF16, 4 packed segments, causal sliding window 16:
+    - `gpu_flex_pallas`/new default FlashAttention path: value `max_abs=0.015625`, `mean_abs=0.000802851`; q/k/v gradients `max_abs=0.03125`, `mean_abs=0.00125566`.
+    - `gpu_flex_pallas_reference_vjp`: value `max_abs=0.015625`, `mean_abs=0.000802851`; q/k/v gradients `max_abs=0`, `mean_abs=0`.
+    - `gpu_flash_triton`: value `max_abs=0.015625`, `mean_abs=0.000802851`; q/k/v gradients `max_abs=0.03125`, `mean_abs=0.00125566`.
+  - Timings:
+    - `reference_xla`: compile+first `1.621834s`, steady `0.937 ms`.
+    - `reference_xla_fwd_bwd`: compile+first `5.271128s`, steady `2.230 ms`.
+    - `gpu_flex_pallas` (new default FlashAttention Triton path): compile+first `0.637144s`, steady `0.165 ms`.
+    - `gpu_flex_pallas_fwd_bwd`: compile+first `3.698227s`, steady `0.739 ms`.
+    - `gpu_flex_pallas_reference_vjp`: compile+first `0.375574s`, steady `0.372 ms`.
+    - `gpu_flex_pallas_reference_vjp_fwd_bwd`: compile+first `5.558864s`, steady `2.393 ms`.
+    - `gpu_flash_triton`: compile+first `0.635042s`, steady `0.172 ms`.
+    - `gpu_flash_triton_fwd_bwd`: compile+first `3.756558s`, steady `0.729 ms`.
+  - Mosaic route:
+    - `gpu_flash_mosaic` failed before timing on GH200 with `ValueError: Dimension to ungroup is not divisible by its index sizes. Group "(qb)" expects size 64, but its indices "b" have combined specified size 128.`
+- Interpretation:
+  - This gives a real forward+backward speedup for the representative packed Grug training shape: `2.230 ms / 0.739 ms = 3.02x` versus reference XLA, and `2.393 ms / 0.739 ms = 3.24x` versus the previous flex + reference-VJP fallback.
+  - The implementation is not a general flex backward. It is a fast path for packed self-attention segment IDs that can be represented as contiguous ranges; arbitrary non-contiguous segment equality still needs flex or a true flex VJP.
+  - Tokamax Mosaic FlashAttention remains blocked on this GQA/range-mask shape; the exact error above is the current minimal blocker to reduce if Mosaic becomes the preferred route.
+
+### 2026-05-11 23:10 PDT - Dynamic segment IDs in the fast VJP path
+- Hypothesis: the packed-segment FlashAttention path also needs to work when `segment_ids` are dynamic JIT inputs, since training batches pass mask data through the compiled step rather than closing over one constant mask.
+- Code changes:
+  - Static segment IDs are still validated for identical q/kv IDs and contiguous runs.
+  - `gpu_flex_pallas_attention` now explicitly assumes packed segment IDs for its preferred FlashAttention route, so dynamic packed training batches can take Tokamax Triton fwd+bwd. The safe flex + reference-VJP path remains selectable with `prefer_flash=False`.
+  - `.agents/scripts/grug_gpu_attention_bench.py` gained `--dynamic-segment-ids` to benchmark the training-shaped case where `segment_ids` are JIT arguments.
+- Local validation:
+  - `uv run --package marin-levanter --extra kernels pytest lib/levanter/tests/grug/test_attention.py -q`
+  - Result: `28 passed, 3 skipped in 16.25s`.
+  - `uv run pyrefly check lib/levanter/src/levanter/grug/flex_attention.py lib/levanter/tests/grug/test_attention.py .agents/scripts/grug_gpu_attention_bench.py`
+  - Result: `INFO 0 errors`.
+  - `./infra/pre-commit.py --fix lib/levanter/src/levanter/grug/flex_attention.py lib/levanter/tests/grug/test_attention.py .agents/scripts/grug_gpu_attention_bench.py .agents/logbooks/grug-gpu-attention.md`
+  - Result: `OK`.
+- GH200 job:
+  - `/dlwh/grug-gpu-attn-fast-bwd-dynamic-20260512-060148`
+  - Command:
+    - `KUBECONFIG=$HOME/.kube/cw-rno2a.yaml UV_NO_SYNC=1 uv run --package marin --group dev iris --cluster=coreweave-rno2a job run --job-name grug-gpu-attn-fast-bwd-dynamic-20260512-060148 --no-wait --max-retries 0 --enable-extra-resources --gpu GH200x1 --cpu 32 --memory 256g --disk 128g -e RUN_ID grug-gpu-attn-fast-bwd-dynamic-20260512-060148 -e WANDB_ENTITY marin-community -e WANDB_PROJECT marin -e XLA_PYTHON_CLIENT_MEM_FRACTION 0.90 -- uv run --package marin-levanter --extra gpu --extra kernels --group dev python .agents/scripts/grug_gpu_attention_bench.py --implementation all --iters 5 --warmup 2 --dtype bf16 --batch 8 --seq 1024 --q-heads 16 --kv-heads 4 --head-dim 128 --segments 4 --sliding-window 256 --dynamic-segment-ids`
+  - Result: succeeded.
+- GH200 results:
+  - Backend: `backend=gpu devices=['cuda:0']`.
+  - Shape: `B=8 S=1024 Hq=16 Hkv=4 D=128`, BF16, 4 packed segments, causal sliding window 256, `dynamic_segment_ids=True`.
+  - Small correctness shape `B=2 S=64 Hq=4 Hkv=2 D=32`, BF16, 4 packed segments, causal sliding window 16:
+    - `gpu_flex_pallas`/new default FlashAttention path: value `max_abs=0.015625`, `mean_abs=0.000802851`; q/k/v gradients `max_abs=0.03125`, `mean_abs=0.00125566`.
+    - `gpu_flex_pallas_reference_vjp`: value `max_abs=0.015625`, `mean_abs=0.000802851`; q/k/v gradients `max_abs=0`, `mean_abs=0`.
+    - `gpu_flash_triton`: value `max_abs=0.015625`, `mean_abs=0.000802851`; q/k/v gradients `max_abs=0.03125`, `mean_abs=0.00125566`.
+  - Timings:
+    - `reference_xla`: compile+first `1.758008s`, steady `0.922 ms`.
+    - `reference_xla_fwd_bwd`: compile+first `5.548442s`, steady `2.200 ms`.
+    - `gpu_flex_pallas` (new default FlashAttention Triton path): compile+first `0.633985s`, steady `0.162 ms`.
+    - `gpu_flex_pallas_fwd_bwd`: compile+first `3.761019s`, steady `0.734 ms`.
+    - `gpu_flex_pallas_reference_vjp`: compile+first `0.376657s`, steady `0.371 ms`.
+    - `gpu_flex_pallas_reference_vjp_fwd_bwd`: compile+first `5.704700s`, steady `2.355 ms`.
+    - `gpu_flash_triton`: compile+first `0.640811s`, steady `0.162 ms`.
+    - `gpu_flash_triton_fwd_bwd`: compile+first `3.728598s`, steady `0.731 ms`.
+  - Mosaic route:
+    - `gpu_flash_mosaic` failed before timing with `ValueError: Dimension to ungroup is not divisible by its index sizes. Group "(qb)" expects size 64, but its indices "b" have combined specified size 128.`
+- Interpretation:
+  - Dynamic packed segment IDs do take the fast Tokamax FlashAttention Triton VJP route.
+  - Speedup is `2.200 ms / 0.734 ms = 3.00x` versus reference XLA fwd+bwd and `2.355 ms / 0.734 ms = 3.21x` versus flex + reference VJP.
+  - Caveat: Tokamax's shipped Triton VJP currently converts the structured range mask through `Mask.as_array(...)` internally before launching its backward kernels. This is still much faster at the benchmark shape, but it does not satisfy the stronger no-full-mask-materialization goal for backward memory scaling. Issue #5658 should stay open for a range-aware backward that consumes `k_start`/`k_end` directly.
