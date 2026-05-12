@@ -9,7 +9,7 @@ from typing import Literal
 import jax
 from jaxtyping import Array, Bool, Float
 
-from levanter.grug.attention import AttentionMask
+from levanter.grug.attention import AttentionMask, reference_attention
 
 
 FlexMaskMod = Callable[[tuple[int, ...]], Bool[jax.Array, "..."]]
@@ -141,16 +141,51 @@ def tokamax_flex_attention(
     return out.astype(v.dtype)
 
 
+def tokamax_flex_attention_with_reference_vjp(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | None,
+    *,
+    implementation: FlexImplementation,
+) -> Float[Array, "B Q Hq D"]:
+    """Run Tokamax flex attention with a reference-derived VJP for q/k/v."""
+
+    @jax.custom_vjp
+    def _attention(q_arg, k_arg, v_arg):
+        return tokamax_flex_attention(q_arg, k_arg, v_arg, mask, implementation=implementation)
+
+    def _attention_fwd(q_arg, k_arg, v_arg):
+        out = tokamax_flex_attention(q_arg, k_arg, v_arg, mask, implementation=implementation)
+        return out, (q_arg, k_arg, v_arg)
+
+    def _attention_bwd(residuals, cotangent):
+        q_arg, k_arg, v_arg = residuals
+
+        def _reference(q_ref, k_ref, v_ref):
+            return reference_attention(q_ref, k_ref, v_ref, mask, logits_dtype=jax.numpy.float32)
+
+        _, pullback = jax.vjp(_reference, q_arg, k_arg, v_arg)
+        return pullback(cotangent)
+
+    _attention.defvjp(_attention_fwd, _attention_bwd)
+    return _attention(q, k, v)
+
+
 def gpu_flex_pallas_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | None,
+    *,
+    use_reference_vjp: bool = True,
 ) -> Float[Array, "B Q Hq D"]:
     """Run Grug attention through Tokamax's experimental Pallas-Triton flex backend."""
     if jax.default_backend() != "gpu":
         raise NotImplementedError("gpu_flex_pallas requires the JAX GPU backend.")
     try:
+        if use_reference_vjp:
+            return tokamax_flex_attention_with_reference_vjp(q, k, v, mask, implementation="pallas_triton")
         return tokamax_flex_attention(q, k, v, mask, implementation="pallas_triton")
     except ImportError as exc:
         raise NotImplementedError(

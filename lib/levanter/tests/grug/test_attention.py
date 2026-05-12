@@ -14,7 +14,11 @@ from levanter.grug.attention import (
     gpu_xla_attention,
     reference_attention,
 )
-from levanter.grug.flex_attention import grug_flex_mask_mod, tokamax_flex_attention
+from levanter.grug.flex_attention import (
+    grug_flex_mask_mod,
+    tokamax_flex_attention,
+    tokamax_flex_attention_with_reference_vjp,
+)
 
 
 def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 4, kv_heads: int = 2):
@@ -279,6 +283,29 @@ def test_tokamax_flex_xla_attention_grad_matches_reference_with_segments():
 
     actual = jax.grad(flex_loss, argnums=(0, 1, 2))(q, k, v)
     expected = jax.grad(ref_loss, argnums=(0, 1, 2))(q, k, v)
+
+    for actual_grad, expected_grad in zip(actual, expected, strict=True):
+        np.testing.assert_allclose(actual_grad, expected_grad, atol=2e-4, rtol=2e-4)
+
+
+def test_tokamax_flex_attention_reference_vjp_matches_reference_with_segments():
+    pytest.importorskip("tokamax")
+    q, k, v = _make_qkv(batch=2, q_len=5, k_len=5, q_heads=4, kv_heads=2)
+    mask = AttentionMask.causal(sliding_window=3).with_segment_ids(
+        jnp.array([[0, 0, 1, 1, 1], [0, 1, 1, 2, 2]], dtype=jnp.int32)
+    )
+    cotangent = jax.random.normal(jax.random.PRNGKey(3), q.shape, dtype=jnp.float32)
+
+    def ref_loss(q_arg, k_arg, v_arg):
+        out = reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
+        return jnp.sum(out * cotangent)
+
+    def flex_loss(q_arg, k_arg, v_arg):
+        out = tokamax_flex_attention_with_reference_vjp(q_arg, k_arg, v_arg, mask, implementation="xla")
+        return jnp.sum(out * cotangent)
+
+    actual = jax.jit(jax.grad(flex_loss, argnums=(0, 1, 2)))(q, k, v)
+    expected = jax.jit(jax.grad(ref_loss, argnums=(0, 1, 2)))(q, k, v)
 
     for actual_grad, expected_grad in zip(actual, expected, strict=True):
         np.testing.assert_allclose(actual_grad, expected_grad, atol=2e-4, rtol=2e-4)
