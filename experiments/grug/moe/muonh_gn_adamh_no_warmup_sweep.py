@@ -12,9 +12,11 @@ Combines two changes vs. the v16 AdamH baseline in ``README.md``:
    ``attn_gated_norm`` and ``mlp_gated_norm``, model-level
    ``embed_gated_norm`` and ``final_gated_norm``) to the AdamH group at
    ``learning_rate``.
-3. Set ``warmup=0`` on the MuonH optimizer (skip the LR warmup that the
-   AdamH baseline heuristic injects). Tests whether MuonH benefits from
-   the warmup in the way AdamH does, or whether it can ramp directly.
+3. Set ``warmup=0`` on the MuonH optimizer. The grug/moe heuristic
+   overrides levanter's default 1% warmup to ``warmup=0.1`` (10% of
+   train steps), so the AdamH baseline burns ~640 / 6,386 steps at
+   d512 ramping LR; this variant skips that entirely and starts at
+   peak LR from step 0.
 
 Gate and run-suffix are pinned at the bottom of this file (``_GATE`` and
 ``_RUN_SUFFIX``). Submit with no env vars:
@@ -66,9 +68,11 @@ def _format_run_id(hidden_dim: int, budget: float, run_suffix: str = "") -> str:
 
 def _muonh_optimizer_from_baseline(base_optimizer: GrugMoeAdamHConfig) -> GrugMoeMuonHConfig:
     """Build a MuonH config that mirrors the baseline AdamH config, but with
-    ``warmup`` zeroed out so the LR schedule starts at peak."""
-    # ``warmup`` is a fraction-of-train-steps float in OptimizerConfig. Setting
-    # it to 0.0 disables the warmup ramp (lr_scheduler still applies decay).
+    ``warmup`` zeroed out so the LR schedule starts at peak.
+
+    The grug/moe heuristic sets ``warmup=0.1`` (10% of train steps); zeroing
+    skips a ~640-step ramp at d512 and ~1,034 at d768.
+    """
     return GrugMoeMuonHConfig(
         learning_rate=base_optimizer.learning_rate,
         adam_lr=base_optimizer.adam_lr,
