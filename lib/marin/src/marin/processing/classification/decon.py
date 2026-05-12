@@ -4,9 +4,8 @@
 """
 Decontamination using rbloom bloom filters.
 
-This module provides two workflows:
-1. DECONTAMINATE: Mark paragraphs that appear in a contamination source
-2. TRAIN_TEST_OVERLAP: Detect train-test overlap using n-gram matching
+Builds a bloom filter from a contamination source (eval data) and marks paragraphs
+in the input data that appear in the filter.
 """
 
 import hashlib
@@ -14,7 +13,6 @@ import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from enum import StrEnum, auto
 
 import draccus
 import dupekit
@@ -35,23 +33,19 @@ from marin.utils import rebase_file_path
 logger = logging.getLogger(__name__)
 
 
-class DeconMode(StrEnum):
-    DECONTAMINATE = auto()
-    TRAIN_TEST_OVERLAP = auto()
-
-
 @dataclass
 class NGramConfig:
     """
     Configuration class for deduplication n-gram settings.
 
     Attributes:
-        ngram_length (int | list[int]): Size of the ngram (e.g. 8) or list of sizes (e.g. [10, 15])
+        ngram_length (int): Size of the ngram (e.g. 8)
         stride (int): Step size when moving through string to generate ngrams
-        overlap_threshold (float): Percentage of duplicate ngrams for a paragraph to be considered duplicate
+        overlap_threshold (float): Minimum fraction of matching ngrams for a paragraph
+            to be recorded as a contaminated span
     """
 
-    ngram_length: int | list[int] = 8
+    ngram_length: int = 8
     stride: int = 0
     overlap_threshold: float = 0.7
 
@@ -59,7 +53,7 @@ class NGramConfig:
 @dataclass(frozen=True)
 class DeconConfig:
     """
-    Configuration class for running decontamination/overlap checks.
+    Configuration class for running decontamination.
 
     Attributes:
         input_path (str | list[str]): Path(s) of files to apply decontamination to.
@@ -69,7 +63,6 @@ class DeconConfig:
         false_positive_rate (float): false positive rate for Bloom filter
         ngram (NGramConfig): settings for ngram matching including length, match threshold, and stride
         processes (int): number of processes to use
-        mode (DeconMode): switch between decontamination (build filter) and regular deduplication
         decontaminate_source (str | None): source to seed bloom filter when decontaminating
         text_field (str): field to use for text content in Parquet files
     """
@@ -81,7 +74,6 @@ class DeconConfig:
     false_positive_rate: float = 0.001
     ngram: NGramConfig | None = None
     processes: int = 1
-    mode: DeconMode = DeconMode.DECONTAMINATE
     decontaminate_source: str | None = None
     text_field: str = "text"
 
@@ -271,89 +263,16 @@ def mark_duplicates_bloom(
     ).results
 
 
-def _run_decontamination(config: DeconConfig):
-    """
-    Decontamination: build filter from contamination source, apply to input (read-only)
-    """
+def decontaminate(config: DeconConfig):
+    """Build a bloom filter from ``decontaminate_source`` and mark matching paragraphs in ``input_path``."""
     if not config.decontaminate_source:
-        raise ValueError("decontaminate_source is required in DECONTAMINATE mode")
+        raise ValueError("decontaminate_source is required")
 
     bloom_path = os.path.join(config.output_path, "bloom", "filter.bin")
     bloom_path = build_filter(config.decontaminate_source, bloom_path, config)
     mark_duplicates_bloom(config.input_path, bloom_path, config.output_path, config)
 
-    return {
-        "success": True,
-        "mode": "decontamination",
-    }
-
-
-def _run_train_test_overlap(config: DeconConfig):
-    """
-    Train-test overlap: build filter from training data, apply to test data for each n-gram size
-    """
-    if not config.decontaminate_source:
-        raise ValueError("decontaminate_source is required in TRAIN_TEST_OVERLAP mode")
-
-    if not config.ngram:
-        raise ValueError("ngram config is required in TRAIN_TEST_OVERLAP mode")
-
-    # Handle multiple n-gram sizes
-    ngram_lengths = (
-        config.ngram.ngram_length if isinstance(config.ngram.ngram_length, list) else [config.ngram.ngram_length]
-    )
-
-    for ngram_len in ngram_lengths:
-        current_ngram_config = NGramConfig(
-            ngram_length=ngram_len,
-            stride=config.ngram.stride,
-            overlap_threshold=config.ngram.overlap_threshold,
-        )
-
-        # Create config for this n-gram size
-        train_config = DeconConfig(
-            input_path=config.decontaminate_source,
-            output_path=config.output_path,
-            ngram=current_ngram_config,
-            text_field=config.text_field,
-            estimated_doc_count=config.estimated_doc_count,
-            false_positive_rate=config.false_positive_rate,
-            processes=config.processes,
-            attribute_name=config.attribute_name,
-        )
-
-        bloom_path = os.path.join(config.output_path, "bloom", f"{ngram_len}.bin")
-        bloom_path = build_filter(config.decontaminate_source, bloom_path, train_config)
-
-        # Step 2: Apply filter to test data
-        test_config = DeconConfig(
-            input_path=config.input_path,
-            output_path=os.path.join(config.output_path, str(ngram_len)),
-            attribute_name=f"{config.attribute_name}_{ngram_len}",
-            ngram=current_ngram_config,
-            text_field=config.text_field,
-            estimated_doc_count=config.estimated_doc_count,
-            false_positive_rate=config.false_positive_rate,
-            processes=config.processes,
-        )
-
-        mark_duplicates_bloom(config.input_path, bloom_path, test_config.output_path, test_config)
-
-    return {
-        "success": True,
-        "mode": "train_test_overlap",
-        "ngram_lengths_processed": ngram_lengths,
-    }
-
-
-def decontaminate(config: DeconConfig):
-    """Main entry point for decontamination workflows."""
-    if config.mode == DeconMode.DECONTAMINATE:
-        return _run_decontamination(config)
-    elif config.mode == DeconMode.TRAIN_TEST_OVERLAP:
-        return _run_train_test_overlap(config)
-    else:
-        raise ValueError(f"Unknown mode {config.mode}")
+    return {"success": True}
 
 
 @draccus.wrap()
