@@ -451,6 +451,14 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         )
         state_callbacks.add_hook(callbacks.pbar_logger(total=trainer.num_train_steps), every=log_every)
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
+        if trainer.forward_progress_timeout is not None:
+            state_callbacks.add_hook(
+                callbacks.ForwardProgressWatchdog(
+                    timeout=trainer.forward_progress_timeout,
+                    check_interval=trainer.forward_progress_check_interval,
+                ),
+                every=1,
+            )
         if profiler_enabled:
             state_callbacks.add_hook(
                 callbacks.profile(

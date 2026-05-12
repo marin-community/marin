@@ -25,6 +25,7 @@ from levanter.callbacks._metrics import (
 )
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
 from levanter.callbacks.profiler import _flush_while_waiting, profile
+from levanter.callbacks.watchdog import ForwardProgressWatchdog
 from levanter.data import DataLoader
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
@@ -233,4 +234,5 @@ __all__ = [
     "pbar_logger",
     "CallbackStateView",
     "StateCallbackRunner",
+    "ForwardProgressWatchdog",
 ]
