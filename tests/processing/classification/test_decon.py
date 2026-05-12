@@ -4,6 +4,7 @@
 import os
 from pathlib import Path
 
+import pytest
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 from marin.utils import fsspec_exists
 from zephyr import load_jsonl
@@ -60,8 +61,7 @@ def test_decontamination(fox_corpus):
 
 
 def test_ngram_decontamination(fox_corpus):
-    """Test n-gram based decontamination"""
-    # Run decontamination with n-grams
+    """N-gram decontamination flags high-overlap paragraphs and gates low-overlap ones via overlap_threshold."""
     config = DeconConfig(
         input_path=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
@@ -78,18 +78,46 @@ def test_ngram_decontamination(fox_corpus):
     assert result["success"]
     assert result["mode"] == "decontamination"
 
-    # Read output
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
 
-    # test_high_overlap has high overlap (>50% of 3-grams match with train_arctic_1)
-    assert len(results_by_id["test_high_overlap"]["attributes"]["overlap"]) == 1
-    assert results_by_id["test_high_overlap"]["attributes"]["overlap"][0][2] > 0.5
+    # test_high_overlap matches train_arctic_1 at >50% of 3-grams → recorded.
+    high_spans = results_by_id["test_high_overlap"]["attributes"]["overlap"]
+    assert len(high_spans) == 1
+    assert high_spans[0][2] >= 0.5
 
-    # test_unique_2 has low/no overlap (less than the high overlap case)
-    assert len(results_by_id["test_unique_2"]["attributes"]["overlap"]) == 1
-    high_overlap_score = results_by_id["test_high_overlap"]["attributes"]["overlap"][0][2]
-    unique_overlap_score = results_by_id["test_unique_2"]["attributes"]["overlap"][0][2]
-    assert unique_overlap_score < high_overlap_score
+    # test_unique_2 has near-zero overlap (different vocabulary) → gated out by threshold=0.5.
+    assert results_by_id["test_unique_2"]["attributes"]["overlap"] == []
+
+
+@pytest.mark.parametrize(
+    "threshold, expect_high_flagged",
+    [(0.0, True), (0.5, True), (0.85, False), (1.0, False)],
+)
+def test_overlap_threshold_gates_spans(fox_corpus, threshold, expect_high_flagged):
+    """Regression: overlap_threshold gates which paragraphs get recorded as contaminated spans.
+
+    Before #5519, NGramConfig.overlap_threshold was configured but ignored — any non-zero
+    score was recorded. This test pins the gating semantics so the bug can't regress.
+    """
+    config = DeconConfig(
+        input_path=fox_corpus["test_dir"],
+        output_path=fox_corpus["output_dir"],
+        decontaminate_source=fox_corpus["train_dir"],
+        attribute_name="overlap",
+        estimated_doc_count=20,
+        false_positive_rate=0.01,
+        ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=threshold),
+        mode=DeconMode.DECONTAMINATE,
+        processes=1,
+    )
+    decontaminate(config)
+    results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
+    spans = results_by_id["test_high_overlap"]["attributes"]["overlap"]
+    if expect_high_flagged:
+        assert spans, f"expected test_high_overlap flagged at threshold={threshold}"
+        assert spans[0][2] >= threshold
+    else:
+        assert spans == [], f"expected test_high_overlap gated out at threshold={threshold}"
 
 
 def test_train_test_overlap(fox_corpus):
