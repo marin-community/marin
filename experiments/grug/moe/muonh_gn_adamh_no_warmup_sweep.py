@@ -106,7 +106,7 @@ def _build_step(hidden_dim: int, budget: float, run_suffix: str = "") -> Executo
             data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
             output_path=this_output_path(),
             run_id=run_id,
-            resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+            resources=versioned(ResourceConfig.with_tpu("v5p-8", regions=("us-east5", "us-central1"))),
             steps=versioned(num_steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
@@ -153,7 +153,7 @@ def _build_steps(gate: str, run_suffix: str = "") -> list[ExecutorStep]:
 
 
 _GATE: str = "1"  # "1" | "2" | "both"
-_RUN_SUFFIX: str = "v1"
+_RUN_SUFFIX: str = "v2"
 
 
 if __name__ == "__main__":
