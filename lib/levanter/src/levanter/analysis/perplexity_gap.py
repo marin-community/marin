@@ -226,17 +226,25 @@ class GapReportBuilder:
             overlap_end = min(byte_end, score_end)
             if overlap_end <= overlap_start:
                 continue
+            overlap_char_start, overlap_char_end = _byte_span_to_char_span(
+                byte_offsets,
+                overlap_start,
+                overlap_end,
+            )
+            overlap_segment = document.text[overlap_char_start:overlap_char_end]
+            if not overlap_segment:
+                continue
 
             segment_loss_a = float(prefix_a[overlap_end] - prefix_a[overlap_start])
             segment_loss_b = float(prefix_b[overlap_end] - prefix_b[overlap_start])
             segment_bytes = int(overlap_end - overlap_start)
             segment_delta_bits = (segment_loss_a - segment_loss_b) * LOG2E
-            bucket = bucket_for_segment(segment)
-            visible = render_visible(segment)
+            bucket = bucket_for_segment(overlap_segment)
+            visible = render_visible(overlap_segment)
             segment_summary = WorstSegment(
                 delta_bits=segment_delta_bits,
-                char_start=match.start(),
-                char_end=match.end(),
+                char_start=overlap_char_start,
+                char_end=overlap_char_end,
                 bytes=segment_bytes,
                 bucket=bucket,
                 text=visible,
@@ -262,11 +270,11 @@ class GapReportBuilder:
                     self._maybe_record_literal_example(
                         literal_key=literal_key,
                         document=document,
-                        segment_text=segment,
-                        segment_byte_start=byte_start,
-                        segment_byte_end=byte_end,
-                        segment_char_start=match.start(),
-                        segment_char_end=match.end(),
+                        segment_text=overlap_segment,
+                        segment_byte_start=overlap_start,
+                        segment_byte_end=overlap_end,
+                        segment_char_start=overlap_char_start,
+                        segment_char_end=overlap_char_end,
                         segment_delta_bits=segment_delta_bits,
                         token_boundary_index_a=token_boundary_index_a,
                         token_boundary_index_b=token_boundary_index_b,
@@ -282,7 +290,7 @@ class GapReportBuilder:
                 "delta_bits": segment_delta_bits,
                 "gap_bpb": segment_delta_bits / segment_bytes,
                 "text": visible,
-                "doc_preview": preview_text_window(document.text, match.start(), match.end()),
+                "doc_preview": preview_text_window(document.text, overlap_char_start, overlap_char_end),
             }
             _push_top_positive(
                 self._top_segments_positive,
@@ -629,6 +637,12 @@ def char_to_byte_offsets(text: str) -> np.ndarray:
         running += len(ch.encode("utf-8"))
         offsets[i] = running
     return offsets
+
+
+def _byte_span_to_char_span(byte_offsets: np.ndarray, byte_start: int, byte_end: int) -> tuple[int, int]:
+    char_start = int(np.searchsorted(byte_offsets, byte_start, side="left"))
+    char_end = int(np.searchsorted(byte_offsets, byte_end, side="left"))
+    return char_start, char_end
 
 
 def manual_special_token_policy(tokenizer: MarinTokenizer) -> tuple[bool, bool]:

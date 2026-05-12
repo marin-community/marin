@@ -172,8 +172,8 @@ def test_gap_report_builder_tracks_whitespace_bucket():
 
 def test_gap_report_builder_scores_only_document_score_span():
     report = GapReportBuilder(model_a_name="a", model_b_name="b", output_path="/tmp/report")
-    prompt = "prompt "
-    target = "answer"
+    prompt = "foo"
+    target = "bar"
     document = RawTextDocument(
         dataset_name="supervised/example",
         tags=("supervised/example",),
@@ -196,12 +196,16 @@ def test_gap_report_builder_scores_only_document_score_span():
     summary = report.build_summary()
     dataset_row = summary["datasets"][0]
     doc_row = summary["top_documents"]["model_a_worse"][0]
+    segment_row = summary["top_segments"]["model_a_worse"][0]
+    literal_row = summary["top_literals"]["model_a_worse"][0]
 
     assert dataset_row["bytes"] == len(target.encode("utf-8"))
     assert math.isclose(dataset_row["delta_bits"], len(target.encode("utf-8")) * gap_analysis.LOG2E)
     assert doc_row["score_byte_start"] == len(prompt.encode("utf-8"))
     assert doc_row["score_byte_end"] == len((prompt + target).encode("utf-8"))
     assert doc_row["worst_text"] == target
+    assert segment_row["text"] == target
+    assert literal_row["name"] == target
 
 
 def test_gap_report_builder_records_per_model_literal_boundaries():
@@ -438,6 +442,27 @@ def test_model_score_files_roundtrip():
     assert loaded_documents[0].tokenized.token_ids.tolist() == tokenized.token_ids.tolist()
     assert loaded_documents[0].tokenized.num_bytes == tokenized.num_bytes
     assert loaded_documents[0].tokenized.byte_starts.tolist() == tokenized.byte_starts.tolist()
+
+
+def test_model_score_report_builder_buckets_only_document_score_span():
+    document = RawTextDocument(
+        dataset_name="paloma/example",
+        tags=("paloma", "paloma/example"),
+        shard_name="docs",
+        row_index=0,
+        text="  ",
+        score_byte_start=1,
+        score_byte_end=2,
+    )
+    report = ModelScoreReportBuilder(model_name="model-a")
+
+    report.add_document(document=document, per_byte_loss=np.asarray([100.0, 1.0], dtype=np.float64))
+
+    summary = report.build_summary()
+
+    assert summary["datasets"][0]["bytes"] == 1
+    assert summary["pattern_buckets"][0]["name"] == "whitespace/single_space"
+    assert summary["pattern_buckets"][0]["bytes"] == 1
 
 
 def test_read_scored_documents_backfills_missing_token_ids():

@@ -22,6 +22,7 @@ from levanter.analysis.perplexity_gap import (
     TokenizedDocument,
     bucket_for_segment,
     write_report_files,
+    _byte_span_to_char_span,
 )
 
 
@@ -102,10 +103,18 @@ class ModelScoreReportBuilder:
             overlap_end = min(byte_end, score_end)
             if overlap_end <= overlap_start:
                 continue
+            overlap_char_start, overlap_char_end = _byte_span_to_char_span(
+                byte_offsets,
+                overlap_start,
+                overlap_end,
+            )
+            overlap_segment = document.text[overlap_char_start:overlap_char_end]
+            if not overlap_segment:
+                continue
 
             segment_loss = float(prefix[overlap_end] - prefix[overlap_start])
             segment_bytes = int(overlap_end - overlap_start)
-            self.bucket_stats[bucket_for_segment(segment)].add(loss=segment_loss, num_bytes=segment_bytes)
+            self.bucket_stats[bucket_for_segment(overlap_segment)].add(loss=segment_loss, num_bytes=segment_bytes)
 
     def build_summary(self) -> dict[str, Any]:
         dataset_rows = [stats.as_dict(name) for name, stats in sorted(self.dataset_stats.items())]
