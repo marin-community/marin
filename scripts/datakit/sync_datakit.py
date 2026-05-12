@@ -32,6 +32,10 @@ For each source, this script builds a single :class:`StepSpec`. The step's
   ``S3FileSystem`` is constructed with ``fixed_upload_size=True`` so R2
   accepts the multipart upload (AWS S3 accepts uniform-size parts too, so
   the flag is harmless there).
+* After all shards complete, copies the leaf's root ``.executor_status``
+  marker as a single follow-up op. Its presence on dst is what whole-source
+  skip keys off — re-runs of an already-synced source short-circuit before
+  any StepSpec is even built.
 
 Per-shard JSONL and per-source executor status all live under
 ``status_prefix`` (default ``gs://marin-us-central1/data/datakit/sync``)
@@ -79,6 +83,12 @@ COPY_CHUNK_BYTES = 8 * 1024 * 1024
 # uses for its intermediate write key. Used to filter orphan leftovers out
 # of source listings (see ``_list_relative_files``).
 _ATOMIC_RENAME_TMP_RE = re.compile(r"\.tmp\.[0-9a-f]{32}$")
+
+# Name of the per-source completion marker that ``marin.execution`` writes
+# at the root of every download leaf. We deliberately exclude it from the
+# batch shards and copy it as the very last step so its presence on dst
+# means "this leaf is fully synced" — enabling whole-source skip on resume.
+_EXECUTOR_STATUS_FILENAME = ".executor_status"
 
 
 # ----------------------------------------------------------------------
@@ -188,13 +198,12 @@ def _copy_shard(
     and synchronous APIs are reentrant.
     """
     src_fs, _ = fsspec.core.url_to_fs(src_dir)
-    # ``fixed_upload_size=True`` is required for Cloudflare R2's multipart
-    # PUT — and harmless on AWS S3, which also accepts uniform parts. It
-    # only matters for the write through ``dst_fs.open(..., "wb")``; the
-    # ``fs.mv`` inside atomic_rename is a single ``CopyObject`` and can
-    # use any S3 client config.
-    dst_kwargs = {"fixed_upload_size": True} if dst_dir.startswith("s3://") else {}
-    dst_fs, _ = fsspec.core.url_to_fs(dst_dir, **dst_kwargs)
+    # ``fixed_upload_size=True`` (set inside ``_open_kwargs_for`` for s3 dests)
+    # is required for Cloudflare R2's multipart PUT and harmless on AWS S3.
+    # It only matters for the write through ``dst_fs.open(..., "wb")``; the
+    # ``fs.mv`` inside atomic_rename is a single ``CopyObject`` and can use
+    # any S3 client config.
+    dst_fs, _ = fsspec.core.url_to_fs(dst_dir, **_open_kwargs_for(dst_dir))
     src_base = src_dir.rstrip("/")
     dst_base = dst_dir.rstrip("/")
 
@@ -225,7 +234,12 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
     Pulls per-file metadata in the same listing call (``detail=True``) so the
     shard hash can incorporate it without a second round trip. Includes files
     whose names start with ``.`` or ``_`` — ``fs.find`` lists all leaf keys;
-    object stores have no concept of hidden files.
+    object stores have no concept of hidden files. Two intentional exclusions:
+
+    * ``.tmp.<uuid.hex>`` orphans from prior interrupted ``atomic_rename`` runs.
+    * The root-level ``.executor_status`` marker — copied separately as the
+      last step (see ``_finalize_executor_status``) so its presence on dst
+      cleanly signals "this leaf is fully synced".
     """
     src_fs, _ = fsspec.core.url_to_fs(src_dir)
     stripped_root = src_fs._strip_protocol(src_dir).rstrip("/")
@@ -238,6 +252,10 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
         if not full.startswith(stripped_root + "/"):
             raise RuntimeError(f"unexpected find result {full!r} under {stripped_root!r}")
         rel = full[len(stripped_root) + 1 :]
+        if rel == _EXECUTOR_STATUS_FILENAME:
+            # Copied separately at the end so its presence is the signal that
+            # the whole leaf is done.
+            continue
         if _ATOMIC_RENAME_TMP_RE.search(rel):
             # Orphans from a prior interrupted sync: ``zephyr.writers.atomic_rename``
             # writes ``<dst>.tmp.<uuid.hex>`` then ``fs.mv``s; if the worker is
@@ -250,6 +268,41 @@ def _list_relative_files(src_dir: str) -> list[tuple[str, str]]:
         logger.warning("Skipped %d atomic_rename temp leftover(s) under %s", skipped_tmp, src_dir)
     entries.sort(key=lambda e: e[0])
     return entries
+
+
+def _executor_status_path(dir_path: str) -> str:
+    """Return ``<dir_path>/.executor_status``."""
+    return f"{dir_path.rstrip('/')}/{_EXECUTOR_STATUS_FILENAME}"
+
+
+def _open_kwargs_for(path: str) -> dict:
+    """Constructor kwargs for the fs at ``path`` — ``fixed_upload_size=True`` for s3 dests."""
+    return {"fixed_upload_size": True} if path.startswith("s3://") else {}
+
+
+def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
+    """Copy ``.executor_status`` from ``src_dir`` to ``dst_dir`` as a single op.
+
+    Runs after the batch Zephyr pipeline completes successfully. The marker's
+    presence on dst is what subsequent runs use to short-circuit the whole
+    leaf (see ``_leaf_already_synced``).
+    """
+    src = _executor_status_path(src_dir)
+    dst = _executor_status_path(dst_dir)
+    src_fs, _ = fsspec.core.url_to_fs(src)
+    if not src_fs.exists(src):
+        logger.warning("source has no %s — not finalizing %s", _EXECUTOR_STATUS_FILENAME, dst_dir)
+        return
+    dst_fs, _ = fsspec.core.url_to_fs(dst, **_open_kwargs_for(dst))
+    _copy_one(src_fs, dst_fs, src, dst)
+    logger.info("Finalized %s", dst)
+
+
+def _leaf_already_synced(dst_dir: str) -> bool:
+    """True if ``<dst_dir>/.executor_status`` already exists on the destination."""
+    dst = _executor_status_path(dst_dir)
+    fs, _ = fsspec.core.url_to_fs(dst)
+    return fs.exists(dst)
 
 
 def _shard(items: list[tuple[str, str]], shard_size: int) -> list[list[tuple[str, str]]]:
@@ -306,6 +359,10 @@ def _upload_dir(
         resources=ResourceConfig(cpu=max(2, copy_threads // 4), ram="4g"),
     )
     ctx.execute(pipeline)
+    # Only now that every other file is at dst, publish ``.executor_status``
+    # — its presence is the canonical "this leaf is fully synced" signal that
+    # lets future runs skip the source entirely.
+    _finalize_executor_status(src_dir, dst_dir)
 
 
 # ----------------------------------------------------------------------
@@ -455,6 +512,22 @@ def _select_sources(names: list[str] | None) -> list[DatakitSource]:
     return [all_src[n] for n in names]
 
 
+def _source_already_synced(source: DatakitSource, canonical_prefix: str, dest_prefix: str) -> bool:
+    """True if every leaf of ``source`` already has ``.executor_status`` on dst.
+
+    Whole-source skip is the right granularity for our pipeline because (a)
+    ``.executor_status`` is only written by ``_finalize_executor_status``
+    after the entire batch completed, and (b) any partial-progress shard
+    markers still live under ``status_prefix`` and would handle in-leaf
+    resume on their own — but if all leaves have the final marker, there's
+    nothing to do for this source.
+    """
+    canonical_leaves = sorted({leaf.output_path for leaf in _leaf_downloads(source.normalized)})
+    if not canonical_leaves:
+        return False
+    return all(_leaf_already_synced(_rebase(leaf, canonical_prefix, dest_prefix)) for leaf in canonical_leaves)
+
+
 def main() -> None:
     args = _parse_args()
     configure_logging()
@@ -470,6 +543,27 @@ def main() -> None:
     logger.info("Syncing %s -> %s", src_prefix, args.dest_prefix)
 
     sources = _select_sources(args.source)
+
+    # Pre-flight: drop sources whose dst already has ``.executor_status`` on
+    # every leaf. Parallelized because each check is one ``fs.exists`` and
+    # the listing can have 100+ sources.
+    canonical_prefix = marin_prefix()
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        already_synced_flags = list(
+            pool.map(
+                lambda s: _source_already_synced(s, canonical_prefix, args.dest_prefix),
+                sources,
+            )
+        )
+    todo: list[DatakitSource] = []
+    for src, done in zip(sources, already_synced_flags, strict=True):
+        if done:
+            logger.info("Skipping %s: dst already has .executor_status on every leaf", src.name)
+        else:
+            todo.append(src)
+    if len(todo) < len(sources):
+        logger.info("Pre-flight: skipped %d/%d already-synced source(s)", len(sources) - len(todo), len(sources))
+
     steps = [
         sync_source_step(
             src,
@@ -479,7 +573,7 @@ def main() -> None:
             copy_threads=args.copy_threads,
             status_prefix=args.status_prefix,
         )
-        for src in sources
+        for src in todo
     ]
 
     logger.info("Built %d sync StepSpec(s)", len(steps))
