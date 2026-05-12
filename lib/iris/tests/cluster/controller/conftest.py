@@ -54,7 +54,6 @@ from iris.cluster.controller.schema import (
     tasks_with_attempts,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -178,12 +177,19 @@ def log_service(state, tmp_path) -> LogServiceImpl:
 @pytest.fixture
 def controller_service(state, log_service, mock_controller, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
+
     return ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
     )
 
 
@@ -198,8 +204,7 @@ def make_controller_state(**kwargs):
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        store = ControllerStore(db)
-        yield ControllerTransitions(store=store, **kwargs)
+        yield ControllerTransitions(db, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

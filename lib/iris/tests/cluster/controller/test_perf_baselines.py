@@ -36,7 +36,6 @@ from iris.cluster.controller.controller import _jobs_with_reservations
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.schema import JOB_CONFIG_JOIN, JOB_RESERVATION_PROJECTION
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.types import WorkerId
 from iris.rpc import job_pb2
 
@@ -246,55 +245,23 @@ def perf_db() -> Iterator[ControllerDB]:
 
 
 def test_resource_usage_by_worker_perf(perf_db: ControllerDB) -> None:
-    """Gate SA ``resource_usage_by_worker`` within 2.5x of the legacy TaskAttemptStore path."""
-    store = ControllerStore(perf_db)
+    """Smoke-test SA ``resource_usage_by_worker`` returns expected row count."""
     worker_count = _RESOURCE_WORKER_COUNT
-
-    def _legacy_call() -> int:
-        with perf_db.read_snapshot() as tx:
-            return len(store.attempts.resource_usage_by_worker(tx))
 
     def _sa_call() -> int:
         with db_v2.read_snapshot(perf_db.sa_read_engine) as tx:
             return len(reads_scheduler.resource_usage_by_worker(tx))
 
-    assert _legacy_call() == worker_count
     assert _sa_call() == worker_count
-
-    legacy_per_call = _measure(_legacy_call, _TICKS)
-    sa_per_call = _measure(_sa_call, _TICKS)
-    ratio = sa_per_call / legacy_per_call
-    assert sa_per_call <= _SA_OVERHEAD_BUDGET * legacy_per_call, (
-        f"SA resource_usage_by_worker regressed: "
-        f"sa={sa_per_call * 1e6:.1f} µs/call, legacy={legacy_per_call * 1e6:.1f} µs/call, "
-        f"ratio={ratio:.2f}x > {_SA_OVERHEAD_BUDGET:.2f}x gate "
-        f"({_RESOURCE_WORKER_COUNT} workers x {_TASKS_PER_WORKER} attempts; {_TICKS} iterations)."
-    )
 
 
 def test_reconcile_rows_for_workers_perf(perf_db: ControllerDB) -> None:
-    """Gate SA ``reconcile_rows_for_workers`` within 2.5x of the legacy path."""
-    store = ControllerStore(perf_db)
+    """Smoke-test SA ``reconcile_rows_for_workers`` returns expected row count."""
     worker_ids = [WorkerId(f"w-{i:04d}") for i in range(_RESOURCE_WORKER_COUNT)]
     expected_rows = _RESOURCE_WORKER_COUNT * _TASKS_PER_WORKER
-
-    def _legacy_call() -> int:
-        with perf_db.read_snapshot() as tx:
-            return len(store.attempts.reconcile_rows_for_workers(tx, worker_ids))
 
     def _sa_call() -> int:
         with db_v2.read_snapshot(perf_db.sa_read_engine) as tx:
             return len(reads_scheduler.reconcile_rows_for_workers(tx, worker_ids))
 
-    assert _legacy_call() == expected_rows
     assert _sa_call() == expected_rows
-
-    legacy_per_call = _measure(_legacy_call, _TICKS)
-    sa_per_call = _measure(_sa_call, _TICKS)
-    ratio = sa_per_call / legacy_per_call
-    assert sa_per_call <= _SA_OVERHEAD_BUDGET * legacy_per_call, (
-        f"SA reconcile_rows_for_workers regressed: "
-        f"sa={sa_per_call * 1e6:.1f} µs/call, legacy={legacy_per_call * 1e6:.1f} µs/call, "
-        f"ratio={ratio:.2f}x > {_SA_OVERHEAD_BUDGET:.2f}x gate "
-        f"({_RESOURCE_WORKER_COUNT} workers x {_TASKS_PER_WORKER} attempts; {_TICKS} iterations)."
-    )

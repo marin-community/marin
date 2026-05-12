@@ -57,7 +57,8 @@ from iris.cluster.controller.db import (
     attempt_is_worker_failure,
     task_row_can_be_scheduled,
 )
-from iris.cluster.controller.projections.endpoints import AddEndpointOutcome
+from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.query import execute_raw_query
 from iris.cluster.controller.reads import jobs as reads_jobs
@@ -81,13 +82,12 @@ from iris.cluster.controller.schema_v2 import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     task_updates_from_proto,
 )
-from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
@@ -451,8 +451,8 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRo
     return tasks_with_attempts([task], attempts)[0]
 
 
-def _read_worker(store: ControllerStore, worker_id: WorkerId) -> WorkerDetailRow | None:
-    with store.read_snapshot() as tx:
+def _read_worker(db: ControllerDB, worker_id: WorkerId) -> WorkerDetailRow | None:
+    with db.read_snapshot() as tx:
         return reads_workers.get_detail(tx, worker_id)
 
 
@@ -574,8 +574,8 @@ class _WorkerDetail:
     running_tasks: frozenset[JobName]
 
 
-def _read_worker_detail(store: ControllerStore, worker_id: WorkerId) -> _WorkerDetail | None:
-    with store.read_snapshot() as tx:
+def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail | None:
+    with db.read_snapshot() as tx:
         worker = reads_workers.get_detail(tx, worker_id)
         if worker is None:
             return None
@@ -985,8 +985,8 @@ def _task_summaries_for_jobs(tx, job_ids: set[JobName]) -> dict[JobName, TaskJob
     return summaries
 
 
-def _worker_roster(store: ControllerStore) -> list[WorkerDetailRow]:
-    with store.read_snapshot() as tx:
+def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
+    with db.read_snapshot() as tx:
         decoded = [
             reads_workers.get_detail(tx, row.worker_id) for row in tx.execute(select(workers_table.c.worker_id)).all()
         ]
@@ -1181,26 +1181,35 @@ class ControllerServiceImpl:
 
     Args:
         transitions: State machine for DB mutations (submit, cancel, register, etc.)
-        store: Controller store bundle (per-entity stores + transaction / read_snapshot).
         controller: Controller runtime for scheduling and worker management
         bundle_store: Bundle store for zip storage.
         log_client: LogClient for reading task logs through LogService.FetchLogs.
+        db: Underlying database connection.
+        health: Worker liveness tracker.
+        endpoints: Endpoint projection (in-memory cache over the endpoints table).
+        worker_attrs: Worker attributes projection.
     """
 
     def __init__(
         self,
         transitions: ControllerTransitions,
-        store: ControllerStore,
         controller: ControllerProtocol,
         bundle_store: BundleStore,
         log_client: LogClient,
+        *,
+        db: ControllerDB,
+        health: WorkerHealthTracker,
+        endpoints: EndpointsProjection,
+        worker_attrs: WorkerAttrsProjection,
         auth: ControllerAuth | None = None,
         system_endpoints: dict[str, str] | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
     ):
         self._transitions = transitions
-        self._store = store
-        self._db = store._db
+        self._db = db
+        self._health = health
+        self._endpoints = endpoints
+        self._worker_attrs = worker_attrs
         self._controller = controller
         self._bundle_store = bundle_store
         self._log_client = log_client
@@ -1720,8 +1729,8 @@ class ControllerServiceImpl:
                     jc_row.res_cpu_millicores, jc_row.res_memory_bytes, jc_row.res_disk_bytes, jc_row.res_device_json
                 )
 
-        proto.status_text_detail_md = self._store.tasks.get_status_text_detail(task_id.to_wire())
-        proto.status_text_summary_md = self._store.tasks.get_status_text_summary(task_id.to_wire())
+        proto.status_text_detail_md = self._transitions.get_status_text_detail(task_id.to_wire())
+        proto.status_text_summary_md = self._transitions.get_status_text_summary(task_id.to_wire())
 
         return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
 
@@ -1747,7 +1756,7 @@ class ControllerServiceImpl:
             if task.state == job_pb2.TASK_STATE_PENDING:
                 proto_task_status.can_be_scheduled = task_row_can_be_scheduled(task)
 
-            proto_task_status.status_text_summary_md = self._store.tasks.get_status_text_summary(task.task_id.to_wire())
+            proto_task_status.status_text_summary_md = self._transitions.get_status_text_summary(task.task_id.to_wire())
 
             task_statuses.append(proto_task_status)
 
@@ -1812,8 +1821,8 @@ class ControllerServiceImpl:
         if request.HasField("query"):
             query.CopyFrom(request.query)
 
-        workers_all = _worker_roster(self._store)
-        liveness_by_id = self._store.health.liveness_many(w.worker_id for w in workers_all)
+        workers_all = _worker_roster(self._db)
+        liveness_by_id = self._health.liveness_many(w.worker_id for w in workers_all)
         filtered = _filter_and_sort_workers(workers_all, liveness_by_id, query)
         total_count = len(filtered)
 
@@ -1931,7 +1940,7 @@ class ControllerServiceImpl:
         if prefix.startswith("/system/"):
             return self._list_system_endpoints(prefix, exact=request.exact)
 
-        endpoints = self._store.endpoints.query(
+        endpoints = self._endpoints.query(
             EndpointQuery(
                 exact_name=prefix if request.exact else None,
                 name_prefix=None if request.exact else prefix,
@@ -1988,8 +1997,8 @@ class ControllerServiceImpl:
 
         status = autoscaler.get_status()
 
-        workers = _worker_roster(self._store)
-        liveness_by_id = self._store.health.liveness_many(w.worker_id for w in workers)
+        workers = _worker_roster(self._db)
+        liveness_by_id = self._health.liveness_many(w.worker_id for w in workers)
         worker_id_to_health: dict[str, bool] = {str(w.worker_id): liveness_by_id[w.worker_id].healthy for w in workers}
 
         # The vm_ids appearing in the autoscaler status are the only candidates
@@ -2127,10 +2136,10 @@ class ControllerServiceImpl:
         # /system/worker/<worker_id>: proxy profile to the worker's own process
         worker_id_str = _parse_worker_target(request.target)
         if worker_id_str is not None:
-            worker = _read_worker(self._store, WorkerId(worker_id_str))
+            worker = _read_worker(self._db, WorkerId(worker_id_str))
             if not worker:
                 raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id_str} not found")
-            if not self._store.health.liveness(worker.worker_id).healthy:
+            if not self._health.liveness(worker.worker_id).healthy:
                 raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id_str} is unavailable")
             forwarded = job_pb2.ProfileTaskRequest(
                 target="/system/process",
@@ -2166,8 +2175,8 @@ class ControllerServiceImpl:
                 )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.target} not yet assigned to a worker")
 
-        worker = _read_worker(self._store, task_worker_id)
-        if not worker or not self._store.health.liveness(task_worker_id).healthy:
+        worker = _read_worker(self._db, task_worker_id)
+        if not worker or not self._health.liveness(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         timeout_ms = (request.duration_seconds or 10) * 1000 + 30000
@@ -2221,12 +2230,12 @@ class ControllerServiceImpl:
         if not request.id:
             raise ConnectError(Code.INVALID_ARGUMENT, "id is required")
 
-        detail = _read_worker_detail(self._store, WorkerId(str(request.id)))
+        detail = _read_worker_detail(self._db, WorkerId(str(request.id)))
         if not detail:
             raise ConnectError(Code.NOT_FOUND, f"No worker found for '{request.id}'")
 
         worker = detail.worker
-        liveness = self._store.health.liveness(worker.worker_id)
+        liveness = self._health.liveness(worker.worker_id)
         worker_health = controller_pb2.Controller.WorkerHealthStatus(
             worker_id=worker.worker_id,
             healthy=liveness.healthy,
@@ -2286,10 +2295,10 @@ class ControllerServiceImpl:
         if worker_id is None:
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}")
 
-        worker = _read_worker(self._store, WorkerId(worker_id))
+        worker = _read_worker(self._db, WorkerId(worker_id))
         if not worker:
             raise ConnectError(Code.NOT_FOUND, f"Worker {worker_id} not found")
-        if not self._store.health.liveness(worker.worker_id).healthy:
+        if not self._health.liveness(worker.worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {worker_id} is unavailable")
 
         try:
@@ -2485,8 +2494,8 @@ class ControllerServiceImpl:
                 )
             raise ConnectError(Code.FAILED_PRECONDITION, f"Task {request.task_id} not assigned to a worker")
 
-        worker = _read_worker(self._store, task_worker_id)
-        if not worker or not self._store.health.liveness(task_worker_id).healthy:
+        worker = _read_worker(self._db, task_worker_id)
+        if not worker or not self._health.liveness(task_worker_id).healthy:
             raise ConnectError(Code.UNAVAILABLE, f"Worker {task_worker_id} is unavailable")
 
         # Proxy to worker

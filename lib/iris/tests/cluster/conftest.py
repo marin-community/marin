@@ -13,12 +13,13 @@ from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -413,9 +414,13 @@ class ServiceTestHarness:
 
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
+
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
-    store = ControllerStore(db)
-    state = ControllerTransitions(store=store)
+    health = WorkerHealthTracker()
+    endpoints = EndpointsProjection(db)
+    worker_attrs = WorkerAttrsProjection(db)
+    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -437,10 +442,13 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
     service = ControllerServiceImpl(
         state,
-        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "k8s_bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=db,
+        health=health,
+        endpoints=endpoints,
+        worker_attrs=worker_attrs,
     )
 
     return ServiceTestHarness(
@@ -454,19 +462,26 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
+
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
-    store = ControllerStore(db)
-    state = ControllerTransitions(store=store)
+    health = WorkerHealthTracker()
+    endpoints = EndpointsProjection(db)
+    worker_attrs = WorkerAttrsProjection(db)
+    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     ctrl = _HarnessController()
     ctrl.has_direct_provider = False
 
     service = ControllerServiceImpl(
         state,
-        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "gcp_bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=db,
+        health=health,
+        endpoints=endpoints,
+        worker_attrs=worker_attrs,
     )
 
     return ServiceTestHarness(

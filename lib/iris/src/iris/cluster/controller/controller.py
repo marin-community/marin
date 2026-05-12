@@ -72,6 +72,8 @@ from iris.cluster.controller.db import (
     job_scheduling_deadline,
     task_row_can_be_scheduled,
 )
+from iris.cluster.controller.projections import assert_owned_tables_not_externally_written
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import jobs as reads_jobs
@@ -101,7 +103,6 @@ from iris.cluster.controller.schema_v2 import (
     tasks_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -1295,7 +1296,11 @@ class Controller:
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
         self._health = WorkerHealthTracker()
-        self._store = ControllerStore(self._db, health=self._health)
+        self._endpoints = EndpointsProjection(self._db)
+        self._worker_attrs = WorkerAttrsProjection(self._db)
+        assert_owned_tables_not_externally_written()
+        self._seed_liveness_from_workers()
+        self._db.register_reopen_hook(self._seed_liveness_from_workers)
 
         # ThreadContainer must be initialized before the log service setup
         # because _start_local_log_server spawns a uvicorn thread.
@@ -1338,8 +1343,10 @@ class Controller:
         logging.getLogger("iris").addHandler(self._log_handler)
 
         self._transitions = ControllerTransitions(
-            store=self._store,
+            self._db,
             health=self._health,
+            endpoints=self._endpoints,
+            worker_attrs=self._worker_attrs,
         )
         self._scheduler = Scheduler()
 
@@ -1347,10 +1354,13 @@ class Controller:
 
         self._service = ControllerServiceImpl(
             self._transitions,
-            self._store,
             controller=self,
             bundle_store=self._bundle_store,
             log_client=self._log_client,
+            db=self._db,
+            health=self._health,
+            endpoints=self._endpoints,
+            worker_attrs=self._worker_attrs,
             auth=config.auth,
             system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
@@ -1426,6 +1436,20 @@ class Controller:
         """
         self._scheduling_wake.set()
         self._polling_wake.set()
+
+    def _seed_liveness_from_workers(self) -> None:
+        """Mark every persisted worker healthy so the scheduler sees them before they ping back.
+
+        Workers that fail to ping within the heartbeat window are timed out
+        by the ping loop. ``find_prunable`` relies on this seed to maintain
+        the invariant that every ``workers`` row has a tracker entry.
+        """
+        now_ms = Timestamp.now().epoch_ms()
+        with self._db.read_snapshot() as q:
+            rows = q.fetchall("SELECT worker_id FROM workers")
+        worker_ids = [WorkerId(str(row["worker_id"])) for row in rows]
+        if worker_ids:
+            self._health.heartbeat(worker_ids, now_ms)
 
     @property
     def started(self) -> bool:
@@ -1837,9 +1861,7 @@ class Controller:
         claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
         claimed_worker_ids: set[WorkerId] = set(claims.keys())
         with self._db.read_snapshot() as tx:
-            all_workers = reads_workers.healthy_active_workers_with_attributes(
-                tx, self._health, self._store.worker_attrs
-            )
+            all_workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         changed = False
 
         reservable_states = (
@@ -1981,9 +2003,7 @@ class Controller:
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
             pending_tasks = _sort_pending_tasks_by_resolved_band(self._db, _schedulable_tasks(self._db))
             with self._db.read_snapshot() as snap:
-                workers = reads_workers.healthy_active_workers_with_attributes(
-                    snap, self._health, self._store.worker_attrs
-                )
+                workers = reads_workers.healthy_active_workers_with_attributes(snap, self._health, self._worker_attrs)
                 usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
             snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return _SchedulingStateRead(
@@ -2497,7 +2517,7 @@ class Controller:
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
         with self._db.read_snapshot() as tx:
-            workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._store.worker_attrs)
+            workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
@@ -2608,7 +2628,7 @@ class Controller:
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
         with self._db.read_snapshot() as tx:
-            workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._store.worker_attrs)
+            workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         demand_entries = compute_demand_entries(
             self._db,
             self._scheduler,

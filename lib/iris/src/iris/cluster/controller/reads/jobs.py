@@ -34,12 +34,12 @@ from rigging.timing import Timestamp
 from sqlalchemy import bindparam, select, text
 
 from iris.cluster.controller.db_v2 import Tx
+from iris.cluster.controller.rows import JobRecomputeBasis
 from iris.cluster.controller.schema_v2 import (
     job_config_table,
     job_workdir_files_table,
     jobs_table,
 )
-from iris.cluster.controller.stores import JobRecomputeBasis
 from iris.cluster.types import TERMINAL_JOB_STATES, JobName
 from iris.rpc import job_pb2
 

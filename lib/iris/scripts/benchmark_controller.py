@@ -45,6 +45,11 @@ from iris.cluster.controller.db import (
     healthy_active_workers_with_attributes,
     running_tasks_by_worker,
 )
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reads import jobs as reads_jobs
+from iris.cluster.controller.reads import scheduler as reads_scheduler
+from iris.cluster.controller.reads import workers as reads_workers
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     JOB_CONFIG_JOIN,
@@ -61,7 +66,6 @@ from iris.cluster.controller.service import (
     _worker_addresses_for_tasks,
     _worker_roster,
 )
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -370,20 +374,21 @@ def benchmark_rpcs(db: ControllerDB) -> None:
 
     # ---- RegisterEndpoint (128/day, p95=245ms) — write txn through add_endpoint. ----
     write_db = clone_db(db)
-    write_store = ControllerStore(write_db)
-    write_txns = ControllerTransitions(store=write_store)
+    write_endpoints = EndpointsProjection(write_db)
+    write_worker_attrs = WorkerAttrsProjection(write_db)
+    write_txns = ControllerTransitions(write_db, endpoints=write_endpoints, worker_attrs=write_worker_attrs)
     try:
         sample = _active_task_sample(write_db, limit=300)
         if sample:
             single_task, single_attempt = sample[0]
 
             def _register_endpoint_one():
-                with write_store.transaction() as cur:
+                with write_db.transaction() as cur:
                     write_txns.add_endpoint(cur, _make_endpoint(single_task, single_attempt))
 
             def _reset_endpoint():
                 write_db.execute("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'")
-                write_store.endpoints.rehydrate()
+                write_endpoints.rehydrate()
 
             bench("RPC: RegisterEndpoint (1 write)", _register_endpoint_one, reset=_reset_endpoint)
 
@@ -395,7 +400,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
         def _register_one():
             register_counter["n"] += 1
             wid = WorkerId(f"bench-reg-{uuid.uuid4().hex[:6]}-{register_counter['n']}")
-            with write_store.transaction() as cur:
+            with write_db.transaction() as cur:
                 write_txns.register_worker(
                     cur,
                     worker_id=wid,
@@ -414,7 +419,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
             burst_counter["n"] += 1
             base = f"bench-burst-{uuid.uuid4().hex[:6]}-{burst_counter['n']}"
             for i in range(100):
-                with write_store.transaction() as cur:
+                with write_db.transaction() as cur:
                     write_txns.register_worker(
                         cur,
                         worker_id=WorkerId(f"{base}-{i}"),
@@ -451,7 +456,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
                     environment=job_pb2.EnvironmentConfig(),
                     resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
                 )
-                with write_store.transaction() as cur:
+                with write_db.transaction() as cur:
                     write_txns.submit_job(cur, jid, req, Timestamp.now())
 
             bench(f"RPC: LaunchJob (replicas={replicas}, WRITE)", _launch)
@@ -460,8 +465,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
         # Pre-clone a dedicated DB so cancel_job has many distinct running
         # jobs to chew through without exhausting them across reset cycles.
         cancel_db = clone_db(db)
-        cancel_store = ControllerStore(cancel_db)
-        cancel_txns = ControllerTransitions(store=cancel_store)
+        cancel_txns = ControllerTransitions(cancel_db)
         try:
             running_rows = cancel_db.fetchall(
                 "SELECT job_id FROM jobs WHERE state = ? AND depth = 1 LIMIT 50",
@@ -476,7 +480,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
                         return
                     jid = cancel_targets[cancel_idx["i"]]
                     cancel_idx["i"] += 1
-                    with cancel_store.transaction() as cur:
+                    with cancel_db.transaction() as cur:
                         cancel_txns.cancel_job(cur, jid, "benchmark")
 
                 bench(
@@ -498,7 +502,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
             print(f"  (heartbeat batch: {len(hb_requests)} workers, {total_t} task updates per call)")
 
             def _apply_hb():
-                with write_store.transaction() as cur:
+                with write_db.transaction() as cur:
                     write_txns.apply_heartbeats_batch(cur, hb_requests)
 
             bench(
@@ -524,7 +528,6 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
-    store = ControllerStore(db, health)
 
     # Inject pending tasks if the production snapshot has none, so we exercise
     # the scheduler's main path. Pick up to 50 running jobs and revert their
@@ -554,8 +557,10 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        with db.read_snapshot() as snap:
-            store.attempts.resource_usage_by_worker(snap)
+        from iris.cluster.controller import db_v2
+
+        with db_v2.read_snapshot(db.sa_read_engine) as snap:
+            reads_scheduler.resource_usage_by_worker(snap)
 
     bench("Scheduling: resource_usage_by_worker (NEW derived query)", _usage_new)
 
@@ -575,10 +580,12 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
+        from iris.cluster.controller import db_v2
+
         _schedulable_tasks(db)
         ws = healthy_active_workers_with_attributes(db, health)
-        with db.read_snapshot() as snap:
-            usage = store.attempts.resource_usage_by_worker(snap)
+        with db_v2.read_snapshot(db.sa_read_engine) as snap:
+            usage = reads_scheduler.resource_usage_by_worker(snap)
         return ws, usage
 
     bench("Scheduling: state read (pending+workers+usage)", _state_read)
@@ -598,8 +605,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- queue_assignments WRITE path ----
     write_db = clone_db(db)
-    write_store = ControllerStore(write_db)
-    write_txns = ControllerTransitions(store=write_store)
+    write_txns = ControllerTransitions(write_db)
     try:
         if pending_tasks and workers:
             worker_list = list(workers)
@@ -645,7 +651,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
                     )
 
             def _do_queue():
-                with write_store.transaction() as cur:
+                with write_db.transaction() as cur:
                     write_txns.queue_assignments(cur, sample_assignments)
 
             bench(
@@ -672,11 +678,10 @@ def benchmark_polling(db: ControllerDB) -> None:
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
-    store = ControllerStore(db, health)
-    txns = ControllerTransitions(store=store, health=health)
+    txns = ControllerTransitions(db, health=health)
 
     with db.read_snapshot() as snap:
-        addresses = store.workers.list_active_healthy(snap)
+        addresses = reads_workers.list_active_healthy(snap, health)
     worker_ids = list(addresses)
     n_workers = len(worker_ids)
     print(f"  (polling shape: {n_workers} active+healthy workers)")
@@ -684,7 +689,7 @@ def benchmark_polling(db: ControllerDB) -> None:
     # ---- list_active_healthy: the snapshot read that drives reconcile. ----
     def _list_active_healthy():
         with db.read_snapshot() as snap:
-            store.workers.list_active_healthy(snap)
+            reads_workers.list_active_healthy(snap, health)
 
     bench("Polling: list_active_healthy (next reconcile batch)", _list_active_healthy)
 
@@ -695,8 +700,10 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-            with db.read_snapshot() as snap:
-                store.attempts.reconcile_rows_for_workers(snap, _ids)
+            from iris.cluster.controller import db_v2
+
+            with db_v2.read_snapshot(db.sa_read_engine) as snap:
+                reads_scheduler.reconcile_rows_for_workers(snap, _ids)
 
         bench(f"Polling: reconcile_rows_for_workers (batch={batch_size})", _reconcile)
 
@@ -730,7 +737,7 @@ def benchmark_polling(db: ControllerDB) -> None:
 
         def _template_first():
             # Fresh transitions to defeat the LRU cache on every call.
-            local = ControllerTransitions(store=store, health=health)
+            local = ControllerTransitions(db, health=health)
             with db.read_snapshot() as snap:
                 local.run_request_template(snap, first_job)
 
@@ -759,8 +766,10 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = JobName.from_wire(str(drain_row["job_id"]))
 
         def _has_unfinished():
-            with db.read_snapshot() as snap:
-                store.jobs.has_unfinished_worker_attempts(snap, drain_jid)
+            from iris.cluster.controller import db_v2
+
+            with db_v2.read_snapshot(db.sa_read_engine) as snap:
+                reads_jobs.has_unfinished_worker_attempts(snap, drain_jid)
 
         bench("Polling: has_unfinished_worker_attempts (drain gate)", _has_unfinished)
 
@@ -774,7 +783,6 @@ def benchmark_dashboard(db: ControllerDB) -> None:
     """Cover ListWorkers, ListTasks, GetSchedulerState, and dashboard reads."""
     health = WorkerHealthTracker()
     _seed_health(db, health)
-    store = ControllerStore(db, health)
 
     def _bench_jobs_in_states():
         placeholders = ",".join("?" for _ in USER_JOB_STATES)
@@ -790,11 +798,11 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     # Worker roster + running map drives ListWorkers.
     def _list_workers():
-        roster = _worker_roster(store)
+        roster = _worker_roster(db)
         if roster:
             running_tasks_by_worker(db, {w.worker_id for w in roster})
 
-    bench(f"RPC: ListWorkers (n={len(_worker_roster(store))})", _list_workers)
+    bench(f"RPC: ListWorkers (n={len(_worker_roster(db))})", _list_workers)
 
     # Sample job for ListTasks.
     sample_row = db.fetchone(
@@ -848,17 +856,17 @@ def benchmark_endpoints(db: ControllerDB) -> None:
     """Endpoint registration, listing, and the fail-burst write storm."""
     health = WorkerHealthTracker()
     _seed_health(db, health)
-    store = ControllerStore(db, health)
+    endpoints = EndpointsProjection(db)
 
-    bench("RPC: ListEndpoints (no prefix)", lambda: store.endpoints.query())
+    bench("RPC: ListEndpoints (no prefix)", lambda: endpoints.query())
     bench(
         "RPC: ListEndpoints (prefix='test')",
-        lambda: store.endpoints.query(EndpointQuery(name_prefix="test")),
+        lambda: endpoints.query(EndpointQuery(name_prefix="test")),
     )
 
     write_db = clone_db(db)
-    write_store = ControllerStore(write_db)
-    write_txns = ControllerTransitions(store=write_store)
+    write_endpoints = EndpointsProjection(write_db)
+    write_txns = ControllerTransitions(write_db, endpoints=write_endpoints)
 
     try:
         sample = _active_task_sample(write_db, limit=300)
@@ -868,7 +876,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
 
         def _reset_endpoints():
             write_db.execute("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'")
-            write_store.endpoints.rehydrate()
+            write_endpoints.rehydrate()
 
         for burst_n in (50, 200):
             if len(sample) < burst_n:
@@ -877,7 +885,7 @@ def benchmark_endpoints(db: ControllerDB) -> None:
 
             def _per_txn(tasks=tasks_for_burst):
                 for t, aid in tasks:
-                    with write_store.transaction() as cur:
+                    with write_db.transaction() as cur:
                         write_txns.add_endpoint(cur, _make_endpoint(t, aid))
 
             bench(
@@ -889,9 +897,9 @@ def benchmark_endpoints(db: ControllerDB) -> None:
             )
 
             def _one_txn(tasks=tasks_for_burst):
-                with write_store.transaction() as cur:
+                with write_db.transaction() as cur:
                     for t, aid in tasks:
-                        write_store.endpoints.add(cur, _make_endpoint(t, aid))
+                        write_endpoints.add(cur, _make_endpoint(t, aid))
 
             bench(
                 f"Endpoints: add_endpoint burst x{burst_n} (1 txn, WRITE)",
@@ -995,7 +1003,6 @@ def _run_apply_under_contention(
     *,
     name: str,
     write_db: ControllerDB,
-    write_store: ControllerStore,
     write_txns: ControllerTransitions,
     heartbeat_requests: list[HeartbeatApplyRequest],
     fail_threads: int = 0,
@@ -1024,7 +1031,7 @@ def _run_apply_under_contention(
         try:
             while not stop.is_set():
                 t0 = time.perf_counter()
-                with write_store.transaction() as cur:
+                with write_db.transaction() as cur:
                     write_txns.apply_heartbeats_batch(cur, heartbeat_requests)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
@@ -1046,7 +1053,7 @@ def _run_apply_under_contention(
             while not stop.is_set():
                 base = f"bench-contend-{uuid.uuid4().hex[:8]}"
                 for i in range(register_burst):
-                    with write_store.transaction() as cur:
+                    with write_db.transaction() as cur:
                         write_txns.register_worker(
                             cur,
                             worker_id=WorkerId(f"{base}-{i}"),
@@ -1066,7 +1073,7 @@ def _run_apply_under_contention(
             i = 0
             while not stop.is_set():
                 t, aid = endpoint_tasks[i % len(endpoint_tasks)]
-                with write_store.transaction() as cur:
+                with write_db.transaction() as cur:
                     write_txns.add_endpoint(cur, _make_endpoint(t, aid))
                 i += 1
         except BaseException as e:
@@ -1126,13 +1133,11 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
     ]
 
     write_db = clone_db(db)
-    write_store = ControllerStore(write_db)
-    write_txns = ControllerTransitions(store=write_store)
+    write_txns = ControllerTransitions(write_db)
     try:
         for scenario in scenarios:
             _run_apply_under_contention(
                 write_db=write_db,
-                write_store=write_store,
                 write_txns=write_txns,
                 heartbeat_requests=heartbeat_requests,
                 **scenario,

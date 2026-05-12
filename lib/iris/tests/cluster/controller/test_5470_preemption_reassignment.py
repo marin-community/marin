@@ -21,8 +21,8 @@ import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.controller import SchedulingOutcome
+from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
-from iris.cluster.controller.stores import WorkerResourceUsage
 from iris.cluster.controller.transitions import (
     Assignment,
     HeartbeatApplyRequest,

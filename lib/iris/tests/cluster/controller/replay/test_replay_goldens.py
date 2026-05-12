@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.types import TERMINAL_TASK_STATES
 from rigging.timing import Timestamp
@@ -37,8 +36,7 @@ def _with_scenario(name: str, fn: Callable[[ControllerDB], None]) -> None:
     with tempfile.TemporaryDirectory(prefix=f"iris-replay-test-{name}-") as db_dir_str:
         db = ControllerDB(db_dir=Path(db_dir_str))
         try:
-            store = ControllerStore(db)
-            transitions = ControllerTransitions(store)
+            transitions = ControllerTransitions(db)
             with frozen_clock() as clock:
                 SCENARIOS[name](transitions, clock)
             fn(db)

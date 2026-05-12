@@ -47,6 +47,11 @@ from iris.cluster.controller.reads import jobs as read_jobs
 from iris.cluster.controller.reads import task_attempts as read_attempts
 from iris.cluster.controller.reads import tasks as read_tasks
 from iris.cluster.controller.reads import workers as read_workers
+from iris.cluster.controller.rows import (
+    ActiveTaskRow,
+    TaskScope,
+    WorkerAttributeParams,
+)
 from iris.cluster.controller.schema import (
     AttemptRow,
     EndpointRow,
@@ -55,11 +60,6 @@ from iris.cluster.controller.schema import (
     WorkerDetailRow,
 )
 from iris.cluster.controller.schema_v2 import worker_attributes_table
-from iris.cluster.controller.stores import (
-    ActiveTaskRow,
-    TaskScope,
-    WorkerAttributeParams,
-)
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.writes import jobs as write_jobs
 from iris.cluster.controller.writes import reservations as write_reservations
@@ -2316,6 +2316,12 @@ class ControllerTransitions:
         """Update the task's markdown status text for UI display (held in memory only)."""
         self._status_text_detail[task_id.to_wire()] = detail_md
         self._status_text_summary[task_id.to_wire()] = summary_md
+
+    def get_status_text_detail(self, task_id_wire: str) -> str:
+        return self._status_text_detail.get(task_id_wire, "")
+
+    def get_status_text_summary(self, task_id_wire: str) -> str:
+        return self._status_text_summary.get(task_id_wire, "")
 
     # --- Endpoint Management ---
 

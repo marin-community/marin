@@ -31,6 +31,7 @@ from sqlalchemy import bindparam, select
 
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db_v2 import Tx
+from iris.cluster.controller.rows import ReconcileRow, WorkerResourceUsage
 from iris.cluster.controller.schema import JobReservationRow
 from iris.cluster.controller.schema_v2 import (
     job_config_table,
@@ -38,7 +39,6 @@ from iris.cluster.controller.schema_v2 import (
     task_attempts_table,
     tasks_table,
 )
-from iris.cluster.controller.stores import ReconcileRow, WorkerResourceUsage
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
 

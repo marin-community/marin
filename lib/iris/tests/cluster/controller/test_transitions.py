@@ -22,6 +22,11 @@ from iris.cluster.controller.db import (
     EndpointQuery,
     attempt_is_terminal,
 )
+
+# =============================================================================
+# Test Helpers
+# =============================================================================
+from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
@@ -29,14 +34,6 @@ from iris.cluster.controller.schema import (
     TASK_DETAIL_PROJECTION,
     WORKER_DETAIL_PROJECTION,
     EndpointRow,
-)
-
-# =============================================================================
-# Test Helpers
-# =============================================================================
-from iris.cluster.controller.stores import (
-    ControllerStore,
-    WorkerResourceUsage,
 )
 from iris.cluster.controller.transitions import (
     MAX_REPLICAS_PER_JOB,
@@ -3001,7 +2998,7 @@ def test_snapshot_round_trip_preserves_reservation_holder(state):
         checkpoint_path = Path(tmpdir) / "controller.sqlite3"
         state._db.backup_to(checkpoint_path)
         restored_db = ControllerDB(db_dir=Path(tmpdir))
-        restored_state = ControllerTransitions(store=ControllerStore(restored_db))
+        restored_state = ControllerTransitions(restored_db)
 
         restored_holder = _query_job(restored_state, holder_job_id)
         assert restored_holder is not None
