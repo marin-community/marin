@@ -41,7 +41,8 @@ from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfi
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _GATE_1_POINTS: tuple[tuple[int, float], ...] = (
-    (512, 2.19e17),
+    # v2 d512 already finished (paloma=3.7293, 1.50x effective speedup vs baseline).
+    # d768 v2 crashed at step 2,352/10,343; resubmit just this point under same v2 name.
     (768, 1.70e18),
 )
 _GATE_2_POINTS: tuple[tuple[int, float], ...] = (
@@ -106,7 +107,8 @@ def _build_step(hidden_dim: int, budget: float, run_suffix: str = "") -> Executo
             data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
             output_path=this_output_path(),
             run_id=run_id,
-            resources=versioned(ResourceConfig.with_tpu("v5p-8", regions=("us-east5", "us-central1"))),
+            # us-east5 only so checkpoint I/O matches the marin-us-east5 output bucket.
+            resources=versioned(ResourceConfig.with_tpu("v5p-8", regions=("us-east5",))),
             steps=versioned(num_steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
