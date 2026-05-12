@@ -11,12 +11,11 @@ store.
 
 Levels are time-ordered: every fresh flush emits an L0 segment. The
 planner promotes L_n → L_{n+1} when the longest contiguous run of L_n
-segments hits the byte target for that tier, or when the oldest run
-has been sitting longer than ``max_segment_age_sec`` — the lever that
-keeps low-volume / bursty namespaces from leaking small files at any
-non-terminal tier. Without an age trigger at L1+ the byte-target alone
-strands hundreds of sub-target L1 files for namespaces whose L0 ages
-out in small pieces.
+segments hits the byte target for that tier, or when its length hits
+``max_segments_per_level``. The count trigger directly bounds per-read
+fanout, which scales with the live non-terminal segment count — without
+it, the byte-target alone strands hundreds of sub-target files for
+namespaces whose L0 flushes are small.
 
 The terminal level is ``len(level_targets)``: segments at that tier
 never re-compact. They are also the only tier eligible for eviction
@@ -68,7 +67,18 @@ class CompactionConfig:
 
     level_targets: tuple[int, ...] = (64 * _MiB, 256 * _MiB)
     check_interval_sec: float = 30.0
-    max_segment_age_sec: float = 300.0
+    # Per-level fanout cap. Promotes a non-terminal level once its
+    # contiguous run reaches this many segments, even if the byte target
+    # isn't met. Bounds per-query parquet-open overhead. Low-volume
+    # namespaces deliberately leave small segments at L0 until either
+    # byte target or this count fires — L0 is local-only and disk loss
+    # is acceptable (durability comes from L>=1 GCS sync).
+    #
+    # Tuned so a slow namespace flushing ~1 L0/min produces ~1-2 L2/day:
+    # with two non-terminal tiers (L0, L1) the total fan-in factor is
+    # count^2; 1440 L0/day / 32^2 ≈ 1.4 L2/day. Worst-case non-terminal
+    # read fanout is 2*count parquet files.
+    max_segments_per_level: int = 32
     max_segments_per_namespace: int = 1000
     max_bytes_per_namespace: int = 100 * 1024**3
 
@@ -99,7 +109,7 @@ class Compactor:
         """Segments at this level are never re-compacted."""
         return len(self.config.level_targets)
 
-    def plan(self, segments: Sequence[SegmentRow], now_ms: int) -> CompactionJob | None:
+    def plan(self, segments: Sequence[SegmentRow]) -> CompactionJob | None:
         """Return the next merge job, or ``None`` if nothing is due.
 
         Walks tiers from L0 upward and returns the first promotable run.
@@ -120,10 +130,8 @@ class Compactor:
             for run in _contiguous_runs(at_level):
                 if _run_bytes(run) >= target:
                     return _build_job(_take_until_target(run, target), output_level=n + 1)
-                if self.config.max_segment_age_sec > 0:
-                    oldest_age_sec = (now_ms - run[0].created_at_ms) / 1000.0
-                    if oldest_age_sec >= self.config.max_segment_age_sec:
-                        return _build_job(_take_until_target(run, target), output_level=n + 1)
+                if len(run) >= self.config.max_segments_per_level:
+                    return _build_job(_take_until_target(run, target), output_level=n + 1)
         return None
 
     def merge_sql(self, job: CompactionJob, *, schema: Schema, staging_path: Path) -> str:

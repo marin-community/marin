@@ -270,8 +270,10 @@ class LocalSegment:
     max_seq: int
     row_count: int
     # ``created_at_ms`` is stamped once at flush/merge time and preserved
-    # across level bumps and catalog reconcile so the planner can age out
-    # quiet non-terminal segments via ``CompactionConfig.max_segment_age_sec``.
+    # across level bumps and catalog reconcile. Currently informational
+    # only — the planner promotes by byte target or segment count, not
+    # age — but kept as the catalog's canonical birth time for ops
+    # tools / future age-based policies.
     created_at_ms: int = 0
     # Typed key-column bounds (Python int / str / float / bool / bytes
     # depending on schema). Stringified only at the catalog boundary in
@@ -930,10 +932,10 @@ class DiskLogNamespace:
         """Build the catalog row that mirrors ``seg``.
 
         ``created_at_ms`` reflects the segment's stamped birth time, never
-        ``now`` — overwriting it would defeat ``max_segment_age_sec`` aging,
-        which the planner reads from the round-trip catalog snapshot every
-        tick. Key bounds are stringified here because the catalog stores
-        them in a generic TEXT column.
+        ``now`` — overwriting it on a tick would defeat any future age-based
+        policy and would mislead ops queries that report segment age. Key
+        bounds are stringified here because the catalog stores them in a
+        generic TEXT column.
         """
         return SegmentRow(
             namespace=self.name,
@@ -1017,7 +1019,7 @@ class DiskLogNamespace:
         """
         with self._insertion_lock:
             segment_rows = [self._segment_to_row(s) for s in self._local_segments]
-        job = self._compactor.plan(segment_rows, now_ms=int(time.time() * 1000))
+        job = self._compactor.plan(segment_rows)
         if job is None:
             return False
         self._run_job(job)
