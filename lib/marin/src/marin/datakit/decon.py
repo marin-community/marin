@@ -196,6 +196,12 @@ def _build_filter(
     Sidecar schema: ``hash: uint64, eval_id: string`` (flattened — one row per
     ``(hash, eval_id)`` pair, with the hash deduped *within* a single eval
     record). Inter-record duplicates are allowed; joins handle them naturally.
+
+    Single-process by design: the build is never the bottleneck (~seconds for a
+    full lm-eval-style suite, vs. hours for marking over a pretraining corpus).
+    If a very large eval suite ever forces this to dominate, parallelize via
+    Zephyr: per-shard ``dupekit.Bloom`` + shared shards of the sidecar Parquet,
+    merging blooms with ``bf.update(other)``. The mark side stays as-is.
     """
     bf = dupekit.Bloom(estimated_doc_count, false_positive_rate)
     stats = {"n_records": 0, "n_index_rows": 0}
