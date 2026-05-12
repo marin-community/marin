@@ -3,10 +3,10 @@
 
 """Tests for auth: session cookies, CSRF, default-deny middleware, auth DB isolation, API keys, and JWT."""
 
-import sqlite3
 from unittest.mock import Mock
 
 import pytest
+import sqlalchemy.exc
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import (
@@ -27,6 +27,7 @@ from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc.auth import SESSION_COOKIE, StaticTokenVerifier, hash_token, resolve_auth
 from rigging.timing import Timestamp
+from sqlalchemy import text
 from starlette.testclient import TestClient
 
 from tests.cluster.conftest import fake_log_client_from_service
@@ -254,8 +255,8 @@ def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
 
     with db.read_snapshot() as q:
         for table in ["api_keys", "controller_secrets", "auth.api_keys"]:
-            with pytest.raises(sqlite3.OperationalError, match="no such table"):
-                q.raw(f"SELECT * FROM {table}")
+            with pytest.raises(sqlalchemy.exc.OperationalError, match="no such table"):
+                q.execute(text(f"SELECT * FROM {table}"))
 
 
 def test_write_connection_can_access_auth_tables(db: ControllerDB):
@@ -264,8 +265,8 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
     _get_or_create_signing_key(db)
     create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
-    with db.snapshot() as q:
-        rows = q.raw(f"SELECT key_id FROM {db.api_keys_table}", decoders={"key_id": str})
+    with db.transaction() as q:
+        rows = q.fetchall(text(f"SELECT key_id FROM {db.api_keys_table}"))
         assert len(rows) == 1
         assert rows[0].key_id == "k1"
 

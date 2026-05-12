@@ -21,15 +21,19 @@ import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.controller import SchedulingOutcome
+from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
+from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.transitions import (
     Assignment,
     HeartbeatApplyRequest,
     TaskUpdate,
 )
+from iris.cluster.controller.writes import task_attempts as write_attempts
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from sqlalchemy import select
 
 from .conftest import (
     building_counts as _building_counts,
@@ -98,7 +102,7 @@ def _job_requirements_from_job(job):
 def _read_usage_by_worker(state) -> dict[WorkerId, WorkerResourceUsage]:
     """Snapshot the derived resource-usage map (replaces workers.committed_*)."""
     with state._db.read_snapshot() as snap:
-        return state._store.attempts.resource_usage_by_worker(snap)
+        return reads_scheduler.resource_usage_by_worker(snap)
 
 
 def _tpu_used(usage_map: dict[WorkerId, WorkerResourceUsage], wid: WorkerId) -> int:
@@ -138,13 +142,13 @@ def _schedule_and_commit(scheduler, state):
     for tid, wid in result.assignments:
         task = _query_task(state, tid)
         if task:
-            with state._store.transaction() as cur:
+            with state._db.transaction() as cur:
                 state.queue_assignments(cur, [Assignment(task_id=tid, worker_id=wid)])
     return result
 
 
 def _transition_to_running(state, task):
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -160,7 +164,7 @@ def _transition_to_running(state, task):
 
 def _heartbeat_killed(state, task):
     """Synthesize a terminal heartbeat for ``task``: that is what releases capacity now."""
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -179,7 +183,7 @@ def _heartbeat_killed(state, task):
 def _worker_fail_one_task(state, task):
     """Send WORKER_FAILED for one task. For coscheduled jobs this triggers
     _requeue_coscheduled_siblings which bounces all siblings to PENDING."""
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         result = state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -208,7 +212,7 @@ def _assigned_workers_by_job(assignments):
 def _mark_slice_unhealthy(state, prefix):
     for i in range(VMS_PER_SLICE):
         wid = WorkerId(f"{prefix}-w{i}")
-        state._store.workers.set_health_for_test(wid, healthy=False)
+        state._health.set_health_for_test(wid, healthy=False)
 
 
 @pytest.fixture
@@ -338,21 +342,24 @@ class TestPreemptionReassignment:
         # rows still reference the old worker. We finalize each unfinished
         # attempt on slice-3 directly.
         with state._db.read_snapshot() as snap:
-            placeholders = ",".join("?" for _ in slice3_workers)
             unfinished = snap.fetchall(
-                f"SELECT task_id, attempt_id FROM task_attempts "
-                f"WHERE worker_id IN ({placeholders}) AND finished_at_ms IS NULL",
-                tuple(str(w) for w in slice3_workers),
+                select(
+                    task_attempts_table.c.task_id,
+                    task_attempts_table.c.attempt_id,
+                ).where(
+                    task_attempts_table.c.worker_id.in_([str(w) for w in slice3_workers]),
+                    task_attempts_table.c.finished_at_ms.is_(None),
+                )
             )
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             for row in unfinished:
-                state._store.attempts.mark_finished(
+                write_attempts.mark_finished(
                     cur,
-                    JobName.from_wire(row["task_id"]),
-                    int(row["attempt_id"]),
+                    JobName.from_wire(str(row.task_id)),
+                    int(row.attempt_id),
                     job_pb2.TASK_STATE_KILLED,
-                    finished_at_ms=1,
-                    error="terminal heartbeat (test)",
+                    1,
+                    "terminal heartbeat (test)",
                 )
 
         usage_after_drain = _read_usage_by_worker(state)
@@ -485,18 +492,23 @@ class TestPreemptionReassignment:
                 continue
             with state._db.read_snapshot() as snap:
                 rows = snap.fetchall(
-                    "SELECT task_id, attempt_id FROM task_attempts " "WHERE worker_id = ? AND finished_at_ms IS NULL",
-                    (str(wid),),
+                    select(
+                        task_attempts_table.c.task_id,
+                        task_attempts_table.c.attempt_id,
+                    ).where(
+                        task_attempts_table.c.worker_id == str(wid),
+                        task_attempts_table.c.finished_at_ms.is_(None),
+                    )
                 )
-            with state._store.transaction() as cur:
+            with state._db.transaction() as cur:
                 for row in rows:
-                    state._store.attempts.mark_finished(
+                    write_attempts.mark_finished(
                         cur,
-                        JobName.from_wire(row["task_id"]),
-                        int(row["attempt_id"]),
+                        JobName.from_wire(str(row.task_id)),
+                        int(row.attempt_id),
                         job_pb2.TASK_STATE_KILLED,
-                        finished_at_ms=1,
-                        error="terminal heartbeat (test)",
+                        1,
+                        "terminal heartbeat (test)",
                     )
 
         usage = _read_usage_by_worker(state)

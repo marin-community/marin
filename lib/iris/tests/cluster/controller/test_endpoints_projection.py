@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.controller.db import EndpointQuery
-from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointsProjection
-from iris.cluster.controller.schema import EndpointRow, tasks_table
+from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
+from iris.cluster.controller.schema import tasks_table
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp

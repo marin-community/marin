@@ -15,7 +15,7 @@ those methods directly when needed.
 from dataclasses import dataclass
 from typing import Any
 
-from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -154,8 +154,7 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
     granularity as the main-flavor dispatcher that opens its own tx
     inside each method.
     """
-    store = transitions._store
-    with store.transaction() as cur:
+    with transitions._db.transaction() as cur:
         match event:
             case SubmitJob(job_id, request, ts):
                 return transitions.submit_job(cur, job_id, request, ts)

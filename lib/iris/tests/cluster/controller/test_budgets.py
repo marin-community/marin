@@ -10,6 +10,7 @@ from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.db import ControllerDB, UserBudget
 from iris.rpc import config_pb2, job_pb2
 from rigging.timing import Timestamp
+from sqlalchemy import text
 
 
 @pytest.fixture
@@ -18,21 +19,20 @@ def db(tmp_path: Path) -> ControllerDB:
 
 
 def _create_user(db: ControllerDB, user_id: str, created_at_ms: int = 1000) -> None:
-    db.execute(
-        "INSERT OR IGNORE INTO users (user_id, created_at_ms) VALUES (?, ?)",
-        (user_id, created_at_ms),
-    )
+    db.ensure_user(user_id, Timestamp.from_ms(created_at_ms))
 
 
 def test_migration_creates_user_budgets_table(db: ControllerDB) -> None:
     """The 0013 migration creates the user_budgets table."""
-    row = db.fetchone("SELECT name FROM sqlite_master WHERE type='table' AND name='user_budgets'")
+    with db.read_snapshot() as q:
+        row = q.fetchone(text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_budgets'"))
     assert row is not None
 
 
 def test_migration_adds_priority_band_column(db: ControllerDB) -> None:
     """The 0013 migration adds priority_band column to tasks."""
-    columns = {row[1] for row in db.fetchall("PRAGMA table_info(tasks)")}
+    with db.read_snapshot() as q:
+        columns = {row[1] for row in q.fetchall(text("PRAGMA table_info(tasks)"))}
     assert "priority_band" in columns
 
 
@@ -45,10 +45,13 @@ def test_migration_seeds_budgets_for_existing_users(tmp_path: Path) -> None:
     db = ControllerDB(db_dir=tmp_path)
     _create_user(db, "alice", created_at_ms=5000)
     # Re-run the seed statement (idempotent)
-    db.execute(
-        "INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
-        "SELECT user_id, 0, 2, created_at_ms FROM users"
-    )
+    with db.transaction() as tx:
+        tx.execute(
+            text(
+                "INSERT OR IGNORE INTO user_budgets(user_id, budget_limit, max_band, updated_at_ms) "
+                "SELECT user_id, 0, 2, created_at_ms FROM users"
+            )
+        )
     budget = db.get_user_budget("alice")
     assert budget is not None
     assert budget.budget_limit == 0
@@ -58,8 +61,9 @@ def test_migration_seeds_budgets_for_existing_users(tmp_path: Path) -> None:
 
 def test_pending_index_includes_priority_band(db: ControllerDB) -> None:
     """The rebuilt idx_tasks_pending includes priority_band."""
-    rows = db.fetchall("PRAGMA index_info(idx_tasks_pending)")
-    col_names = [row["name"] for row in rows]
+    with db.read_snapshot() as q:
+        rows = q.fetchall(text("PRAGMA index_info(idx_tasks_pending)"))
+    col_names = [row[2] for row in rows]
     assert "priority_band" in col_names
     # priority_band should come right after state
     assert col_names.index("priority_band") == 1
@@ -201,5 +205,6 @@ def test_reconcile_creates_user_row_for_fk(db: ControllerDB) -> None:
     tiers = [_tier(["henry"], 75000, job_pb2.PRIORITY_BAND_INTERACTIVE)]
     reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
 
-    row = db.fetchone("SELECT user_id FROM users WHERE user_id = ?", ("henry",))
+    with db.read_snapshot() as q:
+        row = q.fetchone(text("SELECT user_id FROM users WHERE user_id = 'henry'"))
     assert row is not None

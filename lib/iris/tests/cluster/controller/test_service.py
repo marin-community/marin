@@ -19,6 +19,7 @@ from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_va
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.db import TaskJobSummary
+from iris.cluster.controller.schema import jobs_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
@@ -36,6 +37,7 @@ from iris.cluster.controller.transitions import (
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import update as sa_update
 
 from tests.cluster.conftest import fake_log_client_from_service
 
@@ -64,7 +66,7 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
         memory_bytes=16 * 1024**3,
         disk_bytes=100 * 1024**3,
     )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.register_or_refresh_worker(
             cur,
             worker_id=worker_id,
@@ -75,10 +77,8 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
 
 
 def _set_job_state(state: ControllerTransitions, job_id: JobName, state_value: int) -> None:
-    state._db.execute(
-        "UPDATE jobs SET state = ? WHERE job_id = ?",
-        (state_value, job_id.to_wire()),
-    )
+    with state._db.transaction() as cur:
+        cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(state=state_value))
 
 
 def _assign_and_transition(
@@ -89,9 +89,9 @@ def _assign_and_transition(
     *,
     error: str | None = None,
 ) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -100,7 +100,7 @@ def _assign_and_transition(
             ),
         )
     if target_state != job_pb2.TASK_STATE_RUNNING:
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_task_updates(
                 cur,
                 HeartbeatApplyRequest(
@@ -435,7 +435,7 @@ def test_get_job_status_reports_has_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
@@ -726,14 +726,20 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -757,14 +763,20 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
     """Cannot submit a child job under another user's hierarchy."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -1061,7 +1073,7 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
@@ -1086,7 +1098,7 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     roots_response = service.list_jobs(
@@ -1172,7 +1184,7 @@ def test_worker_addresses_for_tasks(state, service):
     service.launch_job(make_job_request("assigned-job"), None)
     job_id = JobName.root("test-user", "assigned-job")
     task_id = JobName.from_wire(job_id.to_wire() + "/0")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
 
     # Get tasks with attempts
@@ -1395,6 +1407,9 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
@@ -1404,10 +1419,13 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
     )
 
@@ -1431,6 +1449,9 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     """Worker-role user can call register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
@@ -1440,10 +1461,13 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
     )
 
@@ -1475,11 +1499,11 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, job_id, request, Timestamp.now())
 
     w1 = WorkerId("w1")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.register_or_refresh_worker(
             cur,
             worker_id=w1,
@@ -1623,8 +1647,8 @@ def test_set_task_status_text_persists_via_store(service):
         status_text_summary_md=summary_text,
     )
     service.set_task_status_text(request, None)
-    assert service._store.tasks.get_status_text_detail(task_id.to_wire()) == detail_text
-    assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text
+    assert service._transitions.get_status_text_detail(task_id.to_wire()) == detail_text
+    assert service._transitions.get_status_text_summary(task_id.to_wire()) == summary_text
 
 
 def test_list_tasks_returns_current_attempt_timing(service, state):

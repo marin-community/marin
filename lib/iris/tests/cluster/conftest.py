@@ -15,7 +15,7 @@ from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribut
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.schema import TaskDetailRow, task_attempts_table, tasks_table, workers_table
+from iris.cluster.controller.schema import task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -129,28 +129,6 @@ def make_worker_attrs(
 # ---------------------------------------------------------------------------
 # ServiceTestHarness — parameterized GCP / K8s controller service harness
 # ---------------------------------------------------------------------------
-
-
-def _task_row_to_detail(row) -> TaskDetailRow:
-    """Convert a tasks_table SA row to a TaskDetailRow."""
-    return TaskDetailRow(
-        task_id=row.task_id,
-        job_id=row.job_id,
-        state=int(row.state),
-        current_attempt_id=int(row.current_attempt_id) if row.current_attempt_id is not None else -1,
-        failure_count=int(row.failure_count),
-        preemption_count=int(row.preemption_count),
-        max_retries_failure=int(row.max_retries_failure),
-        max_retries_preemption=int(row.max_retries_preemption),
-        submitted_at=row.submitted_at_ms,
-        priority_band=int(row.priority_band),
-        error=None if row.error is None else str(row.error),
-        exit_code=None if row.exit_code is None else int(row.exit_code),
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        current_worker_id=row.current_worker_id,
-        current_worker_address=None if row.current_worker_address is None else str(row.current_worker_address),
-    )
 
 
 class _HarnessController:
@@ -293,15 +271,13 @@ class ServiceTestHarness:
 
     # ── Private drivers ─────────────────────────────────────────
 
-    def _query_tasks(self, job_id: JobName) -> list[TaskDetailRow]:
+    def _query_tasks(self, job_id: JobName) -> list:
         with self.db.read_snapshot() as tx:
-            rows = tx.fetchall(select(tasks_table).where(tasks_table.c.job_id == job_id))
-        return [_task_row_to_detail(r) for r in rows]
+            return tx.fetchall(select(tasks_table).where(tasks_table.c.job_id == job_id))
 
-    def _query_task(self, task_id: JobName) -> TaskDetailRow | None:
+    def _query_task(self, task_id: JobName):
         with self.db.read_snapshot() as tx:
-            row = tx.fetchone(select(tasks_table).where(tasks_table.c.task_id == task_id))
-        return _task_row_to_detail(row) if row is not None else None
+            return tx.fetchone(select(tasks_table).where(tasks_table.c.task_id == task_id))
 
     def _drive_k8s(self, task_id: JobName, new_state: int) -> None:
         """K8s: drain to create pod, transition pod, sync to apply."""

@@ -94,6 +94,7 @@ from iris.cluster.controller.schema import (
     reservation_claims_table,
     task_attempts_table,
     tasks_table,
+    workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import (
@@ -1336,8 +1337,8 @@ class Controller:
         """
         now_ms = Timestamp.now().epoch_ms()
         with self._db.read_snapshot() as q:
-            rows = q.fetchall("SELECT worker_id FROM workers")
-        worker_ids = [WorkerId(str(row["worker_id"])) for row in rows]
+            rows = q.fetchall(select(workers_table.c.worker_id))
+        worker_ids = [WorkerId(str(row.worker_id)) for row in rows]
         if worker_ids:
             self._health.heartbeat(worker_ids, now_ms)
 

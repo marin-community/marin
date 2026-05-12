@@ -1446,12 +1446,12 @@ class ControllerServiceImpl:
             has_children=has_children,
             **_job_status_counts(summary, job.job_id),
         )
-        if job.started_at:
-            proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at))
-        if job.finished_at:
-            proto_job_status.finished_at.CopyFrom(timestamp_to_proto(job.finished_at))
-        if job.submitted_at:
-            proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at))
+        if job.started_at_ms:
+            proto_job_status.started_at.CopyFrom(timestamp_to_proto(job.started_at_ms))
+        if job.finished_at_ms:
+            proto_job_status.finished_at.CopyFrom(timestamp_to_proto(job.finished_at_ms))
+        if job.submitted_at_ms:
+            proto_job_status.submitted_at.CopyFrom(timestamp_to_proto(job.submitted_at_ms))
 
         reconstructed_request = _reconstruct_launch_job_request(job)
         return controller_pb2.Controller.GetJobStatusResponse(
@@ -2575,7 +2575,7 @@ class ControllerServiceImpl:
                 tasks_table.c.submitted_at_ms,
                 tasks_table.c.priority_band,
                 tasks_table.c.priority_neg_depth,
-                tasks_table.c.root_submitted_at_ms,
+                tasks_table.c.priority_root_submitted_ms,
                 tasks_table.c.priority_insertion,
             )
             pending_raw = snap.execute(

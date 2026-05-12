@@ -400,7 +400,11 @@ class ControllerDB:
         # Build SA engines first so apply_migrations can use raw_connection().
         t0 = time.monotonic()
         self._sa_write_engine: Engine = _make_write_engine(self._db_path, self._auth_db_path)
-        self._sa_read_engine: Engine = _make_read_engine(self._db_path, self._auth_db_path)
+        # Read connections must not see auth tables — pass None so auth is not ATTACHed.
+        self._sa_read_engine: Engine = _make_read_engine(self._db_path, None)
+        # Dedicated read engine backed by the auth DB file directly so auth
+        # read functions do not go through the write connection.
+        self._sa_auth_read_engine: Engine = _make_read_engine(self._auth_db_path, None)
         logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
 
         t0 = time.monotonic()
@@ -501,6 +505,7 @@ class ControllerDB:
     def close(self) -> None:
         self._sa_write_engine.dispose()
         self._sa_read_engine.dispose()
+        self._sa_auth_read_engine.dispose()
 
     @contextmanager
     def transaction(self) -> Iterator[Tx]:
@@ -523,6 +528,18 @@ class ControllerDB:
         loop holds the write lock.
         """
         with read_snapshot(self._sa_read_engine) as tx:
+            yield tx
+
+    @contextmanager
+    def auth_read_snapshot(self) -> Iterator[Tx]:
+        """Read-only snapshot backed by the auth DB (auth.sqlite3) directly.
+
+        Auth tables live in a separate SQLite file. Read connections from
+        ``read_snapshot`` do not ATTACH that file (by design — main-DB readers
+        must not see auth tables). Use this context manager for auth-only
+        read queries so they remain non-blocking while the write lock is free.
+        """
+        with read_snapshot(self._sa_auth_read_engine) as tx:
             yield tx
 
     def apply_migrations(self) -> None:
@@ -774,7 +791,9 @@ class ControllerDB:
 
             # Rebuild SA engines against the freshly-installed DB.
             self._sa_write_engine = _make_write_engine(self._db_path, self._auth_db_path)
-            self._sa_read_engine = _make_read_engine(self._db_path, self._auth_db_path)
+            # Read connections must not see auth tables — pass None so auth is not ATTACHed.
+            self._sa_read_engine = _make_read_engine(self._db_path, None)
+            self._sa_auth_read_engine = _make_read_engine(self._auth_db_path, None)
 
         self.apply_migrations()
         for hook in self._reopen_hooks:

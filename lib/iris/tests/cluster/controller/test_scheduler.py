@@ -311,10 +311,15 @@ def test_scheduler_detects_timed_out_tasks(state):
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.
-    state._db.execute(
-        "UPDATE jobs SET scheduling_deadline_epoch_ms = ? WHERE job_id = ?",
-        (Timestamp.now().epoch_ms() - 2000, JobName.root("test-user", "j1").to_wire()),
-    )
+    from iris.cluster.controller.schema import jobs_table
+    from sqlalchemy import update as sa_update
+
+    with state._db.transaction() as _tx:
+        _tx.execute(
+            sa_update(jobs_table)
+            .where(jobs_table.c.job_id == JobName.root("test-user", "j1"))
+            .values(scheduling_deadline_epoch_ms=Timestamp.now().epoch_ms() - 2000)
+        )
 
     # When building context, the timed-out task should be filtered out
     pending_tasks = _schedulable_tasks(state)

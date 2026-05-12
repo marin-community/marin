@@ -16,11 +16,12 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
 from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.reads.workers import healthy_active_workers_with_attributes
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
-from iris.cluster.controller.schema import EndpointRow, jobs_table, task_attempts_table, tasks_table
+from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.providers.k8s.types import K8sResource
@@ -176,10 +177,6 @@ def log_service() -> LogServiceImpl:
 
 @pytest.fixture
 def service(state, scheduler, tmp_path, log_service):
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-
     controller_mock = _make_controller_mock(state, scheduler)
     return ControllerServiceImpl(
         state,
@@ -187,9 +184,9 @@ def service(state, scheduler, tmp_path, log_service):
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
         db=state._db,
-        health=WorkerHealthTracker(),
-        endpoints=EndpointsProjection(state._db),
-        worker_attrs=WorkerAttrsProjection(state._db),
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
     )
 
 
@@ -204,10 +201,13 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_ser
     controller_mock = _make_controller_mock(state, scheduler, autoscaler=mock_autoscaler)
     return ControllerServiceImpl(
         state,
-        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
     )
 
 
@@ -1155,10 +1155,13 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
     )
     dashboard = ControllerDashboard(svc, log_service=log_service)
     k8s_client = TestClient(dashboard.app)
@@ -1187,10 +1190,13 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     log_service = LogServiceImpl()
     svc = ControllerServiceImpl(
         state,
-        state._store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
     )
     dashboard = ControllerDashboard(svc, log_service=log_service)
     return TestClient(dashboard.app), k8s, provider

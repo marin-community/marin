@@ -50,6 +50,8 @@ class JobNameType(TypeDecorator):
     def process_bind_param(self, value: Any, dialect: Any) -> Any:
         if value is None:
             return None
+        if isinstance(value, str):
+            return value
         return value.to_wire()
 
     def process_result_value(self, value: Any, dialect: Any) -> Any:
@@ -84,6 +86,8 @@ class TimestampMsType(TypeDecorator):
     def process_bind_param(self, value: Any, dialect: Any) -> Any:
         if value is None:
             return None
+        if isinstance(value, int):
+            return value
         return value.epoch_ms()
 
     def process_result_value(self, value: Any, dialect: Any) -> Any:

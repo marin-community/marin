@@ -37,8 +37,9 @@ def test_execute_sa_core(db: ControllerDB) -> None:
     with db.transaction() as cur:
         cur.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "raw_key", "v": "raw_val"})
 
-    rows = db.fetchall("SELECT key FROM kv")
-    assert rows[0]["key"] == "raw_key"
+    with db.read_snapshot() as q:
+        rows = q.fetchall(text("SELECT key FROM kv"))
+    assert rows[0][0] == "raw_key"
 
 
 def test_tx_rejects_raw_strings(db: ControllerDB) -> None:
@@ -54,8 +55,9 @@ def test_executemany_sa_core(db: ControllerDB) -> None:
     with db.transaction() as cur:
         cur.executemany(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), data)
 
-    rows = db.fetchall("SELECT key FROM kv ORDER BY key")
-    assert [r["key"] for r in rows] == ["em1", "em2", "em3"]
+    with db.read_snapshot() as q:
+        rows = q.fetchall(text("SELECT key FROM kv ORDER BY key"))
+    assert [r[0] for r in rows] == ["em1", "em2", "em3"]
 
 
 def test_transaction_rollback_on_exception(db: ControllerDB) -> None:
@@ -65,7 +67,8 @@ def test_transaction_rollback_on_exception(db: ControllerDB) -> None:
             cur.execute(text("INSERT INTO kv (key, value) VALUES (:k, :v)"), {"k": "should_not_persist", "v": "v"})
             raise ValueError("abort")
 
-    rows = db.fetchall("SELECT key FROM kv")
+    with db.read_snapshot() as q:
+        rows = q.fetchall(text("SELECT key FROM kv"))
     assert len(rows) == 0
 
 
@@ -100,7 +103,8 @@ def test_read_snapshot_returns_consistent_data(db: ControllerDB) -> None:
         assert len(rows_after) == 1
 
     # Outside the snapshot, both rows are visible.
-    all_rows = db.fetchall("SELECT key FROM kv ORDER BY key")
+    with db.read_snapshot() as q:
+        all_rows = q.fetchall(text("SELECT key FROM kv ORDER BY key"))
     assert len(all_rows) == 2
 
 
@@ -235,11 +239,21 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
     db = ControllerDB(db_dir=tmp_path)
 
     # Write to an auth table
-    db.execute(
-        "INSERT INTO auth.api_keys (key_id, key_hash, key_prefix, name, user_id, created_at_ms) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("id1", "hash1", "pfx", "test-key", "user1", 1000),
-    )
+    with db.transaction() as cur:
+        cur.execute(
+            text(
+                "INSERT INTO auth.api_keys (key_id, key_hash, key_prefix, name, user_id, created_at_ms) "
+                "VALUES (:key_id, :key_hash, :key_prefix, :name, :user_id, :created_at_ms)"
+            ),
+            {
+                "key_id": "id1",
+                "key_hash": "hash1",
+                "key_prefix": "pfx",
+                "name": "test-key",
+                "user_id": "user1",
+                "created_at_ms": 1000,
+            },
+        )
 
     # Create a copy of the DB to replace from (replace_from expects a directory)
     backup_dir = tmp_path / "backup"
@@ -248,10 +262,11 @@ def test_replace_from_reattaches_auth_db(tmp_path: Path) -> None:
 
     db.replace_from(str(backup_dir))
 
-    # Auth tables should still be accessible after replace_from
-    rows = db.fetchall("SELECT name FROM auth.api_keys WHERE key_hash = 'hash1'")
+    # Auth tables should still be accessible after replace_from via the write connection.
+    with db.transaction() as q:
+        rows = q.fetchall(text("SELECT name FROM auth.api_keys WHERE key_hash = 'hash1'"))
     assert len(rows) == 1
-    assert rows[0]["name"] == "test-key"
+    assert rows[0][0] == "test-key"
     db.close()
 
 
@@ -272,9 +287,10 @@ def test_replace_from_replaces_db_with_live_wal_sidecars_present(tmp_path: Path)
 
     db.replace_from(str(backup_dir))
 
-    rows = db.fetchall("SELECT value FROM meta WHERE key = ?", ("live-key",))
+    with db.read_snapshot() as q:
+        rows = q.fetchall(text("SELECT value FROM meta WHERE key = 'live-key'"))
     assert len(rows) == 1
-    assert rows[0]["value"] == 1
+    assert rows[0][0] == 1
     db.close()
 
 
@@ -307,10 +323,11 @@ def test_migration_with_dml_does_not_leave_open_transaction(tmp_path: Path) -> N
     with db.transaction() as cur:
         cur.execute(text("INSERT INTO dml_test (id, val) VALUES (:id, :val)"), {"id": 2, "val": "after_commit"})
 
-    rows = db.fetchall("SELECT id, val FROM dml_test ORDER BY id")
+    with db.read_snapshot() as q:
+        rows = q.fetchall(text("SELECT id, val FROM dml_test ORDER BY id"))
     assert len(rows) == 2
-    assert rows[0]["val"] == "world"
-    assert rows[1]["val"] == "after_commit"
+    assert rows[0][1] == "world"
+    assert rows[1][1] == "after_commit"
     db.close()
 
 
@@ -331,7 +348,8 @@ def test_auto_vacuum_migrates_legacy_db(tmp_path: Path) -> None:
 
     db = ControllerDB(db_dir=db_dir)
     try:
-        row = db.fetchone("PRAGMA main.auto_vacuum")
+        with db.read_snapshot() as q:
+            row = q.fetchone(text("PRAGMA main.auto_vacuum"))
         assert row[0] == 2, f"expected auto_vacuum=INCREMENTAL(2), got {row[0]}"
     finally:
         db.close()

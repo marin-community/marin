@@ -12,66 +12,65 @@ import pytest
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import db
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.writes import workers as writes_workers
 from iris.cluster.types import WorkerId
+from sqlalchemy import insert, select
 
 
 def _insert_worker(state, worker_id: str) -> WorkerId:
-    """Direct-SQL worker insertion used to drive the FK-cascade scenario."""
+    """SA Core worker insertion used to drive the FK-cascade scenario."""
     with state._db.transaction() as cur:
-        cur.execute(
-            "INSERT INTO workers (worker_id, address) VALUES (?, ?)",
-            (worker_id, f"{worker_id}.example:8080"),
-        )
+        cur.execute(insert(workers_table).values(worker_id=WorkerId(worker_id), address=f"{worker_id}.example:8080"))
     return WorkerId(worker_id)
 
 
 def _insert_worker_attribute(state, worker_id: WorkerId, key: str, value: str) -> None:
-    """Direct-SQL string-typed attribute insertion. The projection update is
+    """SA Core string-typed attribute insertion. The projection update is
     registered via ``set`` so the in-memory cache matches the on-disk row."""
     with state._db.transaction() as cur:
         cur.execute(
-            "INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) "
-            "VALUES (?, ?, ?, ?, NULL, NULL)",
-            (str(worker_id), key, "str", value),
+            insert(worker_attributes_table).values(
+                worker_id=worker_id, key=key, value_type="str", str_value=value, int_value=None, float_value=None
+            )
         )
-        state._store.worker_attrs.set(cur, worker_id, {key: AttributeValue(value)})
+        state._worker_attrs.set(cur, worker_id, {key: AttributeValue(value)})
 
 
 def test_set_and_get_returns_cached_attributes(state):
     worker_id = _insert_worker(state, "w-set")
     _insert_worker_attribute(state, worker_id, "region", "us-east1")
 
-    assert state._store.worker_attrs.get(worker_id) == {"region": AttributeValue("us-east1")}
+    assert state._worker_attrs.get(worker_id) == {"region": AttributeValue("us-east1")}
 
 
 def test_get_missing_worker_returns_empty_dict(state):
-    assert state._store.worker_attrs.get(WorkerId("never-registered")) == {}
+    assert state._worker_attrs.get(WorkerId("never-registered")) == {}
 
 
 def test_all_returns_copy(state):
     worker_id = _insert_worker(state, "w-all")
     _insert_worker_attribute(state, worker_id, "zone", "us-east1-b")
 
-    snapshot = state._store.worker_attrs.all()
+    snapshot = state._worker_attrs.all()
     assert snapshot == {worker_id: {"zone": AttributeValue("us-east1-b")}}
     # Mutating the snapshot must not leak back into the cache.
     snapshot[worker_id]["zone"] = AttributeValue("mutated")
-    assert state._store.worker_attrs.get(worker_id) == {"zone": AttributeValue("us-east1-b")}
+    assert state._worker_attrs.get(worker_id) == {"zone": AttributeValue("us-east1-b")}
 
 
 def test_remove_drops_cache_entry_after_commit(state):
     worker_id = _insert_worker(state, "w-remove")
     _insert_worker_attribute(state, worker_id, "region", "us-east1")
-    assert state._store.worker_attrs.get(worker_id) != {}
+    assert state._worker_attrs.get(worker_id) != {}
 
     with state._db.transaction() as cur:
-        state._store.worker_attrs.remove(cur, worker_id)
+        state._worker_attrs.remove(cur, worker_id)
         # Hook fires post-commit; mid-tx the dict still has the entry.
-        assert state._store.worker_attrs.get(worker_id) != {}
+        assert state._worker_attrs.get(worker_id) != {}
 
-    assert state._store.worker_attrs.get(worker_id) == {}
+    assert state._worker_attrs.get(worker_id) == {}
 
 
 def test_rehydrate_reflects_disk_state(state):
@@ -79,9 +78,14 @@ def test_rehydrate_reflects_disk_state(state):
     # Insert SQL row only, no projection update — the cache is intentionally stale.
     with state._db.transaction() as cur:
         cur.execute(
-            "INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) "
-            "VALUES (?, ?, ?, ?, NULL, NULL)",
-            (str(worker_id), "zone", "str", "us-east1-b"),
+            insert(worker_attributes_table).values(
+                worker_id=worker_id,
+                key="zone",
+                value_type="str",
+                str_value="us-east1-b",
+                int_value=None,
+                float_value=None,
+            )
         )
 
     fresh = WorkerAttrsProjection(state._db)
@@ -99,15 +103,20 @@ def test_atomic_write_through_no_visibility_before_commit(state):
 
     with state._db.transaction() as cur:
         cur.execute(
-            "INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) "
-            "VALUES (?, ?, ?, ?, NULL, NULL)",
-            (str(worker_id), "region", "str", "eu-west1"),
+            insert(worker_attributes_table).values(
+                worker_id=worker_id,
+                key="region",
+                value_type="str",
+                str_value="eu-west1",
+                int_value=None,
+                float_value=None,
+            )
         )
-        state._store.worker_attrs.set(cur, worker_id, {"region": AttributeValue("eu-west1")})
+        state._worker_attrs.set(cur, worker_id, {"region": AttributeValue("eu-west1")})
         # Hooks have not fired yet; cache is still empty for this worker.
-        assert state._store.worker_attrs.get(worker_id) == {}
+        assert state._worker_attrs.get(worker_id) == {}
 
-    assert state._store.worker_attrs.get(worker_id) == {"region": AttributeValue("eu-west1")}
+    assert state._worker_attrs.get(worker_id) == {"region": AttributeValue("eu-west1")}
 
 
 def test_rollback_leaves_cache_untouched(state):
@@ -119,19 +128,21 @@ def test_rollback_leaves_cache_untouched(state):
     with pytest.raises(BoomError):
         with state._db.transaction() as cur:
             cur.execute(
-                "INSERT INTO worker_attributes(worker_id, key, value_type, str_value, int_value, float_value) "
-                "VALUES (?, ?, ?, ?, NULL, NULL)",
-                (str(worker_id), "region", "str", "ap-south1"),
+                insert(worker_attributes_table).values(
+                    worker_id=worker_id,
+                    key="region",
+                    value_type="str",
+                    str_value="ap-south1",
+                    int_value=None,
+                    float_value=None,
+                )
             )
-            state._store.worker_attrs.set(cur, worker_id, {"region": AttributeValue("ap-south1")})
+            state._worker_attrs.set(cur, worker_id, {"region": AttributeValue("ap-south1")})
             raise BoomError
 
-    assert state._store.worker_attrs.get(worker_id) == {}
+    assert state._worker_attrs.get(worker_id) == {}
     with state._db.read_snapshot() as q:
-        row = q.fetchone(
-            "SELECT key FROM worker_attributes WHERE worker_id = ?",
-            (str(worker_id),),
-        )
+        row = q.fetchone(select(worker_attributes_table.c.key).where(worker_attributes_table.c.worker_id == worker_id))
     assert row is None
 
 
@@ -148,12 +159,12 @@ def test_replace_from_resets_cache(state, tmp_path: Path):
     # Mutate post-backup: add a second worker that exists only in the live DB.
     worker_live = _insert_worker(state, "w-live")
     _insert_worker_attribute(state, worker_live, "zone", "us-east1-c")
-    assert state._store.worker_attrs.get(worker_live) != {}
+    assert state._worker_attrs.get(worker_live) != {}
 
     state._db.replace_from(backup_dir)
 
-    assert state._store.worker_attrs.get(worker_id) == {"region": AttributeValue("us-east1")}
-    assert state._store.worker_attrs.get(worker_live) == {}
+    assert state._worker_attrs.get(worker_id) == {"region": AttributeValue("us-east1")}
+    assert state._worker_attrs.get(worker_live) == {}
 
 
 def test_cascade_delete_invalidates_projection(state):
@@ -165,7 +176,7 @@ def test_cascade_delete_invalidates_projection(state):
     """
     worker_id = _insert_worker(state, "w-cascade")
     _insert_worker_attribute(state, worker_id, "region", "us-east1")
-    assert state._store.worker_attrs.get(worker_id) == {"region": AttributeValue("us-east1")}
+    assert state._worker_attrs.get(worker_id) == {"region": AttributeValue("us-east1")}
 
     health = WorkerHealthTracker()
     health.register(worker_id, now_ms=1000)
@@ -174,14 +185,11 @@ def test_cascade_delete_invalidates_projection(state):
             tx,
             worker_id,
             health=health,
-            worker_attrs=state._store.worker_attrs,
+            worker_attrs=state._worker_attrs,
         )
 
     with state._db.read_snapshot() as q:
-        row = q.fetchone(
-            "SELECT key FROM worker_attributes WHERE worker_id = ?",
-            (str(worker_id),),
-        )
+        row = q.fetchone(select(worker_attributes_table.c.key).where(worker_attributes_table.c.worker_id == worker_id))
     assert row is None
 
-    assert state._store.worker_attrs.get(worker_id) == {}
+    assert state._worker_attrs.get(worker_id) == {}

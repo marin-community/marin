@@ -472,13 +472,13 @@ class ControllerDashboard:
         log_wsgi_app._endpoints["/PushLogs"] = log_wsgi_app._endpoints[_LOG_PUSH_ENDPOINT]
         _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
 
-        self._actor_proxy = ActorProxy(self._service._store.endpoints)
+        self._actor_proxy = ActorProxy(self._service._endpoints)
 
         def _resolve_endpoint(name: str) -> str | None:
             # Task-registered endpoints live in the SQL store; system endpoints
             # (``/system/...``) live in an in-memory dict on the service.
             # Same fallback order as ListEndpoints' system-endpoint branch.
-            row = self._service._store.endpoints.resolve(name)
+            row = self._service._endpoints.resolve(name)
             if row is not None:
                 return row.address
             return self._service._system_endpoints.get(name)

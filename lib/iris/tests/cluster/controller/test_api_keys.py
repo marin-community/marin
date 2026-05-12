@@ -231,7 +231,7 @@ def test_login_is_idempotent(db):
 
     # Only 1 active login key
     all_keys = list_api_keys(db, user_id="alice@example.com")
-    active = [k for k in all_keys if k.revoked_at is None]
+    active = [k for k in all_keys if k.revoked_at_ms is None]
     assert len(active) == 1
     assert active[0].key_id == resp2.key_id
 

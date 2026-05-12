@@ -83,7 +83,7 @@ def test_non_holder_task_not_reset_like_reservation_holder_on_worker_failure(sta
     other_task = other_tasks[0]
 
     worker_id = _register_worker(state, "co-located-worker")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(
             cur,
             [
@@ -96,7 +96,7 @@ def test_non_holder_task_not_reset_like_reservation_holder_on_worker_failure(sta
     # Move the non-holder task to RUNNING so WORKER_FAILED counts as a
     # preemption (not a delivery failure). This matches the production shape:
     # task had actually executed on the worker before it died.
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -158,8 +158,8 @@ def test_non_holder_task_not_reset_like_reservation_holder_on_worker_failure(sta
             f"(={after.preemption_count}); holder-reset branch was misapplied"
         )
         # started_at_ms must NOT be wiped to NULL.
-        assert after.started_at is not None, (
-            f"{victim_label}: started_at was NULLed; " "holder-reset branch was misapplied"
+        assert after.started_at_ms is not None, (
+            f"{victim_label}: started_at_ms was NULLed; " "holder-reset branch was misapplied"
         )
     # Also verify the same-job surviving attempt kept its id.
     after_same = query_task_with_attempts(state, parent_task.task_id)
@@ -184,7 +184,7 @@ def test_reservation_holder_task_is_still_reset_on_worker_failure(state):
     holder_task = query_tasks_for_job(state, holder_job_id)[0]
 
     worker_id = _register_worker(state, "w-holder-only")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=holder_task.task_id, worker_id=worker_id)])
 
     fail_worker(state, worker_id, "crash")
@@ -220,7 +220,7 @@ def test_reservation_holder_reassignment_across_successive_worker_failures(state
     for cycle_idx, worker_name in enumerate(("w-res-1", "w-res-2", "w-res-3")):
         worker_id = _register_worker(state, worker_name)
         # Assignment issued by scheduler: attempt_id = current_attempt_id + 1.
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.queue_assignments(
                 cur,
                 [

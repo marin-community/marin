@@ -12,6 +12,7 @@ table columns handle all bind-side conversions (``JobName.to_wire()``,
 
 from collections.abc import Iterable, Mapping, Sequence
 
+from rigging.timing import Timestamp
 from sqlalchemy import case, delete, func, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -291,6 +292,6 @@ def ensure_user(tx: Tx, user_id: str, now_ms: int) -> None:
     """Idempotently create a ``users`` row at submission time."""
     tx.execute(
         sqlite_insert(users_table)
-        .values(user_id=user_id, created_at_ms=now_ms)
+        .values(user_id=user_id, created_at_ms=Timestamp.from_ms(now_ms), role="user")
         .on_conflict_do_nothing(index_elements=["user_id"])
     )

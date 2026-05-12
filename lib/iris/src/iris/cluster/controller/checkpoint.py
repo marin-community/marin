@@ -37,8 +37,10 @@ from pathlib import Path
 import fsspec.core
 import zstandard
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import func, select
 
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import jobs_table, tasks_table, workers_table
 
 logger = logging.getLogger(__name__)
 
@@ -223,9 +225,9 @@ def upload_checkpoint(
     # They may diverge slightly from the backup contents if writes occurred
     # between backup and upload, but this is acceptable for checkpoint metadata.
     with db.read_snapshot() as snapshot:
-        job_count = snapshot.fetchone("SELECT COUNT(*) FROM jobs")[0]  # type: ignore[index]
-        task_count = snapshot.fetchone("SELECT COUNT(*) FROM tasks")[0]  # type: ignore[index]
-        worker_count = snapshot.fetchone("SELECT COUNT(*) FROM workers")[0]  # type: ignore[index]
+        job_count = snapshot.scalar(select(func.count()).select_from(jobs_table))
+        task_count = snapshot.scalar(select(func.count()).select_from(tasks_table))
+        worker_count = snapshot.scalar(select(func.count()).select_from(workers_table))
     result = CheckpointResult(
         created_at=backup.created_at,
         job_count=job_count,

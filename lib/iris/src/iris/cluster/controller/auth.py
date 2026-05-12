@@ -76,7 +76,7 @@ def create_api_key(
 
 def lookup_api_key_by_hash(db: ControllerDB, key_hash: str):
     """Find an API key by its SHA-256 hash. Returns SA Row or None."""
-    with db.read_snapshot() as tx:
+    with db.auth_read_snapshot() as tx:
         return tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_hash == key_hash).limit(1)).first()
 
 
@@ -105,13 +105,13 @@ def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
 
 def lookup_api_key_by_id(db: ControllerDB, key_id: str):
     """Find an API key by its key_id. Returns SA Row or None."""
-    with db.read_snapshot() as tx:
+    with db.auth_read_snapshot() as tx:
         return tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_id == key_id)).first()
 
 
 def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list:
     """List API keys, optionally filtered by user. Returns list[Row]."""
-    with db.read_snapshot() as tx:
+    with db.auth_read_snapshot() as tx:
         stmt = select(auth_api_keys_table)
         if user_id:
             stmt = stmt.where(auth_api_keys_table.c.user_id == user_id)
@@ -120,7 +120,7 @@ def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list:
 
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:
     """Revoke all active login keys for a user. Returns list of revoked key_ids."""
-    with db.read_snapshot() as tx:
+    with db.auth_read_snapshot() as tx:
         active_rows = tx.execute(
             select(auth_api_keys_table.c.key_id).where(
                 auth_api_keys_table.c.user_id == user_id,
@@ -155,7 +155,7 @@ def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -
 
 def _get_or_create_signing_key(db: ControllerDB) -> str:
     """Load the HMAC signing key from DB, or create one on first run."""
-    with db.read_snapshot() as tx:
+    with db.auth_read_snapshot() as tx:
         row = tx.execute(
             select(auth_controller_secrets_table.c.value).where(auth_controller_secrets_table.c.key == "jwt_signing_key")
         ).first()
@@ -171,7 +171,7 @@ def _get_or_create_signing_key(db: ControllerDB) -> str:
             .on_conflict_do_nothing(index_elements=["key"])
         )
     # Re-read in case of concurrent insert (INSERT OR IGNORE)
-    with db.read_snapshot() as tx:
+    with db.auth_read_snapshot() as tx:
         row = tx.execute(
             select(auth_controller_secrets_table.c.value).where(auth_controller_secrets_table.c.key == "jwt_signing_key")
         ).first()
@@ -271,7 +271,7 @@ class JwtTokenManager:
         by signature verification anyway, so their JTIs don't need tracking.
         """
         now_ms = int(time.time() * 1000)
-        with db.read_snapshot() as tx:
+        with db.auth_read_snapshot() as tx:
             rows = tx.execute(
                 select(auth_api_keys_table.c.key_id).where(
                     auth_api_keys_table.c.revoked_at_ms.is_not(None),

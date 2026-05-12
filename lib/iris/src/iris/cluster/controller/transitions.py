@@ -2168,9 +2168,14 @@ class ControllerTransitions:
                 # Invalidate endpoint cache BEFORE the CASCADE so the cache
                 # drops rows SQLite is about to delete for us.
                 self._endpoints.remove_by_job_ids(cur, [job_name])
-                # Evict status text for the pruned job.
-                self._status_text_detail.pop(job_name.to_wire(), None)
-                self._status_text_summary.pop(job_name.to_wire(), None)
+                # Evict status text for all tasks owned by this job.
+                # Status text is keyed by task_id (e.g. /user/job/0), not job_id,
+                # so we must match by prefix rather than an exact key lookup.
+                prefix = job_name.to_wire() + "/"
+                for key in [k for k in self._status_text_detail if k.startswith(prefix)]:
+                    del self._status_text_detail[key]
+                for key in [k for k in self._status_text_summary if k.startswith(prefix)]:
+                    del self._status_text_summary[key]
                 write_jobs.delete_job(cur, job_name)
             log_event("job_pruned", job_name.to_wire())
             jobs_deleted += 1
