@@ -66,13 +66,12 @@ class LogServiceImpl:
         request: logging_pb2.FetchLogsRequest,
         ctx: Any,
     ) -> logging_pb2.FetchLogsResponse:
-        # Wire-level UNSPECIFIED (default-zero from old clients that don't set
-        # the field) reads as PREFIX so path-style keys still pick up every
-        # entry under the path. In-process Python callers default to EXACT in
-        # `DuckDBLogStore.get_logs`, so this mapping only fires for RPC clients.
+        # Wire-level UNSPECIFIED maps to REGEX so clients that encode the
+        # query as a regex pattern in ``source`` without setting the field
+        # keep working. New code sets EXACT or PREFIX explicitly.
         match_scope = request.match_scope
         if match_scope == logging_pb2.MATCH_SCOPE_UNSPECIFIED:
-            match_scope = logging_pb2.MATCH_SCOPE_PREFIX
+            match_scope = logging_pb2.MATCH_SCOPE_REGEX
         max_lines = request.max_lines if request.max_lines > 0 else 1000
         result = self._log_store.get_logs(
             request.source,

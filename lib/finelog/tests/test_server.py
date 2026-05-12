@@ -110,12 +110,9 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
         svc.close()
 
 
-def test_fetch_logs_wire_unspecified_reads_as_prefix(tmp_path: Path):
-    """RPC clients that omit ``match_scope`` (wire-level UNSPECIFIED) must
-    read path-style: ``/job/<job>/<task>`` should pick up every attempt.
-    The in-process Python default is EXACT, so the server boundary maps
-    UNSPECIFIED → PREFIX before delegating.
-    """
+def test_fetch_logs_wire_unspecified_reads_as_regex(tmp_path: Path):
+    """Wire-level UNSPECIFIED falls back to REGEX so a regex ``source``
+    pattern still matches when ``match_scope`` is unset."""
     svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
     try:
         app = build_log_server_asgi(svc)
@@ -129,11 +126,9 @@ def test_fetch_logs_wire_unspecified_reads_as_prefix(tmp_path: Path):
                     },
                     headers={"Content-Type": "application/json"},
                 )
-            # No match_scope field on the wire (proto-default 0 == UNSPECIFIED).
-            # Server must read this as PREFIX so we see both attempts.
             resp = client.post(
                 "/finelog.logging.LogService/FetchLogs",
-                json={"source": "/job/test/0:"},
+                json={"source": r"/job/test/0:\d+"},
                 headers={"Content-Type": "application/json"},
             )
             assert resp.status_code == 200
