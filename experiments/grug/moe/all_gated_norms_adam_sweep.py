@@ -108,6 +108,11 @@ def _build_step(hidden_dim: int, budget: float, run_suffix: str = "") -> Executo
                     eval_ema=False,
                 )
             ),
+            # Not versioned: if the worker's region differs from the existing
+            # checkpoint's bucket, scan all regions and resume from the
+            # highest-step checkpoint found. One-time ~6 GB cross-region read
+            # under the default 10 GB transfer budget.
+            enable_cross_region_ckpt_read=True,
         ),
     )
 
