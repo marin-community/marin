@@ -22,7 +22,7 @@ from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
@@ -71,6 +71,12 @@ _SIGNAL_NAMES = {
     11: "SIGSEGV",
     15: "SIGTERM",
 }
+
+# Max time to wait for the container to actually exit after force-kill before
+# reporting TASK_STATE_KILLED. SIGKILL is uncatchable, so a healthy runtime
+# reaps within milliseconds; the bound keeps a wedged container (uninterruptible
+# sleep, runtime daemon hang) from blocking the monitor indefinitely.
+_KILL_EXIT_WAIT_TIMEOUT = Duration.from_seconds(30.0)
 
 
 def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
@@ -816,6 +822,21 @@ class TaskAttempt:
             if self.should_stop:
                 handle.stop(force=True)
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
+                # Wait for the runtime to confirm the container has actually
+                # exited before reporting KILLED. Without this, downstream
+                # consumers race the SIGKILL -> exit window: the worker tells
+                # the controller the task is dead while the container is still
+                # holding TPU/GPU/file resources during teardown.
+                exited = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+                    lambda: handle.status().phase == ContainerPhase.STOPPED,
+                    timeout=_KILL_EXIT_WAIT_TIMEOUT,
+                )
+                if not exited:
+                    logger.warning(
+                        "Task %s container did not exit within %s after SIGKILL; reporting KILLED anyway",
+                        self.task_id,
+                        _KILL_EXIT_WAIT_TIMEOUT,
+                    )
                 self._stream_logs(log_reader)  # Capture final logs
                 self.transition_to(job_pb2.TASK_STATE_KILLED)
                 break
