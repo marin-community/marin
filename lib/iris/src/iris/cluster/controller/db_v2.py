@@ -133,11 +133,25 @@ class Tx:
         self._hooks: list[Callable[[], None]] = []
 
     def execute(self, stmt, params=None) -> CursorResult:
-        """Execute ``stmt``. ``params`` may be a dict or omitted."""
+        """Execute ``stmt``. ``params`` may be a dict or omitted.
+
+        ``stmt`` may be a SA construct (``text(...)``, ``select(...)``, …)
+        or a plain SQL string. Plain strings are wrapped in ``text(...)``
+        so call sites that haven't migrated to SA constructs can still
+        funnel through this ``Tx`` (Phase 1 of Stage 13).
+        """
+        if isinstance(stmt, str):
+            stmt = text(stmt)
         return self.conn.execute(stmt, params or {})
 
     def executemany(self, stmt, params_list) -> CursorResult:
-        """Execute ``stmt`` repeatedly against ``params_list``."""
+        """Execute ``stmt`` repeatedly against ``params_list``.
+
+        ``stmt`` may be a SA construct or a plain SQL string (see
+        :meth:`execute`).
+        """
+        if isinstance(stmt, str):
+            stmt = text(stmt)
         return self.conn.execute(stmt, params_list)
 
     def register(self, hook: Callable[[], None]) -> None:

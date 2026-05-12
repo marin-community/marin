@@ -77,13 +77,29 @@ class QuerySnapshot:
         """Execute raw SQL and return the cursor for result inspection."""
         return self._conn.execute(sql, params)
 
-    def fetchall(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
-        """Execute SQL and return all rows."""
-        return self._fetchall(sql, list(params))
+    def execute(self, sql, params=None) -> sqlite3.Cursor:
+        """Execute ``sql`` and return the cursor.
 
-    def fetchone(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
+        ``sql`` may be a string or a SA Core construct (``text(...)`` /
+        ``select(...)``); ``params`` may be a tuple or a dict. Lets the
+        new ``reads.*`` helpers run against a legacy :class:`QuerySnapshot`
+        without going through ``db_v2.Tx`` (Phase 1 of Stage 13).
+        """
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return self._conn.execute(sql, params if params is not None else ())
+
+    def fetchall(self, sql, params=None) -> list[sqlite3.Row]:
+        """Execute SQL and return all rows."""
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return list(self._conn.execute(sql, params if params is not None else ()).fetchall())
+
+    def fetchone(self, sql, params=None) -> sqlite3.Row | None:
         """Execute SQL and return the first row, or None."""
-        return self._conn.execute(sql, params).fetchone()
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return self._conn.execute(sql, params if params is not None else ()).fetchone()
 
     def _fetchall(self, sql: str, params: Sequence[object]) -> list[sqlite3.Row]:
         return list(self._conn.execute(sql, tuple(params)).fetchall())
@@ -246,6 +262,21 @@ def _decode_attribute_rows(rows: Sequence[Any]) -> dict[WorkerId, dict[str, Attr
     return attrs_by_worker
 
 
+def _sa_stmt_to_sql(stmt: Any) -> str:
+    """Lower a SA ``text(...)``/``select(...)`` construct to a SQL string.
+
+    SQLite accepts ``:name`` bind placeholders natively, so a SA construct
+    compiled with ``literal_binds=False`` lands on the same wire form the
+    legacy code already passes to ``sqlite3.Cursor.execute``. Pure-``text``
+    constructs are returned via their ``.text`` attribute (zero overhead).
+    """
+    text_attr = getattr(stmt, "text", None)
+    if isinstance(text_attr, str):
+        return text_attr
+    compiled = stmt.compile(compile_kwargs={"literal_binds": False})
+    return str(compiled)
+
+
 class TransactionCursor:
     """Wraps a raw sqlite3.Cursor for use within controller transactions.
 
@@ -254,31 +285,50 @@ class TransactionCursor:
     by caches (e.g. ``EndpointsProjection``) to update in-memory state atomically
     with the DB write: rollback suppresses the hook so memory never drifts
     from disk.
+
+    Phase 1 of Stage 13: :meth:`execute` and :meth:`executemany` now also
+    accept SA Core constructs (``text(...)``, ``select(...)``) and dict
+    bind params, so the new ``writes.*`` / ``reads.*`` helpers in
+    ``iris.cluster.controller.{writes,reads}`` work against a legacy
+    ``TransactionCursor`` without being re-routed through ``db_v2.Tx``.
     """
 
     def __init__(self, cursor: sqlite3.Cursor):
         self._cursor = cursor
         self._commit_hooks: list[Callable[[], None]] = []
 
-    def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        """Raw SQL escape hatch."""
-        return self._cursor.execute(sql, params)
+    def execute(self, sql, params=None) -> sqlite3.Cursor:
+        """Raw SQL escape hatch.
 
-    def executemany(self, sql: str, params: Iterable[tuple | Mapping[str, object]]) -> sqlite3.Cursor:
+        ``sql`` may be a string or a SA Core construct; ``params`` may be
+        a tuple or a dict (dict required when ``sql`` uses ``:named``
+        placeholders).
+        """
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return self._cursor.execute(sql, params if params is not None else ())
+
+    def executemany(self, sql, params: Iterable[tuple | Mapping[str, object]]) -> sqlite3.Cursor:
         """Raw SQL batch escape hatch."""
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
         return self._cursor.executemany(sql, params)
 
     def executescript(self, sql: str) -> sqlite3.Cursor:
         """Raw SQL script escape hatch."""
         return self._cursor.executescript(sql)
 
-    def fetchall(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
+    def fetchall(self, sql, params=None) -> list[sqlite3.Row]:
         """Execute ``sql`` and return all rows. Mirrors :meth:`QuerySnapshot.fetchall`."""
-        return list(self._cursor.execute(sql, params).fetchall())
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return list(self._cursor.execute(sql, params if params is not None else ()).fetchall())
 
-    def fetchone(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
+    def fetchone(self, sql, params=None) -> sqlite3.Row | None:
         """Execute ``sql`` and return the first row, or None. Mirrors :meth:`QuerySnapshot.fetchone`."""
-        return self._cursor.execute(sql, params).fetchone()
+        if not isinstance(sql, str):
+            sql = _sa_stmt_to_sql(sql)
+        return self._cursor.execute(sql, params if params is not None else ()).fetchone()
 
     def on_commit(self, hook: Callable[[], None]) -> None:
         """Register ``hook`` to run after the transaction commits successfully."""
