@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, NamedTuple, TypeVar
 
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import bindparam, case, delete, func, insert, select, text
+from sqlalchemy import bindparam, case, delete, func, insert, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -81,30 +81,83 @@ from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
-_LIST_DESCENDANTS_SQL = text(
-    "WITH RECURSIVE subtree(job_id) AS ("
-    "  SELECT job_id FROM jobs WHERE parent_job_id = :parent "
-    "  UNION ALL "
-    "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
-    ") SELECT job_id FROM subtree"
+
+def _list_descendants_cte(*, exclude_holders: bool):
+    """Return a SELECT over the recursive subtree of children of ``:parent``.
+
+    When ``exclude_holders`` is True, reservation-holder jobs (and their
+    descendants) are excluded at every level.  Used during preemption retry so
+    the reservation survives while the rest of the subtree is killed.
+    """
+    base_q = select(jobs_table.c.job_id).where(jobs_table.c.parent_job_id == bindparam("parent"))
+    if exclude_holders:
+        base_q = base_q.where(jobs_table.c.is_reservation_holder == 0)
+
+    base = base_q.cte("subtree", recursive=True)
+    j = jobs_table.alias("j")
+    recursive_q = select(j.c.job_id).join(base, j.c.parent_job_id == base.c.job_id)
+    if exclude_holders:
+        recursive_q = recursive_q.where(j.c.is_reservation_holder == 0)
+    subtree = base.union_all(recursive_q)
+    return select(subtree.c.job_id)
+
+
+def _list_subtree_cte():
+    """Return a SELECT over the recursive subtree rooted at ``:root`` (root included)."""
+    base = select(jobs_table.c.job_id).where(jobs_table.c.job_id == bindparam("root")).cte("subtree", recursive=True)
+    j = jobs_table.alias("j")
+    recursive_q = select(j.c.job_id).join(base, j.c.parent_job_id == base.c.job_id)
+    subtree = base.union_all(recursive_q)
+    return select(subtree.c.job_id)
+
+
+# ---------------------------------------------------------------------------
+# Direct-provider dispatch helpers
+# ---------------------------------------------------------------------------
+
+# Columns selected for every pending-dispatch / redrive query.  Covers all
+# fields required to build a RunTaskRequest without a second DB round-trip.
+_PENDING_DISPATCH_COLS = (
+    tasks_table.c.task_id,
+    tasks_table.c.job_id,
+    tasks_table.c.current_attempt_id,
+    jobs_table.c.num_tasks,
+    job_config_table.c.res_cpu_millicores,
+    job_config_table.c.res_memory_bytes,
+    job_config_table.c.res_disk_bytes,
+    job_config_table.c.res_device_json,
+    job_config_table.c.entrypoint_json,
+    job_config_table.c.environment_json,
+    job_config_table.c.bundle_id,
+    job_config_table.c.ports_json,
+    job_config_table.c.constraints_json,
+    job_config_table.c.task_image,
+    job_config_table.c.timeout_ms,
 )
 
-_LIST_DESCENDANTS_EXCLUDE_HOLDERS_SQL = text(
-    "WITH RECURSIVE subtree(job_id) AS ("
-    "  SELECT job_id FROM jobs WHERE parent_job_id = :parent AND is_reservation_holder = 0 "
-    "  UNION ALL "
-    "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id "
-    "   WHERE j.is_reservation_holder = 0"
-    ") SELECT job_id FROM subtree"
-)
 
-_LIST_SUBTREE_SQL = text(
-    "WITH RECURSIVE subtree(job_id) AS ("
-    "  SELECT job_id FROM jobs WHERE job_id = :root "
-    "  UNION ALL "
-    "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
-    ") SELECT job_id FROM subtree"
-)
+def _pending_dispatch_row(r) -> PendingDispatchRow:
+    """Decode a raw SA result row into a ``PendingDispatchRow``."""
+    _tms = r.timeout_ms
+    return PendingDispatchRow(
+        task_id=r.task_id,
+        job_id=r.job_id,
+        current_attempt_id=int(r.current_attempt_id),
+        num_tasks=int(r.num_tasks),
+        resources=resource_spec_from_scalars(
+            int(r.res_cpu_millicores),
+            int(r.res_memory_bytes),
+            int(r.res_disk_bytes),
+            r.res_device_json,
+        ),
+        entrypoint_json=str(r.entrypoint_json),
+        environment_json=str(r.environment_json),
+        bundle_id=str(r.bundle_id),
+        ports_json=r.ports_json,
+        constraints_json=r.constraints_json,
+        task_image=str(r.task_image),
+        timeout_ms=int(_tms) if _tms is not None else None,
+    )
 
 
 def log_event(
@@ -571,8 +624,9 @@ def _cascade_children(
     tasks_to_kill: set[JobName] = set()
     task_kill_workers: dict[JobName, WorkerId] = {}
 
-    _sql = _LIST_DESCENDANTS_EXCLUDE_HOLDERS_SQL if exclude_reservation_holders else _LIST_DESCENDANTS_SQL
-    descendants = [JobName.from_wire(str(row.job_id)) for row in cur.execute(_sql, {"parent": job_id.to_wire()}).all()]
+    descendants = list(
+        cur.execute(_list_descendants_cte(exclude_holders=exclude_reservation_holders), {"parent": job_id}).scalars()
+    )
     for child_job_id in descendants:
         child_tasks_to_kill, child_task_kill_workers = _kill_non_terminal_tasks(
             cur,
@@ -1323,10 +1377,7 @@ class ControllerTransitions:
 
     def cancel_job(self, cur: Tx, job_id: JobName, reason: str) -> TxResult:
         """Cancel a job tree and return tasks that need kill RPCs. Caller owns the transaction."""
-        subtree = [
-            JobName.from_wire(str(row.job_id))
-            for row in cur.execute(_LIST_SUBTREE_SQL, {"root": job_id.to_wire()}).all()
-        ]
+        subtree = list(cur.execute(_list_subtree_cte(), {"root": job_id}).scalars())
         if not subtree:
             return TxResult()
         running_rows = read_tasks.list_active(
@@ -1442,39 +1493,39 @@ class ControllerTransitions:
         # all columns except the primary key. The post-commit hook registers
         # the worker in the liveness tracker so in-memory state advances
         # atomically with the DB row.
-        _worker_row_values = {
-            "worker_id": worker_id,
-            "address": address,
-            "total_cpu_millicores": metadata.cpu_count * 1000,
-            "total_memory_bytes": metadata.memory_bytes,
-            "total_gpu_count": gpu_count,
-            "total_tpu_count": tpu_count,
-            "device_type": device_type,
-            "device_variant": device_variant,
-            "slice_id": slice_id,
-            "scale_group": scale_group,
-            "md_hostname": metadata.hostname,
-            "md_ip_address": metadata.ip_address,
-            "md_cpu_count": metadata.cpu_count,
-            "md_memory_bytes": metadata.memory_bytes,
-            "md_disk_bytes": metadata.disk_bytes,
-            "md_tpu_name": metadata.tpu_name,
-            "md_tpu_worker_hostnames": metadata.tpu_worker_hostnames,
-            "md_tpu_worker_id": metadata.tpu_worker_id,
-            "md_tpu_chips_per_host_bounds": metadata.tpu_chips_per_host_bounds,
-            "md_gpu_count": metadata.gpu_count,
-            "md_gpu_name": metadata.gpu_name,
-            "md_gpu_memory_mb": metadata.gpu_memory_mb,
-            "md_gce_instance_name": metadata.gce_instance_name,
-            "md_gce_zone": metadata.gce_zone,
-            "md_git_hash": metadata.git_hash,
-            "md_device_json": proto_to_json(metadata.device),
-        }
-        _worker_update_set = {k: v for k, v in _worker_row_values.items() if k != "worker_id"}
+        _stmt = sqlite_insert(workers_table).values(
+            worker_id=worker_id,
+            address=address,
+            total_cpu_millicores=metadata.cpu_count * 1000,
+            total_memory_bytes=metadata.memory_bytes,
+            total_gpu_count=gpu_count,
+            total_tpu_count=tpu_count,
+            device_type=device_type,
+            device_variant=device_variant,
+            slice_id=slice_id,
+            scale_group=scale_group,
+            md_hostname=metadata.hostname,
+            md_ip_address=metadata.ip_address,
+            md_cpu_count=metadata.cpu_count,
+            md_memory_bytes=metadata.memory_bytes,
+            md_disk_bytes=metadata.disk_bytes,
+            md_tpu_name=metadata.tpu_name,
+            md_tpu_worker_hostnames=metadata.tpu_worker_hostnames,
+            md_tpu_worker_id=metadata.tpu_worker_id,
+            md_tpu_chips_per_host_bounds=metadata.tpu_chips_per_host_bounds,
+            md_gpu_count=metadata.gpu_count,
+            md_gpu_name=metadata.gpu_name,
+            md_gpu_memory_mb=metadata.gpu_memory_mb,
+            md_gce_instance_name=metadata.gce_instance_name,
+            md_gce_zone=metadata.gce_zone,
+            md_git_hash=metadata.git_hash,
+            md_device_json=proto_to_json(metadata.device),
+        )
         cur.execute(
-            sqlite_insert(workers_table)
-            .values(**_worker_row_values)
-            .on_conflict_do_update(index_elements=["worker_id"], set_=_worker_update_set)
+            _stmt.on_conflict_do_update(
+                index_elements=["worker_id"],
+                set_={c.name: c for c in _stmt.excluded if c.name != "worker_id"},
+            )
         )
         cur.register(lambda: self._health.register(worker_id, now_ms=now_ms))
         # Replace worker_attributes rows and update the in-memory projection.
@@ -2736,57 +2787,18 @@ class ControllerTransitions:
         now_ms = Timestamp.now().epoch_ms()
         tasks_to_run: list[job_pb2.RunTaskRequest] = []
 
-        _dispatch_from = tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
-            job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
-        )
-        _dispatch_cols = (
-            tasks_table.c.task_id,
-            tasks_table.c.job_id,
-            tasks_table.c.current_attempt_id,
-            jobs_table.c.num_tasks,
-            job_config_table.c.res_cpu_millicores,
-            job_config_table.c.res_memory_bytes,
-            job_config_table.c.res_disk_bytes,
-            job_config_table.c.res_device_json,
-            job_config_table.c.entrypoint_json,
-            job_config_table.c.environment_json,
-            job_config_table.c.bundle_id,
-            job_config_table.c.ports_json,
-            job_config_table.c.constraints_json,
-            job_config_table.c.task_image,
-            job_config_table.c.timeout_ms,
-        )
-
-        def _decode_dispatch(r) -> PendingDispatchRow:
-            _tms = r.timeout_ms
-            return PendingDispatchRow(
-                task_id=r.task_id,
-                job_id=r.job_id,
-                current_attempt_id=int(r.current_attempt_id),
-                num_tasks=int(r.num_tasks),
-                resources=resource_spec_from_scalars(
-                    int(r.res_cpu_millicores),
-                    int(r.res_memory_bytes),
-                    int(r.res_disk_bytes),
-                    r.res_device_json,
-                ),
-                entrypoint_json=str(r.entrypoint_json),
-                environment_json=str(r.environment_json),
-                bundle_id=str(r.bundle_id),
-                ports_json=r.ports_json,
-                constraints_json=r.constraints_json,
-                task_image=str(r.task_image),
-                timeout_ms=int(_tms) if _tms is not None else None,
-            )
-
         # Snapshot redrive set BEFORE the PENDING promotion loop so newly-
         # promoted rows (which become ASSIGNED+null_worker mid-transaction)
         # don't get dispatched twice.
         redrive_rows = [
-            _decode_dispatch(r)
+            _pending_dispatch_row(r)
             for r in cur.execute(
-                select(*_dispatch_cols)
-                .select_from(_dispatch_from)
+                select(*_PENDING_DISPATCH_COLS)
+                .select_from(
+                    tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
+                        job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
+                    )
+                )
                 .where(
                     tasks_table.c.state == int(job_pb2.TASK_STATE_ASSIGNED),
                     tasks_table.c.current_worker_id.is_(None),
@@ -2798,10 +2810,14 @@ class ControllerTransitions:
         pending_rows: list[PendingDispatchRow] = []
         if max_promotions > 0:
             pending_rows = [
-                _decode_dispatch(r)
+                _pending_dispatch_row(r)
                 for r in cur.execute(
-                    select(*_dispatch_cols)
-                    .select_from(_dispatch_from)
+                    select(*_PENDING_DISPATCH_COLS)
+                    .select_from(
+                        tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
+                            job_config_table, job_config_table.c.job_id == jobs_table.c.job_id
+                        )
+                    )
                     .where(
                         tasks_table.c.state == int(job_pb2.TASK_STATE_PENDING),
                         jobs_table.c.is_reservation_holder == False,  # noqa: E712

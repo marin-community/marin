@@ -11,21 +11,19 @@ Return shapes:
 * ``get_priority_bands`` — ``dict[JobName, int]``
 * ``get_workdir_files`` — ``dict[str, bytes]``
 * ``has_unfinished_worker_attempts`` — ``bool``
-
-Recursive CTEs (``get_priority_bands``, ``has_unfinished_worker_attempts``)
-use ``text()`` because the self-referential SQL is cleaner than the
-``select().cte(recursive=True)`` spelling for these specific shapes.
 """
 
 from collections.abc import Iterable
 
-from sqlalchemy import bindparam, select, text
+from sqlalchemy import bindparam, literal_column, select
 
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
     jobs_table,
+    task_attempts_table,
+    tasks_table,
 )
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -114,23 +112,49 @@ def get_config(tx: Tx, job_id: JobName) -> dict | None:
 # Recursive CTEs
 # ---------------------------------------------------------------------------
 
-# Walks parent_job_id chain until a non-UNSPECIFIED priority_band is found.
-# Inputs whose entire ancestor chain is UNSPECIFIED are absent from the result;
-# the caller substitutes INTERACTIVE for those.
-_PRIORITY_BANDS_SQL = text(
-    "WITH RECURSIVE chain(input_id, current_id, current_band, parent_id) AS ("
-    "  SELECT j.job_id, j.job_id, jc.priority_band, j.parent_job_id "
-    "  FROM jobs j JOIN job_config jc ON jc.job_id = j.job_id "
-    "  WHERE j.job_id IN :wires "
-    "  UNION ALL "
-    "  SELECT chain.input_id, j.job_id, jc.priority_band, j.parent_job_id "
-    "  FROM chain "
-    "  JOIN jobs j ON j.job_id = chain.parent_id "
-    "  JOIN job_config jc ON jc.job_id = j.job_id "
-    "  WHERE chain.current_band = 0"
-    ") "
-    "SELECT input_id, current_band FROM chain WHERE current_band != 0"
-).bindparams(bindparam("wires", expanding=True))
+
+def _priority_bands_stmt(ids: list[JobName]):
+    """Build a recursive CTE that walks the parent_job_id chain for each id.
+
+    Walks parent_job_id chain until a non-UNSPECIFIED priority_band is found.
+    Inputs whose entire ancestor chain is UNSPECIFIED are absent from the result;
+    the caller substitutes INTERACTIVE for those.
+
+    The CTE tracks four columns per row:
+      input_id     — original job ID we are resolving
+      current_id   — current ancestor being examined
+      current_band — priority_band at that ancestor
+      parent_id    — next ancestor to examine (None if root)
+    """
+    j = jobs_table.alias("j")
+    jc = job_config_table.alias("jc")
+    # Base: one row per input job ID
+    base_q = (
+        select(
+            j.c.job_id.label("input_id"),
+            j.c.job_id.label("current_id"),
+            jc.c.priority_band.label("current_band"),
+            j.c.parent_job_id.label("parent_id"),
+        )
+        .select_from(j.join(jc, jc.c.job_id == j.c.job_id))
+        .where(j.c.job_id.in_(ids))
+    )
+    chain = base_q.cte("chain", recursive=True)
+    # Recursive: step to next ancestor when current_band is still UNSPECIFIED (0)
+    j2 = jobs_table.alias("j2")
+    jc2 = job_config_table.alias("jc2")
+    recursive_q = (
+        select(
+            chain.c.input_id,
+            j2.c.job_id.label("current_id"),
+            jc2.c.priority_band.label("current_band"),
+            j2.c.parent_job_id.label("parent_id"),
+        )
+        .select_from(chain.join(j2, j2.c.job_id == chain.c.parent_id).join(jc2, jc2.c.job_id == j2.c.job_id))
+        .where(chain.c.current_band == 0)
+    )
+    full_chain = chain.union_all(recursive_q)
+    return select(full_chain.c.input_id, full_chain.c.current_band).where(full_chain.c.current_band != 0)
 
 
 def get_priority_bands(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
@@ -143,11 +167,10 @@ def get_priority_bands(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]
     ids = list(job_ids)
     if not ids:
         return {}
-    wires = [jid.to_wire() for jid in ids]
-    rows = tx.execute(_PRIORITY_BANDS_SQL, {"wires": wires}).all()
+    rows = tx.execute(_priority_bands_stmt(ids)).all()
     resolved: dict[JobName, int] = {}
     for row in rows:
-        resolved[JobName.from_wire(str(row.input_id))] = int(row.current_band)
+        resolved[row.input_id] = int(row.current_band)
     for jid in ids:
         resolved.setdefault(jid, int(job_pb2.PRIORITY_BAND_INTERACTIVE))
     return resolved
@@ -164,24 +187,29 @@ def get_workdir_files(tx: Tx, job_id: JobName) -> dict[str, bytes]:
     return {str(row.filename): bytes(row.data) for row in rows}
 
 
-# Recursive CTE: true if any task in the subtree rooted at job_id has a
-# worker-bound unfinished attempt.
-_HAS_UNFINISHED_WORKER_ATTEMPTS_SQL = text(
-    "WITH RECURSIVE subtree(job_id) AS ("
-    "  SELECT job_id FROM jobs WHERE job_id = :jid "
-    "  UNION ALL "
-    "  SELECT j.job_id FROM jobs j JOIN subtree s ON j.parent_job_id = s.job_id"
-    ") "
-    "SELECT 1 FROM tasks t "
-    "JOIN task_attempts ta ON ta.task_id = t.task_id "
-    "WHERE t.job_id IN subtree "
-    "  AND ta.worker_id IS NOT NULL "
-    "  AND ta.finished_at_ms IS NULL "
-    "LIMIT 1"
-)
+def _has_unfinished_worker_attempts_stmt(job_id: JobName):
+    """Build a recursive CTE that returns 1 if the subtree under ``job_id`` has unfinished attempts."""
+    # Recursive CTE: true if any task in the subtree rooted at job_id has a
+    # worker-bound unfinished attempt.
+    base = select(jobs_table.c.job_id).where(jobs_table.c.job_id == job_id).cte("subtree", recursive=True)
+    j = jobs_table.alias("j")
+    recursive_q = select(j.c.job_id).join(base, j.c.parent_job_id == base.c.job_id)
+    subtree = base.union_all(recursive_q)
+    t = tasks_table.alias("t")
+    ta = task_attempts_table.alias("ta")
+    return (
+        select(literal_column("1"))
+        .select_from(t.join(ta, ta.c.task_id == t.c.task_id))
+        .where(
+            t.c.job_id.in_(select(subtree.c.job_id)),
+            ta.c.worker_id.is_not(None),
+            ta.c.finished_at_ms.is_(None),
+        )
+        .limit(1)
+    )
 
 
 def has_unfinished_worker_attempts(tx: Tx, job_id: JobName) -> bool:
     """Return True if any task under ``job_id`` (subtree) has a worker-bound unfinished attempt."""
-    row = tx.execute(_HAS_UNFINISHED_WORKER_ATTEMPTS_SQL, {"jid": job_id.to_wire()}).first()
+    row = tx.execute(_has_unfinished_worker_attempts_stmt(job_id)).first()
     return row is not None
