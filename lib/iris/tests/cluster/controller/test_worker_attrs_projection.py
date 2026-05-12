@@ -5,11 +5,15 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
 from iris.cluster.constraints import AttributeValue
+from iris.cluster.controller import db_v2
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.controller.writes import workers as writes_workers
 from iris.cluster.types import WorkerId
 
 
@@ -152,24 +156,26 @@ def test_replace_from_resets_cache(state, tmp_path: Path):
     assert state._store.worker_attrs.get(worker_live) == {}
 
 
-@pytest.mark.xfail(reason="cascade hook lands in Stage 12; direct DELETE on workers leaves stale cache")
 def test_cascade_delete_invalidates_projection(state):
     """Deleting a worker FK-cascades into worker_attributes; the cache must follow.
 
-    Stage 7 ships ``invalidate_for_worker`` but does not yet wire it into the
-    raw ``DELETE FROM workers`` paths. Stage 12 will route every cascading
-    delete through ``writes/workers.py``, which calls
-    ``worker_attrs.invalidate_for_worker`` and removes this xfail.
+    Stage 12 routes the cascading delete through ``writes/workers.remove_worker``,
+    which calls ``WorkerAttrsProjection.invalidate_for_worker`` inline so the
+    in-memory dict drops the entry atomically with the SQL commit.
     """
     worker_id = _insert_worker(state, "w-cascade")
     _insert_worker_attribute(state, worker_id, "region", "us-east1")
     assert state._store.worker_attrs.get(worker_id) == {"region": AttributeValue("us-east1")}
 
-    # Direct DELETE bypassing the projection's invalidate_for_worker hook —
-    # the FK cascade clears worker_attributes but the in-memory dict is
-    # untouched. Stage 12 closes this gap.
-    with state._db.transaction() as cur:
-        cur.execute("DELETE FROM workers WHERE worker_id = ?", (str(worker_id),))
+    health = WorkerHealthTracker()
+    health.register(worker_id, now_ms=1000)
+    with db_v2.write_transaction(state._db.sa_write_engine, threading.RLock()) as tx:
+        writes_workers.remove_worker(
+            tx,
+            worker_id,
+            health=health,
+            worker_attrs=state._store.worker_attrs,
+        )
 
     with state._db.read_snapshot() as q:
         row = q.fetchone(

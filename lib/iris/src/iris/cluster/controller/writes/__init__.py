@@ -45,3 +45,16 @@ def writes_to(
         return fn
 
     return deco
+
+
+# Re-export entity modules so importing ``iris.cluster.controller.writes``
+# forces every ``@writes_to``-decorated function to register itself. The
+# Stage 12 startup check walks REGISTERED_WRITE_FUNCTIONS; an unimported
+# module would leave a silent gap in the invariant.
+from iris.cluster.controller.writes import (
+    jobs,
+    reservations,
+    task_attempts,
+    tasks,
+    workers,
+)

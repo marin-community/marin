@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller import db_v2
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.stores import ControllerStore, WorkerUpsertParams
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.writes import workers as writes_workers
@@ -137,9 +138,10 @@ def test_remove_worker_parity(db_pair):
         legacy_store.workers.upsert(cur, params, now_ms=1000)
         legacy_store.workers.remove(cur, params.worker_id)
     sa_health = WorkerHealthTracker()
+    sa_attrs = WorkerAttrsProjection(sa_db)
     with db_v2.write_transaction(sa_db.sa_write_engine, threading.RLock()) as tx:
         writes_workers.upsert_worker(tx, params, now_ms=1000, health=sa_health)
-        writes_workers.remove_worker(tx, params.worker_id, health=sa_health)
+        writes_workers.remove_worker(tx, params.worker_id, health=sa_health, worker_attrs=sa_attrs)
 
     assert _dump(legacy_db, "workers") == [] == _dump(sa_db, "workers")
     # The post-commit ``forget`` hook clears the tracker entry; a default
@@ -189,8 +191,9 @@ def test_remove_worker_nulls_attempts_and_tasks(db_pair):
         legacy_store.workers.remove(cur, params.worker_id)
     sa_health = WorkerHealthTracker()
     sa_health.register(params.worker_id, now_ms=1000)
+    sa_attrs = WorkerAttrsProjection(sa_db)
     with db_v2.write_transaction(sa_db.sa_write_engine, threading.RLock()) as tx:
-        writes_workers.remove_worker(tx, params.worker_id, health=sa_health)
+        writes_workers.remove_worker(tx, params.worker_id, health=sa_health, worker_attrs=sa_attrs)
 
     # Workers gone on both.
     assert _dump(legacy_db, "workers") == [] == _dump(sa_db, "workers")

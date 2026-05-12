@@ -43,6 +43,7 @@ from iris.cluster.controller.db import (
     QuerySnapshot,
     TransactionCursor,
 )
+from iris.cluster.controller.projections import assert_owned_tables_not_externally_written
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
@@ -1849,6 +1850,12 @@ class ControllerStore:
         # db.replace_from(). EndpointsProjection registers its own
         # rehydrate hook in __init__.
         db.register_reopen_hook(self._seed_liveness_from_workers)
+        # Stage 12: re-run the @writes_to invariant with PROJECTIONS now
+        # fully populated. ControllerDB.__init__ ran the same check before
+        # any projection instances existed (owned was empty); with the
+        # projections constructed here, the check can flag genuine
+        # external-write violations.
+        assert_owned_tables_not_externally_written()
 
     def _seed_liveness_from_workers(self) -> None:
         """Mark every persisted worker healthy so the scheduler sees them before they ping back.

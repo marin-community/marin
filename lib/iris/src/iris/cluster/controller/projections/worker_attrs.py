@@ -22,13 +22,28 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import ClassVar
+from collections.abc import Callable
+from typing import ClassVar, Protocol
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.db import ControllerDB, TransactionCursor, _decode_attribute_rows
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.schema_v2 import worker_attributes_table
 from iris.cluster.types import WorkerId
+
+
+class PostCommitRegistrar(Protocol):
+    """Structural type for any transaction wrapper that schedules post-commit hooks.
+
+    Both legacy :class:`TransactionCursor` and v2 :class:`db_v2.Tx` expose
+    a ``register(callable)`` method that fires after the surrounding write
+    transaction commits, under the write lock. Projection invalidation
+    methods accept this Protocol so the same hook works for both
+    transaction types during the SA Core migration.
+    """
+
+    def register(self, hook: Callable[[], None]) -> None: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -121,12 +136,21 @@ class WorkerAttrsProjection:
 
         cur.on_commit(apply)
 
-    def invalidate_for_worker(self, cur: TransactionCursor, worker_id: WorkerId) -> None:
+    def invalidate_for_worker(self, tx: PostCommitRegistrar, worker_id: WorkerId) -> None:
         """Drop ``worker_id`` from the cache after commit (FK-cascade hook).
 
         Semantically distinct from :meth:`remove`: ``remove`` is used by the
         explicit worker-removal path, while ``invalidate_for_worker`` is the
         Stage 12 hook for callers that delete from ``workers`` and rely on
         the ``ON DELETE CASCADE`` to clear ``worker_attributes``.
+
+        Accepts any :class:`PostCommitRegistrar` — covers both
+        :class:`db_v2.Tx` and legacy :class:`TransactionCursor` while
+        Stage 13 finishes the transaction-type collapse.
         """
-        self.remove(cur, worker_id)
+
+        def apply() -> None:
+            with self._lock:
+                self._cache.pop(worker_id, None)
+
+        tx.register(apply)

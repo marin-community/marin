@@ -284,6 +284,17 @@ class TransactionCursor:
         """Register ``hook`` to run after the transaction commits successfully."""
         self._commit_hooks.append(hook)
 
+    def register(self, hook: Callable[[], None]) -> None:
+        """SA Core ``Tx``-compatible alias for :meth:`on_commit`.
+
+        Lets projection invalidation hooks accept either a legacy
+        :class:`TransactionCursor` or a v2 :class:`db_v2.Tx` via a single
+        ``register``-named entry point. Stage 13 deletes
+        :class:`TransactionCursor`; until then this alias keeps the
+        Projection write surface uniform across both transaction types.
+        """
+        self._commit_hooks.append(hook)
+
     def _run_commit_hooks(self) -> None:
         for hook in self._commit_hooks:
             hook()
@@ -349,6 +360,18 @@ class ControllerDB:
         # caches over DB contents (e.g. ``ControllerStore``) can reload them
         # after a checkpoint restore. Registered via ``register_reopen_hook``.
         self._reopen_hooks: list[Callable[[], None]] = []
+
+        # Stage 12: enforce the @writes_to invariant. Importing the writes
+        # package re-exports every entity module so REGISTERED_WRITE_FUNCTIONS
+        # is fully populated. Projection classes load via the projections
+        # package re-export; instances appear in PROJECTIONS only after
+        # ControllerStore (or a test) constructs them. The check is safe
+        # to run pre-instantiation — owned will be empty and no violations
+        # can fire — and is re-runnable from any caller after projections
+        # are built.
+        from iris.cluster.controller import projections, writes  # noqa: F401
+
+        projections.assert_owned_tables_not_externally_written()
 
     def register_reopen_hook(self, hook: Callable[[], None]) -> None:
         """Register a no-arg callable to run at the end of ``replace_from``."""
