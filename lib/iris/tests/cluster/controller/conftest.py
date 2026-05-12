@@ -634,7 +634,7 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
 
 
 def healthy_active_workers(state: ControllerTransitions) -> list[SchedulableWorker]:
-    return _healthy_active_workers_with_attributes(state._db, state._store.health)
+    return _healthy_active_workers_with_attributes(state._db, state._store.health, state._store.worker_attrs)
 
 
 def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: WorkerId) -> None:

@@ -1298,8 +1298,10 @@ class ControllerTransitions:
             now_ms=now_ms,
         )
         self._store.workers.replace_attributes(cur, worker_id, attrs)
-        # Update in-memory attribute cache only after commit so a rolled-back tx
-        # doesn't leave the scheduling cache ahead of the durable row.
+        # Update the in-memory attribute projection only after commit so a
+        # rolled-back tx doesn't leave the scheduling cache ahead of the
+        # durable row. WorkerAttrsProjection.set registers its own on_commit
+        # hook against ``cur`` to apply the dict update under the write lock.
         attr_dict: dict[str, AttributeValue] = {}
         for attr in attrs:
             if attr.value_type == "int":
@@ -1308,7 +1310,7 @@ class ControllerTransitions:
                 attr_dict[attr.key] = AttributeValue(float(attr.float_value))
             else:
                 attr_dict[attr.key] = AttributeValue(str(attr.str_value or ""))
-        cur.on_commit(lambda: self._store.workers.update_attr_cache(worker_id, attr_dict))
+        self._store.worker_attrs.set(cur, worker_id, attr_dict)
         cur.on_commit(lambda: log_event("worker_registered", str(worker_id), address=address))
         return TxResult()
 
@@ -1870,6 +1872,11 @@ class ControllerTransitions:
         last_contact_age_ms = None if not last_hb else max(0, now_ms - last_hb)
         self._store.workers.mark_unhealthy(worker_id)
         removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
+        # _remove_failed_worker deletes the worker row, which FK-cascades into
+        # worker_attributes. Invalidate the projection in the same tx so the
+        # in-memory cache stays consistent with disk on commit (and is left
+        # untouched on rollback).
+        self._store.worker_attrs.invalidate_for_worker(cur, worker_id)
         return WorkerFailureResult(
             tasks_to_kill=removal.tasks_to_kill,
             task_kill_workers=removal.task_kill_workers,
@@ -1922,8 +1929,6 @@ class ControllerTransitions:
                     if result.worker_removed:
                         removed_workers.append((worker_id, worker_address))
 
-        for worker_id, _ in removed_workers:
-            self._store.workers.remove_from_attr_cache(worker_id)
         return WorkerFailureBatchResult(
             tasks_to_kill=all_tasks_to_kill,
             task_kill_workers=all_task_kill_workers,
@@ -2185,7 +2190,9 @@ class ControllerTransitions:
             return None
         _remove_worker(cur, self._store.workers, worker_id)
         cur.on_commit(lambda: log_event("worker_removed", str(worker_id)))
-        cur.on_commit(lambda: self._store.workers.remove_from_attr_cache(worker_id))
+        # Worker delete FK-cascades into worker_attributes; mirror the cascade
+        # in the projection so post-commit reads don't see stale attrs.
+        self._store.worker_attrs.invalidate_for_worker(cur, worker_id)
         return detail
 
     def prune_old_data(
@@ -2409,6 +2416,11 @@ class ControllerTransitions:
                 worker_id,
                 WorkerAttributeParams(key, value_type, str_value, int_value, float_value),
             )
+            # Mirror the SQL upsert into the in-memory projection so callers
+            # that read via WorkerAttrsProjection see the new attribute.
+            existing = self._store.worker_attrs.get(worker_id)
+            merged = {**existing, key: value}
+            self._store.worker_attrs.set(cur, worker_id, merged)
 
     # =========================================================================
     # Direct provider methods

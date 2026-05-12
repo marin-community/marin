@@ -124,7 +124,7 @@ def test_controller_store_seeds_liveness_from_persisted_workers(tmp_path: Path) 
         assert liveness_one.last_heartbeat_ms > 0
         assert liveness_two.last_heartbeat_ms > 0
 
-        schedulable = healthy_active_workers_with_attributes(db, store.health)
+        schedulable = healthy_active_workers_with_attributes(db, store.health, store.worker_attrs)
         ids = {str(w.worker_id) for w in schedulable}
         assert ids == {"w-seed-1", "w-seed-2"}
     finally:

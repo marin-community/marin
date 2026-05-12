@@ -74,6 +74,7 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     timed_out_executing_tasks,
 )
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.scheduler import (
@@ -857,6 +858,7 @@ def _reservation_region_constraints(
     claims: dict[WorkerId, ReservationClaim],
     queries: ControllerDB,
     health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
     existing_constraints: list[Constraint],
 ) -> list[Constraint]:
     """Derive region constraints from claimed reservation workers.
@@ -873,7 +875,7 @@ def _reservation_region_constraints(
     claimed_worker_ids = {worker_id for worker_id, claim in claims.items() if claim.job_id == job_id_wire}
     workers_by_id = {
         worker.worker_id: worker
-        for worker in healthy_active_workers_with_attributes(queries, health)
+        for worker in healthy_active_workers_with_attributes(queries, health, worker_attrs)
         if worker.worker_id in claimed_worker_ids
     }
     regions: set[str] = set()
@@ -1660,7 +1662,7 @@ class Controller:
             persisted = True
         claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
         claimed_worker_ids: set[WorkerId] = set(claims.keys())
-        all_workers = healthy_active_workers_with_attributes(self._db, self._health)
+        all_workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.worker_attrs)
         changed = False
 
         reservable_states = (
@@ -1801,7 +1803,7 @@ class Controller:
         timer = Timer()
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
             pending_tasks = _sort_pending_tasks_by_resolved_band(self._store, _schedulable_tasks(self._db))
-            workers = healthy_active_workers_with_attributes(self._db, self._health)
+            workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.worker_attrs)
             with self._db.read_snapshot() as snap:
                 usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
             snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
@@ -2316,7 +2318,7 @@ class Controller:
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
-        workers = healthy_active_workers_with_attributes(self._db, self._health)
+        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.worker_attrs)
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
@@ -2426,7 +2428,7 @@ class Controller:
 
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
-        workers = healthy_active_workers_with_attributes(self._db, self._health)
+        workers = healthy_active_workers_with_attributes(self._db, self._health, self._store.worker_attrs)
         demand_entries = compute_demand_entries(
             self._db,
             self._scheduler,

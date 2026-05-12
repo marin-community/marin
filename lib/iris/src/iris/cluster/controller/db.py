@@ -14,8 +14,8 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock, RLock
-from typing import Any
+from threading import RLock
+from typing import Any, Protocol
 
 import fsspec.core
 from rigging.timing import Deadline, Duration, Timestamp
@@ -344,10 +344,6 @@ class ControllerDB:
         self._sa_write_engine: Engine = _make_write_engine(self._db_path, self._auth_db_path)
         self._sa_read_engine: Engine = _make_read_engine(self._db_path, self._auth_db_path)
         logger.info("SA engines initialized in %.2fs", time.monotonic() - t0)
-        # Lazily populated cache of worker attributes, keyed by worker_id.
-        # Eliminates the per-cycle attribute SQL query from the scheduling hot path.
-        self._attr_cache: dict[WorkerId, dict[str, AttributeValue]] | None = None
-        self._attr_cache_lock = Lock()
 
         # Callables invoked at the end of ``replace_from`` so callers with
         # caches over DB contents (e.g. ``ControllerStore``) can reload them
@@ -357,43 +353,6 @@ class ControllerDB:
     def register_reopen_hook(self, hook: Callable[[], None]) -> None:
         """Register a no-arg callable to run at the end of ``replace_from``."""
         self._reopen_hooks.append(hook)
-
-    def _populate_attr_cache(self) -> dict[WorkerId, dict[str, AttributeValue]]:
-        """Load all worker attributes from the DB into the cache.
-
-        Called once on cold start (first access). The caller must NOT hold
-        _attr_cache_lock when calling this, because the DB read can be slow.
-        """
-        with self.read_snapshot() as q:
-            rows = q.raw(
-                "SELECT worker_id, key, value_type, str_value, int_value, float_value FROM worker_attributes",
-            )
-        return _decode_attribute_rows(rows)
-
-    def get_worker_attributes(self) -> dict[WorkerId, dict[str, AttributeValue]]:
-        """Return cached worker attributes, populating from DB on first call."""
-        cache = self._attr_cache
-        if cache is not None:
-            return cache
-        fresh = self._populate_attr_cache()
-        with self._attr_cache_lock:
-            if self._attr_cache is None:
-                self._attr_cache = fresh
-            return self._attr_cache
-
-    def set_worker_attributes(self, worker_id: WorkerId, attrs: dict[str, AttributeValue]) -> None:
-        """Update the cached attributes for a single worker after registration."""
-        with self._attr_cache_lock:
-            if self._attr_cache is None:
-                return
-            self._attr_cache[worker_id] = attrs
-
-    def remove_worker_from_attr_cache(self, worker_id: WorkerId) -> None:
-        """Remove a single worker from the attribute cache."""
-        with self._attr_cache_lock:
-            if self._attr_cache is None:
-                return
-            self._attr_cache.pop(worker_id, None)
 
     def _init_read_pool(self) -> None:
         """Create (or recreate) the read-only connection pool."""
@@ -911,6 +870,17 @@ def _worker_row_select() -> str:
     return WORKER_ROW_PROJECTION.select_clause()
 
 
+class WorkerAttrsSource(Protocol):
+    """Read-only view over the worker_attributes cache.
+
+    Declared as a ``Protocol`` so :func:`healthy_active_workers_with_attributes`
+    can stay in ``db.py`` without importing the concrete
+    :class:`WorkerAttrsProjection` (which itself imports from ``db.py``).
+    """
+
+    def all(self) -> dict[WorkerId, dict[str, AttributeValue]]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SchedulableWorker:
     """Worker shape consumed by the scheduler.
@@ -934,8 +904,13 @@ class SchedulableWorker:
 def healthy_active_workers_with_attributes(
     db: ControllerDB,
     health: WorkerHealthTracker,
+    attrs: WorkerAttrsSource,
 ) -> list[SchedulableWorker]:
-    """Return healthy + active workers with attributes."""
+    """Return healthy + active workers with attributes.
+
+    ``attrs`` is the live :class:`WorkerAttrsProjection` (declared as a
+    ``Protocol`` to break the db → projection import cycle).
+    """
     liveness = health.all()
     healthy_active = {wid for wid, l in liveness.items() if l.healthy and l.active}
     if not healthy_active:
@@ -950,7 +925,7 @@ def healthy_active_workers_with_attributes(
         )
         if not rows:
             return []
-    attrs_by_worker = db.get_worker_attributes()
+    attrs_by_worker = attrs.all()
     out: list[SchedulableWorker] = []
     for w in rows:
         out.append(

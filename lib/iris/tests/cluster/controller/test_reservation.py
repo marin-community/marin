@@ -917,6 +917,7 @@ def test_region_constraint_injected_from_claimed_workers(ctrl):
         ctrl.reservation_claims,
         ctrl._db,
         ctrl.state._store.health,
+        ctrl.state._store.worker_attrs,
         [],
     )
 
@@ -941,6 +942,7 @@ def test_region_constraint_not_injected_when_already_present(ctrl):
         ctrl.reservation_claims,
         ctrl._db,
         ctrl.state._store.health,
+        ctrl.state._store.worker_attrs,
         [existing],
     )
 
@@ -961,6 +963,7 @@ def test_region_constraint_not_injected_when_no_region_attr(ctrl):
         ctrl.reservation_claims,
         ctrl._db,
         ctrl.state._store.health,
+        ctrl.state._store.worker_attrs,
         [],
     )
 
@@ -985,6 +988,7 @@ def test_region_constraint_multiple_regions(ctrl):
         ctrl.reservation_claims,
         ctrl._db,
         ctrl.state._store.health,
+        ctrl.state._store.worker_attrs,
         [],
     )
 
@@ -1009,6 +1013,7 @@ def test_no_injection_for_non_reservation_job(ctrl):
         ctrl.reservation_claims,
         ctrl._db,
         ctrl.state._store.health,
+        ctrl.state._store.worker_attrs,
         [],
     )
 

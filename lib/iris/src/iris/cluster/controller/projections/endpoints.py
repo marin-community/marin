@@ -26,17 +26,12 @@ from threading import RLock
 from typing import ClassVar
 
 from iris.cluster.controller.db import ControllerDB, EndpointQuery, TransactionCursor
+from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.schema import ENDPOINT_PROJECTION, EndpointRow
 from iris.cluster.controller.schema_v2 import endpoints_table
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName
 
 logger = logging.getLogger(__name__)
-
-
-# Module-level registry of all projection instances. Stage 12 will iterate
-# this to enforce the @writes_to invariant; here we register every instance
-# at construction so the registry is ready when later stages land.
-PROJECTIONS: list[EndpointsProjection] = []
 
 
 class AddEndpointOutcome(StrEnum):

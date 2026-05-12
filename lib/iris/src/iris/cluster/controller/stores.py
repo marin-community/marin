@@ -36,7 +36,6 @@ from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 
-from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller.codec import device_counts_from_json, resource_spec_from_scalars
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
@@ -45,6 +44,7 @@ from iris.cluster.controller.db import (
     TransactionCursor,
 )
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     ATTEMPT_PROJECTION,
     JOB_CONFIG_JOIN,
@@ -1793,12 +1793,6 @@ class WorkerStore:
             (str(worker_id), attr.key, attr.value_type, attr.str_value, attr.int_value, attr.float_value),
         )
 
-    def update_attr_cache(self, worker_id: WorkerId, attrs: dict[str, AttributeValue]) -> None:
-        self._db.set_worker_attributes(worker_id, attrs)
-
-    def remove_from_attr_cache(self, worker_id: WorkerId) -> None:
-        self._db.remove_worker_from_attr_cache(worker_id)
-
     def remove(self, cur: TransactionCursor, worker_id: WorkerId) -> None:
         cur.execute("UPDATE task_attempts SET worker_id = NULL WHERE worker_id = ?", (str(worker_id),))
         cur.execute("UPDATE tasks SET current_worker_id = NULL WHERE current_worker_id = ?", (str(worker_id),))
@@ -1848,6 +1842,7 @@ class ControllerStore:
         self.attempts = TaskAttemptStore(db)
         self.workers = WorkerStore(db, self._health)
         self.endpoints = EndpointsProjection(db)
+        self.worker_attrs = WorkerAttrsProjection(db)
         self.reservations = ReservationStore(db)
         self._seed_liveness_from_workers()
         # Worker liveness reloads after a checkpoint restore via
