@@ -66,15 +66,9 @@ class LogServiceImpl:
         request: logging_pb2.FetchLogsRequest,
         ctx: Any,
     ) -> logging_pb2.FetchLogsResponse:
-        # Wire-level UNSPECIFIED (default-zero from old clients that don't set
-        # the field) maps to REGEX so pre-refactor clients that encode their
-        # query as a regex pattern in ``source`` keep working until they
-        # redeploy with explicit ``match_scope``. The current dashboard / CLI
-        # / library code all set EXACT or PREFIX explicitly, so they bypass
-        # this fallback — and the #5392 literal-metachar bug stays fixed
-        # because those new call sites opt into EXACT. The fallback exists
-        # purely so a finelog upgrade doesn't black out an older iris
-        # controller image whose dashboard JS still sends regex sources.
+        # Wire-level UNSPECIFIED maps to REGEX so clients that encode the
+        # query as a regex pattern in ``source`` without setting the field
+        # keep working. New code sets EXACT or PREFIX explicitly.
         match_scope = request.match_scope
         if match_scope == logging_pb2.MATCH_SCOPE_UNSPECIFIED:
             match_scope = logging_pb2.MATCH_SCOPE_REGEX

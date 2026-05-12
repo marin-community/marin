@@ -111,15 +111,8 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
 
 
 def test_fetch_logs_wire_unspecified_reads_as_regex(tmp_path: Path):
-    """RPC clients that omit ``match_scope`` (wire-level UNSPECIFIED) get
-    legacy regex semantics — the pre-MatchScope default. This is what keeps
-    an in-flight older dashboard build working across a finelog upgrade:
-    its FetchLogs payload still encodes the query as a regex ``source``
-    pattern, and the server interprets it accordingly.
-
-    New code should set MATCH_SCOPE_EXACT or MATCH_SCOPE_PREFIX explicitly;
-    relying on this fallback is the deprecated path.
-    """
+    """Wire-level UNSPECIFIED falls back to REGEX so a regex ``source``
+    pattern still matches when ``match_scope`` is unset."""
     svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
     try:
         app = build_log_server_asgi(svc)
@@ -133,9 +126,6 @@ def test_fetch_logs_wire_unspecified_reads_as_regex(tmp_path: Path):
                     },
                     headers={"Content-Type": "application/json"},
                 )
-            # No match_scope field on the wire (proto-default 0 == UNSPECIFIED)
-            # and a regex-style source — the exact shape that older dashboards
-            # send. The server falls back to REGEX so we still see both attempts.
             resp = client.post(
                 "/finelog.logging.LogService/FetchLogs",
                 json={"source": r"/job/test/0:\d+"},

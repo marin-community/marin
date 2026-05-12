@@ -1,16 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the registry migrations runner.
-
-The runner backs every catalog schema change after the baseline; pinning
-its core invariants (idempotency, legacy-database adoption, retry on
-failure) keeps future migration authors honest. The runner does not
-wrap migrations in an outer transaction — migrations manage their own
-atomicity and must be idempotent — so the tests assert that a failed
-migration leaves ``schema_migrations`` untouched and is retried on the
-next apply, rather than that its side effects are rolled back.
-"""
+"""Tests for the registry migrations runner: idempotency, legacy adoption,
+retry-on-failure, and the ``transactional`` helper migrations use for
+their internal atomicity."""
 
 from __future__ import annotations
 
@@ -28,11 +21,6 @@ def _list_tables(conn: duckdb.DuckDBPyConnection) -> set[str]:
 
 def _applied_migrations(conn: duckdb.DuckDBPyConnection) -> list[str]:
     return [row[0] for row in conn.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()]
-
-
-# ---------------------------------------------------------------------------
-# Baseline: a fresh registry has all tables and 0001 recorded.
-# ---------------------------------------------------------------------------
 
 
 def test_fresh_registry_runs_baseline_migration(tmp_path):
@@ -55,11 +43,9 @@ def test_fresh_registry_runs_baseline_migration(tmp_path):
 
 
 def test_reopen_is_idempotent(tmp_path):
-    """Opening the same data dir twice does not re-apply migrations."""
     Catalog(tmp_path).close()
     db = Catalog(tmp_path)
     try:
-        # Still exactly one row, not two.
         assert _applied_migrations(db._conn) == [
             "0001_init.py",
             "0002_segment_key_value_bounds.py",
@@ -72,13 +58,8 @@ def test_reopen_is_idempotent(tmp_path):
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Legacy adoption: a pre-migrations DB inherits the baseline cleanly.
-# ---------------------------------------------------------------------------
-
-
 def test_pre_migrations_database_inherits_baseline(tmp_path):
-    """A DB created by an old release (only ``namespaces`` table) opens cleanly."""
+    """A pre-migrations DB (only ``namespaces`` table) opens cleanly."""
     db_path = tmp_path / "_finelog_registry.duckdb"
     legacy = duckdb.connect(str(db_path))
     legacy.execute(
@@ -96,7 +77,6 @@ def test_pre_migrations_database_inherits_baseline(tmp_path):
 
     db = Catalog(tmp_path)
     try:
-        # Existing row preserved; segments table created; baseline recorded.
         assert db._conn.execute("SELECT namespace FROM namespaces").fetchall() == [("iris.worker",)]
         assert "segments" in _list_tables(db._conn)
         assert _applied_migrations(db._conn) == [
@@ -111,19 +91,12 @@ def test_pre_migrations_database_inherits_baseline(tmp_path):
         db.close()
 
 
-# ---------------------------------------------------------------------------
-# Failed migrations leave no row in ``schema_migrations`` (so they retry).
-# Per-statement side effects from a partially-applied migration ARE visible
-# — the runner does not wrap migrations in a transaction. Migrations must
-# be idempotent so that the next apply converges over the half-applied state.
-# ---------------------------------------------------------------------------
-
-
 def test_failing_migration_is_not_recorded(tmp_path):
+    """0002 partially applies then raises; 0001 is recorded, 0002 isn't,
+    and 0002's pre-failure side effect remains visible (idempotent re-run
+    is the migration's responsibility)."""
     fake_dir = tmp_path / "migs"
     fake_dir.mkdir()
-    # 0001 succeeds, 0002 partially applies then fails. Only 0001 is
-    # recorded as applied; 0002's pre-failure side effect is still visible.
     (fake_dir / "0001_ok.py").write_text(
         "import duckdb\n"
         "def migrate(conn: duckdb.DuckDBPyConnection, *, data_dir) -> None:\n"
@@ -141,12 +114,8 @@ def test_failing_migration_is_not_recorded(tmp_path):
         with pytest.raises(RuntimeError, match="simulated migration failure"):
             apply_migrations(conn, fake_dir)
 
-        # 0001 is recorded and its table exists.
         assert _applied_migrations(conn) == ["0001_ok.py"]
         assert "ok_marker" in _list_tables(conn)
-        # 0002 left a partial side effect on disk; idempotent re-run is the
-        # migration author's responsibility. The runner just declines to
-        # record it as applied so the next ``apply_migrations`` retries it.
         assert "partial_side_effect" in _list_tables(conn)
         assert "0002_boom.py" not in _applied_migrations(conn)
     finally:
@@ -154,17 +123,11 @@ def test_failing_migration_is_not_recorded(tmp_path):
 
 
 def test_failed_migration_retries_on_next_apply(tmp_path):
-    """A migration that failed once must run again on the next open.
-
-    Idempotent statements (``CREATE TABLE IF NOT EXISTS`` here) make a
-    re-run safe even though the partial side effect from the first pass
-    is still on disk.
-    """
+    """A migration that raised the first time runs again on the next open."""
     fake_dir = tmp_path / "migs"
     fake_dir.mkdir()
     migration_path = fake_dir / "0001_flaky.py"
 
-    # First version raises after a side-effect, simulating a half-failed apply.
     migration_path.write_text(
         "def migrate(conn, *, data_dir):\n"
         "    conn.execute('CREATE TABLE IF NOT EXISTS marker (n INTEGER)')\n"
@@ -186,11 +149,6 @@ def test_failed_migration_retries_on_next_apply(tmp_path):
         assert _applied_migrations(conn) == ["0001_flaky.py"]
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# transactional helper exposed for callers (compaction's segment swap, etc.)
-# ---------------------------------------------------------------------------
 
 
 def test_transactional_commits_on_success():
@@ -219,11 +177,6 @@ def test_transactional_rolls_back_on_exception():
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Discovery: hidden / dunder files are not picked up.
-# ---------------------------------------------------------------------------
-
-
 def test_underscore_prefixed_files_are_skipped(tmp_path):
     fake_dir = tmp_path / "migs"
     fake_dir.mkdir()
@@ -241,16 +194,10 @@ def test_underscore_prefixed_files_are_skipped(tmp_path):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Integrity: a real production-shaped catalog still works after migrations.
-# ---------------------------------------------------------------------------
-
-
 def test_catalog_segments_apis_function_after_migration(tmp_path):
-    """End-to-end check: write a segment row through the public Catalog API."""
+    """End-to-end: write a segment row through the public Catalog API."""
     db = Catalog(tmp_path)
     try:
-        # ``aggregate_namespace_stats`` and friends rely on the baseline schema.
         assert db.aggregate_namespace_stats("ns").row_count == 0
         seg = SegmentRow(
             namespace="ns",
@@ -270,7 +217,6 @@ def test_catalog_segments_apis_function_after_migration(tmp_path):
         assert stats.row_count == 10
         assert stats.segment_count == 1
 
-        # 0002 + 0003 + 0006 columns survive the round-trip.
         rows = db.list_segments("ns")
         assert len(rows) == 1
         assert rows[0].level == 1

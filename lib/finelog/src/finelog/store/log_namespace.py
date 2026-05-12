@@ -1176,25 +1176,17 @@ class DiskLogNamespace:
     def _adopt_remote_segments(self, *, key_column: str | None) -> None:
         """Insert ``REMOTE`` catalog rows for bucket files with no row.
 
-        Runs once at boot when ``_remote_namespace_dir`` is configured.
-        After a catalog wipe the bucket is the only durable record of
-        every L>=1 segment; we read each parquet footer remotely to
-        reconstruct row metadata, then insert at ``location=REMOTE``.
-        Files whose basename is already in the catalog are left alone
-        (the local-disk pass already attached them).
-
-        Parquet footer reads dominate the wall-time here — each segment
-        is one network round-trip. ``fs.find(detail=True)`` returns the
-        file size in the listing response so we don't also pay a
-        ``fs.info`` per file. The footer fetches run on a thread pool
-        (network I/O releases the GIL); catalog upserts then run on the
-        main thread because ``Catalog._conn`` is a single DuckDB
-        connection.
+        Recovery path for a wiped catalog: the bucket is the only durable
+        record of every L>=1 segment, so we read each parquet footer
+        remotely to reconstruct row metadata. Footer fetches dominate
+        wall-time (one network round-trip per segment) and are run on a
+        thread pool; the catalog upserts then run serially because
+        ``Catalog._conn`` is a single DuckDB connection.
         """
         try:
             fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
-            # detail=True returns a dict keyed by path with size/info inline,
-            # eliminating the per-file fs.info() round trip below.
+            # detail=True returns file size in the listing, so we don't
+            # need a separate fs.info() per file below.
             remote_info = fs.find(root, detail=True)
         except Exception:
             logger.warning("remote adopt list failed for %s", self.name, exc_info=True)
@@ -1227,9 +1219,6 @@ class DiskLogNamespace:
                 )
                 return fs_path, None
 
-        # Parquet footers are tiny; the wall-time is round-trip latency, so a
-        # modest pool already saturates bucket throughput. Cap pool size by
-        # candidate count to avoid spinning idle threads for small adopts.
         max_workers = min(32, len(candidates))
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="adopt-remote") as pool:
             footers = dict(pool.map(_fetch_footer, [c[0] for c in candidates]))
@@ -1783,11 +1772,8 @@ def _scope_query(
     Returns ``(where_parts, params, include_key_in_select, exact_key)``.
 
     The in-process Python default is ``MATCH_SCOPE_EXACT``; the RPC server
-    boundary maps wire-level ``MATCH_SCOPE_UNSPECIFIED`` to ``REGEX`` (the
-    historical default, kept so older dashboard / client builds that encode
-    their query as a regex source keep working across a finelog upgrade)
-    before invoking ``get_logs``. Either of those resolves to one of the
-    branches below — ``UNSPECIFIED`` never reaches the query layer.
+    maps wire-level ``UNSPECIFIED`` to ``REGEX`` before delegating, so
+    ``UNSPECIFIED`` never reaches this function.
     """
     if match_scope == logging_pb2.MATCH_SCOPE_EXACT:
         where_parts = ["key = $key", "seq > $cursor"]

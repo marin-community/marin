@@ -3,30 +3,17 @@
 
 """Versioned migrations runner for the registry DuckDB sidecar.
 
-Migration files live next to this module as ``NNNN_name.py`` and define a
-``migrate(conn, *, data_dir)`` function. The runner discovers them in
-filename order, filters out any already recorded in the
-``schema_migrations`` table, and applies the remainder. After ``migrate``
-returns the runner inserts the ``schema_migrations`` row.
+Migration files live next to this module as ``NNNN_name.py`` and define
+a ``migrate(conn, *, data_dir)`` function. The runner applies them in
+filename order, skipping any already recorded in ``schema_migrations``,
+and inserts the ``schema_migrations`` row only after ``migrate`` returns
+without raising.
 
-The runner does **not** wrap ``migrate()`` in an outer transaction. DuckDB
-rejects several useful sequences inside a single transaction — most
-notably multiple schema-altering DDLs interleaved with DML on the same
-table — so each migration manages its own atomicity. Two consequences:
-
-* Migrations must be idempotent (``CREATE TABLE IF NOT EXISTS``,
-  ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``, ``DROP COLUMN IF EXISTS``,
-  conditional UPDATE filters). A crash mid-migration may leave partial
-  side effects on disk; on the next open, the migration runs again and
-  the idempotent statements converge.
-* When a migration needs multi-statement atomicity for a block that
-  DuckDB *does* accept (e.g. compaction's swap of input/output rows),
-  it can call :func:`transactional` itself. The helper is exported for
-  exactly this case.
-
-The ``schema_migrations`` row insert lands only if ``migrate()`` returned
-without raising, so a failed migration is naturally re-run on the next
-open.
+Migrations run with no enclosing transaction — DuckDB rejects several
+useful sequences (notably multiple DDLs + DML on the same table) inside
+one — so each migration is responsible for atomicity and must be
+idempotent. Migrations that want a multi-statement transaction can call
+:func:`transactional` themselves.
 """
 
 from __future__ import annotations
@@ -45,13 +32,7 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def transactional(conn: duckdb.DuckDBPyConnection) -> Iterator[duckdb.DuckDBPyConnection]:
-    """Run a block inside a DuckDB ``BEGIN``/``COMMIT`` transaction.
-
-    Any exception triggers ``ROLLBACK`` and propagates; a clean exit
-    ``COMMIT``s. Useful for callers that want all-or-nothing semantics
-    over multiple statements (compaction's segment swap, a migration's
-    multi-row backfill where partial visibility would be wrong).
-    """
+    """``BEGIN``/``COMMIT`` around a block; ``ROLLBACK`` on exception."""
     conn.execute("BEGIN")
     try:
         yield conn
@@ -63,8 +44,6 @@ def transactional(conn: duckdb.DuckDBPyConnection) -> Iterator[duckdb.DuckDBPyCo
 
 
 def _discover_migrations(migrations_dir: Path) -> list[Path]:
-    """Migration files in numeric order. Anything starting with ``_`` (e.g.
-    ``_runner.py``, ``__init__.py``) is skipped."""
     return [p for p in sorted(migrations_dir.glob("*.py")) if not p.name.startswith("_")]
 
 
@@ -80,7 +59,6 @@ def _ensure_schema_migrations_table(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def _load_migration(path: Path):
-    """Load a migration module from a file path; return its ``migrate``."""
     spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec is not None and spec.loader is not None, f"failed to load migration spec for {path}"
     module = importlib.util.module_from_spec(spec)
@@ -96,18 +74,8 @@ def apply_migrations(
     *,
     data_dir: Path | None = None,
 ) -> None:
-    """Apply pending migrations from ``migrations_dir`` to ``conn``.
-
-    ``migrations_dir`` defaults to this package's directory. ``data_dir``
-    is the parent directory of the registry DB and is forwarded to every
-    migration's ``migrate(conn, *, data_dir=...)`` signature; migrations
-    that need to rename on-disk parquet files use it.
-
-    Each ``migrate`` runs without an enclosing transaction (see module
-    docstring). If it raises, the ``schema_migrations`` row is not
-    inserted, so the migration will re-run on the next open — and must
-    therefore be idempotent.
-    """
+    """Apply pending migrations. ``data_dir`` is forwarded to migrations
+    that need to rename on-disk parquet files."""
     if migrations_dir is None:
         migrations_dir = Path(__file__).parent
 
