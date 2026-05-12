@@ -8,7 +8,6 @@ creates N tasks). Tasks are the unit of scheduling and execution. Job state is
 aggregated from task states.
 """
 
-import dataclasses
 import json
 import logging
 import secrets
@@ -56,7 +55,7 @@ from iris.cluster.controller.db import (
     attempt_is_worker_failure,
     task_row_can_be_scheduled,
 )
-from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointsProjection
+from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.query import execute_raw_query
@@ -65,16 +64,6 @@ from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.reads import workers as reads_workers
 from iris.cluster.controller.reads.workers import SchedulableWorker
 from iris.cluster.controller.scheduler import SchedulingContext
-from iris.cluster.controller.schema import (
-    AttemptRow,
-    EndpointRow,
-    JobDetailRow,
-    JobRow,
-    TaskDetailRow,
-    TaskRow,
-    WorkerDetailRow,
-    tasks_with_attempts,
-)
 from iris.cluster.controller.schema_v2 import (
     job_config_table,
     jobs_table,
@@ -195,29 +184,50 @@ USER_JOB_STATES = (
 )
 
 
-def _current_attempt(task: TaskDetailRow) -> AttemptRow | None:
-    """Get the latest attempt for a task detail row."""
+class TaskWithAttempts:
+    """SA task Row with its attempt rows attached.
+
+    Proxies attribute access to the inner SA Row so callers can use
+    ``task.state``, ``task.task_id``, etc. exactly as before.  The only
+    addition over a bare SA Row is the ``attempts`` tuple.
+    """
+
+    __slots__ = ("_row", "attempts")
+
+    def __init__(self, row, attempts: tuple) -> None:
+        object.__setattr__(self, "_row", row)
+        object.__setattr__(self, "attempts", attempts)
+
+    def __getattr__(self, name: str):
+        return getattr(self._row, name)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("TaskWithAttempts is immutable")
+
+
+def _current_attempt(task: TaskWithAttempts):
+    """Get the latest attempt for a task, or None."""
     if not task.attempts:
         return None
     return task.attempts[-1]
 
 
-def _task_worker_id(task: TaskDetailRow) -> WorkerId | None:
-    """Get the effective worker_id for a task detail row."""
+def _task_worker_id(task: TaskWithAttempts) -> WorkerId | None:
+    """Get the effective worker_id for a task."""
     current = _current_attempt(task)
     if current is None:
         return task.current_worker_id
     return current.worker_id
 
 
-def _active_worker_id(task: TaskDetailRow) -> WorkerId | None:
+def _active_worker_id(task: TaskWithAttempts) -> WorkerId | None:
     """Get the active worker_id (None for pending tasks)."""
     if task.state == job_pb2.TASK_STATE_PENDING:
         return None
     return _task_worker_id(task)
 
 
-def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.TaskStatus:
+def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.TaskStatus:
     """Convert a task row to a TaskStatus proto.
 
     Handles attempt conversion and timestamps. Per-attempt resource samples
@@ -237,10 +247,10 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.Task
             error=attempt.error or "",
             is_worker_failure=attempt_is_worker_failure(attempt.state),
         )
-        if attempt.started_at is not None:
-            proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at))
-        if attempt.finished_at is not None:
-            proto_attempt.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at))
+        if attempt.started_at_ms is not None:
+            proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
+        if attempt.finished_at_ms is not None:
+            proto_attempt.finished_at.CopyFrom(timestamp_to_proto(attempt.finished_at_ms))
         attempts.append(proto_attempt)
 
     active_wid = _active_worker_id(task)
@@ -254,10 +264,10 @@ def task_to_proto(task: TaskDetailRow, worker_address: str = "") -> job_pb2.Task
         current_attempt_id=task.current_attempt_id,
         attempts=attempts,
     )
-    if current_attempt and current_attempt.started_at:
-        proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at))
-    if current_attempt and current_attempt.finished_at:
-        proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at))
+    if current_attempt and current_attempt.started_at_ms:
+        proto.started_at.CopyFrom(timestamp_to_proto(current_attempt.started_at_ms))
+    if current_attempt and current_attempt.finished_at_ms:
+        proto.finished_at.CopyFrom(timestamp_to_proto(current_attempt.finished_at_ms))
     if task.container_id:
         proto.container_id = task.container_id
     # For pending tasks with prior terminal attempts, surface retry context.
@@ -319,89 +329,9 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 # =============================================================================
 
 
-def _read_job(tx, job_id: JobName) -> JobDetailRow | None:
-    row = reads_jobs.get_detail(tx, job_id)
-    if row is None:
-        return None
-    return JobDetailRow(
-        job_id=row.job_id,
-        state=int(row.state),
-        submitted_at=row.submitted_at_ms,
-        root_submitted_at=row.root_submitted_at_ms,
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        scheduling_deadline_epoch_ms=(
-            int(row.scheduling_deadline_epoch_ms) if row.scheduling_deadline_epoch_ms is not None else None
-        ),
-        error=row.error,
-        exit_code=row.exit_code,
-        num_tasks=int(row.num_tasks),
-        is_reservation_holder=bool(row.is_reservation_holder),
-        has_reservation=bool(row.has_reservation),
-        name=str(row.name),
-        depth=int(row.depth),
-        res_cpu_millicores=int(row.res_cpu_millicores),
-        res_memory_bytes=int(row.res_memory_bytes),
-        res_disk_bytes=int(row.res_disk_bytes) if row.res_disk_bytes is not None else 0,
-        res_device_json=row.res_device_json,
-        constraints_json=row.constraints_json,
-        has_coscheduling=bool(row.has_coscheduling),
-        coscheduling_group_by=str(row.coscheduling_group_by) if row.coscheduling_group_by else "",
-        scheduling_timeout_ms=int(row.scheduling_timeout_ms) if row.scheduling_timeout_ms is not None else None,
-        max_task_failures=int(row.max_task_failures),
-        entrypoint_json=str(row.entrypoint_json) if row.entrypoint_json else "{}",
-        environment_json=str(row.environment_json) if row.environment_json else "{}",
-        bundle_id=str(row.bundle_id) if row.bundle_id else "",
-        ports_json=str(row.ports_json) if row.ports_json else "[]",
-        max_retries_failure=int(row.max_retries_failure),
-        max_retries_preemption=int(row.max_retries_preemption),
-        timeout_ms=int(row.timeout_ms) if row.timeout_ms is not None else None,
-        preemption_policy=int(row.preemption_policy),
-        existing_job_policy=int(row.existing_job_policy),
-        priority_band=int(row.priority_band),
-        task_image=str(row.task_image) if row.task_image else "",
-        submit_argv_json=str(row.submit_argv_json) if row.submit_argv_json else "[]",
-        reservation_json=row.reservation_json,
-        fail_if_exists=bool(row.fail_if_exists),
-    )
-
-
-def _sa_row_to_task_detail(row) -> TaskDetailRow:
-    """Build a TaskDetailRow from an SA Core task row (no attempts)."""
-    return TaskDetailRow(
-        task_id=row.task_id,
-        job_id=row.job_id,
-        state=int(row.state),
-        current_attempt_id=int(row.current_attempt_id),
-        failure_count=int(row.failure_count),
-        preemption_count=int(row.preemption_count),
-        max_retries_failure=int(row.max_retries_failure),
-        max_retries_preemption=int(row.max_retries_preemption),
-        submitted_at=row.submitted_at_ms,
-        priority_band=int(row.priority_band),
-        error=row.error,
-        exit_code=row.exit_code,
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        current_worker_id=row.current_worker_id,
-        current_worker_address=row.current_worker_address,
-        container_id=row.container_id,
-    )
-
-
-def _sa_row_to_attempt(row) -> AttemptRow:
-    """Build an AttemptRow from an SA Core task_attempts row."""
-    return AttemptRow(
-        task_id=row.task_id,
-        attempt_id=int(row.attempt_id),
-        worker_id=row.worker_id,
-        state=int(row.state),
-        created_at=row.created_at_ms,
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        exit_code=row.exit_code,
-        error=row.error,
-    )
+def _read_job(tx, job_id: JobName):
+    """Return SA Row for ``job_id`` from reads_jobs.get_detail, or None."""
+    return reads_jobs.get_detail(tx, job_id)
 
 
 _TASK_DETAIL_COLS = (
@@ -437,7 +367,8 @@ _ATTEMPT_COLS = (
 )
 
 
-def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRow | None:
+def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttempts | None:
+    """Return a TaskWithAttempts for ``task_id``, or None if absent."""
     with db.read_snapshot() as tx:
         task_row = tx.execute(select(*_TASK_DETAIL_COLS).where(tasks_table.c.task_id == task_id)).first()
         if task_row is None:
@@ -447,14 +378,7 @@ def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskDetailRo
             .where(task_attempts_table.c.task_id == task_id)
             .order_by(task_attempts_table.c.attempt_id.asc())
         ).all()
-    task = _sa_row_to_task_detail(task_row)
-    attempts = [_sa_row_to_attempt(r) for r in attempt_rows]
-    return tasks_with_attempts([task], attempts)[0]
-
-
-def _read_worker(db: ControllerDB, worker_id: WorkerId) -> WorkerDetailRow | None:
-    with db.read_snapshot() as tx:
-        return reads_workers.get_detail(tx, worker_id)
+    return TaskWithAttempts(task_row, tuple(attempt_rows))
 
 
 def _job_state(db: ControllerDB, job_id: JobName) -> int | None:
@@ -471,6 +395,14 @@ def _worker_address(db: ControllerDB, worker_id: WorkerId) -> str | None:
         return str(row.address) if row else None
 
 
+def _read_worker(db: ControllerDB, worker_id: WorkerId):
+    """Return a slim SA Row (worker_id, address) for ``worker_id``, or None."""
+    with db.read_snapshot() as tx:
+        return tx.execute(
+            select(workers_table.c.worker_id, workers_table.c.address).where(workers_table.c.worker_id == worker_id)
+        ).first()
+
+
 def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
     """Reconstruct a ResourceSpecProto from native job columns."""
     return resource_spec_from_scalars(
@@ -478,8 +410,8 @@ def _resource_spec_from_job_row(job: Any) -> job_pb2.ResourceSpecProto:
     )
 
 
-def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Controller.LaunchJobRequest:
-    """Reconstruct a LaunchJobRequest proto from native JobDetailRow columns."""
+def _reconstruct_launch_job_request(job) -> controller_pb2.Controller.LaunchJobRequest:
+    """Reconstruct a LaunchJobRequest proto from native job columns."""
     req = controller_pb2.Controller.LaunchJobRequest(
         name=job.name,
         bundle_id=job.bundle_id,
@@ -522,8 +454,8 @@ def _reconstruct_launch_job_request(job: JobDetailRow) -> controller_pb2.Control
     return req
 
 
-def _worker_metadata_to_proto(worker: WorkerDetailRow) -> job_pb2.WorkerMetadata:
-    """Reconstruct a WorkerMetadata proto from scalar columns."""
+def _worker_metadata_to_proto(worker, attributes: dict) -> job_pb2.WorkerMetadata:
+    """Reconstruct a WorkerMetadata proto from scalar columns and decoded attributes dict."""
     md = job_pb2.WorkerMetadata(
         hostname=worker.md_hostname,
         ip_address=worker.md_ip_address,
@@ -543,8 +475,7 @@ def _worker_metadata_to_proto(worker: WorkerDetailRow) -> job_pb2.WorkerMetadata
     )
     if worker.md_device_json and worker.md_device_json != "{}":
         md.device.CopyFrom(proto_from_json(worker.md_device_json, job_pb2.DeviceConfig))
-    # Populate attributes from the worker_attributes table data stored on the row.
-    for key, value in worker.attributes.items():
+    for key, value in attributes.items():
         av = job_pb2.AttributeValue()
         if isinstance(value, str):
             av.string_value = value
@@ -571,7 +502,8 @@ def _decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
 
 @dataclass(frozen=True)
 class _WorkerDetail:
-    worker: WorkerDetailRow
+    worker: Any  # SA Row from _WORKER_DETAIL_COLS
+    attributes: dict  # decoded from worker_attributes table
     running_tasks: frozenset[JobName]
 
 
@@ -590,8 +522,6 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
             ).where(worker_attributes_table.c.worker_id == worker_id)
         ).all()
         attrs = dict(_decode_attribute_value(row) for row in attr_rows)
-        if attrs:
-            worker = dataclasses.replace(worker, attributes=attrs)
         running_rows = tx.execute(
             select(tasks_table.c.task_id)
             .select_from(
@@ -608,15 +538,16 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
         ).all()
     return _WorkerDetail(
         worker=worker,
+        attributes=attrs,
         running_tasks=frozenset(r.task_id for r in running_rows),
     )
 
 
-def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailRow]:
+def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAttempts]:
     """Load tasks for the list view, attaching only the current attempt.
 
-    The list UI only needs the current attempt's ``started_at`` /
-    ``finished_at`` and a single ``proto.attempts`` entry. Full history is
+    The list UI only needs the current attempt's ``started_at_ms`` /
+    ``finished_at_ms`` and a single ``proto.attempts`` entry. Full history is
     fetched separately by ``get_task_status``.
     """
     with db.read_snapshot() as tx:
@@ -635,12 +566,13 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskDetailR
                 )
             )
         ).all()
-    tasks = [_sa_row_to_task_detail(r) for r in task_rows]
-    attempts = [_sa_row_to_attempt(r) for r in attempt_rows]
-    return tasks_with_attempts(tasks, attempts)
+    attempts_by_task: dict[JobName, list] = {}
+    for a in attempt_rows:
+        attempts_by_task.setdefault(a.task_id, []).append(a)
+    return [TaskWithAttempts(r, tuple(attempts_by_task.get(r.task_id, ()))) for r in task_rows]
 
 
-def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskDetailRow]) -> dict[WorkerId, str]:
+def _worker_addresses_for_tasks(db: ControllerDB, tasks: list[TaskWithAttempts]) -> dict[WorkerId, str]:
     """Fetch addresses only for workers referenced by the given tasks."""
     worker_ids = {_task_worker_id(t) for t in tasks}
     worker_ids.discard(None)
@@ -741,10 +673,10 @@ def _job_status_counts(summary: TaskJobSummary | None, job_id: JobName) -> dict[
 
 
 def _filter_and_sort_workers(
-    workers: list[WorkerDetailRow],
+    workers: list[tuple[Any, dict]],
     liveness_by_id: dict[WorkerId, WorkerLiveness],
     query: controller_pb2.Controller.WorkerQuery,
-) -> list[WorkerDetailRow]:
+) -> list[tuple[Any, dict]]:
     """Apply the ``WorkerQuery`` contains filter and sort the cached roster.
 
     Filtering and sorting happen in Python against the cached worker roster
@@ -756,19 +688,21 @@ def _filter_and_sort_workers(
     needle = query.contains.lower() if query.contains else ""
     if needle:
         workers = [
-            w for w in workers if needle in str(w.worker_id).lower() or (w.address and needle in w.address.lower())
+            (w, attrs)
+            for w, attrs in workers
+            if needle in str(w.worker_id).lower() or (w.address and needle in w.address.lower())
         ]
 
     sort_field = query.sort_field or controller_pb2.Controller.WORKER_SORT_FIELD_WORKER_ID
     descending = query.sort_direction == controller_pb2.Controller.SORT_DIRECTION_DESC
     if sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_LAST_HEARTBEAT:
-        workers = sorted(workers, key=lambda w: liveness_by_id[w.worker_id].last_heartbeat_ms, reverse=descending)
+        workers = sorted(workers, key=lambda wa: liveness_by_id[wa[0].worker_id].last_heartbeat_ms, reverse=descending)
     elif sort_field == controller_pb2.Controller.WORKER_SORT_FIELD_DEVICE_TYPE:
         # CPU workers persist with ``device_type == ""``; under ascending sort
         # they group first (treating CPU as the no-accelerator baseline).
-        workers = sorted(workers, key=lambda w: (w.device_type, str(w.worker_id)), reverse=descending)
+        workers = sorted(workers, key=lambda wa: (wa[0].device_type, str(wa[0].worker_id)), reverse=descending)
     else:
-        workers = sorted(workers, key=lambda w: str(w.worker_id), reverse=descending)
+        workers = sorted(workers, key=lambda wa: str(wa[0].worker_id), reverse=descending)
     return workers
 
 
@@ -805,30 +739,11 @@ _JOB_ROW_COLS = (
 )
 
 
-def _sa_row_to_job_row(row) -> JobRow:
-    """Build a JobRow from an SA Core jobs+job_config row."""
-    return JobRow(
-        job_id=row.job_id,
-        state=int(row.state),
-        submitted_at=row.submitted_at_ms,
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        error=row.error,
-        exit_code=row.exit_code,
-        name=str(row.name),
-        depth=int(row.depth),
-        res_cpu_millicores=int(row.res_cpu_millicores),
-        res_memory_bytes=int(row.res_memory_bytes),
-        res_disk_bytes=int(row.res_disk_bytes) if row.res_disk_bytes is not None else 0,
-        res_device_json=row.res_device_json,
-    )
-
-
 def _query_jobs(
     tx,
     query: controller_pb2.Controller.JobQuery,
     state_ids: tuple[int, ...],
-) -> tuple[list[JobRow], int]:
+) -> tuple[list, int]:
     """Execute a ``JobQuery`` and return ``(rows, total_count)``.
 
     ``state_ids`` is the pre-resolved state filter (always non-empty); the
@@ -914,7 +829,7 @@ def _query_jobs(
         stmt = stmt.limit(limit).offset(offset)
 
     rows = tx.execute(stmt).all()
-    return [_sa_row_to_job_row(r) for r in rows], total
+    return rows, total
 
 
 def _query_from_list_jobs_request(
@@ -986,7 +901,8 @@ def _task_summaries_for_jobs(tx, job_ids: set[JobName]) -> dict[JobName, TaskJob
     return summaries
 
 
-def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
+def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
+    """Return ``(worker_row, attrs_dict)`` pairs for all registered workers."""
     with db.read_snapshot() as tx:
         decoded = [
             reads_workers.get_detail(tx, row.worker_id) for row in tx.execute(select(workers_table.c.worker_id)).all()
@@ -1010,7 +926,7 @@ def _worker_roster(db: ControllerDB) -> list[WorkerDetailRow]:
             wid = str(row.worker_id)
             key, value = _decode_attribute_value(row)
             attrs_by_worker.setdefault(wid, {})[key] = value
-    return [dataclasses.replace(w, attributes=attrs_by_worker.get(str(w.worker_id), {})) for w in decoded]
+    return [(w, attrs_by_worker.get(str(w.worker_id), {})) for w in decoded]
 
 
 _ACTIVE_JOB_STATES = (
@@ -1076,9 +992,8 @@ def _attempts_for_worker(
             )
             .limit(limit)
         ).all()
-    rows = [_sa_row_to_attempt(r) for r in raw_rows]
     out: list[controller_pb2.Controller.WorkerTaskAttempt] = []
-    for row in rows:
+    for row in raw_rows:
         proto_attempt = job_pb2.TaskAttempt(
             attempt_id=row.attempt_id,
             worker_id=str(row.worker_id) if row.worker_id else "",
@@ -1087,10 +1002,10 @@ def _attempts_for_worker(
             error=row.error or "",
             is_worker_failure=attempt_is_worker_failure(row.state),
         )
-        if row.started_at is not None:
-            proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at))
-        if row.finished_at is not None:
-            proto_attempt.finished_at.CopyFrom(timestamp_to_proto(row.finished_at))
+        if row.started_at_ms is not None:
+            proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))
+        if row.finished_at_ms is not None:
+            proto_attempt.finished_at.CopyFrom(timestamp_to_proto(row.finished_at_ms))
         out.append(controller_pb2.Controller.WorkerTaskAttempt(task_id=row.task_id.to_wire(), attempt=proto_attempt))
     return out
 
@@ -1595,13 +1510,13 @@ class ControllerServiceImpl:
 
     def _job_to_proto(
         self,
-        j: JobRow,
+        j: Any,
         task_summary: TaskJobSummary | None,
         autoscaler_pending_hints: dict[str, PendingHint],
         *,
         has_children: bool = False,
     ) -> job_pb2.JobStatus:
-        """Convert a JobRow + its task summary into a JobStatus proto."""
+        """Convert a job SA Row + its task summary into a JobStatus proto."""
         pending_reason = j.error or ""
         if j.state == job_pb2.JOB_STATE_PENDING:
             sched_reason = self._controller.get_job_scheduling_diagnostics(j.job_id.to_wire())
@@ -1621,17 +1536,17 @@ class ControllerServiceImpl:
             has_children=has_children,
             **_job_status_counts(task_summary, j.job_id),
         )
-        if j.started_at:
-            proto_job.started_at.CopyFrom(timestamp_to_proto(j.started_at))
-        if j.finished_at:
-            proto_job.finished_at.CopyFrom(timestamp_to_proto(j.finished_at))
-        if j.submitted_at:
-            proto_job.submitted_at.CopyFrom(timestamp_to_proto(j.submitted_at))
+        if j.started_at_ms:
+            proto_job.started_at.CopyFrom(timestamp_to_proto(j.started_at_ms))
+        if j.finished_at_ms:
+            proto_job.finished_at.CopyFrom(timestamp_to_proto(j.finished_at_ms))
+        if j.submitted_at_ms:
+            proto_job.submitted_at.CopyFrom(timestamp_to_proto(j.submitted_at_ms))
         return proto_job
 
     def _jobs_to_protos(
         self,
-        jobs: list[JobRow],
+        jobs: list,
         task_summaries: dict[JobName, TaskJobSummary],
         autoscaler_pending_hints: dict[str, PendingHint],
         has_children: set[JobName] | None = None,
@@ -1823,7 +1738,7 @@ class ControllerServiceImpl:
             query.CopyFrom(request.query)
 
         workers_all = _worker_roster(self._db)
-        liveness_by_id = self._health.liveness_many(w.worker_id for w in workers_all)
+        liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers_all)
         filtered = _filter_and_sort_workers(workers_all, liveness_by_id, query)
         total_count = len(filtered)
 
@@ -1840,11 +1755,11 @@ class ControllerServiceImpl:
 
         if page_rows:
             with self._db.read_snapshot() as tx:
-                running = reads_scheduler.running_tasks_by_worker(tx, {w.worker_id for w in page_rows})
+                running = reads_scheduler.running_tasks_by_worker(tx, {w.worker_id for w, _attrs in page_rows})
         else:
             running = {}
         workers = []
-        for worker in page_rows:
+        for worker, attrs in page_rows:
             liveness = liveness_by_id[worker.worker_id]
             workers.append(
                 controller_pb2.Controller.WorkerHealthStatus(
@@ -1854,7 +1769,7 @@ class ControllerServiceImpl:
                     last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
                     running_job_ids=[task_id.to_wire() for task_id in running.get(worker.worker_id, set())],
                     address=worker.address,
-                    metadata=_worker_metadata_to_proto(worker),
+                    metadata=_worker_metadata_to_proto(worker, attrs),
                     status_message=worker_status_message(liveness),
                 )
             )
@@ -1999,8 +1914,10 @@ class ControllerServiceImpl:
         status = autoscaler.get_status()
 
         workers = _worker_roster(self._db)
-        liveness_by_id = self._health.liveness_many(w.worker_id for w in workers)
-        worker_id_to_health: dict[str, bool] = {str(w.worker_id): liveness_by_id[w.worker_id].healthy for w in workers}
+        liveness_by_id = self._health.liveness_many(w.worker_id for w, _attrs in workers)
+        worker_id_to_health: dict[str, bool] = {
+            str(w.worker_id): liveness_by_id[w.worker_id].healthy for w, _attrs in workers
+        }
 
         # The vm_ids appearing in the autoscaler status are the only candidates
         # for the running-task lookup; restrict to those known to be in the
@@ -2244,7 +2161,7 @@ class ControllerServiceImpl:
             last_heartbeat=timestamp_to_proto(Timestamp.from_ms(liveness.last_heartbeat_ms)),
             running_job_ids=[tid.to_wire() for tid in detail.running_tasks],
             address=worker.address,
-            metadata=_worker_metadata_to_proto(worker),
+            metadata=_worker_metadata_to_proto(worker, detail.attributes),
             status_message=worker_status_message(liveness),
         )
 
@@ -2439,10 +2356,10 @@ class ControllerServiceImpl:
                     key_prefix=k.key_prefix,
                     user_id=k.user_id,
                     name=k.name,
-                    created_at_ms=k.created_at.epoch_ms(),
-                    last_used_at_ms=k.last_used_at.epoch_ms() if k.last_used_at else 0,
-                    expires_at_ms=k.expires_at.epoch_ms() if k.expires_at else 0,
-                    revoked=k.revoked_at is not None,
+                    created_at_ms=k.created_at_ms.epoch_ms(),
+                    last_used_at_ms=k.last_used_at_ms.epoch_ms() if k.last_used_at_ms else 0,
+                    expires_at_ms=k.expires_at_ms.epoch_ms() if k.expires_at_ms else 0,
+                    revoked=k.revoked_at_ms is not None,
                 )
             )
         return job_pb2.ListApiKeysResponse(keys=key_infos)
@@ -2664,24 +2581,7 @@ class ControllerServiceImpl:
             pending_raw = snap.execute(
                 select(*_TASK_ROW_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
             ).all()
-            pending_rows = [
-                TaskRow(
-                    task_id=r.task_id,
-                    job_id=r.job_id,
-                    state=int(r.state),
-                    current_attempt_id=int(r.current_attempt_id),
-                    failure_count=int(r.failure_count),
-                    preemption_count=int(r.preemption_count),
-                    max_retries_failure=int(r.max_retries_failure),
-                    max_retries_preemption=int(r.max_retries_preemption),
-                    submitted_at=r.submitted_at_ms,
-                    priority_band=int(r.priority_band),
-                    priority_neg_depth=int(r.priority_neg_depth),
-                    priority_root_submitted_ms=int(r.root_submitted_at_ms.epoch_ms()) if r.root_submitted_at_ms else 0,
-                    priority_insertion=int(r.priority_insertion),
-                )
-                for r in pending_raw
-            ]
+            pending_rows = pending_raw
             pending_requested_bands = reads_jobs.get_priority_bands(snap, {row.job_id for row in pending_rows})
 
             # Running tasks: only task_id, priority_band, and worker — no
@@ -2697,13 +2597,7 @@ class ControllerServiceImpl:
                 )
             ).all()
 
-            class _RunningRow:
-                def __init__(self, r):
-                    self.task_id = r.task_id
-                    self.priority_band = int(r.priority_band)
-                    self.worker_id = r.worker_id
-
-            running_rows = [_RunningRow(r) for r in running_raw]
+            running_rows = running_raw
 
         # Aggregate pending into (band, user, job) → count buckets.
         pending_counts: dict[tuple[int, str, str], int] = {}

@@ -9,7 +9,7 @@ callers receive ``JobName``, ``Timestamp``, and ``bool`` directly.
 
 Return shapes:
 
-* ``list_jobs`` — ``(list[JobRow], int)`` — paged job rows plus total count
+* ``list_jobs`` — ``(list[Row], int)`` — paged job rows plus total count
 * ``task_summaries_for_jobs`` — ``dict[JobName, TaskJobSummary]``
 * ``parent_ids_with_children`` — ``set[JobName]``
 
@@ -31,7 +31,6 @@ from sqlalchemy import Integer, bindparam, case, cast, func, select
 
 from iris.cluster.controller.db import TaskJobSummary
 from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.schema import JobRow
 from iris.cluster.controller.schema_v2 import (
     job_config_table,
     jobs_table,
@@ -88,7 +87,7 @@ _NEEDS_TASK_AGG: frozenset[int] = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# JobRow projection (12-col subset of jobs + job_config)
+# Job listing projection (12-col subset of jobs + job_config)
 # ---------------------------------------------------------------------------
 
 _JOB_ROW_COLUMNS = (
@@ -108,26 +107,6 @@ _JOB_ROW_COLUMNS = (
 )
 
 
-def _row_to_job_row(row) -> JobRow:
-    # SA Core's TypeDecorators have already produced ``Timestamp`` / ``JobName``
-    # objects for the typed columns; pass through directly.
-    return JobRow(
-        job_id=row.job_id,
-        state=int(row.state),
-        submitted_at=row.submitted_at_ms,
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        error=None if row.error is None else str(row.error),
-        exit_code=None if row.exit_code is None else int(row.exit_code),
-        name=str(row.name),
-        depth=int(row.depth),
-        res_cpu_millicores=int(row.res_cpu_millicores),
-        res_memory_bytes=int(row.res_memory_bytes),
-        res_disk_bytes=int(row.res_disk_bytes),
-        res_device_json=None if row.res_device_json is None else str(row.res_device_json),
-    )
-
-
 # ---------------------------------------------------------------------------
 # list_jobs (paged, sortable dashboard listing)
 # ---------------------------------------------------------------------------
@@ -137,12 +116,14 @@ def list_jobs(
     tx: Tx,
     query: controller_pb2.Controller.JobQuery,
     state_ids: tuple[int, ...],
-) -> tuple[list[JobRow], int]:
+) -> tuple[list, int]:
     """Return ``(rows, total_count)`` for the given dashboard ``JobQuery``.
 
     ``state_ids`` is the pre-resolved state filter (always non-empty); the
     caller owns "unknown state -> empty page" handling so a bad filter never
-    reaches SQL. Returns (list[JobRow], int).
+    reaches SQL. Returns (list[Row], int). Each Row exposes TypeDecorator-decoded
+    fields: job_id (JobName), submitted_at_ms (Timestamp), started_at_ms
+    (Timestamp|None), finished_at_ms (Timestamp|None).
     """
     assert state_ids, "list_jobs requires at least one state id"
 
@@ -215,7 +196,7 @@ def list_jobs(
 
     rows = tx.execute(stmt).all()
     total = int(tx.execute(count_stmt).scalar() or 0)
-    return [_row_to_job_row(row) for row in rows], total
+    return rows, total
 
 
 # ---------------------------------------------------------------------------

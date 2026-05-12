@@ -20,19 +20,33 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from threading import RLock
 from typing import ClassVar
 
+from rigging.timing import Timestamp
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller import db_v2
 from iris.cluster.controller.db import ControllerDB, EndpointQuery
 from iris.cluster.controller.projections import PROJECTIONS
-from iris.cluster.controller.schema import EndpointRow
 from iris.cluster.controller.schema_v2 import endpoints_table, tasks_table
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName
+
+
+@dataclass(frozen=True, slots=True)
+class EndpointRow:
+    """Registered service endpoint (in-memory write-through cache row)."""
+
+    endpoint_id: str
+    name: str
+    address: str
+    task_id: JobName
+    metadata: dict
+    registered_at: Timestamp
+
 
 logger = logging.getLogger(__name__)
 

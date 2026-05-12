@@ -47,9 +47,8 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Shared predicate functions for Task/TaskRow and Worker/WorkerRow.
-# Placed above the class definitions so both full and lightweight models
-# can delegate to the same logic without duplication.
+# Shared predicate functions operating on SA Row objects from the tasks
+# and workers tables.
 # ---------------------------------------------------------------------------
 
 

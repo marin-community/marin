@@ -21,7 +21,6 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema import ApiKeyRow
 from iris.cluster.controller.schema_v2 import auth_api_keys_table, auth_controller_secrets_table
 from iris.rpc import config_pb2
 from iris.rpc.auth import (
@@ -36,21 +35,6 @@ logger = logging.getLogger(__name__)
 
 WORKER_USER = "system:worker"
 DEFAULT_JWT_TTL_SECONDS = 86400 * 30  # 30 days
-
-
-def _row_to_api_key(row) -> ApiKeyRow:
-    """Build an ApiKeyRow from an SA row of auth_api_keys_table."""
-    return ApiKeyRow(
-        key_id=str(row.key_id),
-        key_hash=str(row.key_hash),
-        key_prefix=str(row.key_prefix),
-        user_id=str(row.user_id),
-        name=str(row.name),
-        created_at=row.created_at_ms,
-        last_used_at=row.last_used_at_ms,
-        expires_at=row.expires_at_ms,
-        revoked_at=row.revoked_at_ms,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -90,11 +74,10 @@ def create_api_key(
     )
 
 
-def lookup_api_key_by_hash(db: ControllerDB, key_hash: str) -> ApiKeyRow | None:
-    """Find an API key by its SHA-256 hash."""
+def lookup_api_key_by_hash(db: ControllerDB, key_hash: str):
+    """Find an API key by its SHA-256 hash. Returns SA Row or None."""
     with db.read_snapshot() as tx:
-        row = tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_hash == key_hash).limit(1)).first()
-    return _row_to_api_key(row) if row is not None else None
+        return tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_hash == key_hash).limit(1)).first()
 
 
 def touch_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> None:
@@ -120,21 +103,19 @@ def revoke_api_key(db: ControllerDB, key_id: str, now: Timestamp) -> bool:
     return revoked
 
 
-def lookup_api_key_by_id(db: ControllerDB, key_id: str) -> ApiKeyRow | None:
-    """Find an API key by its key_id."""
+def lookup_api_key_by_id(db: ControllerDB, key_id: str):
+    """Find an API key by its key_id. Returns SA Row or None."""
     with db.read_snapshot() as tx:
-        row = tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_id == key_id)).first()
-    return _row_to_api_key(row) if row is not None else None
+        return tx.execute(select(auth_api_keys_table).where(auth_api_keys_table.c.key_id == key_id)).first()
 
 
-def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list[ApiKeyRow]:
-    """List API keys, optionally filtered by user."""
+def list_api_keys(db: ControllerDB, user_id: str | None = None) -> list:
+    """List API keys, optionally filtered by user. Returns list[Row]."""
     with db.read_snapshot() as tx:
         stmt = select(auth_api_keys_table)
         if user_id:
             stmt = stmt.where(auth_api_keys_table.c.user_id == user_id)
-        rows = tx.execute(stmt).all()
-    return [_row_to_api_key(row) for row in rows]
+        return tx.execute(stmt).all()
 
 
 def revoke_login_keys_for_user(db: ControllerDB, user_id: str, now: Timestamp) -> list[str]:

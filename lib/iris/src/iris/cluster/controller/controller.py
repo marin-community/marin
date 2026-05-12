@@ -14,6 +14,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
@@ -86,15 +87,6 @@ from iris.cluster.controller.scheduler import (
     WorkerCapacity,
     WorkerSnapshot,
     worker_snapshot_from_row,
-)
-from iris.cluster.controller.schema import (
-    AttemptRow,
-    JobReservationRow,
-    JobRow,
-    JobSchedulingRow,
-    TaskDetailRow,
-    TaskRow,
-    tasks_with_attempts,
 )
 from iris.cluster.controller.schema_v2 import (
     job_config_table,
@@ -191,7 +183,7 @@ class PreemptionCandidate:
 class _SchedulingStateRead:
     """Snapshot of pending tasks and workers read at the start of a scheduling cycle."""
 
-    pending_tasks: list[TaskRow]
+    pending_tasks: list  # SA Row objects from _TASK_ROW_QUERY
     workers: list[WorkerSnapshot]
     state_read_ms: int
 
@@ -348,102 +340,14 @@ _RUNNING_TASKS_WITH_BAND_QUERY = (
 )
 
 
-def _row_to_scheduling_row(row) -> JobSchedulingRow:
-    """Map an SA Core row from ``_JOB_SCHEDULING_QUERY`` to ``JobSchedulingRow``."""
-    return JobSchedulingRow(
-        job_id=row.job_id,
-        state=int(row.state),
-        submitted_at=row.submitted_at_ms,
-        root_submitted_at=row.root_submitted_at_ms,
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        scheduling_deadline_epoch_ms=(
-            int(row.scheduling_deadline_epoch_ms) if row.scheduling_deadline_epoch_ms is not None else None
-        ),
-        error=row.error,
-        exit_code=int(row.exit_code) if row.exit_code is not None else None,
-        num_tasks=int(row.num_tasks),
-        is_reservation_holder=bool(row.is_reservation_holder),
-        has_reservation=bool(row.has_reservation),
-        name=str(row.name) if row.name is not None else "",
-        depth=int(row.depth),
-        res_cpu_millicores=int(row.res_cpu_millicores),
-        res_memory_bytes=int(row.res_memory_bytes),
-        res_disk_bytes=int(row.res_disk_bytes),
-        res_device_json=row.res_device_json,
-        constraints_json=row.constraints_json,
-        has_coscheduling=bool(row.has_coscheduling),
-        coscheduling_group_by=str(row.coscheduling_group_by) if row.coscheduling_group_by is not None else "",
-        scheduling_timeout_ms=int(row.scheduling_timeout_ms) if row.scheduling_timeout_ms is not None else None,
-        max_task_failures=int(row.max_task_failures),
-    )
-
-
-def _row_to_task_row(row) -> TaskRow:
-    """Map an SA Core row from ``_TASK_ROW_QUERY`` to ``TaskRow``."""
-    return TaskRow(
-        task_id=row.task_id,
-        job_id=row.job_id,
-        state=int(row.state),
-        current_attempt_id=int(row.current_attempt_id),
-        failure_count=int(row.failure_count),
-        preemption_count=int(row.preemption_count),
-        max_retries_failure=int(row.max_retries_failure),
-        max_retries_preemption=int(row.max_retries_preemption),
-        submitted_at=row.submitted_at_ms,
-        priority_band=int(row.priority_band),
-        priority_neg_depth=int(row.priority_neg_depth),
-        priority_root_submitted_ms=int(row.priority_root_submitted_ms),
-        priority_insertion=int(row.priority_insertion),
-    )
-
-
-def _row_to_task_detail(row) -> TaskDetailRow:
-    """Map an SA Core row from ``_TASK_DETAIL_QUERY`` to ``TaskDetailRow``."""
-    return TaskDetailRow(
-        task_id=row.task_id,
-        job_id=row.job_id,
-        state=int(row.state),
-        current_attempt_id=int(row.current_attempt_id),
-        failure_count=int(row.failure_count),
-        preemption_count=int(row.preemption_count),
-        max_retries_failure=int(row.max_retries_failure),
-        max_retries_preemption=int(row.max_retries_preemption),
-        submitted_at=row.submitted_at_ms,
-        priority_band=int(row.priority_band),
-        error=row.error,
-        exit_code=int(row.exit_code) if row.exit_code is not None else None,
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        current_worker_id=row.current_worker_id,
-        current_worker_address=str(row.current_worker_address) if row.current_worker_address is not None else None,
-        container_id=str(row.container_id) if row.container_id is not None else None,
-    )
-
-
-def _row_to_attempt(row):
-    """Map an SA Core row from ``_ATTEMPT_QUERY`` to ``AttemptRow``."""
-    return AttemptRow(
-        task_id=row.task_id,
-        attempt_id=int(row.attempt_id),
-        worker_id=row.worker_id,
-        state=int(row.state),
-        created_at=row.created_at_ms,
-        started_at=row.started_at_ms,
-        finished_at=row.finished_at_ms,
-        exit_code=int(row.exit_code) if row.exit_code is not None else None,
-        error=row.error,
-    )
-
-
-def _resource_spec_from_row(job: JobRow | JobSchedulingRow) -> job_pb2.ResourceSpecProto:
+def _resource_spec_from_row(job: Any) -> job_pb2.ResourceSpecProto:
     """Reconstruct a ResourceSpecProto from native job columns."""
     return resource_spec_from_scalars(
         job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
     )
 
 
-def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
+def job_requirements_from_job(job: Any) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     return JobRequirements(
         resources=_resource_spec_from_row(job),
@@ -490,8 +394,8 @@ def compute_demand_entries(
     demand_entries: list[DemandEntry] = []
 
     # Collect all schedulable pending tasks, grouped by job.
-    tasks_by_job: dict[JobName, list[TaskRow]] = defaultdict(list)
-    all_schedulable: list[TaskRow] = []
+    tasks_by_job: dict[JobName, list] = defaultdict(list)
+    all_schedulable: list = []
     pending = _schedulable_tasks(queries)
     job_rows = list(_jobs_by_id(queries, {task.job_id for task in pending}).values()) if pending else []
     jobs_by_id = {job.job_id: job for job in job_rows}
@@ -625,15 +529,15 @@ def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClai
     }
 
 
-def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, JobSchedulingRow]:
+def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, Any]:
     if not job_ids:
         return {}
     with queries.read_snapshot() as tx:
         rows = tx.execute(_JOB_SCHEDULING_QUERY, {"job_ids": list(job_ids)}).all()
-    return {row.job_id: _row_to_scheduling_row(row) for row in rows}
+    return {row.job_id: row for row in rows}
 
 
-def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobReservationRow]:
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list:
     """Fetch (job_id, reservation_json) for jobs that hold a reservation.
 
     Per-tick hot path: only decode what the reservation-claim recomputation
@@ -859,15 +763,14 @@ def _run_preemption_pass(
     return preemptions
 
 
-def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
+def _schedulable_tasks(queries: ControllerDB) -> list:
     # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
     with queries.read_snapshot() as tx:
         rows = tx.execute(_TASK_ROW_QUERY, {"state": job_pb2.TASK_STATE_PENDING}).all()
-    tasks = [_row_to_task_row(r) for r in rows]
-    return [task for task in tasks if task_row_can_be_scheduled(task)]
+    return [row for row in rows if task_row_can_be_scheduled(row)]
 
 
-def _sort_pending_tasks_by_resolved_band(db: ControllerDB, pending_tasks: list[TaskRow]) -> list[TaskRow]:
+def _sort_pending_tasks_by_resolved_band(db: ControllerDB, pending_tasks: list) -> list:
     """Order pending rows using immutable job_config priority bands."""
     if not pending_tasks:
         return []
@@ -879,22 +782,10 @@ def _sort_pending_tasks_by_resolved_band(db: ControllerDB, pending_tasks: list[T
             requested_bands.get(task.job_id, job_pb2.PRIORITY_BAND_INTERACTIVE),
             task.priority_neg_depth,
             task.priority_root_submitted_ms,
-            task.submitted_at.epoch_ms(),
+            task.submitted_at_ms.epoch_ms(),
             task.priority_insertion,
         ),
     )
-
-
-def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:
-    if not task_ids:
-        return {}
-    ids = list(task_ids)
-    with queries.read_snapshot() as tx:
-        task_rows = tx.execute(_TASK_DETAIL_QUERY, {"task_ids": ids}).all()
-        attempt_rows = tx.execute(_ATTEMPT_QUERY, {"task_ids": ids}).all()
-    tasks = [_row_to_task_detail(r) for r in task_rows]
-    attempts = [_row_to_attempt(r) for r in attempt_rows]
-    return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
 
 
 def _building_counts(
@@ -1790,7 +1681,7 @@ class Controller:
 
     def _is_reservation_satisfied(
         self,
-        job: JobSchedulingRow,
+        job: Any,
         claims: dict[WorkerId, ReservationClaim] | None = None,
     ) -> bool:
         """Check if a job's reservation is fully satisfied.
@@ -2013,7 +1904,7 @@ class Controller:
 
     def _apply_scheduling_gates(
         self,
-        pending_tasks: list[TaskRow],
+        pending_tasks: list,
         claims: dict[WorkerId, ReservationClaim],
         trace: bool = False,
     ) -> _GatedCandidates:
@@ -2074,7 +1965,7 @@ class Controller:
     def _compute_scheduling_order(
         self,
         schedulable_task_ids: list[JobName],
-        pending_tasks: list[TaskRow],
+        pending_tasks: list,
         jobs: dict[JobName, JobRequirements],
         trace: bool = False,
     ) -> _SchedulingOrder:
@@ -2325,7 +2216,7 @@ class Controller:
         with self._db.transaction() as cur:
             self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
 
-    def _mark_task_unschedulable(self, task: TaskRow) -> None:
+    def _mark_task_unschedulable(self, task: Any) -> None:
         """Mark a task as unschedulable due to timeout."""
         if self._config.dry_run:
             logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)

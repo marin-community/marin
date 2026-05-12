@@ -13,7 +13,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Generic, NamedTuple, TypeVar
+from typing import Any, Generic, NamedTuple, TypeVar
 
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import delete, insert
@@ -39,7 +39,7 @@ from iris.cluster.controller.db import (
     task_row_is_finished,
 )
 from iris.cluster.controller.db_v2 import Tx
-from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointsProjection
+from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import jobs as read_jobs
 from iris.cluster.controller.reads import task_attempts as read_attempts
@@ -49,13 +49,6 @@ from iris.cluster.controller.rows import (
     ActiveTaskRow,
     TaskScope,
     WorkerAttributeParams,
-)
-from iris.cluster.controller.schema import (
-    AttemptRow,
-    EndpointRow,
-    JobDetailRow,
-    TaskDetailRow,
-    WorkerDetailRow,
 )
 from iris.cluster.controller.schema_v2 import worker_attributes_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
@@ -1335,7 +1328,7 @@ class ControllerTransitions:
         accepted: list[Assignment] = []
         rejected: list[Assignment] = []
         now_ms = Timestamp.now().epoch_ms()
-        job_cache: dict[str, JobDetailRow] = {}
+        job_cache: dict[str, Any] = {}
         jobs_to_update: set[str] = set()
         for assignment in assignments:
             task = read_tasks.get_detail(cur, assignment.task_id)
@@ -1391,8 +1384,8 @@ class ControllerTransitions:
         cur: Tx,
         req: HeartbeatApplyRequest,
         now_ms: int,
-        task_map: dict[JobName, TaskDetailRow],
-        attempt_map: dict[tuple[JobName, int], AttemptRow],
+        task_map: dict[JobName, Any],
+        attempt_map: dict[tuple[JobName, int], Any],
     ) -> TxResult:
         """Apply task state updates for one worker within an existing transaction.
 
@@ -2127,7 +2120,7 @@ class ControllerTransitions:
         log_event("job_removed", job_id.to_wire(), state=state)
         return True
 
-    def remove_worker(self, cur: Tx, worker_id: WorkerId) -> WorkerDetailRow | None:
+    def remove_worker(self, cur: Tx, worker_id: WorkerId) -> Any | None:
         detail = read_workers.get_detail(cur, worker_id)
         if detail is None:
             return None

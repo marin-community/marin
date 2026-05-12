@@ -43,16 +43,13 @@ from iris.cluster.controller.db import (
     ControllerDB,
     EndpointQuery,
 )
-from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.reads import workers as reads_workers
 from iris.cluster.controller.reads.workers import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.scheduler import Scheduler
-from iris.cluster.controller.schema import (
-    EndpointRow,
-)
 from iris.cluster.controller.schema_v2 import (
     endpoints_table,
     job_config_table,

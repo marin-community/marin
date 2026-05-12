@@ -8,7 +8,7 @@ All queries use ``select(table.c.col, ...)`` rather than ``text("SELECT
 
 Return shapes:
 
-* ``jobs_with_reservations`` — ``list[JobReservationRow]`` (job_id, reservation_json)
+* ``jobs_with_reservations`` — ``list[Row]`` (job_id, reservation_json)
 * ``resource_usage_by_worker`` — ``dict[WorkerId, WorkerResourceUsage]``
 * ``reconcile_rows_for_workers`` — ``list[ReconcileRow]``
 * ``running_tasks_by_worker`` — ``dict[WorkerId, set[JobName]]``
@@ -32,7 +32,6 @@ from sqlalchemy import bindparam, select
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db_v2 import Tx
 from iris.cluster.controller.rows import ReconcileRow, WorkerResourceUsage
-from iris.cluster.controller.schema import JobReservationRow
 from iris.cluster.controller.schema_v2 import (
     job_config_table,
     jobs_table,
@@ -61,13 +60,12 @@ JOBS_WITH_RESERVATIONS_QUERY = (
 )
 
 
-def jobs_with_reservations(tx: Tx, states: tuple[int, ...]) -> list[JobReservationRow]:
+def jobs_with_reservations(tx: Tx, states: tuple[int, ...]) -> list:
     """Return ``(job_id, reservation_json)`` for reservation-holding jobs in ``states``.
 
-    Returns list[JobReservationRow]. TypeDecorators decode job_id to JobName.
+    Returns list[Row]. TypeDecorators decode job_id to JobName.
     """
-    rows = tx.execute(JOBS_WITH_RESERVATIONS_QUERY, {"states": list(states)}).all()
-    return [JobReservationRow(job_id=row.job_id, reservation_json=row.reservation_json) for row in rows]
+    return tx.execute(JOBS_WITH_RESERVATIONS_QUERY, {"states": list(states)}).all()
 
 
 # ---------------------------------------------------------------------------
