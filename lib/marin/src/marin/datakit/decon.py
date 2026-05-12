@@ -41,6 +41,8 @@ from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import load_file
 
+from marin.datakit.normalize import NormalizedData
+from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
@@ -95,12 +97,23 @@ def _extract_ngrams(text: str, n: int, stride: int) -> Iterator[str]:
 
 
 def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
-    """Yield matchable features: ngrams within each paragraph, or whole paragraphs."""
+    """Yield matchable features: ngrams within each paragraph, or whole paragraphs.
+
+    If a paragraph has fewer than ``ngram_length`` tokens we fall back to yielding
+    the whole paragraph — symmetric with the consumer-side fallback in
+    :func:`_paragraph_overlap_and_matches`. Without this, a short eval paragraph
+    would contribute zero hashes to the bloom and an exact-byte match in the
+    input would silently miss.
+    """
     for para in text.split("\n"):
         if not para:
             continue
-        if ngram is not None:
-            yield from _extract_ngrams(para, ngram.ngram_length, ngram.stride)
+        if ngram is None:
+            yield para
+            continue
+        ngrams = list(_extract_ngrams(para, ngram.ngram_length, ngram.stride))
+        if ngrams:
+            yield from ngrams
         else:
             yield para
 
@@ -128,7 +141,13 @@ def _paragraph_overlap_and_matches(
 
 
 def _discover_parquet_partitions(input_path: str) -> list[str]:
-    """Walk *input_path* recursively, return sorted list of .parquet files."""
+    """Walk *input_path* recursively, return sorted list of .parquet files.
+
+    Caller must point at a flat partition directory (the datakit invariant —
+    e.g. a :class:`NormalizedData.main_output_dir`). Output filenames mirror
+    input basenames, so callers passing a nested layout would risk basename
+    collisions.
+    """
     fs, resolved = url_to_fs(input_path)
     protocol = input_path.split("://")[0] if "://" in input_path else ""
 
@@ -287,7 +306,7 @@ def _make_marker(
 
 def decon_to_parquet(
     *,
-    input_path: str,
+    source: NormalizedData,
     decontaminate_source: str | list[str],
     output_path: str,
     text_field: str = "text",
@@ -297,10 +316,12 @@ def decon_to_parquet(
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> DeconAttributes:
-    """Mark records in *input_path* that overlap with text in *decontaminate_source*.
+    """Mark records in *source* that overlap with text in *decontaminate_source*.
 
     Args:
-        input_path: Datakit-normalized Parquet directory. Records must have
+        source: Upstream :class:`NormalizedData` artifact. Reads from
+            ``source.main_output_dir`` (the flat, co-partitioned Parquet
+            directory produced by datakit normalize). Records must have
             ``id``, ``text``, and ``partition_id`` columns.
         decontaminate_source: Eval source directory (or list of dirs). Any
             zephyr-readable file format. Read once to build the bloom filter.
@@ -324,6 +345,7 @@ def decon_to_parquet(
     if not eval_paths:
         raise ValueError("decontaminate_source must be non-empty")
 
+    input_path = source.main_output_dir
     files = _discover_parquet_partitions(input_path)
     if not files:
         raise FileNotFoundError(f"No .parquet files found under {input_path}")
@@ -408,7 +430,7 @@ def decon_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: decon_to_parquet(
-            input_path=normalized.output_path,
+            source=Artifact.load(normalized, NormalizedData),
             decontaminate_source=[s.output_path for s in decontaminate_source],
             output_path=output_path,
             text_field=text_field,

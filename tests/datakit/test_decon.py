@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 from fray import LocalClient, set_current_client
 from marin.datakit.decon import NGramConfig, decon_to_parquet
+from marin.datakit.normalize import NormalizedData
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +41,16 @@ def _read_attributes(output_dir: Path) -> dict[str, dict]:
         for row in pq.read_table(str(pf)).to_pylist():
             rows[row["id"]] = row
     return rows
+
+
+def _as_source(input_dir: Path, num_partitions: int) -> NormalizedData:
+    """Wrap a flat directory of test Parquet files as a NormalizedData artifact."""
+    return NormalizedData(
+        main_output_dir=str(input_dir),
+        dup_output_dir=str(input_dir / "_dups_unused"),
+        num_partitions=num_partitions,
+        counters={},
+    )
 
 
 @pytest.fixture
@@ -102,7 +113,7 @@ def fox_corpus(tmp_path: Path):
 def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
     """n=3 with threshold=0.5: verbatim and high-overlap records flagged; low-overlap and unique gated out."""
     attrs = decon_to_parquet(
-        input_path=fox_corpus["input_dir"],
+        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
         decontaminate_source=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=0.5),
@@ -127,7 +138,7 @@ def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
 def test_decon_exact_paragraph_match(fox_corpus):
     """ngram=None: whole-paragraph match. Verbatim records flagged; near-match gated out (different bytes)."""
     decon_to_parquet(
-        input_path=fox_corpus["input_dir"],
+        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
         decontaminate_source=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=None,
@@ -148,7 +159,7 @@ def test_decon_exact_paragraph_match(fox_corpus):
 def test_decon_preserves_partition_filenames(fox_corpus):
     """Output partition filenames mirror input filenames 1:1 (co-partitioning invariant)."""
     decon_to_parquet(
-        input_path=fox_corpus["input_dir"],
+        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
         decontaminate_source=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -163,7 +174,7 @@ def test_decon_preserves_partition_filenames(fox_corpus):
 def test_decon_output_schema(fox_corpus):
     """Output Parquet has exactly {id, partition_id, contaminated, max_overlap, matched_hashes}."""
     decon_to_parquet(
-        input_path=fox_corpus["input_dir"],
+        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
         decontaminate_source=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -186,7 +197,7 @@ def test_decon_output_schema(fox_corpus):
 def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
     """Build writes a hash → eval_id Parquet sidecar with the expected schema."""
     attrs = decon_to_parquet(
-        input_path=fox_corpus["input_dir"],
+        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
         decontaminate_source=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -209,7 +220,7 @@ def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
 def test_decon_matched_hashes_join_recovers_eval_id(fox_corpus):
     """A contaminated record's matched_hashes joined with the sidecar attributes back to its eval."""
     attrs = decon_to_parquet(
-        input_path=fox_corpus["input_dir"],
+        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
         decontaminate_source=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -246,7 +257,7 @@ def test_decon_overlap_threshold_gates(fox_corpus, threshold, expect_high_flagge
     It's flagged at thresholds ≤ 0.89 and gated above; pin the gate behavior across thresholds.
     """
     decon_to_parquet(
-        input_path=fox_corpus["input_dir"],
+        source=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
         decontaminate_source=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=threshold),
@@ -269,8 +280,41 @@ def test_decon_empty_input_raises(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         decon_to_parquet(
-            input_path=str(input_dir),
+            source=_as_source(input_dir, num_partitions=1),
             decontaminate_source=str(eval_dir),
             output_path=str(output_dir),
             ngram=NGramConfig(ngram_length=3),
         )
+
+
+def test_decon_short_eval_paragraph_still_detected(tmp_path: Path):
+    """Eval paragraphs shorter than ngram_length must still be matchable.
+
+    Regression: _extract_features previously yielded nothing for short paragraphs,
+    so the bloom contained no features for them and exact-byte matches in the
+    input silently missed. Build-side and consumer-side now share the
+    "fall back to whole-paragraph hash" rule.
+    """
+    eval_dir = tmp_path / "eval"
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    # Eval has a 2-token paragraph; with n=8 there are no ngrams. Without the
+    # fallback this paragraph would contribute nothing to the bloom.
+    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "short_eval", "text": "Hello world"}])
+    _write_input_parquet(
+        input_dir / "part-00000-of-00001.parquet",
+        [{"id": "doc_short_match", "text": "Hello world", "partition_id": 0}],
+    )
+
+    decon_to_parquet(
+        source=_as_source(input_dir, num_partitions=1),
+        decontaminate_source=str(eval_dir),
+        output_path=str(output_dir),
+        ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
+        estimated_doc_count=1_000,
+        false_positive_rate=1e-9,
+    )
+    rows = _read_attributes(output_dir)
+    assert rows["doc_short_match"]["contaminated"] is True
+    assert rows["doc_short_match"]["max_overlap"] == 1.0
