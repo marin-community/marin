@@ -36,7 +36,7 @@ import jmp
 from fray.cluster import ResourceConfig, get_tpu_topology
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DNALmDatasetFormat
-from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.eval_harness import LmEvalHarnessConfig  # noqa: F401  (used by commented-out _eval_harness_config; restore when offline eval is wired up)
 from levanter.main.train_lm import TrainLmConfig
 from levanter.optim import AdamHConfig
 from levanter.tracker.wandb import WandbConfig
@@ -50,14 +50,17 @@ from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 from experiments.defaults import default_tokenize
 from experiments.dna.defaults import dna_effective_seq_len
-from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255, convert_to_levanter_task_config
+from experiments.evals.task_configs import (  # noqa: F401  (see _eval_harness_config TODO below)
+    TRAITGYM_MENDELIAN_V2_255,
+    convert_to_levanter_task_config,
+)
 from experiments.scaling_law_sweeps.completed_adamh import CompletedAdamHHeuristic
 
 # =============================================================================
 # Constants
 # =============================================================================
 
-VERSION = "v0.6"
+VERSION = "v0.7"
 TOKENIZER = "bolinas-dna/tokenizer-char-bos"
 DNA_BASE_SEQ_LEN = 255  # bp (256 - 1 for BOS)
 
@@ -165,12 +168,12 @@ assert (
 # cycle via Levanter's RESTART_STRATEGY.
 EPOCHS = 3
 
-EVALS_PER_RUN = 10
-CHECKPOINTS_PER_RUN = 3 * EPOCHS
-CHECKPOINT_TIME_INTERVAL = timedelta(hours=1)
+EVALS_PER_EPOCH = 10
+CHECKPOINTS_PER_EPOCH = 5
+CHECKPOINT_TIME_INTERVAL = timedelta(minutes=15)
 
 WARMUP_NUM_TRAIN_STEPS = 100
-WARMUP_EVALS_PER_RUN = 3
+WARMUP_EVALS_PER_EPOCH = 3
 
 WANDB_PROJECT = "marin"
 
@@ -327,8 +330,8 @@ def _full_target_tokens(mix: MixConfig, *, per_epoch: bool) -> int:
 
 
 def _steps_per_eval(num_train_steps: int) -> int:
-    evals = WARMUP_EVALS_PER_RUN if _warmup_mode() else EVALS_PER_RUN
-    return max(1, num_train_steps // evals)
+    evals_per_epoch = WARMUP_EVALS_PER_EPOCH if _warmup_mode() else EVALS_PER_EPOCH
+    return max(1, num_train_steps // (evals_per_epoch * EPOCHS))
 
 
 def _build_data_mixture(mix: MixConfig):
@@ -350,18 +353,21 @@ def _build_optimizer(mix: MixConfig) -> AdamHConfig:
     return DNA_SCALING_HEURISTIC.build_optimizer_config(BATCH_SIZE, _full_target_tokens(mix, per_epoch=True))
 
 
-def _eval_harness_config() -> LmEvalHarnessConfig:
-    return LmEvalHarnessConfig(
-        task_spec=convert_to_levanter_task_config([TRAITGYM_MENDELIAN_V2_255]),
-        include_path="experiments/evals/custom_tasks",
-        max_packed_segments=1,
-    )
+# TODO: re-enable for offline eval on saved checkpoints. In-training TraitGym
+# eval was disabled because it serializes the multi-host TPU pipeline and we'd
+# rather train continuously and evaluate from checkpoints later.
+# def _eval_harness_config() -> LmEvalHarnessConfig:
+#     return LmEvalHarnessConfig(
+#         task_spec=convert_to_levanter_task_config([TRAITGYM_MENDELIAN_V2_255]),
+#         include_path="experiments/evals/custom_tasks",
+#         max_packed_segments=1,
+#     )
 
 
 def _checkpointer(num_train_steps: int) -> CheckpointerConfig:
     return CheckpointerConfig(
         save_interval=CHECKPOINT_TIME_INTERVAL,
-        keep=[dict(every=max(1, num_train_steps // CHECKPOINTS_PER_RUN))],
+        keep=[dict(every=max(1, num_train_steps // (CHECKPOINTS_PER_EPOCH * EPOCHS)))],
     )
 
 
@@ -404,8 +410,6 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
         train_seq_len=_model_seq_len(),
         z_loss_weight=REFERENCE_HPARAMS.z_loss_weight,
         optimizer=optimizer,
-        eval_harness=_eval_harness_config(),
-        eval_harness_steps=steps_per_eval,
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project=WANDB_PROJECT,
@@ -424,7 +428,7 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
             per_device_parallelism=PER_DEVICE_PARALLELISM,
         ),
     )
-    resources = ResourceConfig.with_tpu(TPU_TYPE, ram="300g")
+    resources = ResourceConfig.with_tpu(TPU_TYPE, ram="128g")
     pod_config = TrainLmOnPodConfig(
         train_config=inner,
         resources=resources,
