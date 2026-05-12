@@ -9,7 +9,6 @@ import itertools
 import logging
 import os
 import queue
-import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Iterable
@@ -23,7 +22,6 @@ import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
 from rigging.filesystem import url_to_fs
-from rigging.timing import log_time
 
 from zephyr import counters
 
@@ -56,44 +54,25 @@ def unique_temp_path(output_path: str) -> str:
 
 
 @contextmanager
-def atomic_rename(output_path: str) -> Iterable[str]:
-    """Context manager for atomic write-and-rename with UUID collision avoidance.
+def atomic_rename(output_path: str, fs: Any = None) -> Iterable[str]:
+    """Atomic write-and-rename via a sibling temp key.
 
-    Yields a unique temporary path to write to. On successful exit, atomically
-    renames the temp file to the final path. On failure, cleans up the temp file.
+    Yields ``<output_path>.tmp.<uuid>``; on clean exit, ``fs.mv`` renames the
+    temp into the final path. On exception, the temp key is best-effort
+    deleted and the original exception re-raised.
 
-    For S3-compatible stores, writes to a local temp directory first, then uploads
-    via fs.put() to avoid server-side multipart copy which is unreliable on some
-    providers (e.g. Cloudflare R2).
+    Callers may pass a pre-constructed ``fs`` to reuse a configured
+    filesystem (e.g. an ``S3FileSystem`` with ``fixed_upload_size=True``)
+    instead of letting atomic_rename build a default one from ``output_path``.
 
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
-    if output_path.startswith("s3://"):
-        fs, resolved_path = url_to_fs(output_path)
-        with tempfile.TemporaryDirectory() as local_tmp_dir:
-            local_path = os.path.join(local_tmp_dir, "output")
-            yield local_path
-            if os.path.isdir(local_path):
-                # batch_size caps concurrent files in flight. Per-file ceiling
-                # is max_concurrency=10 * chunksize=50 MiB = 500 MiB for any
-                # file ≥ 100 MiB (smaller ones skip multipart). fsspec's default
-                # batch_size=128 → 64 GiB ceiling, observed ~11 GiB peak on a
-                # 40-chunk sample. batch_size=8 → 4 GiB ceiling, observed ~2 GiB
-                # peak on the same sample.
-                with log_time(f"atomic_rename fs.put recursive {local_path} → {resolved_path}"):
-                    # Trailing slash prevents fsspec from nesting under an extra
-                    # "output/" level when the destination already exists.
-                    fs.put(local_path + "/", resolved_path, recursive=True, batch_size=8)
-            else:
-                fs.put(local_path, resolved_path)
-        return
-
     temp_path = unique_temp_path(output_path)
-    fs = url_to_fs(output_path)[0]
-
+    if fs is None:
+        fs = url_to_fs(output_path)[0]
     try:
         yield temp_path
         fs.mv(temp_path, output_path, recursive=True)
