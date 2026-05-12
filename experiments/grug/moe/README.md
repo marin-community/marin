@@ -126,6 +126,21 @@ Some discretionary factors may influence the promotion decision even when the
 loss criteria are met — for example, impact on training memory footprint,
 inference latency / KV-cache size, serving compatibility, or interaction effects with other promotable changes.
 
+## Optimizer ablations
+
+- [`muonh_matrix_sweep.py`](./muonh_matrix_sweep.py) swaps AdamH to MuonH for
+  the matrix parameters that the AdamH baseline routes to AdamH or
+  AdamH-expert. The baseline Adam group stays on Adam with the same hyperparams:
+  token embeddings, routers, router biases, attention gates, vector/scalar
+  leaves. The lm head (`output_proj`) stays on AdamH. The launcher reuses the
+  v16 compute-optimal gate points via `MUONH_MATRIX_GATE=1|2|both`; set
+  `MUONH_MATRIX_RUN_SUFFIX` for distinct relaunch run IDs.
+- [`normuonh_matrix_sweep.py`](./normuonh_matrix_sweep.py) mirrors the MuonH
+  matrix swap but adds NorMuon's output-axis adaptive normalization inside the
+  hyperball update. The launcher uses the same gate points via
+  `NORMUONH_MATRIX_GATE=1|2|both`; set `NORMUONH_MATRIX_RUN_SUFFIX` for
+  distinct relaunch run IDs.
+
 ## Large run model sizing
 
 Conservative sizing for large runs using equal compute allocation between
@@ -164,5 +179,9 @@ Predicted macro uses `loss(C) = 1.6 + 95.18 · C^(-0.0941)`.
   `build_from_heuristic` entry point.
 - [`launch.py`](./launch.py) — `GrugMoeLaunchConfig`, baseline `ExecutorStep`,
   and `executor_main` wiring.
+- [`muonh_matrix_sweep.py`](./muonh_matrix_sweep.py) — MuonH matrix-swap
+  ablation launcher for the README gate points.
+- [`normuonh_matrix_sweep.py`](./normuonh_matrix_sweep.py) — NorMuonH
+  matrix-swap ablation launcher for the README gate points.
 - [`adamh.py`](./adamh.py) — shared AdamH utilities.
 - [`agent.md`](./agent.md) — agent guide for running ablation experiments on Iris.
