@@ -124,8 +124,8 @@ _SCATTER_WRITE_BUFFER_BYTES_FALLBACK = 256 * 1024 * 1024  # 256 MB
 # Minimum wall-clock seconds between per-flush progress lines per ScatterWriter.
 # High-fanout shuffles produce many tiny chunks at sub-millisecond cadence; a
 # count-based gate (e.g. % 10) still floods logs. Time-based gating bounds
-# volume to O(1) lines/sec/worker regardless of chunk rate or size.
-_PROGRESS_LOG_INTERVAL_SECONDS = 5.0
+# volume to one line/minute/worker regardless of chunk rate or size.
+_PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 
 
 def _default_scatter_write_buffer_bytes() -> int:
