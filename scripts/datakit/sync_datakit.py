@@ -466,9 +466,14 @@ def sync_source_step(
                 job_name=f"sync-{safe}",
             )
 
+    # No deps: the source data already exists in ``src_prefix`` (R2 or GCS) and
+    # we want to *copy* it, not re-execute the upstream download leaves. Listing
+    # them as ``deps`` would make StepRunner re-materialize each leaf at
+    # ``dest_prefix`` from its original origin (Amazon S3, HF, etc.) before
+    # the sync step's ``fn`` even runs — which is both wasteful and defeats
+    # the point of pulling from the mirror.
     return StepSpec(
         name=f"sync/{safe}",
-        deps=list(_leaf_downloads(source.normalized)),
         fn=_run,
         # Step status sits next to the shard sentinels so a single
         # bucket-lifecycle rule manages the whole sync prefix.
