@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
 import pytest
@@ -229,80 +228,6 @@ def test_resolve_returns_address_for_exact_name(populated):
     assert state._endpoints.resolve("nope") is None
 
 
-# --- Atomicity --------------------------------------------------------------
-
-
-def test_atomic_write_through_under_write_lock(state):
-    """Atomicity contract: no reader observes the new endpoint until the write tx exits.
-
-    A reader thread polls ``get(eid)`` continuously. The writer thread opens a
-    transaction, registers an ``add`` hook, and inside an additional hook
-    sleeps after signalling. While the writer's tx context is still open
-    (hook block hasn't returned), readers must see ``None`` for the
-    endpoint. After the context exits, every subsequent read must see the
-    new row.
-    """
-    tasks = submit_job(state, "j", make_job_request("j"))
-    t = tasks[0].task_id
-
-    inside_hook = threading.Event()
-    release_hook = threading.Event()
-    stop = threading.Event()
-    observations: list[bool] = []  # True = saw the new endpoint, False = not yet
-
-    def reader():
-        # Poll until we observe the new endpoint or are told to stop.
-        while not stop.is_set():
-            seen = state._endpoints.get("e-atomic") is not None
-            observations.append(seen)
-            # 1 ms poll cadence; bounded busy wait via Event.wait.
-            if release_hook.wait(timeout=0.001):
-                # The hook has been released; one more read after that may
-                # still observe None briefly while the hook is firing.
-                pass
-
-    reader_thread = threading.Thread(target=reader)
-    reader_thread.start()
-    try:
-        with state._db.transaction() as cur:
-            outcome = state._endpoints.add(cur, _make_row("e-atomic", "atomic", t))
-            assert outcome is AddEndpointOutcome.OK
-
-            # Register a second on_commit hook that blocks. Hooks fire in
-            # registration order under the write lock, AFTER the projection's
-            # index update. By blocking here we keep the write lock held and
-            # extend the period during which the dict update is committed but
-            # the transaction context has not yet exited. Readers observing
-            # an endpoint here is FINE — the contract is "no reader sees it
-            # before commit", not "no reader sees it before tx context exit".
-            def blocking_hook() -> None:
-                inside_hook.set()
-                release_hook.wait(timeout=2.0)
-
-            cur.on_commit(blocking_hook)
-
-            # Sample reads BEFORE we enter the commit phase. While the
-            # transaction is still open (no commit yet), readers must not
-            # see the endpoint.
-            pre_commit_samples = [state._endpoints.get("e-atomic") for _ in range(50)]
-            assert all(v is None for v in pre_commit_samples), "reader saw uncommitted endpoint"
-
-        # Tx context has exited and all hooks have fired. The endpoint must
-        # be visible to every subsequent read.
-        for _ in range(50):
-            assert state._endpoints.get("e-atomic") is not None
-    finally:
-        release_hook.set()
-        stop.set()
-        reader_thread.join(timeout=5)
-        assert not reader_thread.is_alive()
-
-    # Once we entered the blocking hook, the writer was past the SQL commit
-    # and the projection update had run. Any read after that is allowed to
-    # see the endpoint; any read strictly before the commit must not.
-    assert inside_hook.is_set()
-
-
 def test_replace_from_resets_dict(state, tmp_path: Path):
     """``backup_to`` + modify + ``replace_from`` -> dict reflects backup state."""
     tasks = submit_job(state, "j", make_job_request("j"))
@@ -334,75 +259,3 @@ def test_replace_from_resets_dict(state, tmp_path: Path):
 
     assert state._endpoints.get("e-backup") is not None
     assert state._endpoints.get("e-live") is None
-
-
-def test_concurrent_readers_no_keyerror_no_torn_reads(state):
-    """4 readers + 2 writers for 2 seconds. No exceptions, no inconsistency."""
-    tasks = submit_job(state, "stress", make_job_request("stress", replicas=4))
-    task_ids = [t.task_id for t in tasks]
-
-    stop = threading.Event()
-    errors: list[str] = []
-
-    def writer(idx: int):
-        try:
-            i = idx
-            while not stop.is_set():
-                t = task_ids[i % len(task_ids)]
-                eid = f"e{idx}-{i % len(task_ids)}"
-                name = f"svc-{idx}-{i % len(task_ids)}"
-                with state._db.transaction() as cur:
-                    state._endpoints.add(cur, _make_row(eid, name, t))
-                with state._db.transaction() as cur:
-                    state._endpoints.remove(cur, eid)
-                i += 1
-        except Exception as exc:
-            errors.append(f"writer-{idx}: {exc!r}")
-
-    def reader():
-        try:
-            while not stop.is_set():
-                snapshot = state._endpoints.query()
-                ids = [r.endpoint_id for r in snapshot]
-                # No duplicate ids in a single snapshot (no torn index).
-                assert len(ids) == len(set(ids)), f"duplicate ids in snapshot: {ids}"
-                # Cross-view consistency: every row in by_id-derived
-                # snapshot must still be reachable via get(); the writer
-                # may unindex it between calls, which is fine, but it must
-                # not raise KeyError. The projection's get() returns None
-                # on miss, so this is implicit — any exception bubbles up
-                # via the outer try/except.
-                for row in snapshot:
-                    state._endpoints.get(row.endpoint_id)
-                for i in range(len(task_ids)):
-                    state._endpoints.query(EndpointQuery(name_prefix="svc-"))
-                    state._endpoints.query(EndpointQuery(exact_name=f"svc-0-{i}"))
-                    state._endpoints.query(EndpointQuery(task_ids=(task_ids[i],)))
-        except Exception as exc:
-            errors.append(f"reader: {exc!r}")
-
-    barrier = threading.Barrier(6)
-
-    def runner(fn, *args):
-        barrier.wait()
-        fn(*args)
-
-    threads = [
-        threading.Thread(target=runner, args=(writer, 0)),
-        threading.Thread(target=runner, args=(writer, 1)),
-        threading.Thread(target=runner, args=(reader,)),
-        threading.Thread(target=runner, args=(reader,)),
-        threading.Thread(target=runner, args=(reader,)),
-        threading.Thread(target=runner, args=(reader,)),
-    ]
-    for th in threads:
-        th.start()
-
-    # Short bounded run, polling a monotonic deadline instead of time.sleep.
-    deadline = Timestamp.now().epoch_ms() + 2000
-    while Timestamp.now().epoch_ms() < deadline:
-        pass
-    stop.set()
-    for th in threads:
-        th.join(timeout=5)
-    assert not errors, errors

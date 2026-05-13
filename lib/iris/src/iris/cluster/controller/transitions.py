@@ -9,10 +9,9 @@ Read-only queries do NOT belong here — callers use db.read_snapshot() directly
 import logging
 import threading
 import time
-from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Generic, NamedTuple, TypeVar
+from typing import Any, NamedTuple
 
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import bindparam, case, delete, func, insert, select
@@ -40,6 +39,7 @@ from iris.cluster.controller.db import (
     task_row_can_be_scheduled,
     task_row_is_finished,
 )
+from iris.cluster.controller.lru_cache import LRUCache
 from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import (
@@ -891,42 +891,6 @@ def _resolve_task_failure_state(
 RUN_REQUEST_TEMPLATE_CACHE_SIZE = 4096
 
 
-_K = TypeVar("_K")
-_V = TypeVar("_V")
-
-
-class _LRUCache(Generic[_K, _V]):
-    """Thread-safe LRU cache with a fixed maximum size."""
-
-    def __init__(self, max_size: int):
-        self._max_size = max_size
-        self._lock = threading.Lock()
-        self._items: OrderedDict[_K, _V] = OrderedDict()
-
-    def get(self, key: _K) -> _V | None:
-        with self._lock:
-            value = self._items.get(key)
-            if value is None:
-                return None
-            self._items.move_to_end(key)
-            return value
-
-    def put(self, key: _K, value: _V) -> _V:
-        with self._lock:
-            existing = self._items.get(key)
-            if existing is not None:
-                self._items.move_to_end(key)
-                return existing
-            self._items[key] = value
-            while len(self._items) > self._max_size:
-                self._items.popitem(last=False)
-            return value
-
-    def pop(self, key: _K) -> None:
-        with self._lock:
-            self._items.pop(key, None)
-
-
 class ControllerTransitions:
     """State machine for controller entities.
 
@@ -952,7 +916,7 @@ class ControllerTransitions:
         # In-memory task status text (markdown for UI display).
         self._status_text_detail: dict[str, str] = {}
         self._status_text_summary: dict[str, str] = {}
-        self._run_template_cache: _LRUCache[str, job_pb2.RunTaskRequest] = _LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
+        self._run_template_cache: LRUCache[str, job_pb2.RunTaskRequest] = LRUCache(RUN_REQUEST_TEMPLATE_CACHE_SIZE)
 
     def run_request_template(
         self,

@@ -76,7 +76,6 @@ from iris.cluster.controller.db import (
 from iris.cluster.controller.projections import assert_owned_tables_not_externally_written
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.protocols import SchedulerTaskRow
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.scheduler import (
@@ -179,11 +178,42 @@ class PreemptionCandidate:
     band: int  # proto PriorityBand value
 
 
+@dataclass(frozen=True, slots=True)
+class PendingTask:
+    """Controller-side scheduling input projected from task, job, and config rows."""
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: Timestamp
+    priority_band: int
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_insertion: int
+    job_state: int
+    scheduling_deadline_epoch_ms: int | None
+    is_reservation_holder: bool
+    has_reservation: bool
+    scheduling_timeout_ms: int | None
+    has_coscheduling: bool
+    coscheduling_group_by: str | None
+    constraints_json: str | None
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+
+
 @dataclass(frozen=True)
 class _SchedulingStateRead:
     """Snapshot of pending tasks and workers read at the start of a scheduling cycle."""
 
-    pending_tasks: list[SchedulerTaskRow]
+    pending_tasks: list[PendingTask]
     workers: list[WorkerSnapshot]
     state_read_ms: int
 
@@ -216,7 +246,7 @@ class _TimedOutTask:
     worker_id: WorkerId | None
 
 
-def job_requirements_from_job(job: Any) -> JobRequirements:
+def job_requirements_from_job(job: PendingTask) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     dc = device_counts_from_json(job.res_device_json)
     return JobRequirements(
@@ -269,8 +299,8 @@ def compute_demand_entries(
 
     # Single combined query: each row carries task + job + job_config columns.
     # task_row_can_be_scheduled() is already applied inside _pending_tasks_with_jobs.
-    tasks_by_job: dict[JobName, list[Any]] = defaultdict(list)
-    all_schedulable: list[Any] = []
+    tasks_by_job: dict[JobName, list[PendingTask]] = defaultdict(list)
+    all_schedulable: list[PendingTask] = []
     for task in _pending_tasks_with_jobs(queries):
         tasks_by_job[task.job_id].append(task)
         all_schedulable.append(task)
@@ -385,21 +415,42 @@ def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClai
         return reads.list_claims(tx)
 
 
-def _pending_tasks_with_jobs(queries: ControllerDB) -> list[Any]:
-    """Return one row per PENDING task joined with its job and job_config columns.
+def _row_to_pending_task(row: Any) -> PendingTask:
+    return PendingTask(
+        task_id=row.task_id,
+        job_id=row.job_id,
+        state=int(row.state),
+        current_attempt_id=int(row.current_attempt_id),
+        failure_count=int(row.failure_count),
+        preemption_count=int(row.preemption_count),
+        max_retries_failure=int(row.max_retries_failure),
+        max_retries_preemption=int(row.max_retries_preemption),
+        submitted_at_ms=row.submitted_at_ms,
+        priority_band=int(row.priority_band),
+        priority_neg_depth=int(row.priority_neg_depth),
+        priority_root_submitted_ms=int(row.priority_root_submitted_ms),
+        priority_insertion=int(row.priority_insertion),
+        job_state=int(row.job_state),
+        scheduling_deadline_epoch_ms=row.scheduling_deadline_epoch_ms,
+        is_reservation_holder=bool(row.is_reservation_holder),
+        has_reservation=bool(row.has_reservation),
+        scheduling_timeout_ms=row.scheduling_timeout_ms,
+        has_coscheduling=bool(row.has_coscheduling),
+        coscheduling_group_by=row.coscheduling_group_by,
+        constraints_json=row.constraints_json,
+        res_cpu_millicores=int(row.res_cpu_millicores),
+        res_memory_bytes=int(row.res_memory_bytes),
+        res_disk_bytes=int(row.res_disk_bytes),
+        res_device_json=row.res_device_json,
+    )
 
-    Replaces the two-step pattern of ``_schedulable_tasks`` + ``_jobs_by_id``.
-    Each row satisfies the ``SchedulerTaskRow`` protocol (task columns are
-    un-prefixed) and exposes job columns needed by the gating / demand-emission
-    paths:
 
-    * ``job_state`` — ``jobs.state`` (labeled to avoid collision with
-      ``tasks.state``)
-    * ``scheduling_deadline_epoch_ms``, ``is_reservation_holder``,
-      ``has_reservation``, ``scheduling_timeout_ms`` — from ``jobs``
-    * ``has_coscheduling``, ``coscheduling_group_by``, ``constraints_json``,
-      ``res_cpu_millicores``, ``res_memory_bytes``, ``res_disk_bytes``,
-      ``res_device_json`` — from ``job_config``
+def _pending_tasks_with_jobs(queries: ControllerDB) -> list[PendingTask]:
+    """Return controller scheduling inputs for pending tasks.
+
+    The SQL query joins task, job, and job_config columns once, then projects
+    each SA row into ``PendingTask`` so later scheduling phases use a concrete
+    controller-owned type instead of a wide row shape.
 
     Rows are pre-filtered to ``TASK_STATE_PENDING`` and ordered by the same
     tuple as the old ``_schedulable_tasks``.  The Python-side
@@ -410,7 +461,6 @@ def _pending_tasks_with_jobs(queries: ControllerDB) -> list[Any]:
     with queries.read_snapshot() as tx:
         rows = tx.execute(
             select(
-                # task columns (SchedulerTaskRow-compatible)
                 tasks_table.c.task_id,
                 tasks_table.c.job_id,
                 tasks_table.c.state,
@@ -453,7 +503,8 @@ def _pending_tasks_with_jobs(queries: ControllerDB) -> list[Any]:
             ),
             {"state": job_pb2.TASK_STATE_PENDING},
         ).all()
-    return [row for row in rows if task_row_can_be_scheduled(row)]
+    pending_tasks = [_row_to_pending_task(row) for row in rows]
+    return [task for task in pending_tasks if task_row_can_be_scheduled(task)]
 
 
 def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list:
@@ -722,9 +773,7 @@ def _job_state_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobNa
     return {row.job_id: int(row.state) for row in rows}
 
 
-def _sort_pending_tasks_by_resolved_band(
-    db: ControllerDB, pending_tasks: list[SchedulerTaskRow]
-) -> list[SchedulerTaskRow]:
+def _sort_pending_tasks_by_resolved_band(db: ControllerDB, pending_tasks: list[PendingTask]) -> list[PendingTask]:
     """Order pending rows using immutable job_config priority bands."""
     if not pending_tasks:
         return []
@@ -1871,7 +1920,7 @@ class Controller:
 
     def _apply_scheduling_gates(
         self,
-        pending_tasks: list,
+        pending_tasks: list[PendingTask],
         claims: dict[WorkerId, ReservationClaim],
         trace: bool = False,
     ) -> _GatedCandidates:
@@ -1933,7 +1982,7 @@ class Controller:
     def _compute_scheduling_order(
         self,
         schedulable_task_ids: list[JobName],
-        pending_tasks: list,
+        pending_tasks: list[PendingTask],
         jobs: dict[JobName, JobRequirements],
         trace: bool = False,
     ) -> _SchedulingOrder:

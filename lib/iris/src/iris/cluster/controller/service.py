@@ -8,6 +8,7 @@ creates N tasks). Tasks are the unit of scheduling and execution. Job state is
 aggregated from task states.
 """
 
+import json
 import logging
 import secrets
 import uuid
@@ -20,7 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -60,7 +61,6 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.controller.query import execute_raw_query
 from iris.cluster.controller.reads import SchedulableWorker, TaskJobSummary
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
@@ -163,6 +163,14 @@ def _check_client_freshness(client_date_str: str, now: date) -> None:
             f"minimum {floor.isoformat()}). Run `uv sync` or upgrade "
             f"marin-iris and retry.",
         )
+
+
+def _encode_query_cell(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return f"<blob:{len(value)} bytes>"
+    return value
 
 
 USER_TASK_STATES = (
@@ -2265,10 +2273,15 @@ class ControllerServiceImpl:
         identity = require_identity()
         if identity.role != "admin":
             raise ConnectError(Code.PERMISSION_DENIED, "admin role required for raw queries")
-        result = execute_raw_query(self._db, request.sql)
+
+        with self._db.read_snapshot() as tx:
+            result = tx.execute(text(request.sql))
+            columns = [query_pb2.ColumnMeta(name=name, type="unknown") for name in result.keys()]
+            rows = [json.dumps([_encode_query_cell(value) for value in row]) for row in result.all()]
+
         return query_pb2.RawQueryResponse(
-            columns=result.columns,
-            rows=result.rows,
+            columns=columns,
+            rows=rows,
         )
 
     def restart_worker(
