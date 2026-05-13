@@ -18,6 +18,7 @@ from experiments.evals.long_tail_ppl import (
     long_tail_ppl_slices,
     long_tail_raw_validation_sets,
     render_long_tail_ppl_registry_markdown,
+    stack_v2_config_name,
 )
 
 
@@ -77,6 +78,23 @@ def test_file_backed_raw_dataset_rejects_non_validation_split():
 )
 def test_code_ecosystem_language_slug_is_filesystem_safe(language: str, expected_slug: str):
     assert _language_to_slug(language) == expected_slug
+
+
+@pytest.mark.parametrize(
+    "language, expected_config",
+    [
+        ("Python", "Python"),
+        ("Visual Basic .NET", "Visual_Basic_.NET"),
+        ("C#", "C-Sharp"),
+        ("F#", "F-Sharp"),
+        ("Cap'n Proto", "Cap-n_Proto"),
+        ("Q", "q"),
+        ("ReStructuredText", "reStructuredText"),
+        ("Rmarkdown", "RMarkdown"),
+    ],
+)
+def test_stack_v2_config_name_matches_huggingface_configs(language: str, expected_config: str):
+    assert stack_v2_config_name(language) == expected_config
 
 
 def test_code_ecosystem_slices_cover_every_registered_language_exactly_once():

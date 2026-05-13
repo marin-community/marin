@@ -27,6 +27,8 @@ GAME_MUSIC_ISSUE = 5062
 CODE_ECOSYSTEM_ISSUE = 5254
 
 STACK_V2_SOURCE_URL = "https://huggingface.co/datasets/bigcode/the-stack-v2"
+STACK_V2_DATASET_ID = "bigcode/the-stack-v2"
+STACK_V2_REVISION = "7408bfbcfd48e5833d62fd3dba48afd20d109473"
 
 # Token budget tiers for Stack v2 per-language held-out slices.
 # Heuristic (per maintainer guidance on issue #5254): compressed bytes ≈ tokens.
@@ -192,7 +194,6 @@ CODE_ECOSYSTEM_SMALL_LANGUAGES: tuple[str, ...] = (
     "Literate CoffeeScript",
     "Literate Haskell",
     "LiveScript",
-    "Maple",
     "Modula-2",
     "MoonScript",
     "Nix",
@@ -248,6 +249,15 @@ _LANGUAGE_SLUG_TRANSLATIONS = str.maketrans(
     }
 )
 
+_STACK_V2_CONFIG_OVERRIDES: dict[str, str] = {
+    "C#": "C-Sharp",
+    "F#": "F-Sharp",
+    "Cap'n Proto": "Cap-n_Proto",
+    "Q": "q",
+    "ReStructuredText": "reStructuredText",
+    "Rmarkdown": "RMarkdown",
+}
+
 
 def _language_to_slug(language: str) -> str:
     """Slugify a Stack v2 language config name into a filesystem/registry-safe identifier.
@@ -261,6 +271,12 @@ def _language_to_slug(language: str) -> str:
     while "__" in slug:
         slug = slug.replace("__", "_")
     return slug.strip("_")
+
+
+def stack_v2_config_name(language: str) -> str:
+    """Return the Stack v2 Hugging Face config name for a display language."""
+
+    return _STACK_V2_CONFIG_OVERRIDES.get(language, language.replace(" ", "_"))
 
 
 @dataclass(frozen=True)
