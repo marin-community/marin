@@ -54,12 +54,77 @@ class GrugMoeLaunchConfig:
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
+    # If a preempted TPU gets rescheduled in a different region, scan all
+    # regional buckets to find and resume from the latest checkpoint.
+    # NOT wrapped in versioned() so flipping it on doesn't change the
+    # executor's content hash — flag-only opt-in.
+    enable_cross_region_ckpt_read: bool = False
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
     nemotron_mix,
     default_validation_sets(tokenizer=nemotron_mix.tokenizer),
 )
+
+
+def _find_checkpoint_across_regions(output_path: str) -> str | None:
+    """Search all regional marin buckets for the latest checkpoint.
+
+    Scans each region for checkpoint subdirectories with metadata.json,
+    reads the step number. Returns the gs:// checkpoints directory of the
+    region with the highest step, but only if that region is different from
+    the local region and has a strictly higher step. Returns None if local
+    already has the best checkpoint (to avoid overriding the trainer's
+    normal checkpoint discovery, which also finds temporary checkpoints).
+    """
+    import json
+
+    import gcsfs
+    from rigging.filesystem import REGION_TO_DATA_BUCKET
+
+    if not output_path.startswith("gs://"):
+        return None
+    parts = output_path.split("/", 3)
+    if len(parts) < 4:
+        return None
+    local_bucket = parts[2]
+    suffix = parts[3]
+    checkpoint_suffix = os.path.join(suffix, "checkpoints")
+
+    fs = gcsfs.GCSFileSystem()
+    best_step = -1
+    best_path: str | None = None
+    local_step = -1
+
+    for bucket in REGION_TO_DATA_BUCKET.values():
+        candidate = f"{bucket}/{checkpoint_suffix}"
+        try:
+            subdirs = fs.ls(candidate)
+        except FileNotFoundError:
+            continue
+        for subdir in subdirs:
+            metadata_path = f"{subdir}/metadata.json"
+            try:
+                with fs.open(metadata_path) as f:
+                    metadata = json.load(f)
+                step = int(metadata.get("step", -1))
+                has_data = fs.exists(f"{subdir}/manifest.ocdbt") or fs.exists(f"{subdir}/d")
+                if not has_data:
+                    continue
+                if bucket == local_bucket:
+                    local_step = max(local_step, step)
+                if step > best_step:
+                    best_step = step
+                    best_path = f"gs://{candidate}"
+            except Exception:
+                continue
+
+    # Only return cross-region path if it's strictly better than local.
+    # Otherwise let the trainer discover its own checkpoints (including
+    # temporary ones that may not have metadata.json).
+    if best_step > local_step and best_path and local_bucket not in best_path:
+        return best_path
+    return None
 
 
 def _resolve_run_id(default_run_id: str) -> str:
@@ -78,6 +143,12 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
 
 
 def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
+    # Search all regions for an existing checkpoint (handles cross-region
+    # resume after the parent CPU coordinator moves regions).
+    load_path: str | None = (
+        _find_checkpoint_across_regions(config.output_path) if config.enable_cross_region_ckpt_read else None
+    )
+
     # Map template launch knobs onto full Levanter TrainerConfig.
     trainer = TrainerConfig(
         id=config.run_id,
@@ -91,6 +162,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
         mesh=MeshConfig(axes={"expert": 1}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
+        load_checkpoint_path=load_path,
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
