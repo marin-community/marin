@@ -74,6 +74,60 @@ FAILURE_BUCKETS: tuple[str, ...] = (
     "other",
 )
 
+# Must match job_pb2.TASK_STATE_SUCCEEDED — kept as a literal to avoid
+# importing iris internals from this script.
+_TASK_STATE_SUCCEEDED = 4
+
+# Same logic as _leaf_cpu_wall_ms in service.py, parameterised for inline use.
+# Wrapped in an outer SELECT so the query starts with SELECT (required by ExecuteRawQuery).
+_CPU_WALL_TIME_SQL = """\
+SELECT cpu_wall_ms FROM (
+    WITH RECURSIVE descendants(job_id) AS (
+        SELECT job_id FROM jobs WHERE job_id = '{job_id}'
+        UNION ALL
+        SELECT j.job_id FROM jobs j
+        JOIN descendants d ON j.parent_job_id = d.job_id
+    ),
+    leaves(job_id) AS (
+        SELECT d.job_id FROM descendants d
+        WHERE NOT EXISTS (SELECT 1 FROM jobs c WHERE c.parent_job_id = d.job_id)
+    )
+    SELECT COALESCE(SUM(ta.finished_at_ms - ta.started_at_ms), 0) AS cpu_wall_ms
+    FROM task_attempts ta
+    JOIN tasks t ON t.task_id = ta.task_id
+    JOIN leaves l ON t.job_id = l.job_id
+    WHERE ta.started_at_ms IS NOT NULL
+      AND ta.finished_at_ms IS NOT NULL
+      AND ta.finished_at_ms > ta.started_at_ms
+      {state_filter}
+)"""
+
+# Per-direct-child breakdown: the recursive CTE carries child_job_id (the
+# direct child of the root job each descendant belongs to) so we can group by it.
+_CPU_WALL_TIME_BY_CHILD_SQL = """\
+SELECT child_job_id, COALESCE(SUM(duration_ms), 0) AS cpu_wall_ms FROM (
+    WITH RECURSIVE descendants(job_id, child_job_id) AS (
+        SELECT job_id, job_id AS child_job_id FROM jobs WHERE parent_job_id = '{job_id}'
+        UNION ALL
+        SELECT j.job_id, d.child_job_id FROM jobs j
+        JOIN descendants d ON j.parent_job_id = d.job_id
+    ),
+    leaves(job_id, child_job_id) AS (
+        SELECT d.job_id, d.child_job_id FROM descendants d
+        WHERE NOT EXISTS (SELECT 1 FROM jobs c WHERE c.parent_job_id = d.job_id)
+    )
+    SELECT ta.finished_at_ms - ta.started_at_ms AS duration_ms, leaves.child_job_id
+    FROM task_attempts ta
+    JOIN tasks t ON t.task_id = ta.task_id
+    JOIN leaves ON t.job_id = leaves.job_id
+    WHERE ta.started_at_ms IS NOT NULL
+      AND ta.finished_at_ms IS NOT NULL
+      AND ta.finished_at_ms > ta.started_at_ms
+      {state_filter}
+)
+GROUP BY child_job_id
+ORDER BY child_job_id"""
+
 
 @dataclass
 class PerfReport:
@@ -84,6 +138,8 @@ class PerfReport:
     marin_prefix: str | None = None
     wall_seconds_total: float | None = None
     stage_wall_seconds: dict[str, float] = field(default_factory=dict)
+    cpu_wall_seconds_total: float | None = None
+    stage_cpu_wall_seconds: dict[str, float] = field(default_factory=dict)
     cached_steps: list[str] = field(default_factory=list)
     ooms: int = 0
     failed_shards: int = 0
@@ -182,6 +238,63 @@ def fetch_leaf_summaries(job_tree: list[dict], iris_config: Path) -> list[dict]:
         if s is not None:
             summaries.append(s)
     return summaries
+
+
+def fetch_raw_query_cpu_wall_ms(job_id: str, iris_config: Path, *, include_failed: bool = False) -> int | None:
+    """Run the cpu-wall-ms SQL directly via ExecuteRawQuery and return the result.
+
+    Mirrors the logic in ``_leaf_cpu_wall_ms`` in service.py so the two paths
+    can be compared for correctness.
+    """
+    state_filter = "" if include_failed else f"AND t.state = {_TASK_STATE_SUCCEEDED}"
+    sql = _CPU_WALL_TIME_SQL.format(job_id=job_id.replace("'", "''"), state_filter=state_filter)
+    result = _run_iris(["query", "--format=json", sql], iris_config)
+    if result.returncode != 0:
+        logger.warning("iris query cpu_wall_ms failed (exit %s): %s", result.returncode, result.stderr.strip())
+        return None
+    try:
+        rows = json.loads(result.stdout)
+        if not rows:
+            return None
+        return int(rows[0]["cpu_wall_ms"])
+    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        logger.warning("iris query returned unexpected output: %s", exc)
+        return None
+
+
+def fetch_raw_query_cpu_wall_ms_by_child(
+    job_id: str, iris_config: Path, *, include_failed: bool = False
+) -> dict[str, int] | None:
+    """Return per-direct-child cpu wall ms via ExecuteRawQuery, keyed by child job_id."""
+    state_filter = "" if include_failed else f"AND t.state = {_TASK_STATE_SUCCEEDED}"
+    sql = _CPU_WALL_TIME_BY_CHILD_SQL.format(job_id=job_id.replace("'", "''"), state_filter=state_filter)
+    result = _run_iris(["query", "--format=json", sql], iris_config)
+    if result.returncode != 0:
+        logger.warning("iris query by_child failed (exit %s): %s", result.returncode, result.stderr.strip())
+        return None
+    try:
+        rows = json.loads(result.stdout)
+        return {row["child_job_id"]: int(row["cpu_wall_ms"]) for row in rows}
+    except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        logger.warning("iris query by_child returned unexpected output: %s", exc)
+        return None
+
+
+def bucket_by_step(by_child: dict[str, int], parent_id: str) -> dict[str, int]:
+    """Bucket per-child cpu_wall_ms into step names using the same prefix logic as compute_stage_wall_seconds."""
+    parent_depth = _job_depth(parent_id)
+    by_step: dict[str, int] = {}
+    for child_job_id, cpu_wall_ms in by_child.items():
+        if not child_job_id.startswith(parent_id):
+            continue
+        if _job_depth(child_job_id) != parent_depth + 1:
+            continue
+        name = child_job_id.rsplit("/", 1)[-1]
+        for prefix, step in _STEP_PREFIXES.items():
+            if name.startswith(prefix):
+                by_step[step] = by_step.get(step, 0) + cpu_wall_ms
+                break
+    return by_step
 
 
 def aggregate_per_task_metrics(summaries: list[dict]) -> tuple[int, dict[str, int], int, int]:
@@ -507,6 +620,12 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
     default=None,
     help="If set, write the resulting GCS URL to this $GITHUB_OUTPUT key.",
 )
+@click.option(
+    "--raw-query-cpu-time/--no-raw-query-cpu-time",
+    "fetch_raw_query_cpu_time",
+    default=True,
+    help="Fetch CPU wall time via ExecuteRawQuery and include in the report.",
+)
 def main(
     job_id: str,
     iris_config: Path,
@@ -515,6 +634,7 @@ def main(
     out: Path | None,
     gcs_prefix: str | None,
     gcs_output_env: str | None,
+    fetch_raw_query_cpu_time: bool,
 ) -> None:
     """Collect a perf report for a finished datakit ferry run.
 
@@ -548,6 +668,18 @@ def main(
         status=status,
         workflow_env=workflow_env,
     )
+
+    if fetch_raw_query_cpu_time:
+        cpu_wall_ms = fetch_raw_query_cpu_wall_ms(job_id, iris_config)
+        if cpu_wall_ms is None:
+            report.warnings.append("iris query cpu_wall_ms: failed; cpu_wall_seconds_total unset")
+        else:
+            report.cpu_wall_seconds_total = cpu_wall_ms / 1000.0
+        by_child = fetch_raw_query_cpu_wall_ms_by_child(job_id, iris_config)
+        if by_child is None:
+            report.warnings.append("iris query by_child: failed; stage_cpu_wall_seconds empty")
+        else:
+            report.stage_cpu_wall_seconds = {step: ms / 1000.0 for step, ms in bucket_by_step(by_child, job_id).items()}
 
     if out is not None:
         write_report_local(report, out)
