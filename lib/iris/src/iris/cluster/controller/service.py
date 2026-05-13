@@ -116,12 +116,12 @@ class UserStats:
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
 # Time the launch RPC blocks waiting for a replaced job's worker-bound attempts
-# to finalize before deleting them. One worker poll cycle is ~5s; 30s gives the
-# heartbeat path several cycles to stamp ``finished_at_ms`` for a producer-
-# terminated attempt (the common case is post-preemption cleanup where the
-# worker is busy serving another tenant but will report back within one cycle).
+# to finalize before deleting them. Must exceed the worst-case worker-death
+# detection window so a vanished worker's attempts can be self-finalized by the
+# ping loop before the drain gives up: heartbeat_interval (5s) *
+# PING_FAILURE_THRESHOLD (10) ≈ 50s, plus slack for the heartbeat to land.
 # Stuck finalization surfaces as DEADLINE_EXCEEDED rather than hanging launches.
-_JOB_REPLACEMENT_DRAIN_TIMEOUT = Duration.from_seconds(30)
+_JOB_REPLACEMENT_DRAIN_TIMEOUT = Duration.from_seconds(120)
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
