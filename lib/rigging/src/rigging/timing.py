@@ -421,7 +421,7 @@ class TokenBucket:
     def __init__(self, capacity: int, refill_period: Duration):
         self._capacity = capacity
         self._tokens = float(capacity)
-        self._refill_rate = capacity / refill_period.to_seconds()  # tokens/sec
+        self.refill_rate = capacity / refill_period.to_seconds()  # tokens/sec, public for runtime tuning
         self._last_refill = Timestamp.from_ms(0)
         self._lock = threading.Lock()
 
@@ -440,7 +440,7 @@ class TokenBucket:
         if elapsed_ms <= 0:
             return
         elapsed_seconds = elapsed_ms / 1000.0
-        self._tokens = min(self._capacity, self._tokens + elapsed_seconds * self._refill_rate)
+        self._tokens = min(self._capacity, self._tokens + elapsed_seconds * self.refill_rate)
         self._last_refill = now
 
     @property

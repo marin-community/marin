@@ -95,11 +95,14 @@ class ScalePlan:
 def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timestamp) -> GroupScalePlan:
     """Build the actionable scale-up plan for a group.
 
-    The churn detector's ``scale_up_rate_multiplier`` clamps the per-tick
-    batch size so SUSPECT and CHURNING zones still scale up but at a slower
-    rate, instead of either firing the full burst or sitting in hard backoff.
-    HOSTILE / quota-blocked zones return a 0.0 multiplier, which collapses
-    ``slices_to_add`` to zero — equivalent to the old ``scale_up_blocked``.
+    ``slices_to_add`` is the honest desired count for this tick — what we
+    would launch if nothing were rate-limiting us. The actual throttle
+    happens later in ``runtime.execute``, where each launch must acquire
+    a token from the detector's scale-up bucket; the bucket's refill rate
+    is modulated by health (SUSPECT halves it, CHURNING brings it to 10%,
+    HOSTILE refuses outright). That means CHURNING groups still get a plan
+    here every tick but only succeed at acquiring a token roughly 1/10 as
+    often, which is the actual cadence reduction.
     """
 
     counts = GroupSliceCounts.from_group(group)
@@ -113,12 +116,7 @@ def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timest
         blocked = not group.can_scale_up(ts)
         if not blocked:
             headroom = group.max_slices - counts.total
-            raw = min(slices_needed, headroom)
-            multiplier = group.detector.scale_up_rate_multiplier(ts)
-            # Always launch at least one slice when we want any AND we're not
-            # hard-blocked, so SUSPECT/CHURNING zones make progress (just slowly)
-            # instead of stalling on multiplier * <small> rounding to zero.
-            slices_to_add = max(1, int(raw * multiplier)) if multiplier > 0 else 0
+            slices_to_add = min(slices_needed, headroom)
 
     return GroupScalePlan(
         group=group.name,

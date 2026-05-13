@@ -315,7 +315,7 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
-                if not group.acquire_scale_up_token(timestamp):
+                if not group.try_acquire_scale_up(timestamp):
                     rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)

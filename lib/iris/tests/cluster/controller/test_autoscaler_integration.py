@@ -257,9 +257,9 @@ class TestAutoscalerWaterfallEndToEnd:
 
         demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
 
-        # Drive enough failures on the primary group to push the churn detector
-        # past HOSTILE (3 samples → 100% short-lived).
-        for _ in range(3):
+        # Drive enough failures on the primary group to push the detector
+        # past the HOSTILE display threshold (>=80% of failures_at_probe_floor=10).
+        for _ in range(8):
             autoscaler.run_once(demand, {})
             autoscaler._wait_for_inflight()
         assert group_primary.availability().status == GroupAvailability.BACKOFF

@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.autoscaler.backoff_detector import SliceFate
+from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth, SliceFate
 from iris.cluster.controller.autoscaler.scaling_group import (
     ScalingGroup,
     SliceLifecycleState,
@@ -278,15 +278,24 @@ class TestScalingGroupScalingPolicy:
         assert group.slice_count() == 5  # max_slices
         assert not group.can_scale_up()
 
-    def test_cannot_scale_up_when_detector_hostile(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """can_scale_up() returns False when the churn detector is HOSTILE."""
+    def test_hostile_throttles_bucket_to_probe_floor(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """At 100% churn, try_acquire_scale_up still works but the bucket refills at the probe floor.
+
+        Continuous control: there is no hard "HOSTILE" block, only a low refill rate.
+        ``can_scale_up`` only flips to False on quota.
+        """
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1_000_000)
-        # Three create-failures in the window pushes churn to 100% → HOSTILE.
-        for _ in range(3):
+        # With decay=0.7, 8 failures drive health below the probe floor → clamped to floor.
+        for _ in range(8):
             group.record_create_failed(timestamp=ts)
-        assert not group.can_scale_up(timestamp=Timestamp.from_ms(1_001_000))
+        now = Timestamp.from_ms(1_001_000)
+        # Health-driven throttling is not a "block" — quota would be.
+        assert group.can_scale_up(timestamp=now)
+        # Bucket starts full so first acquire succeeds; refill rate is now the probe floor.
+        assert group.try_acquire_scale_up(timestamp=now)
+        assert group.detector.health_label(now) == GroupHealth.HOSTILE
 
     def test_scale_down_rate_limited_by_token_bucket(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """acquire_scale_down_token() returns False when the token bucket is exhausted."""
@@ -316,14 +325,22 @@ class TestScalingGroupChurnDetector:
     """
 
     def test_create_failures_drive_detector_hostile(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Three create-failures push the detector to HOSTILE, blocking scale-up."""
+        """Enough create-failures push the detector label to HOSTILE.
+
+        Under failure-counting control HOSTILE is a label only — scale-up keeps
+        flowing at the probe floor.
+        """
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1_000_000)
-        for _ in range(3):
+        # With decay=0.7, 5 failures → 0.168 (HOSTILE).
+        for _ in range(5):
             group.record_create_failed(timestamp=ts)
-        assert group.recent_failure_count(Timestamp.from_ms(1_001_000)) == 3
-        assert not group.can_scale_up(timestamp=Timestamp.from_ms(1_001_000))
+        now = Timestamp.from_ms(1_001_000)
+        # Recovery over 1s is small (~3e-4); score remains in the HOSTILE band.
+        assert group.detector.health_label(now) == GroupHealth.HOSTILE
+        # Hard block is quota-only; failures throttle the bucket but never gate it.
+        assert group.can_scale_up(timestamp=now)
 
     def test_long_lived_preemption_does_not_block_scale_up(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """A slice preempted past short_lived threshold is a positive sample."""
@@ -728,7 +745,7 @@ class TestScalingGroupAvailability:
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
-        for _ in range(3):
+        for _ in range(8):
             group.record_create_failed(timestamp=ts)
 
         state = group.availability(Timestamp.from_ms(1001000))
@@ -818,7 +835,7 @@ class TestScalingGroupAvailability:
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(60_000))
 
         ts = Timestamp.from_ms(1000)
-        for _ in range(3):
+        for _ in range(8):
             group.record_create_failed(timestamp=ts)  # detector → HOSTILE
         group.record_quota_exceeded("quota exceeded", ts)
 

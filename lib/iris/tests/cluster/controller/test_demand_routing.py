@@ -392,7 +392,8 @@ class TestWaterfallRouting:
         group_fallback = ScalingGroup(config_fallback, make_mock_platform())
 
         ts = Timestamp.from_ms(1000)
-        for _ in range(3):
+        # With decay=0.7, 5 failures → 0.168 (HOSTILE).
+        for _ in range(5):
             group_primary.record_create_failed(timestamp=ts)
         assert group_primary.availability(ts).status == GroupAvailability.BACKOFF
 
@@ -402,7 +403,7 @@ class TestWaterfallRouting:
         assert len(result.routed_entries.get("fallback", [])) == 2
         status_by_group = {s.group: s for s in result.group_statuses}
         assert status_by_group["primary"].decision == "blocked"
-        assert "churn" in status_by_group["primary"].reason
+        assert "degraded" in status_by_group["primary"].reason
         assert status_by_group["fallback"].decision == "selected"
 
     def test_backoff_group_with_ready_slices_still_falls_through(self):
@@ -418,7 +419,7 @@ class TestWaterfallRouting:
         group_fallback = ScalingGroup(config_fallback, make_mock_platform())
 
         ts = Timestamp.from_ms(1000)
-        for _ in range(3):
+        for _ in range(8):
             group_primary.record_create_failed(timestamp=ts)
         assert group_primary.availability(ts).status == GroupAvailability.BACKOFF
         assert group_primary.slice_count() == 1
