@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
-from iris.cluster.controller.db import ControllerDB, UserBudget
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.reads import UserBudget
 from iris.rpc import config_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import text

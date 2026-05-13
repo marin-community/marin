@@ -19,7 +19,7 @@ from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_va
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
-from iris.cluster.controller.db import TaskJobSummary
+from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.schema import jobs_table, task_attempts_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,

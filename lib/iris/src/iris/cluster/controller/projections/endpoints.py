@@ -27,10 +27,19 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller import db
-from iris.cluster.controller.db import ControllerDB, EndpointQuery
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import PROJECTIONS
 from iris.cluster.controller.schema import endpoints_table, tasks_table
 from iris.cluster.types import TERMINAL_TASK_STATES, JobName
+
+
+@dataclass(frozen=True)
+class EndpointQuery:
+    endpoint_ids: tuple[str, ...] = ()
+    name_prefix: str | None = None
+    exact_name: str | None = None
+    task_ids: tuple[JobName, ...] = ()
+    limit: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

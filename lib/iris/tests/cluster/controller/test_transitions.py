@@ -24,11 +24,10 @@ from iris.cluster.controller.codec import constraints_from_json, device_counts_f
 from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import (
     ControllerDB,
-    EndpointQuery,
     attempt_is_terminal,
 )
-from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.rows import WorkerResourceUsage
+from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
+from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.transitions import (

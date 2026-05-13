@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from iris.cluster.controller.projections.endpoints import EndpointRow
+from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
-    ReservationClaim,
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId

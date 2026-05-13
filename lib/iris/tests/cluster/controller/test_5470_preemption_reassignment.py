@@ -22,7 +22,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.controller import reads
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import SchedulingOutcome
-from iris.cluster.controller.rows import WorkerResourceUsage
+from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.transitions import (

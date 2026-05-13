@@ -11,7 +11,7 @@ aggregated from task states.
 import logging
 import secrets
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Protocol
 
@@ -49,17 +49,19 @@ from iris.cluster.controller.codec import (
 from iris.cluster.controller.db import (
     ACTIVE_TASK_STATES,
     ControllerDB,
-    EndpointQuery,
-    TaskJobSummary,
-    UserStats,
     attempt_is_worker_failure,
     task_row_can_be_scheduled,
 )
-from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
+from iris.cluster.controller.projections.endpoints import (
+    AddEndpointOutcome,
+    EndpointQuery,
+    EndpointRow,
+    EndpointsProjection,
+)
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.query import execute_raw_query
-from iris.cluster.controller.reads import SchedulableWorker
+from iris.cluster.controller.reads import SchedulableWorker, TaskJobSummary
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -105,6 +107,13 @@ from iris.rpc.proto_utils import job_state_friendly, priority_band_name, task_st
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class UserStats:
+    user: str
+    task_state_counts: dict[int, int] = field(default_factory=dict)
+    job_state_counts: dict[int, int] = field(default_factory=dict)
 
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit

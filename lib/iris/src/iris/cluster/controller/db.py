@@ -43,18 +43,8 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
-from iris.cluster.controller.rows import EndpointQuery, TaskJobSummary, UserBudget, UserStats
 from iris.cluster.types import TERMINAL_TASK_STATES
 from iris.rpc import job_pb2
-
-# Re-export dataclasses that previously lived here so existing imports of
-# ``from iris.cluster.controller.db import UserBudget`` etc. keep working.
-__all__ = [
-    "EndpointQuery",
-    "TaskJobSummary",
-    "UserBudget",
-    "UserStats",
-]
 
 logger = logging.getLogger(__name__)
 

@@ -42,12 +42,12 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import TaskDetailRow, TaskScope
-from iris.cluster.controller.rows import (
+from iris.cluster.controller.reads import (
     ActiveTaskRow,
     PendingDispatchRow,
     ReservationClaim,
-    WorkerAttributeParams,
+    TaskDetailRow,
+    TaskScope,
 )
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -74,6 +74,15 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerAttributeParams:
+    key: str
+    value_type: str
+    str_value: str | None
+    int_value: int | None
+    float_value: float | None
 
 
 def _list_descendants_cte(*, exclude_holders: bool):
