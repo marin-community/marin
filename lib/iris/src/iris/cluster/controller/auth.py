@@ -20,6 +20,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from iris.cluster.controller import writes
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import auth_api_keys_table, auth_controller_secrets_table
 from iris.rpc import config_pb2
@@ -312,8 +313,9 @@ def create_controller_auth(
     if not auth_config.HasField("provider"):
         if db:
             now = Timestamp.now()
-            db.ensure_user("anonymous", now, role="admin")
-            db.set_user_role("anonymous", "admin")
+            with db.transaction() as _tx:
+                writes.ensure_user(_tx, "anonymous", now, role="admin")
+                writes.set_user_role(_tx, "anonymous", "admin")
 
             signing_key = _get_or_create_signing_key(db)
             jwt_mgr = JwtTokenManager(signing_key, db=db)
@@ -342,8 +344,9 @@ def create_controller_auth(
         worker_token = _create_worker_jwt(db, jwt_mgr, now)
 
         for admin_user in auth_config.admin_users:
-            db.ensure_user(admin_user, now)
-            db.set_user_role(admin_user, "admin")
+            with db.transaction() as _tx:
+                writes.ensure_user(_tx, admin_user, now)
+                writes.set_user_role(_tx, admin_user, "admin")
 
         verifier: TokenVerifier | None = jwt_mgr
     else:
@@ -403,7 +406,8 @@ def _preload_static_tokens(
         tx.execute(delete(auth_api_keys_table).where(auth_api_keys_table.c.key_id.like("iris_k_static_%")))
 
     for raw_token, username in tokens.items():
-        db.ensure_user(username, now)
+        with db.transaction() as _tx:
+            writes.ensure_user(_tx, username, now)
         key_id = f"iris_k_static_{username}"
         create_api_key(
             db,
@@ -424,7 +428,8 @@ def _create_worker_jwt(db: ControllerDB, jwt_mgr: JwtTokenManager, now: Timestam
     gracefully with their existing credentials.
     """
     key_id = f"iris_k_worker_{secrets.token_hex(8)}"
-    db.ensure_user(WORKER_USER, now, role="worker")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, WORKER_USER, now, role="worker")
     create_api_key(
         db,
         key_id=key_id,

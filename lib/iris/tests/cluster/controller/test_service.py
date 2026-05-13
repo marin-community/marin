@@ -16,10 +16,10 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
 from iris.cluster.controller.db import TaskJobSummary
-from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.schema import jobs_table, task_attempts_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
@@ -329,7 +329,7 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
 
     # Sanity: child is terminal but its attempt still holds the worker.
     with state._db.read_snapshot() as snap:
-        assert reads_jobs.has_unfinished_worker_attempts(snap, child_job)
+        assert reads.has_unfinished_worker_attempts(snap, child_job)
 
     # Re-submit the child with KEEP. The unfinished attempt should make the
     # service block in the drain wait rather than raise FAILED_PRECONDITION.
@@ -1136,15 +1136,13 @@ def test_list_jobs_job_query_roots_and_children(service, state):
 
 
 def test_task_summaries_sql_group_by(state, service):
-    """_task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
-    from iris.cluster.controller.service import _task_summaries_for_jobs
-
+    """task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
     # Launch a job with 3 replicas
     service.launch_job(make_job_request("multi-task", replicas=3), None)
 
     job_id = JobName.root("test-user", "multi-task")
     with state._db.read_snapshot() as q:
-        summaries = _task_summaries_for_jobs(q, {job_id})
+        summaries = reads.task_summaries_for_jobs(q, {job_id})
 
     assert job_id in summaries
     s = summaries[job_id]
@@ -1189,7 +1187,8 @@ def test_list_workers_returns_all(service, state):
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
-    db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(3):
@@ -1217,7 +1216,8 @@ def test_list_workers_returns_all(service, state):
 def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
-    state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    with state._db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(count_cpu):
@@ -1397,7 +1397,8 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
 
     db = state._db
     now = Timestamp.now()
-    db.ensure_user("alice", now, role="user")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "alice", now, role="user")
 
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
@@ -1439,7 +1440,8 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
     db = state._db
     now = Timestamp.now()
-    db.ensure_user("system:worker", now, role="worker")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", now, role="worker")
 
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(

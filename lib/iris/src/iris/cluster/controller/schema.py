@@ -3,13 +3,14 @@
 
 """SQLAlchemy Core schema for the controller database.
 
-Mirrors the on-disk schema produced by ``controller/migrations/`` (current
-HEAD: 0046). Auth tables live on a separate ``auth_metadata`` because they
-are stored in the attached ``auth.sqlite3`` database, not the main controller DB.
+Mirrors the on-disk schema produced by ``controller/migrations/``. Auth tables
+live on a separate ``auth_metadata`` because they are stored in the attached
+``auth.sqlite3`` database, not the main controller DB.
 """
 
 import json
 import threading
+from collections import OrderedDict
 from typing import Any, ClassVar
 
 from rigging.timing import Timestamp
@@ -128,7 +129,7 @@ class CachedProto(TypeDecorator):
     cache_ok = True
 
     _MAX_SIZE: ClassVar[int] = 8192
-    _global_cache: ClassVar[dict[bytes, Any]] = {}
+    _global_cache: ClassVar[OrderedDict[bytes, Any]] = OrderedDict()
     _global_lock: ClassVar[threading.Lock] = threading.Lock()
 
     def __init__(self, message_cls: type) -> None:
@@ -157,8 +158,8 @@ class CachedProto(TypeDecorator):
                 return existing
             if len(self._global_cache) >= self._MAX_SIZE:
                 evict_count = self._MAX_SIZE // 4
-                for stale_key in list(self._global_cache.keys())[:evict_count]:
-                    del self._global_cache[stale_key]
+                for _ in range(evict_count):
+                    self._global_cache.popitem(last=False)
             self._global_cache[raw] = decoded
         return decoded
 
@@ -169,18 +170,12 @@ class JSONList(TypeDecorator):
     On write: accepts a list and stores it as a JSON string.
     On read: decodes the JSON string back to a list.
 
-    Does not enforce element types at runtime — the ``element_type``
-    argument is a documentation aid only.
-
     Only for plain list columns (e.g. ``list[int]``, ``list[str]``).
     Proto-encoded JSON columns use ``CachedProto`` instead.
     """
 
     impl = String
     cache_ok = True
-
-    def __init__(self, _element_type: type | None = None) -> None:
-        super().__init__()
 
     def process_bind_param(self, value: Any, dialect: Any) -> Any:
         if value is None:
@@ -308,7 +303,7 @@ job_config_table = Table(
     Column("entrypoint_json", String, nullable=False, server_default="'{}'"),
     Column("environment_json", String, nullable=False, server_default="'{}'"),
     Column("bundle_id", String, nullable=False, server_default="''"),
-    Column("ports_json", JSONList(int), nullable=False, server_default="'[]'"),
+    Column("ports_json", JSONList(), nullable=False, server_default="'[]'"),
     Column("max_retries_failure", Integer, nullable=False, server_default="0"),
     Column("max_retries_preemption", Integer, nullable=False, server_default="100"),
     Column("timeout_ms", Integer),
@@ -316,7 +311,7 @@ job_config_table = Table(
     Column("existing_job_policy", Integer, nullable=False, server_default="0"),
     Column("priority_band", Integer, nullable=False, server_default="0"),
     Column("task_image", String, nullable=False, server_default="''"),
-    Column("submit_argv_json", JSONList(str), nullable=False, server_default="'[]'"),
+    Column("submit_argv_json", JSONList(), nullable=False, server_default="'[]'"),
     Column("reservation_json", String),
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
     Index("idx_job_config_name", "name"),
@@ -490,7 +485,7 @@ slices_table = Table(
     Column("slice_id", String, primary_key=True),
     Column("scale_group", String, nullable=False),
     Column("lifecycle", String, nullable=False),
-    Column("worker_ids", JSONList(str), nullable=False, server_default="'[]'"),
+    Column("worker_ids", JSONList(), nullable=False, server_default="'[]'"),
     Column("created_at_ms", Integer, nullable=False, server_default="0"),
     Column("error_message", String, nullable=False, server_default="''"),
     Index("idx_slices_scale_group", "scale_group"),

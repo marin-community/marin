@@ -13,13 +13,12 @@ import pytest
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.projections.endpoints import EndpointRow
-from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.reads import scheduler as reads_scheduler
-from iris.cluster.controller.reads.workers import healthy_active_workers_with_attributes
+from iris.cluster.controller.reads import healthy_active_workers_with_attributes
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -132,7 +131,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
                 .order_by(task_attempts_table.c.worker_id.asc())
             )
             building_counts = {row.worker_id: int(row.c) for row in bc_rows}
-            usage_by_worker = reads_scheduler.resource_usage_by_worker(tx)
+            usage_by_worker = reads.resource_usage_by_worker(tx)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return scheduler.create_scheduling_context(snapshots, building_counts=building_counts)
 
@@ -140,7 +139,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
         job_id = JobName.from_wire(job_wire_id)
         with state._db.read_snapshot() as tx:
-            job = reads_jobs.get_detail(tx, job_id)
+            job = reads.get_job_detail(tx, job_id)
         if job is None:
             return None
         if job.state != job_pb2.JOB_STATE_PENDING:

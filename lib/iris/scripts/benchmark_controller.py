@@ -33,6 +33,7 @@ from typing import Any
 
 import click
 import yaml
+from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _schedulable_tasks,
@@ -45,10 +46,7 @@ from iris.cluster.controller.db import (
 )
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.reads import scheduler as reads_scheduler
-from iris.cluster.controller.reads import workers as reads_workers
-from iris.cluster.controller.reads.workers import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
+from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.schema import (
     endpoints_table,
@@ -61,10 +59,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
-    _parent_ids_with_children,
     _query_jobs,
-    _read_job,
-    _task_summaries_for_jobs,
     _tasks_for_listing,
     _worker_addresses_for_tasks,
     _worker_roster,
@@ -211,7 +206,7 @@ def _build_heartbeat_requests(db: ControllerDB) -> list[HeartbeatApplyRequest]:
     health = WorkerHealthTracker()
     _seed_health(db, health)
     with db.read_snapshot() as tx:
-        workers = reads_workers.healthy_active_workers_with_attributes(tx, health, _NoAttrs())
+        workers = reads.healthy_active_workers_with_attributes(tx, health, _NoAttrs())
     active_states = list(ACTIVE_TASK_STATES)
     requests: list[HeartbeatApplyRequest] = []
     for w in workers:
@@ -372,8 +367,8 @@ def benchmark_rpcs(db: ControllerDB) -> None:
             )
             ids = [j.job_id for j in page]
             if ids:
-                _task_summaries_for_jobs(q, set(ids))
-                _parent_ids_with_children(q, ids)
+                reads.task_summaries_for_jobs(q, set(ids))
+                reads.parent_ids_with_children(q, ids)
 
     bench(f"RPC: ListJobs (roots, limit=50, paged={len(page_ids)})", _list_jobs_full)
 
@@ -383,9 +378,9 @@ def benchmark_rpcs(db: ControllerDB) -> None:
 
         def _get_job_status():
             with db.read_snapshot() as q:
-                _read_job(q, sample_job_id)
-                _task_summaries_for_jobs(q, {sample_job_id})
-                _parent_ids_with_children(q, [sample_job_id])
+                reads.get_job_detail(q, sample_job_id)
+                reads.task_summaries_for_jobs(q, {sample_job_id})
+                reads.parent_ids_with_children(q, [sample_job_id])
 
         bench("RPC: GetJobStatus", _get_job_status)
 
@@ -576,7 +571,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
             pending_count += int(_tx.execute(text("SELECT changes() AS c")).scalar() or 0)
     pending_tasks = _schedulable_tasks(db)
     with db.read_snapshot() as _wtx:
-        workers = reads_workers.healthy_active_workers_with_attributes(_wtx, health, _NoAttrs())
+        workers = reads.healthy_active_workers_with_attributes(_wtx, health, _NoAttrs())
     print(
         f"  (scheduling shape: {len(workers)} workers, {len(pending_tasks)} pending tasks "
         f"after injecting {pending_count})"
@@ -588,7 +583,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
         from iris.cluster.controller import db
 
         with db.read_snapshot(db.sa_read_engine) as snap:
-            reads_scheduler.resource_usage_by_worker(snap)
+            reads.resource_usage_by_worker(snap)
 
     bench("Scheduling: resource_usage_by_worker (NEW derived query)", _usage_new)
 
@@ -615,9 +610,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
         _schedulable_tasks(db)
         with db.read_snapshot() as _rtx:
-            ws = reads_workers.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
+            ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
         with db.read_snapshot(db.sa_read_engine) as snap:
-            usage = reads_scheduler.resource_usage_by_worker(snap)
+            usage = reads.resource_usage_by_worker(snap)
         return ws, usage
 
     bench("Scheduling: state read (pending+workers+usage)", _state_read)
@@ -723,7 +718,7 @@ def benchmark_polling(db: ControllerDB) -> None:
     txns = ControllerTransitions(db, health=health)
 
     with db.read_snapshot() as snap:
-        addresses = reads_workers.list_active_healthy(snap, health)
+        addresses = reads.list_active_healthy_workers(snap, health)
     worker_ids = list(addresses)
     n_workers = len(worker_ids)
     print(f"  (polling shape: {n_workers} active+healthy workers)")
@@ -731,7 +726,7 @@ def benchmark_polling(db: ControllerDB) -> None:
     # ---- list_active_healthy: the snapshot read that drives reconcile. ----
     def _list_active_healthy():
         with db.read_snapshot() as snap:
-            reads_workers.list_active_healthy(snap, health)
+            reads.list_active_healthy_workers(snap, health)
 
     bench("Polling: list_active_healthy (next reconcile batch)", _list_active_healthy)
 
@@ -858,7 +853,7 @@ def benchmark_polling(db: ControllerDB) -> None:
             from iris.cluster.controller import db
 
             with db.read_snapshot(db.sa_read_engine) as snap:
-                reads_jobs.has_unfinished_worker_attempts(snap, drain_jid)
+                reads.has_unfinished_worker_attempts(snap, drain_jid)
 
         bench("Polling: has_unfinished_worker_attempts (drain gate)", _has_unfinished)
 
@@ -888,7 +883,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         roster = _worker_roster(db)
         if roster:
             with db.read_snapshot() as tx:
-                reads_scheduler.running_tasks_by_worker(tx, {w.worker_id for w in roster})
+                reads.running_tasks_by_worker(tx, {w.worker_id for w in roster})
 
     bench(f"RPC: ListWorkers (n={len(_worker_roster(db))})", _list_workers)
 

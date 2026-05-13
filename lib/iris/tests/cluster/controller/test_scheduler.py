@@ -10,9 +10,9 @@ modify state, or run threads.
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -28,6 +28,7 @@ from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
 
 from tests.cluster.conftest import eq_constraint, in_constraint
+from tests.cluster.controller._test_support import set_worker_health_for_test
 
 from .conftest import (
     building_counts as _building_counts,
@@ -141,7 +142,7 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
 def _snapshots_with_usage(state, workers):
     """Project worker rows + per-cycle held-resource usage into bundled snapshots."""
     with state._db.read_snapshot() as snap:
-        usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
+        usage_by_worker = reads.resource_usage_by_worker(snap)
     return [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
 
 
@@ -398,7 +399,7 @@ def test_scheduler_skips_unhealthy_workers(scheduler, state):
     register_worker(state, "w1", "addr1", make_worker_metadata())
     register_worker(state, "w2", "addr2", make_worker_metadata())
     # Mark second worker as unhealthy
-    state.set_worker_health_for_test(WorkerId("w2"), False)
+    set_worker_health_for_test(state, WorkerId("w2"), False)
 
     submit_job(state, "j1", make_job_request())
 

@@ -11,6 +11,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller import reads
 from iris.cluster.controller.auth import (
     WORKER_USER,
     ControllerAuth,
@@ -134,7 +135,8 @@ def test_admin_users_bootstrapped(db):
         admin_users=["alice"],
     )
     create_controller_auth(config, db=db)
-    assert db.get_user_role("alice") == "admin"
+    with db.read_snapshot() as snap:
+        assert reads.get_user_role(snap, "alice") == "admin"
 
 
 def test_login_verifier_set_for_gcp(db):
@@ -434,7 +436,8 @@ def test_null_auth_creates_anonymous_admin_and_worker_token(db):
     """No auth config + DB bootstraps anonymous admin and generates worker token."""
     config = config_pb2.AuthConfig()
     auth = create_controller_auth(config, db=db)
-    assert db.get_user_role("anonymous") == "admin"
+    with db.read_snapshot() as snap:
+        assert reads.get_user_role(snap, "anonymous") == "admin"
     assert auth.verifier is not None
     assert auth.worker_token is not None
     assert auth.provider is None

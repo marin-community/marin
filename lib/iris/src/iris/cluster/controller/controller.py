@@ -42,7 +42,7 @@ from iris.cluster.constraints import (
 from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
-from iris.cluster.controller import db
+from iris.cluster.controller import db, reads
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
@@ -78,10 +78,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.protocols import SchedulerTaskRow
 from iris.cluster.controller.provider import TaskProvider
-from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.reads import scheduler as reads_scheduler
-from iris.cluster.controller.reads import workers as reads_workers
-from iris.cluster.controller.reads.workers import SchedulableWorker
+from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.scheduler import (
     JobRequirements,
     Scheduler,
@@ -93,7 +90,6 @@ from iris.cluster.controller.scheduler import (
 from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
-    reservation_claims_table,
     task_attempts_table,
     tasks_table,
     workers_table,
@@ -300,7 +296,7 @@ def compute_demand_entries(
     if scheduler is not None and workers is not None and workers:
         building_counts = _building_counts(queries, workers)
         with queries.read_snapshot() as snap:
-            usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
+            usage_by_worker = reads.resource_usage_by_worker(snap)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
@@ -386,20 +382,7 @@ def compute_demand_entries(
 def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
     """Read reservation claims from the canonical DB table."""
     with db.read_snapshot() as tx:
-        rows = tx.execute(
-            select(
-                reservation_claims_table.c.worker_id,
-                reservation_claims_table.c.job_id,
-                reservation_claims_table.c.entry_idx,
-            )
-        ).all()
-    return {
-        row.worker_id: ReservationClaim(
-            job_id=str(row.job_id),
-            entry_idx=int(row.entry_idx),
-        )
-        for row in rows
-    }
+        return reads.list_claims(tx)
 
 
 def _pending_tasks_with_jobs(queries: ControllerDB) -> list[Any]:
@@ -746,7 +729,7 @@ def _sort_pending_tasks_by_resolved_band(
     if not pending_tasks:
         return []
     with db.read_snapshot() as tx:
-        requested_bands = reads_jobs.get_priority_bands(tx, {task.job_id for task in pending_tasks})
+        requested_bands = reads.get_priority_bands(tx, {task.job_id for task in pending_tasks})
     return sorted(
         pending_tasks,
         key=lambda task: (
@@ -922,7 +905,7 @@ def _reservation_region_constraints(
 
     claimed_worker_ids = {worker_id for worker_id, claim in claims.items() if claim.job_id == job_id_wire}
     with queries.read_snapshot() as tx:
-        _all_workers = reads_workers.healthy_active_workers_with_attributes(tx, health, worker_attrs)
+        _all_workers = reads.healthy_active_workers_with_attributes(tx, health, worker_attrs)
     workers_by_id = {worker.worker_id: worker for worker in _all_workers if worker.worker_id in claimed_worker_ids}
     regions: set[str] = set()
     for worker in workers_by_id.values():
@@ -1735,7 +1718,7 @@ class Controller:
         claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
         claimed_worker_ids: set[WorkerId] = set(claims.keys())
         with self._db.read_snapshot() as tx:
-            all_workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
+            all_workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         changed = False
 
         reservable_states = (
@@ -1877,8 +1860,8 @@ class Controller:
         with slow_log(logger, "scheduling state reads", threshold_ms=50):
             pending_tasks = _sort_pending_tasks_by_resolved_band(self._db, _pending_tasks_with_jobs(self._db))
             with self._db.read_snapshot() as snap:
-                workers = reads_workers.healthy_active_workers_with_attributes(snap, self._health, self._worker_attrs)
-                usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
+                workers = reads.healthy_active_workers_with_attributes(snap, self._health, self._worker_attrs)
+                usage_by_worker = reads.resource_usage_by_worker(snap)
             snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return _SchedulingStateRead(
             pending_tasks=pending_tasks,
@@ -1967,8 +1950,8 @@ class Controller:
             # downgraded to BATCH while its user was over budget would stay
             # BATCH forever after preemption — ``compute_effective_band`` only
             # demotes, never promotes back to the user's requested band.
-            requested_bands = reads_jobs.get_priority_bands(budget_snapshot, {task.job_id for task in pending_tasks})
-        user_budget_limits = self._db.get_all_user_budget_limits()
+            requested_bands = reads.get_priority_bands(budget_snapshot, {task.job_id for task in pending_tasks})
+            user_budget_limits = reads.get_all_user_budget_limits(budget_snapshot)
         defaults = self._config.user_budget_defaults
         task_band_map: dict[JobName, int] = {
             task.task_id: compute_effective_band(
@@ -2250,7 +2233,7 @@ class Controller:
         """Create a scheduling context for the given workers."""
         building_counts = _building_counts(self._db, workers)
         with self._db.read_snapshot() as snap:
-            usage_by_worker = reads_scheduler.resource_usage_by_worker(snap)
+            usage_by_worker = reads.resource_usage_by_worker(snap)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         return self._scheduler.create_scheduling_context(
             snapshots,
@@ -2282,7 +2265,7 @@ class Controller:
 
         # ── Phase 1: snapshot every healthy worker ───────────────────────
         with self._db.read_snapshot() as snap:
-            addresses = reads_workers.list_active_healthy(snap, self._health)
+            addresses = reads.list_active_healthy_workers(snap, self._health)
             if not addresses:
                 return
             worker_ids = list(addresses)
@@ -2453,7 +2436,7 @@ class Controller:
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
         with self._db.read_snapshot() as tx:
-            workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
+            workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
@@ -2564,7 +2547,7 @@ class Controller:
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
         with self._db.read_snapshot() as tx:
-            workers = reads_workers.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
+            workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         demand_entries = compute_demand_entries(
             self._db,
             self._scheduler,
@@ -2578,7 +2561,7 @@ class Controller:
         result: WorkerStatusMap = {}
         worker_ids = {wid for wid, l in self._health.all().items() if l.active}
         with self._db.read_snapshot() as tx:
-            running_by_worker = reads_scheduler.running_tasks_by_worker(tx, worker_ids)
+            running_by_worker = reads.running_tasks_by_worker(tx, worker_ids)
         for wid in worker_ids:
             result[wid] = WorkerStatus(
                 worker_id=wid,

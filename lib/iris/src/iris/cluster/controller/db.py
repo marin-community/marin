@@ -33,25 +33,28 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
 import fsspec.core
 from rigging.timing import Deadline, Duration, Timestamp
-from sqlalchemy import Engine, create_engine, event, select, text, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
-from iris.cluster.controller.schema import (
-    meta_table,
-    user_budgets_table,
-    users_table,
-)
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName
+from iris.cluster.controller.rows import EndpointQuery, TaskJobSummary, UserBudget, UserStats
+from iris.cluster.types import TERMINAL_TASK_STATES
 from iris.rpc import job_pb2
+
+# Re-export dataclasses that previously lived here so existing imports of
+# ``from iris.cluster.controller.db import UserBudget`` etc. keep working.
+__all__ = [
+    "EndpointQuery",
+    "TaskJobSummary",
+    "UserBudget",
+    "UserStats",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -71,21 +74,29 @@ def _install_pragmas(dbapi_conn, auth_path_str: str | None) -> None:
         cur.close()
 
 
-def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
-    """Build the controller's SA **write** engine.
+def _make_engine(
+    db_path: Path,
+    *,
+    read_only: bool,
+    pool_size: int,
+    max_overflow: int,
+    auth_db_path: Path | None = None,
+) -> Engine:
+    """Build a SA engine for ``db_path``.
 
-    Pool size 1: writes are serialized by an external ``RLock``.
-    ``isolation_level="AUTOCOMMIT"`` disables SA's autoBEGIN behaviour so
-    callers issue ``BEGIN IMMEDIATE`` explicitly. ``query_only`` is
-    **not** set — writes need to mutate the DB.
+    Read-only engines pin ``PRAGMA query_only = ON`` at connect time so
+    accidental writes raise without a per-snapshot pragma round-trip.
+    Write engines use ``pool_size=1, max_overflow=0`` (serialised by an
+    external ``RLock``); read engines use ``pool_size=32, max_overflow=4``.
+    Both use ``isolation_level="AUTOCOMMIT"`` so callers emit explicit
+    ``BEGIN`` / ``COMMIT`` / ``ROLLBACK``.
     """
     auth_path_str = str(auth_db_path) if auth_db_path is not None else None
-
     engine = create_engine(
         f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False, "timeout": 5.0},
-        pool_size=1,
-        max_overflow=0,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
         isolation_level="AUTOCOMMIT",
         future=True,
     )
@@ -93,42 +104,22 @@ def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
     @event.listens_for(engine, "connect")
     def _on_connect(dbapi_conn, _record):  # pyrefly: ignore  # event hook
         _install_pragmas(dbapi_conn, auth_path_str)
+        if read_only:
+            cur = dbapi_conn.cursor()
+            try:
+                cur.execute("PRAGMA query_only = ON")
+            finally:
+                cur.close()
 
     return engine
+
+
+def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
+    return _make_engine(db_path, read_only=False, pool_size=1, max_overflow=0, auth_db_path=auth_db_path)
 
 
 def _make_read_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
-    """Build the controller's SA **read** engine.
-
-    ``QueuePool(pool_size=32, max_overflow=4)``.
-    ``PRAGMA query_only = ON`` is pinned at **connect time** so that
-    accidental writes raise without paying a pragma round-trip per call.
-    ``isolation_level="AUTOCOMMIT"`` lets callers open / close transactions
-    with explicit BEGIN/ROLLBACK.
-    """
-    auth_path_str = str(auth_db_path) if auth_db_path is not None else None
-
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False, "timeout": 5.0},
-        pool_size=32,
-        max_overflow=4,
-        isolation_level="AUTOCOMMIT",
-        future=True,
-    )
-
-    @event.listens_for(engine, "connect")
-    def _on_connect(dbapi_conn, _record):  # pyrefly: ignore  # event hook
-        _install_pragmas(dbapi_conn, auth_path_str)
-        # Pin query_only at connect time so accidental writes raise
-        # without paying a pragma round-trip per snapshot.
-        cur = dbapi_conn.cursor()
-        try:
-            cur.execute("PRAGMA query_only = ON")
-        finally:
-            cur.close()
-
-    return engine
+    return _make_engine(db_path, read_only=True, pool_size=32, max_overflow=4, auth_db_path=auth_db_path)
 
 
 class Tx:
@@ -286,8 +277,6 @@ def task_row_can_be_scheduled(task: Any) -> bool:
     )
 
 
-# TERMINAL_TASK_STATES and TERMINAL_JOB_STATES are imported from iris.cluster.types.
-
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     {
         job_pb2.TASK_STATE_ASSIGNED,
@@ -317,9 +306,6 @@ FAILURE_TASK_STATES: frozenset[int] = frozenset(
 )
 
 
-# job_is_finished is imported from iris.cluster.types (canonical definition).
-
-
 def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadline | None:
     """Compute scheduling deadline from epoch ms."""
     if scheduling_deadline_epoch_ms is None:
@@ -335,40 +321,6 @@ def attempt_is_terminal(state: int) -> bool:
 def attempt_is_worker_failure(state: int) -> bool:
     """Check if an attempt is a worker failure or preemption."""
     return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
-
-
-@dataclass(frozen=True)
-class UserStats:
-    user: str
-    task_state_counts: dict[int, int] = field(default_factory=dict)
-    job_state_counts: dict[int, int] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class TaskJobSummary:
-    job_id: JobName
-    task_count: int = 0
-    completed_count: int = 0
-    failure_count: int = 0
-    preemption_count: int = 0
-    task_state_counts: dict[int, int] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class UserBudget:
-    user_id: str
-    budget_limit: int
-    max_band: int
-    updated_at: Timestamp
-
-
-@dataclass(frozen=True)
-class EndpointQuery:
-    endpoint_ids: tuple[str, ...] = ()
-    name_prefix: str | None = None
-    exact_name: str | None = None
-    task_ids: tuple[JobName, ...] = ()
-    limit: int | None = None
 
 
 class ControllerDB:
@@ -656,40 +608,6 @@ class ControllerDB:
     def secrets_table(self) -> str:
         return "auth.controller_secrets"
 
-    def ensure_user(self, user_id: str, now: Timestamp, role: str = "user") -> None:
-        """Create user if not exists. Does not update role for existing users."""
-        stmt = sqlite_insert(users_table).values(
-            user_id=user_id,
-            created_at_ms=now,
-            role=role,
-        )
-        stmt = stmt.on_conflict_do_nothing(index_elements=["user_id"])
-        with self.transaction() as tx:
-            tx.execute(stmt)
-
-    def set_user_role(self, user_id: str, role: str) -> None:
-        """Update the role for an existing user."""
-        stmt = update(users_table).where(users_table.c.user_id == user_id).values(role=role)
-        with self.transaction() as tx:
-            tx.execute(stmt)
-
-    def get_user_role(self, user_id: str) -> str:
-        """Get a user's role. Returns 'user' if not found."""
-        stmt = select(users_table.c.role).where(users_table.c.user_id == user_id)
-        with self.read_snapshot() as tx:
-            row = tx.fetchone(stmt)
-        return row[0] if row is not None else "user"
-
-    def next_sequence(self, key: str, *, cur: Tx) -> int:
-        stmt = select(meta_table.c.value).where(meta_table.c.key == key)
-        row = cur.fetchone(stmt)
-        if row is None:
-            cur.execute(sqlite_insert(meta_table).values(key=key, value=1))
-            return 1
-        value = int(row[0]) + 1
-        cur.execute(update(meta_table).where(meta_table.c.key == key).values(value=value))
-        return value
-
     def backup_to(self, destination: Path) -> None:
         """Create a hot backup to ``destination`` using SQLite backup API.
 
@@ -786,64 +704,3 @@ class ControllerDB:
             hook()
 
     # Read access is through ``read_snapshot()`` and typed table metadata at module scope.
-
-    # -- User budget accessors --------------------------------------------------
-
-    def set_user_budget(self, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
-        """Insert or update a user's budget configuration."""
-        stmt = sqlite_insert(user_budgets_table).values(
-            user_id=user_id,
-            budget_limit=budget_limit,
-            max_band=max_band,
-            updated_at_ms=now,
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["user_id"],
-            set_={"budget_limit": budget_limit, "max_band": max_band, "updated_at_ms": now},
-        )
-        with self.transaction() as tx:
-            tx.execute(stmt)
-
-    def get_user_budget(self, user_id: str) -> UserBudget | None:
-        """Get budget config for a user. Returns None if user has no budget row."""
-        stmt = select(
-            user_budgets_table.c.user_id,
-            user_budgets_table.c.budget_limit,
-            user_budgets_table.c.max_band,
-            user_budgets_table.c.updated_at_ms,
-        ).where(user_budgets_table.c.user_id == user_id)
-        with self.read_snapshot() as tx:
-            row = tx.fetchone(stmt)
-        if row is None:
-            return None
-        return UserBudget(
-            user_id=row[0],
-            budget_limit=row[1],
-            max_band=row[2],
-            updated_at=row[3],
-        )
-
-    def list_user_budgets(self) -> list[UserBudget]:
-        """List all user budgets."""
-        stmt = select(
-            user_budgets_table.c.user_id,
-            user_budgets_table.c.budget_limit,
-            user_budgets_table.c.max_band,
-            user_budgets_table.c.updated_at_ms,
-        )
-        with self.read_snapshot() as tx:
-            rows = tx.fetchall(stmt)
-        return [
-            UserBudget(
-                user_id=row[0],
-                budget_limit=row[1],
-                max_band=row[2],
-                updated_at=row[3],
-            )
-            for row in rows
-        ]
-
-    def get_all_user_budget_limits(self) -> dict[str, int]:
-        """Return ``{user_id: budget_limit}`` for every user with a budget row."""
-        rows = self.list_user_budgets()
-        return {row.user_id: row.budget_limit for row in rows}

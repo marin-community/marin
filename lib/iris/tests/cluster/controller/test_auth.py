@@ -9,6 +9,7 @@ import pytest
 import sqlalchemy.exc
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
     JwtTokenManager,
     _get_or_create_signing_key,
@@ -249,7 +250,8 @@ def test_session_bootstrap_no_auth_configured(noauth_client):
 def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
     """Read pool connections must not see auth tables."""
     now = Timestamp.now()
-    db.ensure_user("test-user", now)
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "test-user", now)
     _get_or_create_signing_key(db)
     create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
@@ -261,7 +263,8 @@ def test_read_snapshot_cannot_access_auth_tables(db: ControllerDB):
 
 def test_write_connection_can_access_auth_tables(db: ControllerDB):
     now = Timestamp.now()
-    db.ensure_user("test-user", now)
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "test-user", now)
     _get_or_create_signing_key(db)
     create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
@@ -284,9 +287,11 @@ def test_auth_db_file_created(tmp_path):
 
 def test_api_key_create_lookup_revoke(db: ControllerDB):
     now = Timestamp.now()
-    db.ensure_user("alice", now, role="admin")
-    db.set_user_role("alice", "admin")
-    assert db.get_user_role("alice") == "admin"
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "alice", now, role="admin")
+        writes.set_user_role(_tx, "alice", "admin")
+    with db.read_snapshot() as _snap:
+        assert reads.get_user_role(_snap, "alice") == "admin"
 
     create_api_key(
         db, key_id="k1", key_hash=hash_token("secret1"), key_prefix="sec", user_id="alice", name="my-key", now=now
@@ -304,7 +309,8 @@ def test_api_key_create_lookup_revoke(db: ControllerDB):
 
 def test_jwt_create_and_verify(db: ControllerDB):
     now = Timestamp.now()
-    db.ensure_user("bob", now, role="user")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "bob", now, role="user")
 
     signing_key = _get_or_create_signing_key(db)
     mgr = JwtTokenManager(signing_key, db=db)
@@ -319,7 +325,8 @@ def test_jwt_create_and_verify(db: ControllerDB):
 
 def test_revoke_login_keys(db: ControllerDB):
     now = Timestamp.now()
-    db.ensure_user("carol", now)
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "carol", now)
 
     for i in (1, 2):
         create_api_key(

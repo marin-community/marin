@@ -6,6 +6,7 @@
 from pathlib import Path
 
 import pytest
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
 from iris.cluster.controller.db import ControllerDB, UserBudget
 from iris.rpc import config_pb2, job_pb2
@@ -19,7 +20,23 @@ def db(tmp_path: Path) -> ControllerDB:
 
 
 def _create_user(db: ControllerDB, user_id: str, created_at_ms: int = 1000) -> None:
-    db.ensure_user(user_id, Timestamp.from_ms(created_at_ms))
+    with db.transaction() as tx:
+        writes.ensure_user(tx, user_id, Timestamp.from_ms(created_at_ms))
+
+
+def _set_user_budget(db: ControllerDB, user_id: str, budget_limit: int, max_band: int, now: Timestamp) -> None:
+    with db.transaction() as tx:
+        writes.set_user_budget(tx, user_id, budget_limit, max_band, now)
+
+
+def _get_user_budget(db: ControllerDB, user_id: str) -> UserBudget | None:
+    with db.read_snapshot() as snap:
+        return reads.get_user_budget(snap, user_id)
+
+
+def _list_user_budgets(db: ControllerDB) -> list[UserBudget]:
+    with db.read_snapshot() as snap:
+        return reads.list_user_budgets(snap)
 
 
 def test_migration_creates_user_budgets_table(db: ControllerDB) -> None:
@@ -52,7 +69,7 @@ def test_migration_seeds_budgets_for_existing_users(tmp_path: Path) -> None:
                 "SELECT user_id, 0, 2, created_at_ms FROM users"
             )
         )
-    budget = db.get_user_budget("alice")
+    budget = _get_user_budget(db, "alice")
     assert budget is not None
     assert budget.budget_limit == 0
     assert budget.max_band == 2
@@ -73,9 +90,9 @@ def test_set_and_get_user_budget(db: ControllerDB) -> None:
     """Round-trip set_user_budget / get_user_budget."""
     _create_user(db, "bob")
     now = Timestamp.from_ms(2000)
-    db.set_user_budget("bob", budget_limit=5000, max_band=1, now=now)
+    _set_user_budget(db, "bob", budget_limit=5000, max_band=1, now=now)
 
-    budget = db.get_user_budget("bob")
+    budget = _get_user_budget(db, "bob")
     assert budget is not None
     assert isinstance(budget, UserBudget)
     assert budget.user_id == "bob"
@@ -87,10 +104,10 @@ def test_set_and_get_user_budget(db: ControllerDB) -> None:
 def test_set_user_budget_upsert(db: ControllerDB) -> None:
     """set_user_budget updates an existing row on conflict."""
     _create_user(db, "carol")
-    db.set_user_budget("carol", budget_limit=100, max_band=2, now=Timestamp.from_ms(1000))
-    db.set_user_budget("carol", budget_limit=999, max_band=3, now=Timestamp.from_ms(2000))
+    _set_user_budget(db, "carol", budget_limit=100, max_band=2, now=Timestamp.from_ms(1000))
+    _set_user_budget(db, "carol", budget_limit=999, max_band=3, now=Timestamp.from_ms(2000))
 
-    budget = db.get_user_budget("carol")
+    budget = _get_user_budget(db, "carol")
     assert budget is not None
     assert budget.budget_limit == 999
     assert budget.max_band == 3
@@ -98,7 +115,7 @@ def test_set_user_budget_upsert(db: ControllerDB) -> None:
 
 
 def test_get_user_budget_returns_none_for_unknown(db: ControllerDB) -> None:
-    assert db.get_user_budget("nonexistent") is None
+    assert _get_user_budget(db, "nonexistent") is None
 
 
 def test_list_user_budgets(db: ControllerDB) -> None:
@@ -106,11 +123,11 @@ def test_list_user_budgets(db: ControllerDB) -> None:
     _create_user(db, "u2")
     _create_user(db, "u3")
     now = Timestamp.from_ms(3000)
-    db.set_user_budget("u1", budget_limit=10, max_band=1, now=now)
-    db.set_user_budget("u2", budget_limit=20, max_band=2, now=now)
-    db.set_user_budget("u3", budget_limit=30, max_band=3, now=now)
+    _set_user_budget(db, "u1", budget_limit=10, max_band=1, now=now)
+    _set_user_budget(db, "u2", budget_limit=20, max_band=2, now=now)
+    _set_user_budget(db, "u3", budget_limit=30, max_band=3, now=now)
 
-    budgets = db.list_user_budgets()
+    budgets = _list_user_budgets(db)
     assert len(budgets) == 3
     assert all(isinstance(b, UserBudget) for b in budgets)
     by_user = {b.user_id: b for b in budgets}
@@ -120,7 +137,7 @@ def test_list_user_budgets(db: ControllerDB) -> None:
 
 
 def test_list_user_budgets_empty(db: ControllerDB) -> None:
-    assert db.list_user_budgets() == []
+    assert _list_user_budgets(db) == []
 
 
 # --- reconcile_user_budget_tiers ------------------------------------------------
@@ -143,12 +160,12 @@ def test_reconcile_creates_rows_for_fresh_users(db: ControllerDB) -> None:
     count = reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
     assert count == 3
 
-    alice = db.get_user_budget("alice")
+    alice = _get_user_budget(db, "alice")
     assert alice is not None
     assert alice.budget_limit == 75000
     assert alice.max_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
-    carol = db.get_user_budget("carol")
+    carol = _get_user_budget(db, "carol")
     assert carol is not None
     assert carol.max_band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
@@ -162,7 +179,7 @@ def test_reconcile_upserts_existing_rows(db: ControllerDB) -> None:
     second = [_tier(["dave"], 75_000, job_pb2.PRIORITY_BAND_PRODUCTION)]
     reconcile_user_budget_tiers(db, second, Timestamp.from_ms(2000))
 
-    dave = db.get_user_budget("dave")
+    dave = _get_user_budget(db, "dave")
     assert dave is not None
     assert dave.budget_limit == 75_000
     assert dave.max_band == job_pb2.PRIORITY_BAND_PRODUCTION
@@ -176,7 +193,7 @@ def test_reconcile_later_tier_overrides_earlier(db: ControllerDB) -> None:
     ]
     reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
 
-    eve = db.get_user_budget("eve")
+    eve = _get_user_budget(db, "eve")
     assert eve is not None
     assert eve.max_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
@@ -184,7 +201,7 @@ def test_reconcile_later_tier_overrides_earlier(db: ControllerDB) -> None:
 def test_reconcile_no_tiers_is_noop(db: ControllerDB) -> None:
     """Empty config leaves the DB untouched."""
     assert reconcile_user_budget_tiers(db, [], Timestamp.from_ms(1000)) == 0
-    assert db.list_user_budgets() == []
+    assert _list_user_budgets(db) == []
 
 
 def test_reconcile_rejects_unspecified_band(db: ControllerDB) -> None:

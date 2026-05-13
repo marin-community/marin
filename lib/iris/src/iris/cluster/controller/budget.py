@@ -14,6 +14,7 @@ from typing import Generic, TypeVar
 from rigging.timing import Timestamp
 from sqlalchemy import bindparam, func, select
 
+from iris.cluster.controller import writes
 from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB, Tx
 from iris.cluster.controller.schema import job_config_table, tasks_table
@@ -205,13 +206,9 @@ def reconcile_user_budget_tiers(
         for user_id in tier.user_ids:
             if not user_id:
                 raise ValueError("UserBudgetTier.user_ids contains an empty entry")
-            db.ensure_user(user_id, now)
-            db.set_user_budget(
-                user_id=user_id,
-                budget_limit=tier.budget_limit,
-                max_band=tier.max_band,
-                now=now,
-            )
+            with db.transaction() as _tx:
+                writes.ensure_user(_tx, user_id, now)
+                writes.set_user_budget(_tx, user_id, tier.budget_limit, tier.max_band, now)
             count += 1
     if count:
         logger.info("Reconciled %d user budget assignment(s) from cluster config", count)

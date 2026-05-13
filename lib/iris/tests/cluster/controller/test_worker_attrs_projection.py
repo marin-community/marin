@@ -10,11 +10,10 @@ from pathlib import Path
 
 import pytest
 from iris.cluster.constraints import AttributeValue
-from iris.cluster.controller import db
+from iris.cluster.controller import db, writes
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import worker_attributes_table, workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.controller.writes import workers as writes_workers
 from iris.cluster.types import WorkerId
 from sqlalchemy import insert, select
 
@@ -181,7 +180,7 @@ def test_cascade_delete_invalidates_projection(state):
     health = WorkerHealthTracker()
     health.register(worker_id, now_ms=1000)
     with db.write_transaction(state._db.sa_write_engine, threading.RLock()) as tx:
-        writes_workers.remove_worker(
+        writes.remove_worker(
             tx,
             worker_id,
             health=health,

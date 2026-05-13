@@ -3,6 +3,7 @@
 
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
+from iris.cluster.controller import reads
 from iris.cluster.controller.budget import UserBudgetDefaults, compute_effective_band
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
@@ -12,7 +13,6 @@ from iris.cluster.controller.controller import (
     _run_preemption_pass,
     _sort_pending_tasks_by_resolved_band,
 )
-from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.scheduler import JobRequirements, WorkerCapacity
 from iris.cluster.controller.transitions import (
     RESERVATION_HOLDER_JOB_NAME,
@@ -768,7 +768,7 @@ def test_demoted_task_re_promotes_after_user_returns_under_budget():
 
         # job_config still reflects what alice asked for.
         with state._db.read_snapshot() as snap:
-            requested = reads_jobs.get_priority_bands(snap, [job_id])
+            requested = reads.get_priority_bands(snap, [job_id])
         assert requested == {job_id: job_pb2.PRIORITY_BAND_INTERACTIVE}
 
         # And under-budget alice gets her INTERACTIVE band back from

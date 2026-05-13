@@ -1,14 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed row dataclasses shared between reads/* and transitions.py.
+"""Typed row dataclasses shared between reads.py, writes.py, and transitions.py.
 
 These carry no SQL or mutable state — just typed projections over query results.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from rigging.timing import Timestamp
 
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
@@ -78,7 +80,7 @@ class PendingDispatchRow:
 class WorkerResourceUsage:
     """Aggregate resources currently held by unfinished worker-bound attempts.
 
-    Computed by ``reads.scheduler.resource_usage_by_worker``; the scheduler
+    Computed by ``reads.resource_usage_by_worker``; the scheduler
     subtracts these from a worker's totals to derive available capacity.
     """
 
@@ -86,3 +88,61 @@ class WorkerResourceUsage:
     memory_bytes: int
     gpu_count: int
     tpu_count: int
+
+
+# ---------------------------------------------------------------------------
+# User / budget result dataclasses (moved from db.py)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UserStats:
+    user: str
+    task_state_counts: dict[int, int] = field(default_factory=dict)
+    job_state_counts: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TaskJobSummary:
+    job_id: JobName
+    task_count: int = 0
+    completed_count: int = 0
+    failure_count: int = 0
+    preemption_count: int = 0
+    task_state_counts: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class UserBudget:
+    user_id: str
+    budget_limit: int
+    max_band: int
+    updated_at: Timestamp
+
+
+@dataclass(frozen=True)
+class EndpointQuery:
+    endpoint_ids: tuple[str, ...] = ()
+    name_prefix: str | None = None
+    exact_name: str | None = None
+    task_ids: tuple[JobName, ...] = ()
+    limit: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# Reservation dataclass (moved from transitions.py to break the
+# reads.py → transitions.py → reads.py import cycle)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReservationClaim:
+    """A claim binding a worker to a specific reservation entry.
+
+    The controller assigns unclaimed workers to unsatisfied reservation entries
+    each scheduling cycle. Once every entry for a job is claimed, the
+    reservation gate opens and the job's tasks can be scheduled.
+    """
+
+    job_id: str
+    entry_idx: int

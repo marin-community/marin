@@ -19,9 +19,9 @@ Production incident timeline (Incident B, v5p-256):
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller import reads
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import SchedulingOutcome
-from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import task_attempts_table
@@ -104,7 +104,7 @@ def _job_requirements_from_job(job):
 def _read_usage_by_worker(state) -> dict[WorkerId, WorkerResourceUsage]:
     """Snapshot the derived resource-usage map (replaces workers.committed_*)."""
     with state._db.read_snapshot() as snap:
-        return reads_scheduler.resource_usage_by_worker(snap)
+        return reads.resource_usage_by_worker(snap)
 
 
 def _tpu_used(usage_map: dict[WorkerId, WorkerResourceUsage], wid: WorkerId) -> int:

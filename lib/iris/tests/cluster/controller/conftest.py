@@ -28,6 +28,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
@@ -39,11 +40,7 @@ from iris.cluster.controller.db import (
     task_row_is_finished,
 )
 from iris.cluster.controller.provider import ProviderUnsupportedError
-from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.reads import task_attempts as reads_attempts
-from iris.cluster.controller.reads import tasks as reads_tasks
-from iris.cluster.controller.reads import workers as reads_workers
-from iris.cluster.controller.reads.workers import SchedulableWorker
+from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.schema import (
     jobs_table,
     task_attempts_table,
@@ -69,6 +66,7 @@ from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 
 from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.controller._test_support import set_task_state_for_test
 from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
@@ -314,14 +312,14 @@ def query_task(state: ControllerTransitions, task_id: JobName):
     Callers access ``row.state``, ``row.current_attempt_id``, etc. via attribute access.
     """
     with state._db.read_snapshot() as tx:
-        return reads_tasks.get_detail(tx, task_id)
+        return reads.get_task_detail(tx, task_id)
 
 
 def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int):
     """Return the SA Row for the given attempt or None."""
     with state._db.read_snapshot() as tx:
         return tx.execute(
-            select(*reads_attempts._ATTEMPT_COLS).where(
+            select(*reads.ATTEMPT_COLS).where(
                 task_attempts_table.c.task_id == task_id,
                 task_attempts_table.c.attempt_id == attempt_id,
             )
@@ -331,13 +329,13 @@ def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: in
 def query_job(state: ControllerTransitions, job_id: JobName):
     """Return the SA Row for ``job_id`` joining jobs+job_config, or None."""
     with state._db.read_snapshot() as tx:
-        return reads_jobs.get_detail(tx, job_id)
+        return reads.get_job_detail(tx, job_id)
 
 
 def query_job_row(state: ControllerTransitions, job_id: JobName):
     """Return the SA Row for ``job_id`` (same as query_job; alias for scheduling projection tests)."""
     with state._db.read_snapshot() as tx:
-        return reads_jobs.get_detail(tx, job_id)
+        return reads.get_job_detail(tx, job_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,7 +377,7 @@ def _worker_view(row, liveness) -> WorkerView:
 
 def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerView | None:
     with state._db.read_snapshot() as tx:
-        row = reads_workers.get_detail(tx, worker_id)
+        row = reads.get_worker_detail(tx, worker_id)
     if row is None:
         return None
     return _worker_view(row, state._health.liveness(row.worker_id))
@@ -661,7 +659,7 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
 
 def healthy_active_workers(state: ControllerTransitions) -> list[SchedulableWorker]:
     with state._db.read_snapshot() as tx:
-        return reads_workers.healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
+        return reads.healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
 
 
 def dispatch_task(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
@@ -700,7 +698,8 @@ def transition_task(
     current_attempt = task.attempts[-1] if task.attempts else None
     worker_id = current_attempt.worker_id if current_attempt is not None else task.current_worker_id
     if worker_id is None:
-        state.set_task_state_for_test(
+        set_task_state_for_test(
+            state,
             task_id,
             new_state,
             error=error,

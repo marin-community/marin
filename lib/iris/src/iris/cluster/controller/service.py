@@ -24,6 +24,7 @@ from sqlalchemy import func, select, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import (
     DEFAULT_JWT_TTL_SECONDS,
     ControllerAuth,
@@ -58,13 +59,7 @@ from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, En
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.query import execute_raw_query
-from iris.cluster.controller.reads import dashboard as reads_dashboard
-from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.reads import scheduler as reads_scheduler
-from iris.cluster.controller.reads import task_attempts as reads_attempts
-from iris.cluster.controller.reads import tasks as reads_tasks
-from iris.cluster.controller.reads import workers as reads_workers
-from iris.cluster.controller.reads.workers import SchedulableWorker
+from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -186,25 +181,52 @@ USER_JOB_STATES = (
 )
 
 
+@dataclass(frozen=True, slots=True)
 class TaskWithAttempts:
-    """Task row with its attempt rows attached.
+    """Task detail columns with attempt rows attached."""
 
-    Proxies attribute access to the inner row so callers can use
-    ``task.state``, ``task.task_id``, etc. directly.  The only addition
-    over a bare row is the ``attempts`` tuple.
-    """
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: object
+    priority_band: int
+    error: str | None
+    exit_code: int | None
+    started_at_ms: object | None
+    finished_at_ms: object | None
+    current_worker_id: WorkerId | None
+    current_worker_address: str | None
+    container_id: str | None
+    attempts: tuple
 
-    __slots__ = ("_row", "attempts")
-
-    def __init__(self, row, attempts: tuple) -> None:
-        object.__setattr__(self, "_row", row)
-        object.__setattr__(self, "attempts", attempts)
-
-    def __getattr__(self, name: str):
-        return getattr(self._row, name)
-
-    def __setattr__(self, name, value):
-        raise AttributeError("TaskWithAttempts is immutable")
+    @classmethod
+    def from_row(cls, row, attempts: tuple) -> "TaskWithAttempts":
+        """Build from an SA Row (matching TASK_DETAIL_COLS) plus attempt rows."""
+        return cls(
+            task_id=row.task_id,
+            job_id=row.job_id,
+            state=row.state,
+            current_attempt_id=row.current_attempt_id,
+            failure_count=row.failure_count,
+            preemption_count=row.preemption_count,
+            max_retries_failure=row.max_retries_failure,
+            max_retries_preemption=row.max_retries_preemption,
+            submitted_at_ms=row.submitted_at_ms,
+            priority_band=row.priority_band,
+            error=row.error,
+            exit_code=row.exit_code,
+            started_at_ms=row.started_at_ms,
+            finished_at_ms=row.finished_at_ms,
+            current_worker_id=row.current_worker_id,
+            current_worker_address=row.current_worker_address,
+            container_id=row.container_id,
+            attempts=attempts,
+        )
 
 
 def _current_attempt(task: TaskWithAttempts):
@@ -331,23 +353,18 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 # =============================================================================
 
 
-def _read_job(tx, job_id: JobName):
-    """Return the job row for ``job_id`` from reads_jobs.get_detail, or None."""
-    return reads_jobs.get_detail(tx, job_id)
-
-
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttempts | None:
     """Return a TaskWithAttempts for ``task_id``, or None if absent."""
     with db.read_snapshot() as tx:
-        task_row = reads_tasks.get_detail(tx, task_id)
+        task_row = reads.get_task_detail(tx, task_id)
         if task_row is None:
             return None
         attempt_rows = tx.execute(
-            select(*reads_attempts._ATTEMPT_COLS)
+            select(*reads.ATTEMPT_COLS)
             .where(task_attempts_table.c.task_id == task_id)
             .order_by(task_attempts_table.c.attempt_id.asc())
         ).all()
-    return TaskWithAttempts(task_row, tuple(attempt_rows))
+    return TaskWithAttempts.from_row(task_row, tuple(attempt_rows))
 
 
 def _job_state(db: ControllerDB, job_id: JobName) -> int | None:
@@ -471,14 +488,14 @@ def _decode_attribute_value(row: Any) -> tuple[str, str | int | float]:
 
 @dataclass(frozen=True)
 class _WorkerDetail:
-    worker: Any  # row from reads_workers.get_detail
-    attributes: dict  # decoded from worker_attributes table
+    worker: Any  # SA Row from reads.get_worker_detail
+    attributes: dict[str, str | int | float]
     running_tasks: frozenset[JobName]
 
 
 def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail | None:
     with db.read_snapshot() as tx:
-        worker = reads_workers.get_detail(tx, worker_id)
+        worker = reads.get_worker_detail(tx, worker_id)
         if worker is None:
             return None
         attr_rows = tx.execute(
@@ -521,13 +538,13 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAtt
     """
     with db.read_snapshot() as tx:
         task_rows = tx.execute(
-            select(*reads_tasks._TASK_DETAIL_COLS)
+            select(*reads.TASK_DETAIL_COLS)
             .where(tasks_table.c.job_id == job_id)
             .order_by(tasks_table.c.job_id.asc(), tasks_table.c.task_index.asc())
         ).all()
         # Fetch only the current attempt for each task (task_index-ordered listing).
         attempt_rows = tx.execute(
-            select(*reads_attempts._ATTEMPT_COLS).where(
+            select(*reads.ATTEMPT_COLS).where(
                 tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(
                     select(tasks_table.c.task_id, tasks_table.c.current_attempt_id).where(
                         tasks_table.c.job_id == job_id, tasks_table.c.current_attempt_id >= 0
@@ -538,7 +555,7 @@ def _tasks_for_listing(db: ControllerDB, *, job_id: JobName) -> list[TaskWithAtt
     attempts_by_task: dict[JobName, list] = {}
     for a in attempt_rows:
         attempts_by_task.setdefault(a.task_id, []).append(a)
-    return [TaskWithAttempts(r, tuple(attempts_by_task.get(r.task_id, ()))) for r in task_rows]
+    return [TaskWithAttempts.from_row(r, tuple(attempts_by_task.get(r.task_id, ()))) for r in task_rows]
 
 
 MAX_LIST_JOBS_LIMIT = 500
@@ -667,7 +684,7 @@ def _query_jobs(
             Code.INVALID_ARGUMENT,
             "query.parent_job_id is required for JOB_QUERY_SCOPE_CHILDREN",
         )
-    return reads_dashboard.list_jobs(tx, query, state_ids)
+    return reads.list_jobs(tx, query, state_ids)
 
 
 def _query_from_list_jobs_request(
@@ -695,19 +712,11 @@ def _query_from_list_jobs_request(
     return query
 
 
-def _parent_ids_with_children(tx, job_ids: list[JobName]) -> set[JobName]:
-    return reads_dashboard.parent_ids_with_children(tx, job_ids)
-
-
-def _task_summaries_for_jobs(tx, job_ids: set[JobName]) -> dict[JobName, TaskJobSummary]:
-    return reads_dashboard.task_summaries_for_jobs(tx, job_ids)
-
-
 def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
     """Return ``(worker_row, attrs_dict)`` pairs for all registered workers."""
     with db.read_snapshot() as tx:
         decoded = [
-            reads_workers.get_detail(tx, row.worker_id) for row in tx.execute(select(workers_table.c.worker_id)).all()
+            reads.get_worker_detail(tx, row.worker_id) for row in tx.execute(select(workers_table.c.worker_id)).all()
         ]
         decoded = [w for w in decoded if w is not None]
         if not decoded:
@@ -784,7 +793,7 @@ def _attempts_for_worker(
 
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(
-            select(*reads_attempts._ATTEMPT_COLS)
+            select(*reads.ATTEMPT_COLS)
             .where(task_attempts_table.c.worker_id == worker_id)
             .order_by(
                 case(
@@ -974,7 +983,7 @@ class ControllerServiceImpl:
 
         def drained() -> bool:
             with self._db.read_snapshot() as tx:
-                return not reads_jobs.has_unfinished_worker_attempts(tx, job_id)
+                return not reads.has_unfinished_worker_attempts(tx, job_id)
 
         try:
             ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until_or_raise(
@@ -996,7 +1005,7 @@ class ControllerServiceImpl:
         transaction. Every replacement path in ``launch_job`` funnels through
         here so the contract is uniform.
         """
-        if reads_jobs.has_unfinished_worker_attempts(cur, job_id):
+        if reads.has_unfinished_worker_attempts(cur, job_id):
             return True
         self._transitions.remove_finished_job(cur, job_id)
         return False
@@ -1050,7 +1059,8 @@ class ControllerServiceImpl:
         if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
             authorize(AuthzAction.MANAGE_BUDGETS)
         else:
-            user_budget = self._db.get_user_budget(job_id.user)
+            with self._db.read_snapshot() as _snap:
+                user_budget = reads.get_user_budget(_snap, job_id.user)
             max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
             if band < max_band:
                 raise ConnectError(
@@ -1092,7 +1102,7 @@ class ControllerServiceImpl:
         # legitimate error rather than a correctness bug.
         needs_drain = False
         with self._db.transaction() as cur:
-            existing_state = reads_jobs.get_state(cur, job_id)
+            existing_state = reads.get_job_state(cur, job_id)
             if existing_state is not None:
                 policy = request.existing_job_policy
                 if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
@@ -1213,12 +1223,12 @@ class ControllerServiceImpl:
         attempt, and worker address.
         """
         with self._db.read_snapshot() as q:
-            job = _read_job(q, JobName.from_wire(request.job_id))
+            job = reads.get_job_detail(q, JobName.from_wire(request.job_id))
             if not job:
                 raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
             # Aggregate task counts via a single GROUP BY query.
-            summaries = _task_summaries_for_jobs(q, {job.job_id})
-            has_children = bool(_parent_ids_with_children(q, [job.job_id]))
+            summaries = reads.task_summaries_for_jobs(q, {job.job_id})
+            has_children = bool(reads.parent_ids_with_children(q, [job.job_id]))
         summary = summaries.get(job.job_id)
 
         # Get scheduling diagnostics for pending jobs from cache
@@ -1390,8 +1400,8 @@ class ControllerServiceImpl:
         with self._db.read_snapshot() as q:
             page, total_count = _query_jobs(q, query, state_ids)
             page_ids = [j.job_id for j in page]
-            summaries = _task_summaries_for_jobs(q, set(page_ids)) if page_ids else {}
-            children = _parent_ids_with_children(q, page_ids) if page_ids else set()
+            summaries = reads.task_summaries_for_jobs(q, set(page_ids)) if page_ids else {}
+            children = reads.parent_ids_with_children(q, page_ids) if page_ids else set()
 
         has_pending = any(j.state == job_pb2.JOB_STATE_PENDING for j in page)
         autoscaler_pending_hints = self._get_autoscaler_pending_hints() if has_pending else {}
@@ -1559,7 +1569,7 @@ class ControllerServiceImpl:
 
         if page_rows:
             with self._db.read_snapshot() as tx:
-                running = reads_scheduler.running_tasks_by_worker(tx, {w.worker_id for w, _attrs in page_rows})
+                running = reads.running_tasks_by_worker(tx, {w.worker_id for w, _attrs in page_rows})
         else:
             running = {}
         workers = []
@@ -1730,7 +1740,7 @@ class ControllerServiceImpl:
         candidate_ids = {WorkerId(vid) for vid in vm_ids if vid in worker_id_to_health}
         if candidate_ids:
             with self._db.read_snapshot() as tx:
-                running = reads_scheduler.running_tasks_by_worker(tx, candidate_ids)
+                running = reads.running_tasks_by_worker(tx, candidate_ids)
         else:
             running = {}
 
@@ -2061,8 +2071,10 @@ class ControllerServiceImpl:
             raise ConnectError(Code.PERMISSION_DENIED, "Reserved username prefix")
 
         now = Timestamp.now()
-        self._db.ensure_user(username, now)
-        role = self._db.get_user_role(username)
+        with self._db.transaction() as _tx:
+            writes.ensure_user(_tx, username, now)
+        with self._db.read_snapshot() as _snap:
+            role = reads.get_user_role(_snap, username)
 
         # Revoke old login keys and propagate to in-memory revocation set
         revoked_ids = revoke_login_keys_for_user(self._db, username, now)
@@ -2102,8 +2114,10 @@ class ControllerServiceImpl:
             authorize(AuthzAction.MANAGE_OTHER_KEYS)
 
         now = Timestamp.now()
-        self._db.ensure_user(target_user, now)
-        role = self._db.get_user_role(target_user)
+        with self._db.transaction() as _tx:
+            writes.ensure_user(_tx, target_user, now)
+        with self._db.read_snapshot() as _snap:
+            role = reads.get_user_role(_snap, target_user)
 
         key_id = f"iris_k_{secrets.token_urlsafe(8)}"
         ttl = request.ttl_ms // 1000 if request.ttl_ms > 0 else DEFAULT_JWT_TTL_SECONDS
@@ -2293,13 +2307,9 @@ class ControllerServiceImpl:
         ):
             raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid max_band: {request.max_band}")
         now = Timestamp.now()
-        self._db.ensure_user(request.user_id, now)
-        self._db.set_user_budget(
-            user_id=request.user_id,
-            budget_limit=request.budget_limit,
-            max_band=max_band,
-            now=now,
-        )
+        with self._db.transaction() as _tx:
+            writes.ensure_user(_tx, request.user_id, now)
+            writes.set_user_budget(_tx, request.user_id, request.budget_limit, max_band, now)
         return controller_pb2.Controller.SetUserBudgetResponse()
 
     def get_user_budget(
@@ -2311,7 +2321,8 @@ class ControllerServiceImpl:
         require_identity()
         if not request.user_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "user_id is required")
-        budget = self._db.get_user_budget(request.user_id)
+        with self._db.read_snapshot() as _snap:
+            budget = reads.get_user_budget(_snap, request.user_id)
         if budget is None:
             raise ConnectError(Code.NOT_FOUND, f"No budget found for user {request.user_id}")
         with self._db.read_snapshot() as snap:
@@ -2330,8 +2341,8 @@ class ControllerServiceImpl:
     ) -> controller_pb2.Controller.ListUserBudgetsResponse:
         """List all user budgets with current spend."""
         require_identity()
-        budgets = self._db.list_user_budgets()
         with self._db.read_snapshot() as snap:
+            budgets = reads.list_user_budgets(snap)
             spend = compute_user_spend(snap)
         users = []
         for b in budgets:
@@ -2359,10 +2370,9 @@ class ControllerServiceImpl:
         """
         require_identity()
 
-        budgets = self._db.list_user_budgets()
-        budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
-
         with self._db.read_snapshot() as snap:
+            budgets = reads.list_user_budgets(snap)
+            budget_limits: dict[str, int] = {b.user_id: b.budget_limit for b in budgets}
             user_spend = compute_user_spend(snap)
 
             # Pending tasks: columns needed for task_row_can_be_scheduled.
@@ -2386,7 +2396,7 @@ class ControllerServiceImpl:
                 select(*_TASK_ROW_COLS).where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
             ).all()
             pending_rows = pending_raw
-            pending_requested_bands = reads_jobs.get_priority_bands(snap, {row.job_id for row in pending_rows})
+            pending_requested_bands = reads.get_priority_bands(snap, {row.job_id for row in pending_rows})
 
             # Running tasks: only task_id, priority_band, and worker — no
             # job_config join is needed for the rolled-up counts below.

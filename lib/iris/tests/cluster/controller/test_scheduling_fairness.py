@@ -5,13 +5,13 @@
 
 from collections import defaultdict
 
+from iris.cluster.controller import reads
 from iris.cluster.controller.budget import UserBudgetDefaults, UserTask, compute_effective_band, interleave_by_user
 from iris.cluster.controller.controller import (
     SchedulingOutcome,
     _pending_tasks_with_jobs,
     _sort_pending_tasks_by_resolved_band,
 )
-from iris.cluster.controller.reads import jobs as reads_jobs
 from iris.cluster.controller.schema import user_budgets_table
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
@@ -188,7 +188,7 @@ def test_child_resolves_parent_band_from_job_config():
             assert task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
         with state._db.read_snapshot() as snap:
-            requested = reads_jobs.get_priority_bands(snap, [child_id])
+            requested = reads.get_priority_bands(snap, [child_id])
         assert requested == {child_id: job_pb2.PRIORITY_BAND_PRODUCTION}
 
 
@@ -330,7 +330,7 @@ def test_get_priority_bands_resolves_via_parent_chain():
             state.submit_job(cur, batch_sub_id, batch_sub_req, Timestamp.now())
 
         with state._db.read_snapshot() as snap:
-            bands = reads_jobs.get_priority_bands(snap, [plain_job_id, prod_job_id, sub_id, batch_sub_id])
+            bands = reads.get_priority_bands(snap, [plain_job_id, prod_job_id, sub_id, batch_sub_id])
 
         assert bands[plain_job_id] == job_pb2.PRIORITY_BAND_INTERACTIVE
         assert bands[prod_job_id] == job_pb2.PRIORITY_BAND_PRODUCTION

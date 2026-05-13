@@ -14,6 +14,11 @@ import threading
 
 from finelog.rpc import logging_pb2
 from iris.cluster.constraints import DeviceType, WellKnownAttribute, constraints_from_resources
+
+# =============================================================================
+# Test Helpers
+# =============================================================================
+from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import compute_demand_entries
@@ -23,12 +28,6 @@ from iris.cluster.controller.db import (
     attempt_is_terminal,
 )
 from iris.cluster.controller.projections.endpoints import EndpointRow
-
-# =============================================================================
-# Test Helpers
-# =============================================================================
-from iris.cluster.controller.reads import jobs as reads_jobs
-from iris.cluster.controller.reads import tasks as reads_tasks
 from iris.cluster.controller.rows import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
@@ -45,6 +44,8 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select, text
 from sqlalchemy import update as sa_update
+
+from tests.cluster.controller._test_support import create_attempt_for_test
 
 from .conftest import (
     building_counts as _building_counts,
@@ -89,10 +90,8 @@ _ZERO_USAGE = WorkerResourceUsage(0, 0, 0, 0)
 
 def _usage_for_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerResourceUsage:
     """Derived per-worker usage (replaces the old ``workers.committed_*`` cache)."""
-    from iris.cluster.controller.reads import scheduler as reads_scheduler
-
     with state._db.read_snapshot() as snap:
-        return reads_scheduler.resource_usage_by_worker(snap).get(worker_id, _ZERO_USAGE)
+        return reads.resource_usage_by_worker(snap).get(worker_id, _ZERO_USAGE)
 
 
 def _endpoints(state: ControllerTransitions, query: EndpointQuery = EndpointQuery()) -> list[EndpointRow]:
@@ -122,10 +121,8 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
                     is_coscheduled=job.has_coscheduling,
                     coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
                 )
-    from iris.cluster.controller.reads import scheduler as reads_scheduler
-
     with state._db.read_snapshot() as snap:
-        usage = reads_scheduler.resource_usage_by_worker(snap)
+        usage = reads.resource_usage_by_worker(snap)
     snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
     return scheduler.create_scheduling_context(
         snapshots,
@@ -142,7 +139,7 @@ def test_sa_core_select_returns_typed_rows(state) -> None:
 
     job_id = JobName.root("test-user", "typed-rows")
     with state._db.read_snapshot() as tx:
-        job_row = reads_jobs.get_detail(tx, job_id)
+        job_row = reads.get_job_detail(tx, job_id)
         task_count = tx.fetchone(select(jobs_table.c.num_tasks).where(jobs_table.c.job_id == job_id))
 
     assert job_row is not None
@@ -1576,7 +1573,7 @@ def test_stale_attempt_error_log_for_non_terminal(state, caplog):
     # Manually create a second attempt without properly terminating the first.
     # This simulates a scenario where the controller created a new attempt
     # but the old one is still non-terminal (a precondition violation).
-    state.create_attempt_for_test(task.task_id, worker_id)
+    create_attempt_for_test(state, task.task_id, worker_id)
     assert _query_task(state, task.task_id).current_attempt_id == 1
     # The old attempt (0) is still in RUNNING state (non-terminal)
     with state._db.read_snapshot() as tx:
@@ -3438,14 +3435,14 @@ def _submit_job_direct(
 
 def _task_state_direct(state: ControllerTransitions, task_id: JobName) -> int:
     with state._db.read_snapshot() as tx:
-        row = reads_tasks.get_detail(tx, task_id)
+        row = reads.get_task_detail(tx, task_id)
     assert row is not None
     return int(row.state)
 
 
 def _task_row_direct(state: ControllerTransitions, task_id: JobName):
     with state._db.read_snapshot() as tx:
-        row = reads_tasks.get_detail(tx, task_id)
+        row = reads.get_task_detail(tx, task_id)
     assert row is not None
     return row
 

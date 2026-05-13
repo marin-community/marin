@@ -60,12 +60,12 @@ expressions against tables defined in `controller/schema.py`.
   DDL; `schema.py` is the source for query generation. Migration 0001
   bootstraps a fresh DB from `schema.metadata` via `CreateTable(...,
   if_not_exists=True)` so the SA model and on-disk DDL never diverge.
-- **Reads:** module-level functions in `controller/reads/<area>.py` taking
+- **Reads:** module-level functions in `controller/reads.py` taking
   `tx: db.Tx` as the first argument and returning SA `Row` objects (or
   `Sequence[Row]`). Callers use `row.column_name` attribute access; there
   are no wrapper dataclasses. Hot-path readers use `select(table.c.col)`
   directly; ad-hoc composites (dashboard, recursive CTEs) use `text(...)`.
-- **Writes:** module-level functions in `controller/writes/<entity>.py`,
+- **Writes:** module-level functions in `controller/writes.py`,
   decorated with `@writes_to(*tables, cascades_into=())`. The decorator is
   pure metadata; `assert_owned_tables_not_externally_written()` runs at
   `ControllerDB.__init__` and rejects any write into a Projection-owned

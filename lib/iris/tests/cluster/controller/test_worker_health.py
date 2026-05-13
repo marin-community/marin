@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-from iris.cluster.controller.reads.workers import healthy_active_workers_with_attributes
+from iris.cluster.controller.reads import healthy_active_workers_with_attributes
 from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import WorkerId

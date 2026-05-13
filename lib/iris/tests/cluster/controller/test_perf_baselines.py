@@ -16,13 +16,14 @@ from pathlib import Path
 from time import perf_counter
 
 import pytest
-from iris.cluster.controller import db
+from iris.cluster.controller import db, reads
 from iris.cluster.controller.controller import _jobs_with_reservations
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.reads import scheduler as reads_scheduler
 from iris.cluster.controller.schema import task_attempts_table, tasks_table
-from iris.cluster.types import WorkerId
-from iris.rpc import job_pb2
+from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.types import JobName, WorkerId
+from iris.rpc import controller_pb2, job_pb2
+from rigging.timing import Timestamp
 from sqlalchemy import select, text
 
 _RESERVATION_JOB_COUNT = 200
@@ -229,7 +230,7 @@ def test_resource_usage_by_worker_perf(perf_db: ControllerDB) -> None:
 
     def _sa_call() -> int:
         with db.read_snapshot(perf_db.sa_read_engine) as tx:
-            return len(reads_scheduler.resource_usage_by_worker(tx))
+            return len(reads.resource_usage_by_worker(tx))
 
     assert _sa_call() == worker_count
 
@@ -276,3 +277,104 @@ def test_reconcile_rows_for_workers_perf(perf_db: ControllerDB) -> None:
             return sum(1 for row in raw_rows if row.worker_id in target_ids)
 
     assert _sa_call() == expected_rows
+
+
+# ---------------------------------------------------------------------------
+# Tier 3 perf gates: bulk_insert_tasks + batch worker_attributes INSERT
+# ---------------------------------------------------------------------------
+
+_REPLICA_COUNT = 32
+_ATTR_COUNT = 32
+# Thresholds are ~10x the observed median on the development machine.
+# Measured medians: submit=8.6ms, register=1.8ms.
+# Tightened: reduce these once stable CI baselines are established.
+_SUBMIT_32_REPLICAS_MAX_MS = 200
+_REGISTER_32_ATTRS_MAX_MS = 50
+
+
+@pytest.fixture
+def submit_perf_db() -> Iterator[ControllerTransitions]:
+    """Fresh ControllerTransitions for bulk-insert submit perf gate."""
+    tmp = Path(tempfile.mkdtemp(prefix="iris_perf_submit_"))
+    controller_db = ControllerDB(db_dir=tmp)
+    try:
+        yield ControllerTransitions(controller_db)
+    finally:
+        controller_db.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@pytest.fixture
+def register_perf_db() -> Iterator[ControllerTransitions]:
+    """Fresh ControllerTransitions for bulk worker-attribute insert perf gate."""
+    tmp = Path(tempfile.mkdtemp(prefix="iris_perf_register_"))
+    controller_db = ControllerDB(db_dir=tmp)
+    try:
+        yield ControllerTransitions(controller_db)
+    finally:
+        controller_db.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_submit_job_with_n_replicas_perf(submit_perf_db: ControllerTransitions) -> None:
+    """Gate bulk_insert_tasks submit path for 32 replicas below a ms ceiling."""
+    state = submit_perf_db
+    job_id_counter = [0]
+
+    def _submit() -> None:
+        job_id_counter[0] += 1
+        name = f"/test-user/perf-job-{job_id_counter[0]:06d}"
+        entrypoint = job_pb2.RuntimeEntrypoint()
+        entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
+        req = controller_pb2.Controller.LaunchJobRequest(
+            name=name,
+            entrypoint=entrypoint,
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=100, memory_bytes=256 * 1024**2),
+            environment=job_pb2.EnvironmentConfig(),
+            replicas=_REPLICA_COUNT,
+        )
+        jid = JobName.from_wire(name)
+        with state._db.transaction() as cur:
+            state.submit_job(cur, jid, req, Timestamp.now())
+
+    per_call_s = _measure(_submit, _TICKS)
+    max_ms = _SUBMIT_32_REPLICAS_MAX_MS
+    assert per_call_s * 1e3 <= max_ms, (
+        f"submit_job with {_REPLICA_COUNT} replicas too slow: "
+        f"{per_call_s * 1e3:.1f} ms/call > {max_ms} ms gate ({_TICKS} iterations)."
+    )
+
+
+def test_register_worker_with_n_attributes_perf(register_perf_db: ControllerTransitions) -> None:
+    """Gate batch worker-attribute INSERT for 32 attributes below a ms ceiling."""
+    state = register_perf_db
+    worker_counter = [0]
+
+    def _register() -> None:
+        worker_counter[0] += 1
+        wid = WorkerId(f"worker-{worker_counter[0]:06d}")
+        attrs = {f"attr-key-{i}": job_pb2.AttributeValue(string_value=f"val-{i}") for i in range(_ATTR_COUNT)}
+        metadata = job_pb2.WorkerMetadata(
+            hostname="perf-worker",
+            ip_address="10.0.0.1",
+            cpu_count=64,
+            memory_bytes=128 * 1024**3,
+            disk_bytes=500 * 1024**3,
+            device=job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice(variant="cpu")),
+            attributes=attrs,
+        )
+        with state._db.transaction() as cur:
+            state.register_or_refresh_worker(
+                cur,
+                worker_id=wid,
+                address=f"{wid}:8080",
+                metadata=metadata,
+                ts=Timestamp.now(),
+            )
+
+    per_call_s = _measure(_register, _TICKS)
+    max_ms = _REGISTER_32_ATTRS_MAX_MS
+    assert per_call_s * 1e3 <= max_ms, (
+        f"register_worker with {_ATTR_COUNT} attributes too slow: "
+        f"{per_call_s * 1e3:.1f} ms/call > {max_ms} ms gate ({_TICKS} iterations)."
+    )
