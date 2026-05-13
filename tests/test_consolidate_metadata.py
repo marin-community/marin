@@ -217,9 +217,9 @@ async def test_token_seq_dataset_reads_sharded_cache():
 
         batch = await dataset.get_batch([0, 3, 4])
 
-        np.testing.assert_array_equal(batch[0], np.array(all_tokens[0:4], dtype=np.int32))
-        np.testing.assert_array_equal(batch[1], np.array(all_tokens[12:16], dtype=np.int32))
-        np.testing.assert_array_equal(batch[2], np.array(all_tokens[16:20], dtype=np.int32))
+        np.testing.assert_array_equal(batch[0]["input_ids"], np.array(all_tokens[0:4], dtype=np.int32))
+        np.testing.assert_array_equal(batch[1]["input_ids"], np.array(all_tokens[12:16], dtype=np.int32))
+        np.testing.assert_array_equal(batch[2]["input_ids"], np.array(all_tokens[16:20], dtype=np.int32))
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, TypeAlias, TypeVar
+from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
 
 import equinox as eqx
 import jax
@@ -40,6 +40,8 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
+    SupervisedLmDatasetFormat,
+    SupervisedTextProcessor,
     TextLmDatasetFormat,
 )
 from levanter.models.lm_model import LmExample
@@ -58,17 +60,23 @@ T_co = TypeVar("T_co", covariant=True)
 logger = logging.getLogger("levanter.data.text")
 
 
-class TokenSeqDataset(AsyncDataset[np.ndarray]):
+class TokenSeqDict(TypedDict):
+    input_ids: np.ndarray
+    loss_weights: NotRequired[np.ndarray]
+
+
+class TokenSeqDataset(AsyncDataset[TokenSeqDict]):
     """
-    A dataset that yields sequences of tokens of fixed length from an underlying TreeCache.
+    A dataset that yields fixed-length token sequences from an underlying TreeCache.
 
     :param doc_cache: the TreeCache to read from
     :param seq_len: The max length of sequences to emit
     """
 
-    def __init__(self, doc_cache: TreeCache[dict], seq_len: int):
+    def __init__(self, doc_cache: TreeCache[dict], seq_len: int, loss_weights_key: str | None = None):
         self.doc_cache = doc_cache
         self.seq_len = seq_len
+        self.loss_weights_key = loss_weights_key
 
     async def async_len(self) -> int:
         return await self.doc_cache.async_flat_field_length("input_ids") // self.seq_len
@@ -76,7 +84,7 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
     def is_finite(self) -> bool:
         return True
 
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[TokenSeqDict]:
         if not indices:
             return []
 
@@ -85,7 +93,15 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
             raise ValueError("Requested indices beyond the end of the dataset")
 
         offsets = np.array(indices, dtype=np.int64) * self.seq_len
-        return await self.doc_cache.get_flat_field_batch("input_ids", offsets, self.seq_len)
+        token_batch = await self.doc_cache.get_flat_field_batch("input_ids", offsets, self.seq_len)
+        if self.loss_weights_key is None:
+            return [{"input_ids": tokens} for tokens in token_batch]
+
+        weight_batch = await self.doc_cache.get_flat_field_batch(self.loss_weights_key, offsets, self.seq_len)
+        return [
+            {"input_ids": tokens, "loss_weights": weights}
+            for tokens, weights in zip(token_batch, weight_batch, strict=True)
+        ]
 
 
 def _single_cpu_sharding() -> jax.sharding.SingleDeviceSharding:
@@ -112,10 +128,10 @@ class NamedLmDataset(MappedAsyncDataset[GrugLmExample, LmExample]):
         return await self.dataset.async_len()
 
 
-class CausalLmDataset(MappedAsyncDataset[np.ndarray, GrugLmExample]):
+class CausalLmDataset(MappedAsyncDataset[TokenSeqDict, GrugLmExample]):
     def __init__(
         self,
-        dataset: AsyncDataset[np.ndarray],
+        dataset: AsyncDataset[TokenSeqDict],
         Pos: Axis,
         *,
         eos_id: int | None = None,
@@ -129,9 +145,10 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, GrugLmExample]):
         sharding = _single_cpu_sharding()
 
         @functools.partial(eqx.filter_jit)
-        def _create_lm_example(tokens: jax.Array) -> GrugLmExample:
+        def _create_lm_example(example_dict: TokenSeqDict) -> GrugLmExample:
             example = GrugLmExample.causal(
-                tokens=tokens,
+                tokens=example_dict["input_ids"],
+                loss_weight=example_dict.get("loss_weights"),
                 eos_id=eos_id,
                 block_cross_document_attention=block_cross_document_attention,
             )
@@ -349,6 +366,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         Pos: Axis,
         max_segments_per_example: int = 64,
         slice_strategy: Literal["left", "right", "raise"] = "left",
+        loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
@@ -359,23 +377,43 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
+        self.loss_weights_key = loss_weights_key
 
         sharding = _single_cpu_sharding()
 
-        @functools.partial(eqx.filter_jit)
-        def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
-            example, seg_ids = e
-            tokens = example["input_ids"]
-            loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
-            seg_ids_raw = seg_ids["input_ids"]
-            out = GrugLmExample.causal(
-                tokens=tokens,
-                loss_weight=loss_weight,
-                segment_ids=seg_ids_raw,
-                block_cross_document_attention=block_cross_document_attention,
-            )
-            out = jax.lax.with_sharding_constraint(out, sharding)
-            return out
+        if loss_weights_key is None:
+
+            @functools.partial(eqx.filter_jit)
+            def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
+                example, seg_ids = e
+                tokens = example["input_ids"]
+                loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
+                seg_ids_raw = seg_ids["input_ids"]
+                out = GrugLmExample.causal(
+                    tokens=tokens,
+                    loss_weight=loss_weight,
+                    segment_ids=seg_ids_raw,
+                    block_cross_document_attention=block_cross_document_attention,
+                )
+                out = jax.lax.with_sharding_constraint(out, sharding)
+                return out
+
+        else:
+
+            @functools.partial(eqx.filter_jit)
+            def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
+                example, seg_ids = e
+                tokens = example["input_ids"]
+                loss_weight = example[loss_weights_key]
+                seg_ids_raw = seg_ids["input_ids"]
+                out = GrugLmExample.causal(
+                    tokens=tokens,
+                    loss_weight=loss_weight,
+                    segment_ids=seg_ids_raw,
+                    block_cross_document_attention=block_cross_document_attention,
+                )
+                out = jax.lax.with_sharding_constraint(out, sharding)
+                return out
 
         super().__init__(self.packed, _create_lm_example)
 
@@ -453,13 +491,31 @@ def dataset_for_component(
                 max_segments_per_example=max_segments,
                 block_cross_document_attention=block_cross_document_attention,
             )
-        else:
-            return CausalLmDataset(
-                TokenSeqDataset(cache, Pos.size),
+        return CausalLmDataset(
+            TokenSeqDataset(cache, Pos.size),
+            Pos,
+            eos_id=eos_id,
+            block_cross_document_attention=block_cross_document_attention,
+        )
+    elif isinstance(fmt, SupervisedLmDatasetFormat):
+        loss_weights_key = SupervisedTextProcessor.loss_weights_key
+        if pack == "pad":
+            raise NotImplementedError("Padding mode not yet implemented.")
+        if pack:
+            max_segments = 64 if pack is True else int(pack)
+            return PackedTokenDataset(
+                cache,
                 Pos,
-                eos_id=eos_id,
+                max_segments_per_example=max_segments,
+                loss_weights_key=loss_weights_key,
                 block_cross_document_attention=block_cross_document_attention,
             )
+        return CausalLmDataset(
+            TokenSeqDataset(cache, Pos.size, loss_weights_key=loss_weights_key),
+            Pos,
+            eos_id=eos_id,
+            block_cross_document_attention=block_cross_document_attention,
+        )
     elif isinstance(fmt, ChatLmDatasetFormat):
         effective_pack = pack
         if effective_pack == "pad":

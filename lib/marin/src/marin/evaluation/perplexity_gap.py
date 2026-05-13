@@ -12,7 +12,13 @@ from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.analysis.model_perplexity import compare_scored_outputs
 from levanter.analysis.perplexity_gap import write_report_files
-from levanter.data.text import DatasetComponent, HfDatasetSourceConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
+from levanter.data.text import (
+    DatasetComponent,
+    HfDatasetSourceConfig,
+    SupervisedLmDatasetFormat,
+    TextLmDatasetFormat,
+    UrlDatasetSourceConfig,
+)
 from levanter.main.perplexity_gap import (
     GapFinderModelConfig as LevanterGapFinderModelConfig,
 )
@@ -286,11 +292,12 @@ def _to_levanter_model_config(config: GapFinderModelConfig) -> LevanterGapFinder
 
 
 def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
-    dataset_format = TextLmDatasetFormat(
-        text_key=config.text_key,
-        input_key=config.input_key,
-        target_key=config.target_key,
-    )
+    if config.input_key is None and config.target_key is None:
+        dataset_format = TextLmDatasetFormat(text_key=config.text_key)
+    elif config.input_key is not None and config.target_key is not None:
+        dataset_format = SupervisedLmDatasetFormat(input_key=config.input_key, target_key=config.target_key)
+    else:
+        raise ValueError("RawTextEvaluationDataset must set both input_key and target_key for supervised data.")
     if config.hf_dataset_id is not None:
         source = HfDatasetSourceConfig(
             id=config.hf_dataset_id,
