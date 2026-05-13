@@ -1277,18 +1277,23 @@ class DiskLogNamespace:
             if row is not None:
                 self._catalog.remove_segment(self.name, row.path)
 
-        # Parallelize fs.rm — a large first-deploy backlog of compaction
-        # orphans would otherwise add minutes to boot.
-        def _delete_one(basename: str) -> None:
+        # Batch fs.rm calls 8 at a time and run batches in parallel. The
+        # gcsfs path uses one BatchDelete request per chunk; otherwise a
+        # large first-deploy backlog of compaction orphans adds minutes
+        # to boot.
+        def _delete_chunk(chunk: list[str]) -> None:
+            paths = [f"{self._remote_namespace_dir}/{b}" for b in chunk]
             try:
-                fs.rm(f"{self._remote_namespace_dir}/{basename}")
+                fs.rm(paths)
             except Exception:
-                logger.warning("redundant remote delete failed: %s/%s", self.name, basename, exc_info=True)
+                logger.warning("redundant remote delete failed: %s/%s", self.name, chunk, exc_info=True)
 
         if redundant:
-            max_workers = min(32, len(redundant))
+            ordered = list(redundant)
+            chunks = [ordered[i : i + 8] for i in range(0, len(ordered), 8)]
+            max_workers = min(32, len(chunks))
             with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reconcile-delete") as pool:
-                list(pool.map(_delete_one, redundant))
+                list(pool.map(_delete_chunk, chunks))
 
         now_ms = int(time.time() * 1000)
         adopted = 0
