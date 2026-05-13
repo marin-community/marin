@@ -13,20 +13,15 @@ import os
 import posixpath
 import shutil
 import tempfile
-import time
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
-from functools import partial
 from typing import Any
 
-import requests
 from datasets import load_dataset
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
-from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
-from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
 from experiments.evals.long_tail_ppl import (
@@ -42,13 +37,14 @@ from experiments.evals.long_tail_ppl import (
 
 logger = logging.getLogger(__name__)
 
+COMMON_PILE_STACK_V2_DATASET_ID = "common-pile/stackv2"
+COMMON_PILE_STACK_V2_REVISION = "d0e3266fce12d25de28f2576ffb7272c18b0148f"
 OUTPUT_FILENAME = "heldout.jsonl.gz"
 METADATA_FILENAME = "heldout_metadata.json"
-SWH_CONTENT_URL_TEMPLATE = "https://archive.softwareheritage.org/api/1/content/sha1:{blob_id}/raw/"
+SUMMARY_FILENAME = "materialization_summary.json"
 MIN_LENGTH_BYTES = 256
 MAX_LENGTH_BYTES = 2_000_000
-HTTP_TIMEOUT = 60
-REQUEST_SLEEP = 0.2
+PROGRESS_INTERVAL_ROWS = 50_000
 
 
 @dataclass(frozen=True)
@@ -58,13 +54,13 @@ class StackV2HeldoutConfig:
     language: str
     stack_v2_config: str
     target_compressed_bytes: int
-    dataset_id: str = STACK_V2_DATASET_ID
-    revision: str = STACK_V2_REVISION
+    source_dataset_id: str = COMMON_PILE_STACK_V2_DATASET_ID
+    source_revision: str = COMMON_PILE_STACK_V2_REVISION
+    stack_v2_dataset_id: str = STACK_V2_DATASET_ID
+    stack_v2_revision: str = STACK_V2_REVISION
     min_length_bytes: int = MIN_LENGTH_BYTES
     max_length_bytes: int = MAX_LENGTH_BYTES
     output_filename: str = OUTPUT_FILENAME
-    request_sleep: float = REQUEST_SLEEP
-    http_timeout: int = HTTP_TIMEOUT
 
 
 def _json_default(value: Any) -> str:
@@ -73,168 +69,8 @@ def _json_default(value: Any) -> str:
     return str(value)
 
 
-def _build_session() -> requests.Session:
-    retry = Retry(
-        total=8,
-        connect=5,
-        read=5,
-        backoff_factor=1.5,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset({"GET"}),
-    )
-    session = requests.Session()
-    session.mount("https://", HTTPAdapter(max_retries=retry))
-    return session
-
-
-def _download_swh_content(session: requests.Session, blob_id: str, src_encoding: str | None, timeout: int) -> str:
-    url = SWH_CONTENT_URL_TEMPLATE.format(blob_id=blob_id)
-    response = session.get(url, timeout=timeout)
-    response.raise_for_status()
-    encoding = src_encoding or "utf-8"
-    return response.content.decode(encoding)
-
-
-def _record_from_row(
-    row: dict[str, Any],
-    text: str,
-    language: str,
-    index: int,
-    config: StackV2HeldoutConfig,
-) -> dict[str, Any]:
-    return {
-        "id": f"stack_v2:{_language_to_slug(language)}:{index:08d}:{row['blob_id']}",
-        "text": text,
-        "source": "bigcode/the-stack-v2",
-        "language": language,
-        "provenance": {
-            "dataset_id": config.dataset_id,
-            "revision": config.revision,
-            "stack_v2_config": config.stack_v2_config,
-            "metadata_index": index,
-            "blob_id": row["blob_id"],
-            "content_id": row.get("content_id"),
-            "repo_name": row.get("repo_name"),
-            "path": row.get("path"),
-            "revision_id": row.get("revision_id"),
-            "license_type": row.get("license_type"),
-            "detected_licenses": row.get("detected_licenses"),
-            "src_encoding": row.get("src_encoding"),
-            "length_bytes": row.get("length_bytes"),
-            "is_vendor": row.get("is_vendor"),
-            "is_generated": row.get("is_generated"),
-        },
-    }
-
-
-def _should_consider_row(row: dict[str, Any], config: StackV2HeldoutConfig) -> bool:
-    length_bytes = row.get("length_bytes")
-    if not isinstance(length_bytes, int):
-        return False
-    if length_bytes < config.min_length_bytes or length_bytes > config.max_length_bytes:
-        return False
-    return not bool(row.get("is_vendor")) and not bool(row.get("is_generated"))
-
-
-def materialize_stack_v2_heldout(config: StackV2HeldoutConfig, output_path: str) -> dict[str, Any]:
-    """Write one bounded Stack v2 held-out slice as raw-text JSONL.gz."""
-
-    fsspec_mkdirs(output_path, exist_ok=True)
-    output_file = posixpath.join(output_path, config.output_filename)
-    session = _build_session()
-    record_count = 0
-    text_bytes = 0
-    skipped_decode_errors = 0
-    skipped_download_errors = 0
-    rows_seen = 0
-
-    try:
-        with tempfile.TemporaryDirectory(prefix="stack-v2-heldout-") as temp_dir:
-            local_gzip = os.path.join(temp_dir, config.output_filename)
-            with gzip.open(local_gzip, "wt", encoding="utf-8") as handle:
-                dataset = load_dataset(
-                    config.dataset_id,
-                    name=config.stack_v2_config,
-                    split="train",
-                    revision=config.revision,
-                    streaming=True,
-                )
-                for index, row in enumerate(dataset):
-                    rows_seen = index + 1
-                    if not _should_consider_row(row, config):
-                        continue
-                    try:
-                        text = _download_swh_content(
-                            session,
-                            str(row["blob_id"]),
-                            row.get("src_encoding"),
-                            config.http_timeout,
-                        )
-                    except (LookupError, UnicodeError):
-                        skipped_decode_errors += 1
-                        continue
-                    except requests.RequestException:
-                        skipped_download_errors += 1
-                        continue
-
-                    if not text.strip():
-                        continue
-                    record = _record_from_row(row, text, config.language, index, config)
-                    json.dump(record, handle, ensure_ascii=False, sort_keys=True, default=_json_default)
-                    handle.write("\n")
-                    record_count += 1
-                    text_bytes += len(text.encode("utf-8"))
-                    handle.flush()
-
-                    compressed_bytes = os.path.getsize(local_gzip)
-                    if compressed_bytes >= config.target_compressed_bytes:
-                        break
-                    if config.request_sleep > 0:
-                        time.sleep(config.request_sleep)
-
-            compressed_bytes = os.path.getsize(local_gzip)
-            if compressed_bytes < config.target_compressed_bytes:
-                raise ValueError(
-                    f"{config.language} exhausted before target: "
-                    f"{compressed_bytes:,}/{config.target_compressed_bytes:,} compressed bytes, "
-                    f"{record_count} records, {rows_seen} metadata rows"
-                )
-
-            with atomic_rename(output_file) as temp_path:
-                with open_url(temp_path, "wb") as dest, open(local_gzip, "rb") as src:
-                    shutil.copyfileobj(src, dest)
-    finally:
-        session.close()
-
-    metadata = {
-        "config": asdict(config),
-        "output_file": output_file,
-        "record_count": record_count,
-        "text_bytes": text_bytes,
-        "compressed_bytes": compressed_bytes,
-        "rows_seen": rows_seen,
-        "skipped_decode_errors": skipped_decode_errors,
-        "skipped_download_errors": skipped_download_errors,
-    }
-    metadata_file = posixpath.join(output_path, METADATA_FILENAME)
-    with open_url(metadata_file, "w") as handle:
-        json.dump(metadata, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-
-    logger.info(
-        "Materialized %s: %d records, %d compressed bytes, %d text bytes",
-        config.language,
-        record_count,
-        compressed_bytes,
-        text_bytes,
-    )
-    return metadata
-
-
-def stack_v2_heldout_steps(*, only_languages: set[str] | None = None) -> list[StepSpec]:
-    """Return one materialization step per registered Stack v2 code language."""
-
-    steps: list[StepSpec] = []
+def _target_configs(*, only_languages: set[str] | None = None) -> dict[str, StackV2HeldoutConfig]:
+    configs: dict[str, StackV2HeldoutConfig] = {}
     for tier in CodeEcosystemTier:
         target = (
             CODE_ECOSYSTEM_LARGE_TARGET_TOKENS if tier == CodeEcosystemTier.LARGE else CODE_ECOSYSTEM_SMALL_TARGET_TOKENS
@@ -242,26 +78,228 @@ def stack_v2_heldout_steps(*, only_languages: set[str] | None = None) -> list[St
         for language in CODE_ECOSYSTEM_LANGUAGES[tier]:
             if only_languages is not None and language not in only_languages:
                 continue
-            config = StackV2HeldoutConfig(
+            configs[language] = StackV2HeldoutConfig(
                 language=language,
                 stack_v2_config=stack_v2_config_name(language),
                 target_compressed_bytes=target,
             )
+    return configs
+
+
+def _record_from_row(row: dict[str, Any], language: str, index: int, config: StackV2HeldoutConfig) -> dict[str, Any]:
+    metadata = row.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    row_id = row.get("id") or metadata.get("blob_id") or f"row-{index}"
+    return {
+        "id": f"stack_v2:{_language_to_slug(language)}:{index:08d}:{row_id}",
+        "text": row["text"],
+        "source": COMMON_PILE_STACK_V2_DATASET_ID,
+        "language": language,
+        "provenance": {
+            "dataset_id": config.source_dataset_id,
+            "revision": config.source_revision,
+            "stack_v2_dataset_id": config.stack_v2_dataset_id,
+            "stack_v2_revision": config.stack_v2_revision,
+            "stack_v2_config": config.stack_v2_config,
+            "metadata_index": index,
+            "row_id": row.get("id"),
+            "blob_id": metadata.get("blob_id"),
+            "content_id": metadata.get("content_id"),
+            "repo_name": metadata.get("repo_name"),
+            "path": metadata.get("path"),
+            "url": metadata.get("url"),
+            "revision_id": metadata.get("revision_id"),
+            "license_type": metadata.get("license_type"),
+            "detected_licenses": metadata.get("detected_licenses"),
+            "length_bytes": metadata.get("length_bytes"),
+            "is_vendor": metadata.get("is_vendor"),
+            "is_generated": metadata.get("is_generated"),
+        },
+    }
+
+
+def _metadata_language(row: dict[str, Any]) -> str | None:
+    metadata = row.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    language = metadata.get("language")
+    return language if isinstance(language, str) else None
+
+
+def _length_bytes(row: dict[str, Any]) -> int:
+    text = row["text"]
+    assert isinstance(text, str)
+    metadata = row.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("length_bytes"), int):
+        return int(metadata["length_bytes"])
+    return len(text.encode("utf-8"))
+
+
+def _should_consider_row(row: dict[str, Any], config: StackV2HeldoutConfig) -> bool:
+    if not isinstance(row.get("text"), str) or not row["text"].strip():
+        return False
+    length_bytes = _length_bytes(row)
+    if length_bytes < config.min_length_bytes or length_bytes > config.max_length_bytes:
+        return False
+    metadata = row.get("metadata")
+    if isinstance(metadata, dict):
+        return not bool(metadata.get("is_vendor")) and not bool(metadata.get("is_generated"))
+    return True
+
+
+def materialize_stack_v2_heldouts(
+    output_path: str,
+    *,
+    only_languages: set[str] | None = None,
+) -> dict[str, Any]:
+    """Write all selected Stack v2 held-out slices as raw-text JSONL.gz."""
+
+    selected = _target_configs(only_languages=only_languages)
+    if not selected:
+        raise ValueError("No Stack v2 held-out languages selected")
+
+    base_output_path = posixpath.dirname(output_path.rstrip("/"))
+    fsspec_mkdirs(base_output_path, exist_ok=True)
+    completed: set[str] = set()
+    rows_seen = 0
+    skipped_rows = 0
+
+    with tempfile.TemporaryDirectory(prefix="stack-v2-heldouts-") as temp_dir:
+        handles: dict[str, gzip.GzipFile] = {}
+        local_files: dict[str, str] = {}
+        stats: dict[str, dict[str, Any]] = {}
+        for language, config in selected.items():
             slug = _language_to_slug(language)
-            steps.append(
-                StepSpec(
-                    name=f"evaluation/long_tail_ppl/stack_v2/{slug}",
-                    fn=partial(materialize_stack_v2_heldout, config),
-                    hash_attrs=asdict(config),
-                    override_output_path=f"raw/long_tail_ppl/code/stack_v2/{slug}",
-                )
+            local_file = os.path.join(temp_dir, slug, OUTPUT_FILENAME)
+            os.makedirs(os.path.dirname(local_file), exist_ok=True)
+            local_files[language] = local_file
+            handles[language] = gzip.open(local_file, "wt", encoding="utf-8")
+            stats[language] = {
+                "config": asdict(config),
+                "record_count": 0,
+                "text_bytes": 0,
+                "compressed_bytes": 0,
+                "first_row_index": None,
+                "last_row_index": None,
+            }
+
+        try:
+            dataset = load_dataset(
+                COMMON_PILE_STACK_V2_DATASET_ID,
+                split="train",
+                revision=COMMON_PILE_STACK_V2_REVISION,
+                streaming=True,
             )
-    return steps
+            for index, row in enumerate(dataset):
+                rows_seen = index + 1
+                language = _metadata_language(row)
+                if language not in selected or language in completed:
+                    skipped_rows += 1
+                    continue
+                config = selected[language]
+                if not _should_consider_row(row, config):
+                    skipped_rows += 1
+                    continue
+
+                record = _record_from_row(row, language, index, config)
+                handle = handles[language]
+                json.dump(record, handle, ensure_ascii=False, sort_keys=True, default=_json_default)
+                handle.write("\n")
+                handle.flush()
+
+                text_bytes = len(row["text"].encode("utf-8"))
+                language_stats = stats[language]
+                language_stats["record_count"] += 1
+                language_stats["text_bytes"] += text_bytes
+                language_stats["last_row_index"] = index
+                if language_stats["first_row_index"] is None:
+                    language_stats["first_row_index"] = index
+
+                compressed_bytes = os.path.getsize(local_files[language])
+                language_stats["compressed_bytes"] = compressed_bytes
+                if compressed_bytes >= config.target_compressed_bytes:
+                    completed.add(language)
+                    logger.info(
+                        "Completed %s: %d records, %d compressed bytes after %d rows",
+                        language,
+                        language_stats["record_count"],
+                        compressed_bytes,
+                        rows_seen,
+                    )
+
+                if rows_seen % PROGRESS_INTERVAL_ROWS == 0:
+                    logger.info(
+                        "Scanned %d rows; completed %d/%d slices",
+                        rows_seen,
+                        len(completed),
+                        len(selected),
+                    )
+                if len(completed) == len(selected):
+                    break
+        finally:
+            for handle in handles.values():
+                handle.close()
+
+        missing = sorted(set(selected) - completed)
+        if missing:
+            raise ValueError(f"Missing held-out targets after scanning {rows_seen:,} rows: {missing}")
+
+        for language, config in selected.items():
+            slug = _language_to_slug(language)
+            language_output_path = posixpath.join(base_output_path, slug)
+            fsspec_mkdirs(language_output_path, exist_ok=True)
+            output_file = posixpath.join(language_output_path, config.output_filename)
+            with atomic_rename(output_file) as temp_path:
+                with open_url(temp_path, "wb") as dest, open(local_files[language], "rb") as src:
+                    shutil.copyfileobj(src, dest)
+
+            stats[language]["output_file"] = output_file
+            metadata_file = posixpath.join(language_output_path, METADATA_FILENAME)
+            with open_url(metadata_file, "w") as handle:
+                json.dump(stats[language], handle, indent=2, sort_keys=True)
+                handle.write("\n")
+
+    summary = {
+        "source_dataset_id": COMMON_PILE_STACK_V2_DATASET_ID,
+        "source_revision": COMMON_PILE_STACK_V2_REVISION,
+        "stack_v2_dataset_id": STACK_V2_DATASET_ID,
+        "stack_v2_revision": STACK_V2_REVISION,
+        "rows_seen": rows_seen,
+        "skipped_rows": skipped_rows,
+        "completed_languages": sorted(completed),
+        "slice_count": len(completed),
+        "stats": stats,
+    }
+    summary_file = posixpath.join(output_path, SUMMARY_FILENAME)
+    fsspec_mkdirs(output_path, exist_ok=True)
+    with open_url(summary_file, "w") as handle:
+        json.dump(summary, handle, indent=2, sort_keys=True, default=_json_default)
+        handle.write("\n")
+    return summary
+
+
+def stack_v2_heldout_steps(*, only_languages: set[str] | None = None) -> list[StepSpec]:
+    """Return the Stack v2 code held-out materialization step."""
+
+    selected = _target_configs(only_languages=only_languages)
+    return [
+        StepSpec(
+            name="evaluation/long_tail_ppl/stack_v2/materialize_all",
+            fn=lambda output_path: materialize_stack_v2_heldouts(output_path, only_languages=set(selected)),
+            hash_attrs={
+                "source_dataset_id": COMMON_PILE_STACK_V2_DATASET_ID,
+                "source_revision": COMMON_PILE_STACK_V2_REVISION,
+                "selected": {language: asdict(config) for language, config in selected.items()},
+            },
+            override_output_path="raw/long_tail_ppl/code/stack_v2/_materialize_all",
+        )
+    ]
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-concurrent", type=int, default=4)
+    parser.add_argument("--max-concurrent", type=int, default=1)
     parser.add_argument("--language", action="append", help="Limit to one display language. Repeatable.")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -272,6 +310,4 @@ if __name__ == "__main__":
     args = _parse_args()
     only_languages = set(args.language) if args.language else None
     steps = stack_v2_heldout_steps(only_languages=only_languages)
-    if not steps:
-        raise ValueError("No Stack v2 held-out steps selected")
     StepRunner().run(steps, dry_run=args.dry_run, max_concurrent=args.max_concurrent)
