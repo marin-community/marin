@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
-import asyncio
 import dataclasses
 import functools
 import logging
@@ -16,7 +15,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-import tensorstore as ts
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
@@ -47,8 +45,6 @@ from levanter.data.text.formats import (
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions, TreeCache
-from levanter.store.jagged_array import JaggedArrayStore
-from levanter.store.tree_store import TreeStore
 from levanter.utils import fsspec_utils
 from levanter.tokenizers import MarinTokenizer, load_tokenizer as load_marin_tokenizer
 from levanter.utils.jax_utils import key_iterator
@@ -73,16 +69,9 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
     def __init__(self, doc_cache: TreeCache[dict], seq_len: int):
         self.doc_cache = doc_cache
         self.seq_len = seq_len
-        self._store: TreeStore | None = doc_cache.store
 
     async def async_len(self) -> int:
-        token_arrays = await self._await_token_cache()
-        return token_arrays.data_size // self.seq_len
-
-    async def _await_token_cache(self) -> JaggedArrayStore:
-        if self._store is None:
-            self._store = self.doc_cache.store
-        return self._store.tree["input_ids"]
+        return await self.doc_cache.async_flat_field_length("input_ids") // self.seq_len
 
     def is_finite(self) -> bool:
         return True
@@ -91,19 +80,12 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         if not indices:
             return []
 
-        token_arrays = await self._await_token_cache()
-        # logger.info(f"Time to get token cache: {time.time() - time_in}")
         ds_len = await self.async_len()
         if ds_len < max(indices) + 1:
             raise ValueError("Requested indices beyond the end of the dataset")
-        offsets = np.array(indices, dtype=np.int64) * self.seq_len
-        with ts.Batch():
-            out = []
-            for offset in offsets:
-                out.append(token_arrays.data[offset : offset + self.seq_len].read())
 
-        out = await asyncio.gather(*out)
-        return out
+        offsets = np.array(indices, dtype=np.int64) * self.seq_len
+        return await self.doc_cache.get_flat_field_batch("input_ids", offsets, self.seq_len)
 
 
 def _single_cpu_sharding() -> jax.sharding.SingleDeviceSharding:
@@ -370,7 +352,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         block_cross_document_attention: bool = True,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
-            cache.store.tree,
+            cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
@@ -413,7 +395,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         block_cross_document_attention: bool = True,
     ):
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
-            cache.store.tree,
+            cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
@@ -918,7 +900,7 @@ def count_corpus_sizes(
     prefix: str = "data/stats/",
     seq_len: int = 4096,
 ) -> dict:
-    stats = {}
+    stats: dict[str, int | float] = {}
     train_caches = config.build_caches("train")
     Pos = Axis("position", seq_len)
 
@@ -935,8 +917,9 @@ def count_corpus_sizes(
         metric_prefix = f"{prefix}train/{name}/"
         component = config.components[name]
         token_key = _get_token_key_for_component(component)
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
+        total_tokens = cache.flat_field_length(token_key)
+        stats[f"{metric_prefix}total_tokens"] = total_tokens
+        stats[f"{metric_prefix}total_docs"] = cache.flat_field_num_rows(token_key)
         train_set = dataset_for_component(
             component,
             Pos,
@@ -946,7 +929,9 @@ def count_corpus_sizes(
         )
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
-        padding_fraction = 1 - (cache.store.tree[token_key].data_size / (train_seqs * seq_len))
+        if train_seqs == 0 or seq_len == 0:
+            continue
+        padding_fraction = 1 - (total_tokens / (train_seqs * seq_len))
         if padding_fraction < 0:
             stats[f"{metric_prefix}truncation_fraction"] = -padding_fraction
         else:
@@ -962,8 +947,8 @@ def count_corpus_sizes(
         metric_prefix = f"{prefix}validation/{name}/"
         component = config.components[name]
         token_key = _get_token_key_for_component(component)
-        stats[f"{metric_prefix}total_tokens"] = cache.store.tree[token_key].data_size
-        stats[f"{metric_prefix}total_docs"] = cache.store.tree[token_key].num_rows
+        stats[f"{metric_prefix}total_tokens"] = cache.flat_field_length(token_key)
+        stats[f"{metric_prefix}total_docs"] = cache.flat_field_num_rows(token_key)
         validation_set = dataset_for_component(
             component,
             Pos,
