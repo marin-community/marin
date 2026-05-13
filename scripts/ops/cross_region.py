@@ -880,9 +880,6 @@ def main(
     logging.info(f"Output directory: {out_path}")
 
     cfg = IrisConfig.load(config)
-    # Logs are shipped by finelog (see lib/finelog/config/<name>.yaml). Iris
-    # used to write parquet segments under `<remote_state_dir>/logs/`, but
-    # that path went stale after the finelog migration (see #5703).
     if not cfg.proto.log_server_config:
         raise click.ClickException(
             f"Iris config {config!r} has no log_server_config; cross-region analysis "
