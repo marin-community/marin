@@ -21,7 +21,7 @@ from datasets import load_dataset
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
-from rigging.filesystem import open_url
+from rigging.filesystem import open_url, url_to_fs
 from zephyr.writers import atomic_rename
 
 from experiments.evals.long_tail_ppl import (
@@ -67,6 +67,11 @@ def _json_default(value: Any) -> str:
     if isinstance(value, datetime | date):
         return value.isoformat()
     return str(value)
+
+
+def _path_exists(path: str) -> bool:
+    fs, resolved_path = url_to_fs(path)
+    return fs.exists(resolved_path)
 
 
 def _target_configs(*, only_languages: set[str] | None = None) -> dict[str, StackV2HeldoutConfig]:
@@ -148,6 +153,53 @@ def _should_consider_row(row: dict[str, Any], config: StackV2HeldoutConfig) -> b
     return True
 
 
+def _language_output_path(base_output_path: str, language: str) -> str:
+    return posixpath.join(base_output_path, _language_to_slug(language))
+
+
+def _output_file(base_output_path: str, language: str, config: StackV2HeldoutConfig) -> str:
+    return posixpath.join(_language_output_path(base_output_path, language), config.output_filename)
+
+
+def _metadata_file(base_output_path: str, language: str) -> str:
+    return posixpath.join(_language_output_path(base_output_path, language), METADATA_FILENAME)
+
+
+def _existing_language_metadata(
+    base_output_path: str, language: str, config: StackV2HeldoutConfig
+) -> dict[str, Any] | None:
+    output_file = _output_file(base_output_path, language, config)
+    metadata_file = _metadata_file(base_output_path, language)
+    if not _path_exists(output_file) or not _path_exists(metadata_file):
+        return None
+    with open_url(metadata_file, "r") as handle:
+        metadata = json.load(handle)
+    metadata["output_file"] = output_file
+    return metadata
+
+
+def _write_language_outputs(
+    base_output_path: str,
+    language: str,
+    config: StackV2HeldoutConfig,
+    local_file: str,
+    language_stats: dict[str, Any],
+) -> None:
+    language_output_path = _language_output_path(base_output_path, language)
+    fsspec_mkdirs(language_output_path, exist_ok=True)
+
+    output_file = _output_file(base_output_path, language, config)
+    with atomic_rename(output_file) as temp_path:
+        with open_url(temp_path, "wb") as dest, open(local_file, "rb") as src:
+            shutil.copyfileobj(src, dest)
+
+    language_stats["output_file"] = output_file
+    metadata_file = _metadata_file(base_output_path, language)
+    with open_url(metadata_file, "w") as handle:
+        json.dump(language_stats, handle, indent=2, sort_keys=True, default=_json_default)
+        handle.write("\n")
+
+
 def materialize_stack_v2_heldouts(
     output_path: str,
     *,
@@ -164,12 +216,21 @@ def materialize_stack_v2_heldouts(
     completed: set[str] = set()
     rows_seen = 0
     skipped_rows = 0
+    stats: dict[str, dict[str, Any]] = {}
+    pending: dict[str, StackV2HeldoutConfig] = {}
+    for language, config in selected.items():
+        existing_metadata = _existing_language_metadata(base_output_path, language, config)
+        if existing_metadata is not None:
+            completed.add(language)
+            stats[language] = existing_metadata
+            logger.info("Skipping existing held-out slice for %s at %s", language, existing_metadata["output_file"])
+            continue
+        pending[language] = config
 
     with tempfile.TemporaryDirectory(prefix="stack-v2-heldouts-") as temp_dir:
         handles: dict[str, gzip.GzipFile] = {}
         local_files: dict[str, str] = {}
-        stats: dict[str, dict[str, Any]] = {}
-        for language, config in selected.items():
+        for language, config in pending.items():
             slug = _language_to_slug(language)
             local_file = os.path.join(temp_dir, slug, OUTPUT_FILENAME)
             os.makedirs(os.path.dirname(local_file), exist_ok=True)
@@ -185,58 +246,70 @@ def materialize_stack_v2_heldouts(
             }
 
         try:
-            dataset = load_dataset(
-                COMMON_PILE_STACK_V2_DATASET_ID,
-                split="train",
-                revision=COMMON_PILE_STACK_V2_REVISION,
-                streaming=True,
-            )
-            for index, row in enumerate(dataset):
-                rows_seen = index + 1
-                language = _metadata_language(row)
-                if language not in selected or language in completed:
-                    skipped_rows += 1
-                    continue
-                config = selected[language]
-                if not _should_consider_row(row, config):
-                    skipped_rows += 1
-                    continue
+            if not pending:
+                logger.info("All %d selected held-out slices already exist", len(selected))
+            else:
+                dataset = load_dataset(
+                    COMMON_PILE_STACK_V2_DATASET_ID,
+                    split="train",
+                    revision=COMMON_PILE_STACK_V2_REVISION,
+                    streaming=True,
+                )
+                for index, row in enumerate(dataset):
+                    rows_seen = index + 1
+                    language = _metadata_language(row)
+                    if language not in pending or language in completed:
+                        skipped_rows += 1
+                        continue
+                    config = pending[language]
+                    if not _should_consider_row(row, config):
+                        skipped_rows += 1
+                        continue
 
-                record = _record_from_row(row, language, index, config)
-                handle = handles[language]
-                json.dump(record, handle, ensure_ascii=False, sort_keys=True, default=_json_default)
-                handle.write("\n")
-                handle.flush()
+                    record = _record_from_row(row, language, index, config)
+                    handle = handles[language]
+                    json.dump(record, handle, ensure_ascii=False, sort_keys=True, default=_json_default)
+                    handle.write("\n")
+                    handle.flush()
 
-                text_bytes = len(row["text"].encode("utf-8"))
-                language_stats = stats[language]
-                language_stats["record_count"] += 1
-                language_stats["text_bytes"] += text_bytes
-                language_stats["last_row_index"] = index
-                if language_stats["first_row_index"] is None:
-                    language_stats["first_row_index"] = index
+                    text_bytes = len(row["text"].encode("utf-8"))
+                    language_stats = stats[language]
+                    language_stats["record_count"] += 1
+                    language_stats["text_bytes"] += text_bytes
+                    language_stats["last_row_index"] = index
+                    if language_stats["first_row_index"] is None:
+                        language_stats["first_row_index"] = index
 
-                compressed_bytes = os.path.getsize(local_files[language])
-                language_stats["compressed_bytes"] = compressed_bytes
-                if compressed_bytes >= config.target_compressed_bytes:
-                    completed.add(language)
-                    logger.info(
-                        "Completed %s: %d records, %d compressed bytes after %d rows",
-                        language,
-                        language_stats["record_count"],
-                        compressed_bytes,
-                        rows_seen,
-                    )
+                    compressed_bytes = os.path.getsize(local_files[language])
+                    language_stats["compressed_bytes"] = compressed_bytes
+                    if compressed_bytes >= config.target_compressed_bytes:
+                        handle.close()
+                        del handles[language]
+                        _write_language_outputs(
+                            base_output_path,
+                            language,
+                            config,
+                            local_files[language],
+                            language_stats,
+                        )
+                        completed.add(language)
+                        logger.info(
+                            "Completed and uploaded %s: %d records, %d compressed bytes after %d rows",
+                            language,
+                            language_stats["record_count"],
+                            compressed_bytes,
+                            rows_seen,
+                        )
 
-                if rows_seen % PROGRESS_INTERVAL_ROWS == 0:
-                    logger.info(
-                        "Scanned %d rows; completed %d/%d slices",
-                        rows_seen,
-                        len(completed),
-                        len(selected),
-                    )
-                if len(completed) == len(selected):
-                    break
+                    if rows_seen % PROGRESS_INTERVAL_ROWS == 0:
+                        logger.info(
+                            "Scanned %d rows; completed %d/%d slices",
+                            rows_seen,
+                            len(completed),
+                            len(selected),
+                        )
+                    if len(completed) == len(selected):
+                        break
         finally:
             for handle in handles.values():
                 handle.close()
@@ -244,21 +317,6 @@ def materialize_stack_v2_heldouts(
         missing = sorted(set(selected) - completed)
         if missing:
             raise ValueError(f"Missing held-out targets after scanning {rows_seen:,} rows: {missing}")
-
-        for language, config in selected.items():
-            slug = _language_to_slug(language)
-            language_output_path = posixpath.join(base_output_path, slug)
-            fsspec_mkdirs(language_output_path, exist_ok=True)
-            output_file = posixpath.join(language_output_path, config.output_filename)
-            with atomic_rename(output_file) as temp_path:
-                with open_url(temp_path, "wb") as dest, open(local_files[language], "rb") as src:
-                    shutil.copyfileobj(src, dest)
-
-            stats[language]["output_file"] = output_file
-            metadata_file = posixpath.join(language_output_path, METADATA_FILENAME)
-            with open_url(metadata_file, "w") as handle:
-                json.dump(stats[language], handle, indent=2, sort_keys=True)
-                handle.write("\n")
 
     summary = {
         "source_dataset_id": COMMON_PILE_STACK_V2_DATASET_ID,
