@@ -184,7 +184,7 @@ assert (
 # Eval cadence and checkpoint policy.
 EVALS_PER_RUN = 10
 CHECKPOINTS_PER_RUN = 3
-CHECKPOINT_TIME_INTERVAL = timedelta(hours=1)
+CHECKPOINT_TIME_INTERVAL = timedelta(minutes=15)
 
 # Warmup mode: smoke-test the full pipeline. Only ``num_train_steps`` and eval
 # count are reduced; the optimizer is built at the full target token count so
@@ -228,17 +228,26 @@ class MixConfig:
     cap is ``max_train_examples * weight / sum(active_weights)``. Used by
     continuation runs that train for a fixed (small) token budget.
 
-    ``initialize_from_checkpoint_path``, when set, is forwarded to
-    ``TrainLmConfig.initialize_from_checkpoint_path`` so the run starts from
-    an existing checkpoint instead of fresh weights. Levanter resolves the
-    parent directory to the latest step-numbered checkpoint at startup via
-    ``latest_checkpoint_path``.
+    ``initialize_from_hf``, when set, is forwarded to
+    ``TrainLmConfig.initialize_from_hf`` so the run warm-starts model weights
+    from a HuggingFace-format checkpoint (config.json + model.safetensors).
+    Only the model is loaded; optimizer state, step, and RNG keys stay fresh,
+    so the LR schedule starts at the beginning of warmup. The Levanter-format
+    counterpart (``initialize_from_checkpoint_path``) is not used here because
+    it deserializes the full state including the ``inject_hyperparams`` count
+    in ``opt_state``, which would leave the new run's schedule clamped at 0.
+
+    ``data_seed``, when set, is forwarded to ``TrainLmConfig.data_seed`` and
+    overrides only the data shuffle / mixture sampling key. Model init and
+    training noise are unaffected. Useful for continuation runs that share an
+    HF init but want a distinct data ordering.
     """
 
     name: str
     weights: dict[str, float]
     max_train_examples: int | None = None
-    initialize_from_checkpoint_path: str | None = None
+    initialize_from_hf: str | None = None
+    data_seed: int | None = None
 
     def __post_init__(self):
         unknown = set(self.weights) - set(TRAIN_DATASETS)
@@ -259,17 +268,54 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
     MixConfig(name="cds_only", weights={"cds": 1.0}),
     MixConfig(name="upstream_only", weights={"upstream": 1.0}),
     MixConfig(name="downstream_only", weights={"downstream": 1.0}),
-    # Continuation run: warm-start from the i=2 upstream_only checkpoint and
-    # train a 50/50 cds+upstream mixture for ~one downstream-dataset worth of
-    # examples (~20.5M → ~5.25B tokens). Levanter resolves the parent dir to
-    # the latest step-numbered checkpoint at startup.
+    # Continuation run: warm-start model weights from the final HF checkpoint
+    # of the i=2 upstream_only run and train a 50/50 cds+upstream mixture for
+    # ~one downstream-dataset worth of examples (~20.5M → ~5.25B tokens). We
+    # load via the HF path (model-only) so the LR schedule starts fresh; see
+    # the ``MixConfig`` docstring for why ``initialize_from_checkpoint_path``
+    # is unsuitable here.
     MixConfig(
-        name="cont_upstream_to_cds_1",
+        name="cont_upstream_to_cds_2",
         weights={"cds": 0.5, "upstream": 0.5},
         max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
-        initialize_from_checkpoint_path=(
-            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i2-upstream_only-68544e/checkpoints/"
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i2-upstream_only-68544e/hf/step-8334/"
         ),
+    ),
+    # Replay of cont_upstream_to_cds_2 with a distinct ``data_seed`` so the
+    # data shuffle / mixture sampling differs while the model init and recipe
+    # are identical.
+    MixConfig(
+        name="cont_upstream_to_cds_2.1",
+        weights={"cds": 0.5, "upstream": 0.5},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i2-upstream_only-68544e/hf/step-8334/"
+        ),
+        data_seed=2,
+    ),
+    # Same warm-start as cont_upstream_to_cds_2 (downstream-sized token budget)
+    # but with a 50/30/20 upstream/downstream/cds mixture instead of 50/50.
+    MixConfig(
+        name="cont_upstream_to_cds_3",
+        weights={"upstream": 0.5, "downstream": 0.3, "cds": 0.2},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i2-upstream_only-68544e/hf/step-8334/"
+        ),
+    ),
+    # Same warm-start and token budget as the cont_upstream_to_cds_* mixes but
+    # with a 50/50 upstream/downstream mixture (no cds). Uses a distinct
+    # ``data_seed`` so the shuffle / mixture sampling differs from the other
+    # continuation runs.
+    MixConfig(
+        name="cont_upstream_to_downstream_1",
+        weights={"upstream": 0.5, "downstream": 0.5},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i2-upstream_only-68544e/hf/step-8334/"
+        ),
+        data_seed=1,
     ),
 )
 
@@ -494,7 +540,8 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
         train_seq_len=_model_seq_len(),
         z_loss_weight=REFERENCE_HPARAMS.z_loss_weight,
         optimizer=optimizer,
-        initialize_from_checkpoint_path=mix.initialize_from_checkpoint_path,
+        initialize_from_hf=mix.initialize_from_hf or False,
+        data_seed=mix.data_seed,
         eval_harness=_eval_harness_config(),
         eval_harness_steps=steps_per_eval,
         trainer=TrainerConfig(
@@ -517,7 +564,7 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
     )
     pod_config = TrainLmOnPodConfig(
         train_config=inner,
-        resources=ResourceConfig.with_tpu(TPU_TYPES, ram="300g"),
+        resources=ResourceConfig.with_tpu(TPU_TYPES, ram="128g"),
         output_path=this_output_path(),
     )
     return ExecutorStep(
@@ -571,8 +618,8 @@ def _print_preview(selected: tuple[MixConfig, ...]) -> None:
             f"opt_T={opt_tokens:.3e}  total_T={total_tokens:.3e} "
             f"(~{opt_tokens / num_params:.1f} tok/param/epoch)"
         )
-        if mix.initialize_from_checkpoint_path is not None:
-            print(f"    init_from           {mix.initialize_from_checkpoint_path}")
+        if mix.initialize_from_hf is not None:
+            print(f"    init_from_hf        {mix.initialize_from_hf}")
         for field, value in (
             ("lr", opt.learning_rate),
             ("adam_lr", opt.adam_lr),
