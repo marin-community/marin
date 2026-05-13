@@ -115,13 +115,16 @@ class UserStats:
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
 
-# Time the launch RPC blocks waiting for a replaced job's worker-bound attempts
-# to finalize before deleting them. Must exceed the worst-case worker-death
-# detection window so a vanished worker's attempts can be self-finalized by the
-# ping loop before the drain gives up: heartbeat_interval (5s) *
+# Soft cap on how long launch_job waits for a replaced job's worker-bound
+# attempts to finalize before force-reaping them. Sized to exceed the worst-
+# case worker-death detection window so a vanished worker's attempts can be
+# self-finalized by the ping loop: heartbeat_interval (5s) *
 # PING_FAILURE_THRESHOLD (10) ≈ 50s, plus slack for the heartbeat to land.
-# Stuck finalization surfaces as DEADLINE_EXCEEDED rather than hanging launches.
-_JOB_REPLACEMENT_DRAIN_TIMEOUT = Duration.from_seconds(120)
+# Past this point we log a warning, CASCADE-delete the predecessor's rows,
+# and proceed with the replacement — a stuck heartbeat must not block the
+# new submission indefinitely.
+_JOB_REPLACEMENT_DRAIN_WAIT = Duration.from_seconds(120)
+
 
 # A root LaunchJob submission is rejected if its client_revision_date is more
 # than FRESHNESS_WINDOW older than today. Clients get exactly this long to
@@ -986,28 +989,21 @@ class ControllerServiceImpl:
             return
         authorize_resource_owner(job_id.user)
 
-    def _wait_until_job_drained(self, job_id: JobName, timeout: Duration) -> None:
-        """Block until ``job_id`` has no unfinished worker-bound attempts.
+    def _wait_until_job_drained(self, job_id: JobName, wait: Duration) -> bool:
+        """Wait up to ``wait`` for ``job_id`` to have no unfinished worker-bound
+        attempts. Returns ``True`` if drained, ``False`` if the wait elapsed.
 
         Polls the snapshot DB; the heartbeat path landing terminal updates is
-        what finally clears the predicate. Used to gate ``remove_finished_job``
-        on a replacement so we never CASCADE-delete tasks whose attempts the
-        worker is still racing to finalize. Raises ``ConnectError`` with
-        ``DEADLINE_EXCEEDED`` if the job hasn't drained within ``timeout``.
+        what flips the predicate. Caller decides whether to reap the
+        predecessor when the wait elapses — a stuck heartbeat must not block
+        the new submission forever.
         """
 
         def drained() -> bool:
             with self._db.read_snapshot() as tx:
                 return not reads.has_unfinished_worker_attempts(tx, job_id)
 
-        try:
-            ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until_or_raise(
-                drained,
-                timeout=timeout,
-                error_message=f"Timed out waiting for job {job_id} to drain before replacement",
-            )
-        except TimeoutError as exc:
-            raise ConnectError(Code.DEADLINE_EXCEEDED, str(exc)) from exc
+        return ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until(drained, timeout=wait)
 
     def _replace_finished_job(self, cur, job_id: JobName) -> bool:
         """Attempt to replace a terminal job; signal whether a drain is needed.
@@ -1159,9 +1155,16 @@ class ControllerServiceImpl:
         if needs_drain:
             # Nudge the polling loop so workers see the cancelled tasks excluded
             # from their expected set on the next reconcile and auto-kill the
-            # containers; the heartbeat path then stamps finished_at_ms.
+            # containers; the heartbeat path then stamps finished_at_ms. If
+            # the heartbeat never lands, force-reap so a stuck worker can't
+            # block the resubmit forever.
             self._controller.wake()
-            self._wait_until_job_drained(job_id, _JOB_REPLACEMENT_DRAIN_TIMEOUT)
+            if not self._wait_until_job_drained(job_id, _JOB_REPLACEMENT_DRAIN_WAIT):
+                logger.warning(
+                    "Job %s did not drain within %ss; force-reaping predecessor and proceeding",
+                    job_id,
+                    _JOB_REPLACEMENT_DRAIN_WAIT.to_seconds(),
+                )
             with self._db.transaction() as cur:
                 self._transitions.remove_finished_job(cur, job_id)
 

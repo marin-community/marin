@@ -1734,6 +1734,29 @@ class ControllerTransitions:
                 job_pb2.TASK_STATE_UNSPECIFIED,
                 job_pb2.TASK_STATE_PENDING,
             ):
+                # Stranded-attempt finalization: producer transitions
+                # (cancel_job, preempt_task) move the task to a terminal
+                # state but leave the attempt's ``finished_at_ms`` NULL,
+                # expecting the worker's next terminal status update to
+                # stamp it. If that push was dropped, the poll loop re-asks
+                # via ``expected_tasks`` and we land here with the task
+                # already finished. Stamp ``finished_at_ms`` on the attempt
+                # so the scheduler releases capacity; leave task state alone.
+                if (
+                    _task_is_finished(task)
+                    and update.new_state in TERMINAL_TASK_STATES
+                    and update.attempt_id == task.current_attempt_id
+                ):
+                    attempt = attempt_map.get((update.task_id, update.attempt_id))
+                    if attempt is not None and attempt.worker_id is not None and attempt.finished_at_ms is None:
+                        cur.execute(
+                            sa_update(task_attempts_table)
+                            .where(
+                                task_attempts_table.c.task_id == update.task_id,
+                                task_attempts_table.c.attempt_id == update.attempt_id,
+                            )
+                            .values(finished_at_ms=now_ms)
+                        )
                 continue
             if update.attempt_id != task.current_attempt_id:
                 stale_attempt = attempt_map.get((update.task_id, update.attempt_id))

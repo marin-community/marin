@@ -326,6 +326,54 @@ def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
         assert att.finished_at_ms is None
 
 
+def test_heartbeat_finalizes_stranded_attempt_after_producer_terminal(harness):
+    """A producer transition (cancel) leaves the task terminal but the attempt
+    unfinalized; a subsequent heartbeat carrying a terminal status — the case
+    the poll loop now re-issues via expected_tasks for worker-bound attempts
+    with NULL finished_at_ms — must stamp finished_at_ms without rewriting the
+    task's terminal state.
+    """
+    w1 = harness.add_worker("w1")
+    tasks = harness.submit("j1", replicas=1)
+    harness.dispatch(tasks[0], w1)
+
+    task = tasks[0]
+    attempt_id = harness.query_task(task.task_id).current_attempt_id
+
+    with harness.state._db.transaction() as cur:
+        harness.state.cancel_job(cur, JobName.root("test-user", "j1"), reason="User cancelled")
+
+    pre = _query_attempt(harness.state, task.task_id, attempt_id)
+    assert pre is not None
+    assert pre.worker_id is not None
+    assert attempt_is_terminal(pre.state)
+    assert pre.finished_at_ms is None
+    pre_task_state = _query_task(harness.state, task.task_id).state
+
+    with harness.state._db.transaction() as cur:
+        harness.state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=w1,
+                updates=[
+                    TaskUpdate(
+                        task_id=task.task_id,
+                        attempt_id=attempt_id,
+                        new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                        error="Task not found on worker",
+                    )
+                ],
+            ),
+        )
+
+    post = _query_attempt(harness.state, task.task_id, attempt_id)
+    assert post is not None
+    assert post.finished_at_ms is not None, "stranded attempt should be finalized by heartbeat"
+    assert (
+        _query_task(harness.state, task.task_id).state == pre_task_state
+    ), "task's terminal state must not be rewritten by the late heartbeat"
+
+
 def test_cancel_job_preserves_kill_worker_mapping_after_clearing_tasks(harness):
     """cancel_job returns worker routing for kill RPCs before current_worker_id is cleared."""
     w1 = harness.add_worker("w1")

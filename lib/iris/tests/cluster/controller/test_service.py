@@ -8,6 +8,7 @@ State changes are verified via RPC calls rather than internal state inspection.
 """
 
 import concurrent.futures
+import logging
 import time
 from datetime import date, timedelta
 
@@ -308,9 +309,9 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     ``remove_finished_job``. After the fix, the resubmit must block on drain
     and succeed once the finalizing heartbeat arrives.
     """
-    # Tighten the drain timeout so the test fails fast on regression instead
+    # Tighten the drain wait so the test fails fast on regression instead
     # of waiting the production 30s.
-    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_TIMEOUT", Duration.from_seconds(5))
+    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(5))
 
     child_name = "/test-user/parent/child"
     service.launch_job(make_job_request("parent"), None)
@@ -373,11 +374,12 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     assert new_job.state == job_pb2.JOB_STATE_PENDING
 
 
-def test_existing_job_policy_keep_drain_times_out_when_no_heartbeat(service, state, monkeypatch):
+def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, monkeypatch, caplog):
     """If a replaced job's worker-bound attempts never finalize, launch_job
-    raises DEADLINE_EXCEEDED instead of hanging or silently destroying the
-    attempt rows the heartbeat path needs."""
-    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_TIMEOUT", Duration.from_seconds(1))
+    must not block the new submission forever. After the drain wait elapses
+    it logs a warning, CASCADE-deletes the predecessor, and proceeds with
+    the replacement. (Earlier behavior raised DEADLINE_EXCEEDED.)"""
+    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(1))
 
     child_name = "/test-user/parent/child"
     service.launch_job(make_job_request("parent"), None)
@@ -394,9 +396,15 @@ def test_existing_job_policy_keep_drain_times_out_when_no_heartbeat(service, sta
     request = make_job_request(child_name)
     request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
 
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
-    assert exc_info.value.code == Code.DEADLINE_EXCEEDED
+    with caplog.at_level(logging.WARNING, logger=service_module.__name__):
+        response = service.launch_job(request, None)
+    assert response.job_id == child_job.to_wire()
+    assert any("did not drain" in r.message for r in caplog.records), caplog.text
+
+    # Predecessor was reaped and replaced — fresh row is PENDING.
+    new_job = _query_job(state, child_job)
+    assert new_job is not None
+    assert new_job.state == job_pb2.JOB_STATE_PENDING
 
 
 def test_launch_job_rejects_empty_name(service, state):

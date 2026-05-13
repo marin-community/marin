@@ -3,6 +3,7 @@
 
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
+import asyncio
 import atexit
 import enum
 import logging
@@ -12,6 +13,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -126,6 +128,35 @@ logger = logging.getLogger(__name__)
 
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
+
+# Sync Connect RPC handlers are dispatched via ``asyncio.to_thread``, which
+# uses the running loop's default executor. asyncio's default executor sizes
+# at ``min(32, os.cpu_count() + 4)`` — only 8 threads on a 4-vCPU controller
+# VM. A handful of slow handlers (e.g. ``launch_job`` blocking up to 120s in
+# ``_wait_until_job_drained``) saturates that pool and head-of-line blocks
+# every other RPC, including the worker heartbeats that would unblock the
+# drain. Install a wider, named pool so a burst of slow handlers cannot
+# starve the rest.
+_RPC_HANDLER_THREADS = 64
+
+
+def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
+    """Replace ``server.run`` with a variant that pins a sized default executor."""
+
+    def run_with_executor() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler"))
+        try:
+            loop.run_until_complete(server.serve())
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
+    server.run = run_with_executor
 
 
 class SchedulingOutcome(enum.Enum):
@@ -1455,6 +1486,7 @@ class Controller:
             forwarded_allow_ips="*",
         )
         self._server = uvicorn.Server(server_config)
+        _install_rpc_executor(self._server, max_workers=_RPC_HANDLER_THREADS)
         self._threads.spawn_server(self._server, name="controller-server")
 
         # Register cluster endpoints BEFORE spawning the autoscaler. Otherwise the
@@ -2333,8 +2365,17 @@ class Controller:
             # Snapshot current attempts for ``worker_ids``. Workers not in
             # ``worker_ids`` are filtered in Python so the partial index
             # ``idx_task_attempts_live_workerbound`` remains active rather
-            # than falling back to a scan on a long IN list. The
-            # ASSIGNED/BUILDING/RUNNING filter is static.
+            # than falling back to a scan on a long IN list. We deliberately
+            # do NOT filter on task state: active rows (ASSIGNED/BUILDING/
+            # RUNNING) drive normal reconciliation; rows whose task has
+            # already moved to a terminal state but whose attempt is still
+            # worker-bound (worker_id set, finished_at_ms NULL) are stranded
+            # attempts whose terminal UpdateTaskStatus push was dropped.
+            # Including them in expected_tasks gives the worker a second
+            # chance to report -- either with the real terminal status or
+            # via _missing_task_status -- so the heartbeat path can stamp
+            # finished_at_ms. Without this, a single lost RPC strands the
+            # attempt forever, since no other code path polls about it.
             target_ids: set[WorkerId] = set(worker_ids)
             raw_rows = snap.execute(
                 select(
@@ -2355,13 +2396,6 @@ class Controller:
                 .where(
                     task_attempts_table.c.worker_id.is_not(None),
                     task_attempts_table.c.finished_at_ms.is_(None),
-                    tasks_table.c.state.in_(
-                        [
-                            int(job_pb2.TASK_STATE_ASSIGNED),
-                            int(job_pb2.TASK_STATE_BUILDING),
-                            int(job_pb2.TASK_STATE_RUNNING),
-                        ]
-                    ),
                 ),
             ).all()
             rows = [row for row in raw_rows if row.worker_id in target_ids]
