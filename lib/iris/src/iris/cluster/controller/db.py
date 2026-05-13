@@ -11,9 +11,12 @@ The engine is split into a **write engine** and a **read engine**:
 * The write engine uses pool size 1 so writes are funneled through a
   single connection. Serialization between writers is enforced by an
   external ``threading.RLock`` passed into ``write_transaction``.
-* The read engine uses ``QueuePool(pool_size=32, max_overflow=4)`` with
+* The read engine uses ``QueuePool(pool_size=2, max_overflow=2)`` with
   ``PRAGMA query_only = ON`` **pinned at connect time**. Pinning avoids
-  toggling the pragma on every ``read_snapshot`` call.
+  toggling the pragma on every ``read_snapshot`` call. A small pool keeps
+  tail latency low under concurrent reads — SQLite's WAL-index header lock
+  becomes contended once many readers each hold their own connection, so
+  queueing surplus readers at the SA pool (FIFO) beats spinning inside SQLite.
 
 Both engines use ``isolation_level="AUTOCOMMIT"`` so callers issue
 ``BEGIN`` / ``BEGIN IMMEDIATE`` / ``COMMIT`` / ``ROLLBACK`` explicitly.
@@ -75,7 +78,11 @@ def _make_engine(
     Read-only engines pin ``PRAGMA query_only = ON`` at connect time so
     accidental writes raise without a per-snapshot pragma round-trip.
     Write engines use ``pool_size=1, max_overflow=0`` (serialised by an
-    external ``RLock``); read engines use ``pool_size=32, max_overflow=4``.
+    external ``RLock``); read engines use ``pool_size=2, max_overflow=2``.
+    A small read pool measurably reduces tail latency under concurrent reads:
+    SQLite WAL allows many readers but each one contends on the WAL-index
+    header lock to establish its snapshot, so capping in-flight readers and
+    queueing the rest at the SA pool (FIFO, cheap) beats spinning inside SQLite.
     Both use ``isolation_level="AUTOCOMMIT"`` so callers emit explicit
     ``BEGIN`` / ``COMMIT`` / ``ROLLBACK``.
     """
@@ -107,7 +114,7 @@ def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
 
 
 def _make_read_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
-    return _make_engine(db_path, read_only=True, pool_size=32, max_overflow=4, auth_db_path=auth_db_path)
+    return _make_engine(db_path, read_only=True, pool_size=2, max_overflow=2, auth_db_path=auth_db_path)
 
 
 class Tx:
