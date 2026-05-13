@@ -22,6 +22,7 @@ import pyarrow.parquet as pq
 import vortex
 import zstandard as zstd
 from rigging.filesystem import url_to_fs
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from zephyr import counters
 
@@ -53,6 +54,57 @@ def unique_temp_path(output_path: str) -> str:
     return f"{output_path}.tmp.{uuid.uuid4().hex}"
 
 
+# AWS error codes that are safe to retry on a server-side multipart copy
+# (``s3fs.S3FileSystem.mv``). ``InvalidPart`` is the R2-specific symptom:
+# every ``UploadPartCopy`` returns 200 but ``CompleteMultipartUpload`` then
+# claims one or more parts are missing.
+_TRANSIENT_S3_ERROR_CODES = frozenset(
+    {
+        "InvalidPart",
+        "InternalError",
+        "ServiceUnavailable",
+        "SlowDown",
+        "RequestTimeout",
+        "RequestTimeTooSkewed",
+    }
+)
+
+# Fragments matched against ``str(exc)`` for the case where s3fs has already
+# translated the underlying ``botocore.ClientError`` into an ``OSError`` and
+# the structured error code is no longer reachable.
+_TRANSIENT_S3_MESSAGE_FRAGMENTS = (
+    "specified parts could not be found",
+    "InternalError",
+    "ServiceUnavailable",
+    "SlowDown",
+    "RequestTimeout",
+)
+
+
+def _is_transient_s3_error(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = response.get("Error", {}).get("Code")
+        if code in _TRANSIENT_S3_ERROR_CODES:
+            return True
+    msg = str(exc)
+    return any(frag in msg for frag in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
+
+
+def _mv_with_retry(fs: Any, src: str, dst: str) -> None:
+    def _on_retry(exc: Exception, _attempt: int) -> None:
+        counters.increment("zephyr/atomic_rename_retries")
+
+    retry_with_backoff(
+        lambda: fs.mv(src, dst, recursive=True),
+        retryable=_is_transient_s3_error,
+        max_attempts=4,
+        backoff=ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0),
+        on_retry=_on_retry,
+        operation=f"atomic_rename fs.mv {src} -> {dst}",
+    )
+
+
 @contextmanager
 def atomic_rename(output_path: str, fs: Any = None) -> Iterable[str]:
     """Atomic write-and-rename via a sibling temp key.
@@ -75,7 +127,7 @@ def atomic_rename(output_path: str, fs: Any = None) -> Iterable[str]:
         fs = url_to_fs(output_path)[0]
     try:
         yield temp_path
-        fs.mv(temp_path, output_path, recursive=True)
+        _mv_with_retry(fs, temp_path, output_path)
     except Exception:
         # Best-effort cleanup: temp file may not exist (writer crashed before
         # creating it) so we tolerate any rm error and re-raise the original.
