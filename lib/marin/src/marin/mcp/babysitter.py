@@ -22,6 +22,7 @@ from iris.cluster.runtime.profile import SYSTEM_PROCESS_TARGET
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
 from mcp.server.fastmcp import FastMCP
@@ -162,7 +163,12 @@ def task_status_to_json(task: job_pb2.TaskStatus) -> dict[str, Any]:
 
 
 def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatus] = ()) -> dict[str, Any]:
-    """Serialize Iris job status into stable JSON."""
+    """Serialize Iris job status into stable JSON.
+
+    Callers that need per-job ``resources`` / ``ports`` / ``tasks`` /
+    ``status_message`` should hit ``GetJobStatus`` and use
+    :func:`_job_summary_payload`.
+    """
     task_payloads = [task_status_to_json(task) for task in tasks]
     return {
         "job_id": job.job_id,
@@ -174,7 +180,6 @@ def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatu
         "started_at_ms": _timestamp_ms(job.started_at),
         "finished_at_ms": _timestamp_ms(job.finished_at),
         "duration_ms": _duration_ms(job.started_at, job.finished_at),
-        "status_message": job.status_message,
         "pending_reason": job.pending_reason,
         "failure_count": int(job.failure_count),
         "preemption_count": int(job.preemption_count),
@@ -182,9 +187,6 @@ def job_status_to_json(job: job_pb2.JobStatus, tasks: Iterable[job_pb2.TaskStatu
         "completed_count": int(job.completed_count),
         "task_state_counts": dict(job.task_state_counts),
         "has_children": bool(job.has_children),
-        "resource_usage": _resource_usage_to_json(job.resource_usage),
-        "resource_requests": _resource_spec_to_json(job.resources),
-        "ports": dict(job.ports),
         "tasks": task_payloads,
     }
 
@@ -406,6 +408,8 @@ class IrisBabysitter:
             config.controller_url,
             timeout_ms=config.timeout_ms,
             interceptors=interceptors,
+            accept_compression=IRIS_RPC_COMPRESSIONS,
+            send_compression=IRIS_RPC_COMPRESSIONS[0],
         )
         self.logs = LogServiceClientSync(
             config.controller_url,
@@ -432,11 +436,11 @@ class IrisBabysitter:
         jobs: list[dict[str, Any]] = []
         offset = 0
         capped_limit = max(1, limit)
-        prefix_job = JobName.from_wire(prefix) if prefix else None
         while len(jobs) < capped_limit:
             query = controller_pb2.Controller.JobQuery(
                 state_filter=state_filter,
                 name_filter=name_filter,
+                job_id_prefix=prefix,
                 sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
                 sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
                 offset=offset,
@@ -444,8 +448,6 @@ class IrisBabysitter:
             )
             response = self.controller.list_jobs(controller_pb2.Controller.ListJobsRequest(query=query))
             for job in response.jobs:
-                if prefix_job is not None and not _job_matches_prefix(job.job_id, prefix_job):
-                    continue
                 jobs.append(job_status_to_json(job))
                 if len(jobs) >= capped_limit:
                     break
@@ -494,10 +496,11 @@ class IrisBabysitter:
         attempt_id: int = -1,
         tail: bool = True,
     ) -> dict[str, Any]:
-        source = _log_source(target, attempt_id)
+        source, match_scope = _log_source(target, attempt_id)
         response = self.logs.fetch_logs(
             logging_pb2.FetchLogsRequest(
                 source=source,
+                match_scope=match_scope,
                 since_ms=since_ms,
                 cursor=cursor,
                 max_lines=max_lines,
@@ -649,16 +652,16 @@ class IrisBabysitter:
     def _jobs_with_prefix(self, prefix: str) -> list[job_pb2.JobStatus]:
         jobs: list[job_pb2.JobStatus] = []
         offset = 0
-        root = JobName.from_wire(prefix)
         while True:
             query = controller_pb2.Controller.JobQuery(
+                job_id_prefix=prefix,
                 sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
                 sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
                 offset=offset,
                 limit=MAX_LIST_JOBS_PAGE_SIZE,
             )
             response = self.controller.list_jobs(controller_pb2.Controller.ListJobsRequest(query=query))
-            jobs.extend(job for job in response.jobs if _job_matches_prefix(job.job_id, root))
+            jobs.extend(response.jobs)
             if not response.has_more:
                 return jobs
             offset += len(response.jobs)
@@ -666,13 +669,20 @@ class IrisBabysitter:
 
 def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]) -> dict[str, Any]:
     summary = build_job_summary(job, tasks)
-    for key, value in job_status_to_json(job).items():
+    extra_fields = {
+        "submitted_at_ms": _timestamp_ms(job.submitted_at),
+        "started_at_ms": _timestamp_ms(job.started_at),
+        "finished_at_ms": _timestamp_ms(job.finished_at),
+        "duration_ms": _duration_ms(job.started_at, job.finished_at),
+        "status_message": job.status_message,
+        "pending_reason": job.pending_reason,
+        "has_children": bool(job.has_children),
+        "resource_requests": _resource_spec_to_json(job.resources),
+        "ports": dict(job.ports),
+    }
+    for key, value in extra_fields.items():
         summary.setdefault(key, value)
     return summary
-
-
-def _job_matches_prefix(job_id: str, prefix: JobName) -> bool:
-    return prefix.is_ancestor_of(JobName.from_wire(job_id), include_self=True)
 
 
 def _token_provider(cluster: str, *, store_path: Path | None = None) -> TokenProvider | None:
@@ -691,9 +701,9 @@ def _normalize_state_filter(state: str) -> str:
     return normalized
 
 
-def _log_source(target: str, attempt_id: int) -> str:
+def _log_source(target: str, attempt_id: int) -> tuple[str, "logging_pb2.MatchScope"]:
     if target.startswith("/system/"):
-        return target
+        return target, logging_pb2.MATCH_SCOPE_EXACT
     return build_log_source(JobName.from_wire(target), attempt_id)
 
 

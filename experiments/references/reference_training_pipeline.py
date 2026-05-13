@@ -17,13 +17,12 @@ from fray.cluster import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.execution.remote import remote
+from marin.execution.executor import this_output_path
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
 
 from experiments.defaults import default_tokenize, default_validation_sets
-from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
+from experiments.grug.base.launch import GrugBaseLaunchConfig, train_grug
 from experiments.grug.base.model import GrugModelConfig
 from experiments.grug.base.train import GrugEvalConfig
 from experiments.marin_models import marin_tokenizer
@@ -78,36 +77,32 @@ data = dataclasses.replace(data, tokenizer=marin_tokenizer)
 data = add_validation_sets_to_mixture(data, default_validation_sets(tokenizer=data.tokenizer))
 
 # --- Training ---
-training_step = ExecutorStep(
-    name="reference-pipeline",
-    fn=remote(run_grug_base_trial, resources=ResourceConfig.with_tpu("v4-8")),
-    config=GrugBaseLaunchConfig(
-        model=model,
-        data=data,
-        output_path=this_output_path(),
-        run_id="reference-pipeline",
-        resources=ResourceConfig.with_tpu("v4-8"),
-        steps=TOTAL_STEPS,
-        batch_size=256,
-        seed=0,
-        mp="params=float32,compute=bfloat16,output=bfloat16",
-        tracker=WandbConfig(
-            project="marin",
-            tags=["reference", "pipeline"],
-            group="reference-pipeline",
-            name=None,
-        ),
-        optimizer=AdamConfig(
-            learning_rate=3e-3,
-            weight_decay=0.1,
-            warmup=0.05,
-            decay=0.2,
-        ),
-        eval=GrugEvalConfig(
-            steps_per_eval=500,
-        ),
+training_launch = GrugBaseLaunchConfig(
+    model=model,
+    data=data,
+    output_path=this_output_path(),
+    run_id="reference-pipeline",
+    resources=ResourceConfig.with_tpu("v4-8"),
+    steps=TOTAL_STEPS,
+    batch_size=256,
+    seed=0,
+    mp="params=float32,compute=bfloat16,output=bfloat16",
+    tracker=WandbConfig(
+        project="marin",
+        tags=["reference", "pipeline"],
+        group="reference-pipeline",
+        name=None,
+    ),
+    optimizer=AdamConfig(
+        learning_rate=3e-3,
+        weight_decay=0.1,
+        warmup=0.05,
+        decay=0.2,
+    ),
+    eval=GrugEvalConfig(
+        steps_per_eval=500,
     ),
 )
 
 if __name__ == "__main__":
-    executor_main(steps=[training_step])
+    train_grug(name="reference-pipeline", launch=training_launch)

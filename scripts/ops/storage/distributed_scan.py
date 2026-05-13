@@ -37,7 +37,8 @@ import google.auth
 import pyarrow as pa
 import pyarrow.parquet as pq
 from google.cloud import storage
-from scripts.storage.constants import (
+
+from scripts.ops.storage.constants import (
     ADAPTIVE_MAX_DEPTH,
     ADAPTIVE_SPLIT_THRESHOLD,
     BLOB_FIELDS,

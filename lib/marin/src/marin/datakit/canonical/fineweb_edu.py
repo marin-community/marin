@@ -16,6 +16,8 @@ Subsets available on HuggingFace:
 - sample/350BT   — 350B token sample
 """
 
+from fray import ResourceConfig
+
 from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.step_spec import StepSpec
 
@@ -24,6 +26,7 @@ def download(
     *,
     revision: str = "87f0914",
     hf_urls_glob: list[str] | None = None,
+    worker_resources: ResourceConfig | None = None,
 ) -> StepSpec:
     """Download FineWeb-Edu from HuggingFace."""
     return download_hf_step(
@@ -32,4 +35,5 @@ def download(
         revision=revision,
         hf_urls_glob=hf_urls_glob,
         override_output_path=f"raw/fineweb-edu-{revision}",
+        worker_resources=worker_resources,
     )

@@ -15,6 +15,7 @@ from optax import GradientTransformation, GradientTransformationExtraArgs
 from optax._src.base import init_empty_state
 
 import haliax as hax
+from haliax.nn import Linear
 from haliax.tree_util import scan_aware_tree_map
 
 from levanter.models.linear import has_linear_like_marker
@@ -87,7 +88,6 @@ def flatten_linear_layers(tree: T) -> T:
 
     :param tree:
     """
-    from haliax.nn import Linear
 
     def _flatten_linear(layer):
         if not isinstance(layer, Linear):
@@ -129,8 +129,6 @@ def unflatten_linear_layers(template: T, tree_with_flattened_linears: T) -> T:
         The same tree as `tree_with_flattened_linears`, but with the linear layers unflattened to match
         the structure of `template`.
     """
-
-    from haliax.nn import Linear
 
     def _unflatten_linear(template, flattened):
         assert isinstance(template, Linear) == isinstance(flattened, Linear)

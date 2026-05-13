@@ -26,6 +26,7 @@ from levanter.data.text import (
     PrebuiltLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
+    count_corpus_sizes,
     dataset_for_component,
     grug_lm_example_from_named,
     named_lm_example_from_grug,
@@ -52,6 +53,40 @@ def test_dont_blow_up_without_validation_set():
         Pos = hax.Axis("position", 10)
         # mostly just making sure this doesn't blow up
         assert config.validation_sets(Pos) == {}
+
+
+def test_count_corpus_sizes_handles_empty_train_cache(monkeypatch):
+    class EmptyCache:
+        def flat_field_length(self, _field):
+            return 0
+
+        async def async_flat_field_length(self, _field):
+            return 0
+
+        def flat_field_num_rows(self, _field):
+            return 0
+
+    config = LmDataConfig(
+        components={"empty": DatasetComponent()},
+        tokenizer="passthrough",
+        vocab_size=64,
+    )
+
+    def build_caches(_self, split):
+        if split == "train":
+            return {"empty": EmptyCache()}
+        return {}
+
+    monkeypatch.setattr(LmDataConfig, "build_caches", build_caches)
+
+    stats = count_corpus_sizes(config)
+
+    prefix = "data/stats/train/empty/"
+    assert stats[f"{prefix}total_tokens"] == 0
+    assert stats[f"{prefix}total_docs"] == 0
+    assert stats[f"{prefix}total_seqs"] == 0
+    assert f"{prefix}padding_fraction" not in stats
+    assert f"{prefix}truncation_fraction" not in stats
 
 
 def test_lm_example_handles_ignore_id():

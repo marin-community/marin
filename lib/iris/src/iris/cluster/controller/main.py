@@ -19,12 +19,19 @@ from pathlib import Path
 
 import click
 from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
+from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.config import create_autoscaler, load_config, make_provider
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
+from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.endpoints import resolve_endpoint_uri
+from iris.cluster.providers.factory import create_provider_bundle
+from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -44,8 +51,9 @@ def _resolve_cluster_endpoints(cluster_config: config_pb2.IrisClusterConfig) -> 
     can declare ``http://``, ``gcp://``, or ``k8s://`` schemes uniformly.
 
     ``/system/log-server`` is optional: when absent, the Controller starts a
-    bundled in-process MemStore-backed log server as a fallback (capped, lossy
-    on restart). Production deployments should declare an external endpoint.
+    bundled in-process DuckDB-backed log server as a fallback (state lives in
+    a tempdir for the controller's lifetime). Production deployments should
+    declare an external endpoint.
     """
     resolved: dict[str, str] = {}
     for name, spec in cluster_config.endpoints.items():
@@ -79,13 +87,6 @@ def run_controller_serve(
     This is the shared implementation used by both the standalone daemon
     entrypoint and the ``iris cluster controller serve`` CLI command.
     """
-    from iris.cluster.config import create_autoscaler, make_provider
-    from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.checkpoint import download_checkpoint_to_local
-    from iris.cluster.controller.db import ControllerDB
-    from iris.cluster.providers.factory import create_provider_bundle
-    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-
     logger.info("Initializing Iris controller (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
     remote_state_dir = cluster_config.storage.remote_state_dir
@@ -332,10 +333,6 @@ def serve(
     state_dir: Path | None,
 ):
     """Start the Iris controller service."""
-    from rigging.log_setup import configure_logging
-
-    from iris.cluster.config import load_config
-
     configure_logging(level=getattr(logging, log_level))
 
     cluster_config = load_config(Path(config_file))

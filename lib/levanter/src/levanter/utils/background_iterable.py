@@ -68,24 +68,17 @@ class BackgroundIterator(Iterator[Ex]):
         if self._stop_event.is_set():
             raise StopIteration
         if self.thread is not None:
-            while not self._stop_event.is_set():
-                batch = self.q.get()
-                if batch is _SENTINEL:
-                    raise StopIteration
-                elif isinstance(batch, _ExceptionWrapper):
-                    batch.reraise()
-                return batch
-        else:
-            # Consume the iterator directly on demand
-            try:
-                return next(self.iterator)
-            except StopIteration:
-                raise
-            except StopAsyncIteration:
+            batch = self.q.get()
+            if batch is _SENTINEL:
                 raise StopIteration
-            except Exception as e:
-                raise e
-        raise StopIteration
+            if isinstance(batch, _ExceptionWrapper):
+                batch.reraise()
+            return batch
+        # No background thread; consume the iterator on demand.
+        try:
+            return next(self.iterator)
+        except StopAsyncIteration:
+            raise StopIteration
 
     def __del__(self):
         self.stop()
@@ -105,54 +98,43 @@ class BackgroundIterator(Iterator[Ex]):
     def _fill_queue_with_batches(self):
         try:
             iterator = self._producer_fn()
-            if isinstance(iterator, Iterator):
-                self._produce_batches_sync(iterator)
-            else:
-                asyncio.run(self._produce_batches_async(iterator))
         except Exception:
             self.q.put(_ExceptionWrapper(sys.exc_info()))
+            return
+
+        if isinstance(iterator, Iterator):
+            self._produce_batches_sync(iterator)
+        else:
+            asyncio.run(self._produce_batches_async(iterator))
+
+    def _enqueue(self, item) -> bool:
+        """Block until ``item`` is on the queue or stop is signaled.
+
+        Returns True if the item was enqueued; False if stop was requested first.
+        """
+        while not self._stop_event.is_set():
+            try:
+                self.q.put(item, block=True, timeout=1)
+                return True
+            except queue.Full:
+                continue
+        return False
 
     def _produce_batches_sync(self, iterator):
         try:
             for batch in iterator:
-                while not self._stop_event.is_set():
-                    try:
-                        self.q.put(batch, block=True, timeout=1)
-                        break
-                    except queue.Full:
-                        pass
-
-                if self._stop_event.is_set():
-                    break
-
-            while not self._stop_event.is_set():
-                try:
-                    self.q.put(_SENTINEL, block=True, timeout=1)
-                    break
-                except queue.Full:
-                    pass
+                if not self._enqueue(batch):
+                    return
+            self._enqueue(_SENTINEL)
         except Exception:
             self.q.put(_ExceptionWrapper(sys.exc_info()))
 
     async def _produce_batches_async(self, iterator):
         try:
             async for batch in iterator:
-                while not self._stop_event.is_set():
-                    try:
-                        self.q.put(batch, block=True, timeout=1)
-                        break
-                    except queue.Full:
-                        pass
-
-                if self._stop_event.is_set():
-                    break
-
-            while not self._stop_event.is_set():
-                try:
-                    self.q.put(_SENTINEL, block=True, timeout=1)
-                    break
-                except queue.Full:
-                    pass
+                if not self._enqueue(batch):
+                    return
+            self._enqueue(_SENTINEL)
         except Exception:
             self.q.put(_ExceptionWrapper(sys.exc_info()))
 

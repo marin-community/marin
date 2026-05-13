@@ -22,8 +22,10 @@ from pathlib import Path
 
 from rigging.timing import Duration, Timestamp
 
+from iris.cli.token_store import store_token
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
+from iris.cluster.controller import writes
 from iris.cluster.controller.auth import create_api_key, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -228,8 +230,9 @@ class LocalCluster:
         url = self._controller.url
         now = Timestamp.now()
         key_id = f"iris_k_local_{secrets.token_hex(8)}"
-        db.ensure_user("local-admin", now, role="admin")
-        db.set_user_role("local-admin", "admin")
+        with db.transaction() as _tx:
+            writes.ensure_user(_tx, "local-admin", now, role="admin")
+            writes.set_user_role(_tx, "local-admin", "admin")
 
         if auth.jwt_manager:
             create_api_key(
@@ -254,10 +257,6 @@ class LocalCluster:
                 name="local-auto-login",
                 now=now,
             )
-
-        # Local import to break circular dependency:
-        # local_cluster → cli.token_store → cli.__init__ → cli.main → client → local_cluster
-        from iris.cli.token_store import store_token
 
         cluster_name = self._config.name or "local"
         store_token(cluster_name, url, jwt_token)

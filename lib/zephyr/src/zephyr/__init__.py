@@ -17,7 +17,7 @@ from zephyr.execution import (
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import compute_plan
 from zephyr.readers import InputFileSpec, load_file, load_jsonl, load_parquet, load_vortex, load_zip_members
-from zephyr.writers import atomic_rename, write_jsonl_file, write_levanter_cache, write_parquet_file, write_vortex_file
+from zephyr.writers import atomic_rename, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,6 @@ __all__ = [
     "load_vortex",
     "load_zip_members",
     "write_jsonl_file",
-    "write_levanter_cache",
     "write_parquet_file",
     "write_vortex_file",
     "zephyr_worker_ctx",

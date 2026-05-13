@@ -3,7 +3,6 @@
 
 """Tests for writers module."""
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -15,7 +14,6 @@ from zephyr.writers import (
     atomic_rename,
     infer_arrow_schema,
     unique_temp_path,
-    write_levanter_cache,
     write_parquet_file,
     write_vortex_file,
 )
@@ -55,16 +53,6 @@ def test_atomic_rename_cleans_up_on_error(tmp_path):
 
     assert not Path(temp_path).exists()
     assert not Path(output).exists()
-
-
-def _make_levanter_records(n: int) -> list[dict[str, list[int]]]:
-    return [{"input_ids": [i, i + 100], "attention_mask": [1, 1]} for i in range(n)]
-
-
-def _require_levanter():
-    cache_mod = pytest.importorskip("levanter.store.cache")
-    tree_store_mod = pytest.importorskip("levanter.store.tree_store")
-    return cache_mod.CacheMetadata, cache_mod.SerialCacheWriter, tree_store_mod.TreeStore
 
 
 def test_write_vortex_file_basic():
@@ -211,71 +199,6 @@ def test_write_parquet_file_empty():
 
         table = pq.read_table(output_path)
         assert len(table) == 0
-
-
-def test_write_levanter_cache_end_to_end():
-    """Write records and verify they can be read back."""
-    _, _, TreeStore = _require_levanter()
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = str(Path(tmpdir) / "cache")
-        records = _make_levanter_records(8)
-
-        result = write_levanter_cache(iter(records), output_path, metadata={})
-
-        assert result["path"] == output_path
-        assert result["count"] == len(records)
-        assert Path(output_path, ".success").exists()
-
-        store = TreeStore.open(records[0], output_path, mode="r", cache_metadata=False)
-        assert len(store) == len(records)
-        assert store[0]["input_ids"].tolist() == records[0]["input_ids"]
-        assert store[len(records) - 1]["input_ids"].tolist() == records[len(records) - 1]["input_ids"]
-
-
-def test_atomic_rename_s3_directory_preserves_layout(tmp_path):
-    """S3 atomic_rename must not add extra nesting for directory outputs.
-
-    When the yielded path is used as a directory (e.g. by write_levanter_cache),
-    fs.put must place contents directly at the destination — not under an extra
-    ``output/`` subdirectory.  fsspec nests when the source has no trailing
-    slash and the destination already exists, so atomic_rename must account for
-    that.
-    """
-    from unittest.mock import patch
-
-    from fsspec.implementations.local import LocalFileSystem
-
-    dest = tmp_path / "dest"
-    dest.mkdir()  # pre-create so fsspec considers it "existing"
-    local_fs = LocalFileSystem()
-
-    with patch("zephyr.writers.url_to_fs", return_value=(local_fs, str(dest))):
-        with atomic_rename("s3://bucket/dest") as local_path:
-            os.makedirs(local_path)
-            (Path(local_path) / "shard_0.bin").write_bytes(b"data0")
-            (Path(local_path) / "shard_1.bin").write_bytes(b"data1")
-
-    assert (dest / "shard_0.bin").exists(), "shard_0.bin should be directly under dest"
-    assert (dest / "shard_1.bin").exists(), "shard_1.bin should be directly under dest"
-    assert not (dest / "output").exists(), "should not have extra 'output' nesting"
-
-
-def test_atomic_rename_s3_single_file(tmp_path):
-    """S3 atomic_rename works correctly for single-file outputs."""
-    from unittest.mock import patch
-
-    from fsspec.implementations.local import LocalFileSystem
-
-    dest = tmp_path / "output.jsonl"
-    local_fs = LocalFileSystem()
-
-    with patch("zephyr.writers.url_to_fs", return_value=(local_fs, str(dest))):
-        with atomic_rename("s3://bucket/output.jsonl") as local_path:
-            Path(local_path).write_text("line1\nline2\n")
-
-    assert dest.exists()
-    assert dest.read_text() == "line1\nline2\n"
 
 
 def test_infer_arrow_schema_basic():

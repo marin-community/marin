@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from finelog.rpc import logging_pb2
 from finelog.server.service import LogServiceImpl
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint as FrayEntrypoint
@@ -30,9 +31,11 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
@@ -74,10 +77,10 @@ class ServiceTestHarness:
 
     def sync_k8s(self) -> None:
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
-        with self.state._store.transaction() as cur:
+        with self.state._db.transaction() as cur:
             batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
-        with self.state._store.transaction() as cur:
+        with self.state._db.transaction() as cur:
             self.state.apply_direct_provider_updates(cur, result.updates)
 
 
@@ -87,7 +90,7 @@ def _make_test_entrypoint() -> job_pb2.RuntimeEntrypoint:
     return entrypoint
 
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 KIND_CLUSTER = "iris-gpu-test"
 KIND_CONTEXT = f"kind-{KIND_CLUSTER}"
@@ -137,11 +140,34 @@ def _get_iris_pods(k8s: InMemoryK8sService) -> list[dict]:
     return k8s.list_json(K8sResource.PODS, labels={_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE})
 
 
+class _FakeLogClient:
+    """In-process LogClient adapter that calls LogServiceImpl.fetch_logs directly."""
+
+    def __init__(self, log_service: LogServiceImpl) -> None:
+        self._log_service = log_service
+
+    def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
+        return self._log_service.fetch_logs(request, ctx=None)
+
+    def get_table(self, namespace: str, schema: object) -> None:
+        # Profile namespace writes are not exercised by these integration tests;
+        # ControllerServiceImpl guards on self._profile_table is not None.
+        return None
+
+    def close(self) -> None:
+        return
+
+
 def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "cw_db")
     log_service = LogServiceImpl(log_dir=tmp_path / "cw_logs")
-    store = ControllerStore(db)
-    state = ControllerTransitions(store=store)
+    health = WorkerHealthTracker()
+    endpoints = EndpointsProjection(db)
+    worker_attrs = WorkerAttrsProjection(db)
+    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -183,10 +209,13 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
 
     service = ControllerServiceImpl(
         state,
-        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "cw_bundles")),
-        log_service=log_service,
+        log_client=_FakeLogClient(log_service),
+        db=db,
+        health=health,
+        endpoints=endpoints,
+        worker_attrs=worker_attrs,
     )
 
     return ServiceTestHarness(

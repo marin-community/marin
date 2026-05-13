@@ -233,7 +233,7 @@ The controller will **fail at startup** if `storage.remote_state_dir` is not con
 
 ## CLI Reference
 
-**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/examples/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
+**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/config/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
 
 ### Cluster Commands
 
@@ -287,13 +287,13 @@ iris --config=... cluster dashboard --port 8080
 iris --config cluster.yaml job run -- python train.py
 iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 iris --config cluster.yaml job run --no-wait -- python long_job.py
+# Pin a zone when you need to colocate with data or target a specific pool.
 iris --config cluster.yaml job run --zone us-central2-b -- python train.py
 
-# Stream logs for a job (batch-fetches from all tasks in one RPC)
+# Stream logs for a job and child jobs (batch-fetches matching tasks in one RPC)
 iris --config cluster.yaml job logs /my-job
 iris --config cluster.yaml job logs /my-job --follow
 iris --config cluster.yaml job logs /my-job --since-seconds 300
-iris --config cluster.yaml job logs /my-job --include-children
 
 # Stop one or more jobs
 iris --config cluster.yaml job stop /my-job
@@ -307,17 +307,17 @@ dashboard rendering, log levels, profiling, and constraint routing.
 
 ```bash
 # Local mode (in-process cluster, default)
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts=" -v
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts=" -v
 
 # Cloud mode: start cluster via CLI, then run tests against it
 # iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # Cloud mode: connect to existing cluster
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url http://localhost:8080 -o "addopts="
 
 # Screenshots saved to custom directory
-IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts="
+IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts="
 ```
 
 ## Configuration
@@ -421,4 +421,3 @@ src/iris/
 ## References
 
 - [Task States](docs/task-states.md) - Task state machine and retry semantics
-- [Constraints](docs/constraints.md) - Constraint system design

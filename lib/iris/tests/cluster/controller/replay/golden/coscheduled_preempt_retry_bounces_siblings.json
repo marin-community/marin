@@ -1,22 +1,4 @@
 {
-  "dispatch_queue": [
-    {
-      "created_at_ms": 1704067200000,
-      "id": 1,
-      "kind": "run",
-      "payload_proto": "ChwvdGVzdC11c2VyL2Nvc2NoZWQtcHJlZW1wdC8wEAIaFBISCgZweXRob24KAi1jCgRwYXNzIgAqADINCOgHIICAgIAEKgBIAEgAWgA=",
-      "task_id": null,
-      "worker_id": "w-cosched-preempt-a"
-    },
-    {
-      "created_at_ms": 1704067200000,
-      "id": 2,
-      "kind": "run",
-      "payload_proto": "ChwvdGVzdC11c2VyL2Nvc2NoZWQtcHJlZW1wdC8xEAIaFBISCgZweXRob24KAi1jCgRwYXNzIgAqADINCOgHIICAgIAEKgBIAEgAWgA=",
-      "task_id": null,
-      "worker_id": "w-cosched-preempt-b"
-    }
-  ],
   "endpoints": [],
   "job_config": [
     {
@@ -89,7 +71,7 @@
       "created_at_ms": 1704067200000,
       "error": "evicted-by-prod",
       "exit_code": null,
-      "finished_at_ms": 1704067200001,
+      "finished_at_ms": null,
       "started_at_ms": null,
       "state": 10,
       "task_id": "/test-user/cosched-preempt/0",
@@ -100,14 +82,13 @@
       "created_at_ms": 1704067200000,
       "error": "Coscheduled sibling /test-user/cosched-preempt/0 bounced for atomic re-scheduling",
       "exit_code": null,
-      "finished_at_ms": 1704067200001,
+      "finished_at_ms": null,
       "started_at_ms": null,
       "state": 10,
       "task_id": "/test-user/cosched-preempt/1",
       "worker_id": "w-cosched-preempt-b"
     }
   ],
-  "task_resource_history": [],
   "tasks": [
     {
       "container_id": null,
@@ -183,34 +164,11 @@
       "worker_id": "w-cosched-preempt-b"
     }
   ],
-  "worker_resource_history": [],
-  "worker_task_history": [
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 1,
-      "task_id": "/test-user/cosched-preempt/0",
-      "worker_id": "w-cosched-preempt-a"
-    },
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 2,
-      "task_id": "/test-user/cosched-preempt/1",
-      "worker_id": "w-cosched-preempt-b"
-    }
-  ],
   "workers": [
     {
-      "active": 1,
       "address": "w-cosched-preempt-a:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
-      "consecutive_failures": 0,
       "device_type": "",
       "device_variant": "",
-      "healthy": 1,
-      "last_heartbeat_ms": 1704067200000,
       "md_cpu_count": 8,
       "md_device_json": "{\"cpu\": {\"variant\": \"cpu\"}}",
       "md_disk_bytes": 17179869184,
@@ -229,15 +187,6 @@
       "md_tpu_worker_id": "",
       "scale_group": "",
       "slice_id": "",
-      "snapshot_disk_total_bytes": null,
-      "snapshot_disk_used_bytes": null,
-      "snapshot_host_cpu_percent": null,
-      "snapshot_memory_total_bytes": null,
-      "snapshot_memory_used_bytes": null,
-      "snapshot_net_recv_bps": null,
-      "snapshot_net_sent_bps": null,
-      "snapshot_running_task_count": null,
-      "snapshot_total_process_count": null,
       "total_cpu_millicores": 8000,
       "total_gpu_count": 0,
       "total_memory_bytes": 17179869184,
@@ -245,17 +194,9 @@
       "worker_id": "w-cosched-preempt-a"
     },
     {
-      "active": 1,
       "address": "w-cosched-preempt-b:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
-      "consecutive_failures": 0,
       "device_type": "",
       "device_variant": "",
-      "healthy": 1,
-      "last_heartbeat_ms": 1704067200000,
       "md_cpu_count": 8,
       "md_device_json": "{\"cpu\": {\"variant\": \"cpu\"}}",
       "md_disk_bytes": 17179869184,
@@ -274,15 +215,6 @@
       "md_tpu_worker_id": "",
       "scale_group": "",
       "slice_id": "",
-      "snapshot_disk_total_bytes": null,
-      "snapshot_disk_used_bytes": null,
-      "snapshot_host_cpu_percent": null,
-      "snapshot_memory_total_bytes": null,
-      "snapshot_memory_used_bytes": null,
-      "snapshot_net_recv_bps": null,
-      "snapshot_net_sent_bps": null,
-      "snapshot_running_task_count": null,
-      "snapshot_total_process_count": null,
       "total_cpu_millicores": 8000,
       "total_gpu_count": 0,
       "total_memory_bytes": 17179869184,

@@ -31,7 +31,7 @@ from marin.training.training import temporary_checkpoint_base_path
 from experiments.defaults import default_validation_sets
 from experiments.grug.modular_opt.model import GrugModelConfig
 from experiments.grug.modular_opt.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.pretraining_datasets import nemotron_mix_block_shuffle
+from experiments.pretraining_datasets import nemotron_mix
 
 
 @OptimizerConfig.register_subclass("grug_param_group_adam")
@@ -171,8 +171,8 @@ GRUG_130M_MODEL = GrugModelConfig(
 )
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix_block_shuffle,
-    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
+    nemotron_mix,
+    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
 )
 
 

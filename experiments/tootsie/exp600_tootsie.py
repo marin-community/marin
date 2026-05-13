@@ -15,8 +15,8 @@ For now, we're training on DCLM's best mix, but that will change.
 
 # You will see in many, many places in this file that I (dlwh) made many, many mistakes.
 # I'm leaving them in for posterity.
-# NOTE: Marin now always uses Feistel permutation in mixture configs. Historical runs in this file that originally
-# used linear permutation will not reproduce exactly if re-run today.
+# NOTE: Marin's LM mixture helpers now default to hierarchical block shuffle with Feistel as the permutation type.
+# Historical runs in this file that originally used linear permutation will not reproduce exactly if re-run today.
 
 import dataclasses
 

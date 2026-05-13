@@ -9,7 +9,6 @@ import re
 import shutil
 import socket
 import subprocess
-import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -505,7 +504,7 @@ def _read_net_dev_bytes() -> tuple[int, int]:
 
 
 MIN_DISK_FREE_FRACTION = 0.05
-"""Worker is unhealthy if the work volume has less than 5% free space."""
+MIN_DISK_FREE_BYTES = 10 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -554,12 +553,15 @@ def check_worker_health(disk_path: str = "/") -> HealthCheckResult:
         return HealthCheckResult(healthy=False, error=f"disk usage check failed: {e}")
 
     if usage.total > 0:
-        free_fraction = (usage.total - usage.used) / usage.total
-        if free_fraction < MIN_DISK_FREE_FRACTION:
-            pct = free_fraction * 100
+        free = usage.total - usage.used
+        free_fraction = free / usage.total
+        if free_fraction < MIN_DISK_FREE_FRACTION and free < MIN_DISK_FREE_BYTES:
             return HealthCheckResult(
                 healthy=False,
-                error=f"disk free space {pct:.1f}% below threshold {MIN_DISK_FREE_FRACTION * 100:.0f}%",
+                error=(
+                    f"disk free {free / 1024**3:.1f} GiB ({free_fraction * 100:.1f}%) below threshold "
+                    f"({MIN_DISK_FREE_FRACTION * 100:.0f}% AND {MIN_DISK_FREE_BYTES // 1024**3} GiB)"
+                ),
             )
     return HealthCheckResult(healthy=True)
 
@@ -577,9 +579,6 @@ class HostMetricsCollector:
         self._disk_path = disk_path
         self._prev_cpu_total = 0
         self._prev_cpu_idle = 0
-        self._prev_net_recv = 0
-        self._prev_net_sent = 0
-        self._prev_net_time: float = 0.0
 
     def collect(self) -> job_pb2.WorkerResourceSnapshot:
         snapshot = job_pb2.WorkerResourceSnapshot()
@@ -638,23 +637,15 @@ class HostMetricsCollector:
             pass
 
     def _collect_network(self, snapshot: job_pb2.WorkerResourceSnapshot) -> None:
-        """Compute network bandwidth as bytes/sec delta from /proc/net/dev.
+        """Read cumulative byte counters from /proc/net/dev.
 
         Sums all non-loopback interfaces. Works inside Docker/K8s containers
         since /proc/net/dev reflects the container's network namespace.
-        The first call establishes a baseline and reports 0 B/s.
+        Consumers compute rates from successive samples.
         """
         try:
             recv, sent = _read_net_dev_bytes()
-            now = time.monotonic()
-
-            dt = now - self._prev_net_time
-            if self._prev_net_time > 0 and dt > 0:
-                snapshot.net_recv_bps = max(0, int((recv - self._prev_net_recv) / dt))
-                snapshot.net_sent_bps = max(0, int((sent - self._prev_net_sent) / dt))
-
-            self._prev_net_recv = recv
-            self._prev_net_sent = sent
-            self._prev_net_time = now
+            snapshot.net_recv_bytes = recv
+            snapshot.net_sent_bytes = sent
         except (OSError, ValueError, IndexError):
             pass

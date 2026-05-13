@@ -197,6 +197,9 @@ message ScaleGroupResources {
 
 message WorkerSettings {
   map<string, string> attributes = 1;
+  // Overrides DefaultsConfig.worker.cache_dir for this scale group. Useful for
+  // pointing CPU workers at a real disk instead of the default /dev/shm tmpfs.
+  string cache_dir = 2;
 }
 
 // Configuration for a scale group

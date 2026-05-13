@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
@@ -126,8 +127,7 @@ def _normalize_output_pattern(output_pattern: str | Callable[[int, int], str]) -
         Callable that takes (shard_idx, total_shards) and returns the output path
     """
     if isinstance(output_pattern, str):
-        pattern_str = output_pattern
-        return lambda shard_idx, total: format_shard_path(pattern_str, shard_idx, total)
+        return functools.partial(format_shard_path, output_pattern)
     return output_pattern
 
 
@@ -205,18 +205,16 @@ class WindowOp:
 class WriteOp:
     """Unified write operation for all output formats.
 
-    Supports writing to JSONL, Parquet, Levanter cache, or binary formats.
+    Supports writing to JSONL, Parquet, or binary formats.
     The writer_type determines which writer function is used.
     Supports path patterns with {shard}, {total}, {basename} substitutions,
     or a callable that takes (shard_idx, total_shards) and returns the output path.
     """
 
     output_pattern: Callable[[int, int], str]
-    writer_type: Literal["jsonl", "parquet", "levanter_cache", "binary", "vortex"]
+    writer_type: Literal["jsonl", "parquet", "binary", "vortex"]
 
     # Format-specific parameters (only used by relevant writer)
-    levanter_metadata: dict[str, Any] | None = None
-    levanter_batch_size: int | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
     skip_existing: bool = False  # Skip writing if output file already exists
 
@@ -758,38 +756,6 @@ class Dataset(Generic[T]):
             ],
         )
 
-    def write_levanter_cache(
-        self,
-        output_pattern: str | Callable[[int, int], str],
-        metadata: dict[str, Any],
-        skip_existing: bool = False,
-        batch_size: int | None = None,
-    ) -> Dataset[str]:
-        """Write tokenized records to Levanter cache format.
-
-        Writes records to Levanter's TreeStore/JaggedArrayStore format for use
-        in training. Each shard creates a separate cache directory.
-        The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}
-        or can be a callable that takes (shard_idx, total_shards) and returns the output path.
-
-        Args:
-            batch_size: Number of records to accumulate before flushing to disk.
-                Defaults to 16384. Lower values reduce peak memory for large documents.
-        """
-        return Dataset(
-            self.source,
-            [
-                *self.operations,
-                WriteOp(
-                    _normalize_output_pattern(output_pattern),
-                    writer_type="levanter_cache",
-                    levanter_metadata=metadata,
-                    levanter_batch_size=batch_size,
-                    skip_existing=skip_existing,
-                ),
-            ],
-        )
-
     @overload
     def group_by(
         self,
@@ -892,7 +858,7 @@ class Dataset(Generic[T]):
 
         def keep_first(k, items: Iterator[T]) -> T:
             """Reducer that keeps the first item."""
-            return next(iter(items))
+            return next(items)
 
         return self.map_shard(streaming_dedup).group_by(key=key, reducer=keep_first, num_output_shards=num_output_shards)
 

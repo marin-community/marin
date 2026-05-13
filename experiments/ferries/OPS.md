@@ -3,8 +3,8 @@
 Ad-hoc run/stop/validate for `experiments/ferries/datakit_ferry.py`.
 The ferry runs download → normalize → dedup (fuzzy document) → consolidate →
 tokenize on FineWeb-Edu `sample/10BT`. Normally triggered nightly by the
-`Marin - Datakit Smoke` GitHub Actions workflow
-(`.github/workflows/marin-datakit-smoke.yaml`); the commands below are for
+`Marin - Smoke - Datakit` GitHub Actions workflow
+(`.github/workflows/marin-smoke-datakit.yaml`); the commands below are for
 manual experimentation from a dev box.
 
 ## Submit
@@ -27,7 +27,7 @@ uv run iris --cluster=marin job run --no-wait \
 - `MARIN_PREFIX` defaults to `marin_temp_bucket(ttl_days=1)`
   (`gs://marin-<region>/tmp/ttl=1d/...`). Override with `-e MARIN_PREFIX gs://...`
   for persistence or a specific bucket.
-- Use `--cluster=marin` (prod), not `--config=lib/iris/examples/marin-dev.yaml`
+- Use `--cluster=marin` (prod), not `--config=lib/iris/config/marin-dev.yaml`
   — the dev config needs OS Login impersonation that dev SAs typically lack.
 
 ## Stop

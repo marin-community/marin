@@ -237,7 +237,7 @@ class ScaleGroupResources(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device_type: _Optional[_Union[AcceleratorType, str]] = ..., device_variant: _Optional[str] = ..., device_count: _Optional[int] = ..., capacity_type: _Optional[_Union[CapacityType, str]] = ...) -> None: ...
 
 class WorkerSettings(_message.Message):
-    __slots__ = ("attributes",)
+    __slots__ = ("attributes", "cache_dir")
     class AttributesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -246,8 +246,10 @@ class WorkerSettings(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ATTRIBUTES_FIELD_NUMBER: _ClassVar[int]
+    CACHE_DIR_FIELD_NUMBER: _ClassVar[int]
     attributes: _containers.ScalarMap[str, str]
-    def __init__(self, attributes: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    cache_dir: str
+    def __init__(self, attributes: _Optional[_Mapping[str, str]] = ..., cache_dir: _Optional[str] = ...) -> None: ...
 
 class ScaleGroupConfig(_message.Message):
     __slots__ = ("name", "buffer_slices", "max_slices", "resources", "num_vms", "priority", "scale_up_rate_limit", "scale_down_rate_limit", "slice_template", "worker", "quota_pool", "allocation_tier")

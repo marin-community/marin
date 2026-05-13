@@ -115,8 +115,16 @@ Along with the cache, we introduce interfaces and classes for working with the c
   a batch of documents for the given indices.
 - [levanter.data.text.TokenSeqDataset][]: This is an async dataset that does the chunking of documents into examples. It
   takes a cache and a `max_seq_len` and returns examples of length `max_seq_len`.
-- [levanter.data.PermutationDataset][]: This is a dataset that permutes the indices of another dataset. It is used for shuffling.
+- [levanter.data.BlockShufflingDataset][]: This is the default LM-training shuffle dataset. It shuffles contiguous IO-sized
+  blocks and then permutes examples within a moving window of blocks.
+- [levanter.data.PermutationDataset][]: This is a dataset that permutes the indices of another dataset. It remains available
+  for full-dataset random-access shuffles.
 - [levanter.data.MixtureDataset][]: This is a dataset that mixes together multiple datasets with different weights.
+
+### [levanter.data.BlockShufflingDataset][]
+
+The BlockShufflingDataset is the default shuffle strategy for LM caches. It preserves more locality than a full
+permutation while still mixing examples across nearby blocks. This is the path used by the default LM data config.
 
 ### [levanter.data.PermutationDataset][]
 

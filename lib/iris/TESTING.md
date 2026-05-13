@@ -115,7 +115,7 @@ types even in startup-polling loops.
 ## Markers and Organization
 
 - All tests that boot a cluster (local or Docker) must be marked
-  `@pytest.mark.e2e`.
+  `@pytest.mark.requires_cluster`.
 - Docker-dependent tests must also be marked `@pytest.mark.docker`.
 - E2E tests live in `tests/e2e/`.
 - Shared fakes live in `src/iris/cluster/providers/gcp/fake.py`
@@ -133,7 +133,7 @@ concrete class for testing.)
 
 ## E2E Tests
 
-All Iris E2E tests live in `tests/e2e/`. Every test is marked `e2e`.
+All Iris E2E tests live in `tests/e2e/`. Every test is marked `requires_cluster`.
 Tests are organized into two files:
 
 - **`test_smoke.py`**: Realistic scenario walkthroughs using a **module-scoped** cluster
@@ -160,19 +160,19 @@ Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 
 ```bash
 # All unit tests
-uv run pytest lib/iris/tests/ -m "not e2e" -o "addopts="
+uv run pytest lib/iris/tests/ -m "not requires_cluster" -o "addopts="
 
 # E2E smoke tests (shared cluster, fast)
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster -o "addopts="
 
 # E2E chaos tests (fresh cluster per test, slower)
-uv run pytest lib/iris/tests/e2e/test_chaos.py -m e2e -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_chaos.py -m requires_cluster -o "addopts="
 
 # All E2E tests
-uv run pytest lib/iris/tests/e2e/ -m e2e -o "addopts="
+uv run pytest lib/iris/tests/e2e/ -m requires_cluster -o "addopts="
 
 # E2E without Docker (fast)
-uv run pytest lib/iris/tests/e2e/ -m "e2e and not docker" -o "addopts="
+uv run pytest lib/iris/tests/e2e/ -m "requires_cluster and not docker" -o "addopts="
 
 # Docker-only tests
 uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
@@ -181,11 +181,11 @@ uv run pytest lib/iris/tests/e2e/ -m docker -o "addopts="
 IRIS_SCREENSHOT_DIR=/tmp/shots uv run pytest lib/iris/tests/e2e/test_smoke.py -o "addopts="
 
 # Cloud mode: connect to running cluster
-uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url http://localhost:8080 -o "addopts="
+uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url http://localhost:8080 -o "addopts="
 
 # Cloud mode: full lifecycle (start cluster, then pass URL to pytest)
 # Step 1: iris --cluster=smoke-gcp cluster start-smoke --label-prefix my-test --url-file /tmp/url --wait-for-workers 1
-# Step 2: uv run pytest lib/iris/tests/e2e/test_smoke.py -m e2e --iris-controller-url "$(cat /tmp/url)" -o "addopts="
+# Step 2: uv run pytest lib/iris/tests/e2e/test_smoke.py -m requires_cluster --iris-controller-url "$(cat /tmp/url)" -o "addopts="
 
 # K8s runtime tests (requires a running cluster — kind, k3d, minikube, etc.)
 uv run pytest lib/iris/tests/e2e/test_coreweave_live_kubernetes_runtime.py \

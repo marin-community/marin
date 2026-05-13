@@ -626,7 +626,7 @@ class Checkpointer:
             time_out = time.time()
             logger.info(f"Deleted old checkpoint from {cp_path} in {time_out - time_in:.2f} seconds")
         except Exception:  # pylint: disable=broad-except
-            logger.exception(f"Failed to delete checkpoint {cp_path}", exc_info=True)
+            logger.exception(f"Failed to delete checkpoint {cp_path}")
 
     def save_checkpoint(
         self,

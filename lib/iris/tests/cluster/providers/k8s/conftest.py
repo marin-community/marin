@@ -1,8 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared fixtures and helpers for Kubernetes provider tests."""
-
 from __future__ import annotations
 
 import pytest
@@ -22,15 +20,28 @@ from iris.cluster.runtime.env import build_common_iris_env
 from iris.rpc import job_pb2
 
 
-class InProcessLogPusher:
-    """Test-friendly log pusher that calls LogServiceImpl directly."""
+class InProcessLogClient:
+    """LogClient stand-in that calls LogServiceImpl directly (no RPC plumbing)."""
 
     def __init__(self, log_service: LogServiceImpl) -> None:
         self._log_service = log_service
 
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None:
-        if entries:
-            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries), ctx=None)
+    def write_batch(self, key: str, messages: list[logging_pb2.LogEntry]) -> None:
+        if messages:
+            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=messages), ctx=None)
+
+    def close(self) -> None:
+        pass
+
+
+class FakeStatsTable:
+    """Records every Table.write call so tests can assert on emitted rows."""
+
+    def __init__(self) -> None:
+        self.writes: list[list[object]] = []
+
+    def write(self, rows) -> None:
+        self.writes.append(list(rows))
 
 
 @pytest.fixture
@@ -40,30 +51,28 @@ def k8s() -> InMemoryK8sService:
 
 @pytest.fixture
 def log_service() -> LogServiceImpl:
-    svc = LogServiceImpl()
-    original_fetch = svc.fetch_logs
-
-    def fetch_logs(request, ctx):
-        svc._log_store._compact_step()
-        return original_fetch(request, ctx)
-
-    svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
-    return svc
+    return LogServiceImpl()
 
 
 @pytest.fixture
-def log_pusher(log_service) -> InProcessLogPusher:
-    return InProcessLogPusher(log_service)
+def log_client(log_service) -> InProcessLogClient:
+    return InProcessLogClient(log_service)
 
 
 @pytest.fixture
-def provider(k8s, log_pusher):
+def task_stats_table() -> FakeStatsTable:
+    return FakeStatsTable()
+
+
+@pytest.fixture
+def provider(k8s, log_client, task_stats_table):
     p = K8sTaskProvider(
         kubectl=k8s,
         namespace="iris",
         default_image="myrepo/iris:latest",
         cache_dir="/cache",
-        log_pusher=log_pusher,
+        log_client=log_client,
+        task_stats_table=task_stats_table,
         log_poll_interval=1.0,
     )
     yield p
@@ -91,13 +100,11 @@ def make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> job_p
 
 def make_batch(
     tasks_to_run=None,
-    tasks_to_kill=None,
     running_tasks=None,
 ) -> DirectProviderBatch:
     return DirectProviderBatch(
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
-        tasks_to_kill=tasks_to_kill or [],
     )
 
 

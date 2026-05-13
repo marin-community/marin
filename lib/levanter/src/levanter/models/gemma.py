@@ -13,7 +13,7 @@ import jax.random as jrandom
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.normalization import LayerNormBase
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -28,7 +28,6 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.types import BlockFoldable
 
 silence_transformer_nag()
 from transformers import Gemma2Config as HfGemma2Config  # noqa: E402
@@ -346,8 +345,6 @@ class GemmaTransformer(ModuleWithStateDictSerialization):
     def init(config: GemmaConfig, *, key) -> "GemmaTransformer":
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         layers = S.init(config.Layers, GemmaDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(
@@ -684,8 +681,6 @@ class Gemma2Transformer(ModuleWithStateDictSerialization):
         # Choose "Stacked" vs "BlockSeq" depending on scan_layers like the original implementation
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         layers = S.init(config.Layers, Gemma2DecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(

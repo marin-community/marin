@@ -11,7 +11,6 @@ helpers.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Sequence
@@ -19,7 +18,10 @@ from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
 from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
+from sqlalchemy import delete, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from iris.chaos import chaos_raise
 from iris.cluster.constraints import (
     CONSTRAINT_REGISTRY,
     AttributeValue,
@@ -32,6 +34,7 @@ from iris.cluster.constraints import (
     is_cpu_device_type_constraint,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import scaling_groups_table, slices_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.types import (
@@ -119,7 +122,14 @@ class SliceState:
     """
 
     handle: SliceHandle
-    last_active: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
+    # Timestamp at which the slice transitioned from "any worker has a
+    # running task" to "all workers idle". None means the slice is currently
+    # active (or has never been observed; both cases stay alive). Eligibility
+    # for scale-down is `now - quiet_since >= idle_threshold`. Stored only in
+    # memory: persisting a continuously-updated activity stamp is what produced
+    # the periodic-flush bug, and the post-restart grace period that falls out
+    # of `quiet_since=None` is exactly the safe behaviour we want anyway.
+    quiet_since: Timestamp | None = None
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     worker_ids: list[str] = field(default_factory=list)
     error_message: str = ""
@@ -195,6 +205,8 @@ def build_worker_config_for_group(
     if group_config.HasField("worker"):
         for k, v in group_config.worker.attributes.items():
             wc.worker_attributes[k] = v
+        if group_config.worker.cache_dir:
+            wc.cache_dir = group_config.worker.cache_dir
 
     template = group_config.slice_template
     region = _region_from_template(template)
@@ -245,12 +257,14 @@ def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = No
     vm_state = _lifecycle_to_vm_state(state.lifecycle)
 
     is_idle = False
-    if idle_threshold is not None and state.lifecycle == SliceLifecycleState.READY:
-        if state.last_active.epoch_ms() == 0:
-            is_idle = True
-        else:
-            idle_duration = Duration.from_ms(Timestamp.now().epoch_ms() - state.last_active.epoch_ms())
-            is_idle = idle_duration >= idle_threshold
+    if idle_threshold is not None and state.lifecycle == SliceLifecycleState.READY and state.quiet_since is not None:
+        idle_duration = Duration.from_ms(Timestamp.now().epoch_ms() - state.quiet_since.epoch_ms())
+        is_idle = idle_duration >= idle_threshold
+
+    # The dashboard renders "idle for {now - last_active}" on idle slices.
+    # For an active slice the value is unused, so report `now`; for an idle
+    # slice, report the transition time (= quiet_since).
+    last_active_ts = state.quiet_since if state.quiet_since is not None else Timestamp.now()
 
     return vm_pb2.SliceInfo(
         slice_id=state.handle.slice_id,
@@ -266,7 +280,7 @@ def slice_state_to_proto(state: SliceState, idle_threshold: Duration | None = No
             for worker_id in state.worker_ids
         ],
         error_message=state.error_message,
-        last_active=timestamp_to_proto(state.last_active),
+        last_active=timestamp_to_proto(last_active_ts),
         idle=is_idle,
     )
 
@@ -340,8 +354,9 @@ class ScalingGroup:
         if self._db is not None:
             with self._db.transaction() as cur:
                 cur.execute(
-                    "INSERT OR IGNORE INTO scaling_groups(name, updated_at_ms) VALUES (?, ?)",
-                    (self.name, Timestamp.now().epoch_ms()),
+                    sqlite_insert(scaling_groups_table)
+                    .values(name=self.name, updated_at_ms=Timestamp.now().epoch_ms())
+                    .on_conflict_do_nothing(index_elements=["name"])
                 )
 
     # -----------------------------------------------------------------------
@@ -353,52 +368,58 @@ class ScalingGroup:
             return
         with self._db.transaction() as cur:
             cur.execute(
-                "INSERT OR REPLACE INTO slices "
-                "(slice_id, scale_group, lifecycle, worker_ids, created_at_ms, last_active_ms, error_message) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    slice_id,
-                    self.name,
-                    state.lifecycle.value,
-                    json.dumps(list(state.worker_ids)),
-                    state.handle.created_at.epoch_ms(),
-                    state.last_active.epoch_ms(),
-                    state.error_message,
-                ),
+                sqlite_insert(slices_table)
+                .values(
+                    slice_id=slice_id,
+                    scale_group=self.name,
+                    lifecycle=state.lifecycle.value,
+                    worker_ids=list(state.worker_ids),
+                    created_at_ms=state.handle.created_at.epoch_ms(),
+                    error_message=state.error_message or "",
+                )
+                .on_conflict_do_update(
+                    index_elements=["slice_id"],
+                    set_={
+                        "scale_group": self.name,
+                        "lifecycle": state.lifecycle.value,
+                        "worker_ids": list(state.worker_ids),
+                        "created_at_ms": state.handle.created_at.epoch_ms(),
+                        "error_message": state.error_message or "",
+                    },
+                )
             )
 
     def _db_remove_slice(self, slice_id: str) -> None:
         if self._db is None:
             return
         with self._db.transaction() as cur:
-            cur.execute("DELETE FROM slices WHERE slice_id = ?", (slice_id,))
+            cur.execute(delete(slices_table).where(slices_table.c.slice_id == slice_id))
 
     def _db_update_group(self) -> None:
         if self._db is None:
             return
         with self._db.transaction() as cur:
             cur.execute(
-                "UPDATE scaling_groups SET "
-                "consecutive_failures=?, backoff_until_ms=?, last_scale_up_ms=?, "
-                "last_scale_down_ms=?, quota_exceeded_until_ms=?, quota_reason=?, updated_at_ms=? "
-                "WHERE name=?",
-                (
-                    self._consecutive_failures,
-                    self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
-                    self._last_scale_up.epoch_ms(),
-                    self._last_scale_down.epoch_ms(),
-                    self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0,
-                    self._quota_reason,
-                    Timestamp.now().epoch_ms(),
-                    self.name,
-                ),
+                update(scaling_groups_table)
+                .where(scaling_groups_table.c.name == self.name)
+                .values(
+                    consecutive_failures=self._consecutive_failures,
+                    backoff_until_ms=self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
+                    last_scale_up_ms=self._last_scale_up.epoch_ms(),
+                    last_scale_down_ms=self._last_scale_down.epoch_ms(),
+                    quota_exceeded_until_ms=(
+                        self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0
+                    ),
+                    quota_reason=self._quota_reason,
+                    updated_at_ms=Timestamp.now().epoch_ms(),
+                )
             )
 
     def _db_clear_slices(self) -> None:
         if self._db is None:
             return
         with self._db.transaction() as cur:
-            cur.execute("DELETE FROM slices WHERE scale_group = ?", (self.name,))
+            cur.execute(delete(slices_table).where(slices_table.c.scale_group == self.name))
 
     @property
     def platform(self) -> WorkerInfraProvider:
@@ -513,16 +534,17 @@ class ScalingGroup:
     def mark_slice_ready(self, slice_id: str, worker_ids: list[str], timestamp: Timestamp | None = None) -> None:
         """Mark a slice as READY with its worker IDs. Called after successful bootstrap.
 
-        Initializes last_active to prevent the slice from appearing idle since epoch(0),
-        which would make it immediately eligible for scaledown.
+        ``quiet_since`` is left unset (None) so the freshly-ready slice is
+        treated as active until the next autoscaler tick observes its workers;
+        if the workers come up idle, that tick will start the dwell-time clock.
         """
-        timestamp = timestamp or Timestamp.now()
+        del timestamp  # No timestamp to record now that quiet_since tracks transitions.
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
                 state.lifecycle = SliceLifecycleState.READY
                 state.worker_ids = worker_ids
-                state.last_active = timestamp
+                state.quiet_since = None
         if state is not None:
             self._db_upsert_slice(slice_id, state)
             logger.info(
@@ -592,8 +614,6 @@ class ScalingGroup:
         Returns:
             The newly created SliceHandle
         """
-        from iris.chaos import chaos_raise
-
         chaos_raise("vm.create")
         slice_config = prepare_slice_config(
             self._config.slice_template,
@@ -734,64 +754,25 @@ class ScalingGroup:
         )
         return check_resource_fit(available, required)
 
-    # Minimum elapsed time before a last_active change is flushed to the DB.
-    # Avoids one transaction per active slice per autoscaler tick for stable workloads.
-    _ACTIVITY_WRITE_THRESHOLD_MS: int = 30_000
-
     def update_slice_activity(self, worker_status_map: WorkerStatusMap, timestamp: Timestamp) -> None:
-        """Update activity timestamps for all slices based on worker status.
+        """Stamp the active→idle / idle→active transition for each slice.
 
-        For each slice, if any worker has running tasks, update its last_active timestamp.
-        All DB writes are batched into a single transaction.
+        Pure in-memory state transition: a slice flips its ``quiet_since`` to
+        ``timestamp`` the first tick all of its workers are idle, and back to
+        ``None`` whenever any worker has a running task. Eligibility for
+        scaledown is then ``now - quiet_since >= idle_threshold``.
         """
         with self._slices_lock:
             snapshot = list(self._slices.items())
 
-        # Determine which slices are active and whether they need a DB write.
-        # _slice_has_active_workers is called outside the lock (reads worker_status_map, not _slices).
-        active_slice_ids: list[str] = []
-        needs_db_write: list[str] = []
-        for slice_id, state in snapshot:
-            if not self._slice_has_active_workers(state, worker_status_map):
-                continue
-            active_slice_ids.append(slice_id)
-            elapsed_ms = timestamp.epoch_ms() - state.last_active.epoch_ms()
-            if elapsed_ms >= self._ACTIVITY_WRITE_THRESHOLD_MS:
-                needs_db_write.append(slice_id)
-
-        if not active_slice_ids:
-            return
-
-        # Mutate last_active under the lock so readers see a consistent value.
         with self._slices_lock:
-            for slice_id in active_slice_ids:
-                if slice_id in self._slices:
-                    self._slices[slice_id].last_active = timestamp
-
-        if not needs_db_write or self._db is None:
-            return
-
-        # Snapshot state under lock before opening the transaction to avoid
-        # holding _slices_lock and _db._lock simultaneously.
-        with self._slices_lock:
-            to_write = [(sid, self._slices[sid]) for sid in needs_db_write if sid in self._slices]
-
-        with self._db.transaction() as cur:
-            for slice_id, state in to_write:
-                cur.execute(
-                    "INSERT OR REPLACE INTO slices "
-                    "(slice_id, scale_group, lifecycle, worker_ids, created_at_ms, last_active_ms, error_message) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        slice_id,
-                        self.name,
-                        state.lifecycle.value,
-                        json.dumps(list(state.worker_ids)),
-                        state.handle.created_at.epoch_ms(),
-                        state.last_active.epoch_ms(),
-                        state.error_message,
-                    ),
-                )
+            for slice_id, state in snapshot:
+                if slice_id not in self._slices:
+                    continue
+                if self._slice_has_active_workers(state, worker_status_map):
+                    self._slices[slice_id].quiet_since = None
+                elif self._slices[slice_id].quiet_since is None:
+                    self._slices[slice_id].quiet_since = timestamp
 
     def _slice_has_active_workers(self, state: SliceState, worker_status_map: WorkerStatusMap) -> bool:
         """Check if any worker in a slice has running tasks."""
@@ -806,28 +787,30 @@ class ScalingGroup:
 
         Eligible if:
         - Slice not tracked -> eligible
-        - last_active is epoch 0 (never had activity) -> eligible
-        - OR idle for at least idle_threshold
+        - quiet_since is None (currently active or never observed) -> not eligible
+        - OR idle for at least idle_threshold since quiet_since
         """
         with self._slices_lock:
             state = self._slices.get(slice_id)
         if state is None:
             return True
-        if state.last_active.epoch_ms() == 0:
-            return True
-        idle_duration = Duration.from_ms(timestamp.epoch_ms() - state.last_active.epoch_ms())
+        if state.quiet_since is None:
+            return False
+        idle_duration = Duration.from_ms(timestamp.epoch_ms() - state.quiet_since.epoch_ms())
         return idle_duration >= self._idle_threshold
 
     def get_idle_slices(self, timestamp: Timestamp) -> list[SliceState]:
         """Get all slice states eligible for scaledown, sorted by idle time (longest first)."""
         with self._slices_lock:
             snapshot = list(self._slices.items())
-        eligible = []
+        eligible: list[tuple[SliceState, int]] = []
         for slice_id, state in snapshot:
-            if state.lifecycle == SliceLifecycleState.READY and self.is_slice_eligible_for_scaledown(
-                slice_id, timestamp
-            ):
-                eligible.append((state, state.last_active.epoch_ms()))
+            if state.lifecycle != SliceLifecycleState.READY:
+                continue
+            if not self.is_slice_eligible_for_scaledown(slice_id, timestamp):
+                continue
+            assert state.quiet_since is not None  # implied by eligibility
+            eligible.append((state, state.quiet_since.epoch_ms()))
         eligible.sort(key=lambda x: x[1])
         return [s[0] for s in eligible]
 
@@ -897,16 +880,13 @@ class ScalingGroup:
 
             with self._slices_lock:
                 state = self._slices.get(slice_state.handle.slice_id)
-            last_active = state.last_active if state else Timestamp.from_ms(0)
-            never_active = last_active.epoch_ms() == 0
-            idle_duration = Duration.from_ms(timestamp.epoch_ms() - last_active.epoch_ms())
+            quiet_since = state.quiet_since if state is not None else None
+            idle_ms = timestamp.epoch_ms() - quiet_since.epoch_ms() if quiet_since is not None else 0
             logger.info(
-                "Scale group %s: scaling down slice %s "
-                "(idle for %dms, never_active=%s, ready=%d/%d, pending=%d, target=%d)",
+                "Scale group %s: scaling down slice %s " "(idle for %dms, ready=%d/%d, pending=%d, target=%d)",
                 self.name,
                 slice_state.handle.slice_id,
-                idle_duration.to_ms(),
-                never_active,
+                idle_ms,
                 ready,
                 self.num_vms,
                 pending,
@@ -1257,7 +1237,6 @@ class SliceSnapshot:
     lifecycle: str
     worker_ids: list[str] = field(default_factory=list)
     created_at_ms: int = 0
-    last_active_ms: int = 0
     error_message: str = ""
 
 
@@ -1322,11 +1301,15 @@ def restore_scaling_group(
             )
             lifecycle = SliceLifecycleState.BOOTING
 
+        # Recovered slices start with quiet_since=None so the next autoscaler
+        # tick observes their workers and decides afresh: any active task →
+        # stays active; otherwise the tick stamps quiet_since and the dwell
+        # clock starts from there. This intentionally grants a full
+        # idle_threshold grace period after a controller restart.
         result.slices[slice_id] = SliceState(
             handle=cloud_handle,
             lifecycle=lifecycle,
             worker_ids=list(slice_snap.worker_ids),
-            last_active=Timestamp.from_ms(slice_snap.last_active_ms),
             error_message=slice_snap.error_message,
         )
 

@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from pathlib import Path
 
-from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
-from marin.utils import fsspec_exists
+import pytest
+from marin.processing.classification.decon import DeconConfig, NGramConfig, decontaminate
 from zephyr import load_jsonl
 
 
@@ -35,13 +34,11 @@ def test_decontamination(fox_corpus):
         attribute_name="contaminated",
         estimated_doc_count=20,
         false_positive_rate=0.01,
-        mode=DeconMode.DECONTAMINATE,
         processes=2,
     )
 
     result = decontaminate(config)
     assert result["success"]
-    assert result["mode"] == "decontamination"
 
     # Read output
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
@@ -60,8 +57,7 @@ def test_decontamination(fox_corpus):
 
 
 def test_ngram_decontamination(fox_corpus):
-    """Test n-gram based decontamination"""
-    # Run decontamination with n-grams
+    """N-gram decontamination flags high-overlap paragraphs and gates low-overlap ones via overlap_threshold."""
     config = DeconConfig(
         input_path=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
@@ -70,31 +66,33 @@ def test_ngram_decontamination(fox_corpus):
         estimated_doc_count=20,
         false_positive_rate=0.01,
         ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=0.5),
-        mode=DeconMode.DECONTAMINATE,
         processes=1,
     )
 
     result = decontaminate(config)
     assert result["success"]
-    assert result["mode"] == "decontamination"
 
-    # Read output
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
 
-    # test_high_overlap has high overlap (>50% of 3-grams match with train_arctic_1)
-    assert len(results_by_id["test_high_overlap"]["attributes"]["overlap"]) == 1
-    assert results_by_id["test_high_overlap"]["attributes"]["overlap"][0][2] > 0.5
+    # test_high_overlap matches train_arctic_1 at >50% of 3-grams → recorded.
+    high_spans = results_by_id["test_high_overlap"]["attributes"]["overlap"]
+    assert len(high_spans) == 1
+    assert high_spans[0][2] >= 0.5
 
-    # test_unique_2 has low/no overlap (less than the high overlap case)
-    assert len(results_by_id["test_unique_2"]["attributes"]["overlap"]) == 1
-    high_overlap_score = results_by_id["test_high_overlap"]["attributes"]["overlap"][0][2]
-    unique_overlap_score = results_by_id["test_unique_2"]["attributes"]["overlap"][0][2]
-    assert unique_overlap_score < high_overlap_score
+    # test_unique_2 has near-zero overlap (different vocabulary) → gated out by threshold=0.5.
+    assert results_by_id["test_unique_2"]["attributes"]["overlap"] == []
 
 
-def test_train_test_overlap(fox_corpus):
-    """Test train-test overlap with multiple n-gram sizes"""
-    # Run train-test overlap with multiple n-gram sizes
+@pytest.mark.parametrize(
+    "threshold, expect_high_flagged",
+    [(0.0, True), (0.5, True), (0.85, False), (1.0, False)],
+)
+def test_overlap_threshold_gates_spans(fox_corpus, threshold, expect_high_flagged):
+    """Regression: overlap_threshold gates which paragraphs get recorded as contaminated spans.
+
+    Before #5519, NGramConfig.overlap_threshold was configured but ignored — any non-zero
+    score was recorded. This test pins the gating semantics so the bug can't regress.
+    """
     config = DeconConfig(
         input_path=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
@@ -102,35 +100,17 @@ def test_train_test_overlap(fox_corpus):
         attribute_name="overlap",
         estimated_doc_count=20,
         false_positive_rate=0.01,
-        ngram=NGramConfig(ngram_length=[3, 5], stride=0, overlap_threshold=0.0),  # Show all overlaps
-        mode=DeconMode.TRAIN_TEST_OVERLAP,
+        ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=threshold),
         processes=1,
     )
-
-    result = decontaminate(config)
-    assert result["success"]
-    assert result["mode"] == "train_test_overlap"
-    assert result["ngram_lengths_processed"] == [3, 5]
-
-    # Check outputs for each n-gram size
-    for ngram_len in [3, 5]:
-        ngram_dir = os.path.join(fox_corpus["output_dir"], str(ngram_len))
-        assert fsspec_exists(ngram_dir)
-
-        results_by_id = load_dedup_outputs(ngram_dir)
-        assert len(results_by_id) > 0
-
-        # test_high_overlap should have some overlap with train
-        assert len(results_by_id["test_high_overlap"]["attributes"][f"overlap_{ngram_len}"]) == 1
-        high_score = results_by_id["test_high_overlap"]["attributes"][f"overlap_{ngram_len}"][0][2]
-        assert high_score > 0.0
-
-        # test_unique_1 should have much less overlap than test_high_overlap
-        # (may have small overlap due to common words, but significantly less)
-        unique_attrs = results_by_id["test_unique_1"]["attributes"][f"overlap_{ngram_len}"]
-        if len(unique_attrs) > 0:
-            unique_score = unique_attrs[0][2]
-            assert unique_score < high_score, f"Expected unique ({unique_score}) < high overlap ({high_score})"
+    decontaminate(config)
+    results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
+    spans = results_by_id["test_high_overlap"]["attributes"]["overlap"]
+    if expect_high_flagged:
+        assert spans, f"expected test_high_overlap flagged at threshold={threshold}"
+        assert spans[0][2] >= threshold
+    else:
+        assert spans == [], f"expected test_high_overlap gated out at threshold={threshold}"
 
 
 def test_multi_paragraph_decontamination(fox_corpus):
@@ -143,13 +123,11 @@ def test_multi_paragraph_decontamination(fox_corpus):
         attribute_name="contaminated",
         estimated_doc_count=20,
         false_positive_rate=0.01,
-        mode=DeconMode.DECONTAMINATE,
         processes=1,
     )
 
     result = decontaminate(config)
     assert result["success"]
-    assert result["mode"] == "decontamination"
 
     # Read output
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])

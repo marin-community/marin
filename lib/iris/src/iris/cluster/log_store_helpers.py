@@ -9,7 +9,7 @@ iris-domain values (`JobName`, `TaskAttempt`) to those strings.
 
 from __future__ import annotations
 
-import re
+from finelog.rpc import logging_pb2
 
 from iris.cluster.types import JobName, TaskAttempt
 
@@ -28,19 +28,19 @@ def task_log_key(task_attempt: TaskAttempt) -> str:
     return task_attempt.to_wire()
 
 
-def build_log_source(target: JobName, attempt_id: int = -1) -> str:
-    """Build a FetchLogs source regex pattern from a JobName.
+def build_log_source(target: JobName, attempt_id: int = -1) -> tuple[str, logging_pb2.MatchScope]:
+    """Build a (literal source, match scope) tuple for FetchLogs.
 
-    Escapes regex metacharacters in the job name so they match literally,
-    then appends the appropriate wildcard suffix.
+    The source is always a literal string — finelog matches `+`, `.`, `[` etc.
+    byte-for-byte. ``match_scope`` tells the server how to interpret it.
 
-    - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
-    - Task + all attempts:     /user/job/0:.*
-    - Job (all tasks):         /user/job/.*
+    - Task + specific attempt: ``(/user/job/0:<attempt_id>, EXACT)``
+    - Task + all attempts:     ``(/user/job/0:, PREFIX)``
+    - Job (all tasks):         ``(/user/job/, PREFIX)``
     """
-    wire = re.escape(target.to_wire())
+    wire = target.to_wire()
     if target.is_task:
         if attempt_id >= 0:
-            return f"{wire}:{attempt_id}"
-        return f"{wire}:.*"
-    return f"{wire}/.*"
+            return f"{wire}:{attempt_id}", logging_pb2.MATCH_SCOPE_EXACT
+        return f"{wire}:", logging_pb2.MATCH_SCOPE_PREFIX
+    return f"{wire}/", logging_pb2.MATCH_SCOPE_PREFIX

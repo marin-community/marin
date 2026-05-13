@@ -5,6 +5,8 @@ import dataclasses
 import json
 import logging
 import os
+
+import fsspec
 from typing import Any, Mapping, Optional
 
 import jax
@@ -39,8 +41,6 @@ class JsonFileTracker(Tracker):
         pass
 
     def finish(self):
-        import fsspec
-
         summary = {**self._summary_metrics, **self._last_metrics}
         output_file = os.path.join(self.output_path, "eval_results.json")
         with fsspec.open(output_file, "wt") as f:

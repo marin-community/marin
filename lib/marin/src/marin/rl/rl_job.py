@@ -216,7 +216,7 @@ class RLJob:
         and child jobs (trainer + rollout workers). The coordinator runs
         inside the cluster with proper job hierarchy.
         """
-        from marin.rl.orchestration import submit_rl_job
+        from marin.rl.orchestration import submit_rl_job  # circular import
 
         handle = submit_rl_job(self.config)
         handle.wait(raise_on_failure=True)

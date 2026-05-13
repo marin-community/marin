@@ -132,37 +132,25 @@ def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
     return args
 
 
-def _wait_health(name: str, project: str, zone: str, port: int, max_attempts: int = 60) -> bool:
-    """Wait for the bootstrap script to report finelog healthy.
+def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) -> bool:
+    """Poll ``/health`` from inside the VM over SSH.
 
-    Polls the VM's serial console output (no SSH required, so this works on
-    VMs that enforce OS Login restricting the operator's account). The
-    bootstrap script in ``bootstrap.py`` validates ``/health`` from inside
-    the VM and prints sentinel markers; we just look for them.
+    Used by both ``gcp_up`` (where the first attempts may fail while
+    OS Login propagates the SSH key on the fresh VM) and ``gcp_restart``.
+    A direct probe is unambiguous: serial-console marker scraping was
+    fragile because ``gcp_restart`` re-runs the bootstrap over SSH and
+    that path never reaches the console.
     """
-    del port  # the bootstrap script polls /health itself; we read its verdict.
-    healthy_marker = "[finelog-init] finelog is healthy"
-    failed_marker = "[finelog-init] FAILED"
+    probe = f"curl -sf -m 5 http://localhost:{port}/health"
     for _ in range(max_attempts):
         result = subprocess.run(
-            [
-                "gcloud",
-                "compute",
-                "instances",
-                "get-serial-port-output",
-                name,
-                f"--project={project}",
-                f"--zone={zone}",
-            ],
+            _ssh_args(cfg, probe),
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            if healthy_marker in result.stdout:
-                return True
-            if failed_marker in result.stdout:
-                return False
-        time.sleep(3)
+            return True
+        time.sleep(2)
     return False
 
 
@@ -214,7 +202,7 @@ def gcp_up(cfg: FinelogConfig) -> None:
     click.echo("Instance created. Startup script will install Docker and launch finelog.")
 
     click.echo("Waiting for finelog /health (up to ~3 minutes)...")
-    if not _wait_health(cfg.name, gcp.project, gcp.zone, cfg.port):
+    if not _wait_health_via_ssh(cfg, cfg.port):
         raise click.ClickException("finelog did not become healthy; inspect via `finelog deploy logs`")
     click.echo("finelog is healthy.")
 
@@ -253,6 +241,24 @@ def gcp_restart(cfg: FinelogConfig) -> None:
 
     bootstrap = render_bootstrap(image=pinned, port=cfg.port, remote_log_dir=cfg.remote_log_dir)
 
+    # Update the instance's startup-script metadata so that a future VM reboot
+    # (host maintenance, manual reset) brings up the same image we're about to
+    # restart into — otherwise GCE would re-run the bootstrap baked in at
+    # `gcp_up` time, pinning the VM to whatever image was current on day one.
+    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
+        f.write(bootstrap)
+        startup_path = f.name
+    click.echo("Updating instance startup-script metadata...")
+    _gcloud(
+        "compute",
+        "instances",
+        "add-metadata",
+        cfg.name,
+        f"--project={gcp.project}",
+        f"--zone={gcp.zone}",
+        f"--metadata-from-file=startup-script={startup_path}",
+    )
+
     click.echo(f"Re-running bootstrap on {cfg.name} via SSH...")
     result = subprocess.run(
         _ssh_args(cfg, "bash -s"),
@@ -262,7 +268,7 @@ def gcp_restart(cfg: FinelogConfig) -> None:
     if result.returncode != 0:
         raise click.ClickException("Bootstrap re-run failed; see SSH output above")
     click.echo("Bootstrap re-applied. Verifying health...")
-    if not _wait_health(cfg.name, gcp.project, gcp.zone, cfg.port):
+    if not _wait_health_via_ssh(cfg, cfg.port):
         raise click.ClickException("finelog did not become healthy after restart")
     click.echo("finelog is healthy.")
 

@@ -13,7 +13,6 @@ from __future__ import annotations
 import heapq
 import inspect
 import logging
-import os
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
@@ -47,8 +46,8 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr
-from zephyr.external_sort import external_sort_merge
-from zephyr.readers import InputFileSpec
+from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
+from zephyr.readers import InputFileSpec, load_file
 
 logger = logging.getLogger(__name__)
 
@@ -101,11 +100,9 @@ class Write:
     """Write stream to file, return path."""
 
     output_pattern: Callable[[int, int], str]  # (shard_idx, total_shards) → path
-    writer_type: str  # For chunk aggregation: "jsonl", "parquet", "binary", "levanter_cache"
+    writer_type: str  # For chunk aggregation: "jsonl", "parquet", "binary", "vortex"
     skip_existing: bool = False
     # Writer-specific parameters
-    levanter_metadata: dict | None = None
-    levanter_batch_size: int | None = None
     schema: Any = None  # For parquet
 
 
@@ -192,14 +189,11 @@ def _reduce_gen(
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
-    cols_set = set(columns)
     for item in stream:
-        yield {k: item[k] for k in cols_set if k in item}
+        yield {k: item[k] for k in columns if k in item}
 
 
 def _load_file_gen(stream: Iterator) -> Iterator:
-    from zephyr.readers import load_file
-
     for spec in stream:
         try:
             yield from load_file(spec)
@@ -418,8 +412,6 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
                     output_pattern=op.output_pattern,
                     writer_type=op.writer_type,
                     skip_existing=op.skip_existing,
-                    levanter_metadata=op.levanter_metadata,
-                    levanter_batch_size=op.levanter_batch_size,
                     schema=op.schema,
                 )
             )
@@ -496,7 +488,10 @@ def _compute_file_pushdown(
             select_columns = list(op.columns)
             ops_to_skip.add(i)
         elif isinstance(op, FilterOp) and op.expr is None:
-            continue  # Lambda filter, can't push down
+            # Lambda filter — can't introspect what columns it reads, so any
+            # later SelectOp pushdown could KeyError the lambda by dropping
+            # columns it needs. Stop pushdown here.
+            break
         elif isinstance(op, (MapOp | FlatMapOp)):
             break  # Transform ops stop pushdown
         else:
@@ -629,7 +624,7 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterReader
+    from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
 
     use_external = (
         external_sort_dir is not None
@@ -638,8 +633,6 @@ def _merge_sorted_chunks(
     )
 
     if use_external:
-        from zephyr.external_sort import compute_fan_in, compute_write_batch_size
-
         memory_limit = _TaskResources.from_environment().memory_bytes
         # Per-iterator memory ~= compressed bytes for one chunk held by
         # cat_file. Use the actual max compressed chunk size from the sidecar.
@@ -773,8 +766,12 @@ def run_stage(
 
     configure_logging(level=logging.INFO)
 
-    from zephyr import counters
-    from zephyr.writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
+    from zephyr import counters  # circular import: counters → execution → plan
+    from zephyr.writers import (  # circular import: writers → counters → execution → plan
+        write_binary_file,
+        write_jsonl_file,
+        write_parquet_file,
+    )
 
     stream: Iterator = iter(ctx.shard)
 
@@ -793,10 +790,7 @@ def run_stage(
 
             if op.skip_existing:
                 fs = url_to_fs(output_path)[0]
-                if op.writer_type == "levanter_cache":
-                    test_path = os.path.join(output_path, ".success")
-                else:
-                    test_path = output_path
+                test_path = output_path
 
                 if fs.exists(test_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
@@ -809,16 +803,10 @@ def run_stage(
                 result = write_jsonl_file(stream, output_path)["path"]
             elif op.writer_type == "parquet":
                 result = write_parquet_file(stream, output_path, schema=op.schema)["path"]
-            elif op.writer_type == "levanter_cache":
-                metadata = op.levanter_metadata if op.levanter_metadata is not None else {}
-                kwargs: dict[str, Any] = {"metadata": metadata}
-                if op.levanter_batch_size is not None:
-                    kwargs["batch_size"] = op.levanter_batch_size
-                result = write_levanter_cache(stream, output_path, **kwargs)["path"]
             elif op.writer_type == "binary":
                 result = write_binary_file(stream, output_path)["path"]
             elif op.writer_type == "vortex":
-                from zephyr.writers import write_vortex_file
+                from zephyr.writers import write_vortex_file  # circular import: writers → counters → execution → plan
 
                 result = write_vortex_file(stream, output_path, schema=op.schema)["path"]
             else:
@@ -837,7 +825,7 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.shuffle import ScatterReader
+            from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
 
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):

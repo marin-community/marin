@@ -15,7 +15,6 @@ autouse fixture.
 import fcntl
 import logging
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -46,7 +45,7 @@ from .chronos import VirtualClock
 
 MARIN_ROOT = Path(__file__).resolve().parents[4]  # repo root
 IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "config" / "test.yaml"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -262,7 +261,10 @@ class IrisTestCluster:
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         """Fetch log lines for a task."""
         task_id = job.job_id.task(task_index).to_wire()
-        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        request = logging_pb2.FetchLogsRequest(
+            source=f"{task_id}:",
+            match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+        )
         response = self.log_client.fetch_logs(request)
         return [f"{e.source}: {e.data}" for e in response.entries]
 

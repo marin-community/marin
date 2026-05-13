@@ -13,10 +13,43 @@ cluster yaml.
 
 from __future__ import annotations
 
-import click
+import csv
+import json
+import logging
+import sys
+from enum import StrEnum
 
+import click
+import pyarrow as pa
+from rigging.log_setup import configure_logging
+from rigging.tunnel import GcpSshForwardTarget, K8sPortForwardTarget, TunnelTarget, open_tunnel
+
+from finelog.client.log_client import LogClient
 from finelog.deploy import _gcp, _k8s
+from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
+
+
+def _tunnel_target(cfg: FinelogConfig) -> TunnelTarget:
+    """Translate a finelog deployment block into a rigging tunnel target.
+
+    The GCP path forwards ``deployment.gcp.service_account`` as the SSH
+    impersonation principal — matching the deploy CLI's own SSH calls
+    (see ``_gcp._ssh_args``), so this command works wherever
+    ``finelog deploy status`` does.
+    """
+    if cfg.deployment.gcp is not None:
+        gcp = cfg.deployment.gcp
+        return GcpSshForwardTarget(
+            project=gcp.project,
+            zone=gcp.zone,
+            instance=cfg.name,
+            port=cfg.port,
+            impersonate_service_account=gcp.service_account,
+        )
+    assert cfg.deployment.k8s is not None
+    k8s = cfg.deployment.k8s
+    return K8sPortForwardTarget(namespace=k8s.namespace, service=cfg.name, port=cfg.port)
 
 
 def _dispatch_up(cfg: FinelogConfig) -> None:
@@ -66,9 +99,18 @@ def deploy() -> None:
 
 @deploy.command("up")
 @click.argument("name")
-def up_cmd(name: str) -> None:
+@click.option(
+    "--build/--no-build",
+    "build",
+    default=True,
+    show_default=True,
+    help="Build and push the finelog image (using cfg.image as the tag) before provisioning.",
+)
+def up_cmd(name: str, build: bool) -> None:
     """Provision the finelog deployment described by `<name>` (idempotent)."""
     cfg = load_finelog_config(name)
+    if build:
+        build_finelog_image(image=cfg.image)
     _dispatch_up(cfg)
 
 
@@ -83,9 +125,18 @@ def down_cmd(name: str, yes: bool) -> None:
 
 @deploy.command("restart")
 @click.argument("name")
-def restart_cmd(name: str) -> None:
+@click.option(
+    "--build/--no-build",
+    "build",
+    default=True,
+    show_default=True,
+    help="Build and push the finelog image (using cfg.image as the tag) before restarting.",
+)
+def restart_cmd(name: str, build: bool) -> None:
     """Restart the finelog deployment in place (refresh the container/image)."""
     cfg = load_finelog_config(name)
+    if build:
+        build_finelog_image(image=cfg.image)
     _dispatch_restart(cfg)
 
 
@@ -95,6 +146,102 @@ def status_cmd(name: str) -> None:
     """Show status of the finelog deployment."""
     cfg = load_finelog_config(name)
     _dispatch_status(cfg)
+
+
+class OutputFormat(StrEnum):
+    TABLE = "table"
+    JSON = "json"
+    CSV = "csv"
+
+
+def _print_table(table: pa.Table) -> None:
+    """Render an Arrow table as fixed-width columns to stdout."""
+    if table.num_rows == 0:
+        click.echo(f"(0 rows; columns: {', '.join(table.schema.names)})")
+        return
+    rows = [[_format_cell(v) for v in row.values()] for row in table.to_pylist()]
+    headers = list(table.schema.names)
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+    sep = " | "
+    click.echo(sep.join(h.ljust(widths[i]) for i, h in enumerate(headers)))
+    click.echo("-+-".join("-" * w for w in widths))
+    for row in rows:
+        click.echo(sep.join(row[i].ljust(widths[i]) for i in range(len(headers))))
+    click.echo(f"({table.num_rows} rows)")
+
+
+def _format_cell(v: object) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        return v.hex()
+    return str(v)
+
+
+def _print_json(table: pa.Table) -> None:
+    json.dump(table.to_pylist(), sys.stdout, default=str, indent=2)
+    sys.stdout.write("\n")
+
+
+def _print_csv(table: pa.Table) -> None:
+    writer = csv.writer(sys.stdout)
+    writer.writerow(table.schema.names)
+    for row in table.to_pylist():
+        writer.writerow([_format_cell(v) for v in row.values()])
+
+
+_PRINTERS = {
+    OutputFormat.TABLE: _print_table,
+    OutputFormat.JSON: _print_json,
+    OutputFormat.CSV: _print_csv,
+}
+
+
+@cli.command("query")
+@click.argument("name")
+@click.argument("sql")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice([f.value for f in OutputFormat]),
+    default=OutputFormat.TABLE.value,
+    show_default=True,
+    help="Output format for the result.",
+)
+@click.option(
+    "--max-rows",
+    type=int,
+    default=100_000,
+    show_default=True,
+    help="Reject results larger than this (use LIMIT or raise this cap).",
+)
+@click.option(
+    "--tunnel-timeout",
+    type=float,
+    default=60.0,
+    show_default=True,
+    help="Seconds to wait for the local tunnel to become reachable.",
+)
+def query_cmd(name: str, sql: str, output_format: str, max_rows: int, tunnel_timeout: float) -> None:
+    """Run SQL against the deployed finelog `<name>` via a tunnel.
+
+    Opens an IAP tunnel (GCP) or `kubectl port-forward` (k8s) to the
+    configured finelog server, runs `<sql>` through `StatsService.Query`,
+    and prints results in `--format` (table/json/csv).
+    """
+    configure_logging(level=logging.INFO)
+    cfg = load_finelog_config(name)
+    target = _tunnel_target(cfg)
+    with open_tunnel(target, timeout=tunnel_timeout) as url:
+        client = LogClient.connect(url)
+        try:
+            table = client.query(sql, max_rows=max_rows)
+        finally:
+            client.close()
+    _PRINTERS[OutputFormat(output_format)](table)
 
 
 @deploy.command("logs")

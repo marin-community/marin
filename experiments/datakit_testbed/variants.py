@@ -9,28 +9,29 @@ parquet serves every hyperparam sweep. Each variant then MinHash→fuzzy-dups
 →consolidates the sampled data with its own fuzzy-dedup parameters,
 tokenizes the deduped output, and trains.
 
-Pipeline mirrors ``experiments/ferries/datakit_ferry.py`` but fanned across
-every sampled source and with sample (not normalize) as the input.
+The whole pipeline (ferry → minhash → fuzzy_dups → consolidate → tokenize
+→ weights → train) lives in one executor DAG so ``--dry_run`` validates
+structure without touching GCS.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 
+import draccus
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
-from marin.execution.executor import Executor, ExecutorMainConfig, ExecutorStep, executor_main
-from marin.execution.step_runner import StepRunner
+from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.consolidate import FilterConfig, FilterType, consolidate
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, compute_fuzzy_dups_attrs
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs
-from rigging.filesystem import marin_prefix
 from rigging.log_setup import configure_logging
 
-from experiments.datakit_testbed.mixture import weights_from_tokenized_bucket_stats
+from experiments.datakit_testbed.mixture import tokenized_bucket_weights_step
 from experiments.datakit_testbed.sampler import build_testbed_steps
 from experiments.datakit_testbed.settings import TESTBED_TOKENIZER
 from experiments.datakit_testbed.train import run_testbed_config, testbed_tokenize
@@ -161,48 +162,31 @@ def dedup(
         fuzzy_dedup_cc_max_iterations,
     )
 
-    # Materialize the dedup chain (StepRunner walks transitive deps, so we only
-    # need to hand it the terminal consolidates).
-    StepRunner().run(list(deduped_by_source.values()))
-
-    # Now the deduped parquet lives at each consolidate step's output_path under
-    # outputs/main/ — bridge those into tokenize ExecutorSteps exactly like
-    # baseline wires sample outputs.
     tokenized_buckets = {
         src_name: testbed_tokenize(src_name, deduped, tokenizer) for src_name, deduped in deduped_by_source.items()
     }
-    prefix = marin_prefix()
-    tokenize_executor = Executor(
-        prefix=prefix,
-        executor_info_base_path=os.path.join(prefix, "experiments"),
-    )
-    tokenize_executor.run(list(tokenized_buckets.values()), max_concurrent=MAX_STEP_CONCURRENCY)
-
-    resolved_output_paths = {
-        bucket_name: tokenize_executor.output_paths[step] for bucket_name, step in tokenized_buckets.items()
-    }
-    weights = weights_from_tokenized_bucket_stats(resolved_output_paths)
+    weights_step = tokenized_bucket_weights_step(name, tokenized_buckets)
     return run_testbed_config(
         name=name,
         tokenized_buckets=tokenized_buckets,
-        weights=weights,
+        weights_step=weights_step,
         tokenizer=tokenizer,
     )
 
 
 def main() -> None:
-    """Entry-point: ferry → minhash → fuzzy_dups → consolidate → tokenize → train."""
-    os.environ["MARIN_PREFIX"] = STAGING_PREFIX
+    """Build the fuzzy-dedup DAG and hand it to ``executor_main``."""
+    config = draccus.parse(ExecutorMainConfig)
+    if config.prefix is None:
+        config = dataclasses.replace(config, prefix=STAGING_PREFIX)
+    os.environ.setdefault("MARIN_PREFIX", config.prefix)
 
     tokenizer = TESTBED_TOKENIZER
     run_id = "fuzzy_dedup"
 
     testbed_steps = build_testbed_steps(target_total_tokens_b=TARGET_TOTAL_TOKENS_B)
-    logger.info("Materializing %d ferry StepSpecs under %s", len(testbed_steps), STAGING_PREFIX)
-    StepRunner().run(testbed_steps, max_concurrent=MAX_STEP_CONCURRENCY)
-
     training_step = dedup(testbed_steps, name=run_id, tokenizer=tokenizer)
-    executor_main(ExecutorMainConfig(), [training_step])
+    executor_main(config, [training_step], max_concurrent=MAX_STEP_CONCURRENCY)
 
 
 if __name__ == "__main__":

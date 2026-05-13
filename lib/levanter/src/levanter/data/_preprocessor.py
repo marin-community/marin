@@ -129,7 +129,7 @@ def _construct_composite_batch_processor(dataset):
     """
 
     def rec(dataset):
-        from levanter.data.sharded_datasource import _TransformedDataset
+        from levanter.data.sharded_datasource import _TransformedDataset  # circular import
 
         if isinstance(dataset, _TransformedDataset):
             source, transforms, batch_transform = rec(dataset.source)

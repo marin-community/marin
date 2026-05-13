@@ -85,7 +85,7 @@ class ShardedDataSource(Generic[T_co]):
         """
 
         source, processor = _construct_composite_batch_processor(self)
-        from ..store.cache import build_or_load_cache
+        from ..store.cache import build_or_load_cache  # lazy: store.cache imports levanter.data modules
 
         cache = build_or_load_cache(
             path,

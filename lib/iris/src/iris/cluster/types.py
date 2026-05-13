@@ -12,6 +12,7 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
+import functools
 import hashlib
 import os
 import sys
@@ -57,21 +58,16 @@ class JobName:
     def from_string(cls, s: str) -> "JobName":
         """Parse a job name string like '/user/root/child/grandchild'.
 
+        Parsed names are interned in a process-wide LRU cache (names are
+        immutable) so repeated decodes — the TypeDecorator path that fires
+        once per row read — collapse to a dict lookup.
+
         Examples:
             JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
             JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
             JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
-        if not s:
-            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
-        if not s.startswith("/"):
-            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
-        parts = tuple(s[1:].split("/"))
-        if len(parts) < 2:
-            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
-        if any(not part or not part.strip() for part in parts):
-            raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
-        return cls(parts)
+        return _parse_job_name(s)
 
     @classmethod
     def root(cls, user: str, name: str) -> "JobName":
@@ -203,6 +199,26 @@ class JobName:
     def from_wire(cls, s: str) -> "JobName":
         """Parse from wire format. Alias for from_string."""
         return cls.from_string(s)
+
+
+@functools.lru_cache(maxsize=2**18)
+def _parse_job_name(s: str) -> JobName:
+    """Cached parser backing JobName.from_string / from_wire.
+
+    Hot SA Core read paths decode the same job_id / task_id strings on every
+    row; this collapses repeated decodes to a dict lookup. ``JobName`` is
+    frozen+slots so cached instances can be shared without aliasing risk.
+    """
+    if not s:
+        raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
+    if not s.startswith("/"):
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    parts = tuple(s[1:].split("/"))
+    if len(parts) < 2:
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    if any(not part or not part.strip() for part in parts):
+        raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
+    return JobName(parts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -605,6 +621,7 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
         job_pb2.TASK_STATE_UNSCHEDULABLE,
         job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_COSCHED_FAILED,
     }
 )
 
