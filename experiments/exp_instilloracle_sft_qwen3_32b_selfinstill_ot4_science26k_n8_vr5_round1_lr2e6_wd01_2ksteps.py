@@ -65,7 +65,7 @@ TRAIN_BATCH_SIZE = 64
 MICROBATCH_SIZE = 64  # no gradient accumulation on v5p-64
 NUM_TRAIN_STEPS = 2000
 
-RESOURCES = ResourceConfig.with_tpu("v5p-64", ram="256g")
+RESOURCES = ResourceConfig.with_tpu("v5p-64", ram="500g")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
@@ -77,7 +77,7 @@ mixture_sft_config = SimpleSFTConfig(
     learning_rate=2e-6,
     max_seq_len=32768,  # 32K context length
     seed=42,
-    steps_per_checkpoint=(DATASET_SIZE / TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
+    steps_per_checkpoint=100,  # match steps_per_hf_export to align save cadence
     lr_schedule="cosine",
     warmup=0.05,
     decay=0.9,
