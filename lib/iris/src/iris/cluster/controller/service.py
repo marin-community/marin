@@ -1220,6 +1220,20 @@ class ControllerServiceImpl:
                 )
 
         with self._db.transaction() as cur:
+            # Re-check inside the same tx as the INSERT. Two LaunchJob
+            # handlers can race past the earlier existence check (separate
+            # transaction above) — almost always the same logical request
+            # from a client that retried after blowing past its deadline.
+            # SQLite serializes write transactions, so whichever handler
+            # gets the lock first INSERTs and the loser sees the row here
+            # and short-circuits, instead of tripping the jobs.job_id PK
+            # (which would surface as INTERNAL — retryable, compounding the
+            # storm).
+            if reads.get_job_state(cur, job_id) is not None:
+                raise ConnectError(
+                    Code.ALREADY_EXISTS,
+                    f"Job {job_id} already exists (concurrent submission)",
+                )
             self._transitions.submit_job(cur, job_id, request, Timestamp.now())
         self._controller.wake()
 
