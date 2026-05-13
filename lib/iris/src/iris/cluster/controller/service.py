@@ -1108,9 +1108,11 @@ class ControllerServiceImpl:
         # Existence check + conditional cleanup run in one transaction so a
         # concurrent submitter cannot land a row between the read and the
         # cleanup write. The new job's ``submit_job`` still opens its own
-        # transaction further down — between the two txs another submitter
-        # can race, but ``INSERT INTO jobs`` then PK-conflicts, which is a
-        # legitimate error rather than a correctness bug.
+        # transaction further down (we can't hold a write tx across the
+        # drain wait below) — between the two txs another submitter can
+        # race, so the INSERT tx re-checks existence before INSERTing to
+        # avoid tripping the jobs.job_id PK. See the inner re-check at
+        # the second ``with self._db.transaction()`` below.
         needs_drain = False
         with self._db.transaction() as cur:
             existing_state = reads.get_job_state(cur, job_id)
@@ -1220,6 +1222,27 @@ class ControllerServiceImpl:
                 )
 
         with self._db.transaction() as cur:
+            # Re-check inside the same tx as the INSERT. Two LaunchJob
+            # handlers can race past the earlier existence check (separate
+            # transaction above) — almost always the same logical request
+            # from a client that retried after blowing past its deadline.
+            # SQLite serializes write transactions, so whichever handler
+            # gets the lock first INSERTs and the loser sees the row here
+            # and short-circuits, instead of tripping the jobs.job_id PK
+            # (which would surface as INTERNAL — retryable, compounding the
+            # storm). KEEP mirrors line 1126: return the existing handle as
+            # success. Other policies surface ALREADY_EXISTS; the outer
+            # block's RECREATE / replace-finished path already ran for any
+            # row that was visible at that time, so any row showing up here
+            # belongs to the racing submitter and is too late for us to
+            # replace without re-running the whole flow.
+            if reads.get_job_state(cur, job_id) is not None:
+                if request.existing_job_policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
+                    return controller_pb2.Controller.LaunchJobResponse(job_id=job_id.to_wire())
+                raise ConnectError(
+                    Code.ALREADY_EXISTS,
+                    f"Job {job_id} already exists (concurrent submission)",
+                )
             self._transitions.submit_job(cur, job_id, request, Timestamp.now())
         self._controller.wake()
 
