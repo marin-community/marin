@@ -40,6 +40,7 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
+    SupervisedLmDatasetFormat,
     SupervisedTextProcessor,
     TextLmDatasetFormat,
 )
@@ -480,7 +481,24 @@ def dataset_for_component(
     pack = _effective_pack(component)
     fmt = component.format
     if isinstance(fmt, TextLmDatasetFormat):
-        loss_weights_key = SupervisedTextProcessor.loss_weights_key if fmt.input_key is not None else None
+        if pack == "pad":
+            raise NotImplementedError("Padding mode not yet implemented.")
+        if pack:
+            max_segments = 64 if pack is True else int(pack)
+            return PackedTokenDataset(
+                cache,
+                Pos,
+                max_segments_per_example=max_segments,
+                block_cross_document_attention=block_cross_document_attention,
+            )
+        return CausalLmDataset(
+            TokenSeqDataset(cache, Pos.size),
+            Pos,
+            eos_id=eos_id,
+            block_cross_document_attention=block_cross_document_attention,
+        )
+    elif isinstance(fmt, SupervisedLmDatasetFormat):
+        loss_weights_key = SupervisedTextProcessor.loss_weights_key
         if pack == "pad":
             raise NotImplementedError("Padding mode not yet implemented.")
         if pack:

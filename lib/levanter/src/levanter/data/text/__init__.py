@@ -36,6 +36,7 @@ from .formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
+    SupervisedLmDatasetFormat,
     TextLmDatasetFormat,
     preprocessor_for_format,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "ChatProcessor",
     "LmDatasetFormatBase",
     "TextLmDatasetFormat",
+    "SupervisedLmDatasetFormat",
     "ChatLmDatasetFormat",
     "PrebuiltLmDatasetFormat",
     "ProcessedChatDict",

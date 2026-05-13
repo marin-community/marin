@@ -36,23 +36,31 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
     """Dataset configuration for raw text examples."""
 
     text_key: str = "text"  # key for the text field in the jsonl file
-    input_key: str | None = None
-    target_key: str | None = None
 
     def build_preprocessor(
         self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
     ) -> BatchProcessor[dict, dict]:
-        if self.input_key is not None or self.target_key is not None:
-            if self.input_key is None or self.target_key is None:
-                raise ValueError("TextLmDatasetFormat must set both input_key and target_key for supervised data.")
-            return SupervisedTextProcessor(
-                tokenizer,
-                input_field=self.input_key,
-                target_field=self.target_key,
-                enforce_bos=enforce_bos,
-                enforce_eos=enforce_eos,
-            )
         return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
+
+
+@LmDatasetFormatBase.register_subclass("supervised")
+@dataclass(frozen=True)
+class SupervisedLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for input/target examples with target-only loss."""
+
+    input_key: str = "input"
+    target_key: str = "target"
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        return SupervisedTextProcessor(
+            tokenizer,
+            input_field=self.input_key,
+            target_field=self.target_key,
+            enforce_bos=enforce_bos,
+            enforce_eos=enforce_eos,
+        )
 
 
 class SupervisedTextProcessor(BatchProcessor[dict, dict]):

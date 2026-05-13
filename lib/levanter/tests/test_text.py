@@ -24,7 +24,7 @@ from levanter.data.text import (
     PreferenceChatLmDatasetFormat,
     PreferenceChatProcessor,
     PrebuiltLmDatasetFormat,
-    TextLmDatasetFormat,
+    SupervisedLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
     count_corpus_sizes,
@@ -389,7 +389,7 @@ def test_supervised_text_cache_masks_target_tokens_for_training_and_eval(tmp_pat
 
     component = DatasetComponent(
         source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[str(data_path)]),
-        format=TextLmDatasetFormat(input_key="input", target_key="target"),
+        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
         cache_dir=str(tmp_path),
     )
     config = LmDataConfig(
@@ -429,7 +429,7 @@ def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
 
     component = DatasetComponent(
         source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
-        format=TextLmDatasetFormat(input_key="input", target_key="target"),
+        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
         cache_dir=str(tmp_path),
         pack=2,
     )

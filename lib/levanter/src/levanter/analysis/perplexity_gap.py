@@ -15,7 +15,7 @@ import regex
 from rigging.filesystem import open_url
 
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.text import DatasetComponent, TextLmDatasetFormat
+from levanter.data.text import DatasetComponent, SupervisedLmDatasetFormat, TextLmDatasetFormat
 from levanter.tokenizers import MarinTokenizer, _safe_split_for_tokenizer
 
 
@@ -451,10 +451,18 @@ def iter_raw_text_documents(
     for name, component in datasets.items():
         if component.source is None:
             raise ValueError(f"Dataset {name} has no source; raw gap finding requires raw sources.")
-        if not isinstance(component.format, TextLmDatasetFormat):
+        if isinstance(component.format, TextLmDatasetFormat):
+            text_key = component.format.text_key
+            input_key = None
+            target_key = None
+        elif isinstance(component.format, SupervisedLmDatasetFormat):
+            text_key = "text"
+            input_key = component.format.input_key
+            target_key = component.format.target_key
+        else:
             raise ValueError(
                 f"Dataset {name} uses unsupported format {type(component.format).__name__}. "
-                "Gap finding currently supports TextLmDatasetFormat only."
+                "Gap finding currently supports TextLmDatasetFormat and SupervisedLmDatasetFormat only."
             )
 
         source = component.source.get_shard_source(component.split)
@@ -466,9 +474,9 @@ def iter_raw_text_documents(
             dataset_name=name,
             tags=tags,
             source=source,
-            text_key=component.format.text_key,
-            input_key=component.format.input_key,
-            target_key=component.format.target_key,
+            text_key=text_key,
+            input_key=input_key,
+            target_key=target_key,
             max_docs=max_docs_per_dataset,
             max_doc_bytes=max_doc_bytes,
         )
