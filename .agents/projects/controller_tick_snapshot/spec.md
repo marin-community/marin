@@ -11,12 +11,17 @@ This spec is the contract surface. Where it disagrees with the design, the desig
 | Path | Phase | Purpose |
 |---|---|---|
 | `lib/iris/src/iris/cluster/controller/tick.py` | 1 | New module. Hosts `ControlTick`, `TickDiagnostics`, `TickDriver`. |
+| `lib/iris/src/iris/cluster/controller/cloud_monitor.py` | 1 | New module. `TpuMonitor` background thread + `CloudStateCache`. |
+| `lib/iris/src/iris/cluster/controller/worker_poll_fanout.py` | 2 | New module. `WorkerPollFanout` background thread + `WorkerPollCache`. |
 | `lib/iris/src/iris/cluster/controller/intents.py` | 3 | New module. Intent taxonomy + `IntentBatch` + `ApplyTickResult` types. |
-| `lib/iris/src/iris/cluster/controller/controller.py` | 1, 2, 3 | Delete `_run_scheduling_loop`, `_run_autoscaler_loop` (P1); `_run_polling_loop` (P2). `Controller.__init__` spawns `TickDriver` instead. `_cache_scheduling_diagnostics`, `get_job_scheduling_diagnostics`, `_scheduling_diagnostics` move to `TickDriver` (P1). |
+| `lib/iris/src/iris/cluster/controller/controller.py` | 1, 2, 3 | Delete `_run_scheduling_loop`, `_run_autoscaler_loop` (P1); `_run_polling_loop` (P2). `Controller.__init__` spawns `TickDriver` + `TpuMonitor` (P1), adds `WorkerPollFanout` (P2). `_cache_scheduling_diagnostics`, `get_job_scheduling_diagnostics`, `_scheduling_diagnostics` move to `TickDriver` (P1). |
+| `lib/iris/src/iris/cluster/controller/autoscaler/runtime.py` | 1 | `AutoscalerRuntime.refresh` no longer calls `slice_handle.describe()` inline; reads from `CloudStateCache` instead. The handle methods stay; only the autoscaler's call site changes. |
 | `lib/iris/src/iris/cluster/controller/transitions.py` | 3 | Add `apply_tick_intents(cur, batch) -> ApplyTickResult`. Existing per-section methods (`queue_assignments`, `apply_heartbeats_batch`, ...) stay public — used by ping and by tests; their bodies are reused by `apply_tick_intents`. |
-| `lib/iris/src/iris/cluster/controller/reads.py` | 1, 2 | Add `build_control_tick(tx, *, health, attrs) -> ControlTick`. Add `bulk_run_request_templates(tx, transitions, job_ids) -> dict[JobName, RunTaskRequest \| None]` (Phase 2). |
+| `lib/iris/src/iris/cluster/controller/reads.py` | 1, 2 | Add `build_control_tick(tx, *, health, attrs, cloud_state, poll_state) -> ControlTick`. Add `bulk_run_request_templates(tx, transitions, job_ids)` (Phase 2). |
 | `lib/iris/tests/cluster/controller/test_control_tick.py` | 1 | Integration test; parity checks against per-loop reads on a checkpoint DB. |
 | `lib/iris/tests/cluster/controller/test_tick_driver.py` | 1, 2 | Lifecycle test: start/stop/wake/exception isolation. |
+| `lib/iris/tests/cluster/controller/test_cloud_monitor.py` | 1 | Lifecycle + cache-staleness tests for `TpuMonitor`. |
+| `lib/iris/tests/cluster/controller/test_worker_poll_fanout.py` | 2 | Lifecycle + saturation tests for `WorkerPollFanout`. |
 | `lib/iris/tests/cluster/controller/test_apply_tick_intents.py` | 3 | Property test + per-intent CAS contract tests. |
 
 Files **not** touched (intentional): `db.py`, `schema.py`, `projections/*`, `service.py`, `worker_health.py`. Ping path (`_run_ping_loop` and its writes) is unchanged.
@@ -55,22 +60,35 @@ class ControlTick:
     to compute staleness against a later tick.
     """
 
+    # DB-side fields, all from one read_snapshot:
     pending_tasks: tuple[PendingTask, ...]
     healthy_workers: tuple[SchedulableWorker, ...]
     resource_usage: Mapping[WorkerId, WorkerResourceUsage]   # MappingProxyType
     tasks_index: Mapping[JobName, TaskDetailRow]             # MappingProxyType; keyed by task_id
     reserved_jobs: frozenset[JobName]
+
+    # Cache-side fields, pinned references to background caches at tick start.
+    # Cache snapshots are themselves frozen — the pinned reference cannot be
+    # invalidated mid-tick.
+    cloud_state: "CloudStateSnapshot"   # populated by TpuMonitor (Phase 1)
+
     state_read_ms: int
+
+    # Added in Phase 2:
+    # task_attempts: tuple[ActiveTaskRow, ...]
+    # run_request_templates: Mapping[JobName, job_pb2.RunTaskRequest | None]
+    # worker_poll_state: "WorkerPollSnapshot"
 ```
 
 **Snapshot-build order** (inside `build_control_tick`, all under the same `Tx`):
 
 1. `state_read_ms = int(Timestamp.now().epoch_ms())` *before* the first DB read, so consumers see the tx-open wall time.
-2. `pending_tasks = tuple(_pending_tasks_with_jobs_tx(tx))` — moves the body of `controller._pending_tasks_with_jobs` to accept a `Tx` instead of opening its own. The current function ([controller.py:448](https://github.com/marin-community/marin/blob/0d440a1b20d23f038fce7c5e0d6ab6d9833fb268/lib/iris/src/iris/cluster/controller/controller.py#L448)) is kept as a thin wrapper that opens a snapshot — used only by tests; production code uses the `_tx` variant.
-3. `healthy_workers = tuple(reads.healthy_active_workers_with_attributes(tx, health, attrs))` — unchanged signature.
-4. `resource_usage = MappingProxyType(reads.resource_usage_by_worker(tx))`.
-5. `reserved_jobs = frozenset(controller._reserved_job_ids_tx(tx))` — also gets a `_tx` variant.
-6. `tasks_index = MappingProxyType(reads.bulk_get_task_detail(tx, _task_ids_referenced(pending_tasks, resource_usage)))` — `bulk_get_task_detail` ([reads.py:829](https://github.com/marin-community/marin/blob/0d440a1b20d23f038fce7c5e0d6ab6d9833fb268/lib/iris/src/iris/cluster/controller/reads.py#L829)) keys by task_id (`JobName`). Covers only the tasks referenced in this tick to bound memory.
+2. `cloud_state = cloud_monitor.snapshot()` — pinned reference to the current `CloudStateCache` snapshot. Captured early so the rest of the tick body sees a consistent cloud-state view.
+3. `pending_tasks = tuple(_pending_tasks_with_jobs_tx(tx))` — moves the body of `controller._pending_tasks_with_jobs` to accept a `Tx` instead of opening its own. The current function ([controller.py:448](https://github.com/marin-community/marin/blob/0d440a1b20d23f038fce7c5e0d6ab6d9833fb268/lib/iris/src/iris/cluster/controller/controller.py#L448)) is kept as a thin wrapper that opens a snapshot — used only by tests; production code uses the `_tx` variant.
+4. `healthy_workers = tuple(reads.healthy_active_workers_with_attributes(tx, health, attrs))` — unchanged signature.
+5. `resource_usage = MappingProxyType(reads.resource_usage_by_worker(tx))`.
+6. `reserved_jobs = frozenset(controller._reserved_job_ids_tx(tx))` — also gets a `_tx` variant.
+7. `tasks_index = MappingProxyType(reads.bulk_get_task_detail(tx, _task_ids_referenced(pending_tasks, resource_usage)))` — `bulk_get_task_detail` ([reads.py:829](https://github.com/marin-community/marin/blob/0d440a1b20d23f038fce7c5e0d6ab6d9833fb268/lib/iris/src/iris/cluster/controller/reads.py#L829)) keys by task_id (`JobName`). Covers only the tasks referenced in this tick to bound memory.
 
 `MappingProxyType` is the standard-library read-only view; mutation raises `TypeError`. Mandatory — relying on convention failed in `20260223_iris_resultectomy.md` cleanup, so we use the type system here.
 
@@ -82,23 +100,134 @@ def build_control_tick(
     *,
     health: WorkerLivenessSource,
     attrs: WorkerAttrsSource,
+    cloud_monitor: "TpuMonitor",          # Phase 1
+    poll_fanout: "WorkerPollFanout | None" = None,  # Phase 2
 ) -> ControlTick:
-    """Build one ``ControlTick`` from a single read_snapshot Tx.
+    """Build one ``ControlTick`` from a single read_snapshot Tx + pinned cache refs.
 
-    Caller owns the ``read_snapshot()`` context manager. This function only
-    issues reads via ``tx`` so the returned ``ControlTick`` is a consistent
-    SQLite WAL snapshot. The first read inside ``tx`` is what pins the
-    snapshot; subsequent writers cannot change what this Tx sees.
-
-    Cost is dominated by the four queries listed in "Snapshot-build order"
-    above. Roughly equal to the union of today's per-loop reads on the
-    same DB state; the win is that this happens once per tick instead of
-    2–3 times.
+    Caller owns the ``read_snapshot()`` context manager. DB reads issue
+    via ``tx`` so the returned ``ControlTick`` has a consistent SQLite WAL
+    snapshot on the DB side. Cache references are pinned at the moment
+    this function is called.
 
     Raises any error the underlying reads raise (lock-timeout, decode);
     caller is expected to handle by aborting the tick (see TickDriver._tick).
     """
 ```
+
+### Cache staleness guard
+
+Cache snapshots carry `captured_at_ms`. Consumers (the autoscaler section, the polling section) MUST check the age of their input cache before using it:
+
+- Autoscaler section: if `tick.cloud_state.captured_at_ms` is older than `2 * tpu_monitor.poll_interval_s` (default ~20 s), the autoscaler skips this tick and logs a warning. Counted in `TickDiagnostics.autoscaler_section_skipped_stale_cache`.
+- Polling section (Phase 2): if `tick.worker_poll_state.captured_at_ms` is older than `2 * worker_poll_fanout.poll_interval_s` (default ~2 s), the polling section skips heartbeat emission this tick (but still emits dispatch-side RunTask RPCs based on the DB snapshot — those don't depend on poll cache).
+
+The guard prevents acting on a long-stale cache when a data thread is wedged. Sustained skips trip the rollback threshold for the affected section's failure counter.
+
+### `TpuMonitor` (Phase 1)
+
+```python
+class TpuMonitor:
+    """Background thread that polls cloud slice state and publishes to a cache.
+
+    Replaces synchronous ``slice_handle.describe()`` calls from the autoscaler
+    hot path. The autoscaler's ``refresh`` reads from ``snapshot()`` which is
+    O(1).
+
+    Cadence is configurable; default 10 s. A poll round iterates over the set
+    of slice handles known to ``AutoscalerRuntime`` (via a getter callback),
+    calls ``describe()`` on each, and atomically replaces the cache snapshot.
+    If a single ``describe()`` raises, the old value for that slice is
+    retained and the error is counted on the cache snapshot's per-slice
+    error counter; the slice's record carries an ``error: str | None`` so
+    the autoscaler can decide what to do (e.g. avoid scale-down on stale
+    data).
+    """
+
+    def __init__(
+        self,
+        *,
+        slice_handles: Callable[[], Mapping[SliceId, SliceHandle]],
+        poll_interval_s: float = 10.0,
+    ) -> None: ...
+
+    def start(self) -> None: ...
+    def stop(self, *, join_timeout_s: float = 30.0) -> None: ...
+
+    def snapshot(self) -> "CloudStateSnapshot":
+        """Return the latest immutable cache snapshot. O(1); never blocks."""
+
+@dataclass(frozen=True, slots=True)
+class CloudStateSnapshot:
+    """Immutable view of cloud slice state at one moment.
+
+    ``per_slice`` keys exactly the set of slices ``TpuMonitor`` knew about
+    at the time of the snapshot. Missing slices indicate a slice that
+    appeared/disappeared between snapshots; the autoscaler treats them as
+    UNKNOWN.
+    """
+    captured_at_ms: int
+    per_slice: Mapping[SliceId, "CloudSliceRecord"]
+
+@dataclass(frozen=True, slots=True)
+class CloudSliceRecord:
+    state: "CloudSliceState"
+    worker_count: int
+    workers: tuple["WorkerEndpoint", ...]
+    error: str | None              # None on success; str on describe() failure
+    polled_at_ms: int              # per-slice timestamp (older if it failed)
+```
+
+The `AutoscalerRuntime.refresh` ([autoscaler/runtime.py:415](https://github.com/marin-community/marin/blob/0d440a1b20d23f038fce7c5e0d6ab6d9833fb268/lib/iris/src/iris/cluster/controller/autoscaler/runtime.py#L415)) is refactored to take a `CloudStateSnapshot` parameter instead of calling `handle.describe()` inline. Internal control flow (READY/FAILED handling, worker registration) is otherwise unchanged. The handle methods stay public for tests and for the `direct_provider` path.
+
+**Construction order**: `AutoscalerRuntime` owns the slice handles. `TpuMonitor` is constructed *after* it, taking a callable to read the current handle set (`lambda: autoscaler.slice_handles`). The `TickDriver` takes both. This avoids a hard cycle while keeping the monitor's view of slices in sync with the autoscaler's lifecycle.
+
+**Monitor thread death**: if the `TpuMonitor` thread itself exits (e.g. unhandled exception), the cache snapshot freezes at its last value. The cache-staleness guard above (autoscaler skips when `captured_at_ms` is older than `2 * poll_interval_s`) detects this and the autoscaler will refuse to scale based on stale data. The `TpuMonitor` itself logs and re-raises any uncaught exception; the supervising `ManagedThreadGroup` records the death and exposes it via the existing thread-health diagnostics. There is no auto-restart; a controller restart is the recovery path.
+
+### `WorkerPollFanout` (Phase 2)
+
+```python
+class WorkerPollFanout:
+    """Background thread that fans out PollTasks RPCs and publishes a cache.
+
+    Replaces the inline RPC fan-out in ``_run_polling_loop``. Each round:
+      1. Snapshot the set of healthy active worker addresses (from health tracker).
+      2. Submit a PollTasksRequest for each via an internal ThreadPoolExecutor.
+      3. Gather results with per-RPC timeout.
+      4. Atomically replace the cache snapshot.
+
+    A round that hasn't finished by the next ``poll_interval_s`` is allowed
+    to continue; the next round skips and the cadence drops to "as fast as
+    one round completes." Self-rate-limited.
+    """
+
+    def __init__(
+        self,
+        *,
+        health: WorkerHealthTracker,
+        rpc_executor_workers: int = 8,
+        poll_interval_s: float = 1.0,
+        per_rpc_timeout_s: float = 5.0,
+    ) -> None: ...
+
+    def start(self) -> None: ...
+    def stop(self, *, join_timeout_s: float = 30.0) -> None: ...
+
+    def snapshot(self) -> "WorkerPollSnapshot": ...
+
+@dataclass(frozen=True, slots=True)
+class WorkerPollSnapshot:
+    captured_at_ms: int
+    per_worker: Mapping[WorkerId, "WorkerPollRecord"]
+
+@dataclass(frozen=True, slots=True)
+class WorkerPollRecord:
+    response: "PollTasksResponse | None"   # None on RPC failure or timeout
+    error: str | None
+    polled_at_ms: int
+```
+
+Workers that didn't respond in time get a record with `response=None` and an error string. The tick's polling section treats these as "no update for this worker this round"; it does NOT issue failure intents on RPC failure (ping owns that). Worker failure derives from ping threshold, not from PollTasks failure.
 
 ### `TickDriver`
 
@@ -123,13 +252,14 @@ class TickDriver:
         transitions: ControllerTransitions,
         scheduler: Scheduler,
         autoscaler: AutoscalerRuntime | None,
+        cloud_monitor: TpuMonitor,
+        poll_fanout: WorkerPollFanout | None,   # None in Phase 1
         health: WorkerHealthTracker,
         worker_attrs: WorkerAttrsProjection,
         tick_interval_s: float = 1.0,
         scheduler_idle_max_s: float = 10.0,
         autoscaler_interval_s: float = 10.0,
-        rpc_executor_workers: int = 8,        # Phase 2; ignored in Phase 1
-        heartbeat_subbatch_cap: int = 200,    # Phase 3; ignored in Phase 1/2
+        heartbeat_subbatch_cap: int = 200,      # Phase 3; ignored in Phase 1/2
     ) -> None: ...
 
     def start(self) -> None: ...
@@ -309,23 +439,30 @@ No RPC-surface change. No persisted-state change. Test: existing `test_controlle
 ### Controller `__init__` delta (Phase 1)
 
 Attributes **deleted** from `Controller.__init__`:
-- `self._scheduling_wake: threading.Event` (deleted in Phase 2; in Phase 1 still set by external producers, see below)
+- `self._scheduling_wake: threading.Event` (Phase 1 still set by external producers; deleted in Phase 2)
 - `self._scheduling_round: int`
 - `self._scheduling_diagnostics: dict[str, str]` (moved to `TickDriver`)
 
 Threads **deleted** in Phase 1: `self._scheduling_thread`, `self._autoscaler_thread` (their `start`/`stop`/`join` lines too — full list in `controller.py:1513–1545`).
 
-Attributes **kept**: `self._polling_thread` (Phase 2 deletes it), `self._ping_thread`, `self._direct_provider_thread`, `self._prune_thread`, `self._polling_wake` (Phase 2 folds into `TickDriver.wake`), `self._threads: ManagedThreadGroup`.
+Threads **kept** in Phase 1: `self._polling_thread` (Phase 2 deletes it), `self._ping_thread`, `self._direct_provider_thread`, `self._prune_thread`.
 
-Attributes **added**:
-- `self._tick_driver: TickDriver`
-- `Controller.get_job_scheduling_diagnostics(...)` body becomes a one-line delegate.
+Threads **added** in Phase 1: `self._tick_driver: TickDriver`, `self._tpu_monitor: TpuMonitor`. Phase 2 also adds `self._poll_fanout: WorkerPollFanout` and deletes `self._polling_thread`. The thread topology after each phase:
 
-Migration plan:
-1. Add `TickDriver` and its tests behind no flag.
-2. Switch `Controller.__init__` to spawn `TickDriver`; delete the two threads.
-3. Switch the RPC delegate.
-4. Land in one PR with parity tests green.
+| Phase | Threads in the control plane | Data threads |
+|---|---|---|
+| Pre-refactor | scheduler, autoscaler, polling, ping, direct_provider, prune | (none — I/O inline) |
+| After P1 | tick_driver, polling, ping, direct_provider, prune | tpu_monitor |
+| After P2 | tick_driver, ping, direct_provider, prune | tpu_monitor, poll_fanout |
+| After P3 | tick_driver, ping, direct_provider, prune | tpu_monitor, poll_fanout |
+
+Net thread-count change after Phase 2: same headcount, but each thread has a single concern (decision vs I/O) and only one thread does DB reads in the hot path.
+
+Attribute **changes**:
+- `self._tick_driver: TickDriver` added.
+- `self._tpu_monitor: TpuMonitor` added (P1).
+- `self._poll_fanout: WorkerPollFanout` added (P2).
+- `Controller.get_job_scheduling_diagnostics(...)` body becomes a one-line delegate to `self._tick_driver.get_job_scheduling_diagnostics(...)`.
 
 ### Wake-event migration
 
@@ -353,13 +490,16 @@ The migration is a grep-and-replace exercise. The PR description must list every
 
 ```python
 # Added to ControlTick dataclass (still frozen):
-task_attempts: tuple[ActiveTaskRow, ...]                 # unfinished worker-bound
+task_attempts: tuple[ActiveTaskRow, ...]                                  # unfinished worker-bound
 run_request_templates: Mapping[JobName, "job_pb2.RunTaskRequest | None"]  # MappingProxyType
+worker_poll_state: "WorkerPollSnapshot"                                   # pinned at tick start
 ```
 
 `ActiveTaskRow` is the existing type at [reads.py:50](https://github.com/marin-community/marin/blob/0d440a1b20d23f038fce7c5e0d6ab6d9833fb268/lib/iris/src/iris/cluster/controller/reads.py#L50). The filter ("unfinished worker-bound" — `worker_id IS NOT NULL AND finished_at_ms IS NULL`) matches the current polling-loop query at controller.py:2339–2366.
 
-`run_request_templates` covers only the job IDs the polling fan-out will hit. Built via `reads.bulk_run_request_templates(tx, transitions, job_ids_in_tick)` which iterates over `transitions.run_request_template(snap, job_id)` (existing method at [transitions.py:966](https://github.com/marin-community/marin/blob/0d440a1b20d23f038fce7c5e0d6ab6d9833fb268/lib/iris/src/iris/cluster/controller/transitions.py#L966)); the template cache inside `ControllerTransitions` is unchanged.
+`run_request_templates` covers only the job IDs the polling section needs. Built via `reads.bulk_run_request_templates(tx, transitions, job_ids_in_tick)` which iterates over `transitions.run_request_template(snap, job_id)` (existing method at [transitions.py:966](https://github.com/marin-community/marin/blob/0d440a1b20d23f038fce7c5e0d6ab6d9833fb268/lib/iris/src/iris/cluster/controller/transitions.py#L966)); the template cache inside `ControllerTransitions` is unchanged.
+
+`worker_poll_state` is the pinned `WorkerPollFanout.snapshot()` value at tick start. The polling section reads it; the scheduler section does not consume it but it costs nothing to carry.
 
 ### `_run_polling_section`
 
@@ -368,17 +508,25 @@ def _run_polling_section(
     self,
     tick: ControlTick,
 ) -> "PollingSectionResult":
-    """Run the polling RPC fan-out + heartbeat-apply for this tick.
+    """Decide heartbeat transitions from the cached poll state + DB snapshot,
+    and issue dispatch RPCs (RunTask, KillTask) for tasks that need them.
 
-    Calls into self._rpc_executor (ThreadPoolExecutor with rpc_executor_workers
-    workers). Each PollTasksRequest has a per-RPC timeout (5 s, matching
-    today's polling loop). RPCs whose futures don't complete within
-    (tick_interval_s - 200ms) are timed out and counted; their workers
-    are NOT marked failed by this path (ping owns failure).
+    Reads:
+      - ``tick.worker_poll_state`` (populated by WorkerPollFanout): per-worker
+        latest PollTasksResponse → drives heartbeat intents.
+      - ``tick.task_attempts`` + ``tick.run_request_templates``: identifies
+        ASSIGNED tasks not yet dispatched → fires fire-and-forget RunTask
+        RPCs through gRPC's async client.
 
-    Returns a PollingSectionResult with the heartbeat-apply intents/results.
+    Workers whose ``WorkerPollRecord.response is None`` (RPC timed out or
+    failed) contribute no heartbeat updates this tick.
+
     Phase 2: calls transitions.apply_heartbeats_batch inline.
-    Phase 3: returns intents (no write).
+    Phase 3: returns heartbeat intents (no write).
+
+    Dispatch RPCs (RunTask/KillTask) are fire-and-forget — issued via the
+    existing async gRPC client; no result is awaited. Worker responses come
+    back through the next WorkerPollFanout round.
     """
 ```
 
@@ -387,32 +535,17 @@ def _run_polling_section(
 ```python
 @dataclass(frozen=True, slots=True)
 class PollingSectionResult:
-    """Outcome of one polling section.
-
-    In Phase 2, ``hb_apply_result`` is populated (the section called
-    apply_heartbeats_batch inline). In Phase 3, ``hb_intents`` is populated
-    and ``hb_apply_result`` is None — the tick driver will call
-    apply_tick_intents.
-    """
-
-    workers_polled: int
-    rpcs_timed_out: int
-    rpcs_failed: int
+    workers_with_updates: int
+    workers_skipped_no_response: int
     hb_apply_result: "HeartbeatApplyResult | None"            # Phase 2 path
     hb_intents: tuple["HeartbeatApplyIntent", ...]            # Phase 3 path
-    fail_worker_intents: tuple["WorkerFailureIntent", ...]    # only when ping threshold exceeded
 ```
 
-### RPC executor lifecycle
-
-- Owned by `TickDriver`. Constructed in `__init__` with `max_workers=rpc_executor_workers` (default 8).
-- `stop()` calls `executor.shutdown(wait=True, cancel_futures=True)` after the current tick body returns.
-- The pool size 8 is intentionally small. At 340 workers and 1 s ticks, fanout uses futures faster than the pool can synchronously execute them — but the worker RPCs are network-bound, so blocked workers don't consume CPU. If saturation becomes a problem (`diagnostics.rpcs_timed_out` rising), increase the pool size; do not change it without a measurement.
-- The pool is NOT shared with anything else. Scheduler and autoscaler do no RPCs from inside the tick.
+Worker-failure intents come from ping (which issues `fail_workers_batch` directly today; Phase 3 leaves ping's write path unchanged). The polling section emits no `WorkerFailureIntent`.
 
 ### Memory bound
 
-After Phase 2, `ControlTick.task_attempts` carries every unfinished worker-bound attempt — production scale ~200k rows × ~200 B each ≈ 40 MB. The tuple is held only during the tick body (~1 s) and dropped at `_tick` return. We rely on Python GC; no explicit `del`. If memory growth becomes a concern at 10× scale, follow-up work materializes the tuple lazily per consumer (Open Question 5).
+After Phase 2, `ControlTick.task_attempts` carries every unfinished worker-bound attempt — production scale ~200 k rows × ~200 B each ≈ 40 MB. The tuple is held only during the tick body (~10–50 ms now that no network I/O happens inline) and dropped at `_tick` return. We rely on Python GC; no explicit `del`. If memory growth ever becomes a problem, the answer is a bigger controller VM; the data has to live somewhere.
 
 ---
 
@@ -733,11 +866,14 @@ After Phase 1 deploys:
 
 | Metric | Source | Threshold | Action |
 |---|---|---|---|
-| Tick duration p95 | `TickDiagnostics.last_tick_duration_ms` (export via Prometheus follow-up; until then, log scrape) | > 3 s sustained > 5 min | revert |
-| Snapshot build p95 | `last_snapshot_build_ms` | > 500 ms sustained > 5 min | investigate, possibly revert |
+| Tick duration p95 | `TickDiagnostics.last_tick_duration_ms` (export via Prometheus follow-up; until then, log scrape) | > 500 ms sustained > 5 min | investigate |
+| Snapshot build p95 | `last_snapshot_build_ms` | > 200 ms sustained > 5 min | investigate, possibly revert |
 | Snapshot failures / min | `snapshot_failures` diff | > 5 / min | revert |
 | Scheduler-section failures / min | `scheduler_section_failures` diff | > 1 / min | investigate |
+| Autoscaler skipped (stale cloud cache) | `autoscaler_section_skipped_stale_cache` rate | > 30% of autoscaler ticks | investigate `TpuMonitor` health |
 | `get_job_scheduling_diagnostics` returns None for known job | RPC | sustained | revert (diagnostics migration broken) |
+
+Phase 1's tick body is purely DB-bound (no inline HTTP), so the 500 ms tick threshold is realistic. The pre-refactor world has multi-second autoscaler ticks; we expect Phase 1 to *improve* tick time, and a sustained > 500 ms tick after deploy means something is wrong.
 
 After Phase 3 deploys, additionally:
 
@@ -774,11 +910,9 @@ No new exception types. Behavioral changes:
 
 ## Out of scope
 
-- **Autoscaler-inline-HTTP fix.** Phase 1 runs `autoscaler.refresh()` inline including `tpu_describe` calls. A sibling design proposes a background `TpuMonitor` cache; not a hard dependency. Phase 1 caps `autoscaler_interval_s ≥ 10.0` to bound the impact.
 - **Service-layer (gRPC) refactor.** `list_jobs` and other gRPC paths under `service.py` are the single largest CPU sink in the profile but are touched by this design only at the diagnostics-RPC delegate. A separate follow-up should address the gRPC path.
-- **`_direct_provider_thread` and `_prune_thread`.** Continue to run on their own threads. Could fold into the tick driver later; not now.
+- **`_direct_provider_thread` and `_prune_thread`.** Continue to run on their own threads. Could fold into the tick driver or migrate to the cache pattern later; not now.
 - **Diagnostics RPC.** `TickDiagnostics` is in-process; surfacing it via a new RPC handler is a follow-up.
 - **Backwards-compatibility flag.** Explicit non-goal. Each phase rolls forward; revert is the rollback.
-- **Sub-second autoscaler / streaming `ControlTick`.** Phase 2 holds ~40 MB per tick at current scale. A streaming/lazy materialization (Open Question 5) is a follow-up if growth materializes.
 - **`replace_reservation_claims` call-site consolidation.** Open Question 4 in design; spec treats Phase 3 as "one intent per tick" but acknowledges reviewers may push for a per-call-site split.
-- **`MappingProxyType` for the two `dict` fields after Phase 2 additions.** This spec mandates `MappingProxyType` from Phase 1 onward (a reversal from a prior draft that left it for "later"). Mandatory because relying on convention has failed before.
+- **Pluggable `TpuMonitor` providers.** Phase 1 ships with the existing GCE `slice_handle.describe()` path moved behind the cache. Other providers (CoreWeave, manual) are unchanged in this design; the monitor is generic enough to support them without further refactor.
