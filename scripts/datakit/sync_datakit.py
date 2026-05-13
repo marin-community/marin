@@ -36,6 +36,10 @@ For each source, this script builds a single :class:`StepSpec`. The step's
   marker as a single follow-up op. Its presence on dst is what whole-source
   skip keys off — re-runs of an already-synced source short-circuit before
   any StepSpec is even built.
+* Finally, sweeps any ``.tmp.<uuid.hex>`` orphans under the dst leaf —
+  leftovers from prior interrupted ``atomic_rename`` runs (ours or
+  upstream). They're never legitimate content; deleting them after the
+  marker lands keeps the dst byte-identical to src.
 
 Per-shard JSONL and per-source executor status all live under
 ``status_prefix`` (default ``gs://marin-us-central1/data/datakit/sync``)
@@ -305,6 +309,26 @@ def _leaf_already_synced(dst_dir: str) -> bool:
     return fs.exists(dst)
 
 
+def _remove_tmp_orphans(dst_dir: str) -> None:
+    """Delete ``.tmp.<uuid.hex>`` orphans anywhere under ``dst_dir``.
+
+    Runs once per leaf after ``.executor_status`` is published. The orphans
+    are interrupted ``atomic_rename`` writes from earlier runs (ours or
+    other producers); they never become legitimate content, and leaving
+    them around would make a byte-for-byte src/dst comparison fail despite
+    the real data matching.
+    """
+    dst_fs, _ = fsspec.core.url_to_fs(dst_dir)
+    if not dst_fs.exists(dst_dir):
+        return
+    orphans = [full for full in dst_fs.find(dst_dir) if _ATOMIC_RENAME_TMP_RE.search(full)]
+    if not orphans:
+        return
+    logger.info("Removing %d .tmp.<uuid> orphan(s) under %s", len(orphans), dst_dir)
+    dst_fs.rm(orphans)
+    counters.increment("upload/tmp_orphans_removed", len(orphans))
+
+
 def _shard(items: list[tuple[str, str]], shard_size: int) -> list[list[tuple[str, str]]]:
     return [items[i : i + shard_size] for i in range(0, len(items), shard_size)]
 
@@ -363,6 +387,9 @@ def _upload_dir(
     # — its presence is the canonical "this leaf is fully synced" signal that
     # lets future runs skip the source entirely.
     _finalize_executor_status(src_dir, dst_dir)
+    # With the marker in place, the leaf is canonical; any ``.tmp.<uuid>``
+    # debris under it is orphaned and can be removed.
+    _remove_tmp_orphans(dst_dir)
 
 
 # ----------------------------------------------------------------------
