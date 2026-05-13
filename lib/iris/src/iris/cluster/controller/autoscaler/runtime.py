@@ -62,9 +62,6 @@ from iris.time_proto import duration_from_proto, timestamp_to_proto
 logger = logging.getLogger(__name__)
 
 
-# Slices that die within this time of creation trigger backoff (preemption detection)
-SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
-
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
 
@@ -393,7 +390,7 @@ class Autoscaler:
             logger.exception("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
-            group.record_failure(ts)
+            group.record_create_failed(ts)
             return False
 
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
@@ -441,7 +438,7 @@ class Autoscaler:
                     group.mark_slice_failed(slice_id, error_message=status.error_message)
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
-                    group.record_failure()
+                    group.record_slice_boot_failed(slice_id, timestamp)
                     reason = status.error_message if status.error_message else "bootstrap failed"
                     self._log_action(
                         "slice_failed",
@@ -456,7 +453,7 @@ class Autoscaler:
                         group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                         group.scale_down(slice_id)
                         self._unregister_slice_workers(slice_id)
-                        group.record_failure()
+                        group.record_slice_boot_failed(slice_id, timestamp)
                         self._log_action(
                             "slice_failed",
                             group.name,
@@ -617,7 +614,6 @@ class Autoscaler:
             unregister_slice_workers=self._unregister_slice_workers,
             log_action=self._log_action,
             timestamp=Timestamp.now(),
-            short_lived_slice_threshold=SHORT_LIVED_SLICE_THRESHOLD,
         )
         for request in result.termination_requests:
 

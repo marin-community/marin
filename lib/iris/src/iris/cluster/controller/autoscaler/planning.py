@@ -93,7 +93,14 @@ class ScalePlan:
 
 
 def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timestamp) -> GroupScalePlan:
-    """Build the actionable scale-up plan for a group."""
+    """Build the actionable scale-up plan for a group.
+
+    The churn detector's ``scale_up_rate_multiplier`` clamps the per-tick
+    batch size so SUSPECT and CHURNING zones still scale up but at a slower
+    rate, instead of either firing the full burst or sitting in hard backoff.
+    HOSTILE / quota-blocked zones return a 0.0 multiplier, which collapses
+    ``slices_to_add`` to zero — equivalent to the old ``scale_up_blocked``.
+    """
 
     counts = GroupSliceCounts.from_group(group)
     target_slices = min(required_slices + group.buffer_slices, group.max_slices)
@@ -105,7 +112,13 @@ def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timest
     if slices_needed > 0 and counts.total < group.max_slices:
         blocked = not group.can_scale_up(ts)
         if not blocked:
-            slices_to_add = min(slices_needed, group.max_slices - counts.total)
+            headroom = group.max_slices - counts.total
+            raw = min(slices_needed, headroom)
+            multiplier = group.detector.scale_up_rate_multiplier(ts)
+            # Always launch at least one slice when we want any AND we're not
+            # hard-blocked, so SUSPECT/CHURNING zones make progress (just slowly)
+            # instead of stalling on multiplier * <small> rounding to zero.
+            slices_to_add = max(1, int(raw * multiplier)) if multiplier > 0 else 0
 
     return GroupScalePlan(
         group=group.name,

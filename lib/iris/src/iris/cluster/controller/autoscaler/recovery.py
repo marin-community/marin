@@ -34,17 +34,18 @@ class AutoscalerCheckpoint:
 
 
 def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
-    """Load autoscaler state from the controller DB."""
+    """Load autoscaler state from the controller DB.
+
+    Backoff/churn state is no longer persisted (it lives in the in-memory
+    :class:`BackoffDetector`), so we only restore slice membership and
+    informational scale timestamps from the DB.
+    """
     with db.read_snapshot() as tx:
         scaling_rows = tx.execute(
             select(
                 scaling_groups_table.c.name,
-                scaling_groups_table.c.consecutive_failures,
-                scaling_groups_table.c.backoff_until_ms,
                 scaling_groups_table.c.last_scale_up_ms,
                 scaling_groups_table.c.last_scale_down_ms,
-                scaling_groups_table.c.quota_exceeded_until_ms,
-                scaling_groups_table.c.quota_reason,
             )
         ).all()
 
@@ -88,12 +89,8 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
         group_snapshots[row.name] = GroupSnapshot(
             name=row.name,
             slices=slices_by_group.get(row.name, []),
-            consecutive_failures=int(row.consecutive_failures),
-            backoff_until_ms=int(row.backoff_until_ms),
             last_scale_up_ms=int(row.last_scale_up_ms),
             last_scale_down_ms=int(row.last_scale_down_ms),
-            quota_exceeded_until_ms=int(row.quota_exceeded_until_ms),
-            quota_reason=row.quota_reason,
         )
 
     tracked_worker_rows = [
@@ -135,12 +132,8 @@ def restore_autoscaler_state(
         )
         group.restore_from_snapshot(
             slices=restore_result.slices,
-            consecutive_failures=restore_result.consecutive_failures,
             last_scale_up=restore_result.last_scale_up,
             last_scale_down=restore_result.last_scale_down,
-            backoff_until=restore_result.backoff_until,
-            quota_exceeded_until=restore_result.quota_exceeded_until,
-            quota_reason=restore_result.quota_reason,
         )
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)

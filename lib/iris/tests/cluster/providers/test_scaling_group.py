@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 
 import pytest
+from iris.cluster.controller.autoscaler.backoff_detector import SliceFate
 from iris.cluster.controller.autoscaler.scaling_group import (
     ScalingGroup,
     SliceLifecycleState,
@@ -277,35 +278,15 @@ class TestScalingGroupScalingPolicy:
         assert group.slice_count() == 5  # max_slices
         assert not group.can_scale_up()
 
-    def test_cannot_scale_up_during_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """can_scale_up() returns False during backoff period."""
+    def test_cannot_scale_up_when_detector_hostile(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """can_scale_up() returns False when the churn detector is HOSTILE."""
         platform = make_mock_platform()
-        group = ScalingGroup(unbounded_config, platform, backoff_initial=Duration.from_seconds(5.0))
-
-        ts = Timestamp.from_ms(1000000)
-        group.record_failure(timestamp=ts)
-
-        # During backoff period
-        assert not group.can_scale_up(timestamp=Timestamp.from_ms(1001000))
-        # After backoff expires (5s = 5000ms)
-        assert group.can_scale_up(timestamp=Timestamp.from_ms(1006000))
-
-    def test_cannot_scale_up_during_cooldown(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """can_scale_up() returns False during cooldown period after scale-up."""
-        platform = make_mock_platform()
-        group = ScalingGroup(
-            unbounded_config,
-            platform,
-            scale_up_cooldown=Duration.from_ms(10000),
-        )
-
-        ts = Timestamp.from_ms(1000000)
-        _tracked_scale_up(group, timestamp=ts)
-
-        # During cooldown
-        assert not group.can_scale_up(timestamp=Timestamp.from_ms(1005000))
-        # After cooldown expires
-        assert group.can_scale_up(timestamp=Timestamp.from_ms(1015000))
+        group = ScalingGroup(unbounded_config, platform)
+        ts = Timestamp.from_ms(1_000_000)
+        # Three create-failures in the window pushes churn to 100% → HOSTILE.
+        for _ in range(3):
+            group.record_create_failed(timestamp=ts)
+        assert not group.can_scale_up(timestamp=Timestamp.from_ms(1_001_000))
 
     def test_scale_down_rate_limited_by_token_bucket(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """acquire_scale_down_token() returns False when the token bucket is exhausted."""
@@ -326,77 +307,40 @@ class TestScalingGroupScalingPolicy:
         assert group.acquire_scale_down_token(Timestamp.from_ms(ts.epoch_ms() + 61_000))
 
 
-class TestScalingGroupBackoff:
-    """Tests for exponential backoff behavior."""
+class TestScalingGroupChurnDetector:
+    """Tests for ScalingGroup's integration with BackoffDetector.
 
-    def test_record_failure_applies_initial_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """First failure applies initial backoff duration."""
-        platform = make_mock_platform()
-        group = ScalingGroup(
-            unbounded_config,
-            platform,
-            backoff_initial=Duration.from_seconds(5.0),
-        )
+    Detailed unit tests of the detector itself live in
+    ``tests/cluster/controller/test_backoff_detector.py``. These tests verify
+    that ScalingGroup wires the detector correctly into its scale-up gating.
+    """
 
-        ts = Timestamp.from_ms(1000000)
-        group.record_failure(timestamp=ts)
-
-        assert group.consecutive_failures == 1
-        assert group._backoff_until is not None
-        assert group._backoff_until.as_timestamp().epoch_ms() == 1005000
-
-    def test_record_failure_applies_exponential_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Consecutive failures double the backoff time."""
-        platform = make_mock_platform()
-        group = ScalingGroup(
-            unbounded_config,
-            platform,
-            backoff_initial=Duration.from_seconds(5.0),
-            backoff_factor=2.0,
-        )
-
-        ts = Timestamp.from_ms(1000000)
-        group.record_failure(timestamp=ts)  # 5000ms
-        group.record_failure(timestamp=ts)  # 10000ms
-        group.record_failure(timestamp=ts)  # 20000ms
-
-        assert group.consecutive_failures == 3
-        assert group._backoff_until is not None
-        assert group._backoff_until.as_timestamp().epoch_ms() == 1020000
-
-    def test_backoff_capped_at_maximum(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Backoff duration is capped at max value."""
-        platform = make_mock_platform()
-        group = ScalingGroup(
-            unbounded_config,
-            platform,
-            backoff_initial=Duration.from_seconds(5.0),
-            backoff_max=Duration.from_seconds(15.0),
-            backoff_factor=2.0,
-        )
-
-        ts = Timestamp.from_ms(1000000)
-        for _ in range(10):  # Many failures
-            group.record_failure(timestamp=ts)
-
-        # Should be capped at max
-        assert group._backoff_until is not None
-        assert group._backoff_until.as_timestamp().epoch_ms() == 1015000
-
-    def test_scale_up_resets_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Successful scale-up via complete_scale_up resets backoff state."""
+    def test_create_failures_drive_detector_hostile(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Three create-failures push the detector to HOSTILE, blocking scale-up."""
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
+        ts = Timestamp.from_ms(1_000_000)
+        for _ in range(3):
+            group.record_create_failed(timestamp=ts)
+        assert group.recent_failure_count(Timestamp.from_ms(1_001_000)) == 3
+        assert not group.can_scale_up(timestamp=Timestamp.from_ms(1_001_000))
 
-        ts = Timestamp.from_ms(1000000)
-        group.record_failure(timestamp=ts)
-        group.record_failure(timestamp=ts)
-        assert group.consecutive_failures == 2
-
-        _tracked_scale_up(group, timestamp=Timestamp.from_ms(1100000))
-
-        assert group.consecutive_failures == 0
-        assert group._backoff_until is None
+    def test_long_lived_preemption_does_not_block_scale_up(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """A slice preempted past short_lived threshold is a positive sample."""
+        platform = make_mock_platform()
+        group = ScalingGroup(unbounded_config, platform)
+        create_ts = Timestamp.from_ms(1_000_000)
+        # Three slices created and "preempted" 6 minutes later (past 5-min threshold).
+        for i in range(3):
+            slice_id = f"s{i}"
+            group.detector.record_created(slice_id, create_ts)
+            group.detector.record_terminated(
+                slice_id,
+                SliceFate.PREEMPTED,
+                Timestamp.from_ms(1_000_000 + 6 * 60 * 1000),
+            )
+        now = Timestamp.from_ms(1_000_000 + 7 * 60 * 1000)
+        assert group.can_scale_up(timestamp=now)
 
 
 class TestScalingGroupDemandTracking:
@@ -777,18 +721,18 @@ class TestScalingGroupAvailability:
         state = group.availability()
         assert state.status == GroupAvailability.AT_MAX_SLICES
 
-    def test_backoff_when_in_backoff_period(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Group is in BACKOFF when backoff timer is active."""
+    def test_backoff_when_detector_hostile(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Group is in BACKOFF when the churn detector is HOSTILE."""
         from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
-        group = ScalingGroup(unbounded_config, platform, backoff_initial=Duration.from_seconds(60.0))
+        group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1000000)
-        group.record_failure(timestamp=ts)
+        for _ in range(3):
+            group.record_create_failed(timestamp=ts)
 
-        state = group.availability(Timestamp.from_ms(1001000))  # Still in backoff
+        state = group.availability(Timestamp.from_ms(1001000))
         assert state.status == GroupAvailability.BACKOFF
-        assert state.until is not None
 
     def test_can_accept_demand_true_when_available(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """can_accept_demand() returns True when AVAILABLE."""
@@ -866,32 +810,23 @@ class TestScalingGroupAvailability:
         group.complete_scale_up(handle, ts2)
         assert group.can_accept_demand(timestamp=Timestamp.from_ms(4000))
 
-    def test_quota_exceeded_takes_precedence_over_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """Quota exceeded has higher precedence than backoff."""
+    def test_quota_exceeded_takes_precedence_over_churn_backoff(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """Quota exceeded reports as QUOTA_EXCEEDED even if churn is HOSTILE."""
         from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
-        platform.create_slice.side_effect = QuotaExhaustedError("Quota exhausted")
-
         group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(60_000))
 
         ts = Timestamp.from_ms(1000)
-        # Record a failure to trigger backoff
-        group.record_failure(timestamp=ts)
-
-        # Then trigger quota exceeded via failed scale-up
-        group.begin_scale_up(timestamp=ts)
-        with pytest.raises(QuotaExhaustedError):
-            group.scale_up(timestamp=ts)
-        group.cancel_scale_up()
+        for _ in range(3):
+            group.record_create_failed(timestamp=ts)  # detector → HOSTILE
         group.record_quota_exceeded("quota exceeded", ts)
 
-        # Availability should report QUOTA_EXCEEDED, not BACKOFF
         state = group.availability(timestamp=Timestamp.from_ms(2000))
         assert state.status == GroupAvailability.QUOTA_EXCEEDED
 
-    def test_cooldown_availability_state(self):
-        """After scale-up + complete, availability() returns COOLDOWN until expiry, then AVAILABLE."""
+    def test_available_immediately_after_scale_up(self):
+        """After complete_scale_up, the group is AVAILABLE (no cooldown gate)."""
         from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = _with_resources(
@@ -903,46 +838,18 @@ class TestScalingGroupAvailability:
         )
         config.slice_template.gcp.zone = "us-central1-a"
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(5000))
+        group = ScalingGroup(config, platform)
 
         ts = Timestamp.from_ms(1_000_000)
         group.begin_scale_up(timestamp=ts)
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(handle, ts)
 
-        # During cooldown
-        state = group.availability(Timestamp.from_ms(1_003_000))
-        assert state.status == GroupAvailability.COOLDOWN
-        assert state.until is not None
-
-        # After cooldown expires
-        state = group.availability(Timestamp.from_ms(1_006_000))
+        state = group.availability(Timestamp.from_ms(1_001_000))
         assert state.status == GroupAvailability.AVAILABLE
 
-    def test_cooldown_accepts_demand(self):
-        """COOLDOWN groups still accept demand (demand stays, scale-up is deferred)."""
-        config = _with_resources(
-            config_pb2.ScaleGroupConfig(
-                name="test-group",
-                buffer_slices=0,
-                max_slices=10,
-            ),
-        )
-        config.slice_template.gcp.zone = "us-central1-a"
-        platform = make_mock_platform()
-        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(5000))
-
-        ts = Timestamp.from_ms(1_000_000)
-        group.begin_scale_up(timestamp=ts)
-        handle = group.scale_up(timestamp=ts)
-        group.complete_scale_up(handle, ts)
-
-        # During cooldown, can_accept_demand should be True
-        assert group.can_accept_demand(Timestamp.from_ms(1_003_000)) is True
-
-    def test_at_max_slices_takes_precedence_over_cooldown(self):
-        """When both at max_slices and in cooldown, AT_MAX_SLICES takes precedence
-        (once all slices are READY)."""
+    def test_at_max_slices_with_inflight_capacity_accepts_demand(self):
+        """At max_slices but with in-flight booting capacity → COOLDOWN (accepts demand)."""
         from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         config = _with_resources(
@@ -954,14 +861,14 @@ class TestScalingGroupAvailability:
         )
         config.slice_template.gcp.zone = "us-central1-a"
         platform = make_mock_platform()
-        group = ScalingGroup(config, platform, scale_up_cooldown=Duration.from_ms(5000))
+        group = ScalingGroup(config, platform)
 
         ts = Timestamp.from_ms(1_000_000)
         group.begin_scale_up(timestamp=ts)
         handle = group.scale_up(timestamp=ts)
         group.complete_scale_up(handle, ts)
 
-        # While slice is BOOTING, group accepts demand (in-flight capacity)
+        # Slice is at max_slices but still BOOTING — accepts demand.
         state = group.availability(Timestamp.from_ms(1_003_000))
         assert state.status == GroupAvailability.COOLDOWN
 
@@ -1067,9 +974,7 @@ class TestCanScaleUpQuotaExhausted:
         platform = make_mock_platform()
         platform.create_slice.side_effect = QuotaExhaustedError("no quota")
 
-        group = ScalingGroup(
-            unbounded_config, platform, quota_timeout=Duration.from_ms(5000), scale_up_cooldown=Duration.from_ms(0)
-        )
+        group = ScalingGroup(unbounded_config, platform, quota_timeout=Duration.from_ms(5000))
 
         ts = Timestamp.from_ms(1000000)
         group.begin_scale_up(timestamp=ts)
