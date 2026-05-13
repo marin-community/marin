@@ -39,7 +39,7 @@ from fray import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
-from zephyr.readers import load_file
+from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
@@ -140,19 +140,33 @@ def _paragraph_overlap_and_matches(
     return len(matched) / len(hashes), matched
 
 
+def _is_hidden_dir(root: str, resolved: str) -> bool:
+    """Return True if any path segment between *resolved* and *root* starts with a dot.
+
+    Skips ``.metrics/``, ``.executor_info/``, and other hidden sidecar directories
+    that show up routinely in normalize / executor outputs.
+    """
+    rel = os.path.relpath(root, resolved)
+    if rel == ".":
+        return False
+    return any(p.startswith(".") for p in rel.split(os.sep))
+
+
 def _discover_parquet_partitions(input_path: str) -> list[str]:
     """Walk *input_path* recursively, return sorted list of .parquet files.
 
     Caller must point at a flat partition directory (the datakit invariant —
     e.g. a :class:`NormalizedData.main_output_dir`). Output filenames mirror
     input basenames, so callers passing a nested layout would risk basename
-    collisions.
+    collisions. Hidden directories (e.g. ``.metrics/``) are skipped.
     """
     fs, resolved = url_to_fs(input_path)
     protocol = input_path.split("://")[0] if "://" in input_path else ""
 
     discovered: list[str] = []
     for root, _dirs, files in fs.walk(resolved):
+        if _is_hidden_dir(root, resolved):
+            continue
         for fname in files:
             if fname.startswith(".") or not fname.endswith(".parquet"):
                 continue
@@ -163,13 +177,21 @@ def _discover_parquet_partitions(input_path: str) -> list[str]:
 
 
 def _discover_eval_files(eval_paths: list[str]) -> Iterator[str]:
-    """Walk all *eval_paths* recursively and yield any zephyr-readable file."""
+    """Walk all *eval_paths* recursively and yield zephyr-readable data files.
+
+    Filters by ``zephyr.readers.SUPPORTED_EXTENSIONS`` so common sidecars
+    (``README``, ``_SUCCESS``, ``provenance.json``, ``.executor_info``, …)
+    that live alongside eval data don't kill the whole decon step when
+    ``load_file`` later rejects their extension. Mirrors ``normalize._discover_files``.
+    """
     for source in eval_paths:
         fs, resolved = url_to_fs(source)
         protocol = source.split("://")[0] if "://" in source else ""
         for root, _dirs, files in fs.walk(resolved):
+            if _is_hidden_dir(root, resolved):
+                continue
             for fname in files:
-                if fname.startswith("."):
+                if fname.startswith(".") or not fname.endswith(SUPPORTED_EXTENSIONS):
                     continue
                 full = os.path.join(root, fname)
                 yield f"{protocol}://{full}" if protocol else full
@@ -208,12 +230,13 @@ def _build_filter(
 
     def emit_index_rows() -> Iterator[dict[str, Any]]:
         for path in _discover_eval_files(eval_paths):
-            basename = os.path.basename(path)
             for idx, record in enumerate(load_file(path)):
                 text = record.get(text_field)
                 if not text:
                     continue
-                eval_id = str(record.get("id") or f"{basename}::{idx}")
+                # Use the full path (not basename) so fallback IDs stay unique across
+                # nested or multi-source eval directories that share file basenames.
+                eval_id = str(record.get("id") or f"{path}::{idx}")
                 seen_in_record: set[int] = set()
                 for feat in _extract_features(str(text), ngram):
                     h = _bloom_hash(feat)
@@ -332,10 +355,15 @@ def decon_to_parquet(
             ``normalized_data.main_output_dir`` (the flat, co-partitioned
             Parquet directory produced by datakit normalize). Records must
             have ``id``, ``text``, and ``partition_id`` columns.
-        eval_data_sources: Eval source directory or list of directories. Any
-            zephyr-readable file format. Read once to build the bloom filter.
-            Multiple sources are merged into one filter; attribution stays
-            per-eval-record via the ``eval_hash_index`` sidecar.
+        eval_data_sources: Eval source directory or list of directories. Walked
+            recursively for files with zephyr-readable extensions; sidecar/metadata
+            files (e.g. ``README``, ``_SUCCESS``, ``provenance.json``, hidden dirs
+            like ``.metrics/``) are skipped. Read once to build the bloom filter.
+            Multiple sources are merged into one filter; per-eval-record
+            attribution is preserved in the ``eval_hash_index`` sidecar. The
+            attribution ``eval_id`` is ``record["id"]`` when present, else
+            ``f"{full_path}::{idx}"`` (full path keeps fallback IDs unique across
+            nested or multi-source eval directories that share file basenames).
         output_path: Directory for co-partitioned Parquet attributes. One
             output file is written per input partition, preserving filenames.
         text_field: Text column name in both input and eval records.

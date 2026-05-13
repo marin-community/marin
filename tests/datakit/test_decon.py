@@ -287,6 +287,90 @@ def test_decon_empty_input_raises(tmp_path: Path):
         )
 
 
+def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
+    """Eval directories with non-data sidecars (README, _SUCCESS, hidden dirs) don't break build.
+
+    Regression: _discover_eval_files previously yielded every non-dot file, then
+    load_file rejected unsupported extensions and raised — killing the whole
+    decon step. The discovery now filters by zephyr.readers.SUPPORTED_EXTENSIONS
+    and skips hidden directories (mirrors normalize._discover_files).
+    """
+    eval_dir = tmp_path / "eval"
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    eval_dir.mkdir()
+    input_dir.mkdir()
+
+    # The actual eval file
+    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "eval", "text": "Hello big world example"}])
+    # Common sidecar files that would crash load_file:
+    (eval_dir / "README.md").write_text("# Eval corpus\nA description.\n")
+    (eval_dir / "_SUCCESS").write_text("")
+    (eval_dir / "provenance.json").write_text('{"source": "wherever"}')
+    # Hidden directory with stuff inside (.metrics/, .executor_info/, etc.)
+    (eval_dir / ".metrics").mkdir()
+    (eval_dir / ".metrics" / "stats.json").write_text('{"records": 1}')
+
+    _write_input_parquet(
+        input_dir / "part-00000-of-00001.parquet",
+        [{"id": "doc", "text": "Hello big world example", "partition_id": 0}],
+    )
+
+    # Must not raise.
+    decon_to_parquet(
+        normalized_data=_as_source(input_dir, num_partitions=1),
+        eval_data_sources=str(eval_dir),
+        output_path=str(output_dir),
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        estimated_doc_count=1_000,
+        false_positive_rate=1e-9,
+    )
+    # And the legitimate eval record still drove a match.
+    rows = _read_attributes(output_dir)
+    assert rows["doc"]["contaminated"] is True
+
+
+def test_decon_fallback_eval_id_uses_full_path_for_uniqueness(tmp_path: Path):
+    """Eval records without an ``id`` field get fallback eval_ids built from the full path.
+
+    Regression: the fallback used os.path.basename, so two files at e.g.
+    ``source/a/data.jsonl.gz`` and ``source/b/data.jsonl.gz`` would produce the
+    same eval_id (``data.jsonl.gz::0``) for their row 0 — collapsing distinct
+    eval records under one ID. Now uses the full path so they stay distinct.
+    """
+    eval_dir = tmp_path / "eval"
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+
+    # Two eval files with the same basename in different subdirs. Records lack `id`.
+    _write_eval_jsonl(eval_dir / "a" / "data.jsonl.gz", [{"text": "the quick brown fox jumps over"}])
+    _write_eval_jsonl(eval_dir / "b" / "data.jsonl.gz", [{"text": "a wholly distinct evaluation sentence here"}])
+
+    _write_input_parquet(
+        input_dir / "part-00000-of-00001.parquet",
+        [{"id": "doc", "text": "irrelevant input text", "partition_id": 0}],
+    )
+
+    attrs = decon_to_parquet(
+        normalized_data=_as_source(input_dir, num_partitions=1),
+        eval_data_sources=str(eval_dir),
+        output_path=str(output_dir),
+        ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
+        estimated_doc_count=1_000,
+        false_positive_rate=1e-9,
+    )
+
+    # Sidecar should have two distinct eval_ids, one per eval file.
+    sidecar = pq.read_table(attrs.eval_hash_index_path).to_pylist()
+    eval_ids = {r["eval_id"] for r in sidecar}
+    assert len(eval_ids) == 2, f"expected 2 distinct eval_ids, got {len(eval_ids)}: {eval_ids}"
+    # Both should mention 'data.jsonl.gz' but be path-distinguishable (one under /a/, one under /b/).
+    assert all("data.jsonl.gz" in e for e in eval_ids)
+    assert any("/a/" in e for e in eval_ids)
+    assert any("/b/" in e for e in eval_ids)
+
+
 def test_decon_v1_input_without_partition_id_column(tmp_path: Path):
     """Legacy v1 NormalizedData (pre-partition_id) is supported via shard.shard_idx fallback.
 
