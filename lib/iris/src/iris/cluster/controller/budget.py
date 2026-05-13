@@ -16,8 +16,9 @@ from sqlalchemy import bindparam, func, select
 
 from iris.cluster.controller import writes
 from iris.cluster.controller.codec import device_counts_from_json
-from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB, Tx
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.schema import job_config_table, tasks_table
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.rpc import config_pb2, job_pb2
 
 logger = logging.getLogger(__name__)

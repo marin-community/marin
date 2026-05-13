@@ -344,7 +344,7 @@ class TestPreemptionReassignment:
         # rows still reference the old worker. We finalize each unfinished
         # attempt on slice-3 directly.
         with state._db.read_snapshot() as snap:
-            unfinished = snap.fetchall(
+            unfinished = snap.execute(
                 select(
                     task_attempts_table.c.task_id,
                     task_attempts_table.c.attempt_id,
@@ -352,7 +352,7 @@ class TestPreemptionReassignment:
                     task_attempts_table.c.worker_id.in_([str(w) for w in slice3_workers]),
                     task_attempts_table.c.finished_at_ms.is_(None),
                 )
-            )
+            ).all()
         with state._db.transaction() as cur:
             for row in unfinished:
                 # Heartbeat-equivalent stamp: finalize the attempt row.
@@ -498,7 +498,7 @@ class TestPreemptionReassignment:
             if wid == trigger.current_worker_id:
                 continue
             with state._db.read_snapshot() as snap:
-                rows = snap.fetchall(
+                rows = snap.execute(
                     select(
                         task_attempts_table.c.task_id,
                         task_attempts_table.c.attempt_id,
@@ -506,7 +506,7 @@ class TestPreemptionReassignment:
                         task_attempts_table.c.worker_id == str(wid),
                         task_attempts_table.c.finished_at_ms.is_(None),
                     )
-                )
+                ).all()
             with state._db.transaction() as cur:
                 for row in rows:
                     # Heartbeat-equivalent stamp: finalize the attempt row.

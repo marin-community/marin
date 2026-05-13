@@ -68,11 +68,7 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.db import (
-    ControllerDB,
-    job_scheduling_deadline,
-    task_row_can_be_scheduled,
-)
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections import assert_owned_tables_not_externally_written
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -94,6 +90,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -1349,7 +1346,7 @@ class Controller:
         """
         now_ms = Timestamp.now().epoch_ms()
         with self._db.read_snapshot() as q:
-            rows = q.fetchall(select(workers_table.c.worker_id))
+            rows = q.execute(select(workers_table.c.worker_id)).all()
         worker_ids = [WorkerId(str(row.worker_id)) for row in rows]
         if worker_ids:
             self._health.heartbeat(worker_ids, now_ms)

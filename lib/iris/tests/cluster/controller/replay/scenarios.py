@@ -198,17 +198,19 @@ def _submit(
 
 def _task_ids(transitions: ControllerTransitions, job_id: JobName) -> list[JobName]:
     with transitions._db.read_snapshot() as snap:
-        rows = snap.fetchall(
+        rows = snap.execute(
             select(tasks_table.c.task_id)
             .where(tasks_table.c.job_id == job_id.to_wire())
             .order_by(tasks_table.c.task_index.asc())
-        )
+        ).all()
     return [JobName.from_wire(str(row.task_id)) for row in rows]
 
 
 def _current_attempt(transitions: ControllerTransitions, task_id: JobName) -> int:
     with transitions._db.read_snapshot() as snap:
-        row = snap.fetchone(select(tasks_table.c.current_attempt_id).where(tasks_table.c.task_id == task_id.to_wire()))
+        row = snap.execute(
+            select(tasks_table.c.current_attempt_id).where(tasks_table.c.task_id == task_id.to_wire())
+        ).first()
     assert row is not None, f"task missing: {task_id}"
     return int(row.current_attempt_id)
 

@@ -89,12 +89,12 @@ def _decode_worker_attr_value(row):
 
 def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
     with state._db.read_snapshot() as tx:
-        rows = tx.fetchall(
+        rows = tx.execute(
             select(worker_attributes_table).where(
                 worker_attributes_table.c.worker_id == worker_id,
                 worker_attributes_table.c.key == key,
             )
-        )
+        ).all()
     if not rows:
         return None
     return _decode_worker_attr_value(rows[0])

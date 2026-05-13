@@ -10,12 +10,12 @@ as its first argument and mutates state directly via the controller's DB.
 
 from iris.cluster.constraints import AttributeValue
 from iris.cluster.controller import writes
-from iris.cluster.controller.db import ACTIVE_TASK_STATES
 from iris.cluster.controller.schema import (
     tasks_table,
     worker_attributes_table,
     workers_table,
 )
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.types import JobName, WorkerId
 from rigging.timing import Timestamp

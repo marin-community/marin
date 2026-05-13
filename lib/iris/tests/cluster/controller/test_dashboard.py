@@ -115,7 +115,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
 
     def _create_scheduling_context(workers):
         with state._db.read_snapshot() as tx:
-            bc_rows = tx.fetchall(
+            bc_rows = tx.execute(
                 select(task_attempts_table.c.worker_id, func.count().label("c"))
                 .join(
                     tasks_table,
@@ -129,7 +129,7 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
                 )
                 .group_by(task_attempts_table.c.worker_id)
                 .order_by(task_attempts_table.c.worker_id.asc())
-            )
+            ).all()
             building_counts = {row.worker_id: int(row.c) for row in bc_rows}
             usage_by_worker = reads.resource_usage_by_worker(tx)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]

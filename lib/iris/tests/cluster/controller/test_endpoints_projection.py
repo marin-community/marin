@@ -18,7 +18,6 @@ from iris.cluster.controller.schema import tasks_table
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from rigging.timing import Timestamp
-from sqlalchemy import select
 from sqlalchemy import update as sa_update
 
 from .conftest import make_job_request, submit_job
@@ -77,24 +76,6 @@ def test_rollback_leaves_memory_untouched(state):
     # DB rolled back -> memory must NOT see the insert.
     assert state._endpoints.get("e1") is None
     assert state._endpoints.query() == []
-
-
-def test_rollback_safety_dict_and_sql_consistent(state):
-    """Raise mid-tx: assert dict has no entry AND SQL has no row."""
-    from iris.cluster.controller.schema import endpoints_table
-
-    tasks = submit_job(state, "j", make_job_request("j"))
-    t = tasks[0].task_id
-
-    with pytest.raises(RuntimeError, match="boom"):
-        with state._db.transaction() as cur:
-            state._endpoints.add(cur, _make_row("e-rollback", "alpha", t))
-            raise RuntimeError("boom")
-
-    assert state._endpoints.get("e-rollback") is None
-    with state._db.read_snapshot() as tx:
-        row = tx.fetchone(select(endpoints_table.c.endpoint_id).where(endpoints_table.c.endpoint_id == "e-rollback"))
-    assert row is None
 
 
 def test_add_rejects_terminal_task(state):

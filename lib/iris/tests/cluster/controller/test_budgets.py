@@ -43,14 +43,14 @@ def _list_user_budgets(db: ControllerDB) -> list[UserBudget]:
 def test_migration_creates_user_budgets_table(db: ControllerDB) -> None:
     """The 0013 migration creates the user_budgets table."""
     with db.read_snapshot() as q:
-        row = q.fetchone(text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_budgets'"))
+        row = q.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_budgets'")).first()
     assert row is not None
 
 
 def test_migration_adds_priority_band_column(db: ControllerDB) -> None:
     """The 0013 migration adds priority_band column to tasks."""
     with db.read_snapshot() as q:
-        columns = {row[1] for row in q.fetchall(text("PRAGMA table_info(tasks)"))}
+        columns = {row[1] for row in q.execute(text("PRAGMA table_info(tasks)")).all()}
     assert "priority_band" in columns
 
 
@@ -80,7 +80,7 @@ def test_migration_seeds_budgets_for_existing_users(tmp_path: Path) -> None:
 def test_pending_index_includes_priority_band(db: ControllerDB) -> None:
     """The rebuilt idx_tasks_pending includes priority_band."""
     with db.read_snapshot() as q:
-        rows = q.fetchall(text("PRAGMA index_info(idx_tasks_pending)"))
+        rows = q.execute(text("PRAGMA index_info(idx_tasks_pending)")).all()
     col_names = [row[2] for row in rows]
     assert "priority_band" in col_names
     # priority_band should come right after state
@@ -224,5 +224,5 @@ def test_reconcile_creates_user_row_for_fk(db: ControllerDB) -> None:
     reconcile_user_budget_tiers(db, tiers, Timestamp.from_ms(1000))
 
     with db.read_snapshot() as q:
-        row = q.fetchone(text("SELECT user_id FROM users WHERE user_id = 'henry'"))
+        row = q.execute(text("SELECT user_id FROM users WHERE user_id = 'henry'")).first()
     assert row is not None

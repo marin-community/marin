@@ -129,7 +129,7 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
         # Replicate _seed_liveness_from_workers
         now_ms = Timestamp.now().epoch_ms()
         with db.read_snapshot() as tx:
-            rows = tx.fetchall(select(workers_table.c.worker_id))
+            rows = tx.execute(select(workers_table.c.worker_id)).all()
         worker_ids = [row.worker_id for row in rows]
         health.heartbeat(worker_ids, now_ms)
 

@@ -28,7 +28,7 @@ a no-op once applied.
 
 import sqlite3
 
-# Mirror of iris.cluster.controller.db.ACTIVE_TASK_STATES /
+# Mirror of iris.cluster.controller.task_state.ACTIVE_TASK_STATES /
 # TERMINAL_TASK_STATES. Inlined to keep migrations free of imports from the
 # evolving controller package, since old migrations must keep working as
 # the codebase changes.

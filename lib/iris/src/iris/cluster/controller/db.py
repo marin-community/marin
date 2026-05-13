@@ -35,16 +35,12 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
-from typing import Any
 
 import fsspec.core
-from rigging.timing import Deadline, Duration, Timestamp
+from rigging.timing import Timestamp
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
-
-from iris.cluster.types import TERMINAL_TASK_STATES
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -143,30 +139,6 @@ class Tx:
             )
         return self.conn.execute(stmt, params or {})
 
-    def executemany(self, stmt, params_list) -> CursorResult:
-        """Execute ``stmt`` repeatedly against ``params_list``.
-
-        ``stmt`` must be a SA Core construct (see :meth:`execute`).
-        """
-        if isinstance(stmt, str):
-            raise TypeError(
-                "Tx.executemany does not accept raw SQL strings. "
-                "Pass a SQLAlchemy construct (insert/update/delete/text)."
-            )
-        return self.conn.execute(stmt, params_list)
-
-    def fetchone(self, stmt, params=None):
-        """Execute and return the first row, or ``None``."""
-        return self.execute(stmt, params).first()
-
-    def fetchall(self, stmt, params=None) -> list:
-        """Execute and return all rows as a list."""
-        return list(self.execute(stmt, params).all())
-
-    def scalar(self, stmt, params=None):
-        """Execute and return the first column of the first row, or ``None``."""
-        return self.execute(stmt, params).scalar()
-
     def register(self, hook: Callable[[], None]) -> None:
         """Register a post-commit hook.
 
@@ -230,87 +202,6 @@ def read_snapshot(read_engine: Engine) -> Iterator[Tx]:
             conn.execute(text("ROLLBACK"))
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Shared predicate functions operating on SA Row objects from the tasks
-# and workers tables.
-# ---------------------------------------------------------------------------
-
-
-def task_is_finished(
-    state: int, failure_count: int, max_retries_failure: int, preemption_count: int, max_retries_preemption: int
-) -> bool:
-    """Whether a task has reached a terminal state with no remaining retries."""
-    if state == job_pb2.TASK_STATE_SUCCEEDED:
-        return True
-    if state in (job_pb2.TASK_STATE_KILLED, job_pb2.TASK_STATE_UNSCHEDULABLE, job_pb2.TASK_STATE_COSCHED_FAILED):
-        return True
-    if state == job_pb2.TASK_STATE_FAILED:
-        return failure_count > max_retries_failure
-    if state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED):
-        return preemption_count > max_retries_preemption
-    return False
-
-
-def task_row_is_finished(task: Any) -> bool:
-    return task_is_finished(
-        task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
-    )
-
-
-def task_row_can_be_scheduled(task: Any) -> bool:
-    if task.state != job_pb2.TASK_STATE_PENDING:
-        return False
-    return task.current_attempt_id < 0 or not task_is_finished(
-        task.state, task.failure_count, task.max_retries_failure, task.preemption_count, task.max_retries_preemption
-    )
-
-
-ACTIVE_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_ASSIGNED,
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
-    }
-)
-
-# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
-EXECUTING_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
-    }
-)
-
-# All non-terminal task states (ACTIVE plus PENDING). Complement of TERMINAL_TASK_STATES.
-NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {job_pb2.TASK_STATE_PENDING}
-
-# Failure states that trigger coscheduled sibling cascades.
-FAILURE_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-    }
-)
-
-
-def job_scheduling_deadline(scheduling_deadline_epoch_ms: int | None) -> Deadline | None:
-    """Compute scheduling deadline from epoch ms."""
-    if scheduling_deadline_epoch_ms is None:
-        return None
-    return Deadline.after(Timestamp.from_ms(scheduling_deadline_epoch_ms), Duration.from_ms(0))
-
-
-def attempt_is_terminal(state: int) -> bool:
-    """Check if an attempt is in a terminal state."""
-    return state in TERMINAL_TASK_STATES
-
-
-def attempt_is_worker_failure(state: int) -> bool:
-    """Check if an attempt is a worker failure or preemption."""
-    return state in (job_pb2.TASK_STATE_WORKER_FAILED, job_pb2.TASK_STATE_PREEMPTED)
 
 
 class ControllerDB:

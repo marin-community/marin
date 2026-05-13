@@ -198,11 +198,11 @@ def test_submit_does_not_create_user_budgets_row():
         _submit_user_job(state, "newuser", "first-job")
 
         with state._db.read_snapshot() as tx:
-            row = tx.fetchone(
+            row = tx.execute(
                 select(user_budgets_table.c.budget_limit, user_budgets_table.c.max_band).where(
                     user_budgets_table.c.user_id == "newuser"
                 )
-            )
+            ).first()
         assert row is None, (
             "user_budgets row should NOT be created on first job submission; "
             "unlisted users fall through to UserBudgetDefaults at read time"

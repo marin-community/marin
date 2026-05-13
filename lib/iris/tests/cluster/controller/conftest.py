@@ -33,12 +33,7 @@ from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import (
-    ACTIVE_TASK_STATES,
-    ControllerDB,
-    task_row_can_be_scheduled,
-    task_row_is_finished,
-)
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.provider import ProviderUnsupportedError
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.schema import (
@@ -48,6 +43,7 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -70,7 +66,16 @@ from tests.cluster.controller._test_support import set_task_state_for_test
 from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
-check_task_is_finished = task_row_is_finished
+
+
+def check_task_is_finished(task) -> bool:
+    return task_is_finished(
+        task.state,
+        task.failure_count,
+        task.max_retries_failure,
+        task.preemption_count,
+        task.max_retries_preemption,
+    )
 
 
 def check_is_job_finished(j) -> bool:
@@ -297,7 +302,7 @@ def submit_direct_job(
     with state._db.transaction() as cur:
         state.submit_job(cur, jid, req, Timestamp.now())
     with state._db.read_snapshot() as tx:
-        rows = tx.fetchall(select(tasks_table.c.task_id).where(tasks_table.c.job_id == jid))
+        rows = tx.execute(select(tasks_table.c.task_id).where(tasks_table.c.job_id == jid)).all()
     return [row.task_id for row in rows]
 
 
@@ -386,13 +391,15 @@ def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerVie
 def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list:
     """Return SA Rows for all tasks in ``job_id``."""
     with state._db.read_snapshot() as tx:
-        return tx.fetchall(select(tasks_table).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index))
+        return tx.execute(
+            select(tasks_table).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index)
+        ).all()
 
 
 def schedulable_tasks(state: ControllerTransitions) -> list:
     """Return non-terminal task SA Rows eligible for scheduling, in priority order."""
     with state._db.read_snapshot() as tx:
-        tasks = tx.fetchall(
+        tasks = tx.execute(
             select(tasks_table)
             .where(tasks_table.c.state.not_in(list(TERMINAL_TASK_STATES)))
             .order_by(
@@ -401,14 +408,14 @@ def schedulable_tasks(state: ControllerTransitions) -> list:
                 tasks_table.c.submitted_at_ms.asc(),
                 tasks_table.c.task_id.asc(),
             )
-        )
+        ).all()
     return [t for t in tasks if check_task_can_be_scheduled(t)]
 
 
 def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
     """Count tasks in BUILDING/ASSIGNED state per worker, excluding reservation holders."""
     with state._db.read_snapshot() as tx:
-        rows = tx.fetchall(
+        rows = tx.execute(
             select(task_attempts_table.c.worker_id, func.count().label("c"))
             .join(
                 tasks_table,
@@ -422,7 +429,7 @@ def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
             )
             .group_by(task_attempts_table.c.worker_id)
             .order_by(task_attempts_table.c.worker_id.asc())
-        )
+        ).all()
     return {row.worker_id: int(row.c) for row in rows}
 
 
@@ -512,17 +519,17 @@ class TaskWithAttempts:
 def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[TaskWithAttempts]:
     """Return task rows with their attempt rows attached under ``.attempts``."""
     with state._db.read_snapshot() as tx:
-        task_rows = tx.fetchall(
+        task_rows = tx.execute(
             select(tasks_table).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index.asc())
-        )
+        ).all()
         if not task_rows:
             return []
         task_ids = [t.task_id for t in task_rows]
-        attempt_rows = tx.fetchall(
+        attempt_rows = tx.execute(
             select(task_attempts_table)
             .where(task_attempts_table.c.task_id.in_(task_ids))
             .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc())
-        )
+        ).all()
     attempts_by_task: dict = {}
     for a in attempt_rows:
         attempts_by_task.setdefault(a.task_id, []).append(a)
@@ -532,14 +539,14 @@ def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> 
 def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> TaskWithAttempts | None:
     """Return the task row with attempts attached, or None."""
     with state._db.read_snapshot() as tx:
-        task_row = tx.fetchone(select(tasks_table).where(tasks_table.c.task_id == task_id))
+        task_row = tx.execute(select(tasks_table).where(tasks_table.c.task_id == task_id)).first()
         if task_row is None:
             return None
-        attempt_rows = tx.fetchall(
+        attempt_rows = tx.execute(
             select(task_attempts_table)
             .where(task_attempts_table.c.task_id == task_id)
             .order_by(task_attempts_table.c.attempt_id.asc())
-        )
+        ).all()
     return TaskWithAttempts(_row=task_row, attempts=list(attempt_rows))
 
 
@@ -619,7 +626,7 @@ def make_worker_metadata(
 
 def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> frozenset[JobName]:
     with state._db.read_snapshot() as tx:
-        rows = tx.fetchall(
+        rows = tx.execute(
             select(tasks_table.c.task_id)
             .join(
                 task_attempts_table,
@@ -630,7 +637,7 @@ def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> f
                 task_attempts_table.c.worker_id == worker_id,
                 tasks_table.c.state.in_(list(ACTIVE_TASK_STATES)),
             )
-        )
+        ).all()
     return frozenset(row.task_id for row in rows)
 
 
@@ -648,9 +655,9 @@ def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> li
         return workers
     worker_ids = [w.worker_id for w in workers]
     with state._db.read_snapshot() as tx:
-        attr_rows = tx.fetchall(
+        attr_rows = tx.execute(
             select(worker_attributes_table).where(worker_attributes_table.c.worker_id.in_(worker_ids))
-        )
+        ).all()
     attrs_by_worker: dict = {}
     for row in attr_rows:
         attrs_by_worker.setdefault(row.worker_id, {})[row.key] = _decode_attr_value(row)

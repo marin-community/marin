@@ -273,11 +273,11 @@ class ServiceTestHarness:
 
     def _query_tasks(self, job_id: JobName) -> list:
         with self.db.read_snapshot() as tx:
-            return tx.fetchall(select(tasks_table).where(tasks_table.c.job_id == job_id))
+            return tx.execute(select(tasks_table).where(tasks_table.c.job_id == job_id)).all()
 
     def _query_task(self, task_id: JobName):
         with self.db.read_snapshot() as tx:
-            return tx.fetchone(select(tasks_table).where(tasks_table.c.task_id == task_id))
+            return tx.execute(select(tasks_table).where(tasks_table.c.task_id == task_id)).first()
 
     def _drive_k8s(self, task_id: JobName, new_state: int) -> None:
         """K8s: drain to create pod, transition pod, sync to apply."""
@@ -333,12 +333,12 @@ class ServiceTestHarness:
         the latest attempt row directly to get the actual worker assignment.
         """
         with self.db.read_snapshot() as tx:
-            row = tx.fetchone(
+            row = tx.execute(
                 select(task_attempts_table.c.worker_id, task_attempts_table.c.attempt_id)
                 .where(task_attempts_table.c.task_id == task_id)
                 .order_by(task_attempts_table.c.attempt_id.desc())
                 .limit(1)
-            )
+            ).first()
         if row is None:
             return None, 0
         return (WorkerId(str(row.worker_id)) if row.worker_id is not None else None), int(row.attempt_id)
@@ -352,7 +352,7 @@ class ServiceTestHarness:
         # If still PENDING, assign to an available worker.
         if task.state == job_pb2.TASK_STATE_PENDING:
             with self.db.read_snapshot() as tx:
-                worker_row = tx.fetchone(select(workers_table.c.worker_id).limit(1))
+                worker_row = tx.execute(select(workers_table.c.worker_id).limit(1)).first()
             if worker_row is None:
                 raise ValueError("No GCP workers registered -- call register_gcp_worker first")
             with self.db.transaction() as cur:

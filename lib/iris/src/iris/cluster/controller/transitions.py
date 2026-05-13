@@ -29,16 +29,7 @@ from iris.cluster.controller.codec import (
     reservation_to_json,
     resource_spec_from_scalars,
 )
-from iris.cluster.controller.db import (
-    ACTIVE_TASK_STATES,
-    EXECUTING_TASK_STATES,
-    FAILURE_TASK_STATES,
-    NON_TERMINAL_TASK_STATES,
-    ControllerDB,
-    Tx,
-    task_row_can_be_scheduled,
-    task_row_is_finished,
-)
+from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.lru_cache import LRUCache
 from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -61,6 +52,7 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
@@ -74,6 +66,36 @@ from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
+
+# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
+EXECUTING_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
+    }
+)
+
+# All non-terminal task states (ACTIVE plus PENDING).
+NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {job_pb2.TASK_STATE_PENDING}
+
+# Failure states that trigger coscheduled sibling cascades.
+FAILURE_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
+    }
+)
+
+
+def _task_is_finished(task: Any) -> bool:
+    return task_is_finished(
+        task.state,
+        task.failure_count,
+        task.max_retries_failure,
+        task.preemption_count,
+        task.max_retries_preemption,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1688,7 +1710,7 @@ class ControllerTransitions:
                 task = reads.get_task_detail(cur, update.task_id)
             if task is None:
                 continue
-            if task_row_is_finished(task) or update.new_state in (
+            if _task_is_finished(task) or update.new_state in (
                 job_pb2.TASK_STATE_UNSPECIFIED,
                 job_pb2.TASK_STATE_PENDING,
             ):
@@ -2855,7 +2877,7 @@ class ControllerTransitions:
             task = task_map.get(update.task_id)
             if task is None:
                 continue
-            if task_row_is_finished(task) or update.new_state in (
+            if _task_is_finished(task) or update.new_state in (
                 job_pb2.TASK_STATE_UNSPECIFIED,
                 job_pb2.TASK_STATE_PENDING,
             ):

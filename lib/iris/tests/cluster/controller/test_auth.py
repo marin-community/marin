@@ -269,7 +269,7 @@ def test_write_connection_can_access_auth_tables(db: ControllerDB):
     create_api_key(db, key_id="k1", key_hash="hash1", key_prefix="pfx", user_id="test-user", name="test", now=now)
 
     with db.transaction() as q:
-        rows = q.fetchall(text(f"SELECT key_id FROM {db.api_keys_table}"))
+        rows = q.execute(text(f"SELECT key_id FROM {db.api_keys_table}")).all()
         assert len(rows) == 1
         assert rows[0].key_id == "k1"
 

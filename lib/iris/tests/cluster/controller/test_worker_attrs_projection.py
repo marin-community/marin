@@ -141,7 +141,9 @@ def test_rollback_leaves_cache_untouched(state):
 
     assert state._worker_attrs.get(worker_id) == {}
     with state._db.read_snapshot() as q:
-        row = q.fetchone(select(worker_attributes_table.c.key).where(worker_attributes_table.c.worker_id == worker_id))
+        row = q.execute(
+            select(worker_attributes_table.c.key).where(worker_attributes_table.c.worker_id == worker_id)
+        ).first()
     assert row is None
 
 
@@ -188,7 +190,9 @@ def test_cascade_delete_invalidates_projection(state):
         )
 
     with state._db.read_snapshot() as q:
-        row = q.fetchone(select(worker_attributes_table.c.key).where(worker_attributes_table.c.worker_id == worker_id))
+        row = q.execute(
+            select(worker_attributes_table.c.key).where(worker_attributes_table.c.worker_id == worker_id)
+        ).first()
     assert row is None
 
     assert state._worker_attrs.get(worker_id) == {}

@@ -36,9 +36,9 @@ def _encode(value: Any) -> Any:
 
 def _list_user_tables(db: ControllerDB) -> list[str]:
     with db.read_snapshot() as snap:
-        rows = snap.fetchall(
+        rows = snap.execute(
             text("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-        )
+        ).all()
     return [str(row.name) for row in rows if str(row.name) not in EXCLUDED_TABLES]
 
 
@@ -49,7 +49,7 @@ def _primary_key_columns(db: ControllerDB, table: str) -> list[str]:
     has no PK so dumps remain stable regardless of insert order.
     """
     with db.read_snapshot() as snap:
-        rows = snap.fetchall(text(f"PRAGMA table_info({table})"))
+        rows = snap.execute(text(f"PRAGMA table_info({table})")).all()
     pk_cols = sorted(
         ((int(row.pk), str(row.name), int(row.cid)) for row in rows if int(row.pk) > 0),
         key=lambda triple: triple[0],
@@ -73,6 +73,6 @@ def deterministic_dump(db: ControllerDB) -> dict[str, list[dict[str, Any]]]:
         pk = _primary_key_columns(db, table)
         order = ", ".join(pk)
         with db.read_snapshot() as snap:
-            rows = snap.fetchall(text(f"SELECT * FROM {table} ORDER BY {order}"))
+            rows = snap.execute(text(f"SELECT * FROM {table} ORDER BY {order}")).all()
         out[table] = [{key: _encode(row._mapping[key]) for key in row._mapping} for row in rows]
     return out

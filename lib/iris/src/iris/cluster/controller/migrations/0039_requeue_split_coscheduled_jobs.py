@@ -37,7 +37,7 @@ nothing on subsequent runs.
 
 import sqlite3
 
-# Mirror of iris.cluster.controller.db.ACTIVE_TASK_STATES.
+# Mirror of iris.cluster.controller.task_state.ACTIVE_TASK_STATES.
 _ACTIVE = (2, 3, 9)  # BUILDING, RUNNING, ASSIGNED
 _TASK_STATE_PENDING = 1
 _TASK_STATE_PREEMPTED = 10

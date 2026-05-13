@@ -23,7 +23,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import Table, delete, func, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.controller.db import ACTIVE_TASK_STATES, Tx
+from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.schema import (
     USER_ROLE_DEFAULT,
@@ -36,6 +36,7 @@ from iris.cluster.controller.schema import (
     users_table,
     workers_table,
 )
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2

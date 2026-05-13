@@ -225,9 +225,9 @@ def upload_checkpoint(
     # They may diverge slightly from the backup contents if writes occurred
     # between backup and upload, but this is acceptable for checkpoint metadata.
     with db.read_snapshot() as snapshot:
-        job_count = snapshot.scalar(select(func.count()).select_from(jobs_table))
-        task_count = snapshot.scalar(select(func.count()).select_from(tasks_table))
-        worker_count = snapshot.scalar(select(func.count()).select_from(workers_table))
+        job_count = snapshot.execute(select(func.count()).select_from(jobs_table)).scalar()
+        task_count = snapshot.execute(select(func.count()).select_from(tasks_table)).scalar()
+        worker_count = snapshot.execute(select(func.count()).select_from(workers_table)).scalar()
     result = CheckpointResult(
         created_at=backup.created_at,
         job_count=job_count,

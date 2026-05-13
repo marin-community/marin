@@ -22,14 +22,12 @@ from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import compute_demand_entries
-from iris.cluster.controller.db import (
-    ControllerDB,
-    attempt_is_terminal,
-)
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
 from iris.cluster.controller.reads import WorkerResourceUsage
 from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
+from iris.cluster.controller.task_state import attempt_is_terminal
 from iris.cluster.controller.transitions import (
     MAX_REPLICAS_PER_JOB,
     Assignment,
@@ -139,7 +137,7 @@ def test_sa_core_select_returns_typed_rows(state) -> None:
     job_id = JobName.root("test-user", "typed-rows")
     with state._db.read_snapshot() as tx:
         job_row = reads.get_job_detail(tx, job_id)
-        task_count = tx.fetchone(select(jobs_table.c.num_tasks).where(jobs_table.c.job_id == job_id))
+        task_count = tx.execute(select(jobs_table.c.num_tasks).where(jobs_table.c.job_id == job_id)).first()
 
     assert job_row is not None
     assert job_row.submitted_at_ms is not None
@@ -171,7 +169,7 @@ def test_sa_core_read_snapshot_finds_workers(state) -> None:
     register_worker(state, "exists-worker", "addr", make_worker_metadata())
 
     with state._db.read_snapshot() as tx:
-        row = tx.fetchone(select(workers_table.c.worker_id).where(workers_table.c.worker_id == "exists-worker"))
+        row = tx.execute(select(workers_table.c.worker_id).where(workers_table.c.worker_id == "exists-worker")).first()
     assert row is not None
 
 
@@ -301,8 +299,6 @@ def test_cancel_job_rolls_attempt_state_without_finalizing(harness):
     leaving ``finished_at_ms`` NULL so the scheduler retains capacity for
     the worker until heartbeat finalization.
     """
-    from iris.cluster.controller.db import attempt_is_terminal
-
     w1 = harness.add_worker("w1")
     w2 = harness.add_worker("w2")
     tasks = harness.submit("j1", replicas=2)
@@ -459,7 +455,7 @@ def test_failed_worker_is_pruned_from_state(state):
 
     # list_all_workers only returns w2
     with state._db.read_snapshot() as tx:
-        all_workers = tx.fetchall(select(workers_table.c.worker_id))
+        all_workers = tx.execute(select(workers_table.c.worker_id)).all()
     assert len(all_workers) == 1
     assert all_workers[0].worker_id == w2
 
@@ -472,7 +468,7 @@ def test_failed_worker_is_pruned_from_state(state):
     assert _query_worker(state, w1_again) is not None
     assert _query_worker(state, w1_again).healthy is True
     with state._db.read_snapshot() as tx:
-        assert len(tx.fetchall(select(workers_table.c.worker_id))) == 2
+        assert len(tx.execute(select(workers_table.c.worker_id)).all()) == 2
 
 
 def test_dispatch_failure_marks_worker_failed_and_requeues_task(state):
@@ -910,7 +906,7 @@ def test_hierarchical_job_tracking(state):
     # get_children only returns direct children
     parent_id = JobName.root("test-user", "parent")
     with state._db.read_snapshot() as tx:
-        children = tx.fetchall(select(jobs_table.c.job_id).where(jobs_table.c.parent_job_id == parent_id))
+        children = tx.execute(select(jobs_table.c.job_id).where(jobs_table.c.parent_job_id == parent_id)).all()
     assert len(children) == 2
     assert {c.job_id for c in children} == {
         JobName.from_string("/test-user/parent/child1"),
@@ -920,7 +916,7 @@ def test_hierarchical_job_tracking(state):
     # No children for leaf nodes
     grandchild_id = JobName.from_string("/test-user/parent/child1/grandchild")
     with state._db.read_snapshot() as tx:
-        leaf_children = tx.fetchall(select(jobs_table.c.job_id).where(jobs_table.c.parent_job_id == grandchild_id))
+        leaf_children = tx.execute(select(jobs_table.c.job_id).where(jobs_table.c.parent_job_id == grandchild_id)).all()
     assert leaf_children == []
 
 
@@ -1138,7 +1134,7 @@ def test_coscheduled_cascade_ignores_late_sibling_heartbeats(state):
     The worker's container is still up until the next poll diff stops it, so
     heartbeats for the sibling task may arrive after the cascade has marked
     it COSCHED_FAILED. The heartbeat update loop short-circuits via
-    ``task_row_is_finished``; without an unconditionally-terminal sibling
+    ``task_is_finished``; without an unconditionally-terminal sibling
     state, a stale ``WORKER_FAILED`` heartbeat with retry budget remaining
     would flip the sibling back to PENDING and undo the cascade.
     """
@@ -3471,11 +3467,11 @@ def test_drain_pending_creates_attempt_rows(state):
 
     # Verify attempt row was created with NULL worker_id.
     with state._db.read_snapshot() as _snap:
-        row = _snap.fetchone(
+        row = _snap.execute(
             select(task_attempts_table.c.worker_id, task_attempts_table.c.state).where(
                 (task_attempts_table.c.task_id == task_id) & (task_attempts_table.c.attempt_id == 0)
             )
-        )
+        ).first()
     assert row is not None
     assert row.worker_id is None
     assert int(row.state) == job_pb2.TASK_STATE_ASSIGNED
@@ -3483,11 +3479,11 @@ def test_drain_pending_creates_attempt_rows(state):
 
 def _count_pending(state: ControllerTransitions) -> int:
     with state._db.read_snapshot() as q:
-        row = q.fetchone(
+        row = q.execute(
             select(func.count().label("c"))
             .select_from(tasks_table)
             .where(tasks_table.c.state == job_pb2.TASK_STATE_PENDING)
-        )
+        ).first()
     return int(row.c)
 
 

@@ -14,8 +14,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.types import TERMINAL_TASK_STATES
 from rigging.timing import Timestamp
@@ -101,7 +102,7 @@ def test_no_orphan_task_attempts(scenario_name: str) -> None:
 
     def check(db: ControllerDB) -> None:
         with db.read_snapshot() as snap:
-            rows = snap.fetchall(
+            rows = snap.execute(
                 select(
                     ta.c.task_id,
                     ta.c.attempt_id,
@@ -115,7 +116,7 @@ def test_no_orphan_task_attempts(scenario_name: str) -> None:
                     ta.c.state.in_(active),
                     ta.c.finished_at_ms.is_(None),
                 )
-            )
+            ).all()
         orphans = [
             f"{row.task_id} attempt={row.attempt_id} " f"task_state={row.task_state} attempt_state={row.attempt_state}"
             for row in rows
@@ -167,7 +168,7 @@ def test_no_split_coscheduled_active_tasks(scenario_name: str) -> None:
 
     def check(db: ControllerDB) -> None:
         with db.read_snapshot() as snap:
-            rows = snap.fetchall(stmt)
+            rows = snap.execute(stmt).all()
         split = [
             f"{row.job_id} active={row.active_count} pending={row.pending_count} total={row.task_count}" for row in rows
         ]

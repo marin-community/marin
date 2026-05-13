@@ -47,12 +47,7 @@ from iris.cluster.controller.codec import (
     reservation_entries_from_json,
     resource_spec_from_scalars,
 )
-from iris.cluster.controller.db import (
-    ACTIVE_TASK_STATES,
-    ControllerDB,
-    attempt_is_worker_failure,
-    task_row_can_be_scheduled,
-)
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import (
     AddEndpointOutcome,
     EndpointQuery,
@@ -71,6 +66,7 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, attempt_is_worker_failure, task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
