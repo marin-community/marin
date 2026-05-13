@@ -77,6 +77,7 @@ _USER_SPEND_QUERY = (
     )
     .select_from(tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id))
     .where(tasks_table.c.state.in_(bindparam("states", expanding=True)))
+    .where(job_config_table.c.priority_band != job_pb2.PRIORITY_BAND_BATCH)
     .group_by(tasks_table.c.job_id)
 )
 
@@ -86,6 +87,13 @@ def compute_user_spend(tx: Tx) -> dict[str, int]:
 
     Joins tasks (in ASSIGNED/BUILDING/RUNNING states) with job_config to get
     resource columns.  Groups by job, then sums resource_value * task_count per user.
+
+    Jobs whose requested band is ``PRIORITY_BAND_BATCH`` are excluded so users
+    aren't billed for opportunistic work they explicitly submitted as batch.
+    We key off ``job_config.priority_band`` (the user's requested band) rather
+    than the stamped ``tasks.priority_band`` so jobs the scheduler downgraded
+    to BATCH still count — otherwise a downgrade would drop the user under
+    budget on the next tick and the band would oscillate.
 
     Returns ``{user_id: total_resource_value}`` for users with active tasks.
     """
