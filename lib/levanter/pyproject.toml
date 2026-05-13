@@ -85,6 +85,13 @@ gpu = [
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # Optional CuTe/QuACK/Sonic MoE kernels.
+  "apache-tvm-ffi>=0.1.6,<0.2; sys_platform == 'linux'",
+  "cuda-bindings>=13.2.0; sys_platform == 'linux'",
+  "nvidia-cutlass-dsl[cu13]>=4.5.0; sys_platform == 'linux'",
+  "quack-kernels>=0.4.0; sys_platform == 'linux'",
+  "torch-c-dlpack-ext; sys_platform == 'linux'",
+  "sonic-moe @ git+https://github.com/Dao-AILab/sonic-moe@cfbd65f39b980b85b878b3cccdacb09191e24993 ; sys_platform == 'linux'",
 ]
 tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.38"]
 torch_test = [

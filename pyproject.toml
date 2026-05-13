@@ -71,6 +71,8 @@ override-dependencies = [
     "setuptools>=82.0.1",
     "tiktoken>=0.12.0",
     "tornado>=6.5.5",
+    # QuACK/Sonic MoE uses CUDA 13 bindings; PyTorch's CUDA 12.8 wheel metadata caps this too tightly.
+    "cuda-bindings>=13.2.0; sys_platform == 'linux'",
 ]
 conflicts = [
     # Temporary cross-package conflicts for the GPU JAX 0.10 / non-GPU JAX 0.9 split.
@@ -100,6 +102,12 @@ conflicts = [
         { package = "marin-fray", group = "fray_tpu_test" },
     ],
 ]
+
+[[tool.uv.dependency-metadata]]
+name = "sonic-moe"
+version = "0.1.2.post1"
+requires-python = ">=3.11"
+requires-dist = []
 
 [tool.uv.workspace]
 members = [
