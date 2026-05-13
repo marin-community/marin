@@ -238,7 +238,7 @@ Only delete the specific bad node. If multiple nodes fail simultaneously or the 
 
 ### GCP State
 
-State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages), `controller-state/` (SQLite checkpoints), `logs/` (Parquet).
+State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages) and `controller-state/` (SQLite checkpoints). Per-task log parquet segments are shipped separately by finelog under `<finelog.remote_log_dir>/log/` (see `lib/finelog/config/<cluster>.yaml`).
 
 ### GCP Gotchas
 

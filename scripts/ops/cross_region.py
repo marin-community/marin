@@ -5,7 +5,7 @@
 """Analyze cross-region GCS operations from archived Iris task logs.
 
 This script:
-- locates archived log parquet segments under ``<remote_state_dir>/logs``
+- locates finelog log parquet segments under ``<finelog.remote_log_dir>/log``
 - downloads the recent segments needed for a time window
 - downloads the latest controller checkpoint unless a checkpoint directory is supplied
 - joins task log entries against task attempt / worker region metadata
@@ -31,6 +31,7 @@ from pathlib import Path
 import click
 import duckdb
 import fsspec
+from finelog.deploy.config import load_finelog_config
 from iris.cluster.config import IrisConfig
 from iris.cluster.controller.checkpoint import _find_latest_checkpoint_dir, download_checkpoint_to_local
 from rigging.filesystem import get_bucket_location, region_from_prefix
@@ -418,6 +419,7 @@ def analyze(
     job_counts = Counter()
     task_counts = Counter()
     user_counts = Counter()
+    large_user_counts = Counter()
     size_tier_counts = Counter()
     cross_region_size_tier_counts = Counter()
     cross_region_extension_counts = Counter()
@@ -517,6 +519,8 @@ def analyze(
                 job_counts[task_id.rsplit("/", 1)[0]] += 1
                 task_counts[task_id] += 1
                 user_counts[user] += 1
+                if size_tier == "large":
+                    large_user_counts[user] += 1
 
                 sample_key = (task_id, attempt_id, path, epoch_ms)
                 if sample_key in seen_sample_keys:
@@ -582,6 +586,7 @@ def analyze(
         "cross_region_jobs": dict(job_counts.most_common(50)),
         "cross_region_tasks": dict(task_counts.most_common(50)),
         "cross_region_users": dict(user_counts.most_common()),
+        "cross_region_large_users": dict(large_user_counts.most_common()),
         "unmatched_tasks_top25": dict(unmatched_tasks.most_common(25)),
         "unknown_buckets_top25": dict(unknown_buckets.most_common(25)),
         "samples": samples,
@@ -600,6 +605,19 @@ def _md_table(headers: list[str], rows: list[list]) -> str:
     for row in rows:
         out.append("| " + " | ".join(str(c) for c in row) + " |")
     return "\n".join(out) + "\n"
+
+
+def _format_handle(user: str) -> str:
+    """Prefix GH-style handles with `@`; leave `<unknown>` alone."""
+    return f"@{user}" if user and user != "<unknown>" else user
+
+
+def _split_owner_path(prefix: str) -> tuple[str, str]:
+    """Split an Iris task/job key (``/<user>/<rest>``) into (owner, rest)."""
+    parts = prefix.split("/", 2)
+    if len(parts) >= 3 and parts[1]:
+        return parts[1], parts[2]
+    return "<unknown>", prefix
 
 
 def write_markdown(summary: dict, path: Path) -> None:
@@ -677,9 +695,23 @@ def write_markdown(summary: dict, path: Path) -> None:
     lines.append(
         _md_table(
             ["User", "Mentions"],
-            [[k, v] for k, v in list(summary["cross_region_users"].items())[:25]],
+            [[_format_handle(k), v] for k, v in list(summary["cross_region_users"].items())[:25]],
         )
     )
+
+    large_users = summary.get("cross_region_large_users") or {}
+    if large_users:
+        lines.append("\n## Cross-region by user (large-tier only)\n")
+        lines.append(
+            "_Only path mentions in the `large` tier (model/checkpoint shards). "
+            "This is the closest proxy we have to bytes-of-egress per user._\n"
+        )
+        lines.append(
+            _md_table(
+                ["User", "Large-tier mentions"],
+                [[_format_handle(k), v] for k, v in list(large_users.items())[:25]],
+            )
+        )
 
     lines.append("\n## Top region pairs (source → destination)\n")
     lines.append(
@@ -698,20 +730,18 @@ def write_markdown(summary: dict, path: Path) -> None:
     )
 
     lines.append("\n## Top cross-region jobs\n")
-    lines.append(
-        _md_table(
-            ["Job", "Mentions"],
-            [[k, v] for k, v in list(summary["cross_region_jobs"].items())[:25]],
-        )
-    )
+    job_rows = []
+    for k, v in list(summary["cross_region_jobs"].items())[:25]:
+        owner, rest = _split_owner_path(k)
+        job_rows.append([_format_handle(owner), rest, v])
+    lines.append(_md_table(["Owner", "Job", "Mentions"], job_rows))
 
     lines.append("\n## Top cross-region tasks\n")
-    lines.append(
-        _md_table(
-            ["Task", "Mentions"],
-            [[k, v] for k, v in list(summary["cross_region_tasks"].items())[:25]],
-        )
-    )
+    task_rows = []
+    for k, v in list(summary["cross_region_tasks"].items())[:25]:
+        owner, rest = _split_owner_path(k)
+        task_rows.append([_format_handle(owner), rest, v])
+    lines.append(_md_table(["Owner", "Task", "Mentions"], task_rows))
 
     if summary.get("unknown_buckets_top25"):
         lines.append("\n## Buckets with unknown region\n")
@@ -735,7 +765,10 @@ def write_markdown(summary: dict, path: Path) -> None:
             user_samples = samples_by_user[user]
             if not user_samples:
                 continue
-            lines.append(f"### `{user}` ({summary['cross_region_users'].get(user, len(user_samples))} mentions)\n")
+            lines.append(
+                f"### {_format_handle(user)} "
+                f"({summary['cross_region_users'].get(user, len(user_samples))} mentions)\n"
+            )
             rows = []
             for s in user_samples:
                 ts = _fmt_ms(s["timestamp_ms"]).split("+")[0]
@@ -772,6 +805,8 @@ def write_csv(summary: dict, path: Path) -> None:
             writer.writerow(["task", key, value])
         for key, value in summary["cross_region_users"].items():
             writer.writerow(["user", key, value])
+        for key, value in (summary.get("cross_region_large_users") or {}).items():
+            writer.writerow(["user_large_tier", key, value])
         for key, value in summary["cross_region_size_tier_counts"].items():
             writer.writerow(["size_tier", key, value])
         for key, value in summary["cross_region_extensions"].items():
@@ -845,7 +880,15 @@ def main(
     logging.info(f"Output directory: {out_path}")
 
     cfg = IrisConfig.load(config)
-    remote_logs_dir = f"{cfg.proto.storage.remote_state_dir.rstrip('/')}/logs"
+    if not cfg.proto.log_server_config:
+        raise click.ClickException(
+            f"Iris config {config!r} has no log_server_config; cross-region analysis "
+            "requires logs shipped via finelog."
+        )
+    finelog_cfg = load_finelog_config(cfg.proto.log_server_config)
+    if not finelog_cfg.remote_log_dir:
+        raise click.ClickException(f"finelog config {cfg.proto.log_server_config!r} has no remote_log_dir.")
+    remote_logs_dir = f"{finelog_cfg.remote_log_dir.rstrip('/')}/log"
 
     log_entries = choose_log_objects(remote_logs_dir, window, download_lookback_hours)
     local_logs_dir = out_path / "logs"
