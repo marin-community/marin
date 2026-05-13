@@ -10,7 +10,7 @@ import logging
 import re
 import tempfile
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
@@ -79,6 +79,10 @@ class XPlaneTableExport:
     trace_event_count: int | None
 
 
+class MultipleXPlaneFilesError(ValueError):
+    """Raised when an artifact contains one XPlane protobuf per host."""
+
+
 def find_xplane_file(profile_dir: Path) -> Path:
     """Locate an XPlane protobuf inside a downloaded JAX profile artifact."""
     if not profile_dir.exists():
@@ -89,7 +93,7 @@ def find_xplane_file(profile_dir: Path) -> Path:
         return candidates[0]
     if len(candidates) > 1:
         joined = ", ".join(str(path) for path in candidates)
-        raise ValueError(f"Found multiple *.xplane.pb files under '{profile_dir}': {joined}")
+        raise MultipleXPlaneFilesError(f"Found multiple *.xplane.pb files under '{profile_dir}': {joined}")
 
     raise FileNotFoundError(f"No *.xplane.pb file found under '{profile_dir}'.")
 
@@ -311,24 +315,7 @@ def summarize_xplane_tables(
         gap_region_contexts=[],
         optimization_candidates=[],
     )
-    return ProfileSummary(
-        schema_version=summary.schema_version,
-        generated_at_utc=summary.generated_at_utc,
-        source_format=summary.source_format,
-        source_path=summary.source_path,
-        run_metadata=summary.run_metadata,
-        trace_overview=summary.trace_overview,
-        trace_provenance=summary.trace_provenance,
-        step_time=summary.step_time,
-        time_breakdown=summary.time_breakdown,
-        hot_ops=summary.hot_ops,
-        semantic_families=summary.semantic_families,
-        communication_ops=summary.communication_ops,
-        gap_before_ops=summary.gap_before_ops,
-        hierarchical_regions=summary.hierarchical_regions,
-        gap_region_contexts=summary.gap_region_contexts,
-        optimization_candidates=_derive_optimization_candidates(summary),
-    )
+    return replace(summary, optimization_candidates=_derive_optimization_candidates(summary))
 
 
 def _try_summarize_xprof_tables(
@@ -424,24 +411,7 @@ def _merge_timeline_and_xprof_summaries(
         gap_region_contexts=timeline_summary.gap_region_contexts,
         optimization_candidates=[],
     )
-    return ProfileSummary(
-        schema_version=summary.schema_version,
-        generated_at_utc=summary.generated_at_utc,
-        source_format=summary.source_format,
-        source_path=summary.source_path,
-        run_metadata=summary.run_metadata,
-        trace_overview=summary.trace_overview,
-        trace_provenance=summary.trace_provenance,
-        step_time=summary.step_time,
-        time_breakdown=summary.time_breakdown,
-        hot_ops=summary.hot_ops,
-        semantic_families=summary.semantic_families,
-        communication_ops=summary.communication_ops,
-        gap_before_ops=summary.gap_before_ops,
-        hierarchical_regions=summary.hierarchical_regions,
-        gap_region_contexts=summary.gap_region_contexts,
-        optimization_candidates=_derive_optimization_candidates(summary),
-    )
+    return replace(summary, optimization_candidates=_derive_optimization_candidates(summary))
 
 
 def _xprof_quality_warnings(summary: ProfileSummary) -> list[str]:
@@ -930,8 +900,8 @@ def _load_tables(path: Path) -> list[tuple[list[str], list[dict[str, Any]], dict
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Malformed xprof table JSON: {path}") from error
     tables = data if isinstance(data, list) else [data]
     return [_table_rows(table) for table in tables if isinstance(table, dict) and "cols" in table]
 

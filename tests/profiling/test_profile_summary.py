@@ -449,15 +449,18 @@ def test_profile_dir_prefers_xplane_over_capped_perfetto_trace(tmp_path: Path, m
     assert summary.trace_overview.num_complete_events == 6
 
 
-def test_profile_dir_rejects_multiple_xplane_files(tmp_path: Path, monkeypatch) -> None:
+def test_profile_dir_falls_back_to_perfetto_for_multiple_xplane_files(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(xplane_module, "_try_summarize_xprof_tables", lambda *args, **kwargs: None)
     profile_dir = tmp_path / "artifact" / "plugins" / "profile" / "2026_05_11_12_00_00"
     profile_dir.mkdir(parents=True)
     _write_xplane(profile_dir / "host-0.xplane.pb")
     _write_xplane(profile_dir / "host-1.xplane.pb")
+    _write_trace(profile_dir / "perfetto_trace.json.gz", step_durations=[100, 120, 140], softmax_duration=30)
 
-    with pytest.raises(ValueError, match="multiple \\*\\.xplane\\.pb files"):
-        summarize_profile_artifact(tmp_path / "artifact")
+    summary = summarize_profile_artifact(tmp_path / "artifact", warmup_steps=1, hot_op_limit=10)
+
+    assert summary.source_format == "perfetto_trace_json"
+    assert summary.step_time.steady_state_steps.median == 130.0
 
 
 def test_profile_dir_falls_back_to_perfetto_when_xplane_is_malformed(tmp_path: Path) -> None:
@@ -667,12 +670,11 @@ def test_export_xplane_tables_accepts_text_and_counts_trace_events(tmp_path: Pat
     assert "trace_viewer@" in seen_tools
 
 
-def test_xplane_table_summary_ignores_malformed_tables_and_handles_large_kernel_summary(tmp_path: Path) -> None:
+def test_xplane_table_summary_ignores_non_table_entries_and_handles_large_kernel_summary(tmp_path: Path) -> None:
     output_dir = tmp_path / "tables"
     output_dir.mkdir()
     xplane_path = tmp_path / "profile.xplane.pb"
     xplane_path.write_bytes(b"fake xplane bytes")
-    (output_dir / "memory_profile.json").write_text("", encoding="utf-8")
 
     (output_dir / "overview_page.json").write_text(
         json.dumps(
@@ -747,6 +749,17 @@ def test_xplane_table_summary_ignores_malformed_tables_and_handles_large_kernel_
     assert summary.communication_ops[0].total_duration > 0
     assert summary.semantic_families
     assert summary.optimization_candidates
+
+
+def test_xplane_table_summary_rejects_malformed_table_json(tmp_path: Path) -> None:
+    output_dir = tmp_path / "tables"
+    output_dir.mkdir()
+    xplane_path = tmp_path / "profile.xplane.pb"
+    xplane_path.write_bytes(b"fake xplane bytes")
+    (output_dir / "overview_page.json").write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Malformed xprof table JSON"):
+        summarize_xplane_tables(output_dir, xplane_path=xplane_path)
 
 
 def _write_trace(path: Path, *, step_durations: list[float], softmax_duration: float) -> None:

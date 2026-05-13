@@ -104,6 +104,10 @@ def profile(
 
     def profiler_callback_fn(step: StepInfo, *, force: bool = False):
         nonlocal trace_started
+        if force and trace_started:
+            _stop_profile()
+            return
+
         # -1 b/c step is the finished step
         if step.step == start_step - 1:
             if force or trace_started:
@@ -117,34 +121,36 @@ def profile(
                 profiler_options=profiler_options,
             )
             trace_started = True
-        elif step.step == start_step + num_steps - 1 or (force and trace_started):
-            if not trace_started:
-                return
-            if create_perfetto_link:
-                logger.info(
-                    f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}"
-                )
-            else:
-                logger.info("Stopping profiler.")
-            # so, annoyingly, gcloud ssh doesn't reliably flush stdout here, so we need to spin up
-            # a thread to flush and print periodically until we make it past stop_trace
-            # (note: stop_trace blocks if perfetto is enabled)
-            event = threading.Event()
-            if create_perfetto_link and jax.process_index() == 0:
-                _flush_while_waiting(event)
+        elif step.step == start_step + num_steps - 1:
+            _stop_profile()
 
-            jax.profiler.stop_trace()
-            trace_started = False
+    def _stop_profile():
+        nonlocal trace_started
+        if not trace_started:
+            return
+        if create_perfetto_link:
+            logger.info(f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}")
+        else:
+            logger.info("Stopping profiler.")
+        # so, annoyingly, gcloud ssh doesn't reliably flush stdout here, so we need to spin up
+        # a thread to flush and print periodically until we make it past stop_trace
+        # (note: stop_trace blocks if perfetto is enabled)
+        event = threading.Event()
+        if create_perfetto_link and jax.process_index() == 0:
+            _flush_while_waiting(event)
 
-            if create_perfetto_link and jax.process_index() == 0:
-                event.set()
+        jax.profiler.stop_trace()
+        trace_started = False
 
-            levanter.tracker.current_tracker().log_artifact(
-                path,
-                name=artifact_name,
-                type="jax_profile",
-            )
-            barrier_sync()
+        if create_perfetto_link and jax.process_index() == 0:
+            event.set()
+
+        levanter.tracker.current_tracker().log_artifact(
+            path,
+            name=artifact_name,
+            type="jax_profile",
+        )
+        barrier_sync()
 
     return profiler_callback_fn
 

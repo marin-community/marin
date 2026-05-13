@@ -40,8 +40,8 @@ def test_profile_passes_profile_options_and_ignores_duplicate_forced_stop(monkey
     )
 
     callback.on_step(SimpleNamespace(step=4))
-    callback.on_step(SimpleNamespace(step=5), force=True)
-    callback.on_step(SimpleNamespace(step=5), force=True)
+    callback.on_step(SimpleNamespace(step=4), force=True)
+    callback.on_step(SimpleNamespace(step=4), force=True)
 
     assert calls == [
         ("start", "/tmp/profiler", False, True, options),
