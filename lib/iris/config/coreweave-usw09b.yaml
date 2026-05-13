@@ -15,7 +15,7 @@
 #        export R2_SECRET_ACCESS_KEY=<...>
 #   3. Start the cluster:
 #        cd lib/iris && uv run --group dev iris \
-#          --config=examples/coreweave-usw09b.yaml cluster start
+#          --config=config/coreweave-usw09b.yaml cluster start
 #
 # The controller Deployment includes the standard NVIDIA GPU toleration, so it
 # can schedule onto this GPU-only cluster.
