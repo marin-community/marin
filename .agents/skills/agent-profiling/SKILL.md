@@ -3,7 +3,7 @@ name: agent-profiling
 description: Profile JAX training using xprof/TensorBoard/Perfetto and analyze hotspots. Use when asked to profile, benchmark, or optimize training throughput.
 ---
 
-# Skill: Agent-Driven Profiling (xprof/TensorBoard/Perfetto)
+# Skill: Agent-Driven Profiling (XPlane/xprof/TensorBoard/Perfetto)
 
 ## Overview
 Use this skill to turn a `jax_profile` artifact into a deterministic, agent-consumable summary and a concrete optimization workflow:
@@ -15,13 +15,23 @@ Use this skill to turn a `jax_profile` artifact into a deterministic, agent-cons
 5. re-profile and compare.
 
 ## Scope
-MVP ingestion source of truth:
-- xprof-exported trace JSON inside Levanter `jax_profile` artifacts:
-  - `plugins/profile/<timestamp>/perfetto_trace.json.gz` (preferred)
-  - `plugins/profile/<timestamp>/*.trace.json.gz` (fallback)
+Ingestion source of truth:
+- XPlane protobufs inside Levanter `jax_profile` artifacts:
+  - `plugins/profile/<timestamp>/*.xplane.pb`
+  - explicit local `*.xplane.pb` files via `--xplane-file`
+- xprof aggregate tables exported from the same XPlane protobuf when the optional `xprof` package is available:
+  - step overview timing
+  - kernel stats
+  - collective breakdowns
+  - xprof bottleneck statements
+- Perfetto trace JSON as an explicit/fallback source for old artifacts:
+  - `plugins/profile/<timestamp>/perfetto_trace.json.gz`
+  - `plugins/profile/<timestamp>/*.trace.json.gz`
 
-MVP non-goal:
-- direct `*.xplane.pb` parsing (kept as a follow-up increment)
+Prefer XPlane protobuf for new work. Perfetto trace JSON commonly hits the trace event cap, while XPlane contains the
+uncapped timeline events needed for named-scope regions, pre-op gaps, gap context, process/thread metadata, and xprof
+aggregate tables. Use `--trace-file` only when you intentionally want a specific Perfetto JSON trace or when handling an
+older artifact with no XPlane protobuf.
 
 ## Capture Profiles
 Use Levanter profiler flags so profiles are uploaded consistently as `jax_profile` artifacts:
@@ -33,6 +43,22 @@ uv run ... \
   --trainer.profiler_num_steps 50 \
   --trainer.profiler_perfetto_link false
 ```
+
+For profiles where xprof/HLO protobuf tables matter, enable JAX profile options through the Levanter profiler config:
+
+```bash
+uv run ... \
+  --trainer.profiler true \
+  --trainer.profiler_start_step 5 \
+  --trainer.profiler_num_steps 50 \
+  --trainer.profiler.profile_options.host_tracer_level 1 \
+  --trainer.profiler.profile_options.python_tracer_level 0 \
+  --trainer.profiler.profile_options.device_tracer_level 0 \
+  --trainer.profiler.profile_options.enable_hlo_proto true
+```
+
+Keep the profiler window short when enabling HLO protobuf collection. It can make artifacts much larger and may increase
+profile upload/finalization time.
 
 Reference:
 - `lib/levanter/docs/Performance-Guide.md`
@@ -97,6 +123,11 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
+If the artifact directory contains `*.xplane.pb`, `--profile-dir` automatically uses the XPlane path.
+
+When both `*.xplane.pb` and Perfetto trace JSON are present, `--profile-dir` reads the XPlane protobuf by default because
+Perfetto exports are often capped. Use `--trace-file` to force a specific Perfetto JSON file.
+
 ### Option D: From a specific trace file
 
 ```bash
@@ -104,6 +135,28 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --trace-file /path/to/perfetto_trace.json.gz \
   --output /tmp/profile_summary.json
 ```
+
+### Option E: From a specific XPlane protobuf
+
+Direct XPlane timeline parsing uses `protobuf` and does not require TensorFlow-generated `xplane_pb2` modules. If `xprof`
+is installed, ingestion also exports compact xprof table JSON and augments the timeline summary with aggregate step,
+kernel, collective, and bottleneck evidence.
+
+```bash
+uv run --with xprof --with protobuf python lib/marin/tools/profile_summary.py summarize \
+  --xplane-file /path/to/profile.xplane.pb \
+  --xplane-output-dir /tmp/profile_xprof_tables \
+  --xplane-count-trace-events \
+  --output /tmp/profile_summary.json
+```
+
+Without `--xplane-output-dir`, the command still parses XPlane timeline events directly. Add `--with xprof` when you want
+xprof aggregate table augmentation. Add `--xplane-output-dir` when you want the exported table JSON preserved; this flag
+requires the optional `xprof` package.
+
+XPlane summaries expose hierarchical named-scope regions, pre-op gaps, gap region context, process/thread/timeline event
+metadata, step timing when step markers or xprof overview rows exist, xprof bottleneck statements, kernel stats,
+collective breakdowns, and optimization candidates.
 
 Summary version tag:
 - `profile_summary.v1`
