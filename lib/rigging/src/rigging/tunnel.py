@@ -32,8 +32,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
+import signal
 import socket
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -166,15 +169,64 @@ def _pump_stderr_to_logger(proc: subprocess.Popen, label: str) -> threading.Thre
     return t
 
 
+def _process_group(proc: subprocess.Popen) -> int | None:
+    """Return ``proc``'s process group id, or ``None`` if it isn't its own session leader.
+
+    ``_default_spawn`` uses ``start_new_session=True`` so the child is the
+    leader of a fresh group containing every descendant it forks. Signaling
+    that group tears the whole tunnel down; signaling only ``proc.pid``
+    leaves the SSH/kubectl child that actually holds the listener alive.
+    A spawn fn that does not start a new session shares its group with us,
+    in which case we must fall back to signaling only the pid — signaling
+    our own group would kill the caller.
+    """
+    if sys.platform == "win32" or not hasattr(os, "killpg"):
+        return None
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return None
+    if pgid == os.getpgid(0):
+        return None
+    return pgid
+
+
+def _send(proc: subprocess.Popen, pgid: int | None, sig: int) -> None:
+    if pgid is not None:
+        try:
+            os.killpg(pgid, sig)
+            return
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            logger.debug("killpg(%d, %d) failed: %s; falling back to pid", pgid, sig, exc)
+    try:
+        proc.send_signal(sig)
+    except ProcessLookupError:
+        pass
+
+
 def _terminate(proc: subprocess.Popen) -> None:
+    """Tear ``proc`` down along with every descendant in its session.
+
+    ``gcloud compute ssh`` and ``kubectl port-forward`` are wrappers that
+    fork the long-lived SSH/forwarder child that actually holds the local
+    listener. Signaling only the wrapper pid lets the wrapper exit while
+    the descendant keeps the local port — and the remote session — alive
+    past context exit. Send to the whole process group instead, escalating
+    to ``SIGKILL`` if the group does not exit within five seconds.
+    """
     if proc.poll() is not None:
         return
-    proc.terminate()
+    pgid = _process_group(proc)
+    _send(proc, pgid, signal.SIGTERM)
     try:
         proc.wait(timeout=5)
+        return
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+        pass
+    _send(proc, pgid, signal.SIGKILL)
+    proc.wait()
 
 
 @contextlib.contextmanager
