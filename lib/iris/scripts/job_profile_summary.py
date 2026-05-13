@@ -53,12 +53,12 @@ logger = logging.getLogger("job-profile")
 CONTROLLER_DB = "controller.sqlite3"
 PROFILES_DB = "profiles.sqlite3"
 
-EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 
 def remote_state_dir_for_cluster(cluster: str) -> str:
-    """Look up ``storage.remote_state_dir`` from ``examples/<cluster>.yaml``."""
-    config_path = EXAMPLES_DIR / f"{cluster}.yaml"
+    """Look up ``storage.remote_state_dir`` from ``config/<cluster>.yaml``."""
+    config_path = CONFIG_DIR / f"{cluster}.yaml"
     if not config_path.exists():
         raise FileNotFoundError(f"No cluster config at {config_path}")
     with open(config_path) as f:
@@ -515,7 +515,7 @@ def main() -> int:
     p.add_argument(
         "--cluster",
         default="marin",
-        help="Cluster name; resolves storage.remote_state_dir from lib/iris/examples/<cluster>.yaml (default: marin)",
+        help="Cluster name; resolves storage.remote_state_dir from lib/iris/config/<cluster>.yaml (default: marin)",
     )
     p.add_argument(
         "--cache-dir",

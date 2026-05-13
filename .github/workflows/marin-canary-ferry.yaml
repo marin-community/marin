@@ -32,7 +32,7 @@ jobs:
       CANARY_CHILD_WAIT_TIMEOUT: "12600"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/examples/marin.yaml
+      IRIS_CONFIG: lib/iris/config/marin.yaml
       IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
 
     steps:

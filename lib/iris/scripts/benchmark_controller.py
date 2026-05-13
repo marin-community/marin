@@ -79,12 +79,12 @@ from rigging.timing import Timestamp
 
 _results: list[tuple[str, float, float, int]] = []
 
-_MARIN_YAML = Path(__file__).resolve().parents[1] / "examples" / "marin.yaml"
+_MARIN_YAML = Path(__file__).resolve().parents[1] / "config" / "marin.yaml"
 DEFAULT_DB_DIR = Path("/tmp/iris_benchmark")
 
 
 def _marin_remote_state_dir() -> str:
-    """Resolve the canonical remote_state_dir from examples/marin.yaml."""
+    """Resolve the canonical remote_state_dir from config/marin.yaml."""
     with _MARIN_YAML.open() as fh:
         cfg = yaml.safe_load(fh)
     return cfg["storage"]["remote_state_dir"]

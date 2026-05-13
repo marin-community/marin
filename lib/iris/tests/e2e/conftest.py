@@ -45,7 +45,7 @@ from .chronos import VirtualClock
 
 MARIN_ROOT = Path(__file__).resolve().parents[4]  # repo root
 IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "test.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "config" / "test.yaml"
 
 
 @pytest.fixture(scope="session", autouse=True)

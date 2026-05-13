@@ -46,7 +46,7 @@ Reserve a single-host TPU and hold it until `Ctrl-C`:
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8" \
   allocate --tpu-type v5p-8
 ```
@@ -55,7 +55,7 @@ Inspect the active session:
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8" \
   status
 ```
@@ -64,7 +64,7 @@ Connect to the reserved worker:
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8" \
   connect
 ```
@@ -80,7 +80,7 @@ Run one command with sync:
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8" \
   execute -- \
   uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
@@ -90,7 +90,7 @@ If you allocated with `--no-setup-env`, refresh the remote environment before th
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8" \
   setup_env
 ```
@@ -101,7 +101,7 @@ Pick a config that exposes the TPU family you want, then pin the holder job with
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8-east5" \
   allocate --tpu-type v5p-8 --zone us-east5-b
 ```
@@ -114,7 +114,7 @@ Multi-host TPU types reserve more than one worker VM. Use `--worker <index>` wit
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p16" \
   connect --worker 1
 ```
@@ -127,7 +127,7 @@ uv run scripts/iris/dev_tpu.py \
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8" \
   execute --no-sync -- \
   uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
@@ -137,7 +137,7 @@ uv run scripts/iris/dev_tpu.py \
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8" \
   watch -- \
   uv run --package levanter --group test pytest lib/levanter/tests/kernels/test_pallas_fused_cross_entropy_loss.py
@@ -148,16 +148,16 @@ uv run scripts/iris/dev_tpu.py \
 Use normal Iris tooling to inspect the backing cluster and holder job:
 
 ```bash
-uv run iris --config=lib/iris/examples/marin.yaml cluster dashboard
-uv run iris --config=lib/iris/examples/marin.yaml cluster vm status
-uv run iris --config=lib/iris/examples/marin.yaml job list --prefix /$USER/dev-tpu
-uv run iris --config=lib/iris/examples/marin.yaml job logs /$USER/dev-tpu-<name>
+uv run iris --config=lib/iris/config/marin.yaml cluster dashboard
+uv run iris --config=lib/iris/config/marin.yaml cluster vm status
+uv run iris --config=lib/iris/config/marin.yaml job list --prefix /$USER/dev-tpu
+uv run iris --config=lib/iris/config/marin.yaml job logs /$USER/dev-tpu-<name>
 ```
 
 If worker bootstrap fails:
 
 ```bash
-uv run iris --config=lib/iris/examples/marin.yaml cluster vm logs <worker-id>
+uv run iris --config=lib/iris/config/marin.yaml cluster vm logs <worker-id>
 ```
 
 ### Session behavior
@@ -179,7 +179,7 @@ export TPU_NAME="${USER}-$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"
 Then use that name consistently:
 
 ```bash
-uv run scripts/iris/dev_tpu.py --config lib/iris/examples/marin.yaml --tpu-name "$TPU_NAME" allocate --tpu-type v5p-8
+uv run scripts/iris/dev_tpu.py --config lib/iris/config/marin.yaml --tpu-name "$TPU_NAME" allocate --tpu-type v5p-8
 ```
 
 ## Cleanup
@@ -190,7 +190,7 @@ If you need cleanup from another shell:
 
 ```bash
 uv run scripts/iris/dev_tpu.py \
-  --config lib/iris/examples/marin.yaml \
+  --config lib/iris/config/marin.yaml \
   --tpu-name "$USER-v5p8" \
   release
 ```

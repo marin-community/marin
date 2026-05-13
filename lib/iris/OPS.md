@@ -204,7 +204,7 @@ gcloud compute ssh iris-controller-marin --zone=us-central1-a \
   --project=hai-gcp-models --tunnel-through-iap -- -L 10000:localhost:10000 -N
 
 # Then: iris --controller-url=http://localhost:10000 ...
-# Or config-based auto-tunnel: iris --config=lib/iris/examples/marin.yaml ...
+# Or config-based auto-tunnel: iris --config=lib/iris/config/marin.yaml ...
 ```
 
 Configs: `marin.yaml` (production), `marin-dev.yaml` (dev, smaller scale caps).
@@ -251,7 +251,7 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 ## CoreWeave (GPU) Operations
 
 Always read [`docs/coreweave.md`](docs/coreweave.md) before operating a
-GPU/CoreWeave cluster. Use `lib/iris/examples/coreweave-*.yaml` for CoreWeave
+GPU/CoreWeave cluster. Use `lib/iris/config/coreweave-*.yaml` for CoreWeave
 cluster configs.
 
 ## CI Workflows

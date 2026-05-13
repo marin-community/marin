@@ -475,7 +475,7 @@ def upload_report_to_gcs(report: PerfReport, gcs_prefix: str, report_name: str, 
 @click.option("--job-id", required=True, help="Iris job id of the ferry run.")
 @click.option(
     "--iris-config",
-    default="lib/iris/examples/marin.yaml",
+    default="lib/iris/config/marin.yaml",
     type=click.Path(path_type=Path),
     show_default=True,
     help="Path to iris config file used for the iris CLI.",
