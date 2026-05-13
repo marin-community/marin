@@ -781,8 +781,8 @@ def write_csv(summary: dict, path: Path) -> None:
 @click.command(help=__doc__)
 @click.option(
     "--config",
-    default="lib/iris/examples/marin.yaml",
-    help="Iris cluster config to use. Defaults to lib/iris/examples/marin.yaml.",
+    default="lib/iris/config/marin.yaml",
+    help="Iris cluster config to use. Defaults to lib/iris/config/marin.yaml.",
 )
 @click.option(
     "--outdir",

@@ -3,7 +3,7 @@
 
 import sqlite3
 
-# Marin cluster zones (from examples/marin.yaml). Not for upstream — local hotfix
+# Marin cluster zones (from config/marin.yaml). Not for upstream — local hotfix
 # to backfill region/zone/scale-group attributes on workers registered between
 # #4681 and #4720, which stopped publishing these keys.
 ZONES = (

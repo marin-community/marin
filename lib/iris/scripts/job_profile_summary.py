@@ -515,7 +515,7 @@ def main() -> int:
     p.add_argument(
         "--cluster",
         default="marin",
-        help="Cluster name; resolves storage.remote_state_dir from lib/iris/examples/<cluster>.yaml (default: marin)",
+        help="Cluster name; resolves storage.remote_state_dir from lib/iris/config/<cluster>.yaml (default: marin)",
     )
     p.add_argument(
         "--cache-dir",

@@ -1152,7 +1152,7 @@ class TestPrepareSliceConfigGpuCount:
         from iris.cluster.config import load_config
         from iris.cluster.controller.autoscaler.scaling_group import prepare_slice_config
 
-        yaml_path = Path(__file__).parents[3] / "examples" / "coreweave.yaml"
+        yaml_path = Path(__file__).parents[3] / "config" / "coreweave.yaml"
         config = load_config(yaml_path)
 
         h100_sg = config.scale_groups["h100-8x"]

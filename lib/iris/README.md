@@ -233,7 +233,7 @@ The controller will **fail at startup** if `storage.remote_state_dir` is not con
 
 ## CLI Reference
 
-**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/examples/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
+**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/config/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
 
 ### Cluster Commands
 
