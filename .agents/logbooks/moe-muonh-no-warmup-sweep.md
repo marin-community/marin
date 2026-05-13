@@ -61,3 +61,40 @@ Effective speedup vs corrected-mask MuonH (`L_inf=1.6, alpha=0.0941`):
   - `marin-community/marin_moe/muonh-nowarmup-d768-1.70e18` (run id `muonh-nowarmup-d768-1.70e18`, runtime 13,536 s)
 - W&B report (3-way gate 1): https://wandb.ai/marin-community/marin_moe/reports/MuonH-no-warmup-vs-MuonH-vs-v16-AdamH----gate-1--VmlldzoxNjg0Njk4OA==
 - Next action: Launch gate 2 (d1024 at 9.00e18, d1280 at 2.83e19) under the same code to confirm the speedup persists at scale.
+
+### 2026-05-13 23:39 - MOE-MH-NW-003 gate-2 completion and final verdict
+
+- Hypothesis: MuonH-no-warmup scaling law (pinned L_inf=1.6) projects under the canonical AdamH baseline at both 1e21 and 1e23 FLOPs, satisfying gate 2.
+- Command: `iris job run --no-wait --preemptible --region us-east5 -e MUONH_NOWARMUP_GATE 2 -- python -m experiments.grug.moe.muonh_no_warmup_sweep`.
+- Config: PR #5620 (commit `3271a0360`), gate 2 (d1024 at 9.00e18, d1280 at 2.83e19), us-east5 preemptible v5p-8.
+- Operational note: capacity contention plus a marin-executor checkpoint-region issue caused 7 parent restarts (us-central1 attempts couldn't find d1024 checkpoints written by the original us-east5 run). Pinning resubmits to `--region us-east5` recovered the prior `step-8442` d1024 checkpoint and the d1280 checkpoint stream; both children eventually finished cleanly with 0 preemptions on the final attempt. See [[feedback-babysit-child-abandoned]] for the recovery pattern.
+- Result: Both gate-2 runs `state=finished`.
+
+Observed 4-point macro_loss (full runs):
+
+| Scale | Compute (FLOPs) | MuonH-NW macro_loss | Canonical AdamH baseline | Speedup vs baseline |
+|---|---|---|---|---|
+| d512  | 2.19e17 | 3.7404 | 3.8223 | 1.49× |
+| d768  | 1.70e18 | 3.3834 | 3.4326 | 1.34× |
+| d1024 | 9.00e18 | 3.1230 | 3.1666 | 1.35× |
+| d1280 | 2.83e19 | 2.9710 | 3.0065 | 1.31× |
+
+Speedup observed at all four scales → gate-2 criterion 1 passes.
+
+4-point scaling law fit (`L(C) = 1.6 + α · C^(-β)`):
+
+- α = 83.09, β = 0.0916, R² = 0.9998, residuals all ≤ 0.007.
+
+Projection at gate-2 thresholds (canonical baseline α=95.18, β=0.0941):
+
+| Compute | Baseline | MuonH-NW | Verdict |
+|---|---|---|---|
+| 1e21 | 2.606 | 2.591 | **PASS** (Δ=0.015, 1.17× speedup) |
+| 1e23 | 2.252 | 2.250 | **PASS** (Δ=0.002, 1.04× speedup) |
+
+- Interpretation: MuonH no-warmup passes gate 2 cleanly on the speedup criterion (all four scales) and narrowly at the 1e23 projection threshold. The fit β=0.0916 is slightly shallower than the canonical β=0.0941, so the margin tightens with scale (Δ=0.015 at 1e21 → Δ=0.002 at 1e23, projected speedup 1.17× → 1.04×). Within the noise floor of a 4-point fit (~0.007), the variant is statistically a wash with the baseline at 1e23 but stays on the right side of zero across the projection. Decision: gate 2 passes; recommend recording the variant.
+- W&B runs (final):
+  - `marin-community/marin_moe/muonh-nowarmup-d1024-9.00e18` (paloma macro 3.123, uncheatable 2.726)
+  - `marin-community/marin_moe/muonh-nowarmup-d1280-2.83e19` (paloma macro 2.971, uncheatable 2.551)
+- Figure: `.agents/logbooks/muonh_nowarmup_gate2_4pt_scaling.png`
+- Next action: Update GitHub issue #5619 with the scaling-law fit and verdict; close out the babysit cron (already deleted).
