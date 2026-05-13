@@ -222,10 +222,23 @@ class MixConfig:
     Regions absent from ``weights`` (or with weight 0) are omitted from the
     mixture entirely — neither tokenized nor sampled. Validation datasets are
     always tokenized and evaluated regardless of training weights.
+
+    ``max_train_examples``, when set, overrides the per-region cap logic in
+    ``_train_example_caps`` with a total-budget split: each active region's
+    cap is ``max_train_examples * weight / sum(active_weights)``. Used by
+    continuation runs that train for a fixed (small) token budget.
+
+    ``initialize_from_checkpoint_path``, when set, is forwarded to
+    ``TrainLmConfig.initialize_from_checkpoint_path`` so the run starts from
+    an existing checkpoint instead of fresh weights. Levanter resolves the
+    parent directory to the latest step-numbered checkpoint at startup via
+    ``latest_checkpoint_path``.
     """
 
     name: str
     weights: dict[str, float]
+    max_train_examples: int | None = None
+    initialize_from_checkpoint_path: str | None = None
 
     def __post_init__(self):
         unknown = set(self.weights) - set(TRAIN_DATASETS)
@@ -233,6 +246,8 @@ class MixConfig:
             raise ValueError(f"{self.name}: unknown regions {unknown}; expected subset of {set(TRAIN_DATASETS)}")
         if not any(w > 0 for w in self.weights.values()):
             raise ValueError(f"{self.name}: at least one weight must be > 0")
+        if self.max_train_examples is not None and self.max_train_examples <= 0:
+            raise ValueError(f"{self.name}: max_train_examples must be positive, got {self.max_train_examples}")
 
     @property
     def active_regions(self) -> tuple[str, ...]:
@@ -244,6 +259,18 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
     MixConfig(name="cds_only", weights={"cds": 1.0}),
     MixConfig(name="upstream_only", weights={"upstream": 1.0}),
     MixConfig(name="downstream_only", weights={"downstream": 1.0}),
+    # Continuation run: warm-start from the i=2 upstream_only checkpoint and
+    # train a 50/50 cds+upstream mixture for ~one downstream-dataset worth of
+    # examples (~20.5M → ~5.25B tokens). Levanter resolves the parent dir to
+    # the latest step-numbered checkpoint at startup.
+    MixConfig(
+        name="cont_upstream_to_cds_1",
+        weights={"cds": 0.5, "upstream": 0.5},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_checkpoint_path=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i2-upstream_only-68544e/checkpoints/"
+        ),
+    ),
 )
 
 
@@ -343,10 +370,19 @@ def _tokenize(key: str, dataset: str, dataset_format: DNALmDatasetFormat) -> Exe
 def _train_example_caps(mix: MixConfig) -> dict[str, int]:
     """Per-region training-example cap for this mix.
 
-    Region-only mixes (single active region) cap at the region's full dataset
-    size (``MAX_TRAIN_EXAMPLES_PER_REGION``). Multi-region mixes (uniform) cap
-    each active component at ``UNIFORM_MAX_EXAMPLES_PER_COMPONENT``.
+    If ``mix.max_train_examples`` is set, the total budget is split across
+    active regions in proportion to their weights (used by fixed-budget
+    continuation runs). Otherwise: region-only mixes (single active region)
+    cap at the region's full dataset size (``MAX_TRAIN_EXAMPLES_PER_REGION``)
+    and multi-region mixes (uniform) cap each active component at
+    ``UNIFORM_MAX_EXAMPLES_PER_COMPONENT``.
     """
+    if mix.max_train_examples is not None:
+        active_weight_sum = sum(mix.weights[r] for r in mix.active_regions)
+        return {
+            region: int(mix.max_train_examples * mix.weights[region] / active_weight_sum)
+            for region in mix.active_regions
+        }
     if len(mix.active_regions) == 1:
         region = mix.active_regions[0]
         return {region: MAX_TRAIN_EXAMPLES_PER_REGION[region]}
@@ -451,6 +487,8 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
     ]
     if _warmup_mode():
         tags.append("warmup")
+    if mix.initialize_from_checkpoint_path is not None:
+        tags.append(f"init_from={mix.initialize_from_checkpoint_path}")
 
     inner = TrainLmConfig(
         data=_build_data_mixture(mix),
@@ -458,6 +496,7 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
         train_seq_len=_model_seq_len(),
         z_loss_weight=REFERENCE_HPARAMS.z_loss_weight,
         optimizer=optimizer,
+        initialize_from_checkpoint_path=mix.initialize_from_checkpoint_path,
         eval_harness=_eval_harness_config(),
         eval_harness_steps=steps_per_eval,
         trainer=TrainerConfig(
@@ -534,6 +573,8 @@ def _print_preview(selected: tuple[MixConfig, ...]) -> None:
             f"opt_T={opt_tokens:.3e}  total_T={total_tokens:.3e} "
             f"(~{opt_tokens / num_params:.1f} tok/param/epoch)"
         )
+        if mix.initialize_from_checkpoint_path is not None:
+            print(f"    init_from           {mix.initialize_from_checkpoint_path}")
         for field, value in (
             ("lr", opt.learning_rate),
             ("adam_lr", opt.adam_lr),
