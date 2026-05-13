@@ -646,6 +646,22 @@ wheels = [
 ]
 
 [[package]]
+name = "av"
+version = "17.0.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/f0/8c8dca97ae0cf00e8e2a53bb5cb9aca5fd484f585ef3e9b412200aff3ebd/av-17.0.1.tar.gz", hash = "sha256:fbcbd4aa43bca6a8691816283112d1659a27f407bbeb66d1397023691339f5d4", size = 4411938, upload-time = "2026-04-18T17:12:34.29Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/82/e7007dcef7bd2d2c377e2e85977701384f42d19fc808c2ccb3a99eaf58f2/av-17.0.1-cp311-abi3-macosx_11_0_x86_64.whl", hash = "sha256:987f4f46ceae4da6c614dcbd2b8149be9dbf680c3bb7a6841c58af9cff4d9230", size = 23238802, upload-time = "2026-04-18T17:11:51.166Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/aa/858b09a08ea6f83f91be44b5a5adad13ae8d9ac8b80fda27e73c24bfb160/av-17.0.1-cp311-abi3-macosx_14_0_arm64.whl", hash = "sha256:d97f54e55b18a74912f479c1978aadd1341d38d892dee95bb5c2f2dccfa72f32", size = 18709338, upload-time = "2026-04-18T17:11:53.286Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/8b/8de3fd21c4b0b74d44337421abeab0e71462337fb6a28fff888e0c356cbd/av-17.0.1-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e6eee84afa48d0e9321047cd3e4facd44b401493f6bdc753e2e1d1e7c9e6d13e", size = 34007351, upload-time = "2026-04-18T17:11:56.116Z" },
+    { url = "https://files.pythonhosted.org/packages/02/28/167b291356c2cc315a2d62a95b0ceace72b5b0bf547de30b89313110f032/av-17.0.1-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c58c71bffd9383908c85695ac61d3184c668accb04a5bd1b262e0fb8d09f60a5", size = 36345295, upload-time = "2026-04-18T17:11:59.125Z" },
+    { url = "https://files.pythonhosted.org/packages/04/fa/aae56f2ff2c204c408641e1120f5ca5ce9c3390cf5362245c6f1158704b5/av-17.0.1-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:42d6745d30a410ec9b22aef79a52a7ab5a001eb8f5adfd952946606a30983318", size = 35183754, upload-time = "2026-04-18T17:12:01.697Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/bd/776046f27093aef80155a204ca7d82a887ae4ee72ba4ef8411b46ea7898c/av-17.0.1-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:3ed6bcd7021fe55832f95b8ef78dd01a4cb21faf3cd71f1e1bf4f20bf100b278", size = 37430809, upload-time = "2026-04-18T17:12:04.231Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/d5/3261bd2c6b7f6c0aa8379fc970d1ecf496330990b992ad28607785074268/av-17.0.1-cp311-abi3-win_amd64.whl", hash = "sha256:9af524e8632a54032e361d6b88895bd3e7c6212ca560de60f5ccc525323c764c", size = 28889649, upload-time = "2026-04-18T17:12:07.04Z" },
+    { url = "https://files.pythonhosted.org/packages/98/39/381104e427a0c7231d2ec0d25d538d58fc20fc0458846b95860d3ef8073b/av-17.0.1-cp311-abi3-win_arm64.whl", hash = "sha256:50e58a473d65ea29b645e45c9fd8518a6783737135683ecc40571a91592bdfe4", size = 21918412, upload-time = "2026-04-18T17:12:09.312Z" },
+]
+
+[[package]]
 name = "babel"
 version = "2.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1177,7 +1193,7 @@ wheels = [
 
 [[package]]
 name = "compressed-tensors"
-version = "0.14.0.1"
+version = "0.15.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "loguru" },
@@ -1186,9 +1202,9 @@ dependencies = [
     { name = "torch", version = "2.10.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(platform_machine != 'arm64' and extra == 'extra-5-marin-vllm') or (sys_platform != 'darwin' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
     { name = "transformers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/eb/f1/4c9b01ceaf82ad58ad00919223e09b8e74d4073a2ba8e3ab2f97521ef65c/compressed_tensors-0.14.0.1.tar.gz", hash = "sha256:5ad3841184b6f5020e06059b2463191c5c57a144bb97cab9159978d8118839b1", size = 226393, upload-time = "2026-03-11T17:04:35.57Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/1b/c3c4a98ec5f2727656336f07a0c35862195c310d8eb0b2fa5b4be6848680/compressed_tensors-0.15.0.1.tar.gz", hash = "sha256:a8e93054e8a5ec49c980b09ed36c4c1249b4a8ee167920a8e461c4da26e78d99", size = 229412, upload-time = "2026-04-10T14:23:54.708Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/26/16a13993ecf4fdc9c39d63b3a6daabafd32a452cf68b81aa9eb3b8170913/compressed_tensors-0.14.0.1-py3-none-any.whl", hash = "sha256:46c4940a3a779d3d97108c294bfcd9acf4bd0491f7c6737c320f0e815ec732e4", size = 196454, upload-time = "2026-03-11T17:04:33.2Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/52/93833dc1610e017ac5b7dcd59b8304d8ef67d1114c2d124e728a2cbbea12/compressed_tensors-0.15.0.1-py3-none-any.whl", hash = "sha256:e1b1f322e82e475715e242bad46925a304ea8e5c98b5055a15b8eb22fb6bfea9", size = 194260, upload-time = "2026-04-10T14:23:53.098Z" },
 ]
 
 [[package]]
@@ -4509,11 +4525,11 @@ wheels = [
 
 [[package]]
 name = "libtpu"
-version = "0.0.38"
+version = "0.0.39"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/72/2aa100577aab50252d2429bab7f8f43faf74a8107b9b6120d02469249375/libtpu-0.0.38-cp311-cp311-manylinux_2_31_x86_64.whl", hash = "sha256:b1c95a1e5406549d9d6d4e6b54b6ba10c5c5c7f81bf9f1ab1ce61aba2397ed76", size = 213844360, upload-time = "2026-03-19T17:04:45.939Z" },
-    { url = "https://files.pythonhosted.org/packages/34/ee/071e24d098535f1a2268b9c9467b620c54d975edc2515a30c47e7555374c/libtpu-0.0.38-cp312-cp312-manylinux_2_31_x86_64.whl", hash = "sha256:a52597a44ed773562f1033706a15635eba79eeb1972aa0165990b704a4faa28e", size = 213844317, upload-time = "2026-03-19T17:04:02.494Z" },
+    { url = "https://files.pythonhosted.org/packages/39/4a/542c866610df6f58e037ef1c689137c53a69f2fbdd4a5b142ddab140322a/libtpu-0.0.39-cp311-cp311-manylinux_2_31_x86_64.whl", hash = "sha256:dd691c880aa61710a9674a7bbd771b945cc559596c8f64c7e7e710fb2f50aae6", size = 227542296, upload-time = "2026-04-07T04:39:41.989Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/b0/3a1d687d1ff2948215a85615903558204f1f01f9c74eb0952afec7d0ceac/libtpu-0.0.39-cp312-cp312-manylinux_2_31_x86_64.whl", hash = "sha256:7c3eb2a6814b9b7fb2ef8656d0bd9afdd48cb58db421f59906e95edc303fa91b", size = 227541982, upload-time = "2026-04-07T04:40:00.733Z" },
 ]
 
 [[package]]
@@ -5070,7 +5086,7 @@ requires-dist = [
     { name = "jaxlib", marker = "extra == 'tpu'", specifier = "==0.9.2" },
     { name = "jaxlib", marker = "extra == 'vllm'", specifier = "==0.9.2" },
     { name = "jaxopt", specifier = ">=0.8.3" },
-    { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.38" },
+    { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.39" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lxml", extras = ["html-clean"] },
@@ -5117,12 +5133,12 @@ requires-dist = [
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'cpu'", specifier = "==0.25.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin", extra = "cpu" } },
     { name = "torchvision", marker = "platform_machine == 'AMD64' and sys_platform == 'win32' and extra == 'vllm'", specifier = "==0.25.0+cpu", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin", extra = "vllm" } },
     { name = "torchvision", marker = "extra == 'tpu'", specifier = "==0.25.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin", extra = "tpu" } },
-    { name = "tpu-inference", marker = "extra == 'vllm'", specifier = "==0.18.0" },
+    { name = "tpu-inference", marker = "extra == 'vllm'", specifier = "==0.19.0" },
     { name = "tqdm" },
     { name = "tqdm-loggable" },
     { name = "triton", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'vllm'", specifier = "==3.6.0" },
     { name = "verifiers", marker = "extra == 'rl'", specifier = "==0.1.5" },
-    { name = "vllm-tpu", marker = "extra == 'vllm'", specifier = "==0.18.0" },
+    { name = "vllm-tpu", marker = "extra == 'vllm'", specifier = "==0.19.0" },
     { name = "wandb", specifier = ">0.24.0" },
     { name = "warcio" },
 ]
@@ -5350,7 +5366,7 @@ fray-test = [
 fray-tpu-test = [
     { name = "jax", specifier = "==0.9.2" },
     { name = "jaxlib", specifier = "==0.9.2" },
-    { name = "libtpu", specifier = "==0.0.38" },
+    { name = "libtpu", specifier = "==0.0.39" },
     { name = "numpy" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
@@ -5687,7 +5703,7 @@ requires-dist = [
     { name = "kitoken", specifier = ">=0.10.2" },
     { name = "kitoken", marker = "extra == 'kitoken'", specifier = ">=0.10.2" },
     { name = "lenses" },
-    { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.38" },
+    { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.39" },
     { name = "lm-eval", marker = "extra == 'lm-eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
@@ -11436,7 +11452,7 @@ wheels = [
 
 [[package]]
 name = "tpu-inference"
-version = "0.18.0"
+version = "0.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
@@ -11464,9 +11480,9 @@ dependencies = [
     { name = "tpu-info" },
     { name = "yapf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4a/e9/1439764de20923559333eee6bdd975d54cdc6c78d530e441eeb7555ef651/tpu_inference-0.18.0.tar.gz", hash = "sha256:966a643ddab4ca8094d492a48f548a555398b37a6f463294fe6d8a6190a9d036", size = 750789, upload-time = "2026-04-20T16:41:40.65Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/33/ce70823cb6368dccc4facab760de188cf3bdffef79fa434b454110ca1ee7/tpu_inference-0.19.0.tar.gz", hash = "sha256:2c884403e669a99875f59124a89e9576abe38694ca719d75b4b50b9ff2afe6a6", size = 803861, upload-time = "2026-05-05T21:26:31.548Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/1f/5f2aef5f244acc8550c2743b66acd6c8b02ec4925c45a3794ddd0fca25fb/tpu_inference-0.18.0-py3-none-any.whl", hash = "sha256:54ff44d86654356a73570136504d9322de3b043e952791111d76d3a574407e91", size = 970128, upload-time = "2026-04-20T16:41:38.079Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/8d/66d92ef4fa970fb3c01a69be8adde636bba99d22205b00929dad2cd42337/tpu_inference-0.19.0-py3-none-any.whl", hash = "sha256:463daf94e4c2d15e734e3e87f99af50d4b5a069ed2b517897b9557e7a6fa0e1b", size = 1039193, upload-time = "2026-05-05T21:26:29.631Z" },
 ]
 
 [[package]]
@@ -11870,11 +11886,12 @@ wheels = [
 
 [[package]]
 name = "vllm-tpu"
-version = "0.18.0"
+version = "0.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "anthropic" },
+    { name = "av" },
     { name = "blake3" },
     { name = "cachetools" },
     { name = "cbor2" },
@@ -11890,7 +11907,7 @@ dependencies = [
     { name = "ijson" },
     { name = "jinja2" },
     { name = "lark" },
-    { name = "llguidance", marker = "platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'ppc64le' or platform_machine == 's390x' or platform_machine == 'x86_64'" },
+    { name = "llguidance", marker = "platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'ppc64le' or platform_machine == 'x86_64'" },
     { name = "lm-format-enforcer" },
     { name = "mcp" },
     { name = "mistral-common", extra = ["image"], marker = "extra == 'extra-5-marin-vllm' or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
@@ -11928,6 +11945,7 @@ dependencies = [
     { name = "setuptools" },
     { name = "setuptools-scm" },
     { name = "six", marker = "python_full_version >= '3.12'" },
+    { name = "soundfile" },
     { name = "tiktoken" },
     { name = "tokenizers" },
     { name = "tpu-inference" },
@@ -11938,9 +11956,9 @@ dependencies = [
     { name = "wheel" },
     { name = "xgrammar", marker = "platform_machine == 'aarch64' or platform_machine == 'arm64' or platform_machine == 'ppc64le' or platform_machine == 's390x' or platform_machine == 'x86_64'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e5/fb/33135f21db27c0e23ec768fcf2a5eb7e3c21de05408fb4a74a3a4e76d4b6/vllm_tpu-0.18.0.tar.gz", hash = "sha256:6ce5cc1208981589654ca0b817907d1c42846899b6d6a00d3af3538bfd3d420c", size = 31183135, upload-time = "2026-04-20T16:48:34.258Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/3e/5a788587966c7ff750fb78168e8976cb53408b9bbd39b9d169f24c041963/vllm_tpu-0.19.0.tar.gz", hash = "sha256:89b8ee7b1d9b17f0d3dd360f97d31180f7f1a3825cb4cc71456941ac113bfa09", size = 31557722, upload-time = "2026-05-05T22:18:46.045Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/46/2b17db9882cae481c86b7662cf18a58213cd976d12ed691a054bddeacc7e/vllm_tpu-0.18.0-py3-none-any.whl", hash = "sha256:cba91318dfd4a95abafe5db78f83078490d24847e93e29750329f0270a313ef1", size = 6067139, upload-time = "2026-04-20T16:48:29.407Z" },
+    { url = "https://files.pythonhosted.org/packages/49/62/628cee0bcc0f8407359e65b18a244f4aad4ad67518690755106cb8a5d41d/vllm_tpu-0.19.0-py3-none-any.whl", hash = "sha256:7b85fe4d701ca04ce219aa2256b16d3203ed5a5198888920ddc44a72f82e18c7", size = 6349686, upload-time = "2026-05-05T22:18:41.54Z" },
 ]
 
 [[package]]
