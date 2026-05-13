@@ -85,19 +85,22 @@ def compute_metadata_metrics(
     return metrics
 
 
-def compute_logprobs(
+def compute_logprobs_and_entropy(
     model: LmHeadModel,
     batch: TrainingBatch,
     key: jax.Array | None,
-) -> jax.Array:
-    """Compute log probabilities of target tokens.
+    *,
+    compute_entropy: bool,
+) -> tuple[jax.Array, jax.Array | None]:
+    """Compute selected-token logprobs and, optionally, full-vocabulary entropy.
 
     Args:
         model: The language model
         batch: Training batch containing input_ids, position_ids, temperature
         key: JAX random key for dropout
+        compute_entropy: Whether to compute full-vocabulary entropy for each predicted token
     Returns:
-        logprobs array of shape [batch, seq_len]
+        Tuple of selected-token logprobs and optional entropy arrays, each shaped [batch, seq_len].
     """
     batch_size, _seq_len = batch.input_ids.array.shape
 
@@ -126,6 +129,34 @@ def compute_logprobs(
         [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted], axis=1
     )  # [batch, seq_len]
 
+    if not compute_entropy:
+        return logprobs, None
+
+    probs = jax.nn.softmax(logits_array, axis=-1)
+    entropy_shifted = jax.nn.logsumexp(logits_array, axis=-1) - jnp.sum(probs * logits_array, axis=-1)
+    entropy = jnp.concatenate(
+        [jnp.zeros((entropy_shifted.shape[0], 1), dtype=entropy_shifted.dtype), entropy_shifted],
+        axis=1,
+    )
+
+    return logprobs, entropy
+
+
+def compute_logprobs(
+    model: LmHeadModel,
+    batch: TrainingBatch,
+    key: jax.Array | None,
+) -> jax.Array:
+    """Compute log probabilities of target tokens.
+
+    Args:
+        model: The language model
+        batch: Training batch containing input_ids, position_ids, temperature
+        key: JAX random key for dropout
+    Returns:
+        logprobs array of shape [batch, seq_len]
+    """
+    logprobs, _entropy = compute_logprobs_and_entropy(model, batch, key, compute_entropy=False)
     return logprobs
 
 
@@ -246,6 +277,12 @@ def compute_grpo_loss(
     return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
 
 
+def masked_response_mean(values: jax.Array, loss_masks: jax.Array) -> jax.Array:
+    """Average response-token values per sequence, then across the batch."""
+    per_sequence = jnp.sum(values * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)
+    return jnp.mean(per_sequence)
+
+
 def importance_sampling_ratio(
     current_logprobs: jax.Array,
     policy_logprobs_array: jax.Array,
@@ -277,7 +314,8 @@ def rloo_loss_with_importance_sampling(
     do_trainer_inference_mismatch_importance_sampling: bool = False,
     synchronous: bool = False,
     do_overlong_filtering: bool = False,
-    compute_logprobs_fn: Callable = compute_logprobs,
+    log_policy_entropy: bool = False,
+    compute_policy_stats_fn: Callable = compute_logprobs_and_entropy,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
@@ -288,7 +326,8 @@ def rloo_loss_with_importance_sampling(
         kl_coef: Coefficient for KL regularization
         clip_epsilon_low: Lower clipping epsilon for importance sampling ratio
         clip_epsilon_high: Upper clipping epsilon for importance sampling ratio
-        compute_logprobs_fn: Function to compute logprobs (can be chunked)
+        log_policy_entropy: Whether to log exact full-vocabulary policy entropy
+        compute_policy_stats_fn: Function to compute logprobs and optional entropy
 
     Returns:
         Tuple of (loss, aux_metrics)
@@ -298,7 +337,9 @@ def rloo_loss_with_importance_sampling(
     loss_masks_array = batch.loss_masks.array
 
     # Get logits from current policy
-    current_logprobs = compute_logprobs_fn(model, batch, key)
+    current_logprobs, current_policy_entropy = compute_policy_stats_fn(
+        model, batch, key, compute_entropy=log_policy_entropy
+    )
     current_logprobs = current_logprobs * loss_masks_array
 
     if synchronous:
@@ -355,7 +396,9 @@ def rloo_loss_with_importance_sampling(
     if kl_coef > 0:
         if reference_model is None:
             raise ValueError("reference_model is required when kl_coef > 0")
-        reference_logprobs = compute_logprobs_fn(reference_model, batch, key)
+        reference_logprobs, _reference_entropy = compute_policy_stats_fn(
+            reference_model, batch, key, compute_entropy=False
+        )
         reference_logprobs = reference_logprobs * loss_masks_array
         # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
         kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
@@ -381,7 +424,7 @@ def rloo_loss_with_importance_sampling(
         jnp.sum(kl_penalty * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
     )
 
-    return loss, {
+    metrics = {
         "ratio_mean": Metric.from_value(ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN),
         "clipped_ratio_mean": Metric.from_value(
             clipped_ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN
@@ -400,6 +443,16 @@ def rloo_loss_with_importance_sampling(
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
         **metadata,
     }
+
+    if log_policy_entropy:
+        if current_policy_entropy is None:
+            raise ValueError("compute_policy_stats_fn must return entropy when log_policy_entropy=True")
+        policy_entropy = masked_response_mean(current_policy_entropy, loss_masks_array)
+        metrics["current_policy_entropy"] = Metric.from_value(
+            jax.lax.stop_gradient(policy_entropy).astype(jnp.float32), ReductionType.MEAN
+        )
+
+    return loss, metrics
 
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
@@ -428,6 +481,7 @@ class RLOOLoss(RLLossModule):
     do_trainer_inference_mismatch_importance_sampling: bool = False
     do_overlong_filtering: bool = False
     vocab_tile_size: int | None = None
+    log_policy_entropy: bool = False
 
     def build(self, reference_model: eqx.Module) -> eqx.Module:
         """Initialize any learned components (e.g., value heads)."""
@@ -445,15 +499,22 @@ class RLOOLoss(RLLossModule):
         """Create the loss function for training."""
         if self.needs_reference_model() and reference_model is None:
             raise ValueError("reference_model is required when kl_coef > 0")
+        if self.log_policy_entropy and self.vocab_tile_size is not None:
+            raise ValueError(
+                "Exact policy entropy is not supported with vocab_tile_size yet. "
+                "Set vocab_tile_size=None or implement chunked entropy first."
+            )
 
         def loss_fn(model, batch, key):
             if self.vocab_tile_size is not None:
 
-                def compute_logprobs_fn(m, b, k):
-                    return chunked_compute_logprobs(m, b, k, self.vocab_tile_size)
+                def compute_policy_stats_fn(m, b, k, *, compute_entropy: bool):
+                    if compute_entropy:
+                        raise ValueError("Exact policy entropy is not supported with vocab_tile_size yet")
+                    return chunked_compute_logprobs(m, b, k, self.vocab_tile_size), None
 
             else:
-                compute_logprobs_fn = compute_logprobs
+                compute_policy_stats_fn = compute_logprobs_and_entropy
 
             return rloo_loss_with_importance_sampling(
                 model,
@@ -467,7 +528,8 @@ class RLOOLoss(RLLossModule):
                 synchronous=self.synchronous,
                 do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
                 do_overlong_filtering=self.do_overlong_filtering,
-                compute_logprobs_fn=compute_logprobs_fn,
+                log_policy_entropy=self.log_policy_entropy,
+                compute_policy_stats_fn=compute_policy_stats_fn,
             )
 
         return loss_fn
