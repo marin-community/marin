@@ -2272,6 +2272,13 @@ class ControllerServiceImpl:
         if identity.role != "admin":
             raise ConnectError(Code.PERMISSION_DENIED, "admin role required for raw queries")
 
+        # The read snapshot connection sets ``PRAGMA query_only = ON``, but a
+        # query of the form ``PRAGMA query_only = OFF; UPDATE ...`` flips it
+        # back before the snapshot rejects anything. Reject up front: only
+        # statements whose first token is ``SELECT`` are permitted.
+        if request.sql.lstrip()[:6].upper() != "SELECT":
+            raise ConnectError(Code.INVALID_ARGUMENT, "only SELECT statements are allowed")
+
         with self._db.read_snapshot() as tx:
             result = tx.execute(text(request.sql))
             columns = [query_pb2.ColumnMeta(name=name, type="unknown") for name in result.keys()]
