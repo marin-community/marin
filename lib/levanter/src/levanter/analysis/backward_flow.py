@@ -12,7 +12,7 @@ import html
 from itertools import pairwise
 import math
 import re
-from typing import Any, Iterable, Literal, Mapping, TypeAlias
+from typing import Any, Callable, Iterable, Literal, Mapping, TypeAlias, TypeVar, cast
 
 import jax
 from jax._src.core import Literal as JaxprLiteral
@@ -43,6 +43,7 @@ _NAME_STACK_PART_RE = re.compile(r"^(?P<wrapper>[A-Za-z_][A-Za-z0-9_]*)\((?P<inn
 _STAT_NAMES = ("norm", "rms", "rms_scaled", "mean_abs", "max_abs", "max_abs_scaled", "finite_fraction")
 BackwardFlowSite: TypeAlias = Literal["in", "out"]
 _BackwardFlowTensorKind: TypeAlias = Literal["activation", "gradient"]
+_R = TypeVar("_R")
 ACT_IN: BackwardFlowSite = "in"
 ACT_OUT: BackwardFlowSite = "out"
 _TENSOR_KIND_ACTIVATION: _BackwardFlowTensorKind = "activation"
@@ -226,6 +227,44 @@ def trace_backward_activation(x: jax.Array, name: str, *, site: BackwardFlowSite
 
     with jax.named_scope(name):
         return log_backward_activation(x, site=site)
+
+
+def _is_array_value(value: object) -> bool:
+    return isinstance(value, jax.Array | jax.core.Tracer)
+
+
+def trace_grads(fn: Callable[..., _R]) -> Callable[..., _R]:
+    """Decorate an activation-to-activation function with backward-flow probes.
+
+    The first top-level array argument is tagged as ``ACT_IN`` and the array return
+    value is tagged as ``ACT_OUT``. The wrapper itself is a JAX named call so both
+    probes share the function's runtime name, even when this wraps another
+    ``jax.named_call``.
+    """
+
+    @functools.wraps(fn)
+    def wrapped(*args: Any, **kwargs: Any) -> _R:
+        traced_args = list(args)
+        traced_kwargs = kwargs
+        for index, value in enumerate(traced_args):
+            if _is_array_value(value):
+                traced_args[index] = log_backward_activation(value, site=ACT_IN)
+                break
+        else:
+            for key, value in traced_kwargs.items():
+                if _is_array_value(value):
+                    traced_kwargs = dict(traced_kwargs)
+                    traced_kwargs[key] = log_backward_activation(value, site=ACT_IN)
+                    break
+            else:
+                raise ValueError("trace_grads requires a top-level array argument")
+
+        result = fn(*traced_args, **traced_kwargs)
+        if not _is_array_value(result):
+            raise ValueError("trace_grads requires the decorated function to return an array")
+        return cast(_R, log_backward_activation(result, site=ACT_OUT))
+
+    return jax.named_call(wrapped, name=fn.__name__)
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1))

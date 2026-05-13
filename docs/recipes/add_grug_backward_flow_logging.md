@@ -39,24 +39,20 @@ explicitly when a variant should opt out. Positive intervals sample that often.
 
 ## 2) Mark module boundaries
 
-At each named module boundary you want in the graph, wrap the returned activation with
-`log_backward_activation(...)`. Omitting `site` means `ACT_OUT`, the forward output
-boundary. The backward metric there is the cotangent with respect to the returned
-activation, such as `dL/dout`.
-
-For modules where you also want the gradient at the forward input boundary, mark the
-input with `ACT_IN`. The backward metric there is the cotangent with respect to that
-input, such as `dL/dx`; in reverse-mode terms it is what the module's backward pass sends
-upstream, not what downstream sends into the module.
+At each named module boundary you want in the graph, use `@trace_grads` on the
+activation-to-activation function. It marks the first top-level array argument as
+`ACT_IN` and the array return value as `ACT_OUT`. The backward metric at `ACT_OUT`
+is the cotangent with respect to the returned activation, such as `dL/dout`; the
+metric at `ACT_IN` is the cotangent with respect to the input activation, such as
+`dL/dx`.
 
 ```python
-from levanter.analysis.backward_flow import ACT_IN, log_backward_activation, trace_backward_activation
+from levanter.analysis.backward_flow import trace_backward_activation, trace_grads
 
+@trace_grads
 @named_call
 def __call__(self, x):
-    x = log_backward_activation(x, site=ACT_IN)
-    out = ...
-    return log_backward_activation(out)
+    return ...
 ```
 
 For identity-only stream anchors, use `trace_backward_activation(...)` to add the probe

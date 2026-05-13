@@ -24,6 +24,7 @@ from levanter.analysis.backward_flow import (
     normalize_name_stack,
     render_backward_flow_html,
     trace_backward_activation,
+    trace_grads,
 )
 
 
@@ -44,10 +45,10 @@ def test_normalize_name_stack_strips_jax_transform_wrappers():
 
 
 def test_log_backward_activation_records_activation_and_gradient_metrics():
+    @trace_grads
     @jax.named_call
     def inner(x):
-        x = log_backward_activation(x, site=ACT_IN)
-        return log_backward_activation(x * 2, site=ACT_OUT)
+        return x * 2
 
     @jax.jit
     def compute_grad(x):
@@ -69,6 +70,35 @@ def test_log_backward_activation_records_activation_and_gradient_metrics():
     assert jnp.allclose(metrics["backward_flow/inner/out_gradient_max_abs"], jnp.array(4.0, dtype=jnp.float32))
     assert jnp.allclose(metrics["backward_flow/inner/in_activation_rms"], jnp.array(1.0, dtype=jnp.float32))
     assert jnp.allclose(metrics["backward_flow/inner/out_activation_rms"], jnp.array(2.0, dtype=jnp.float32))
+
+
+def test_trace_grads_handles_methods_and_keyword_array_arguments():
+    class Layer(eqx.Module):
+        weight: jax.Array
+
+        @trace_grads
+        @jax.named_call
+        def __call__(self, *, x: jax.Array) -> jax.Array:
+            return jnp.tanh(x * self.weight)
+
+    layer = Layer(weight=jnp.array(2.0, dtype=jnp.float32))
+
+    @jax.jit
+    def compute_grad(x):
+        with capture_backward_flow(BackwardFlowConfig(interval=1)):
+            with levanter.tracker.defer_tracker_for_jit() as metrics:
+                grad = jax.grad(lambda z: jnp.sum(layer(x=z) ** 2))(x)
+        return grad, metrics
+
+    grad, metrics = compute_grad(jnp.ones((3,), dtype=jnp.float32))
+
+    assert jnp.all(jnp.isfinite(grad))
+    assert "backward_flow/__call__/in_gradient_rms" in metrics
+    assert "backward_flow/__call__/out_gradient_rms" in metrics
+    assert jnp.allclose(metrics["backward_flow/__call__/in_activation_rms"], jnp.array(1.0, dtype=jnp.float32))
+    assert jnp.allclose(
+        metrics["backward_flow/__call__/out_activation_rms"], jnp.tanh(jnp.array(2.0, dtype=jnp.float32))
+    )
 
 
 def test_log_backward_activation_records_scaled_gradient_rms_when_configured():

@@ -49,6 +49,9 @@ canonical Grug base template.
 - `trace_backward_activation(x, name, site=...)`: a convenience wrapper for
   identity-only stream anchors that adds a `jax.named_scope(name)` around
   `log_backward_activation(...)`
+- `trace_grads(fn)`: a decorator for activation-to-activation functions that logs
+  the first top-level array argument at `ACT_IN` and the array return value at
+  `ACT_OUT` inside a named call
 - `ACT_IN` / `ACT_OUT`: named constants for forward input/output boundary labels.
   The backward value at `ACT_OUT` is the cotangent with respect to the returned
   activation, and the backward value at `ACT_IN` is the cotangent with respect to
@@ -93,6 +96,18 @@ def trace_backward_activation(
 ) -> jax.Array:
     with jax.named_scope(name):
         return log_backward_activation(x, site=site)
+
+def trace_grads(fn):
+    @functools.wraps(fn)
+    def wrapped(*args, **kwargs):
+        args = list(args)
+        for index, value in enumerate(args):
+            if _is_array_value(value):
+                args[index] = log_backward_activation(value, site=ACT_IN)
+                break
+        result = fn(*args, **kwargs)
+        return log_backward_activation(result, site=ACT_OUT)
+    return jax.named_call(wrapped, name=fn.__name__)
 ```
 
 ### 2) JAXpr-to-DAG projection
