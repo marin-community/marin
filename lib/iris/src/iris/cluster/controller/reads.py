@@ -996,18 +996,20 @@ def get_worker_detail(tx: Tx, worker_id: WorkerId):
 
 
 def list_active_healthy_workers(tx: Tx, health: WorkerLivenessSource) -> dict[WorkerId, str]:
-    """Return ``{worker_id: address}`` for all active+healthy workers."""
+    """Return ``{worker_id: address}`` for all active+healthy workers.
+
+    Fetches the full roster from SQL and filters by the in-memory health
+    tracker in Python. The expanding ``IN (...)`` form pays SA Core overhead
+    proportional to the IN list; since almost every persisted worker is
+    healthy, fetching the whole roster and filtering by dict lookup is
+    cheaper than the IN expansion.
+    """
     liveness = health.all()
-    live_ids = [wid for wid, ent in liveness.items() if ent.healthy and ent.active]
+    live_ids = {wid for wid, ent in liveness.items() if ent.healthy and ent.active}
     if not live_ids:
         return {}
-    rows = tx.execute(
-        select(workers_table.c.worker_id, workers_table.c.address).where(
-            workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))
-        ),
-        {"worker_ids": live_ids},
-    ).all()
-    return {row.worker_id: str(row.address) for row in rows}
+    rows = tx.execute(select(workers_table.c.worker_id, workers_table.c.address)).all()
+    return {row.worker_id: str(row.address) for row in rows if row.worker_id in live_ids}
 
 
 def filter_existing_workers(tx: Tx, worker_ids: Iterable[WorkerId]) -> set[str]:
@@ -1047,17 +1049,28 @@ def healthy_active_workers_with_attributes(
     health: WorkerLivenessSource,
     attrs: WorkerAttrsSource,
 ) -> list[SchedulableWorker]:
-    """Return healthy + active workers with their attributes hydrated."""
+    """Return healthy + active workers with their attributes hydrated.
+
+    Reads the full worker roster and post-filters with the in-memory health
+    tracker. See :func:`list_active_healthy_workers` for why we skip the
+    SQL-side ``IN (...)`` filter.
+    """
     liveness = health.all()
-    healthy_active = [wid for wid, ent in liveness.items() if ent.healthy and ent.active]
+    healthy_active = {wid for wid, ent in liveness.items() if ent.healthy and ent.active}
     if not healthy_active:
         return []
     rows = tx.execute(
-        select(*WORKER_DETAIL_COLS).where(workers_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))),
-        {"worker_ids": healthy_active},
+        select(
+            workers_table.c.worker_id,
+            workers_table.c.address,
+            workers_table.c.total_cpu_millicores,
+            workers_table.c.total_memory_bytes,
+            workers_table.c.total_gpu_count,
+            workers_table.c.total_tpu_count,
+            workers_table.c.device_type,
+            workers_table.c.device_variant,
+        )
     ).all()
-    if not rows:
-        return []
     attrs_by_worker = attrs.all()
     return [
         SchedulableWorker(
@@ -1072,4 +1085,5 @@ def healthy_active_workers_with_attributes(
             attributes=attrs_by_worker.get(row.worker_id, {}),
         )
         for row in rows
+        if row.worker_id in healthy_active
     ]

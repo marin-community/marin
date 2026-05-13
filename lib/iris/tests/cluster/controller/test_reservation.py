@@ -32,6 +32,7 @@ from iris.cluster.controller.controller import (
     _inject_taint_constraints,
     _preference_pass,
     _reservation_region_constraints,
+    _reserved_job_ids,
     _worker_matches_reservation_entry,
     job_requirements_from_job,
 )
@@ -1069,7 +1070,7 @@ def test_find_reservation_ancestor_returns_parent_with_reservation(ctrl):
     with ctrl.state._db.transaction() as cur:
         ctrl.state.submit_job(cur, child_jid, child_req, Timestamp.now())
 
-    result = _find_reservation_ancestor(ctrl._db, child_jid)
+    result = _find_reservation_ancestor(_reserved_job_ids(ctrl._db), child_jid)
     assert result == parent_jid
 
 
@@ -1105,7 +1106,7 @@ def test_find_reservation_ancestor_returns_grandparent(ctrl):
     with ctrl.state._db.transaction() as cur:
         ctrl.state.submit_job(cur, gc_jid, gc_req, Timestamp.now())
 
-    result = _find_reservation_ancestor(ctrl._db, gc_jid)
+    result = _find_reservation_ancestor(_reserved_job_ids(ctrl._db), gc_jid)
     assert result == gp_jid
 
 
@@ -1119,7 +1120,7 @@ def test_find_reservation_ancestor_returns_none_for_root_job(ctrl):
         replicas=1,
     )
     jid = _submit_job(ctrl.state, "no-res", req)
-    assert _find_reservation_ancestor(ctrl._db, jid) is None
+    assert _find_reservation_ancestor(_reserved_job_ids(ctrl._db), jid) is None
 
 
 def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation(ctrl):
@@ -1144,7 +1145,7 @@ def test_find_reservation_ancestor_returns_none_when_no_ancestor_has_reservation
     with ctrl.state._db.transaction() as cur:
         ctrl.state.submit_job(cur, child_jid, child_req, Timestamp.now())
 
-    assert _find_reservation_ancestor(ctrl._db, child_jid) is None
+    assert _find_reservation_ancestor(_reserved_job_ids(ctrl._db), child_jid) is None
 
 
 # =============================================================================
@@ -1195,7 +1196,7 @@ def test_taint_exemption_for_children_of_reservation_job(ctrl):
             jobs[task.job_id] = job_requirements_from_job(job_row)
             if job_detail and job_detail.reservation_json is not None:
                 has_reservation.add(task.job_id)
-            elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
+            elif _find_reservation_ancestor(_reserved_job_ids(ctrl._db), task.job_id) is not None:
                 has_reservation.add(task.job_id)
 
     assert child_jid in has_reservation
@@ -1308,7 +1309,7 @@ def test_grandchildren_inherit_reservation_from_ancestor(ctrl):
             jobs[task.job_id] = job_requirements_from_job(job_row)
             if job_detail and job_detail.reservation_json is not None:
                 has_reservation.add(task.job_id)
-            elif _find_reservation_ancestor(ctrl._db, task.job_id) is not None:
+            elif _find_reservation_ancestor(_reserved_job_ids(ctrl._db), task.job_id) is not None:
                 has_reservation.add(task.job_id)
 
     # Both grandchildren inherit taint exemption

@@ -304,6 +304,9 @@ def compute_demand_entries(
 
     # Build job requirements once, shared between dry-run and demand emission.
     # Also track which jobs have reservations so we can apply taint injection.
+    # Pre-fetch the reserved-job set once so the per-task ancestor walk is
+    # pure Python instead of one SQL round trip per unique pending job.
+    reserved_jobs = _reserved_job_ids(queries)
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     has_direct_reservation: set[JobName] = set()
@@ -314,7 +317,7 @@ def compute_demand_entries(
         if task.has_reservation:
             has_reservation.add(task.job_id)
             has_direct_reservation.add(task.job_id)
-        elif _find_reservation_ancestor(queries, task.job_id) is not None:
+        elif _find_reservation_ancestor(reserved_jobs, task.job_id) is not None:
             has_reservation.add(task.job_id)
 
     # Dry-run scheduling with building/assignment limits disabled.
@@ -913,20 +916,30 @@ def _inject_taint_constraints(
     return modified
 
 
-def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobName | None:
+def _reserved_job_ids(queries: ControllerDB) -> set[JobName]:
+    """Return the set of job_ids with ``has_reservation = 1`` on the jobs table.
+
+    Callers use this to drive :func:`_find_reservation_ancestor` purely in
+    Python instead of issuing one SQL chain-walk per pending job.
+    """
+    with queries.read_snapshot() as tx:
+        rows = tx.execute(select(jobs_table.c.job_id).where(jobs_table.c.has_reservation == 1)).all()
+    return {row.job_id for row in rows}
+
+
+def _find_reservation_ancestor(reserved_jobs: set[JobName], job_id: JobName) -> JobName | None:
     """Walk up the job hierarchy to find the nearest ancestor with a reservation.
 
-    Returns the ancestor's JobName, or None if no ancestor has a reservation.
-    Uses the has_reservation column on the jobs table.
+    Pure Python walk against the pre-fetched ``reserved_jobs`` set. The old
+    SQL-per-call form opened a fresh ``read_snapshot`` and issued 1-3 round
+    trips per unique pending job, which dominated ``compute_demand_entries``
+    once the SA Core machinery became the per-call floor.
     """
-    _has_reservation_query = select(jobs_table.c.has_reservation).where(jobs_table.c.job_id == bindparam("job_id"))
     current = job_id.parent
-    with queries.read_snapshot() as tx:
-        while current is not None:
-            row = tx.execute(_has_reservation_query, {"job_id": current}).first()
-            if row is not None and row.has_reservation:
-                return current
-            current = current.parent
+    while current is not None:
+        if current in reserved_jobs:
+            return current
+        current = current.parent
     return None
 
 
@@ -1934,6 +1947,8 @@ class Controller:
         tasks_per_job: dict[JobName, int] = defaultdict(int)
         cap = self._config.max_tasks_per_job_per_cycle
         filter_counts: dict[str, int] = defaultdict(int)
+        # Pre-fetch the reserved-job set once for the ancestor walk below.
+        reserved_jobs = _reserved_job_ids(self._db)
         # Each row already carries its job columns — no secondary _jobs_by_id fetch.
         for task in pending_tasks:
             if not task_row_can_be_scheduled(task):
@@ -1959,7 +1974,7 @@ class Controller:
                 if task.has_reservation:
                     has_reservation.add(task.job_id)
                     has_direct_reservation.add(task.job_id)
-                elif _find_reservation_ancestor(self._db, task.job_id) is not None:
+                elif _find_reservation_ancestor(reserved_jobs, task.job_id) is not None:
                     has_reservation.add(task.job_id)
         if trace:
             logger.info(

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 from rigging.timing import Duration, Timestamp
-from sqlalchemy import bindparam, case, delete, func, insert, select
+from sqlalchemy import bindparam, case, delete, func, insert, select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -96,6 +96,29 @@ def _task_is_finished(task: Any) -> bool:
         task.preemption_count,
         task.max_retries_preemption,
     )
+
+
+def _build_workers_upsert():
+    """Build a cacheable ``INSERT ... ON CONFLICT(worker_id) DO UPDATE`` text statement.
+
+    SA's ``sqlite_insert(...).on_conflict_do_update(...)`` form bypasses the
+    compiled-statement cache (``_generate_cache_key`` returns None), so the
+    burst-register path was re-compiling the SQL once per row. A ``text()``
+    statement with typed bindparams gets the cache and preserves the
+    ``WorkerIdType`` TypeDecorator on ``worker_id``.
+    """
+    cols = list(workers_table.c)
+    col_names = [c.name for c in cols]
+    sql = (
+        f"INSERT INTO workers ({', '.join(col_names)}) "
+        f"VALUES ({', '.join(f':{n}' for n in col_names)}) "
+        f"ON CONFLICT(worker_id) DO UPDATE SET "
+        f"{', '.join(f'{n}=excluded.{n}' for n in col_names if n != 'worker_id')}"
+    )
+    return text(sql).bindparams(*(bindparam(c.name, type_=c.type) for c in cols))
+
+
+_WORKER_UPSERT = _build_workers_upsert()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1499,39 +1522,36 @@ class ControllerTransitions:
         # all columns except the primary key. The post-commit hook registers
         # the worker in the liveness tracker so in-memory state advances
         # atomically with the DB row.
-        _stmt = sqlite_insert(workers_table).values(
-            worker_id=worker_id,
-            address=address,
-            total_cpu_millicores=metadata.cpu_count * 1000,
-            total_memory_bytes=metadata.memory_bytes,
-            total_gpu_count=gpu_count,
-            total_tpu_count=tpu_count,
-            device_type=device_type,
-            device_variant=device_variant,
-            slice_id=slice_id,
-            scale_group=scale_group,
-            md_hostname=metadata.hostname,
-            md_ip_address=metadata.ip_address,
-            md_cpu_count=metadata.cpu_count,
-            md_memory_bytes=metadata.memory_bytes,
-            md_disk_bytes=metadata.disk_bytes,
-            md_tpu_name=metadata.tpu_name,
-            md_tpu_worker_hostnames=metadata.tpu_worker_hostnames,
-            md_tpu_worker_id=metadata.tpu_worker_id,
-            md_tpu_chips_per_host_bounds=metadata.tpu_chips_per_host_bounds,
-            md_gpu_count=metadata.gpu_count,
-            md_gpu_name=metadata.gpu_name,
-            md_gpu_memory_mb=metadata.gpu_memory_mb,
-            md_gce_instance_name=metadata.gce_instance_name,
-            md_gce_zone=metadata.gce_zone,
-            md_git_hash=metadata.git_hash,
-            md_device_json=proto_to_json(metadata.device),
-        )
         cur.execute(
-            _stmt.on_conflict_do_update(
-                index_elements=["worker_id"],
-                set_={c.name: c for c in _stmt.excluded if c.name != "worker_id"},
-            )
+            _WORKER_UPSERT,
+            {
+                "worker_id": worker_id,
+                "address": address,
+                "total_cpu_millicores": metadata.cpu_count * 1000,
+                "total_memory_bytes": metadata.memory_bytes,
+                "total_gpu_count": gpu_count,
+                "total_tpu_count": tpu_count,
+                "device_type": device_type,
+                "device_variant": device_variant,
+                "slice_id": slice_id,
+                "scale_group": scale_group,
+                "md_hostname": metadata.hostname,
+                "md_ip_address": metadata.ip_address,
+                "md_cpu_count": metadata.cpu_count,
+                "md_memory_bytes": metadata.memory_bytes,
+                "md_disk_bytes": metadata.disk_bytes,
+                "md_tpu_name": metadata.tpu_name,
+                "md_tpu_worker_hostnames": metadata.tpu_worker_hostnames,
+                "md_tpu_worker_id": metadata.tpu_worker_id,
+                "md_tpu_chips_per_host_bounds": metadata.tpu_chips_per_host_bounds,
+                "md_gpu_count": metadata.gpu_count,
+                "md_gpu_name": metadata.gpu_name,
+                "md_gpu_memory_mb": metadata.gpu_memory_mb,
+                "md_gce_instance_name": metadata.gce_instance_name,
+                "md_gce_zone": metadata.gce_zone,
+                "md_git_hash": metadata.git_hash,
+                "md_device_json": proto_to_json(metadata.device),
+            },
         )
         cur.register(lambda: self._health.register(worker_id, now_ms=now_ms))
         # Replace worker_attributes rows and update the in-memory projection.

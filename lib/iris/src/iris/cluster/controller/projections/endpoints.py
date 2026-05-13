@@ -23,8 +23,7 @@ from threading import RLock
 from typing import ClassVar
 
 from rigging.timing import Timestamp
-from sqlalchemy import delete, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy import bindparam, delete, insert, select
 
 from iris.cluster.controller import db
 from iris.cluster.controller.db import ControllerDB
@@ -55,6 +54,20 @@ class EndpointRow:
 
 
 logger = logging.getLogger(__name__)
+
+
+# Module-level INSERT OR REPLACE. SA Core caches its compiled SQL across calls;
+# the SQLite-dialect ``insert(...).on_conflict_do_update(...)`` form is *not*
+# cacheable (``_generate_cache_key()`` returns None) and was re-compiling the
+# statement once per row on burst writes. Safe to use INSERT OR REPLACE here
+# because no other table holds an FK referencing ``endpoints``.
+_INSERT_OR_REPLACE_ENDPOINT = insert(endpoints_table).prefix_with("OR REPLACE")
+
+# Built once so the SELECT cache key is computed at import time; rebuilding it
+# inside ``add()`` paid a ~50µs cache-key tax per call on burst writes.
+_TASK_STATE_FOR_ENDPOINT = select(tasks_table.c.state, tasks_table.c.current_attempt_id).where(
+    tasks_table.c.task_id == bindparam("task_id", type_=tasks_table.c.task_id.type)
+)
 
 
 class AddEndpointOutcome(StrEnum):
@@ -215,9 +228,7 @@ class EndpointsProjection:
         """
         task_id = endpoint.task_id
         job_id, _ = task_id.require_task()
-        task_row = cur.execute(
-            select(tasks_table.c.state, tasks_table.c.current_attempt_id).where(tasks_table.c.task_id == task_id)
-        ).fetchone()
+        task_row = cur.execute(_TASK_STATE_FOR_ENDPOINT, {"task_id": task_id}).fetchone()
         if task_row is None:
             return AddEndpointOutcome.NOT_FOUND
         if int(task_row.state) in TERMINAL_TASK_STATES:
@@ -226,27 +237,16 @@ class EndpointsProjection:
             return AddEndpointOutcome.STALE_ATTEMPT
 
         cur.execute(
-            sqlite_insert(endpoints_table)
-            .values(
-                endpoint_id=endpoint.endpoint_id,
-                name=endpoint.name,
-                address=endpoint.address,
-                job_id=job_id,
-                task_id=task_id,
-                metadata_json=endpoint.metadata,
-                registered_at_ms=endpoint.registered_at,
-            )
-            .on_conflict_do_update(
-                index_elements=["endpoint_id"],
-                set_={
-                    "name": endpoint.name,
-                    "address": endpoint.address,
-                    "job_id": job_id,
-                    "task_id": task_id,
-                    "metadata_json": endpoint.metadata,
-                    "registered_at_ms": endpoint.registered_at,
-                },
-            )
+            _INSERT_OR_REPLACE_ENDPOINT,
+            {
+                "endpoint_id": endpoint.endpoint_id,
+                "name": endpoint.name,
+                "address": endpoint.address,
+                "job_id": job_id,
+                "task_id": task_id,
+                "metadata_json": endpoint.metadata,
+                "registered_at_ms": endpoint.registered_at,
+            },
         )
 
         def apply() -> None:

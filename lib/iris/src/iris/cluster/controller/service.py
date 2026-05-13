@@ -726,12 +726,14 @@ def _query_from_list_jobs_request(
 
 
 def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
-    """Return ``(worker_row, attrs_dict)`` pairs for all registered workers."""
+    """Return ``(worker_row, attrs_dict)`` pairs for all registered workers.
+
+    Two queries total: one SELECT over ``workers`` for the full roster and
+    one over ``worker_attributes`` filtered to those worker_ids. The old
+    shape (per-worker ``get_worker_detail``) issued N+1 queries.
+    """
     with db.read_snapshot() as tx:
-        decoded = [
-            reads.get_worker_detail(tx, row.worker_id) for row in tx.execute(select(workers_table.c.worker_id)).all()
-        ]
-        decoded = [w for w in decoded if w is not None]
+        decoded = tx.execute(select(*reads.WORKER_DETAIL_COLS)).all()
         if not decoded:
             return []
         worker_ids = [w.worker_id for w in decoded]
