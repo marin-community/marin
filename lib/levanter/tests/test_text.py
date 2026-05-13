@@ -24,6 +24,7 @@ from levanter.data.text import (
     PreferenceChatLmDatasetFormat,
     PreferenceChatProcessor,
     PrebuiltLmDatasetFormat,
+    TextLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
     count_corpus_sizes,
@@ -374,6 +375,83 @@ def test_prebuilt_cache_without_loss_weights(tmp_path):
     example = ds[0]
     expected_loss_weight = np.array([1.0, 1.0, 1.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
+
+
+def test_supervised_text_cache_masks_target_tokens_for_training_and_eval(tmp_path):
+    records = [
+        {"input": "1 2 ", "target": "3 4"},
+        {"input": "5 ", "target": "6 7 8"},
+    ]
+    data_path = tmp_path / "supervised.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[str(data_path)]),
+        format=TextLmDatasetFormat(input_key="input", target_key="target"),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    train_cache = config.build_caches("train")["supervised"]
+    first_row = train_cache.as_sync_dataset()[0]
+    np.testing.assert_array_equal(first_row["input_ids"], np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(first_row["loss_weights"], np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float32))
+
+    Pos = hax.Axis("position", 4)
+    train_example = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))[
+        "supervised"
+    ].as_sync_dataset()[0]
+    np.testing.assert_array_equal(np.asarray(train_example.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(train_example.loss_weight), np.array([0.0, 1.0, 1.0, 0.0]))
+
+    tagged_eval_sets = config.tagged_eval_sets(Pos)
+    assert tagged_eval_sets[0][1] == ["supervised"]
+    eval_example = tagged_eval_sets[0][0].as_sync_dataset()[0]
+    np.testing.assert_array_equal(eval_example.tokens.array, np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(eval_example.loss_weight.array, np.array([0.0, 1.0, 1.0, 0.0]))
+
+
+def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
+    records = [
+        {"input": "1 ", "target": "2"},
+        {"input": "3 ", "target": "4"},
+    ]
+    data_path = tmp_path / "supervised_pack.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
+        format=TextLmDatasetFormat(input_key="input", target_key="target"),
+        cache_dir=str(tmp_path),
+        pack=2,
+    )
+    config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    cache = config.build_caches("train")["supervised"]
+    Pos = hax.Axis("position", 4)
+    dataset = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+    ).as_sync_dataset()
+
+    example = dataset[0]
+    np.testing.assert_array_equal(np.asarray(example.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
 
 
 def test_train_set_last_mile_wraps_to_named(tmp_path):
