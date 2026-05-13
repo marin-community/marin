@@ -36,15 +36,20 @@ import yaml
 from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
-    _schedulable_tasks,
+    _pending_tasks_with_jobs as _schedulable_tasks,
+)
+from iris.cluster.controller.controller import (
     compute_demand_entries,
 )
-from iris.cluster.controller.db import (
-    ACTIVE_TASK_STATES,
-    ControllerDB,
-    EndpointQuery,
-)
-from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.db import Tx as _Tx
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+
+# Branch removed Tx.fetchall/fetchone; restore for this benchmark script.
+if not hasattr(_Tx, "fetchall"):
+    _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
+    _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
+from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.scheduler import Scheduler
@@ -61,7 +66,6 @@ from iris.cluster.controller.service import (
     USER_JOB_STATES,
     _query_jobs,
     _tasks_for_listing,
-    _worker_addresses_for_tasks,
     _worker_roster,
 )
 from iris.cluster.controller.transitions import (
@@ -75,6 +79,21 @@ from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, text, update
+
+
+def _worker_addresses_for_tasks(db, tasks):
+    """Inlined for the branch: service.py removed this helper."""
+    worker_ids = {t.current_worker_id for t in tasks if getattr(t, "current_worker_id", None)}
+    if not worker_ids:
+        return {}
+    with db.read_snapshot() as q:
+        rows = q.execute(
+            select(workers_table.c.worker_id, workers_table.c.address).where(
+                workers_table.c.worker_id.in_(list(worker_ids))
+            )
+        ).all()
+    return {r.worker_id: r.address for r in rows}
+
 
 # ---------------------------------------------------------------------------
 # Result accumulation
@@ -580,9 +599,9 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        from iris.cluster.controller import db
+        from iris.cluster.controller import db as db_mod
 
-        with db.read_snapshot(db.sa_read_engine) as snap:
+        with db_mod.read_snapshot(db.sa_read_engine) as snap:
             reads.resource_usage_by_worker(snap)
 
     bench("Scheduling: resource_usage_by_worker (NEW derived query)", _usage_new)
@@ -606,12 +625,12 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-        from iris.cluster.controller import db
+        from iris.cluster.controller import db as db_mod
 
         _schedulable_tasks(db)
         with db.read_snapshot() as _rtx:
             ws = reads.healthy_active_workers_with_attributes(_rtx, health, _NoAttrs())
-        with db.read_snapshot(db.sa_read_engine) as snap:
+        with db_mod.read_snapshot(db.sa_read_engine) as snap:
             usage = reads.resource_usage_by_worker(snap)
         return ws, usage
 
@@ -737,10 +756,10 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-            from iris.cluster.controller import db
+            from iris.cluster.controller import db as db_mod
 
             target_ids = set(_ids)
-            with db.read_snapshot(db.sa_read_engine) as snap:
+            with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 # Worker filter applied in Python to keep the partial index
                 # ``idx_task_attempts_live_workerbound`` in play (a long IN
                 # list on worker_id degrades to a scan).
@@ -850,9 +869,9 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            from iris.cluster.controller import db
+            from iris.cluster.controller import db as db_mod
 
-            with db.read_snapshot(db.sa_read_engine) as snap:
+            with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 reads.has_unfinished_worker_attempts(snap, drain_jid)
 
         bench("Polling: has_unfinished_worker_attempts (drain gate)", _has_unfinished)
@@ -883,7 +902,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
         roster = _worker_roster(db)
         if roster:
             with db.read_snapshot() as tx:
-                reads.running_tasks_by_worker(tx, {w.worker_id for w in roster})
+                reads.running_tasks_by_worker(tx, {w[0].worker_id for w in roster})
 
     bench(f"RPC: ListWorkers (n={len(_worker_roster(db))})", _list_workers)
 
