@@ -28,3 +28,16 @@ This is the API documentation for the executor framework.
 ::: marin.execution.ensure_versioned
 ::: marin.execution.unwrap_versioned_value
 ::: marin.execution.get_executor_step
+
+## Config Walking and Materialization
+
+Helpers for inspecting and resolving placeholder-bearing configs without
+running a full executor pipeline. `compute_output_path` and
+`resolve_local_placeholders` run on the submitter; `materialize` is the
+worker-side counterpart that submits any embedded `ExecutorStep`s and
+substitutes resolved paths into the config.
+
+::: marin.execution.walk_config
+::: marin.execution.resolve_local_placeholders
+::: marin.execution.compute_output_path
+::: marin.execution.materialize

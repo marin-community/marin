@@ -7,14 +7,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-from fray.v1.cluster import (
+from fray import current_client
+from fray.types import (
     CpuConfig,
     Entrypoint,
-    EnvironmentConfig,
+    GpuConfig,
     JobRequest,
     ResourceConfig,
     TpuConfig,
-    current_cluster,
+    create_environment,
 )
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
@@ -23,13 +24,7 @@ from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    VersionedValue,
-    ensure_versioned,
-    this_output_path,
-)
+from marin.execution.executor import ExecutorStep, InputName, VersionedValue, ensure_versioned, this_output_path
 from marin.training.run_environment import add_run_env_variables
 from marin.training.training import _add_default_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
@@ -109,16 +104,21 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     if isinstance(config.resources.device, TpuConfig):
         assert config.resources.replicas == 1, "Export currently works on single slices at present."
 
+    extras: list[str] = []
+    if isinstance(config.resources.device, TpuConfig):
+        extras.append("tpu")
+    elif isinstance(config.resources.device, GpuConfig):
+        extras.append("gpu")
+
+    client = current_client()
     job_request = JobRequest(
         name="convert-checkpoint-to-hf",
         entrypoint=Entrypoint.from_callable(_run_with_lockfile),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env),
+        environment=create_environment(env_vars=env, extras=extras),
     )
-
-    cluster = current_cluster()
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
 
 
 def convert_checkpoint_to_hf_step(

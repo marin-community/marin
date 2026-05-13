@@ -7,7 +7,6 @@ import pytest
 from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
 from iris.rpc.auth import (
     AuthInterceptor,
     AuthTokenInjector,
@@ -514,13 +513,15 @@ def test_jwt_token_manager_expired(jwt_manager):
 
 
 def test_jwt_token_manager_load_revocations(tmp_path):
+    from iris.cluster.controller import writes
     from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
     from iris.cluster.controller.db import ControllerDB
     from rigging.timing import Timestamp
 
     db = ControllerDB(db_dir=tmp_path)
     now = Timestamp.now()
-    db.ensure_user("alice", now)
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "alice", now)
 
     manager = JwtTokenManager(signing_key="test-key-load-revocations-abc123")
 

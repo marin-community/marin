@@ -9,12 +9,13 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.providers.types import SliceHandle
+from rigging.timing import Timestamp
+
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
+from iris.cluster.providers.types import SliceHandle
 from iris.rpc import config_pb2, vm_pb2
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +85,14 @@ def terminate_slices_for_workers(
     unregister_slice_workers: Callable[[str, Sequence[str] | None], None],
     log_action: Callable[..., vm_pb2.AutoscalerAction],
     timestamp: Timestamp,
-    short_lived_slice_threshold: Duration,
 ) -> SliceTerminationResult:
-    """Detach and schedule slice termination for the given failed workers."""
+    """Detach and schedule slice termination for the given failed workers.
+
+    Every observed slice termination is reported to the group's churn detector
+    as :class:`~iris.cluster.controller.autoscaler.backoff_detector.SliceFate.PREEMPTED`.
+    The detector classifies internally based on slice age — short-lived deaths
+    move churn rate; long-lived deaths count as positive samples.
+    """
 
     if not worker_ids:
         return SliceTerminationResult(sibling_worker_ids=[], termination_requests=[])
@@ -116,13 +122,7 @@ def terminate_slices_for_workers(
             slice_id=slice_id,
             reason=f"workers failed: {', '.join(failed_workers)}",
         )
-        record_slice_failure(
-            group=group,
-            slice_id=slice_id,
-            timestamp=timestamp,
-            short_lived_slice_threshold=short_lived_slice_threshold,
-            log_action=log_action,
-        )
+        group.record_slice_preempted(slice_id, timestamp)
         handle = group.detach_slice(slice_id)
         unregister_slice_workers(slice_id, worker_ids=slice_worker_ids)
         if handle is not None:
@@ -145,31 +145,3 @@ def find_slice_for_worker(
         if slice_id is not None:
             return slice_id, group
     return None, None
-
-
-def record_slice_failure(
-    group: ScalingGroup,
-    slice_id: str,
-    timestamp: Timestamp,
-    short_lived_slice_threshold: Duration,
-    log_action: Callable[..., vm_pb2.AutoscalerAction],
-) -> None:
-    """Record slice failure and apply backoff if it was short-lived."""
-
-    slice_handle = group.get_slice(slice_id)
-    if slice_handle is None:
-        return
-
-    age_ms = timestamp.epoch_ms() - slice_handle.created_at.epoch_ms()
-    age = Duration.from_ms(age_ms)
-    if age >= short_lived_slice_threshold:
-        return
-
-    logger.warning("Short-lived slice %s (age=%dms) in %s, applying backoff", slice_id, age_ms, group.name)
-    group.record_failure(timestamp)
-    log_action(
-        "backoff_triggered",
-        group.name,
-        slice_id=slice_id,
-        reason=f"short-lived slice (age={age_ms}ms)",
-    )

@@ -10,12 +10,11 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from iris.client import IrisClient
 from iris.cli.job import load_env_vars, run_iris_job
+from iris.client import IrisClient
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 @pytest.fixture(scope="module")
@@ -23,7 +22,7 @@ def local_cluster_and_config(tmp_path_factory):
     """Start local cluster and create config file for it."""
     tmp_path = tmp_path_factory.mktemp("iris_run")
     iris_root = Path(__file__).resolve().parents[2]
-    test_config_path = iris_root / "examples" / "test.yaml"
+    test_config_path = iris_root / "config" / "test.yaml"
 
     config = load_config(test_config_path)
     config = make_local_config(config)

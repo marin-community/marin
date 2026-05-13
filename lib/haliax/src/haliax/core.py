@@ -14,6 +14,7 @@ from types import EllipsisType
 from typing import Any, Callable, Mapping, Sequence, TypeAlias, overload
 
 import jax
+import jax._src.pretty_printer as pp
 import jax.numpy as jnp
 import numpy as np
 
@@ -429,8 +430,6 @@ class NamedArray(metaclass=NamedArrayMeta):
 
     def __tree_pp__(self, **kwargs):
         # For Equinox's tree pretty printer
-        import jax._src.pretty_printer as pp
-
         if kwargs.get("short_arrays", True) and is_jax_array_like(self.array):
             return pp.text(f"Named({self.dtype}{self.shape})")
         else:

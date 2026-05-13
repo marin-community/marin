@@ -3,10 +3,14 @@
 
 import abc
 import dataclasses
+import logging
 import typing
 from typing import Any, List, Optional
 
 import draccus
+
+
+logger = logging.getLogger(__name__)
 
 
 class Tracker(abc.ABC):
@@ -61,7 +65,7 @@ class Tracker(abc.ABC):
         pass
 
     def __enter__(self):
-        import levanter.tracker.tracker_fns as tracker_fns
+        import levanter.tracker.tracker_fns as tracker_fns  # circular import: tracker_fns imports tracker
 
         if hasattr(self, "_tracker_cm"):
             raise RuntimeError("This tracker is already set as the global tracker")
@@ -76,39 +80,47 @@ class Tracker(abc.ABC):
 
 
 class CompositeTracker(Tracker):
+    """A tracker that fans calls out to a list of trackers.
+
+    Exceptions from any single member tracker are caught and logged so that one
+    failing backend (e.g. W&B losing connectivity) doesn't take down the others.
+    Wrap members in :class:`~levanter.tracker.BackgroundTracker` if you also
+    want isolation from latency.
+    """
+
     def __init__(self, loggers: List[Tracker]):
         self.loggers = loggers
 
-    def log_hyperparameters(self, hparams: dict[str, Any]):
-        for tracker in self.loggers:
-            tracker.log_hyperparameters(hparams)
-
-    def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
-        for tracker in self.loggers:
-            tracker.log(metrics, step=step, commit=commit)
-
-    def log_summary(self, metrics: dict[str, Any]):
-        for tracker in self.loggers:
-            tracker.log_summary(metrics)
-
-    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
-        for tracker in self.loggers:
-            tracker.log_artifact(artifact_path, name=name, type=type)
-
-    def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
-        for tracker in self.loggers:
-            tracker.log_html(key, html_path, step=step, commit=commit)
-
-    def finish(self):
-        excs = []
+    def _for_each(self, op: str, *args, **kwargs) -> None:
         for tracker in self.loggers:
             try:
-                tracker.finish()
-            except Exception as e:
-                excs.append(e)
+                getattr(tracker, op)(*args, **kwargs)
+            except Exception:
+                logger.exception(
+                    "Tracker '%s' raised during %s; continuing with remaining trackers.",
+                    getattr(tracker, "name", type(tracker).__name__),
+                    op,
+                )
 
-        if excs:
-            raise RuntimeError("Errors occurred when finishing trackers") from excs[0]
+    def log_hyperparameters(self, hparams: dict[str, Any]):
+        self._for_each("log_hyperparameters", hparams)
+
+    def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
+        self._for_each("log", metrics, step=step, commit=commit)
+
+    def log_summary(self, metrics: dict[str, Any]):
+        self._for_each("log_summary", metrics)
+
+    def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+        self._for_each("log_artifact", artifact_path, name=name, type=type)
+
+    def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
+        self._for_each("log_html", key, html_path, step=step, commit=commit)
+
+    def finish(self):
+        # finish() exceptions are logged and swallowed too; a tracker failing to
+        # flush at the very end of a run shouldn't crash the trainer's shutdown.
+        self._for_each("finish")
 
 
 class TrackerConfig(draccus.PluginRegistry, abc.ABC):

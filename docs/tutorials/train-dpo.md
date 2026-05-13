@@ -137,13 +137,16 @@ if __name__ == "__main__":
     executor_main(steps=[dpo_step])
 ```
 
-Submit the job:
+Submit the job to the shared Iris cluster (CPU-only entrypoint; the script's
+`executor_main` spawns the TPU sub-task via Fray):
 
 ```bash
-uv run lib/marin/src/marin/run/ray_run.py --no_wait \
-    --env_vars WANDB_API_KEY=${WANDB_API_KEY} \
-    -- python experiments/my_dpo_experiment.py
+uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.my_dpo_experiment
 ```
+
+See [`lib/iris/OPS.md`](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md) for flag details and how to stream logs with `iris job logs`.
 
 ## Example
 

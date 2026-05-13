@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import string
-from collections import defaultdict
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Generic, List, Optional, Tuple, TypeVar, Union, cast
@@ -1481,45 +1480,3 @@ def _unstack_and_unpad_matrices(stacked_array, original_shapes):
             arr = arr[slices]
         unpadded.append(arr)
     return tuple(unpadded)
-
-
-# unused fns (can be used for stacking partitions without padding):
-def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
-    indexed_list = list(enumerate(matrix_shapes))
-    sorted_indexed = sorted(indexed_list, key=lambda x: x[1])
-    sorted_shapes = [shape for _, shape in sorted_indexed]
-    change_indices = [original_index for original_index, _ in sorted_indexed]
-    revert_indices = [0] * len(matrix_shapes)
-    for new_pos, (original_index, _) in enumerate(sorted_indexed):
-        revert_indices[original_index] = new_pos
-    shape_groups = defaultdict(list)
-    for i, shape in enumerate(sorted_shapes):
-        shape_groups[shape].append(i)
-    unique_sorted_shapes = list(shape_groups.keys())
-    return unique_sorted_shapes, dict(shape_groups), change_indices, revert_indices
-
-
-def _stack_matrices(array_list):
-    in_tuple = isinstance(array_list, tuple)
-    shapes = [arr.shape for arr in array_list]
-    unique_shapes, shape_groups, change_indices, _ = _sort_and_group_matrices(shapes)
-    sorted_arrays = [array_list[i] for i in change_indices]
-    stacked_arrays = []
-    for shape in unique_shapes:
-        indices = shape_groups[shape]
-        stacked = jnp.stack([sorted_arrays[i] for i in indices])
-        stacked_arrays.append(stacked)
-    if in_tuple:
-        return tuple(stacked_arrays)
-    return stacked_arrays
-
-
-def _unstack_matrices(stacked_arrays, revert_indices):
-    in_tuple = isinstance(stacked_arrays, tuple)
-    unstacked = []
-    for arr in stacked_arrays:
-        unstacked.extend(jnp.split(arr, arr.shape[0]))
-    array_list = [jnp.squeeze(unstacked[i], axis=0) for i in revert_indices]
-    if in_tuple:
-        return tuple(array_list)
-    return array_list

@@ -22,7 +22,7 @@ import sys
 BEGIN = "# ### BEGIN RUST-DEV SOURCES ###"
 END = "# ### END RUST-DEV SOURCES ###"
 
-DEV_SOURCES = 'dupekit = { path = "rust/dupekit", editable = true }'
+DEV_SOURCES = 'marin-dupekit = { path = "rust/dupekit", editable = true }'
 
 PYPROJECT = pathlib.Path("pyproject.toml")
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import { logServiceRpcCall } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import type { FetchLogsResponse, LogEntry, TaskAttempt } from '@/types/rpc'
@@ -38,12 +39,30 @@ const cursor = ref<string | number | null>(null)
 // Task IDs end with a numeric segment (e.g. /alice/job/0), job IDs don't.
 const isTask = props.taskId ? /\/\d+$/.test(props.taskId) : false
 
-function computeSource(): string {
+type WireMatchScope = 'MATCH_SCOPE_EXACT' | 'MATCH_SCOPE_PREFIX'
+
+interface SourceQuery {
+  source: string
+  matchScope: WireMatchScope
+}
+
+// Build a (literal source, match_scope) pair for FetchLogs. Server treats
+// `source` as a literal string — no regex escaping needed for `:`, `/`, etc.
+// PREFIX picks up every attempt of a task or every task of a job; EXACT
+// pins to a specific attempt or system stream.
+function computeSource(): SourceQuery {
   if (props.taskId) {
-    if (selectedAttemptId.value >= 0) return `${props.taskId}:${selectedAttemptId.value}`
-    return isTask ? `${props.taskId}:.*` : `${props.taskId}/\\d+:.*`
+    if (selectedAttemptId.value >= 0) {
+      return { source: `${props.taskId}:${selectedAttemptId.value}`, matchScope: 'MATCH_SCOPE_EXACT' }
+    }
+    // Boundary char (`:` or `/`) baked into the prefix so we don't bleed
+    // into sibling task ids that share the same numeric leader.
+    return { source: isTask ? `${props.taskId}:` : `${props.taskId}/`, matchScope: 'MATCH_SCOPE_PREFIX' }
   }
-  return props.workerId ? `/system/worker/${props.workerId}` : '/system/controller'
+  return {
+    source: props.workerId ? `/system/worker/${props.workerId}` : '/system/controller',
+    matchScope: 'MATCH_SCOPE_EXACT',
+  }
 }
 
 // Monotonic generation to discard responses from superseded requests (e.g.
@@ -55,8 +74,10 @@ async function fetchTail() {
   loading.value = true
   errorMsg.value = null
   try {
+    const { source, matchScope } = computeSource()
     const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
-      source: computeSource(),
+      source,
+      matchScope,
       maxLines: tailLines.value || undefined,
       tail: true,
       substring: filter.value || undefined,
@@ -84,8 +105,10 @@ async function fetchIncremental() {
   // Incremental polls don't toggle `loading` so the UI doesn't flash on every
   // poll; the user only sees the spinner on the initial/tail load.
   try {
+    const { source, matchScope } = computeSource()
     const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
-      source: computeSource(),
+      source,
+      matchScope,
       maxLines: AUTO_REFRESH_MAX_LINES,
       tail: false,
       cursor: cursor.value,
@@ -159,19 +182,52 @@ watch(() => props.workerId, resetAndFetch)
 
 onMounted(resetAndFetch)
 
-const filteredLogs = computed<LogEntry[]>(() => entries.value)
+// Job-aggregate mode shows logs from many tasks; render a per-line link to the
+// originating task. Single-task mode would link every line to itself, so skip.
+const showTaskLinks = computed(() => {
+  if (!props.taskId) return false
+  return !/\/\d+$/.test(props.taskId)
+})
+
+interface TaskRef {
+  taskId: string
+  taskIndex: string
+}
+
+function parseTaskFromKey(key: string | undefined): TaskRef | null {
+  if (!key) return null
+  const colonIdx = key.lastIndexOf(':')
+  const taskId = colonIdx > 0 ? key.slice(0, colonIdx) : key
+  const lastSlash = taskId.lastIndexOf('/')
+  if (lastSlash < 0) return null
+  const taskIndex = taskId.slice(lastSlash + 1)
+  if (!/^\d+$/.test(taskIndex)) return null
+  return { taskId, taskIndex }
+}
+
+interface LogRow {
+  entry: LogEntry
+  taskRef: TaskRef | null
+}
+
+const logRows = computed<LogRow[]>(() =>
+  entries.value.map(entry => ({
+    entry,
+    taskRef: showTaskLinks.value ? parseTaskFromKey(entry.key) : null,
+  })),
+)
 
 defineExpose({ selectedAttemptId })
 </script>
 
 <template>
   <div class="space-y-2">
-    <div class="flex items-center gap-3 text-sm">
+    <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-sm">
       <input
         v-model="filter"
         type="text"
         placeholder="Filter logs..."
-        class="w-64 px-3 py-1.5 bg-surface border border-surface-border rounded
+        class="w-full sm:w-64 px-3 py-1.5 bg-surface border border-surface-border rounded
                text-sm font-mono placeholder:text-text-muted
                focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
       />
@@ -211,7 +267,7 @@ defineExpose({ selectedAttemptId })
         {{ autoRefreshActive ? 'Auto ⟳' : 'Paused' }}
       </button>
       <span class="ml-auto text-xs text-text-muted font-mono">
-        {{ filteredLogs.length }} lines
+        {{ logRows.length }} lines
       </span>
     </div>
 
@@ -227,27 +283,35 @@ defineExpose({ selectedAttemptId })
       :style="{ maxHeight: maxHeight }"
     >
       <div
-        v-if="loading && filteredLogs.length === 0"
+        v-if="loading && logRows.length === 0"
         class="py-12 text-center text-text-muted text-sm"
       >
         Loading logs...
       </div>
       <div
-        v-else-if="filteredLogs.length === 0"
+        v-else-if="logRows.length === 0"
         class="py-12 text-center text-text-muted text-sm"
       >
         No log entries
       </div>
       <div
-        v-for="(entry, i) in filteredLogs"
+        v-for="(row, i) in logRows"
         :key="i"
         :class="[
           'px-3 py-0.5 font-mono text-xs leading-relaxed hover:bg-surface-sunken',
-          logLevelClass(entry.level),
+          logLevelClass(row.entry.level),
         ]"
       >
-        <span class="text-text-muted mr-2">{{ formatLogTime(timestampMs(entry.timestamp)) }}</span>
-        <span class="whitespace-pre-wrap break-all">{{ entry.data }}</span>
+        <RouterLink
+          v-if="row.taskRef && props.taskId"
+          :to="`/job/${encodeURIComponent(props.taskId)}/task/${encodeURIComponent(row.taskRef.taskId)}`"
+          class="text-accent hover:underline mr-2"
+          :title="row.taskRef.taskId"
+        >
+          T{{ row.taskRef.taskIndex }}
+        </RouterLink>
+        <span class="text-text-muted mr-2">{{ formatLogTime(timestampMs(row.entry.timestamp)) }}</span>
+        <span class="whitespace-pre-wrap break-all">{{ row.entry.data }}</span>
       </div>
     </div>
   </div>

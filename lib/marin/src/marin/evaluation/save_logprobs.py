@@ -19,18 +19,17 @@ from dataclasses import dataclass, field, replace
 
 import equinox as eqx
 import fsspec
-import jax
-
-import jmp
-import numpy as np
-from jax.experimental import multihost_utils
-
 import haliax as hax
+import jax
+import jmp
+import levanter
+import numpy as np
+from fray import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
-
-import levanter
-from levanter.checkpoint import load_checkpoint
+from jax.experimental import multihost_utils
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.data import DataLoader
 from levanter.data.text import DatasetComponent, LmDataConfig, LMMixtureDatasetConfig
@@ -41,9 +40,6 @@ from levanter.tracker import NoopConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
-
-from fray.v2 import current_client
-from fray.v2.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
@@ -137,7 +133,8 @@ def save_logprobs(config: SaveLogprobsConfig) -> None:
         if config.checkpoint_path is not None and not config.checkpoint_is_hf:
             with use_cpu_device():
                 model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                model = load_checkpoint(model, config.checkpoint_path, subpath="model")
+                checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
+                model = load_checkpoint(model, checkpoint_path, subpath="model")
             model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
         elif hf_checkpoint is not None:
             model_config = config.model

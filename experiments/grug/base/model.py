@@ -13,7 +13,6 @@ from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-
 from levanter.analysis.backward_flow import (
     is_backward_flow_active,
     log_backward_activation,

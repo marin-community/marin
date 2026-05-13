@@ -87,6 +87,9 @@ export interface TaskStatus {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   ports?: Record<string, number>
+  // Worker-resident in-memory snapshot (Worker.GetTaskStatus only). The
+  // controller-served TaskStatus carries no resourceUsage; query the
+  // iris.task stats namespace via useLogServerStatsRpc for time series.
   resourceUsage?: ResourceUsage
   buildMetrics?: BuildMetrics
   currentAttemptId?: number
@@ -94,7 +97,8 @@ export interface TaskStatus {
   pendingReason?: string
   canBeScheduled?: boolean
   containerId?: string
-  resourceHistory?: ResourceUsage[]
+  statusTextDetailMd?: string
+  statusTextSummaryMd?: string
 }
 
 // -- Jobs --
@@ -107,7 +111,6 @@ export interface JobStatus {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   ports?: Record<string, number>
-  resourceUsage?: ResourceUsage
   statusMessage?: string
   buildMetrics?: BuildMetrics
   failureCount?: number
@@ -145,8 +148,6 @@ export interface ListJobsResponse {
 export interface GetJobStatusResponse {
   job: JobStatus
   request?: LaunchJobRequest
-  resourceMin?: ResourceUsage
-  resourceMax?: ResourceUsage
 }
 
 export interface CommandEntrypoint {
@@ -224,21 +225,23 @@ export interface WorkerHealthStatus {
   statusMessage?: string
 }
 
-export interface ListWorkersResponse {
-  workers: WorkerHealthStatus[]
+export interface WorkerQuery {
+  contains?: string
+  sortField?: string
+  sortDirection?: string
+  offset?: number
+  limit?: number
 }
 
-export interface WorkerResourceSnapshot {
-  timestamp?: ProtoTimestamp
-  hostCpuPercent?: number
-  memoryUsedBytes?: string
-  memoryTotalBytes?: string
-  diskUsedBytes?: string
-  diskTotalBytes?: string
-  runningTaskCount?: number
-  totalProcessCount?: number
-  netRecvBps?: string
-  netSentBps?: string
+export interface ListWorkersResponse {
+  workers: WorkerHealthStatus[]
+  totalCount: number
+  hasMore: boolean
+}
+
+export interface WorkerTaskAttempt {
+  taskId: string
+  attempt?: TaskAttempt
 }
 
 export interface GetWorkerStatusResponse {
@@ -246,10 +249,10 @@ export interface GetWorkerStatusResponse {
   scaleGroup?: string
   worker?: WorkerHealthStatus
   bootstrapLogs?: string
-  workerLogEntries?: LogEntry[]
-  recentTasks?: TaskStatus[]
-  currentResources?: WorkerResourceSnapshot
-  resourceHistory?: WorkerResourceSnapshot[]
+  // workerLogEntries removed from this response to avoid blocking the worker
+  // page render on a slow LogService proxy. Fetched separately via
+  // LogService.FetchLogs(source="/system/worker/<worker_id>").
+  recentAttempts?: WorkerTaskAttempt[]
 }
 
 // -- Endpoints --
@@ -458,19 +461,6 @@ export interface GetProcessStatusResponse {
   logEntries?: LogEntry[]
 }
 
-// -- Transactions --
-
-export interface TransactionAction {
-  timestamp?: ProtoTimestamp
-  action?: string
-  entityId?: string
-  details?: string
-}
-
-export interface GetTransactionsResponse {
-  actions: TransactionAction[]
-}
-
 // -- Task State Counts (used in job summaries and user summaries) --
 
 /** Mapping from lowercase state name to count, e.g. { running: 2, pending: 5 } */
@@ -503,20 +493,21 @@ export interface ListApiKeysResponse {
 
 // -- Scheduler State --
 
-export interface SchedulerTaskEntry {
-  taskId: string
-  jobId: string
+/** Aggregated pending-task count keyed by (band, user, job). */
+export interface PendingTaskBucket {
+  band: string
   userId: string
-  originalBand: string
-  effectiveBand: string
-  queuePosition: number
-  resourceValue: number
+  jobId: string
+  count: number
 }
 
-export interface SchedulerBandGroup {
+/** Aggregated running-task count keyed by (band, user, worker, job). */
+export interface RunningTaskBucket {
   band: string
-  tasks: SchedulerTaskEntry[]
-  totalInBand: number
+  userId: string
+  workerId: string
+  jobId: string
+  count: number
 }
 
 export interface SchedulerUserBudget {
@@ -528,22 +519,45 @@ export interface SchedulerUserBudget {
   utilizationPercent: number
 }
 
-export interface SchedulerRunningTask {
-  taskId: string
-  jobId: string
-  userId: string
-  workerId: string
-  effectiveBand: string
-  resourceValue: number
-  preemptible: boolean
-  preemptibleBy: string[]
-  isCoscheduled: boolean
-}
-
 export interface GetSchedulerStateResponse {
-  pendingQueue: SchedulerBandGroup[]
   userBudgets: SchedulerUserBudget[]
-  runningTasks: SchedulerRunningTask[]
   totalPending: number
   totalRunning: number
+  pendingBuckets: PendingTaskBucket[]
+  runningBuckets: RunningTaskBucket[]
+}
+
+// -- RPC Statistics (iris.stats.StatsService) --
+
+export interface RpcMethodStats {
+  method: string
+  count?: string
+  errorCount?: string
+  totalDurationMs?: number
+  maxDurationMs?: number
+  p50Ms?: number
+  p95Ms?: number
+  p99Ms?: number
+  bucketUpperBoundsMs?: string[]
+  bucketCounts?: string[]
+  lastCall?: ProtoTimestamp
+}
+
+export interface RpcCallSample {
+  method: string
+  timestamp?: ProtoTimestamp
+  durationMs?: number
+  peer?: string
+  userAgent?: string
+  caller?: string
+  errorCode?: string
+  errorMessage?: string
+  requestPreview?: string
+}
+
+export interface GetRpcStatsResponse {
+  methods?: RpcMethodStats[]
+  slowSamples?: RpcCallSample[]
+  discoverySamples?: RpcCallSample[]
+  collectorStartedAt?: ProtoTimestamp
 }

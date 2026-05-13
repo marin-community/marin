@@ -12,9 +12,8 @@ import logging
 import os
 from dataclasses import dataclass
 
-from rigging.filesystem import open_url
-
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
+from rigging.filesystem import open_url
 
 logger = logging.getLogger(__name__)
 

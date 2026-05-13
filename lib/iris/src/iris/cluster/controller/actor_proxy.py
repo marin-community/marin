@@ -20,7 +20,7 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +46,10 @@ _HOP_BY_HOP_HEADERS = frozenset(
 
 
 class ActorProxy:
-    """Forwards ActorService RPCs to actors resolved from the endpoint registry."""
+    """Forwards ActorService RPCs to actors resolved from the endpoint store."""
 
-    def __init__(self, db: ControllerDB):
-        self._db = db
+    def __init__(self, endpoints: EndpointsProjection):
+        self._endpoints = endpoints
         self._client = httpx.AsyncClient(timeout=PROXY_TIMEOUT_SECONDS)
 
     async def close(self) -> None:
@@ -97,8 +97,8 @@ class ActorProxy:
         )
 
     def _resolve_endpoint(self, name: str) -> str | None:
-        """Resolve an endpoint name to an address via the in-memory registry."""
-        row = self._db.endpoints.resolve(name)
+        """Resolve an endpoint name to an address via the in-memory projection."""
+        row = self._endpoints.resolve(name)
         if row is None:
             return None
         return row.address

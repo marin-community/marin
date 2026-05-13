@@ -120,7 +120,6 @@ def _make_slice_snapshot(
         lifecycle=lifecycle,
         worker_ids=worker_ids or [],
         created_at_ms=created_at_ms,
-        last_active_ms=created_at_ms,
         error_message=error_message,
     )
 
@@ -388,61 +387,18 @@ def test_restore_empty_checkpoint_empty_cloud():
 # =============================================================================
 
 
-def test_restore_preserves_backoff_state():
-    """Backoff timers survive checkpoint/restore."""
-    # Set backoff_until to 5 minutes in the future
-    backoff_ms = Timestamp.now().epoch_ms() + 300_000
-    snapshot = GroupSnapshot(
-        name="tpu-group",
-        consecutive_failures=3,
-        backoff_until_ms=backoff_ms,
-    )
+def test_restore_does_not_carry_backoff_state():
+    """Backoff/churn state lives in-memory only; restore starts fresh.
 
+    Slices are still adopted from the checkpoint, but the churn detector's
+    sample window begins empty after a controller restart. This lets the
+    detector re-discover hostility through real observed behaviour rather
+    than persisting potentially-stale counters across restarts.
+    """
+    snapshot = GroupSnapshot(name="tpu-group")
     result = restore_scaling_group(
         group_snapshot=snapshot,
         cloud_handles=[],
         label_prefix="test",
     )
-
-    assert result.consecutive_failures == 3
-    assert result.backoff_active
-
-
-def test_restore_expired_backoff_is_inactive():
-    """Backoff that expired during the restart window is correctly inactive."""
-    # Set backoff_until to 1 minute in the past
-    backoff_ms = Timestamp.now().epoch_ms() - 60_000
-    snapshot = GroupSnapshot(
-        name="tpu-group",
-        consecutive_failures=2,
-        backoff_until_ms=backoff_ms,
-    )
-
-    result = restore_scaling_group(
-        group_snapshot=snapshot,
-        cloud_handles=[],
-        label_prefix="test",
-    )
-
-    assert result.consecutive_failures == 2
-    assert not result.backoff_active
-
-
-def test_restore_preserves_quota_exceeded_state():
-    """Quota exceeded state and reason survive restore."""
-    # Set quota_exceeded_until to 5 minutes in the future
-    quota_ms = Timestamp.now().epoch_ms() + 300_000
-    snapshot = GroupSnapshot(
-        name="tpu-group",
-        quota_reason="RESOURCE_EXHAUSTED: out of v5 TPUs in us-central2",
-        quota_exceeded_until_ms=quota_ms,
-    )
-
-    result = restore_scaling_group(
-        group_snapshot=snapshot,
-        cloud_handles=[],
-        label_prefix="test",
-    )
-
-    assert result.quota_exceeded_active
-    assert "v5 TPUs" in result.quota_reason
+    assert result.slices == {}

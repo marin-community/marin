@@ -101,7 +101,7 @@ We need this tag to construct the `loss_weight` for training, unless `mask_user_
 
 Unfortunately, almost no tokenizers use this format, so you will need to write your own.
 
-Here is an example we use in the [stanford-crfm/marin-tokenizer](https://huggingface.co/stanford-crfm/marin-tokenizer)
+Here is an example we use in the [marin-community/marin-tokenizer](https://huggingface.co/marin-community/marin-tokenizer)
 tokenizer:
 
 ```

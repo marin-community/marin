@@ -90,7 +90,7 @@ def sample_params():
 
 def create_test_weight_transfer_pair(weight_transfer_config):
     """Helper function to create server/client pairs for testing with simplified Levanter API."""
-    from fray.v2 import current_client
+    from fray import current_client
     from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 
     # Set unique coordinator name for distributed modes
@@ -146,7 +146,7 @@ def weight_transfer_config(transfer_mode):
 @pytest.fixture(autouse=True)
 def v2_client():
     """Ensure a v2 LocalClient for weight transfer tests."""
-    from fray.v2 import LocalClient, set_current_client
+    from fray import LocalClient, set_current_client
 
     with set_current_client(LocalClient()) as client:
         yield client
@@ -208,7 +208,7 @@ def test_arrow_flight_server_debug_snapshot_reports_stored_bytes(sample_params):
 
 
 def test_arrow_flight_coordinator_accepts_rollback_weight_ids():
-    from fray.v2 import current_client
+    from fray import current_client
     from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 
     client = current_client()

@@ -51,8 +51,6 @@ def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.
 
 
 def save_xla_dumps_to_wandb(initial_time: float):
-    import os
-
     from levanter.tracker.wandb import is_wandb_available
 
     if not is_wandb_available():
@@ -85,10 +83,8 @@ def save_xla_dumps_to_wandb(initial_time: float):
 class LoadingTimeTrackerIterator(Iterator[T]):
     def __init__(self, items: Iterable[T]):
         self.total_time = 0.0
-        start = time.perf_counter()
-        self.items = iter(items)
-        self.total_time += time.perf_counter() - start
         self.this_load_time = 0.0
+        self.items = iter(items)
 
     def __next__(self) -> T:
         start = time.perf_counter()

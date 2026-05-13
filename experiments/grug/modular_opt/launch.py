@@ -26,11 +26,12 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import leaf_key_paths
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
+from marin.training.training import temporary_checkpoint_base_path
 
 from experiments.defaults import default_validation_sets
 from experiments.grug.modular_opt.model import GrugModelConfig
 from experiments.grug.modular_opt.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
-from experiments.pretraining_datasets import nemotron_mix_block_shuffle
+from experiments.pretraining_datasets import nemotron_mix
 
 
 @OptimizerConfig.register_subclass("grug_param_group_adam")
@@ -170,8 +171,8 @@ GRUG_130M_MODEL = GrugModelConfig(
 )
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
-    nemotron_mix_block_shuffle,
-    default_validation_sets(tokenizer=nemotron_mix_block_shuffle.tokenizer),
+    nemotron_mix,
+    default_validation_sets(tokenizer=nemotron_mix.tokenizer),
 )
 
 
@@ -205,6 +206,7 @@ def run_grug_modular_opt_trial(config: GrugModularOptLaunchConfig) -> None:
         allow_nondivisible_batch_size=False,
         checkpointer=CheckpointerConfig(
             base_path=os.path.join(config.output_path, "checkpoints"),
+            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
             keep=[{"every": 1000}],

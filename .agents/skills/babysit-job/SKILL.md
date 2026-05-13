@@ -12,20 +12,20 @@ the execution backend.
 ## Required Info
 
 1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
-2. `config` — Iris config path (e.g., `lib/iris/examples/marin.yaml`). When the user
+2. `config` — Iris config path (e.g., `lib/iris/config/marin.yaml`). When the user
    refers to a cluster by shorthand name (e.g., "marin_dev", "marin-dev", "marin",
-   "coreweave"), resolve it to the matching config file under `lib/iris/examples/`.
+   "coreweave"), resolve it to the matching config file under `lib/iris/config/`.
    Common mappings:
-   - `marin` / `marin_prod` -> `lib/iris/examples/marin.yaml`
-   - `marin_dev` / `marin-dev` -> `lib/iris/examples/marin-dev.yaml`
-   - `coreweave` -> `lib/iris/examples/coreweave.yaml`
+   - `marin` / `marin_prod` -> `lib/iris/config/marin.yaml`
+   - `marin_dev` / `marin-dev` -> `lib/iris/config/marin-dev.yaml`
+   - `coreweave` -> `lib/iris/config/coreweave.yaml`
 3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
 4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
    `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
 
 Example resubmit command:
-`uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
+`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
 
 If any required field is missing, ask for it before proceeding.
 
@@ -70,17 +70,46 @@ If any required field is missing, ask for it before proceeding.
 - Sleep must be foreground (max ~10 min due to tool timeout).
 - Loop control is at agent level, not bash.
 
+## MCP-Assisted Monitoring
+
+When testing or using `marin-mcp-babysitter`, keep the MCP server resident and
+verify the job through MCP tools, not only through Iris CLI commands.
+
+- Keep the controller tunnel and MCP server in named, restartable sessions
+  (`screen`, `tmux`, or one long-running exec session). Record session names,
+  ports, and log paths in the state file.
+- Start MCP with a stable local controller URL and streamable HTTP transport:
+  `uv run --package marin marin-mcp-babysitter --controller-url <URL> --cluster <CLUSTER> --transport streamable-http --host 127.0.0.1 --port <PORT>`
+- Verify with `iris_job_summary` and `iris_tail_logs`. For heartbeat-style
+  monitoring, report: job state, latest progress/tick/log line, timestamp, and
+  error signal.
+- If the MCP server is reachable but tool calls fail with connection refused to
+  the controller URL, restart only the smoke-test tunnel/session. Do not restart
+  or mutate the Iris cluster.
+- If a sandbox blocks direct localhost TCP probes, run the probe inside an
+  existing long-lived session and write a small JSON result under `scratch/`.
+- For bounded smoke tests, create a thread heartbeat only after the job is
+  submitted, MCP is reachable, and at least one expected log/progress line has
+  appeared. Delete the heartbeat and stop the smoke-test sessions/listeners when
+  the job reaches the expected terminal state.
+
 ## State File
 
 Write to `scratch/<create_timestamp>_monitoring_state.json`, create the `scratch`
 directory if needed. `<create_timestamp>` should have format `YYYYMMDD-HHMM`.
-Track `restart_count` to detect flapping. State file allows resume after context reset.
+Track `restart_count` to detect flapping. Add MCP fields when a resident MCP
+server is part of the monitoring setup. State file allows resume after context reset.
 
 ```json
 {
   "ts": <timestamp_ms>,
   "job_id": "<JOB_ID>",
   "config": "<IRIS_CONFIG_PATH>",
+  "mcp_url": "http://127.0.0.1:<PORT>/mcp",
+  "tunnel_session": "<SESSION_NAME>",
+  "server_session": "<SESSION_NAME>",
+  "tunnel_log": "scratch/<TUNNEL_LOG>",
+  "server_log": "scratch/<SERVER_LOG>",
   "resubmit_command": "<IRIS_JOB_RUN_COMMAND_WITH_NO_WAIT>",
   "restart_count": 0
 }
@@ -94,7 +123,9 @@ Track `restart_count` to detect flapping. State file allows resume after context
    - otherwise: sleep 570
 
 2. CHECK LOGS
-   uv run iris --config <CONFIG> job logs --since-seconds 900 --include-children <JOB_ID> | rg -i -e "loss|error|traceback|exception|resource_exhausted|oom|compiler_base\.cc:2587|program hbm requirement|largest program allocations|ownerdiederror|dead node|node death|autoscaler unsatisfied resources|no accelerator found|failed_precondition|device or resource busy"
+   uv run iris --config <CONFIG> job logs --since-seconds 900 <JOB_ID> | rg -i -e "loss|error|traceback|exception|resource_exhausted|oom|compiler_base\.cc:2587|program hbm requirement|largest program allocations|ownerdiederror|dead node|node death|autoscaler unsatisfied resources|no accelerator found|failed_precondition|device or resource busy"
+
+   `iris job logs <JOB_ID>` includes child-job task logs by default.
 
 3. CHECK STATUS
    uv run iris --config <CONFIG> job list --json --prefix <JOB_ID>

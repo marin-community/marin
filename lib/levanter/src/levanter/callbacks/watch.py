@@ -3,10 +3,9 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Literal, Sequence, TypeVar, Union, cast
+from typing import Literal, Sequence, TypeVar, Union, cast
 
 import jax
-from jax.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, SequenceKey
 from jaxtyping import PyTree
 
 import levanter.tracker
@@ -14,6 +13,7 @@ from levanter.analysis.tree_stats import summary_statistics_for_tree
 from levanter.callbacks import JitCallback
 from levanter.tracker.histogram import Histogram
 from levanter.trainer_state import InsideJitInfo, TrainerState
+from levanter.utils.tree_utils import key_path_to_str
 
 
 Target = Literal["grads", "params", "opt_state", "updates"]
@@ -26,30 +26,6 @@ def _validate_watch_targets(watch_targets: Sequence[str]) -> None:
     invalid_targets = set(watch_targets) - VALID_WATCH_TARGETS
     if invalid_targets:
         raise ValueError(f"Invalid watch targets: {invalid_targets}. Valid targets are: {VALID_WATCH_TARGETS}")
-
-
-def _munge_key_name(path: Sequence[Any]) -> str:
-    """Formats optimizer state key paths to a stable metric suffix."""
-    if not path:
-        return ""
-    path_elem = path[-1]
-    match path_elem:
-        case SequenceKey(idx):  # type: ignore
-            out = f"{idx}"
-        case DictKey(key):  # type: ignore
-            out = f"{key}"
-        case GetAttrKey():  # type: ignore
-            out = str(path_elem)
-        case FlattenedIndexKey(idx):  # type: ignore
-            out = f"{idx}"
-        case _:
-            path_elem = str(path_elem)
-            out = f"{path_elem}"
-
-    if out.startswith("."):
-        out = out[1:]
-
-    return out
 
 
 def compute_watch_stats(
@@ -120,7 +96,7 @@ def compute_watch_stats(
                 if model_tree_type is not None and not isinstance(value, model_tree_type):
                     continue
 
-                name = _munge_key_name(path)
+                name = key_path_to_str(path)
                 name_to_log = f"opt_state/{name}" if name else "opt_state"
                 this_stats = summary_statistics_for_tree(
                     name_to_log,

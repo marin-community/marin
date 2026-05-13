@@ -18,7 +18,6 @@ import time
 from dataclasses import dataclass
 
 import humanfriendly
-from rigging.filesystem import open_url
 from jax.random import PRNGKey
 from levanter.data.text import (
     HfDatasetSourceConfig,
@@ -27,11 +26,11 @@ from levanter.data.text import (
 )
 from levanter.store import SerialCacheWriter, TreeCache
 from levanter.tokenizers import load_tokenizer
-from tqdm_loggable.auto import tqdm
-
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName
 from marin.processing.tokenize.tokenize import TokenizeConfigBase
+from rigging.filesystem import open_url
 from rigging.log_setup import configure_logging
+from tqdm_loggable.auto import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ class SliceCacheConfig(TokenizeConfigBase):
     input_config: LmDatasetSourceConfigBase
     num_tokens: int
     cache_path: str = THIS_OUTPUT_PATH
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    tokenizer: str = "marin-community/marin-tokenizer"
     seed: int = 42
 
     def as_lm_dataset_source_config(
@@ -170,21 +169,12 @@ def _short_desc_from_lm_config(input_config: LmDatasetSourceConfigBase) -> str:
             url += f" (name: {input_config.name})"
         return url
     elif isinstance(input_config, UrlDatasetSourceConfig):
-        out = ""
+        sections = []
         if input_config.train_urls:
-            out = "Train Urls: \n"
-            for url in input_config.train_urls:
-                out += f"- {url}\n"
-
+            sections.append("Train Urls: \n" + "".join(f"- {url}\n" for url in input_config.train_urls))
         if input_config.validation_urls:
-            out = "Validation Urls: \n"
-            for url in input_config.validation_urls:
-                out += f"- {url}\n"
-
-        if not out:
-            out = "{missing urls}"
-
-        return out
+            sections.append("Validation Urls: \n" + "".join(f"- {url}\n" for url in input_config.validation_urls))
+        return "".join(sections) if sections else "{missing urls}"
     else:
         return ""
 
@@ -201,7 +191,7 @@ def _patch_source_config(
     return dataclasses.replace(input_config, cache_dir=output_path, tags=base_tags + extra_tags)
 
 
-def _slice_cache_in_ray(cfg: SliceCacheConfig):
+def _slice_cache_entrypoint(cfg: SliceCacheConfig):
 
     configure_logging(level=logging.INFO)
     logger.info(f"Starting slice cache with config: {cfg}")
@@ -213,7 +203,7 @@ def slice_cache(
     input_config: LmDatasetSourceConfigBase,
     num_tokens: int,
     seed: int = 42,
-    tokenizer_spec: str = "stanford-crfm/marin-tokenizer",
+    tokenizer_spec: str = "marin-community/marin-tokenizer",
 ) -> ExecutorStep[SliceCacheConfig]:
     """High-level function to slice a Levanter cache.
 
@@ -231,7 +221,7 @@ def slice_cache(
 
     return ExecutorStep(
         name=output_path,
-        fn=_slice_cache_in_ray,
+        fn=_slice_cache_entrypoint,
         config=SliceCacheConfig(
             input_config=input_config,
             num_tokens=num_tokens,

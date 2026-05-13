@@ -16,7 +16,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import numpy as np
-
 from marin.rl.rl_losses import RLLossModule
 
 from .rollout_storage import RolloutReader
@@ -378,10 +377,10 @@ class ReplayDataLoader:
         while not self._stop_event.is_set():
             try:
                 self._collect_rollouts()
-                time.sleep(self.rollout_fetch_interval)
             except Exception as e:
                 logger.error(f"Error in ReplayDataLoader worker loop: {e}", exc_info=True)
 
+            # Sleep via the stop event so shutdown is responsive instead of blocking the full interval.
             self._stop_event.wait(self.rollout_fetch_interval)
 
     def _collect_rollouts(self) -> None:
@@ -392,12 +391,9 @@ class ReplayDataLoader:
             return
 
         start_time = time.time()
-
         self.replay_buffer.add_batches(batches)
-
         elapsed = time.time() - start_time
-        if batches:
-            logger.info(f"Collected {len(batches)} rollout batches, updated replay buffer in {elapsed}")
+        logger.info(f"Collected {len(batches)} rollout batches, updated replay buffer in {elapsed:.3f}s")
 
     def __enter__(self):
         self.start()

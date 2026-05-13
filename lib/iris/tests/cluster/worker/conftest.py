@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from unittest.mock import Mock
 
 import pytest
-
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import ContainerPhase, ContainerStats, ContainerStatus
@@ -76,6 +75,7 @@ class FakeContainerHandle:
         self.stop_hook: object = None  # Callable[[bool], None] | None — set by tests for slow_stop etc.
         self.stop_calls: list[dict[str, object]] = []
         self._cleaned_up = False
+        self._killed = False
 
     @property
     def container_id(self) -> str | None:
@@ -94,8 +94,15 @@ class FakeContainerHandle:
         self.stop_calls.append({"force": force})
         if self.stop_hook is not None:
             self.stop_hook(force)  # type: ignore[operator]
+        if force:
+            # Model real runtimes: once SIGKILL has been delivered the container
+            # reports STOPPED on the next inspect. Tests that need to simulate a
+            # wedged container should override _killed back to False.
+            self._killed = True
 
     def status(self) -> ContainerStatus:
+        if self._killed:
+            return ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=137)
         idx = min(self._status_cursor, len(self._status_sequence) - 1)
         self._status_cursor += 1
         return self._status_sequence[idx]

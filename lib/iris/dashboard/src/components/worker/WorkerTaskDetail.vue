@@ -212,7 +212,9 @@ onMounted(async () => {
                 <div class="flex-1">
                   <ResourceGauge label="CPU" :used="cpuUsed" :total="cpuTotal" unit="cores" />
                 </div>
-                <Sparkline :data="cpuHistory" :width="64" :height="20" />
+                <div class="w-16 shrink-0">
+                  <Sparkline :data="cpuHistory" :height="20" />
+                </div>
               </div>
               <div class="flex items-center gap-2">
                 <div class="flex-1">
@@ -223,7 +225,9 @@ onMounted(async () => {
                     unit="bytes"
                   />
                 </div>
-                <Sparkline :data="memHistory" :width="64" :height="20" />
+                <div class="w-16 shrink-0">
+                  <Sparkline :data="memHistory" :height="20" />
+                </div>
               </div>
               <ResourceGauge
                 v-if="diskUsedMb > 0"

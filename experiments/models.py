@@ -110,6 +110,13 @@ llama_3_1_8b = download_model_step(
     )
 )
 
+llama_3_1_70b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.1-70B",
+        hf_revision="349b2ddb53ce8f2849a6c168a81980ab25258dac",
+    )
+)
+
 tulu_3_1_8b_sft = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
@@ -181,6 +188,34 @@ llama_3_2_1b = download_model_step(
     )
 )
 
+llama_3_2_3b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.2-3B",
+        hf_revision="13afe5124825b4f3751f836b40dafda64c1ed062",
+    )
+)
+
+llama_2_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-2-7b-hf",
+        hf_revision="01c7f73d771dfac7d292323805ebc428287df4f9",
+    )
+)
+
+llama_2_13b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-2-13b-hf",
+        hf_revision="5c31dfb671ce7cfe2d7bb7c04375e44c55e815b1",
+    )
+)
+
+olmo_2_base_13b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-1124-13B",
+        hf_revision="3fefddc1bf18a30e1d9b91000271630718f2aa8b",
+    )
+)
+
 qwen3_0_6b = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-0.6B",
@@ -241,6 +276,13 @@ qwen3_8b_base = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-8B-Base",
         hf_revision="49e3418",
+    )
+)
+
+qwen3_14b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-14B-Base",
+        hf_revision="0b0bd3732e2c374d483664439ea334928b65f304",
     )
 )
 

@@ -5,18 +5,19 @@
 
 import gzip
 import json
+import re
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
-from fray.v1.job import create_job_ctx, fray_default_job_ctx
-
+from fray import LocalClient, set_current_client
+from marin.datakit import partition_filename
 from marin.datakit.normalize import generate_id, normalize_to_parquet
 
 
 @pytest.fixture(autouse=True)
 def flow_backend_ctx():
-    with fray_default_job_ctx(create_job_ctx("sync")):
+    with set_current_client(LocalClient()):
         yield
 
 
@@ -33,8 +34,13 @@ def write_jsonl_gz():
 
 
 def _read_all_parquet(output_dir: Path) -> list[dict]:
+    """Read every main-branch Parquet file under *output_dir*.
+
+    Normalize writes a single ``outputs/main/`` (and ``outputs/dups/``) branch
+    per run; tests want just the main output.
+    """
     records = []
-    for pf in sorted(output_dir.glob("**/*.parquet")):
+    for pf in sorted((output_dir / "outputs" / "main").glob("*.parquet")):
         records.extend(pq.read_table(str(pf)).to_pylist())
     return records
 
@@ -100,6 +106,41 @@ def test_custom_id_field(tmp_path: Path, write_jsonl_gz):
     assert "my_custom_id" not in results[0]
 
 
+def test_bare_mode_strips_extra_columns(tmp_path: Path, write_jsonl_gz):
+    """bare=True drops every column that isn't id, text, or source_id.
+
+    Motivating case: sources whose extra columns vary across shards (e.g.
+    starcoderdata's 87 language subdirs each ship a different set of
+    GitHub-meta columns, or proof-pile-2's nested ``meta`` dict with
+    optional-typed fields). A uniform schema is the only safe option,
+    so dump everything but id/text/source_id at the record level before
+    the writer sees it.
+    """
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    records = [
+        {"id": "a", "text": "row a", "meta": {"max_stars_count": 3}, "lang": "en"},
+        {"id": "b", "text": "row b", "meta": None, "lang": "fr"},
+    ]
+    write_jsonl_gz(input_dir / "data.jsonl.gz", records)
+
+    normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        bare=True,
+    )
+
+    results = _read_all_parquet(output_dir)
+    assert len(results) == 2
+    for r in results:
+        # bare drops record-level extras; partition_id is stamped on later by
+        # the writer and is independent of bare mode.
+        assert set(r.keys()) - {"partition_id"} == {"id", "text", "source_id"}
+    assert {r["source_id"] for r in results} == {"a", "b"}
+    assert {r["text"] for r in results} == {"row a", "row b"}
+
+
 def test_missing_id_field_silently_skipped(tmp_path: Path, write_jsonl_gz):
     """When id_field is absent from records, source_id is omitted (not an error)."""
     input_dir = tmp_path / "input"
@@ -137,8 +178,7 @@ def test_missing_or_empty_text_filtered(tmp_path: Path, write_jsonl_gz, record):
     assert len(results) == 1
     assert results[0]["text"] == "valid"
 
-    total_empty = sum(s.counters.get("normalize/empty_text_filtered", 0) for s in result.subdirs)
-    assert total_empty >= 1
+    assert result.counters.get("normalize/empty_text_filtered", 0) >= 1
 
 
 def test_all_records_empty_text_raises(tmp_path: Path, write_jsonl_gz):
@@ -152,20 +192,18 @@ def test_all_records_empty_text_raises(tmp_path: Path, write_jsonl_gz):
         normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
 
 
-def test_directory_structure_preserved(tmp_path: Path, write_jsonl_gz):
-    """Each input subdirectory gets its own parquet output under the same relative path."""
+def test_subdirectories_merged_into_single_output(tmp_path: Path, write_jsonl_gz):
+    """Files discovered across input subdirectories are merged into one flat output."""
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"
 
     write_jsonl_gz(input_dir / "subset_a" / "data.jsonl.gz", [{"text": "A doc"}])
     write_jsonl_gz(input_dir / "subset_b" / "data.jsonl.gz", [{"text": "B doc"}])
 
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+    result = normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
 
-    a_texts = [r["text"] for r in _read_all_parquet(output_dir / "subset_a")]
-    b_texts = [r["text"] for r in _read_all_parquet(output_dir / "subset_b")]
-    assert a_texts == ["A doc"]
-    assert b_texts == ["B doc"]
+    assert result.main_output_dir == str(output_dir / "outputs" / "main")
+    assert {r["text"] for r in _read_all_parquet(output_dir)} == {"A doc", "B doc"}
 
 
 def test_exact_dedup(tmp_path: Path, write_jsonl_gz):
@@ -185,22 +223,6 @@ def test_exact_dedup(tmp_path: Path, write_jsonl_gz):
     results = _read_all_parquet(output_dir)
     assert {r["text"] for r in results} == {"Duplicate text", "Unique text"}
     assert len(results) == 2
-
-
-def test_skip_existing_idempotent(tmp_path: Path, write_jsonl_gz):
-    """A second run with the same input does not rewrite existing parquet files."""
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-
-    write_jsonl_gz(input_dir / "data.jsonl.gz", [{"text": "Hello world"}])
-
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-    parquet_files = list(output_dir.glob("*.parquet"))
-    assert len(parquet_files) == 1
-    mtime_first = parquet_files[0].stat().st_mtime
-
-    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
-    assert parquet_files[0].stat().st_mtime == mtime_first
 
 
 def test_whitespace_compaction(tmp_path: Path, write_jsonl_gz):
@@ -230,6 +252,94 @@ def test_whitespace_compaction(tmp_path: Path, write_jsonl_gz):
     assert by_source["pathological"]["id"] == generate_id("before" + " " * 100 + "after")
     # Normal docs are untouched
     assert by_source["normal"]["text"] == "Hello world"
+
+
+def test_partition_id_stamped_single_shard(tmp_path: Path, write_jsonl_gz):
+    """Every output row carries an int partition_id; with a single shard it's 0."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    write_jsonl_gz(
+        input_dir / "data.jsonl.gz",
+        [{"text": "doc one"}, {"text": "doc two"}, {"text": "doc three"}],
+    )
+
+    result = normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+    assert result.num_partitions == 1
+    rows = _read_all_parquet(output_dir)
+    assert len(rows) == 3
+    assert all(isinstance(r["partition_id"], int) for r in rows)
+    assert all(r["partition_id"] == 0 for r in rows)
+
+    # Filename matches the helper's output and the single partition.
+    main_files = sorted((output_dir / "outputs" / "main").glob("*.parquet"))
+    assert [p.name for p in main_files] == [partition_filename(0, 1)]
+
+
+def test_partition_id_matches_filename_across_shards(tmp_path: Path, write_jsonl_gz):
+    """With multiple output shards, every row's partition_id matches its filename suffix."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    # Varied per-record content so xxh3_128 distributes ids across shards;
+    # tiny target_partition_bytes forces multi-shard output.
+    records = [{"text": f"document {i} with unique content payload {i * 7919}"} for i in range(50)]
+    write_jsonl_gz(input_dir / "data.jsonl.gz", records)
+
+    result = normalize_to_parquet(
+        input_path=str(input_dir),
+        output_path=str(output_dir),
+        target_partition_bytes=50,
+    )
+
+    assert result.num_partitions > 1
+
+    main_dir = output_dir / "outputs" / "main"
+    files = sorted(main_dir.glob("*.parquet"))
+    assert files, "expected at least one output file"
+
+    seen_partition_ids: set[int] = set()
+    filename_re = re.compile(r"part-(\d+)-of-(\d+)\.parquet")
+    for pf in files:
+        m = filename_re.match(pf.name)
+        assert m, f"unexpected filename: {pf.name}"
+        expected_id = int(m.group(1))
+        assert int(m.group(2)) == result.num_partitions
+
+        rows = pq.read_table(str(pf)).to_pylist()
+        for row in rows:
+            assert row["partition_id"] == expected_id
+        if rows:
+            seen_partition_ids.add(expected_id)
+
+    # Sanity: hash distribution actually spread records across partitions.
+    assert len(seen_partition_ids) > 1
+
+
+def test_partition_id_stamped_on_dup_side_output(tmp_path: Path, write_jsonl_gz):
+    """Duplicate records also receive partition_id matching their dup-shard filename."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+
+    write_jsonl_gz(
+        input_dir / "data.jsonl.gz",
+        [
+            {"text": "Duplicate text", "source": "first"},
+            {"text": "Duplicate text", "source": "second"},
+            {"text": "Unique text"},
+        ],
+    )
+
+    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+    dup_files = sorted((output_dir / "outputs" / "dups").glob("*.parquet"))
+    assert dup_files, "expected at least one dup-side output"
+    dup_rows: list[dict] = []
+    for pf in dup_files:
+        dup_rows.extend(pq.read_table(str(pf)).to_pylist())
+    assert len(dup_rows) == 1
+    assert dup_rows[0]["partition_id"] == 0
 
 
 def test_no_input_files_raises(tmp_path: Path):

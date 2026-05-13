@@ -36,6 +36,8 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
     """Dataset configuration for raw text examples."""
 
     text_key: str = "text"  # key for the text field in the jsonl file
+    input_key: str | None = None
+    target_key: str | None = None
 
     def build_preprocessor(
         self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True

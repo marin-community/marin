@@ -5,21 +5,25 @@
 
 from __future__ import annotations
 
+import itertools
+import logging
+import os
 import queue
-import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Iterable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, is_dataclass
-import itertools
-import os
 from typing import Any
 
-import pyarrow as pa
-from rigging.filesystem import open_url, url_to_fs
 import msgspec
-import logging
+import pyarrow as pa
+import pyarrow.parquet as pq
+import vortex
+import zstandard as zstd
+from rigging.filesystem import url_to_fs
+from rigging.timing import ExponentialBackoff, retry_with_backoff
+
 from zephyr import counters
 
 logger = logging.getLogger(__name__)
@@ -36,11 +40,8 @@ DEFAULT_TARGET_BUFFER_BYTES = 64 * 1024 * 1024  # 64 MB
 # ``pa.Table.from_pylist`` is fast; large enough to amortise per-call overhead.
 _MICRO_BATCH_SIZE = 8
 
-# Fixed batch size for Levanter cache writes (2^14).
-_LEVANTER_BATCH_SIZE = 16384
-
-# Number of items per intermediate chunk for pickle and scatter writes.
-# Used by both _write_pickle_chunks (execution.py) and _write_scatter (shuffle.py).
+# Number of items per intermediate pickle chunk between non-scatter stages.
+# Used by ``_write_pickle_chunks`` in execution.py.
 INTERMEDIATE_CHUNK_SIZE = 100_000
 
 
@@ -53,48 +54,85 @@ def unique_temp_path(output_path: str) -> str:
     return f"{output_path}.tmp.{uuid.uuid4().hex}"
 
 
+# AWS error codes that are safe to retry on a server-side multipart copy
+# (``s3fs.S3FileSystem.mv``). ``InvalidPart`` is the R2-specific symptom:
+# every ``UploadPartCopy`` returns 200 but ``CompleteMultipartUpload`` then
+# claims one or more parts are missing.
+_TRANSIENT_S3_ERROR_CODES = frozenset(
+    {
+        "InvalidPart",
+        "InternalError",
+        "ServiceUnavailable",
+        "SlowDown",
+        "RequestTimeout",
+        "RequestTimeTooSkewed",
+    }
+)
+
+# Fragments matched against ``str(exc)`` for the case where s3fs has already
+# translated the underlying ``botocore.ClientError`` into an ``OSError`` and
+# the structured error code is no longer reachable.
+_TRANSIENT_S3_MESSAGE_FRAGMENTS = (
+    "specified parts could not be found",
+    "InternalError",
+    "ServiceUnavailable",
+    "SlowDown",
+    "RequestTimeout",
+)
+
+
+def _is_transient_s3_error(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = response.get("Error", {}).get("Code")
+        if code in _TRANSIENT_S3_ERROR_CODES:
+            return True
+    msg = str(exc)
+    return any(frag in msg for frag in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
+
+
+def _mv_with_retry(fs: Any, src: str, dst: str) -> None:
+    def _on_retry(exc: Exception, _attempt: int) -> None:
+        counters.increment("zephyr/atomic_rename_retries")
+
+    retry_with_backoff(
+        lambda: fs.mv(src, dst, recursive=True),
+        retryable=_is_transient_s3_error,
+        max_attempts=4,
+        backoff=ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0),
+        on_retry=_on_retry,
+        operation=f"atomic_rename fs.mv {src} -> {dst}",
+    )
+
+
 @contextmanager
-def atomic_rename(output_path: str) -> Iterable[str]:
-    """Context manager for atomic write-and-rename with UUID collision avoidance.
+def atomic_rename(output_path: str, fs: Any = None) -> Iterable[str]:
+    """Atomic write-and-rename via a sibling temp key.
 
-    Yields a unique temporary path to write to. On successful exit, atomically
-    renames the temp file to the final path. On failure, cleans up the temp file.
+    Yields ``<output_path>.tmp.<uuid>``; on clean exit, ``fs.mv`` renames the
+    temp into the final path. On exception, the temp key is best-effort
+    deleted and the original exception re-raised.
 
-    For S3-compatible stores, writes to a local temp directory first, then uploads
-    via fs.put() to avoid server-side multipart copy which is unreliable on some
-    providers (e.g. Cloudflare R2).
+    Callers may pass a pre-constructed ``fs`` to reuse a configured
+    filesystem (e.g. an ``S3FileSystem`` with ``fixed_upload_size=True``)
+    instead of letting atomic_rename build a default one from ``output_path``.
 
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
-    if output_path.startswith("s3://"):
-        fs, resolved_path = url_to_fs(output_path)
-        with tempfile.TemporaryDirectory() as local_tmp_dir:
-            local_path = os.path.join(local_tmp_dir, "output")
-            yield local_path
-            if os.path.isdir(local_path):
-                # Trailing slash prevents fsspec from nesting under an extra
-                # "output/" level when the destination already exists.
-                fs.put(local_path + "/", resolved_path, recursive=True)
-            else:
-                fs.put(local_path, resolved_path)
-        return
-
     temp_path = unique_temp_path(output_path)
-    fs = url_to_fs(output_path)[0]
-
+    if fs is None:
+        fs = url_to_fs(output_path)[0]
     try:
         yield temp_path
-        fs.mv(temp_path, output_path, recursive=True)
+        _mv_with_retry(fs, temp_path, output_path)
     except Exception:
-        # Try to cleanup if something went wrong
-        try:
-            if fs.exists(temp_path):
-                fs.rm(temp_path)
-        except Exception:
-            pass
+        # Best-effort cleanup: temp file may not exist (writer crashed before
+        # creating it) so we tolerate any rm error and re-raise the original.
+        with suppress(Exception):
+            fs.rm(temp_path)
         raise
 
 
@@ -117,8 +155,6 @@ def ensure_parent_dir(path: str) -> None:
 def _open_write_stream(fs, resolved_path: str, output_path: str):
     """Open a binary write stream with compression inferred from ``output_path``."""
     if output_path.endswith(".zst"):
-        import zstandard as zstd
-
         cctx = zstd.ZstdCompressor(level=2, threads=1)
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
             with cctx.stream_writer(raw_f) as f:
@@ -171,28 +207,94 @@ def _accumulate_tables(
     Converts records to PyArrow in micro-batches of ``_MICRO_BATCH_SIZE``,
     tracks byte size incrementally, and yields a single ``concat_tables``
     result each time the threshold is reached.
+
+    When the caller did not pass an explicit schema, the schema is inferred
+    from the first micro-batch. If a later micro-batch doesn't fit that
+    schema — e.g. early rows pinned a column as ``null`` and a later row
+    supplies a concrete value, or a new top-level column appears — the
+    schemas are unified via :func:`pa.unify_schemas` and the batch is
+    rebuilt against the widened schema. On yield, prior chunks whose
+    schemas differ are reconciled via ``concat_tables(promote_options=
+    "permissive")``. Genuinely incompatible schemas (e.g. ``int`` vs
+    ``string`` for the same field) still raise, with both schemas shown.
+
+    An explicit caller-provided schema is treated as a contract: mismatches
+    raise without silent widening.
     """
     chunks: list[pa.Table] = []
     bytesize = 0
     convert: Callable | None = None
+    schema_inferred = schema is None
+
+    def _raise_schema_mismatch(e: Exception, dicts: list[dict[str, Any]]) -> None:
+        actual_schema = pa.Table.from_pylist(dicts).schema
+        origin = (
+            f"inferred from first {_MICRO_BATCH_SIZE} records (no explicit schema passed)"
+            if schema_inferred
+            else "explicitly provided by caller"
+        )
+        raise pa.ArrowInvalid(
+            f"Schema mismatch converting batch to Arrow: {e}\n"
+            f"Expected schema ({origin}):\n{schema}\n"
+            f"Got schema:\n{actual_schema}"
+        ) from e
+
+    def _build_table(dicts: list[dict[str, Any]], schema: pa.Schema) -> tuple[pa.Table, pa.Schema]:
+        """Convert *dicts* to a table under *schema*, widening via ``pa.unify_schemas`` when needed.
+
+        Returns ``(table, schema)`` where ``schema`` may be wider than the
+        input. Handles two kinds of divergence: (1) ``from_pylist`` raises
+        because a field's type doesn't fit, (2) ``from_pylist`` would
+        silently drop extra top-level keys (new fields appearing only in
+        later batches). Raises (via :func:`_raise_schema_mismatch`) when
+        *schema* was explicitly provided by the caller, or when the
+        divergence isn't representable as a widening (e.g. ``int`` vs
+        ``string``).
+        """
+        mismatch_error: Exception | None = None
+        try:
+            table = pa.Table.from_pylist(dicts, schema=schema)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as e:
+            mismatch_error = e
+
+        if mismatch_error is None:
+            extra_keys = {k for d in dicts for k in d.keys()} - set(schema.names)
+            if not extra_keys:
+                return table, schema
+            mismatch_error = pa.ArrowInvalid(f"extra top-level keys not in schema: {sorted(extra_keys)}")
+
+        if not schema_inferred:
+            _raise_schema_mismatch(mismatch_error, dicts)
+        new_schema = pa.Table.from_pylist(dicts).schema
+        try:
+            widened = pa.unify_schemas([schema, new_schema])
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError):
+            _raise_schema_mismatch(mismatch_error, dicts)
+        return pa.Table.from_pylist(dicts, schema=widened), widened
 
     for micro_batch in batchify(records, n=_MICRO_BATCH_SIZE):
         if convert is None:
             convert = asdict if is_dataclass(micro_batch[0]) else (lambda x: x)
         dicts = [convert(r) for r in micro_batch]
         if schema is None:
-            # NOTE: the _MICRO_BATCH_SIZE is fairly small, here we hope it's enough to infer "real" schema
+            # NOTE: _MICRO_BATCH_SIZE is small; if the initial schema turns
+            # out to be narrower than the stream's true schema, we widen
+            # below on the first mismatching batch.
             schema = infer_arrow_schema(dicts)
-        table = pa.Table.from_pylist(dicts, schema=schema)
+
+        table, schema = _build_table(dicts, schema)
         chunks.append(table)
         bytesize += table.nbytes
         if bytesize >= target_bytes:
-            yield pa.concat_tables(chunks)
+            # ``promote_options="permissive"`` reconciles chunks whose schemas
+            # widened mid-stream (e.g. a later chunk introduced a new column
+            # or widened ``null`` → concrete type).
+            yield pa.concat_tables(chunks, promote_options="permissive")
             chunks = []
             bytesize = 0
 
     if chunks:
-        yield pa.concat_tables(chunks)
+        yield pa.concat_tables(chunks, promote_options="permissive")
 
 
 def write_parquet_file(
@@ -214,8 +316,6 @@ def write_parquet_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import pyarrow.parquet as pq
-
     ensure_parent_dir(output_path)
     count = 0
 
@@ -258,8 +358,6 @@ def write_vortex_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import vortex
-
     ensure_parent_dir(output_path)
 
     table_iter = _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes)
@@ -371,63 +469,6 @@ class ThreadedBatchWriter:
             return False
         self.close()
         return False
-
-
-def write_levanter_cache(
-    records: Iterable[dict[str, Any]],
-    output_path: str,
-    *,
-    metadata: dict[str, Any],
-    batch_size: int = _LEVANTER_BATCH_SIZE,
-) -> dict:
-    """Write tokenized records to Levanter cache format.
-
-    Args:
-        records: Tokenized records (iterable of dicts with array values)
-        output_path: Path to output cache directory
-        metadata: Metadata for the cache
-        batch_size: Number of records to accumulate before flushing to disk.
-    """
-    if batch_size < 1:
-        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
-
-    from levanter.store.cache import CacheMetadata, SerialCacheWriter
-
-    ensure_parent_dir(output_path)
-    record_iter = iter(records)
-
-    try:
-        exemplar = next(record_iter)
-    except StopIteration:
-        return {"path": output_path, "count": 0}
-
-    count = 0
-    logger.info("write_levanter_cache: starting write to %s (batch_size=%d)", output_path, batch_size)
-
-    with atomic_rename(output_path) as tmp_path:
-        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
-
-            def _drain_batches(batches: Iterable) -> None:
-                for batch in batches:
-                    writer.write_batch(batch)
-
-            with ThreadedBatchWriter(_drain_batches) as threaded:
-                threaded.submit([exemplar])
-                count += 1
-                counters.increment("zephyr/records_out")
-                for batch in batchify(record_iter, n=batch_size):
-                    threaded.submit(batch)
-                    count += len(batch)
-                    counters.increment("zephyr/records_out", len(batch))
-                    logger.info("write_levanter_cache: %s — %d records so far", output_path, count)
-
-    logger.info("write_levanter_cache: finished %s — %d records", output_path, count)
-
-    # write success sentinel
-    with open_url(f"{output_path}/.success", "w") as f:
-        f.write("")
-
-    return {"path": output_path, "count": count}
 
 
 def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:

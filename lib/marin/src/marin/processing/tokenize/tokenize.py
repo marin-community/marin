@@ -19,9 +19,9 @@ from collections.abc import Iterator, Sequence
 import braceexpand
 import draccus
 import fsspec
-from rigging.filesystem import open_url, url_to_fs
+import pyarrow.parquet as pq
 from datasets import load_dataset_builder
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -30,20 +30,36 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
+from levanter.store.cache import consolidate_shard_cache_ledgers, write_levanter_cache
 from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
-from levanter.store.cache import consolidate_shard_caches
-from levanter.store.tree_store import TreeStore
+from rigging.filesystem import open_url, url_to_fs
+from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
-from zephyr.dataset import FileEntry
+from zephyr.dataset import FileEntry, format_shard_path
 from zephyr.readers import InputFileSpec, load_file
 
 from marin.execution.executor import InputName, VersionedValue
 from marin.utils import fsspec_exists, fsspec_isdir
-from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
 MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
+# Empirical upper bound on the zephyr window size (see
+# https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943).
+_MAX_WINDOW_SIZE = 64
+
+
+def _avg_parquet_row_group_rows(path: str) -> int | None:
+    """Return the mean rows-per-row-group from ``path``.
+
+    Returns ``None`` if the file has no row groups (empty parquet footer).
+    """
+    fs, resolved = url_to_fs(path)
+    with fs.open(resolved, "rb") as f:
+        meta = pq.ParquetFile(f).metadata
+    if meta.num_row_groups == 0:
+        return None
+    return max(1, meta.num_rows // meta.num_row_groups)
 
 
 def _compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
@@ -67,7 +83,6 @@ class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
     max_workers: int = 4096
-    cache_copy_max_workers: int = 128
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
@@ -288,6 +303,13 @@ def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Ite
     # load_tokenizer is @lru_cache, so this only loads once per worker process.
     tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
+    # Levanter's BatchTokenizer ships ``long_string_workaround`` opt-in but the
+    # behavior is desirable always: per-record texts above ``_workaround_len``
+    # (10K chars) get split at safe whitespace boundaries before the underlying
+    # ``encode_batch`` is called, then merged back. No-op for short records.
+    # Without this, a single multi-MB outlier passes one giant string to the
+    # Rust tokenizer and OOMs the worker.
+    batch_processor._long_string_workaround = True
 
     batch_count = 0
     record_count = 0
@@ -396,24 +418,57 @@ def tokenize(config: TokenizeConfigBase):
         prefix = os.path.join(config.cache_path, split_name)
         pipeline_start = time.monotonic()
 
+        # For parquet sources, align zephyr's window and levanter's cache batch
+        # with the parquet row-group size so each unit of work is exactly one
+        # row group end-to-end. Non-parquet inputs fall through to the defaults.
+        sample_path = next(
+            (p for group in file_groups for p in group if p.endswith(".parquet")),
+            None,
+        )
+        window_size = _MAX_WINDOW_SIZE
+        batch_size = config.levanter_batch_size
+        if sample_path is not None:
+            avg_rg_rows = _avg_parquet_row_group_rows(sample_path)
+            if avg_rg_rows is not None:
+                half_rg = max(avg_rg_rows // 2, 1)
+                window_size = min(half_rg, _MAX_WINDOW_SIZE)
+                batch_size = half_rg if config.levanter_batch_size is None else config.levanter_batch_size
+                logger.info(
+                    "Parquet source: avg rows/row-group=%d (from %s) → window=%d, levanter batch_size=%d",
+                    avg_rg_rows,
+                    sample_path,
+                    window_size,
+                    batch_size,
+                )
+
         ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
 
         if config.sample_count is not None:
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        temp_shards = (
-            # NOTE: https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943
-            # Window set to 64 ^
-            ds.window(64)
-            .map_shard(lambda batches, _: _tokenize_batches(config=config, batches=batches))
-            .write_levanter_cache(
-                f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
-                metadata={},
-                skip_existing=True,
-                batch_size=config.levanter_batch_size,
+        output_pattern = f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}"
+        _batch_size = batch_size
+
+        def _write_shard(batches, shard_info):
+            output_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
+            success_path = f"{output_path}/.success"
+            fs = url_to_fs(output_path)[0]
+            if fs.exists(success_path):
+                logger.info("Skipping write, output exists: %s", output_path)
+                yield output_path
+                return
+            kwargs: dict = {"metadata": {}}
+            if _batch_size is not None:
+                kwargs["batch_size"] = _batch_size
+            result = write_levanter_cache(
+                _tokenize_batches(config=config, batches=batches),
+                output_path,
+                **kwargs,
             )
-        )
+            yield result["path"]
+
+        temp_shards = ds.window(window_size).map_shard(_write_shard)
 
         # Broadcast tokenizer config to workers. We send name + backend rather than
         # the tokenizer object because not all backends support pickling.
@@ -435,17 +490,15 @@ def tokenize(config: TokenizeConfigBase):
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(
+        ledger = consolidate_shard_cache_ledgers(
             shard_cache_paths=shard_paths,
             output_path=prefix,
             exemplar=exemplar,
-            copy_max_workers=config.cache_copy_max_workers,
         )
         consolidate_elapsed = time.monotonic() - consolidate_start
 
         total_elements = ledger.total_num_rows
-        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
-        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
+        total_tokens = ledger.field_counts.get("input_ids", 0)
 
         stats_path = os.path.join(prefix, ".stats.json")
         with open_url(stats_path, "w") as f:

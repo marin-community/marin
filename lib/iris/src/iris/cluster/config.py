@@ -23,16 +23,16 @@ from pathlib import Path
 
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
+from rigging.timing import Duration
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
-from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -530,10 +530,6 @@ def apply_defaults(config: config_pb2.IrisClusterConfig) -> config_pb2.IrisClust
     for key, value in merged.defaults.task_env.items():
         merged.defaults.worker.task_env[key] = value
 
-    # Apply controller defaults
-    if not merged.controller.HasField("heartbeat_failure_threshold"):
-        merged.controller.heartbeat_failure_threshold = 10
-
     # Apply scale group defaults
     for group in merged.scale_groups.values():
         if not group.HasField("priority"):
@@ -580,11 +576,6 @@ def make_local_config(
     # from DEFAULT_CONFIG that may have been applied during load_config()
     if not config.HasField("defaults"):
         config.defaults.CopyFrom(config_pb2.DefaultsConfig())
-
-    # Set fast controller timings for local testing.
-    # worker_timeout is derived: heartbeat_interval * heartbeat_failure_threshold
-    # = 0.5s * 3 = 1.5s effective timeout.
-    config.controller.heartbeat_failure_threshold = 3
 
     # Set fast autoscaler timings for local testing
     config.defaults.autoscaler.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.5)))
@@ -1248,7 +1239,6 @@ def create_autoscaler(
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
-    scale_up_delay = duration_from_proto(autoscaler_config.scale_up_delay)
     scale_down_delay = duration_from_proto(autoscaler_config.scale_down_delay)
 
     scaling_groups: dict[str, ScalingGroup] = {}
@@ -1257,7 +1247,6 @@ def create_autoscaler(
             config=group_config,
             platform=platform,
             label_prefix=label_prefix,
-            scale_up_cooldown=scale_up_delay,
             idle_threshold=scale_down_delay,
             scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,

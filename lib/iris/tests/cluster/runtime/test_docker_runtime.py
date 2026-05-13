@@ -9,7 +9,6 @@ import subprocess
 from unittest.mock import Mock
 
 import pytest
-
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.runtime.types import MountKind, MountSpec
