@@ -81,9 +81,10 @@ independent job state machine.
 | `SUCCEEDED` | 4 | Yes | No | Worker PollTasks report; task exited with code 0 | `succeeded` (green) |
 | `FAILED` | 5 | Yes | Yes | Worker PollTasks report; task exited with non-zero code | `failed` (red) |
 | `KILLED` | 6 | Yes | No | Controller: job cancellation (`_on_job_cancelled`), job failure cascade (`_mark_remaining_tasks_killed`), per-task timeout | `killed` (grey) |
-| `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`_on_worker_failed`), coscheduled sibling kill | `worker_failed` (purple) |
+| `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`_on_worker_failed`) | `worker_failed` (purple) |
 | `UNSCHEDULABLE` | 8 | Yes | No | Controller: scheduling timeout expired (`_mark_task_unschedulable`) | `unschedulable` (red) |
 | `PREEMPTED` | 10 | Yes | Yes | Controller: priority preemption with budget exhausted (`preempt_task`) | `preempted` (orange) |
+| `COSCHED_FAILED` | 11 | Yes | No | Controller: coscheduled sibling cascade (`_terminate_coscheduled_siblings`) | `cosched_failed` (red) |
 
 
 ## State Transitions in Detail
@@ -179,9 +180,9 @@ Retry evaluation uses the preemption budget:
    and is terminal.
 
 **Coscheduled jobs**: When a task in a coscheduled (gang-scheduled) job fails
-terminally, `_cascade_coscheduled_failure` exhausts the preemption budget of
-all running siblings and transitions them to `WORKER_FAILED` (terminal). This
-prevents other hosts from hanging on collective operations.
+terminally, `_terminate_coscheduled_siblings` transitions all running siblings
+to `COSCHED_FAILED` (always terminal — see below). This prevents other hosts
+from hanging on collective operations.
 
 ### PREEMPTED
 
@@ -217,6 +218,20 @@ derived from the job's `scheduling_timeout` field.
 `UNSCHEDULABLE` is always terminal. If any task becomes unschedulable, the
 entire job transitions to `JOB_STATE_UNSCHEDULABLE` and all remaining tasks
 are killed.
+
+### COSCHED_FAILED
+
+Set by the controller in `_terminate_coscheduled_siblings` when a coscheduled
+(gang-scheduled) sibling task hits its terminal failure budget. The cascaded
+task itself was healthy, so the state is distinct from `WORKER_FAILED` (which
+implies a real worker death and bumps the preemption counter) and from
+`KILLED` (which implies operator-initiated cancellation).
+
+`COSCHED_FAILED` is always terminal — `task_is_finished` returns `True`
+unconditionally, with no counter math involved. At the job level, it rolls up
+into `JOB_STATE_WORKER_FAILED` alongside `WORKER_FAILED` and `PREEMPTED`,
+because the triggering event was a worker-failure pattern on the originating
+task.
 
 ## Retry Semantics
 

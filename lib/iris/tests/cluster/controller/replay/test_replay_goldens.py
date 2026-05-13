@@ -14,11 +14,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db import ACTIVE_TASK_STATES, ControllerDB
-from iris.cluster.controller.stores import ControllerStore
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import job_config_table, jobs_table, task_attempts_table, tasks_table
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.types import TERMINAL_TASK_STATES
 from rigging.timing import Timestamp
+from sqlalchemy import Integer, case, func, literal, select
 
 from tests.cluster.controller.replay.db_dump import deterministic_dump
 from tests.cluster.controller.replay.scenarios import SCENARIO_NAMES, SCENARIOS, frozen_clock
@@ -37,8 +39,7 @@ def _with_scenario(name: str, fn: Callable[[ControllerDB], None]) -> None:
     with tempfile.TemporaryDirectory(prefix=f"iris-replay-test-{name}-") as db_dir_str:
         db = ControllerDB(db_dir=Path(db_dir_str))
         try:
-            store = ControllerStore(db)
-            transitions = ControllerTransitions(store)
+            transitions = ControllerTransitions(db)
             with frozen_clock() as clock:
                 SCENARIOS[name](transitions, clock)
             fn(db)
@@ -93,20 +94,31 @@ def test_no_orphan_task_attempts(scenario_name: str) -> None:
     fail this assertion.
     """
 
-    terminal = ",".join(str(s) for s in sorted(TERMINAL_TASK_STATES))
-    active = ",".join(str(s) for s in sorted(ACTIVE_TASK_STATES))
+    terminal = list(sorted(TERMINAL_TASK_STATES))
+    active = list(sorted(ACTIVE_TASK_STATES))
+
+    ta = task_attempts_table.alias("ta")
+    t = tasks_table.alias("t")
 
     def check(db: ControllerDB) -> None:
         with db.read_snapshot() as snap:
-            rows = snap.fetchall(
-                f"SELECT ta.task_id, ta.attempt_id, ta.state AS attempt_state, t.state AS task_state, "
-                f"ta.finished_at_ms FROM task_attempts ta JOIN tasks t ON t.task_id = ta.task_id "
-                f"WHERE t.state IN ({terminal}) AND ta.state IN ({active}) "
-                f"AND ta.finished_at_ms IS NULL"
-            )
+            rows = snap.execute(
+                select(
+                    ta.c.task_id,
+                    ta.c.attempt_id,
+                    ta.c.state.label("attempt_state"),
+                    t.c.state.label("task_state"),
+                    ta.c.finished_at_ms,
+                )
+                .join(t, t.c.task_id == ta.c.task_id)
+                .where(
+                    t.c.state.in_(terminal),
+                    ta.c.state.in_(active),
+                    ta.c.finished_at_ms.is_(None),
+                )
+            ).all()
         orphans = [
-            f"{row['task_id']} attempt={row['attempt_id']} "
-            f"task_state={row['task_state']} attempt_state={row['attempt_state']}"
+            f"{row.task_id} attempt={row.attempt_id} " f"task_state={row.task_state} attempt_state={row.attempt_state}"
             for row in rows
         ]
         assert not orphans, (
@@ -130,25 +142,35 @@ def test_no_split_coscheduled_active_tasks(scenario_name: str) -> None:
     precondition; for any scenario where it shouldn't happen, the test fails.
     """
 
-    active = ",".join(str(s) for s in sorted(ACTIVE_TASK_STATES))
+    active_states = list(sorted(ACTIVE_TASK_STATES))
+    PENDING_STATE = 1
+
+    j = jobs_table.alias("j")
+    jc = job_config_table.alias("jc")
+    t = tasks_table.alias("t")
+
+    active_count_col = func.sum(
+        case((t.c.state.in_(active_states), literal(1, Integer)), else_=literal(0, Integer))
+    ).label("active_count")
+    pending_count_col = func.sum(
+        case((t.c.state == PENDING_STATE, literal(1, Integer)), else_=literal(0, Integer))
+    ).label("pending_count")
+    task_count_col = func.count().label("task_count")
+
+    stmt = (
+        select(j.c.job_id, active_count_col, pending_count_col, task_count_col)
+        .join(jc, jc.c.job_id == j.c.job_id)
+        .join(t, t.c.job_id == j.c.job_id)
+        .where(jc.c.has_coscheduling == 1, j.c.is_reservation_holder == 0)
+        .group_by(j.c.job_id)
+        .having(active_count_col > 0, pending_count_col > 0)
+    )
 
     def check(db: ControllerDB) -> None:
         with db.read_snapshot() as snap:
-            rows = snap.fetchall(
-                f"SELECT j.job_id, "
-                f"  SUM(CASE WHEN t.state IN ({active}) THEN 1 ELSE 0 END) AS active_count, "
-                f"  SUM(CASE WHEN t.state = 1 THEN 1 ELSE 0 END) AS pending_count, "
-                f"  COUNT(*) AS task_count "
-                f"FROM jobs j "
-                f"JOIN job_config jc ON jc.job_id = j.job_id "
-                f"JOIN tasks t ON t.job_id = j.job_id "
-                f"WHERE jc.has_coscheduling = 1 AND j.is_reservation_holder = 0 "
-                f"GROUP BY j.job_id "
-                f"HAVING active_count > 0 AND pending_count > 0"
-            )
+            rows = snap.execute(stmt).all()
         split = [
-            f"{row['job_id']} active={row['active_count']} pending={row['pending_count']} " f"total={row['task_count']}"
-            for row in rows
+            f"{row.job_id} active={row.active_count} pending={row.pending_count} total={row.task_count}" for row in rows
         ]
         assert not split, (
             f"scenario {scenario_name!r} left {len(split)} coscheduled job(s) in a partial-PENDING "

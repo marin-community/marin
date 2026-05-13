@@ -42,6 +42,16 @@ from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
+from iris.cluster.runtime.profile import (
+    IrisProfile,
+    build_memray_attach_cmd,
+    build_memray_transform_cmd,
+    build_profile_row,
+    build_pyspy_cmd,
+    build_pyspy_dump_cmd,
+    resolve_cpu_spec,
+    resolve_memory_spec,
+)
 from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
 from iris.cluster.worker.stats import build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -1053,6 +1063,17 @@ class ResourceCollector:
         self._thread.join(timeout=5)
 
 
+def _get_pod_node_name(kubectl: K8sService, pod_name: str) -> str:
+    """Return the pod's spec.nodeName, or empty string if unschedulable / not yet bound."""
+    try:
+        pod = kubectl.get_json(K8sResource.PODS, pod_name)
+    except KubectlError:
+        return ""
+    if pod is None:
+        return ""
+    return pod.get("spec", {}).get("nodeName", "") or ""
+
+
 @dataclass
 class K8sTaskProvider:
     """Executes tasks as Kubernetes Pods without worker daemons.
@@ -1085,6 +1106,9 @@ class K8sTaskProvider:
     # constructing the LogClient (see controller.py); when None — e.g. tests
     # without finelog — the resource collector is disabled.
     task_stats_table: Table | None = None
+    # Pre-resolved iris.profile Table handle injected by the controller
+    # alongside task_stats_table. None in test mode.
+    profile_table: Table[IrisProfile] | None = None
     poll_concurrency: int = 32
     log_poll_interval: float = 15.0
     _pod_not_found_counts: dict[str, int] = field(default_factory=dict, init=False, repr=False)
@@ -1111,7 +1135,14 @@ class K8sTaskProvider:
         return self._log_collector
 
     def sync(self, batch: DirectProviderBatch) -> DirectProviderSyncResult:
-        """Sync task state: apply new pods, delete killed pods, poll running pods."""
+        """Sync task state: apply new pods, delete strays, poll running pods.
+
+        Kill targets are derived here, not buffered in the controller: any
+        managed pod whose ``(task_hash, attempt_id)`` is not in the desired
+        set (``tasks_to_run`` union ``running_tasks``) is deleted on this tick.
+        Producing transitions only need to update ``tasks.state``; the next
+        sync sees the diff.
+        """
         apply_failures: list[TaskUpdate] = []
         for run_req in batch.tasks_to_run:
             try:
@@ -1134,7 +1165,12 @@ class K8sTaskProvider:
             field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
         )
 
-        self._bulk_delete_task_pods(batch.tasks_to_kill, managed_pods)
+        desired_keys: set[tuple[str, int]] = set()
+        for run_req in batch.tasks_to_run:
+            desired_keys.add((_task_hash(run_req.task_id), int(run_req.attempt_id)))
+        for entry in batch.running_tasks:
+            desired_keys.add((_task_hash(entry.task_id.to_wire()), int(entry.attempt_id)))
+        self._delete_stray_pods(managed_pods, desired_keys)
         updates = apply_failures + self._poll_pods(batch.running_tasks, managed_pods)
         scheduling_events = self._fetch_scheduling_events(managed_pods)
 
@@ -1158,22 +1194,41 @@ class K8sTaskProvider:
         attempt_id: int,
         request: job_pb2.ProfileTaskRequest,
     ) -> job_pb2.ProfileTaskResponse:
-        """Profile a running task pod via kubectl exec."""
+        """Profile a running task pod via kubectl exec.
+
+        On success, writes one IrisProfile row to the finelog profile_table
+        (when not None). On failure, returns ProfileTaskResponse(error=...) and
+        skips the write.
+        """
         pod_name = _pod_name(JobName.from_wire(task_id), attempt_id)
         duration = request.duration_seconds or 10
         profile_type = request.profile_type
 
         try:
             if profile_type.HasField("threads"):
-                return self._profile_threads(pod_name, profile_type.threads)
+                resp = self._profile_threads(pod_name, profile_type.threads)
             elif profile_type.HasField("cpu"):
-                return self._profile_cpu(pod_name, profile_type.cpu, duration)
+                resp = self._profile_cpu(pod_name, profile_type.cpu, duration)
             elif profile_type.HasField("memory"):
-                return self._profile_memory(pod_name, profile_type.memory, duration)
+                resp = self._profile_memory(pod_name, profile_type.memory, duration)
             else:
                 return job_pb2.ProfileTaskResponse(error="Unknown profile type")
         except Exception as e:
             return job_pb2.ProfileTaskResponse(error=str(e))
+
+        if self.profile_table is not None and resp.profile_data:
+            pod_node_name = _get_pod_node_name(self.kubectl, pod_name)
+            row = build_profile_row(
+                source=request.target,
+                attempt_id=attempt_id,
+                vm_id=f"k8s/{pod_node_name or pod_name}",
+                duration_seconds=duration,
+                profile_type=profile_type,
+                profile_data=resp.profile_data,
+            )
+            self.profile_table.write([row])
+
+        return resp
 
     def exec_in_container(
         self,
@@ -1222,16 +1277,12 @@ class K8sTaskProvider:
 
     def _profile_threads(self, pod_name: str, threads_config: job_pb2.ThreadsProfile) -> job_pb2.ProfileTaskResponse:
         """Get thread stacks via py-spy dump."""
-        from iris.cluster.runtime.profile import build_pyspy_dump_cmd
-
         cmd = shlex.join(build_pyspy_dump_cmd("1", include_locals=threads_config.locals))
         stdout = self._kubectl_exec_shell(pod_name, cmd, timeout=30)
         return job_pb2.ProfileTaskResponse(profile_data=stdout.encode("utf-8"))
 
     def _profile_cpu(self, pod_name: str, cpu_config: job_pb2.CpuProfile, duration: int) -> job_pb2.ProfileTaskResponse:
         """Record CPU profile via py-spy."""
-        from iris.cluster.runtime.profile import build_pyspy_cmd, resolve_cpu_spec
-
         spec = resolve_cpu_spec(cpu_config, duration, pid="1")
         output_path = f"/tmp/iris-profile.{spec.ext}"
         cmd = shlex.join(build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path))
@@ -1244,12 +1295,6 @@ class K8sTaskProvider:
         self, pod_name: str, memory_config: job_pb2.MemoryProfile, duration: int
     ) -> job_pb2.ProfileTaskResponse:
         """Record memory profile via memray."""
-        from iris.cluster.runtime.profile import (
-            build_memray_attach_cmd,
-            build_memray_transform_cmd,
-            resolve_memory_spec,
-        )
-
         spec = resolve_memory_spec(memory_config, duration, pid="1")
         trace_path = "/tmp/iris-memray.bin"
         output_path = f"/tmp/iris-memray.{spec.ext}"
@@ -1353,28 +1398,50 @@ class K8sTaskProvider:
             self.kubectl.apply_json(pdb)
             logger.info("Applied PDB %s for coordinator task %s", pdb["metadata"]["name"], task_id)
 
-    def _bulk_delete_task_pods(self, task_ids: list[str], cached_pods: list[dict]) -> None:
-        """Delete pods for killed tasks. ConfigMaps and PDBs are cleaned up by the
-        periodic GC pass (_gc_terminal_resources) to avoid listing all configmaps/PDBs
-        on every sync cycle — which was an O(total_resources) scan on the hot path.
+    def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
+        """Delete pods that aren't in the desired ``(task_hash, attempt_id)`` set.
+
+        Stray = the controller no longer wants this attempt running (task is
+        terminal in ``tasks``, or the attempt has rolled to a newer one). The
+        producing transition has already updated ``tasks.state``; we observe
+        the absence here and tear the pod down.
+
+        ConfigMaps and PDBs are cleaned up by the periodic GC pass
+        (_gc_terminal_resources) to avoid listing all configmaps/PDBs on
+        every sync cycle — which was an O(total_resources) scan on the hot
+        path.
         """
-        if not task_ids:
+        stray_pod_names: list[str] = []
+        stray_hashes: set[str] = set()
+        for pod in cached_pods:
+            labels = pod.get("metadata", {}).get("labels", {})
+            task_hash = labels.get(_LABEL_TASK_HASH)
+            attempt_str = labels.get(_LABEL_ATTEMPT_ID)
+            if not task_hash or attempt_str is None:
+                continue
+            try:
+                attempt_id = int(attempt_str)
+            except (ValueError, TypeError):
+                continue
+            if (task_hash, attempt_id) in desired_keys:
+                continue
+            pod_name = pod.get("metadata", {}).get("name")
+            if pod_name:
+                stray_pod_names.append(pod_name)
+                stray_hashes.add(task_hash)
+
+        if not stray_pod_names:
             return
-        task_hashes = {_task_hash(tid) for tid in task_ids}
 
-        pod_names = [
-            p["metadata"]["name"]
-            for p in cached_pods
-            if p.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH) in task_hashes
-        ]
-
-        if pod_names:
-            self.kubectl.delete_many(K8sResource.PODS, pod_names, wait=False)
-
+        self.kubectl.delete_many(K8sResource.PODS, stray_pod_names, wait=False)
         # Enqueue task hashes for deferred configmap/PDB cleanup by the GC pass.
-        self._pending_gc_hashes.update(task_hashes)
+        self._pending_gc_hashes.update(stray_hashes)
 
-        logger.info("Deleted %d pods for %d tasks (CM/PDB cleanup deferred to GC)", len(pod_names), len(task_ids))
+        logger.info(
+            "Deleted %d stray pods for %d task hashes (CM/PDB cleanup deferred to GC)",
+            len(stray_pod_names),
+            len(stray_hashes),
+        )
 
     def _maybe_gc_terminal_resources(self, active_pods: list[dict]) -> None:
         """Periodically delete terminal (Succeeded/Failed) pods and their associated

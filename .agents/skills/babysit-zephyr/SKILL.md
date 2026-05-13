@@ -22,7 +22,7 @@ Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`.
 ## Iris Config
 
 All Iris commands below use `--config <CONFIG>`. Resolve the cluster name the user
-gives to the matching file under `lib/iris/examples/` (see **babysit-job** for
+gives to the matching file under `lib/iris/config/` (see **babysit-job** for
 the full mapping). Examples in this skill use `marin.yaml` — substitute the actual
 config (e.g., `marin-dev.yaml`) as needed.
 
@@ -30,19 +30,19 @@ config (e.g., `marin-dev.yaml`) as needed.
 
 ```bash
 # Connect to the Iris dashboard (establishes SSH tunnel, prints URL with port)
-uv run iris --config lib/iris/examples/marin.yaml cluster dashboard
+uv run iris --config lib/iris/config/marin.yaml cluster dashboard
 ```
 
 ## Starting a Job
 
 Get the run command from the user. Typical pattern:
 ```bash
-uv run iris --config lib/iris/examples/marin.yaml job run --region <REGION> --no-wait -- python <SCRIPT>
+uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --no-wait -- python <SCRIPT>
 ```
 
 The entrypoint container defaults to 1GB memory. For long-running pipelines that accumulate state (GCS clients, logging), increase with `--memory`:
 ```bash
-uv run iris --config lib/iris/examples/marin.yaml job run --region <REGION> --memory 5GB --no-wait -- python <SCRIPT>
+uv run iris --config lib/iris/config/marin.yaml job run --region <REGION> --memory 5GB --no-wait -- python <SCRIPT>
 ```
 
 The command prints a job ID on success. Note this ID for monitoring.
@@ -51,7 +51,7 @@ The command prints a job ID on success. Note this ID for monitoring.
 
 Always ask the user before stopping. Stopping kills all child jobs (coordinators, workers).
 ```bash
-uv run iris --config lib/iris/examples/marin.yaml job stop <JOB_ID>
+uv run iris --config lib/iris/config/marin.yaml job stop <JOB_ID>
 ```
 
 ## Monitoring
@@ -61,7 +61,7 @@ uv run iris --config lib/iris/examples/marin.yaml job stop <JOB_ID>
 Check child job states via the Iris CLI (returns per-task state and resourceUsage):
 ```bash
 # diskMb is updated every ~60s. On K8s it is always 0 (workdir lives inside the pod).
-uv run iris --config lib/iris/examples/marin.yaml rpc controller list-tasks --job-id <JOB_ID>
+uv run iris --config lib/iris/config/marin.yaml rpc controller list-tasks --job-id <JOB_ID>
 ```
 
 A healthy zephyr job has:
@@ -77,7 +77,7 @@ The coordinator logs a progress line every 5s:
 
 Fetch via the Iris CLI:
 ```bash
-uv run iris --config lib/iris/examples/marin.yaml rpc controller get-task-logs \
+uv run iris --config lib/iris/config/marin.yaml rpc controller get-task-logs \
   --id <COORD_JOB_ID> --max-total-lines 5000 --attempt-id -1 --tail
 ```
 
@@ -94,7 +94,7 @@ for entry in task_logs:
 
 When logs are flooded, a thread dump tells you if the coordinator is alive and working:
 ```bash
-uv run iris --config lib/iris/examples/marin.yaml rpc controller profile-task \
+uv run iris --config lib/iris/config/marin.yaml rpc controller profile-task \
   --json '{"target":"<COORD_JOB_ID>/0","durationSeconds":1,"profileType":{"threads":{}}}'
 ```
 

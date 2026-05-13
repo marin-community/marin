@@ -39,7 +39,6 @@ from iris.cluster.client import (
 )
 from iris.cluster.constraints import Constraint, WellKnownAttribute, merge_constraints, region_constraint
 from iris.cluster.log_store_helpers import build_log_source
-from iris.cluster.providers.local.cluster import LocalCluster, make_local_cluster_config
 from iris.cluster.types import (
     CoschedulingConfig,
     Entrypoint,
@@ -58,6 +57,12 @@ from iris.rpc.proto_utils import job_state_friendly
 from iris.time_proto import timestamp_from_proto
 
 logger = logging.getLogger(__name__)
+
+
+class _ClusterLifecycle(Protocol):
+    """Anything IrisClient owns and tears down on shutdown — typically a LocalCluster."""
+
+    def close(self) -> None: ...
 
 
 @dataclass
@@ -166,9 +171,10 @@ class Task:
         Returns:
             List of TaskLogEntry objects from the task
         """
-        source = build_log_source(self._task_name)
+        source, match_scope = build_log_source(self._task_name)
         response = self._client._cluster_client.fetch_logs(
             source,
+            match_scope=match_scope,
             since_ms=start.epoch_ms() if start else 0,
             max_lines=max_lines,
         )
@@ -439,7 +445,8 @@ class IrisClient:
 
     Example:
         # Local execution
-        with IrisClient.local() as client:
+        from iris.client.local_client import make_local_client
+        with make_local_client() as client:
             job = client.submit(entrypoint, "my-job", resources)
             job.wait()
 
@@ -456,36 +463,21 @@ class IrisClient:
         self,
         cluster: ClusterClient,
         namespace: Namespace = Namespace(""),
-        controller: LocalCluster | None = None,
+        controller: _ClusterLifecycle | None = None,
     ):
         """Initialize IrisClient with a cluster client.
 
-        Prefer using factory methods (local(), remote()) over direct construction.
+        For local execution, prefer ``iris.client.local_client.make_local_client``
+        over direct construction; for RPC use ``IrisClient.remote(...)``.
 
         Args:
             cluster: Low-level cluster client (RemoteClusterClient)
-            controller: Optional LocalCluster to manage lifecycle for local mode.
+            controller: Optional cluster object whose lifecycle this client owns.
+                ``shutdown()`` will call ``controller.close()``.
         """
         self._cluster_client = cluster
         self._namespace = namespace
         self._controller = controller
-
-    @classmethod
-    def local(cls, config: LocalClientConfig | None = None) -> "IrisClient":
-        """Create an IrisClient for local execution using real Controller/Worker.
-
-        Args:
-            config: Configuration for local execution
-
-        Returns:
-            IrisClient wrapping a RemoteClusterClient connected to a local controller.
-        """
-        cfg = config or LocalClientConfig()
-        config_proto = make_local_cluster_config(cfg.max_workers)
-        controller = LocalCluster(config_proto)
-        address = controller.start()
-        cluster = RemoteClusterClient(controller_address=address, timeout_ms=30000)
-        return cls(cluster, controller=controller)
 
     @classmethod
     def remote(
@@ -727,35 +719,31 @@ class IrisClient:
         self,
         *,
         state: job_pb2.JobState | None = None,
-        prefix: JobName | None = None,
+        prefix: str | None = None,
     ) -> list[job_pb2.JobStatus]:
         """List jobs with optional filtering.
 
-        Filters are pushed down to the server via ``JobQuery`` so the
-        controller does not page-walk its entire jobs table: ``state`` becomes
-        ``state_filter`` and ``prefix`` becomes a ``name_filter`` substring
-        match. The prefix is re-validated client-side because ``name_filter``
-        is a substring, not an anchored prefix.
+        Filters are pushed down to the server via ``JobQuery``: ``state``
+        becomes ``state_filter`` and ``prefix`` becomes ``job_id_prefix``, an
+        anchored prefix match against the wire-form job_id (e.g.
+        ``"/alice/exp-"``). The prefix is passed through verbatim; callers do
+        not need to provide a parseable ``JobName``.
 
         Args:
-            state: If provided, only return jobs in this state
-            prefix: If provided, only return jobs whose JobName starts with this prefix
+            state: If provided, only return jobs in this state.
+            prefix: If provided, only return jobs whose ``job_id`` (wire form,
+                e.g. ``"/alice/foo"``) starts with this string.
 
         Returns:
-            List of JobStatus matching the filters
+            List of JobStatus matching the filters.
         """
         query = controller_pb2.Controller.JobQuery()
         if state is not None:
             query.state_filter = job_state_friendly(state)
-        if prefix is not None:
-            query.name_filter = prefix.to_wire()
+        if prefix:
+            query.job_id_prefix = prefix
 
-        all_jobs = self._cluster_client.list_jobs(query=query)
-        if prefix is None:
-            return list(all_jobs)
-
-        prefix_wire = prefix.to_wire()
-        return [job for job in all_jobs if JobName.from_wire(job.job_id).to_wire().startswith(prefix_wire)]
+        return list(self._cluster_client.list_jobs(query=query))
 
     def terminate_prefix(
         self,
@@ -772,7 +760,7 @@ class IrisClient:
         Returns:
             List of job IDs that were terminated
         """
-        jobs = self.list_jobs(prefix=prefix)
+        jobs = self.list_jobs(prefix=prefix.to_wire())
         terminated = []
         for job in jobs:
             if exclude_finished and is_job_finished(job.state):
@@ -829,10 +817,10 @@ class IrisClient:
     ) -> list[TaskLogEntry]:
         """Fetch logs for a task or job.
 
-        Builds a regex source pattern from the target:
-        - Task + all attempts: /user/job/0:.*
-        - Task + specific attempt: /user/job/0:<attempt_id>  (exact match)
-        - Job (all tasks): /user/job/.*
+        Builds a literal source + match scope from the target:
+        - Task + all attempts:     prefix /user/job/0:
+        - Task + specific attempt: exact  /user/job/0:<attempt_id>
+        - Job (all tasks):         prefix /user/job/
 
         Args:
             target: Task ID or Job ID
@@ -846,9 +834,10 @@ class IrisClient:
         Returns:
             List of TaskLogEntry objects, sorted by timestamp
         """
-        source = build_log_source(target, attempt_id)
+        source, match_scope = build_log_source(target, attempt_id)
         response = self._cluster_client.fetch_logs(
             source,
+            match_scope=match_scope,
             since_ms=start.epoch_ms() if start else 0,
             max_lines=max_lines,
             substring=substring,

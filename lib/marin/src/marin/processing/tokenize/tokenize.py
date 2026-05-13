@@ -30,13 +30,12 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
-from levanter.store.cache import consolidate_shard_caches
-from levanter.store.tree_store import TreeStore
+from levanter.store.cache import consolidate_shard_cache_ledgers, write_levanter_cache
 from levanter.tokenizers import MarinTokenizer, TokenizerBackend, load_tokenizer
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
-from zephyr.dataset import FileEntry
+from zephyr.dataset import FileEntry, format_shard_path
 from zephyr.readers import InputFileSpec, load_file
 
 from marin.execution.executor import InputName, VersionedValue
@@ -84,7 +83,6 @@ class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
     max_workers: int = 4096
-    cache_copy_max_workers: int = 128
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
 
     tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
@@ -449,16 +447,28 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        temp_shards = (
-            ds.window(window_size)
-            .map_shard(lambda batches, _: _tokenize_batches(config=config, batches=batches))
-            .write_levanter_cache(
-                f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
-                metadata={},
-                skip_existing=True,
-                batch_size=batch_size,
+        output_pattern = f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}"
+        _batch_size = batch_size
+
+        def _write_shard(batches, shard_info):
+            output_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
+            success_path = f"{output_path}/.success"
+            fs = url_to_fs(output_path)[0]
+            if fs.exists(success_path):
+                logger.info("Skipping write, output exists: %s", output_path)
+                yield output_path
+                return
+            kwargs: dict = {"metadata": {}}
+            if _batch_size is not None:
+                kwargs["batch_size"] = _batch_size
+            result = write_levanter_cache(
+                _tokenize_batches(config=config, batches=batches),
+                output_path,
+                **kwargs,
             )
-        )
+            yield result["path"]
+
+        temp_shards = ds.window(window_size).map_shard(_write_shard)
 
         # Broadcast tokenizer config to workers. We send name + backend rather than
         # the tokenizer object because not all backends support pickling.
@@ -480,17 +490,15 @@ def tokenize(config: TokenizeConfigBase):
 
         consolidate_start = time.monotonic()
         logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(
+        ledger = consolidate_shard_cache_ledgers(
             shard_cache_paths=shard_paths,
             output_path=prefix,
             exemplar=exemplar,
-            copy_max_workers=config.cache_copy_max_workers,
         )
         consolidate_elapsed = time.monotonic() - consolidate_start
 
         total_elements = ledger.total_num_rows
-        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
-        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
+        total_tokens = ledger.field_counts.get("input_ids", 0)
 
         stats_path = os.path.join(prefix, ".stats.json")
         with open_url(stats_path, "w") as f:

@@ -55,9 +55,10 @@ from iris.cluster.dashboard_common import (
     requires_auth,
     static_files_mount,
 )
+from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceWSGIApplication
+from iris.rpc.controller_connect import ControllerServiceASGIApplication
 from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
 from iris.rpc.stats import RpcStatsCollector
 from iris.rpc.stats_connect import StatsServiceWSGIApplication
@@ -208,31 +209,50 @@ class _DashboardAuthInterceptor:
         self._optional = optional
         self._null = NullAuthInterceptor(verifier=verifier)
 
+    def _resolve_or_raise(self, ctx):
+        """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
+        from connectrpc.code import Code
+        from connectrpc.errors import ConnectError
+
+        token = extract_bearer_token(ctx.request_headers())
+        try:
+            identity = resolve_auth(token, self._verifier, self._optional)
+        except ValueError as exc:
+            if token is None:
+                raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
+            logger.warning("Authentication failed: %s", exc)
+            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
+        return identity
+
     def intercept_unary_sync(self, call_next, request, ctx):
         from iris.rpc.auth import _verified_identity
 
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return call_next(request, ctx)
 
-        token = extract_bearer_token(ctx.request_headers())
-        try:
-            identity = resolve_auth(token, self._verifier, self._optional)
-        except ValueError as exc:
-            from connectrpc.code import Code
-            from connectrpc.errors import ConnectError
-
-            if token is None:
-                raise ConnectError(Code.UNAUTHENTICATED, str(exc)) from exc
-            logger.warning("Authentication failed: %s", exc)
-            raise ConnectError(Code.UNAUTHENTICATED, "Authentication failed") from exc
-
+        identity = self._resolve_or_raise(ctx)
         if identity is None:
-            # Optional mode, no token — anonymous fallback.
             return self._null.intercept_unary_sync(call_next, request, ctx)
 
         reset_token = _verified_identity.set(identity)
         try:
             return call_next(request, ctx)
+        finally:
+            _verified_identity.reset(reset_token)
+
+    async def intercept_unary(self, call_next, request, ctx):
+        from iris.rpc.auth import _verified_identity
+
+        if ctx.method().name in _UNAUTHENTICATED_RPCS:
+            return await call_next(request, ctx)
+
+        identity = self._resolve_or_raise(ctx)
+        if identity is None:
+            return await self._null.intercept_unary(call_next, request, ctx)
+
+        reset_token = _verified_identity.set(identity)
+        try:
+            return await call_next(request, ctx)
         finally:
             _verified_identity.reset(reset_token)
 
@@ -330,6 +350,25 @@ class _SubdomainProxyMiddleware:
         return headers.get("x-forwarded-host") or headers.get("host", "")
 
 
+_LEGACY_FETCH_LOGS_PATH = "/iris.cluster.ControllerService/FetchLogs"
+_CANONICAL_FETCH_LOGS_PATH = "/finelog.logging.LogService/FetchLogs"
+
+
+class _LegacyFetchLogsRedirect:
+    """Rewrites the legacy ControllerService/FetchLogs path to the canonical
+    LogService path so old workers reach the LogService mount, where the
+    full auth + timing + concurrency interceptor chain handles the request.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") == "http" and scope.get("path") == _LEGACY_FETCH_LOGS_PATH:
+            scope = {**scope, "path": _CANONICAL_FETCH_LOGS_PATH}
+        await self._app(scope, receive, send)
+
+
 class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
@@ -388,8 +427,12 @@ class ControllerDashboard:
             # when present but treat everything as anonymous/admin.
             auth_interceptor = NullAuthInterceptor(verifier=self._auth_verifier)
         controller_interceptors = [auth_interceptor, controller_timing]
-        rpc_wsgi_app = ControllerServiceWSGIApplication(
-            service=self._service, interceptors=controller_interceptors, compressions=IRIS_RPC_COMPRESSIONS
+        # @on_loop handlers run inline on the event loop; everything else
+        # is dispatched to a thread by AsyncServiceAdapter.
+        rpc_asgi_app = ControllerServiceASGIApplication(
+            service=AsyncServiceAdapter(self._service),
+            interceptors=controller_interceptors,
+            compressions=IRIS_RPC_COMPRESSIONS,
         )
 
         # StatsService: reuses the auth interceptor (so non-admins can't read
@@ -415,16 +458,6 @@ class ControllerDashboard:
         )
         log_app = WSGIMiddleware(log_wsgi_app)
 
-        # Backward-compat: old clients call ControllerService/FetchLogs (removed
-        # from the proto in the LogService migration).  Register the already-
-        # intercepted LogService FetchLogs endpoint under the old path so the
-        # Connect protocol handles encoding, compression, and auth correctly.
-        # The LogService now lives under the finelog.logging proto package.
-        _LOG_FETCH_ENDPOINT = "/finelog.logging.LogService/FetchLogs"
-        _LOG_PUSH_ENDPOINT = "/finelog.logging.LogService/PushLogs"
-        _COMPAT_FETCH_ENDPOINT = "/iris.cluster.ControllerService/FetchLogs"
-        rpc_wsgi_app._endpoints[_COMPAT_FETCH_ENDPOINT] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
-
         # Backward-compat: clients/workers built before the finelog lift call
         # /iris.logging.LogService/{FetchLogs,PushLogs}. Wire bytes are identical
         # to /finelog.logging.LogService/*, so mount the same WSGI app at the
@@ -432,20 +465,20 @@ class ControllerDashboard:
         # connectrpc dispatch (_server_sync.py:206-210) first looks up PATH_INFO
         # directly; the existing /finelog.logging.LogService mount only hits via
         # the SCRIPT_NAME==self.path fallback. Adding relative keys lets the
-        # first lookup succeed regardless of which mount handled the request.
+        # first lookup succeeds regardless of which mount handled the request.
+        _LOG_FETCH_ENDPOINT = "/finelog.logging.LogService/FetchLogs"
+        _LOG_PUSH_ENDPOINT = "/finelog.logging.LogService/PushLogs"
         log_wsgi_app._endpoints["/FetchLogs"] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
         log_wsgi_app._endpoints["/PushLogs"] = log_wsgi_app._endpoints[_LOG_PUSH_ENDPOINT]
         _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
 
-        rpc_app = WSGIMiddleware(rpc_wsgi_app)
-
-        self._actor_proxy = ActorProxy(self._service._store)
+        self._actor_proxy = ActorProxy(self._service._endpoints)
 
         def _resolve_endpoint(name: str) -> str | None:
             # Task-registered endpoints live in the SQL store; system endpoints
             # (``/system/...``) live in an in-memory dict on the service.
             # Same fallback order as ListEndpoints' system-endpoint branch.
-            row = self._service._store.endpoints.resolve(name)
+            row = self._service._endpoints.resolve(name)
             if row is not None:
                 return row.address
             return self._service._system_endpoints.get(name)
@@ -486,8 +519,8 @@ class ControllerDashboard:
             Route("/auth/config", self._auth_config),
             Route("/auth/session", self._auth_session, methods=["POST"]),
             Route("/auth/logout", self._auth_logout, methods=["POST"]),
-            Route("/job/{job_id:path}", self._job_detail_page),
-            Route("/worker/{worker_id:path}", self._worker_detail_page),
+            Route("/job/{job_id:path}", self._dashboard),
+            Route("/worker/{worker_id:path}", self._dashboard),
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
@@ -504,7 +537,7 @@ class ControllerDashboard:
             ),
             Mount(log_wsgi_app.path, app=log_app),
             Mount(_LEGACY_LOG_SERVICE_PATH, app=log_app),
-            Mount(rpc_wsgi_app.path, app=rpc_app),
+            Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(stats_wsgi_app.path, app=stats_app),
         ]
         if self._finelog_stats_service is not None:
@@ -533,6 +566,9 @@ class ControllerDashboard:
         wrapped: ASGIApp = app
         if self._auth_verifier is not None and self._auth_provider is not None:
             wrapped = _RouteAuthMiddleware(app, self._auth_verifier, optional=self._auth_optional)
+        # Wrap auth so the legacy FetchLogs rewrite happens before route
+        # matching: auth and routing both see the canonical path.
+        wrapped = _LegacyFetchLogsRedirect(wrapped)
         # Subdomain dispatch wraps everything: subdomain requests don't match
         # any Starlette route, so _RouteAuthMiddleware would default-allow
         # them. This middleware enforces auth itself before forwarding.
@@ -545,7 +581,8 @@ class ControllerDashboard:
         return wrapped
 
     @public
-    def _dashboard(self, request: Request) -> Response:
+    def _dashboard(self, _request: Request) -> HTMLResponse:
+        # Vue Router handles client-side routing, so every SPA path serves the same shell.
         return HTMLResponse(html_shell("controller"))
 
     @public
@@ -568,14 +605,6 @@ class ControllerDashboard:
             path="/",
         )
         return response
-
-    @public
-    def _job_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("controller"))
-
-    @public
-    def _worker_detail_page(self, _request: Request) -> HTMLResponse:
-        return HTMLResponse(html_shell("controller"))
 
     @public
     def _auth_config(self, request: Request) -> JSONResponse:
@@ -684,11 +713,12 @@ class ProxyControllerDashboard:
         return self._app
 
     def _create_app(self) -> Starlette:
+        # Vue Router handles client-side routing, so every SPA path serves the same shell.
         routes = [
             Route("/", self._dashboard),
             favicon_route(),
-            Route("/job/{job_id:path}", self._job_detail_page),
-            Route("/worker/{worker_id:path}", self._worker_detail_page),
+            Route("/job/{job_id:path}", self._dashboard),
+            Route("/worker/{worker_id:path}", self._dashboard),
             Route("/bundles/{bundle_id:str}.zip", self._proxy_bundle),
             Route("/blobs/{blob_id:str}", self._proxy_blob),
             Route("/health", self._health),
@@ -700,8 +730,8 @@ class ProxyControllerDashboard:
 
         return Starlette(routes=routes, lifespan=on_shutdown(self._client.aclose))
 
-    def _proxy_html(self, dashboard_type: str) -> HTMLResponse:
-        html = html_shell(dashboard_type)
+    def _dashboard(self, _request: Request) -> HTMLResponse:
+        html = html_shell("controller")
         banner = (
             '<div style="background:#f59e0b;color:#000;text-align:center;'
             "padding:4px 8px;font-size:13px;font-weight:600;position:fixed;"
@@ -710,15 +740,6 @@ class ProxyControllerDashboard:
         )
         html = html.replace('<div id="app">', banner + '<div id="app">')
         return HTMLResponse(html)
-
-    def _dashboard(self, _request: Request) -> HTMLResponse:
-        return self._proxy_html("controller")
-
-    def _job_detail_page(self, _request: Request) -> HTMLResponse:
-        return self._proxy_html("controller")
-
-    def _worker_detail_page(self, _request: Request) -> HTMLResponse:
-        return self._proxy_html("controller")
 
     def _health(self, _request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})

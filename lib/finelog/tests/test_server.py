@@ -110,6 +110,33 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
         svc.close()
 
 
+def test_fetch_logs_wire_unspecified_reads_as_regex(tmp_path: Path):
+    """Wire-level UNSPECIFIED falls back to REGEX so a regex ``source``
+    pattern still matches when ``match_scope`` is unset."""
+    svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
+    try:
+        app = build_log_server_asgi(svc)
+        with TestClient(app) as client:
+            for attempt in range(2):
+                client.post(
+                    "/finelog.logging.LogService/PushLogs",
+                    json={
+                        "key": f"/job/test/0:{attempt}",
+                        "entries": [{"source": "stdout", "data": f"a{attempt}", "timestamp": {"epoch_ms": attempt + 1}}],
+                    },
+                    headers={"Content-Type": "application/json"},
+                )
+            resp = client.post(
+                "/finelog.logging.LogService/FetchLogs",
+                json={"source": r"/job/test/0:\d+"},
+                headers={"Content-Type": "application/json"},
+            )
+            assert resp.status_code == 200
+            assert sorted(e["data"] for e in resp.json().get("entries", [])) == ["a0", "a1"]
+    finally:
+        svc.close()
+
+
 def test_query_concurrency_cap_enforced_by_interceptor(tmp_path: Path):
     log_service = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
     stats_service = StatsServiceImpl(log_store=log_service.log_store)

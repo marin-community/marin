@@ -39,12 +39,30 @@ const cursor = ref<string | number | null>(null)
 // Task IDs end with a numeric segment (e.g. /alice/job/0), job IDs don't.
 const isTask = props.taskId ? /\/\d+$/.test(props.taskId) : false
 
-function computeSource(): string {
+type WireMatchScope = 'MATCH_SCOPE_EXACT' | 'MATCH_SCOPE_PREFIX'
+
+interface SourceQuery {
+  source: string
+  matchScope: WireMatchScope
+}
+
+// Build a (literal source, match_scope) pair for FetchLogs. Server treats
+// `source` as a literal string — no regex escaping needed for `:`, `/`, etc.
+// PREFIX picks up every attempt of a task or every task of a job; EXACT
+// pins to a specific attempt or system stream.
+function computeSource(): SourceQuery {
   if (props.taskId) {
-    if (selectedAttemptId.value >= 0) return `${props.taskId}:${selectedAttemptId.value}`
-    return isTask ? `${props.taskId}:.*` : `${props.taskId}/\\d+:.*`
+    if (selectedAttemptId.value >= 0) {
+      return { source: `${props.taskId}:${selectedAttemptId.value}`, matchScope: 'MATCH_SCOPE_EXACT' }
+    }
+    // Boundary char (`:` or `/`) baked into the prefix so we don't bleed
+    // into sibling task ids that share the same numeric leader.
+    return { source: isTask ? `${props.taskId}:` : `${props.taskId}/`, matchScope: 'MATCH_SCOPE_PREFIX' }
   }
-  return props.workerId ? `/system/worker/${props.workerId}` : '/system/controller'
+  return {
+    source: props.workerId ? `/system/worker/${props.workerId}` : '/system/controller',
+    matchScope: 'MATCH_SCOPE_EXACT',
+  }
 }
 
 // Monotonic generation to discard responses from superseded requests (e.g.
@@ -56,8 +74,10 @@ async function fetchTail() {
   loading.value = true
   errorMsg.value = null
   try {
+    const { source, matchScope } = computeSource()
     const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
-      source: computeSource(),
+      source,
+      matchScope,
       maxLines: tailLines.value || undefined,
       tail: true,
       substring: filter.value || undefined,
@@ -85,8 +105,10 @@ async function fetchIncremental() {
   // Incremental polls don't toggle `loading` so the UI doesn't flash on every
   // poll; the user only sees the spinner on the initial/tail load.
   try {
+    const { source, matchScope } = computeSource()
     const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
-      source: computeSource(),
+      source,
+      matchScope,
       maxLines: AUTO_REFRESH_MAX_LINES,
       tail: false,
       cursor: cursor.value,

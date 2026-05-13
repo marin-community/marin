@@ -18,6 +18,7 @@ from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import format_resources, job_state_friendly, task_state_friendly
 from iris.time_proto import timestamp_from_proto
@@ -119,7 +120,13 @@ def gather_bug_report(
 ) -> BugReport:
     """Gather all diagnostic data for a job into a BugReport."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    client = ControllerServiceClientSync(controller_url, timeout_ms=30000, interceptors=interceptors)
+    client = ControllerServiceClientSync(
+        controller_url,
+        timeout_ms=30000,
+        interceptors=interceptors,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=None,
+    )
     log_client = LogClient.connect(controller_url, timeout_ms=30000, interceptors=interceptors)
     try:
         return _gather(client, log_client, job_id, tail=tail)
@@ -159,16 +166,16 @@ def _gather(
     for task in tasks_resp.tasks:
         try:
             # Fetch all attempts for this task, taking only the last `tail` lines.
-            source = build_log_source(JobName.from_wire(task.task_id))
+            source, match_scope = build_log_source(JobName.from_wire(task.task_id))
             log_resp = log_client.fetch_logs(
                 logging_pb2.FetchLogsRequest(
                     source=source,
+                    match_scope=match_scope,
                     max_lines=tail,
                     tail=True,
                 )
             )
-            lines = [entry.data for entry in log_resp.entries]
-            task_logs[task.task_id] = lines[-tail:]
+            task_logs[task.task_id] = [entry.data for entry in log_resp.entries]
         except Exception:
             logger.warning("Failed to fetch logs for task %s", task.task_id, exc_info=True)
             task_logs[task.task_id] = ["(failed to fetch logs)"]

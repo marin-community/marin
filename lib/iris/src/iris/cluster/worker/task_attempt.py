@@ -10,6 +10,7 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 import logging
 import shutil
 import socket
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -21,11 +22,14 @@ from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
 from finelog.types import str_to_log_level
 from rigging.log_setup import parse_log_level
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.runtime.docker import DockerContainerHandle
+from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -59,6 +63,7 @@ logger = logging.getLogger(__name__)
 # Trailing stderr lines scanned for TPU bad-node signatures on non-zero exit.
 _TPU_STDERR_TAIL_LINES = 200
 
+
 # Signal numbers for interpreting exit codes > 128
 _SIGNAL_NAMES = {
     6: "SIGABRT",
@@ -66,6 +71,12 @@ _SIGNAL_NAMES = {
     11: "SIGSEGV",
     15: "SIGTERM",
 }
+
+# Max time to wait for the container to actually exit after force-kill before
+# reporting TASK_STATE_KILLED. SIGKILL is uncatchable, so a healthy runtime
+# reaps within milliseconds; the bound keeps a wedged container (uninterruptible
+# sleep, runtime daemon hang) from blocking the monitor indefinitely.
+_KILL_EXIT_WAIT_TIMEOUT = Duration.from_seconds(30.0)
 
 
 def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
@@ -146,8 +157,6 @@ def build_iris_env(
     variables (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST) and overrides port values
     with real allocated ports.
     """
-    from iris.cluster.runtime.env import build_common_iris_env
-
     req = task.request
     env = build_common_iris_env(
         task_id=req.task_id,
@@ -438,8 +447,6 @@ class TaskAttempt:
         if not self._container_handle:
             return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {self.task_id} has no container handle")
 
-        import subprocess as _subprocess
-
         container_id = self._container_handle.container_id
         if not container_id:
             return worker_pb2.Worker.ExecInContainerResponse(error="No container ID available")
@@ -447,10 +454,8 @@ class TaskAttempt:
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
 
         # Use docker exec for Docker containers, direct exec for process containers
-        from iris.cluster.runtime.docker import DockerContainerHandle
-
         if isinstance(self._container_handle, DockerContainerHandle):
-            result = _subprocess.run(
+            result = subprocess.run(
                 ["docker", "exec", container_id, *command],
                 capture_output=True,
                 text=True,
@@ -463,7 +468,7 @@ class TaskAttempt:
             )
 
         # Process runtime: run command directly
-        result = _subprocess.run(
+        result = subprocess.run(
             command,
             capture_output=True,
             text=True,
@@ -698,16 +703,17 @@ class TaskAttempt:
         )
         env = dict(iris_env)
 
-        # Expose the worker's region so child jobs can inherit a region
-        # constraint (e.g. when the parent holds a reservation).
-        from iris.cluster.constraints import WellKnownAttribute
+        env.update(self._task_env)
+        env.update(dict(self.request.environment.env_vars))
 
+        # Surface the worker's region so in-task code (e.g. the Marin
+        # executor) and IrisClient.submit_job's parent->child region
+        # inheritance can read it via get_job_info().worker_region.
+        # Set last: this is a physical fact about the worker, not a
+        # user-configurable preference, so task/user env_vars cannot spoof it.
         region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
-
-        env.update(self._task_env)
-        env.update(dict(self.request.environment.env_vars))
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint
@@ -816,6 +822,21 @@ class TaskAttempt:
             if self.should_stop:
                 handle.stop(force=True)
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
+                # Wait for the runtime to confirm the container has actually
+                # exited before reporting KILLED. Without this, downstream
+                # consumers race the SIGKILL -> exit window: the worker tells
+                # the controller the task is dead while the container is still
+                # holding TPU/GPU/file resources during teardown.
+                exited = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+                    lambda: handle.status().phase == ContainerPhase.STOPPED,
+                    timeout=_KILL_EXIT_WAIT_TIMEOUT,
+                )
+                if not exited:
+                    logger.warning(
+                        "Task %s container did not exit within %s after SIGKILL; reporting KILLED anyway",
+                        self.task_id,
+                        _KILL_EXIT_WAIT_TIMEOUT,
+                    )
                 self._stream_logs(log_reader)  # Capture final logs
                 self.transition_to(job_pb2.TASK_STATE_KILLED)
                 break

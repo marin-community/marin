@@ -8,6 +8,7 @@ Transform ar5iv HTML to markdown in two stages: clean_html and markdownify.
 
 import datetime
 from dataclasses import dataclass
+from html import escape, unescape
 
 import draccus
 from bs4 import BeautifulSoup
@@ -101,8 +102,6 @@ def unwrap_eqn(page: BeautifulSoup) -> BeautifulSoup:
     Extract alttext from math element and convert to LaTeX format.
     Returns BeautifulSoup object with the formatted equation.
     """
-    from html import escape, unescape
-
     math_elements = page.find_all("math")
 
     for math_elem in math_elements:

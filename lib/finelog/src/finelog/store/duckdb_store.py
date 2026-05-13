@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
-import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -24,10 +22,10 @@ from pathlib import Path
 from threading import Lock
 
 import duckdb
-import fsspec.core
 import pyarrow as pa
 import pyarrow.ipc as paipc
 
+from finelog.rpc import logging_pb2
 from finelog.store.catalog import Catalog, NamespaceStats
 from finelog.store.compactor import CompactionConfig
 from finelog.store.layout_migration import LOG_NAMESPACE_DIR
@@ -66,21 +64,17 @@ DEFAULT_FLUSH_INTERVAL_SEC = 60.0
 # retain pages indefinitely. 512MB on the read pool is plenty against 5
 # segments x ~50MB + zstd decompression scratch. Compaction tier-merges can
 # spill larger sort buffers, so it gets its own (still bounded) limit.
-_DEFAULT_DUCKDB_MEMORY_LIMIT = "512MB"
-_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "1GB"
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "2GB"
+# Sized for an L1 merge of ~256 MiB segments: DuckDB's working set during
+# COPY (... ORDER BY ...) is several x the output size, and the prod
+# 1 GB cap was OOMing.
+_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "4GB"
 _DEFAULT_DUCKDB_THREADS = "4"
 
 # Embedded mode (iris controller's bundled log-server) keeps VMS small so the
 # parent doesn't trip Linux's overcommit heuristic when forking subprocesses.
 EMBEDDED_DUCKDB_MEMORY_LIMIT = "128MB"
 EMBEDDED_DUCKDB_THREADS = "2"
-
-# Streaming chunk size for src->dst copy. 4 MiB keeps RAM usage flat regardless
-# of segment size while still amortizing per-write overhead on GCS.
-_COPY_CHUNK_BYTES = 4 * 1024 * 1024
-# How long ``close()`` waits for the copy worker to drain before forcing exit.
-_COPY_DRAIN_TIMEOUT_SEC = 10.0
-
 
 # Namespace names: lowercase ASCII alphanumerics + ._-, starting with a
 # letter, max 64 chars. Restrictive enough to be safe as both a directory
@@ -99,144 +93,90 @@ def _next_cursor_id() -> int:
         return _cursor_counter
 
 
+_DEFAULT_POOL_RECYCLE_SEC = 600.0
+
+
 class ConnectionPool:
     """Single DuckDB read connection shared across all read paths.
 
     ``enable_object_cache`` keeps parquet footer / row-group stats hot
-    across queries. Compaction does not share this connection — each
-    namespace owns its own DuckDB conn for compaction COPYs so concurrent
-    namespaces can't collide on session state.
+    across queries. The connection is recycled periodically (default
+    10 min) so DuckDB-internal accounting (spill counters, arena bloat)
+    cannot accumulate without bound.
+
+    All access goes through :meth:`cursor`, which serializes callers,
+    recycles if stale, and manages table registration / cleanup.
     """
 
     def __init__(
         self,
         memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
         threads: str = _DEFAULT_DUCKDB_THREADS,
+        temp_directory: Path | None = None,
+        recycle_sec: float = _DEFAULT_POOL_RECYCLE_SEC,
     ):
-        config = {"memory_limit": memory_limit, "threads": threads}
-        self._conn = duckdb.connect(config=config)
-        self._conn.execute("SET enable_object_cache=true")
-        # Serializes DDL on the shared read connection. ``query()`` issues
-        # ``CREATE OR REPLACE VIEW {namespace}`` for every registered
-        # namespace, and concurrent calls would collide on the same view
-        # names. Held end-to-end through the fetch so the views stay valid
-        # while the result materializes.
-        self._read_query_lock = Lock()
+        self._config: dict[str, str] = {"memory_limit": memory_limit, "threads": threads}
+        if temp_directory is not None:
+            temp_directory.mkdir(parents=True, exist_ok=True)
+            self._config["temp_directory"] = str(temp_directory)
+        self._recycle_sec = recycle_sec
+        self._conn = self._new_conn()
+        self._conn_born = time.monotonic()
+        self._lock = Lock()
+
+    def _new_conn(self) -> duckdb.DuckDBPyConnection:
+        conn = duckdb.connect(config=dict(self._config))
+        conn.execute("SET enable_object_cache=true")
+        return conn
+
+    def _maybe_recycle(self) -> None:
+        if time.monotonic() - self._conn_born < self._recycle_sec:
+            return
+        old = self._conn
+        self._conn = self._new_conn()
+        self._conn_born = time.monotonic()
+        old.close()
+        logger.debug("ConnectionPool recycled read connection")
 
     @contextmanager
-    def checkout(self, buffer_tables: list[pa.Table]) -> Iterator[tuple[duckdb.DuckDBPyConnection, list[str]]]:
-        """Yield ``(cursor, ram_table_names)`` with each RAM table registered."""
-        cid = _next_cursor_id()
-        cursor = self._conn.cursor()
-        names: list[str] = []
-        try:
-            for i, table in enumerate(buffer_tables):
-                name = f"_ram_{cid}_{i}"
-                cursor.register(name, table)
-                names.append(name)
-            yield cursor, names
-        finally:
-            for name in names:
-                cursor.unregister(name)
-            cursor.close()
+    def cursor(
+        self,
+        buffers: dict[str, list[pa.Table]] | None = None,
+    ) -> Iterator[duckdb.DuckDBPyConnection]:
+        """Yield a cursor under the pool lock.
+
+        Recycles the underlying connection if stale. ``buffers`` maps
+        view names to lists of Arrow tables; each entry becomes a
+        ``CREATE VIEW <name> AS SELECT * FROM ... UNION ALL ...``
+        so the caller can reference the tables by the view name it
+        chose. Everything is torn down on exit.
+        """
+        with self._lock:
+            self._maybe_recycle()
+            cid = _next_cursor_id()
+            cur = self._conn.cursor()
+            registered: list[str] = []
+            views: list[str] = []
+            try:
+                for view_name, tables in (buffers or {}).items():
+                    parts: list[str] = []
+                    for table in tables:
+                        reg = f"_reg_{cid}_{len(registered)}"
+                        cur.register(reg, table)
+                        registered.append(reg)
+                        parts.append(f"SELECT * FROM {reg}")
+                    cur.execute(f"CREATE VIEW {view_name} AS {' UNION ALL '.join(parts)}")
+                    views.append(view_name)
+                yield cur
+            finally:
+                for v in views:
+                    cur.execute(f"DROP VIEW IF EXISTS {v}")
+                for r in registered:
+                    cur.unregister(r)
+                cur.close()
 
     def close(self) -> None:
         self._conn.close()
-
-
-class CopyWorker:
-    """Polling background uploader for L>=1 catalog segments.
-
-    One worker per :class:`DuckDBLogStore`. Walks the catalog every
-    ``_POLL_INTERVAL_SEC`` (or sooner when woken) for ``level >= 1 AND
-    copied_at_ms IS NULL`` rows, streams each parquet to remote storage,
-    and stamps the row on success. Per-segment RAM footprint is bounded
-    by ``_COPY_CHUNK_BYTES``.
-
-    Decoupling from compaction means the copy policy is "anything
-    promoted to L1+ that doesn't yet have a remote copy" — the planner
-    doesn't know or care about uploads.
-    """
-
-    _POLL_INTERVAL_SEC = 5.0
-
-    def __init__(self, store: DuckDBLogStore, remote_log_dir: str) -> None:
-        self._store = store
-        self._remote_log_dir = remote_log_dir
-        self._stop = threading.Event()
-        self._wake = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="finelog_copy", daemon=True)
-        self._thread.start()
-
-    def wake(self) -> None:
-        """Hint that new L>=1 segments may exist; speeds up the next pass."""
-        self._wake.set()
-
-    def wait_drained(self, timeout: float) -> bool:
-        """Block until the catalog has no L>=1 rows missing ``copied_at_ms``.
-
-        Returns True on drain, False on timeout.
-        """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.wake()
-            with self._store._insertion_lock:
-                if not self._store._catalog.list_pending_copies():
-                    return True
-            time.sleep(0.05)
-        with self._store._insertion_lock:
-            return not self._store._catalog.list_pending_copies()
-
-    def close(self, timeout: float = _COPY_DRAIN_TIMEOUT_SEC) -> None:
-        self.wait_drained(timeout)
-        self._stop.set()
-        self._wake.set()
-        self._thread.join(timeout=timeout)
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                with self._store._insertion_lock:
-                    pending = self._store._catalog.list_pending_copies()
-            except Exception:
-                logger.warning("copy poll failed", exc_info=True)
-                pending = []
-            for row in pending:
-                if self._stop.is_set():
-                    break
-                completed_ms = self._upload(row.namespace, Path(row.path))
-                if completed_ms is not None:
-                    self._store._mark_copied(row.namespace, row.path, completed_ms)
-            self._wake.wait(timeout=self._POLL_INTERVAL_SEC)
-            self._wake.clear()
-
-    def _upload(self, namespace: str, local_path: Path) -> int | None:
-        """Stream ``local_path`` to the remote path. Returns completion ms
-        on success, ``None`` on failure (the catalog row stays unstamped
-        and the next poll retries)."""
-        remote_path = f"{self._remote_log_dir.rstrip('/')}/{namespace}/{local_path.name}"
-        upload_start = time.monotonic()
-        try:
-            with (
-                fsspec.core.open(str(local_path), "rb") as f_src,
-                fsspec.core.open(remote_path, "wb") as f_dst,
-            ):
-                shutil.copyfileobj(f_src, f_dst, length=_COPY_CHUNK_BYTES)
-        except Exception:
-            logger.warning("Failed to copy %s to %s", local_path, remote_path, exc_info=True)
-            return None
-        try:
-            size = local_path.stat().st_size
-        except OSError:
-            size = -1
-        logger.info(
-            "Copied %s to %s: bytes=%d elapsed_ms=%d",
-            local_path.name,
-            remote_path,
-            size,
-            int((time.monotonic() - upload_start) * 1000),
-        )
-        return int(time.time() * 1000)
 
 
 def _validate_namespace_name(name: str, data_dir: Path | None) -> Path | None:
@@ -289,30 +229,39 @@ class DuckDBLogStore:
 
         self._insertion_lock = Lock()
         self._query_visibility_lock = RWLock()
-        self._pool = ConnectionPool(memory_limit=duckdb_memory_limit, threads=duckdb_threads)
-        self._catalog = Catalog(self._data_dir)
-
-        # Polling uploader: independent of compaction. Walks the catalog
-        # for L>=1 segments without ``copied_at_ms`` and uploads them.
-        # Only spun up when remote storage is configured.
-        self._copy_worker: CopyWorker | None = (
-            CopyWorker(self, remote_log_dir) if remote_log_dir and self._data_dir is not None else None
+        # Spill into the data dir, not CWD — the prod container runs with a
+        # read-only working directory.
+        pool_tmp = (log_dir / ".duckdb_tmp_read") if log_dir is not None else None
+        self._pool = ConnectionPool(
+            memory_limit=duckdb_memory_limit,
+            threads=duckdb_threads,
+            temp_directory=pool_tmp,
         )
+        self._catalog = Catalog(self._data_dir)
 
         self._namespace_registered_at: dict[str, int] = {}
         self._namespaces: dict[str, LogNamespaceProtocol] = {}
+        # Names currently being dropped. ``drop_table`` reserves the name
+        # here under ``_insertion_lock`` so a concurrent ``register_table``
+        # cannot recreate the namespace in the window between popping
+        # ``_namespaces`` and the late ``catalog.delete`` /
+        # ``remove_local_storage``. Without this, the late steps would
+        # delete the freshly registered namespace's catalog row and wipe
+        # its on-disk directory.
+        self._dropping: set[str] = set()
 
         # Disk-only kwargs; ignored by memory namespaces. ``duckdb_memory_limit``
         # in this dict feeds the per-namespace compaction connection in
         # ``DiskLogNamespace``; we route the dedicated compaction cap here so
-        # tier-merges don't share the read pool's tighter ceiling.
+        # tier-merges don't share the read pool's tighter ceiling. Each disk
+        # namespace owns its own remote sync — empty ``remote_log_dir``
+        # disables it.
         self._disk_namespace_kwargs = dict(
-            copy_wake=self._wake_copier,
+            remote_log_dir=remote_log_dir,
             flush_interval_sec=flush_interval_sec,
             compaction_config=compaction_config,
             segment_target_bytes=segment_target_bytes,
             duckdb_memory_limit=duckdb_compaction_memory_limit,
-            duckdb_threads=duckdb_threads,
         )
 
         self._rehydrate_from_registry()
@@ -380,6 +329,16 @@ class DuckDBLogStore:
         stored_schema = with_implicit_seq(schema)
 
         with self._insertion_lock:
+            if name in self._dropping:
+                # A concurrent ``drop_table`` has already removed the
+                # namespace from ``_namespaces`` but has not yet finished
+                # its catalog/storage cleanup. Recreating the namespace
+                # now would let that cleanup wipe the new state. Surface
+                # this as a transient validation error; the caller can
+                # retry once the drop completes.
+                raise InvalidNamespaceError(
+                    f"namespace {name!r} is currently being dropped; retry once drop_table completes"
+                )
             existing_ns = self._namespaces.get(name)
             if existing_ns is None:
                 self._catalog.upsert(name, stored_schema)
@@ -480,57 +439,46 @@ class DuckDBLogStore:
 
         Unknown namespaces in the FROM clause surface as DuckDB
         ``CatalogException`` (the view doesn't exist).
-
-        Uses a cursor on the shared read connection rather than opening a
-        fresh ``duckdb.connect()`` per call: a fresh connection is its own
-        in-process DB instance with its own buffer manager, and mimalloc
-        retained those arenas long after ``con.close()`` (RSS climbed by
-        ~50-100MB per call under load). The view + RAM-table names are
-        suffixed with a unique cursor id so concurrent calls on the shared
-        connection don't collide; views and registrations are torn down in
-        ``finally`` to keep the connection clean for the next caller.
         """
-        cid = _next_cursor_id()
-        registered_names: list[str] = []
         view_names: list[str] = []
         self._query_visibility_lock.read_acquire()
-        self._pool._read_query_lock.acquire()
-        cursor = self._pool._conn.cursor()
         try:
-            # Snapshot under the insertion lock so a concurrent drop_table
-            # (which mutates the dict under the same lock) can't trigger
-            # "dictionary changed size during iteration".
-            with self._insertion_lock:
-                ns_snapshot = list(self._namespaces.items())
-            for ns_name, ns in ns_snapshot:
-                ns_quoted = quote_ident(ns_name)
-                view_names.append(ns_quoted)
-                segments, ram_tables = ns.query_snapshot()
-                if not segments and not ram_tables:
-                    cols_sql = ", ".join(
-                        f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
-                    )
-                    cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
-                    continue
+            with self._pool.cursor() as cursor:
+                # Snapshot under the insertion lock so a concurrent drop_table
+                # can't trigger "dictionary changed size during iteration".
+                with self._insertion_lock:
+                    ns_snapshot = list(self._namespaces.items())
 
-                parts: list[str] = []
-                if segments:
-                    paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
-                    parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
-                for table in ram_tables:
-                    reg_name = f"_q{cid}_seg_{len(registered_names)}"
-                    cursor.register(reg_name, table)
-                    registered_names.append(reg_name)
-                    parts.append(f"SELECT * FROM {reg_name}")
-                cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
-            return cursor.execute(sql).fetch_arrow_table()
+                extra_registered: list[str] = []
+                try:
+                    for ns_name, ns in ns_snapshot:
+                        ns_quoted = quote_ident(ns_name)
+                        view_names.append(ns_quoted)
+                        segments, ram_tables = ns.query_snapshot()
+                        if not segments and not ram_tables:
+                            cols_sql = ", ".join(
+                                f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
+                            )
+                            cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
+                            continue
+
+                        parts: list[str] = []
+                        if segments:
+                            paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
+                            parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
+                        for table in ram_tables:
+                            reg_name = f"_q{_next_cursor_id()}_seg_{len(extra_registered)}"
+                            cursor.register(reg_name, table)
+                            extra_registered.append(reg_name)
+                            parts.append(f"SELECT * FROM {reg_name}")
+                        cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
+                    return cursor.execute(sql).fetch_arrow_table()
+                finally:
+                    for name in extra_registered:
+                        cursor.unregister(name)
+                    for vname in view_names:
+                        cursor.execute(f"DROP VIEW IF EXISTS {vname}")
         finally:
-            for name in registered_names:
-                cursor.unregister(name)
-            for vname in view_names:
-                cursor.execute(f"DROP VIEW IF EXISTS {vname}")
-            cursor.close()
-            self._pool._read_query_lock.release()
             self._query_visibility_lock.read_release()
 
     def drop_table(self, name: str) -> None:
@@ -538,9 +486,22 @@ class DuckDBLogStore:
 
         We can't hold the insertion mutex end-to-end because the bg flush
         thread itself takes it every iteration; joining under the mutex
-        would deadlock. Instead: (1) remove from registry under the mutex,
-        (2) stop_and_join the bg thread, (3) take the rwlock write side and
-        delete the segment directory.
+        would deadlock. The order is:
+
+          1. Under the mutex: remove from the registry *and* mark ``name``
+             as ``_dropping`` (new ops fail fast — including a concurrent
+             ``register_table``, which would otherwise recreate the
+             namespace and have its state wiped by the cleanup steps
+             below).
+          2. Stop and join the bg thread — *before* dropping catalog rows,
+             because ``_sync_step`` would otherwise see an empty catalog
+             plus a populated bucket and ``fs.rm`` every remote file as
+             an orphan.
+          3. Drop the catalog rows now that no concurrent reader can act
+             on them.
+          4. Take the rwlock write side and delete the segment directory.
+          5. Clear the ``_dropping`` reservation under the mutex; the name
+             is now free to be re-registered.
 
         GCS-archived data is intentionally preserved; the bucket is the
         caller's to clean up.
@@ -552,29 +513,24 @@ class DuckDBLogStore:
             ns = self._namespaces.get(name)
             if ns is None:
                 raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            self._catalog.delete(name)
             del self._namespaces[name]
             self._namespace_registered_at.pop(name, None)
+            self._dropping.add(name)
 
-        ns.stop_and_join()
-
-        self._query_visibility_lock.write_acquire()
         try:
-            ns.remove_local_storage()
+            ns.stop_and_join()
+
+            with self._insertion_lock:
+                self._catalog.delete(name)
+
+            self._query_visibility_lock.write_acquire()
+            try:
+                ns.remove_local_storage()
+            finally:
+                self._query_visibility_lock.write_release()
         finally:
-            self._query_visibility_lock.write_release()
-
-    def _mark_copied(self, namespace: str, path: str, copied_at_ms: int) -> None:
-        """Worker-thread entry point for stamping the catalog after upload.
-
-        Eviction filters on ``copied_at_ms IS NOT NULL`` so a freshly
-        compacted segment becomes evictable only after the remote copy
-        is durable.
-        """
-        ns = self._namespaces.get(namespace)
-        if ns is None:
-            return
-        ns.mark_copied(path, copied_at_ms)
+            with self._insertion_lock:
+                self._dropping.discard(name)
 
     def append(self, key: str, entries: list) -> None:
         if not entries:
@@ -588,6 +544,7 @@ class DuckDBLogStore:
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -597,6 +554,7 @@ class DuckDBLogStore:
     ) -> LogReadResult:
         return self._namespaces[LOG_NAMESPACE_NAME].get_logs(
             key,
+            match_scope=match_scope,
             since_ms=since_ms,
             cursor=cursor,
             substring_filter=substring_filter,
@@ -610,28 +568,15 @@ class DuckDBLogStore:
         return len(result.entries) > 0
 
     def cursor(self, key: str):
-        from finelog.store import LogCursor
+        from finelog.store import LogCursor  # circular import: duckdb_store -> store.__init__ -> duckdb_store
 
         return LogCursor(self, key)
 
     def close(self) -> None:
         for ns in self._namespaces.values():
             ns.close()
-        if self._copy_worker is not None:
-            self._copy_worker.close()
         self._pool.close()
         self._catalog.close()
-
-    def _wake_copier(self) -> None:
-        """Hint the copy worker that fresh L>=1 segments may exist."""
-        if self._copy_worker is not None:
-            self._copy_worker.wake()
-
-    def _wait_for_copies(self, timeout: float = _COPY_DRAIN_TIMEOUT_SEC) -> bool:
-        """Block until the catalog has no pending L>=1 copies. Test/shutdown hook."""
-        if self._copy_worker is None:
-            return True
-        return self._copy_worker.wait_drained(timeout)
 
     # Test hooks below; forward to the registered "log" namespace.
 

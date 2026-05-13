@@ -28,7 +28,6 @@ Example:
 
 import logging
 import threading
-import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
@@ -86,8 +85,6 @@ class PendingTask:
     serialized_args: bytes
     serialized_kwargs: bytes
     future: Future
-    fn_name: str
-    submitted_at: float
     retries_remaining: int = 0
 
 
@@ -320,7 +317,6 @@ class WorkerFuture(Generic[T]):
     """Future representing an in-flight task."""
 
     _future: Future
-    _fn_name: str
 
     def result(self, timeout: float | None = None) -> T:
         """Block until result is available.
@@ -514,13 +510,11 @@ class WorkerPool:
             serialized_args=cloudpickle.dumps(args),
             serialized_kwargs=cloudpickle.dumps(kwargs),
             future=Future(),
-            fn_name=getattr(fn, "__name__", "lambda"),
-            submitted_at=time.monotonic(),
             retries_remaining=self._config.max_retries,
         )
 
         self._task_queue.put(task)
-        return WorkerFuture(_future=task.future, _fn_name=task.fn_name)
+        return WorkerFuture(_future=task.future)
 
     def map(
         self,

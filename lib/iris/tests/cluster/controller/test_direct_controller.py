@@ -4,7 +4,6 @@
 """Tests for KubernetesProvider integration with controller and transitions."""
 
 from finelog.rpc import logging_pb2
-from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.controller.transitions import (
     DirectProviderBatch,
     DirectProviderSyncResult,
@@ -18,6 +17,7 @@ from .conftest import (
     make_direct_job_request,
     query_attempt,
     query_task,
+    query_tasks_for_job,
     submit_direct_job,
 )
 
@@ -59,7 +59,7 @@ def test_drain_pending_creates_attempt_rows(state):
     task_before = query_task(state, task_id)
     assert task_before.state == job_pb2.TASK_STATE_PENDING
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
 
     assert len(batch.tasks_to_run) == 1
@@ -79,7 +79,7 @@ def test_drain_propagates_task_image(state):
     """task_image set on the LaunchJobRequest is copied into RunTaskRequest."""
     [task_id] = submit_direct_job(state, "drain-task-image", task_image="custom/swetrace:dev")
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
 
     assert len(batch.tasks_to_run) == 1
@@ -91,7 +91,7 @@ def test_drain_default_task_image_is_empty(state):
     """When the LaunchJobRequest omits task_image, the dispatched RunTaskRequest is empty."""
     submit_direct_job(state, "drain-default-image")
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
 
     assert len(batch.tasks_to_run) == 1
@@ -113,10 +113,10 @@ def test_drain_includes_workdir_files(state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, job_name, req, Timestamp.now())
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
 
     assert len(batch.tasks_to_run) == 1
@@ -125,38 +125,59 @@ def test_drain_includes_workdir_files(state):
     assert run_req.entrypoint.workdir_files["_callable_runner.py"] == b"print('hello')"
 
 
-def test_drain_skips_already_assigned(state):
-    """Already ASSIGNED tasks appear in running_tasks, not tasks_to_run."""
-    [task_id] = submit_direct_job(state, "drain-skip")
+def test_drain_redrives_assigned_null_worker(state):
+    """ASSIGNED+null-worker rows are redriven into ``tasks_to_run`` on each
+    cycle (idempotent ``kubectl apply``), so a controller crash between the
+    promote-commit and the pod-apply still recovers. They are *also* in
+    ``running_tasks`` so the same-cycle poll observes the freshly-applied
+    pod's phase and transitions the row out of ASSIGNED."""
+    [task_id] = submit_direct_job(state, "drain-redrive")
 
-    # First drain promotes to ASSIGNED.
-    with state._store.transaction() as cur:
+    # First drain promotes PENDING -> ASSIGNED, builds a RunTaskRequest, and
+    # also includes the row in running_tasks so the post-apply poll picks up
+    # the new pod's phase on the same cycle.
+    with state._db.transaction() as cur:
         batch1 = state.drain_for_direct_provider(cur)
     assert len(batch1.tasks_to_run) == 1
-    assert len(batch1.running_tasks) == 0
+    assert batch1.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch1.tasks_to_run[0].attempt_id == 0
+    assert [(e.task_id, e.attempt_id) for e in batch1.running_tasks] == [(task_id, 0)]
 
-    # Second drain: task is already ASSIGNED, so appears only in running_tasks.
-    with state._store.transaction() as cur:
+    # Second drain (simulates a crash between assign-commit and provider.sync,
+    # or a transient apply failure): task is still ASSIGNED+null-worker, so it
+    # is redriven in tasks_to_run with the same attempt_id and stays in
+    # running_tasks.
+    with state._db.transaction() as cur:
         batch2 = state.drain_for_direct_provider(cur)
+    assert len(batch2.tasks_to_run) == 1
+    assert batch2.tasks_to_run[0].task_id == task_id.to_wire()
+    assert batch2.tasks_to_run[0].attempt_id == 0
+    assert [(e.task_id, e.attempt_id) for e in batch2.running_tasks] == [(task_id, 0)]
+
+
+def test_drain_executing_goes_to_running_tasks(state):
+    """BUILDING/RUNNING rows with null worker land in running_tasks (poll set),
+    not tasks_to_run."""
+    [task_id] = submit_direct_job(state, "drain-running")
+
+    with state._db.transaction() as cur:
+        batch1 = state.drain_for_direct_provider(cur)
+    attempt_id = batch1.tasks_to_run[0].attempt_id
+
+    # Provider reports the pod has reached RUNNING.
+    with state._db.transaction() as cur:
+        state.apply_direct_provider_updates(
+            cur,
+            [TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING)],
+        )
+
+    with state._db.transaction() as cur:
+        batch2 = state.drain_for_direct_provider(cur)
+
     assert len(batch2.tasks_to_run) == 0
     assert len(batch2.running_tasks) == 1
     assert batch2.running_tasks[0].task_id == task_id
-
-
-def test_drain_kill_queue(state):
-    """Kill requests buffered via buffer_direct_kill appear in tasks_to_kill."""
-    [task_id] = submit_direct_job(state, "drain-kill")
-
-    # Promote to ASSIGNED first.
-    with state._store.transaction() as cur:
-        state.drain_for_direct_provider(cur)
-
-    with state._store.transaction() as cur:
-        state.buffer_direct_kill(cur, task_id.to_wire())
-
-    with state._store.transaction() as cur:
-        batch = state.drain_for_direct_provider(cur)
-    assert task_id.to_wire() in batch.tasks_to_kill
+    assert batch2.running_tasks[0].attempt_id == attempt_id
 
 
 # =============================================================================
@@ -167,11 +188,11 @@ def test_drain_kill_queue(state):
 def test_apply_running(state):
     """ASSIGNED -> RUNNING via direct provider update."""
     [task_id] = submit_direct_job(state, "apply-running")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         result = state.apply_direct_provider_updates(
             cur,
             [
@@ -187,12 +208,12 @@ def test_apply_running(state):
 def test_apply_succeeded(state):
     """RUNNING -> SUCCEEDED via direct provider update."""
     [task_id] = submit_direct_job(state, "apply-succeeded")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
     # First move to RUNNING.
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
@@ -201,7 +222,7 @@ def test_apply_succeeded(state):
         )
 
     # Then to SUCCEEDED.
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
@@ -219,24 +240,22 @@ def test_apply_failed_with_retry(state):
     jid = JobName.root("test-user", "retry-job")
     req = make_direct_job_request("retry-job")
     req.max_retries_failure = 2
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, jid, req, Timestamp.now())
-    with state._db.snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
-    task_id = tasks[0].task_id
+    task_id = query_tasks_for_job(state, jid)[0].task_id
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
         )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
@@ -255,24 +274,22 @@ def test_apply_failed_no_retry(state):
     jid = JobName.root("test-user", "no-retry-job")
     req = make_direct_job_request("no-retry-job")
     req.max_retries_failure = 0
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, jid, req, Timestamp.now())
-    with state._db.snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
-    task_id = tasks[0].task_id
+    task_id = query_tasks_for_job(state, jid)[0].task_id
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
         )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
@@ -288,11 +305,11 @@ def test_apply_failed_no_retry(state):
 def test_apply_failed_directly_from_assigned(state):
     """ASSIGNED -> FAILED without going through RUNNING (e.g. ConfigMap too large)."""
     [task_id] = submit_direct_job(state, "fail-on-apply")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
@@ -315,24 +332,22 @@ def test_apply_worker_failed_from_running_retries(state):
     jid = JobName.root("test-user", "wf-retry")
     req = make_direct_job_request("wf-retry")
     req.max_retries_preemption = 5
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, jid, req, Timestamp.now())
-    with state._db.snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
-    task_id = tasks[0].task_id
+    task_id = query_tasks_for_job(state, jid)[0].task_id
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
         )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
@@ -348,12 +363,12 @@ def test_apply_worker_failed_from_running_retries(state):
 def test_apply_worker_failed_from_assigned(state):
     """WORKER_FAILED from ASSIGNED returns to PENDING without incrementing preemption_count."""
     [task_id] = submit_direct_job(state, "wf-assigned")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
     # Task is ASSIGNED after drain (not yet RUNNING).
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
@@ -366,21 +381,6 @@ def test_apply_worker_failed_from_assigned(state):
     assert task.preemption_count == 0
 
 
-def test_buffer_direct_kill(state):
-    """buffer_direct_kill inserts a kill entry with NULL worker_id."""
-    with state._store.transaction() as cur:
-        state.buffer_direct_kill(cur, "some-task-id")
-
-    rows = state._db.fetchall(
-        "SELECT worker_id, kind, task_id FROM dispatch_queue WHERE worker_id IS NULL",
-        (),
-    )
-    assert len(rows) == 1
-    assert rows[0]["kind"] == "kill"
-    assert rows[0]["task_id"] == "some-task-id"
-    assert rows[0]["worker_id"] is None
-
-
 # =============================================================================
 # Controller-level tests
 # =============================================================================
@@ -391,7 +391,7 @@ def test_drain_multiple_tasks(state):
     task_ids = submit_direct_job(state, "multi-task", replicas=3)
     assert len(task_ids) == 3
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     assert len(batch.tasks_to_run) == 3
 
@@ -403,12 +403,12 @@ def test_drain_multiple_tasks(state):
 def test_apply_ignores_stale_attempt(state):
     """Updates with a mismatched attempt_id are silently skipped."""
     [task_id] = submit_direct_job(state, "stale-attempt")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
     # Apply with wrong attempt_id.
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         result = state.apply_direct_provider_updates(
             cur,
             [
@@ -425,19 +425,19 @@ def test_apply_ignores_stale_attempt(state):
 def test_apply_ignores_finished_task(state):
     """Updates to already-finished tasks are silently skipped."""
     [task_id] = submit_direct_job(state, "finished-task")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         batch = state.drain_for_direct_provider(cur)
     attempt_id = batch.tasks_to_run[0].attempt_id
 
     # Move to SUCCEEDED.
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
                 TaskUpdate(task_id=task_id, attempt_id=attempt_id, new_state=job_pb2.TASK_STATE_RUNNING),
             ],
         )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_direct_provider_updates(
             cur,
             [
@@ -446,7 +446,7 @@ def test_apply_ignores_finished_task(state):
         )
 
     # Try to move to FAILED after already succeeded.
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         result = state.apply_direct_provider_updates(
             cur,
             [

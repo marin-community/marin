@@ -2,8 +2,10 @@ name: "Marin - Canary Ferry - CoreWeave"
 
 # The canary submits a small training job to the shared `iris-ci` controller
 # and reuses the warm `iris-ci-h100-8x` NodePool. Scheduled runs use the warm
-# single H100 host; manual multi-host runs may autoscale the same NodePool to a
-# second `gd-8xh100ib-i128` host.
+# single H100 host; manual runs can request multiple GPU replicas on the same
+# NodePool. Before requesting multiple replicas, make sure enough GPU nodes are
+# already warm and free; cold/warm mixed starts can fail at JAX rendezvous.
+# See https://github.com/marin-community/marin/issues/5480.
 #
 # `iris cluster start --fresh` rebuilds the controller/worker/task images from
 # the current checkout and rolls the shared controller deployment to pick them
@@ -19,10 +21,10 @@ on:
         description: 'Override training token budget'
         type: number
         required: false
-      multi_host:
-        description: 'Run across two H100 hosts'
-        type: boolean
-        default: false
+      gpu_replicas:
+        description: 'Number of H100 GPU replicas'
+        type: number
+        default: 1
         required: false
 
 permissions:
@@ -47,13 +49,17 @@ jobs:
       RUN_ID: canary-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       CANARY_ACCELERATOR: gpu
       CANARY_BATCH_SIZE: "16"
-      CANARY_MULTI_HOST: ${{ github.event_name == 'workflow_dispatch' && inputs.multi_host && '1' || '' }}
+      CANARY_GPU_REPLICAS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.gpu_replicas) || '1' }}
+      # TODO(#5524): remove this override once Levanter profiler stop is
+      # idempotent. Keeping the profile window off the final callback lets
+      # CoreWeave validation proceed independently of that fix.
+      CANARY_PROFILER_NUM_STEPS: "10"
       CANARY_TARGET_TOKENS: "6553600"
       CANARY_MIN_STEPS: "40"
       CANARY_MAX_LOSS: "8.0"
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/examples/coreweave-ci.yaml
+      IRIS_CONFIG: lib/iris/config/coreweave-ci.yaml
       IRIS_NAMESPACE: iris-ci
       IRIS_MANAGED_LABEL: iris-iris-ci-managed
 
@@ -106,26 +112,20 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: .venv/bin/iris -v --config=${{ env.IRIS_CONFIG }} cluster start --fresh
 
-      - name: Connect to iris-ci controller
-        run: |
-          uv run python scripts/workflows/iris_monitor.py coreweave-controller \
-            --namespace "$IRIS_NAMESPACE" \
-            --kubeconfig "$HOME/.kube/coreweave-iris" \
-            --log-path "$RUNNER_TEMP/iris-cw-port-forward.log"
-
       - name: Submit canary ferry
         id: submit
         shell: bash -l {0}
         run: |
-          echo "Multi-host canary: ${CANARY_MULTI_HOST:-0}"
-          JOB_ID=$(.venv/bin/iris --controller-url="$IRIS_CONTROLLER_URL" \
+          echo "GPU replicas: $CANARY_GPU_REPLICAS"
+          JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX s3://marin-na/marin/ \
             -e RUN_ID "$RUN_ID" \
             -e CANARY_ACCELERATOR "$CANARY_ACCELERATOR" \
             -e CANARY_BATCH_SIZE "$CANARY_BATCH_SIZE" \
-            -e CANARY_MULTI_HOST "$CANARY_MULTI_HOST" \
+            -e CANARY_GPU_REPLICAS "$CANARY_GPU_REPLICAS" \
+            -e CANARY_PROFILER_NUM_STEPS "$CANARY_PROFILER_NUM_STEPS" \
             -e CANARY_TARGET_TOKENS "$CANARY_TARGET_TOKENS" \
             -e WANDB_ENTITY "$WANDB_ENTITY" \
             -e WANDB_PROJECT "$WANDB_PROJECT" \
@@ -149,7 +149,7 @@ jobs:
         run: |
           uv run python scripts/workflows/iris_monitor.py wait \
             --job-id "${{ steps.submit.outputs.job_id }}" \
-            --controller-url "$IRIS_CONTROLLER_URL" \
+            --iris-config "$IRIS_CONFIG" \
             --poll-interval 30 \
             --timeout 10500 \
             --github-output
@@ -186,12 +186,9 @@ jobs:
           DIAG_DIR: /tmp/canary-diag
         run: |
           mkdir -p "$DIAG_DIR"
-          if [ -n "${PF_LOG:-}" ] && [ -f "$PF_LOG" ]; then
-            cp "$PF_LOG" "$DIAG_DIR/port-forward.log"
-          fi
           uv run python scripts/workflows/iris_monitor.py collect \
             --job-id "$JOB_ID" \
-            --controller-url "$IRIS_CONTROLLER_URL" \
+            --iris-config "$IRIS_CONFIG" \
             --provider coreweave \
             --output-dir "$DIAG_DIR" \
             --namespace "$IRIS_NAMESPACE" \
@@ -253,15 +250,6 @@ jobs:
           path: slack_message.md
           retention-days: 1
           if-no-files-found: ignore
-
-      - name: Stop port-forward
-        if: always()
-        run: |
-          if [ -n "${PF_PID:-}" ]; then
-            kill "$PF_PID" 2>/dev/null || true
-          fi
-          pkill -f "kubectl.*$IRIS_NAMESPACE.*port-forward.*pod/iris-controller" 2>/dev/null || true
-          pkill -f "kubectl.*port-forward.*$IRIS_NAMESPACE.*pod/iris-controller" 2>/dev/null || true
 
   # Separate job so Slack always fires, even if the main job is force-killed
   # after its grace window. `needs.canary-ferry-cw.result` reflects the main

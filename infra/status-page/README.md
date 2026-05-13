@@ -30,7 +30,7 @@ server/
     githubActions.ts   Ferry workflow runs (REST API)
     githubCommits.ts   Build panel: per-commit CI rollup on main (GraphQL)
     iris.ts            iris controller /health caller
-    workers.ts         iris worker counts via ExecuteRawQuery
+    workers.ts         iris worker counts via the ListWorkers RPC
     jobs.ts            iris 24h job-state breakdown via ExecuteRawQuery
     controllerQuery.ts helper for the raw-SQL Connect RPC
     discovery.ts       GCE label → controller internal URL
@@ -197,20 +197,20 @@ filled by a background sampler on a 30s cadence — 24h worth of points.
 The sampler runs on a fixed interval, not off request traffic, so
 history keeps ticking even when nobody is looking at the dashboard.
 
-## Controller data via raw SQL
+## Controller data
 
-The Workers and Jobs panels both read from the controller's SQLite via
-the `ExecuteRawQuery` Connect RPC
-(`lib/iris/src/iris/rpc/controller.proto:635`):
+The Workers and Jobs panels read from the controller via Connect RPC:
 
-- **Workers** — aggregate `healthy=1 AND active=1` vs `COUNT(*)` against
-  the `workers` table.
-- **Jobs** — `GROUP BY state` over `jobs WHERE submitted_at_ms > now-24h`,
-  with the integer enum translated via `server/sources/jobs.ts`
-  (kept in sync with `lib/iris/src/iris/rpc/job.proto:182`).
+- **Workers** — `ListWorkers` (paged at 1000 / page), aggregated
+  client-side. Worker liveness moved from SQLite to in-memory after
+  PR #5559, so a raw-SQL aggregation is no longer possible.
+- **Jobs** — `GROUP BY state` over `jobs WHERE submitted_at_ms > now-24h`
+  via the `ExecuteRawQuery` raw-SQL RPC, with the integer enum
+  translated via `server/sources/jobs.ts` (kept in sync with
+  `lib/iris/src/iris/rpc/job.proto:182`).
 
-The RPC nominally requires the `admin` role, but the marin cluster runs
-in null-auth mode
+Both RPCs nominally require the `admin` role, but the marin cluster
+runs in null-auth mode
 (`lib/iris/src/iris/cluster/controller/auth.py`, `NullAuthInterceptor`
 promotes anonymous callers to admin), so no token is needed today.
 **If auth ever gets enabled on the marin controller, both panels will

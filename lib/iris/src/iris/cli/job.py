@@ -52,7 +52,6 @@ from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
 from iris.rpc.proto_utils import (
     PRIORITY_BAND_NAMES,
-    format_resources,
     job_state_friendly,
     priority_band_value,
     task_state_friendly,
@@ -977,7 +976,12 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 
 @job.command("list")
 @click.option("--state", type=str, default=None, help="Filter by state (e.g., running, pending, failed)")
-@click.option("--prefix", type=str, default=None, help="Filter by job name prefix")
+@click.option(
+    "--prefix",
+    type=str,
+    default=None,
+    help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
+)
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @click.pass_context
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
@@ -993,8 +997,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
         state_value = _STATE_MAP[state_lower]
 
-    prefix_name = JobName.from_wire(prefix) if prefix else None
-    jobs = client.list_jobs(state=state_value, prefix=prefix_name)
+    jobs = client.list_jobs(state=state_value, prefix=prefix)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
@@ -1008,7 +1011,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         click.echo("No jobs found.")
         return
 
-    # Build table rows
     rows: list[list[str]] = []
     has_reasons = False
 
@@ -1016,23 +1018,19 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         job_id = j.job_id
         state_name = job_state_friendly(j.state)
         submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
-        resources = format_resources(j.resources) if j.HasField("resources") else "-"
 
-        # Show error for failed jobs, pending_reason for pending/unschedulable
         reason = j.error or j.pending_reason or ""
         if reason:
             has_reasons = True
-            # Truncate long reasons
             reason = (reason[:60] + "...") if len(reason) > 63 else reason
 
-        rows.append([job_id, state_name, resources, submitted, reason])
+        rows.append([job_id, state_name, submitted, reason])
 
-    # Build headers - only include REASON column if there are any reasons
     if has_reasons:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED", "REASON"]
+        headers = ["JOB ID", "STATE", "SUBMITTED", "REASON"]
     else:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED"]
-        rows = [row[:4] for row in rows]
+        headers = ["JOB ID", "STATE", "SUBMITTED"]
+        rows = [row[:3] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
 

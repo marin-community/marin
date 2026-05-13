@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import os
 import threading
+import uuid
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -650,8 +651,6 @@ async def _ts_open_async(path: Optional[str], dtype: jnp.dtype, shape, *, mode):
 
 def _get_spec(path, shape):
     if path is None:
-        import uuid
-
         random_name = str(uuid.uuid4())
         spec = ts.Spec({"driver": "zarr", "kvstore": f"memory://{random_name}"})
     else:

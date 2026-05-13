@@ -21,6 +21,7 @@ import MetricCard from '@/components/shared/MetricCard.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
+import ProfileHistory from '@/components/shared/ProfileHistory.vue'
 
 const props = defineProps<{
   workerId: string
@@ -46,6 +47,7 @@ async function fetchWorkerLogs() {
   try {
     const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
       source: `/system/worker/${props.workerId}`,
+      matchScope: 'MATCH_SCOPE_EXACT',
       maxLines: 200,
       tail: true,
     })
@@ -454,6 +456,8 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           </div>
         </div>
       </div>
+
+      <ProfileHistory :source="`/system/worker/${workerId}`" class="mb-6" />
 
       <!-- Bootstrap logs (raw text) -->
       <div v-if="data.bootstrapLogs" class="mb-6">

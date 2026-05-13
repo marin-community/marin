@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +30,7 @@ from threading import Condition, Lock
 from typing import NamedTuple, Protocol
 
 import duckdb
+import fsspec.core
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -37,6 +41,7 @@ from finelog.rpc import logging_pb2
 from finelog.store.catalog import (
     Catalog,
     NamespaceStats,
+    SegmentLocation,
     SegmentRow,
 )
 from finelog.store.compactor import (
@@ -55,7 +60,7 @@ from finelog.store.schema import (
     Schema,
     schema_to_arrow,
 )
-from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
+from finelog.types import LogReadResult, parse_attempt_id, str_to_log_level
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +92,9 @@ _BG_HEARTBEAT_INTERVAL_SEC = 10.0
 # Hard ceiling on the per-read parquet working set; safety net for body-LIKE
 # queries that cannot be pruned by row-group statistics.
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
+
+# 4 MiB amortizes GCS per-write overhead without growing with segment size.
+_REMOTE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
 
 
 class SegmentMetadata(NamedTuple):
@@ -236,9 +244,21 @@ def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
 
 @dataclass
 class _SealedBuffer:
+    """An immutable, in-flight flush buffer.
+
+    ``nbytes`` and ``num_rows`` are snapshotted at construction so the hot
+    path (``RamBuffers.ram_bytes`` / ``ram_rows``) doesn't re-walk every
+    column buffer on each call — ``pa.Table.nbytes`` is O(chunks * columns)
+    and was the dominant cost under sustained write load.
+    """
+
     table: pa.Table
     min_seq: int
     max_seq: int
+
+    def __post_init__(self) -> None:
+        self.nbytes: int = self.table.nbytes
+        self.num_rows: int = self.table.num_rows
 
 
 @dataclass
@@ -250,8 +270,10 @@ class LocalSegment:
     max_seq: int
     row_count: int
     # ``created_at_ms`` is stamped once at flush/merge time and preserved
-    # across level bumps and catalog reconcile so the planner can age out
-    # quiet L0 segments via ``CompactionConfig.max_l0_age_sec``.
+    # across level bumps and catalog reconcile. Currently informational
+    # only — the planner promotes by byte target or segment count, not
+    # age — but kept as the catalog's canonical birth time for ops
+    # tools / future age-based policies.
     created_at_ms: int = 0
     # Typed key-column bounds (Python int / str / float / bool / bytes
     # depending on schema). Stringified only at the catalog boundary in
@@ -259,7 +281,10 @@ class LocalSegment:
     # can compare numeric keys with native ordering.
     min_key_value: object | None = None
     max_key_value: object | None = None
-    copied_at_ms: int | None = None
+    # Where the bytes live. The deque only ever holds ``LOCAL`` or ``BOTH``
+    # entries; eviction flips to ``REMOTE`` and removes the entry from the
+    # deque (the row stays in the catalog as a durable-archive pointer).
+    location: SegmentLocation = SegmentLocation.LOCAL
 
 
 def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
@@ -310,6 +335,8 @@ class RamBuffers:
     primitive columns and shares string buffers via Arrow's reference
     counting, so total ``nbytes`` is conserved across merges. We can
     therefore maintain ``_ram_bytes`` incrementally rather than scanning.
+    The sealed in-flight buffer caches its own ``nbytes`` / ``num_rows``
+    (see ``_SealedBuffer``) so ``ram_bytes`` stays O(1) on the hot path.
     """
 
     def __init__(self, *, arrow_schema: pa.Schema, next_seq: int) -> None:
@@ -337,11 +364,11 @@ class RamBuffers:
         self._ram_rows += table.num_rows
 
     def ram_bytes(self) -> int:
-        flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
+        flushing_b = self._flushing.nbytes if self._flushing is not None else 0
         return self._ram_bytes + flushing_b
 
     def ram_rows(self) -> int:
-        flushing_n = self._flushing.table.num_rows if self._flushing is not None else 0
+        flushing_n = self._flushing.num_rows if self._flushing is not None else 0
         return self._ram_rows + flushing_n
 
     def chunk_count(self) -> int:
@@ -406,6 +433,7 @@ class LogNamespaceProtocol(Protocol):
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -421,8 +449,6 @@ class LogNamespaceProtocol(Protocol):
     def update_schema(self, new_schema: Schema) -> None: ...
 
     def evict_segment(self, path: str) -> int: ...
-
-    def mark_copied(self, path: str, copied_at_ms: int) -> None: ...
 
     def remove_local_storage(self) -> None: ...
 
@@ -452,14 +478,13 @@ class DiskLogNamespace:
         name: str,
         schema: Schema,
         data_dir: Path,
-        copy_wake: Callable[[], None],
+        remote_log_dir: str,
         segment_target_bytes: int,
         flush_interval_sec: float,
         compaction_config: CompactionConfig,
         insertion_lock: Lock,
         query_visibility_lock: RWLock,
         duckdb_memory_limit: str,
-        duckdb_threads: str,
         read_pool: _ReadPoolProtocol,
         catalog: Catalog,
     ) -> None:
@@ -469,10 +494,9 @@ class DiskLogNamespace:
         self._data_dir = data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
 
-        # Notifies the store-wide copy worker that fresh L>=1 catalog
-        # rows may exist; the worker polls the catalog regardless, this
-        # just shortens the latency from "compaction commit" to "upload".
-        self._copy_wake = copy_wake
+        # Empty string disables remote sync.
+        self._remote_namespace_dir = f"{remote_log_dir.rstrip('/')}/{name}" if remote_log_dir else ""
+
         self._segment_target_bytes = segment_target_bytes
         self._compactor = Compactor(compaction_config)
 
@@ -483,10 +507,14 @@ class DiskLogNamespace:
         # _next_seq).
         self._flush_lock = Lock()
 
-        # Per-namespace compaction connection. Cross-namespace COPYs would
-        # collide on a shared connection's session state, and we don't run
-        # cross-namespace queries through this conn anyway.
-        self._compaction_conn = duckdb.connect(config={"memory_limit": duckdb_memory_limit, "threads": duckdb_threads})
+        # Compaction uses a fresh DuckDB connection per merge (see
+        # ``_open_compaction_conn``). DuckDB's per-connection spill
+        # accountant leaks bytes when a COPY fails; reusing one long-lived
+        # connection eventually wedges with a bogus "165 GiB / 16383 PiB
+        # used" OOM. A short-lived per-merge conn sidesteps the leak,
+        # and the connect cost (~ms) is negligible vs. a multi-second COPY.
+        self._compaction_tmp = data_dir / ".duckdb_tmp"
+        self._compaction_conn_memory_limit = duckdb_memory_limit
         self._read_pool = read_pool
         self._catalog = catalog
 
@@ -496,42 +524,107 @@ class DiskLogNamespace:
         )
         self._local_segments: deque[LocalSegment] = deque()
 
-        # Reconcile from disk: parquet files are authoritative across
-        # crashes. Walk every ``seg_L<n>_*.parquet`` and rebuild the
-        # in-memory deque + catalog rows. ``created_at_ms`` falls back to
-        # the file mtime when the catalog has nothing for this path —
-        # close enough for L0 aging and stable across reboots.
+        # Reconcile boot state across three sources of truth (in order):
+        #   1. Catalog rows — authoritative for ``REMOTE`` segments whose
+        #      local file was evicted before the prior shutdown.
+        #   2. Local parquet files — authoritative for unflushed catalog
+        #      state (genuine boot from disk, no prior catalog).
+        #   3. Remote bucket — authoritative for wiped-catalog recovery,
+        #      handled below by ``_adopt_remote_segments`` *before* the
+        #      bg loop starts. We can't defer this to the first sync tick:
+        #      that tick's phase-2 orphan-delete would see an empty
+        #      catalog with a populated bucket and ``fs.rm`` everything.
+        #      The cost is a network round-trip per parquet file at boot
+        #      when the bucket is non-empty.
+        #
+        # Each catalog row is reattached to its on-disk file when present;
+        # ``REMOTE``-only rows stay in the catalog but never enter the
+        # deque (queries don't see archived data). Local files without a
+        # catalog row are inserted as ``LOCAL`` (sync uploads them next
+        # tick).
         key_column = self.schema.key_column or None
         catalog_rows = {row.path: row for row in self._catalog.list_segments(self.name)}
-        for p in _discover_segments(data_dir):
-            meta = _read_segment_metadata(p, key_column=key_column)
-            row = catalog_rows.get(str(p))
-            created_at_ms = row.created_at_ms if row is not None else int(p.stat().st_mtime * 1000)
-            copied_at_ms = row.copied_at_ms if row is not None else None
+        local_files = {str(p): p for p in _discover_segments(data_dir)}
+        seen_paths: set[str] = set()
+
+        # Pass 1: walk catalog rows. Local-present → deque entry; otherwise
+        # leave the row in place as the durable-archive pointer.
+        for path_str, row in catalog_rows.items():
+            seen_paths.add(path_str)
+            local_path = local_files.get(path_str)
+            if local_path is None:
+                if row.location == SegmentLocation.LOCAL:
+                    # Local file went missing while the catalog still
+                    # claims LOCAL — data is lost. Drop the row so sync
+                    # doesn't keep trying to upload a non-existent file.
+                    logger.warning(
+                        "Catalog row %s missing local file and has no remote copy; dropping",
+                        path_str,
+                    )
+                    self._catalog.remove_segment(self.name, path_str)
+                elif row.location == SegmentLocation.BOTH:
+                    # Local file lost but bucket copy is durable; collapse
+                    # to ``REMOTE`` so queries don't try to read the
+                    # missing file.
+                    self._catalog.set_location(self.name, path_str, SegmentLocation.REMOTE)
+                continue
+            meta = _read_segment_metadata(local_path, key_column=key_column)
+            location = SegmentLocation.BOTH if row.location == SegmentLocation.REMOTE else row.location
             self._local_segments.append(
                 LocalSegment(
-                    path=str(p),
+                    path=path_str,
+                    size_bytes=local_path.stat().st_size,
+                    level=meta.level,
+                    min_seq=meta.min_seq,
+                    max_seq=meta.max_seq,
+                    row_count=meta.row_count,
+                    created_at_ms=row.created_at_ms,
+                    min_key_value=meta.min_key_value,
+                    max_key_value=meta.max_key_value,
+                    location=location,
+                )
+            )
+
+        # Pass 2: walk local files. Anything not already accounted for is
+        # a genuine fresh-from-disk segment (or a compaction-mid-crash
+        # leftover; sync will upload it then orphan-delete in the next
+        # round if it's truly stale).
+        for path_str, p in local_files.items():
+            if path_str in seen_paths:
+                continue
+            meta = _read_segment_metadata(p, key_column=key_column)
+            self._local_segments.append(
+                LocalSegment(
+                    path=path_str,
                     size_bytes=p.stat().st_size,
                     level=meta.level,
                     min_seq=meta.min_seq,
                     max_seq=meta.max_seq,
                     row_count=meta.row_count,
-                    created_at_ms=created_at_ms,
+                    created_at_ms=int(p.stat().st_mtime * 1000),
                     min_key_value=meta.min_key_value,
                     max_key_value=meta.max_key_value,
-                    copied_at_ms=copied_at_ms,
+                    location=SegmentLocation.LOCAL,
                 )
             )
 
-        # Reconcile rewrites the catalog rows wholesale; ``created_at_ms``
-        # and ``copied_at_ms`` already came back from the catalog above
-        # (or from mtime fallback), so the rewrite is a no-op for those
-        # fields and a refresh of structural columns (level, key bounds)
-        # for any catalog row that drifted from the parquet footer.
-        self._catalog.reconcile_segments(
-            self.name,
-            [self._segment_to_row(seg) for seg in self._local_segments],
-        )
+        # Order the deque by min_seq so query iteration matches the
+        # implicit "oldest first" expected by callers and the planner.
+        self._local_segments = deque(sorted(self._local_segments, key=lambda s: s.min_seq))
+
+        # Refresh the catalog from the deque so any drift in level / key
+        # bounds (parquet footer is authoritative) is corrected. REMOTE
+        # rows are left untouched. Each upsert is independent so no
+        # transaction is required.
+        for seg in self._local_segments:
+            self._catalog.upsert_segment(self._segment_to_row(seg))
+
+        # Wiped-catalog recovery: if the remote bucket has parquet files
+        # that no row references, adopt them as ``REMOTE``. Without this,
+        # the first ``_sync_step`` after a catalog wipe would treat the
+        # whole bucket as orphan and ``fs.rm`` everything.
+        if self._remote_namespace_dir:
+            self._adopt_remote_segments(key_column=key_column)
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_config.check_interval_sec)
@@ -551,6 +644,24 @@ class DiskLogNamespace:
             daemon=True,
         )
         self._bg_thread.start()
+
+    def _open_compaction_conn(self) -> duckdb.DuckDBPyConnection:
+        """Fresh DuckDB connection for one compaction COPY.
+
+        Opened per-merge so DuckDB's per-conn spill accountant resets
+        (it leaks bytes after failed COPYs). ``preserve_insertion_order``
+        is off because the COPY ``ORDER BY``s explicitly, and
+        ``threads=2`` caps the per-thread sort buffer footprint.
+        """
+        self._compaction_tmp.mkdir(parents=True, exist_ok=True)
+        return duckdb.connect(
+            config={
+                "memory_limit": self._compaction_conn_memory_limit,
+                "threads": "2",
+                "temp_directory": str(self._compaction_tmp),
+                "preserve_insertion_order": "false",
+            }
+        )
 
     def append_log_batch(self, items: list[tuple[str, list]]) -> None:
         """Log-namespace-only append for ``PushLogs`` RPCs.
@@ -629,6 +740,7 @@ class DiskLogNamespace:
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -637,23 +749,7 @@ class DiskLogNamespace:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level)
-        is_pattern = bool(REGEX_META_RE.search(key))
-
-        if not is_pattern:
-            where_parts = ["key = $key", "seq > $cursor"]
-            params: dict = {"key": key, "cursor": cursor}
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            return self._execute_read(
-                where_parts,
-                params,
-                max_lines,
-                tail,
-                cursor,
-                include_key_in_select=False,
-                exact_key=key,
-            )
-
-        where_parts, params = _regex_query(key, cursor)
+        where_parts, params, include_key_in_select, exact_key = _scope_query(key, cursor, match_scope)
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
         return self._execute_read(
             where_parts,
@@ -661,26 +757,25 @@ class DiskLogNamespace:
             max_lines,
             tail,
             cursor,
-            include_key_in_select=True,
+            include_key_in_select=include_key_in_select,
+            exact_key=exact_key,
         )
 
     def close(self) -> None:
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
-        # Flush turns RAM into L0 on disk so a clean restart picks it up.
-        # We do NOT promote L0 to L1 at close — L0 is local-only by design,
-        # and re-discovery on boot brings them back. The store-wide copy
-        # worker handles L1+ uploads independently.
+        # Flush RAM to L0 so a clean restart picks it up. We deliberately do
+        # NOT promote L0 to L1 here — L0 is local-only by design.
         self._flush_step()
-        self._compaction_conn.close()
+        # Final reconcile so the bucket matches the catalog at shutdown.
+        self._sync_step()
 
     def stop_and_join(self) -> None:
         """Stop the bg thread without flushing or compacting (used by ``DropTable``)."""
         self._stop.set()
         self._wake.set()
         self._bg_thread.join()
-        self._compaction_conn.close()
 
     def ram_bytes(self) -> int:
         return self._buffers.ram_bytes()
@@ -733,11 +828,21 @@ class DiskLogNamespace:
                 # Drain promotable runs back-to-back on the same tick: a
                 # large flush burst can leave several tiers eligible at once,
                 # and waiting another check_interval per merge needlessly
-                # extends per-read fanout.
+                # extends per-read fanout. Yield to flush between jobs so a
+                # long L>=1 merge (seconds to tens of seconds) doesn't starve
+                # writers — under sustained load the ram buffer would
+                # otherwise grow past ``segment_target_bytes`` while we keep
+                # merging.
                 while self._compaction_step():
-                    pass
+                    with self._insertion_lock:
+                        ram_bytes = self._buffers.ram_bytes()
+                    if ram_bytes >= self._segment_target_bytes:
+                        self._flush_step()
+                        self._flush_rl.mark_run()
+                        last_flush_at = time.monotonic()
                 self._compaction_rl.mark_run()
                 last_compact_at = time.monotonic()
+                self._sync_step()
                 self._eviction_step()
 
             self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
@@ -827,10 +932,10 @@ class DiskLogNamespace:
         """Build the catalog row that mirrors ``seg``.
 
         ``created_at_ms`` reflects the segment's stamped birth time, never
-        ``now`` — overwriting it would defeat ``max_l0_age_sec`` aging,
-        which the planner reads from the round-trip catalog snapshot every
-        tick. Key bounds are stringified here because the catalog stores
-        them in a generic TEXT column.
+        ``now`` — overwriting it on a tick would defeat any future age-based
+        policy and would mislead ops queries that report segment age. Key
+        bounds are stringified here because the catalog stores them in a
+        generic TEXT column.
         """
         return SegmentRow(
             namespace=self.name,
@@ -843,7 +948,7 @@ class DiskLogNamespace:
             created_at_ms=seg.created_at_ms,
             min_key_value=None if seg.min_key_value is None else str(seg.min_key_value),
             max_key_value=None if seg.max_key_value is None else str(seg.max_key_value),
-            copied_at_ms=seg.copied_at_ms,
+            location=seg.location,
         )
 
     def _write_new_segment(self, sealed: _SealedBuffer) -> None:
@@ -914,7 +1019,7 @@ class DiskLogNamespace:
         """
         with self._insertion_lock:
             segment_rows = [self._segment_to_row(s) for s in self._local_segments]
-        job = self._compactor.plan(segment_rows, now_ms=int(time.time() * 1000))
+        job = self._compactor.plan(segment_rows)
         if job is None:
             return False
         self._run_job(job)
@@ -984,7 +1089,6 @@ class DiskLogNamespace:
             pre_swap=lambda: os.rename(old.path, new_path),
         )
         logger.info("Level-bumped %s -> L%d (%s)", Path(old.path).name, job.output_level, new_filename)
-        self._copy_wake()
 
     def _apply_merge(self, job: CompactionJob) -> None:
         merged_filename = seg_filename(level=job.output_level, min_seq=job.output_min_seq)
@@ -997,7 +1101,8 @@ class DiskLogNamespace:
         # ``_insertion_lock`` protects, so we run it lock-free. A multi-second
         # COPY would otherwise stall every concurrent ``append_log_batch``.
         try:
-            self._compaction_conn.execute(sql)
+            with self._open_compaction_conn() as conn:
+                conn.execute(sql)
         except Exception:
             logger.warning("Compaction failed, leaving inputs in place", exc_info=True)
             staging_path.unlink(missing_ok=True)
@@ -1036,7 +1141,6 @@ class DiskLogNamespace:
             merged_seg.max_seq,
             int((time.monotonic() - compaction_start) * 1000),
         )
-        self._copy_wake()
 
     def _commit_swap(
         self,
@@ -1094,6 +1198,191 @@ class DiskLogNamespace:
         finally:
             self._query_visibility_lock.write_release()
 
+    def _adopt_remote_segments(self, *, key_column: str | None) -> None:
+        """Insert ``REMOTE`` catalog rows for bucket files with no row.
+
+        Recovery path for a wiped catalog: the bucket is the only durable
+        record of every L>=1 segment, so we read each parquet footer
+        remotely to reconstruct row metadata. Footer fetches dominate
+        wall-time (one network round-trip per segment) and are run on a
+        thread pool; the catalog upserts then run serially because
+        ``Catalog._conn`` is a single DuckDB connection.
+        """
+        try:
+            fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
+            # detail=True returns file size in the listing, so we don't
+            # need a separate fs.info() per file below.
+            remote_info = fs.find(root, detail=True)
+        except Exception:
+            logger.warning("remote adopt list failed for %s", self.name, exc_info=True)
+            return
+
+        catalog_basenames = {Path(r.path).name for r in self._catalog.list_segments(self.name)}
+        candidates: list[tuple[str, int, int, int]] = []  # (fs_path, level, min_seq, byte_size)
+        for fs_path, info in remote_info.items():
+            basename = Path(fs_path).name
+            if basename in catalog_basenames:
+                continue
+            parsed = parse_seg_filename(basename)
+            if parsed is None:
+                logger.warning("ignoring unparseable remote file %s/%s", self.name, basename)
+                continue
+            level, min_seq = parsed
+            byte_size = int(info.get("size", 0) or 0)
+            candidates.append((fs_path, level, min_seq, byte_size))
+
+        if not candidates:
+            return
+
+        def _fetch_footer(fs_path: str) -> tuple[str, pq.FileMetaData | None]:
+            try:
+                with fs.open(fs_path, "rb") as f:
+                    return fs_path, pq.read_metadata(f)
+            except Exception:
+                logger.warning(
+                    "failed reading remote parquet footer %s/%s", self.name, Path(fs_path).name, exc_info=True
+                )
+                return fs_path, None
+
+        max_workers = min(32, len(candidates))
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="adopt-remote") as pool:
+            footers = dict(pool.map(_fetch_footer, [c[0] for c in candidates]))
+
+        now_ms = int(time.time() * 1000)
+        for fs_path, level, min_seq, byte_size in candidates:
+            metadata = footers.get(fs_path)
+            if metadata is None:
+                continue
+            basename = Path(fs_path).name
+            num_rows = metadata.num_rows
+            min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
+            local_path = self._data_dir / basename
+            self._catalog.upsert_segment(
+                SegmentRow(
+                    namespace=self.name,
+                    path=str(local_path),
+                    level=level,
+                    min_seq=min_seq,
+                    max_seq=min_seq + max(num_rows - 1, 0),
+                    row_count=num_rows,
+                    byte_size=byte_size,
+                    created_at_ms=now_ms,
+                    location=SegmentLocation.REMOTE,
+                    min_key_value=None if min_key is None else str(min_key),
+                    max_key_value=None if max_key is None else str(max_key),
+                )
+            )
+        logger.info(
+            "Adopted %d remote segment(s) for namespace %s as REMOTE",
+            sum(1 for fs_path, *_ in candidates if footers.get(fs_path) is not None),
+            self.name,
+        )
+
+    def _sync_step(self) -> None:
+        """Reconcile the remote namespace prefix with the catalog.
+
+        The catalog is the source of truth for what should exist remotely.
+        Phase 1 uploads every ``LOCAL`` row at L>=1 (or adopts a row whose
+        file is already remote, which happens after a crash between
+        ``fs`` write and the catalog flip). Phase 2 ``fs.rm``s any remote
+        file with no catalog row — those are compaction inputs whose row
+        has been dropped. The ordering is what makes this safe: by the
+        time phase 2 runs, the merged output that subsumes those inputs
+        has been uploaded in phase 1, so the durable copy is in place
+        before any input remote bytes are deleted.
+
+        Phase 2 is skipped entirely when any phase-1 upload failed: if
+        the merged output isn't durable, the only remaining copies of
+        its seq range are the compaction inputs sitting in the bucket
+        (whose catalog rows were dropped at commit time). Deleting them
+        as orphans before the replacement is durable would lose data.
+        Cleanup is harmless to defer to the next tick.
+
+        No-op when the namespace has no remote prefix configured.
+        """
+        if not self._remote_namespace_dir:
+            return
+
+        try:
+            fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
+            remote_basenames = {Path(p).name for p in fs.find(root)}
+        except Exception:
+            logger.warning("remote sync list failed for %s", self.name, exc_info=True)
+            return
+
+        with self._insertion_lock:
+            rows = self._catalog.list_segments(self.name, min_level=1)
+
+        all_durable = True
+        for row in rows:
+            if row.location != SegmentLocation.LOCAL:
+                continue
+            basename = Path(row.path).name
+            if basename in remote_basenames:
+                # Crash recovery: the file was uploaded but the catalog
+                # never flipped. Adopt without re-uploading.
+                self._mark_uploaded(row.path)
+                continue
+            if self._upload(Path(row.path)):
+                self._mark_uploaded(row.path)
+            else:
+                all_durable = False
+
+        if not all_durable:
+            return
+
+        # Re-snapshot: phase 1 may have added basenames to the bucket; we
+        # only want to delete files whose basename is genuinely orphan
+        # (no catalog row at all).
+        with self._insertion_lock:
+            catalog_basenames = {Path(r.path).name for r in self._catalog.list_segments(self.name, min_level=1)}
+        for basename in remote_basenames - catalog_basenames:
+            try:
+                fs.rm(f"{self._remote_namespace_dir}/{basename}")
+                logger.info("Deleted orphan remote segment %s/%s", self.name, basename)
+            except Exception:
+                logger.warning("orphan delete failed: %s/%s", self.name, basename, exc_info=True)
+
+    def _upload(self, local_path: Path) -> bool:
+        """Stream ``local_path`` to remote. Returns True on success;
+        the next sync retries on failure."""
+        remote_path = f"{self._remote_namespace_dir}/{local_path.name}"
+        upload_start = time.monotonic()
+        try:
+            with (
+                fsspec.core.open(str(local_path), "rb") as f_src,
+                fsspec.core.open(remote_path, "wb") as f_dst,
+            ):
+                shutil.copyfileobj(f_src, f_dst, length=_REMOTE_UPLOAD_CHUNK_BYTES)
+        except Exception:
+            logger.warning("Failed to copy %s to %s", local_path, remote_path, exc_info=True)
+            return False
+        try:
+            size = local_path.stat().st_size
+        except OSError:
+            size = -1
+        logger.info(
+            "Copied %s to %s: bytes=%d elapsed_ms=%d",
+            local_path.name,
+            remote_path,
+            size,
+            int((time.monotonic() - upload_start) * 1000),
+        )
+        return True
+
+    def _mark_uploaded(self, path: str) -> None:
+        """Flip a segment's location to ``BOTH`` after a successful upload.
+
+        Updates the in-memory deque and the catalog under the insertion
+        lock so the planner / eviction queries see consistent state.
+        """
+        with self._insertion_lock:
+            for s in self._local_segments:
+                if s.path == path:
+                    s.location = SegmentLocation.BOTH
+                    break
+            self._catalog.set_location(self.name, path, SegmentLocation.BOTH)
+
     def _eviction_step(self) -> None:
         """Evict the namespace's oldest L>=1 copied segments until under caps.
 
@@ -1134,31 +1423,34 @@ class DiskLogNamespace:
         """Snapshot every locally-tracked segment. Caller MUST hold the insertion lock."""
         return list(self._local_segments)
 
-    def mark_copied(self, path: str, copied_at_ms: int) -> None:
-        """Stamp the catalog row + in-memory deque after a copy upload completes.
-
-        The copy worker calls this from its own thread; ``_insertion_lock``
-        serializes it against the bg thread's catalog mutations.
-        """
-        with self._insertion_lock:
-            for s in self._local_segments:
-                if s.path == path:
-                    s.copied_at_ms = copied_at_ms
-                    break
-            self._catalog.mark_copied(self.name, path, copied_at_ms)
-
     def evict_segment(self, path: str) -> int:
-        """Remove ``path`` from tracking and unlink the file. Returns bytes freed."""
+        """Drop ``path`` from the local deque and unlink the file. Returns
+        bytes freed.
+
+        For a ``BOTH`` segment, the catalog row stays in place at
+        ``REMOTE`` and the bucket copy is the durable archive. For a
+        ``LOCAL``-only segment, eviction is destructive: there's no
+        durable copy, so the row is dropped entirely. Production eviction
+        runs through ``select_eviction_candidate`` which gates on
+        ``BOTH``; the destructive branch is here for direct callers
+        (tests, manual recovery) that have already accepted the
+        consequences.
+        """
         with self._insertion_lock:
             new: deque[LocalSegment] = deque()
             removed_bytes = 0
+            removed_location: SegmentLocation | None = None
             for s in self._local_segments:
                 if s.path == path:
                     removed_bytes = s.size_bytes
+                    removed_location = s.location
                     continue
                 new.append(s)
             self._local_segments = new
-            self._catalog.remove_segment(self.name, path)
+            if removed_location is SegmentLocation.BOTH:
+                self._catalog.set_location(self.name, path, SegmentLocation.REMOTE)
+            else:
+                self._catalog.remove_segment(self.name, path)
         try:
             Path(path).unlink(missing_ok=True)
         except OSError:
@@ -1265,8 +1557,8 @@ class DiskLogNamespace:
         order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-        with self._read_pool.checkout(ram_tables) as (conn, ram_names):
-            source = _build_union_source(parquet_files, ram_names, self._arrow_schema)
+        with self._read_pool.cursor(buffers={"_ram": ram_tables} if ram_tables else None) as conn:
+            source = _build_union_source(parquet_files, ["_ram"] if ram_tables else [], self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             return conn.execute(sql, params).fetchall()
 
@@ -1327,6 +1619,7 @@ class MemoryLogNamespace:
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -1335,19 +1628,8 @@ class MemoryLogNamespace:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level)
-        is_pattern = bool(REGEX_META_RE.search(key))
-
-        if not is_pattern:
-            where_parts = ["key = $key", "seq > $cursor"]
-            params: dict = {"key": key, "cursor": cursor}
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            include_key_in_select = False
-            exact_key: str | None = key
-        else:
-            where_parts, params = _regex_query(key, cursor)
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            include_key_in_select = True
-            exact_key = None
+        where_parts, params, include_key_in_select, exact_key = _scope_query(key, cursor, match_scope)
+        _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
         # Insertion lock alone suffices; rwlock unneeded because there are
         # no files to unlink.
@@ -1361,8 +1643,8 @@ class MemoryLogNamespace:
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
         where_clause = " AND ".join(where_parts)
 
-        with self._read_pool.checkout([table]) as (conn, ram_names):
-            source = _build_union_source([], ram_names, self._arrow_schema)
+        with self._read_pool.cursor(buffers={"_ram": [table]}) as conn:
+            source = _build_union_source([], ["_ram"], self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             rows = conn.execute(sql, params).fetchall()
 
@@ -1385,9 +1667,6 @@ class MemoryLogNamespace:
 
     def evict_segment(self, path: str) -> int:
         return 0
-
-    def mark_copied(self, path: str, copied_at_ms: int) -> None:
-        return None
 
     def remove_local_storage(self) -> None:
         with self._insertion_lock:
@@ -1422,9 +1701,10 @@ class MemoryLogNamespace:
 
 
 class _ReadPoolProtocol(Protocol):
-    def checkout(
-        self, buffer_tables: list[pa.Table]
-    ) -> AbstractContextManager[tuple[duckdb.DuckDBPyConnection, list[str]]]: ...
+    def cursor(
+        self,
+        buffers: dict[str, list[pa.Table]] | None = None,
+    ) -> AbstractContextManager[duckdb.DuckDBPyConnection]: ...
 
 
 def _assert_additive_schema_evolution(old: Schema, new: Schema) -> None:
@@ -1495,30 +1775,70 @@ def _cap_segments(segments: list[LocalSegment]) -> list[LocalSegment]:
     return capped
 
 
+# Characters that hint a regex was passed where PREFIX was intended; used
+# only for a friendlier error if a caller forgets to set match_scope=REGEX.
+_REGEX_HINT_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
+
+
 def _regex_literal_prefix(pattern: str) -> str:
-    match = REGEX_META_RE.search(pattern)
+    match = _REGEX_HINT_RE.search(pattern)
     if match is None:
         return pattern
     return pattern[: match.start()]
 
 
-def _regex_query(pattern: str, cursor: int) -> tuple[list[str], dict]:
-    literal_prefix = _regex_literal_prefix(pattern)
-    suffix = pattern[len(literal_prefix) :]
-    is_pure_prefix = suffix in (".*", "")
+def _scope_query(
+    source: str,
+    cursor: int,
+    match_scope: int,
+) -> tuple[list[str], dict, bool, str | None]:
+    """Build the WHERE clause for a FetchLogs query.
 
-    where_parts = ["seq > $cursor"]
-    params: dict = {"cursor": cursor}
+    Returns ``(where_parts, params, include_key_in_select, exact_key)``.
 
-    if literal_prefix:
-        where_parts.append("prefix(key, $prefix_lo)")
-        params["prefix_lo"] = literal_prefix
+    The in-process Python default is ``MATCH_SCOPE_EXACT``; the RPC server
+    maps wire-level ``UNSPECIFIED`` to ``REGEX`` before delegating, so
+    ``UNSPECIFIED`` never reaches this function.
+    """
+    if match_scope == logging_pb2.MATCH_SCOPE_EXACT:
+        where_parts = ["key = $key", "seq > $cursor"]
+        params: dict = {"key": source, "cursor": cursor}
+        return where_parts, params, False, source
 
-    if not is_pure_prefix:
-        where_parts.append("regexp_matches(key, $key_pattern)")
-        params["key_pattern"] = pattern
+    if match_scope == logging_pb2.MATCH_SCOPE_PREFIX:
+        if not source:
+            # Empty prefix would match every key in the store. Reads with no
+            # source are almost always a caller bug (omitted/defaulted field);
+            # fail fast instead of returning the first page of every stream.
+            raise ValueError("FetchLogs source is required for MATCH_SCOPE_PREFIX")
+        # `prefix(key, $p)` is DuckDB's literal-prefix predicate. It's pushed
+        # into Parquet row-group min/max stats the same way an `=` is, so
+        # PREFIX reads keep the pruning of EXACT.
+        where_parts = ["seq > $cursor", "prefix(key, $prefix)"]
+        params = {"cursor": cursor, "prefix": source}
+        return where_parts, params, True, None
 
-    return where_parts, params
+    if match_scope == logging_pb2.MATCH_SCOPE_REGEX:
+        # Pull off any leading literal prefix to keep row-group pruning even
+        # for regex queries. `prefix(key, $p)` is monotone, so it remains
+        # correct as long as the regex requires that prefix to match.
+        literal_prefix = _regex_literal_prefix(source)
+        suffix = source[len(literal_prefix) :]
+        # `^literal$`, `^literal`, `^literal.*` all reduce to the literal prefix
+        # alone; we still need regexp_matches for any other suffix.
+        is_pure_prefix = suffix in (".*", "")
+
+        where_parts = ["seq > $cursor"]
+        params = {"cursor": cursor}
+        if literal_prefix:
+            where_parts.append("prefix(key, $prefix_lo)")
+            params["prefix_lo"] = literal_prefix
+        if not is_pure_prefix:
+            where_parts.append("regexp_matches(key, $key_pattern)")
+            params["key_pattern"] = source
+        return where_parts, params, True, None
+
+    raise ValueError(f"unknown match_scope: {match_scope}")
 
 
 def _add_common_filters(

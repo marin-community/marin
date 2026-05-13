@@ -10,7 +10,7 @@ CoreWeave manages node provisioning and deprovisioning; Iris manages only Pods.
 Tasks execute as independent Kubernetes Pods via `KubernetesRuntime` (Pod-per-task),
 which replaced an originally-planned containerd/crictl approach during implementation.
 
-Example config: `lib/iris/examples/coreweave.yaml`
+Example config: `lib/iris/config/coreweave.yaml`
 
 ## 2. Architecture
 
@@ -177,7 +177,7 @@ iris --cluster=coreweave-ci job logs /runner/my-job
 iris cluster list
 ```
 
-`--cluster=NAME` resolves to a config under `lib/iris/examples/` and opens a
+`--cluster=NAME` resolves to a config under `lib/iris/config/` and opens a
 `kubectl port-forward` to the controller service. This path requires the
 `iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`). Without them,
 auto-tunneled CoreWeave commands fail before connecting:
@@ -200,9 +200,9 @@ iris --controller-url=http://localhost:10000 ...
 
 | Target | Iris config | `--gpu` request | `nvidia-smi` GPU name |
 |--------|-------------|-----------------|-----------------------|
-| H100 | `lib/iris/examples/coreweave-ci.yaml` | `H100x1` | `NVIDIA H100 80GB HBM3` |
-| GH200 | `lib/iris/examples/coreweave-rno2a.yaml` | `GH200x1` | `NVIDIA GH200 480GB` |
-| B200 | `lib/iris/examples/coreweave-usw09b.yaml` | `B200x1` | `NVIDIA B200` |
+| H100 | `lib/iris/config/coreweave-ci.yaml` | `H100x1` | `NVIDIA H100 80GB HBM3` |
+| GH200 | `lib/iris/config/coreweave-rno2a.yaml` | `GH200x1` | `NVIDIA GH200 480GB` |
+| B200 | `lib/iris/config/coreweave-usw09b.yaml` | `B200x1` | `NVIDIA B200` |
 
 Use `GH200x1` for RNO2A. `H200x1` also schedules there today; both land on
 CoreWeave `gd-1xgh200` nodes labeled `gpu.nvidia.com/model=GH200_480GB` and
@@ -214,6 +214,107 @@ prove `nvidia-smi`, GPU-backed JAX, and a tiny matmul.
 Marin's `gpu` extra installs the JAX CUDA 13 wheel stack from PyPI. CoreWeave
 GPU nodes must expose NVIDIA driver 580 or newer; `nvidia-smi` should report
 CUDA 13.x.
+
+### Grug MoE Canary Warm-Node Multinode Smoke
+
+For a realistic Grug MoE multinode smoke, use the GPU path in
+`experiments.ferries.canary_ferry`. This is a temporary warm-node validation
+while cold-start/gang scheduling is tracked in #5480: before submitting the job,
+verify that the required GPU nodes are already `CURRENT`, free, and schedulable.
+
+Warm-node preflight:
+
+```bash
+# Confirm the target pool is not already occupied by another Iris workload.
+uv run iris --cluster=<cluster> job list --state running
+
+# Confirm the requested nodes are already warm, not still provisioning.
+kubectl --kubeconfig <kubeconfig> get nodepool.compute.coreweave.com <nodepool> \
+  -o custom-columns=NAME:.metadata.name,TARGET:.spec.targetNodes,CURRENT:.status.currentNodes,INPROGRESS:.status.inProgress,QUEUED:.status.queuedNodes
+
+# Confirm the scheduler-visible pods are not already consuming the target nodes.
+kubectl --kubeconfig <kubeconfig> -n <namespace> get pods -o wide
+```
+
+Starting smoke settings:
+
+| Target | Cluster | Namespace | Kubeconfig | NodePool | `CANARY_GPU_*` | Batch | `NCCL_SOCKET_IFNAME` |
+|--------|---------|-----------|------------|----------|-----------------|-------|----------------------|
+| H100x8 x 2 | `coreweave-ci` | `iris-ci` | `~/.kube/coreweave-iris` | `iris-ci-h100-8x` | `TYPE=H100`, `COUNT=8`, `REPLICAS=2` | 64 | `=enp157s0np0` |
+| B200x8 x 2 | `coreweave-usw09b` | `iris` | `~/.kube/cw-usw09b.yaml` | `iris-usw09b-b200-8x` | `TYPE=B200`, `COUNT=8`, `REPLICAS=2` | 128 | `=enp44s0np0` |
+| GH200x1 x 2 | `coreweave-rno2a` | `iris` | `~/.kube/cw-rno2a.yaml` | `iris-rno2a-gh200-1x` | `TYPE=GH200`, `COUNT=1`, `REPLICAS=2` | 16 | `=eth0` |
+
+For H100, manually warm the second node before launch and restore the pool after
+the run:
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris patch nodepool.compute.coreweave.com iris-ci-h100-8x \
+  --type merge -p '{"spec":{"targetNodes":2}}'
+
+# After the smoke:
+kubectl --kubeconfig ~/.kube/coreweave-iris patch nodepool.compute.coreweave.com iris-ci-h100-8x \
+  --type merge -p '{"spec":{"targetNodes":1}}'
+```
+
+The GitHub CoreWeave canary workflow uses the same H100 pool; run it and manual
+H100 validation sequentially. If the controller restarts after warming the H100
+pool, recheck `targetNodes`; startup may reconcile the pool back toward the
+single-node target.
+
+Submit with explicit `-e` environment variables. Iris job containers do not
+inherit arbitrary shell variables from the submitter. Because this canary uses
+real SlimPajama data, use a shared durable `MARIN_PREFIX` plus the credentials
+needed to read/write that prefix. `CANARY_TRACKER=json_logger` avoids requiring
+W&B for this smoke.
+
+| Use | Prefix | Endpoint | Credentials |
+|-----|--------|----------|-------------|
+| H100 CI state and canary data | `s3://marin-na/...` | Cloudflare R2 | R2 credentials |
+| B200/GH200 controller state | `s3://marin-poc/iris/state/...` | `https://cwobject.com` | CoreWeave object storage credentials |
+| B200/GH200 canary data with `MARIN_PREFIX=s3://marin-na/marin/` | `s3://marin-na/marin/` | Cloudflare R2 | R2 credentials |
+
+Set `AWS_ENDPOINT_URL` to the endpoint that matches the prefix and credentials.
+For R2/CoreWeave S3-compatible endpoints, leave `AWS_REGION` and
+`AWS_DEFAULT_REGION` as `auto`; use a real AWS region only for AWS S3.
+
+```bash
+RUN_ID="cw-grug-mn-warm-<target>-$(date -u +%Y%m%d-%H%M%S)"
+LOG="/tmp/marin-cw-grug-moe/${RUN_ID}.log"
+mkdir -p "$(dirname "$LOG")"
+
+# TODO(#5524): remove CANARY_PROFILER_NUM_STEPS once Levanter profiler stop is
+# idempotent. The shorter window keeps 20-step smokes from stopping the
+# profiler on the final forced callback.
+uv run iris --cluster=<cluster> job run \
+  --job-name "$RUN_ID" \
+  --cpu 1 --memory 2GB --disk 8GB --extra cpu \
+  -e MARIN_PREFIX <shared-marin-prefix> \
+  -e RUN_ID "$RUN_ID" \
+  -e CANARY_ACCELERATOR gpu \
+  -e CANARY_GPU_TYPE <H100|B200|GH200> \
+  -e CANARY_GPU_COUNT <8|1> \
+  -e CANARY_GPU_REPLICAS 2 \
+  -e CANARY_STEPS 20 \
+  -e CANARY_BATCH_SIZE <64|128|16> \
+  -e CANARY_PROFILER_ENABLED true \
+  -e CANARY_PROFILER_NUM_STEPS 10 \
+  -e CANARY_TRACKER json_logger \
+  -e NCCL_SOCKET_IFNAME '<interface>' \
+  -e HF_TOKEN "$HF_TOKEN" \
+  -e AWS_ACCESS_KEY_ID "$AWS_ACCESS_KEY_ID" \
+  -e AWS_SECRET_ACCESS_KEY "$AWS_SECRET_ACCESS_KEY" \
+  -e AWS_ENDPOINT_URL "$AWS_ENDPOINT_URL" \
+  -e AWS_REGION "${AWS_REGION:-auto}" \
+  -e AWS_DEFAULT_REGION "${AWS_DEFAULT_REGION:-auto}" \
+  -- python -m experiments.ferries.canary_ferry 2>&1 | tee "$LOG"
+```
+
+Expected success signals: both replicas report JAX 0.10.0, both enter
+`initialize_jax` with `IRIS_NUM_TASKS=2`, both emit tracker summaries, the
+profiler starts and records a JAX profile artifact, the step reaches 20/20, a
+checkpoint is committed, and the parent job exits `JOB_STATE_SUCCEEDED`. H100
+batch 128 has OOMed with the current Grug MoE model; use batch 64 for functional
+validation.
 
 ### KubernetesProvider Operations
 
@@ -695,5 +796,5 @@ instantly. Fix in config and redeploy.
 | `lib/iris/src/iris/providers/k8s/coreweave.py` | CoreWeave platform implementation (includes `ensure_rbac()`) |
 | `lib/iris/src/iris/cluster/runtime/kubernetes.py` | KubernetesRuntime (Pod-per-task) |
 | `lib/iris/src/iris/providers/k8s/service.py` | Kubectl CLI wrapper |
-| `lib/iris/examples/coreweave.yaml` | Example cluster config |
+| `lib/iris/config/coreweave.yaml` | Example cluster config |
 | `lib/iris/AGENTS.md` | CoreWeave integration notes for agents |

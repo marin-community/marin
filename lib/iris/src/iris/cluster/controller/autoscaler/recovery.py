@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from sqlalchemy import select
+
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     ScalingGroup,
@@ -16,7 +18,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 )
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, TrackedWorkerRow, restore_tracked_workers
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema import _decode_json_list, decode_timestamp_ms
+from iris.cluster.controller.schema import scaling_groups_table, slices_table, workers_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import SliceHandle
 
@@ -32,34 +34,42 @@ class AutoscalerCheckpoint:
 
 
 def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
-    """Load autoscaler state from the controller DB."""
+    """Load autoscaler state from the controller DB.
 
-    with db.read_snapshot() as snapshot:
-        scaling_rows = snapshot.raw(
-            "SELECT name, consecutive_failures, backoff_until_ms, last_scale_up_ms, "
-            "last_scale_down_ms, quota_exceeded_until_ms, quota_reason "
-            "FROM scaling_groups",
-            decoders={
-                "consecutive_failures": int,
-                "backoff_until_ms": decode_timestamp_ms,
-                "last_scale_up_ms": decode_timestamp_ms,
-                "last_scale_down_ms": decode_timestamp_ms,
-                "quota_exceeded_until_ms": decode_timestamp_ms,
-            },
-        )
-        slice_rows = snapshot.raw(
-            "SELECT slice_id, scale_group, lifecycle, worker_ids, "
-            "created_at_ms, last_active_ms, error_message "
-            "FROM slices",
-            decoders={
-                "worker_ids": _decode_json_list,
-                "created_at_ms": decode_timestamp_ms,
-                "last_active_ms": decode_timestamp_ms,
-            },
-        )
-        tracked_rows = snapshot.raw(
-            "SELECT worker_id, slice_id, scale_group, address FROM workers WHERE slice_id != '' AND active = 1",
-        )
+    Backoff/churn state is no longer persisted (it lives in the in-memory
+    :class:`BackoffDetector`), so we only restore slice membership and
+    informational scale timestamps from the DB.
+    """
+    with db.read_snapshot() as tx:
+        scaling_rows = tx.execute(
+            select(
+                scaling_groups_table.c.name,
+                scaling_groups_table.c.last_scale_up_ms,
+                scaling_groups_table.c.last_scale_down_ms,
+            )
+        ).all()
+
+        slice_rows = tx.execute(
+            select(
+                slices_table.c.slice_id,
+                slices_table.c.scale_group,
+                slices_table.c.lifecycle,
+                slices_table.c.worker_ids,
+                slices_table.c.created_at_ms,
+                slices_table.c.error_message,
+            )
+        ).all()
+
+        # Failed workers have their DB row deleted (writes.workers.remove_worker), so
+        # surviving rows with a slice are by definition the live tracked set.
+        tracked_rows = tx.execute(
+            select(
+                workers_table.c.worker_id,
+                workers_table.c.slice_id,
+                workers_table.c.scale_group,
+                workers_table.c.address,
+            ).where(workers_table.c.slice_id != "")
+        ).all()
 
     slices_by_group: dict[str, list[SliceSnapshot]] = {}
     for row in slice_rows:
@@ -69,8 +79,7 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
                 scale_group=row.scale_group,
                 lifecycle=row.lifecycle,
                 worker_ids=row.worker_ids,
-                created_at_ms=row.created_at_ms.epoch_ms(),
-                last_active_ms=row.last_active_ms.epoch_ms(),
+                created_at_ms=int(row.created_at_ms),
                 error_message=row.error_message,
             )
         )
@@ -80,20 +89,16 @@ def load_autoscaler_checkpoint(db: ControllerDB) -> AutoscalerCheckpoint:
         group_snapshots[row.name] = GroupSnapshot(
             name=row.name,
             slices=slices_by_group.get(row.name, []),
-            consecutive_failures=row.consecutive_failures,
-            backoff_until_ms=row.backoff_until_ms.epoch_ms(),
-            last_scale_up_ms=row.last_scale_up_ms.epoch_ms(),
-            last_scale_down_ms=row.last_scale_down_ms.epoch_ms(),
-            quota_exceeded_until_ms=row.quota_exceeded_until_ms.epoch_ms(),
-            quota_reason=row.quota_reason,
+            last_scale_up_ms=int(row.last_scale_up_ms),
+            last_scale_down_ms=int(row.last_scale_down_ms),
         )
 
     tracked_worker_rows = [
         TrackedWorkerRow(
-            worker_id=row.worker_id,
+            worker_id=str(row.worker_id),
             slice_id=row.slice_id,
             scale_group=row.scale_group,
-            address=row.address,
+            address=str(row.address),
         )
         for row in tracked_rows
     ]
@@ -127,12 +132,8 @@ def restore_autoscaler_state(
         )
         group.restore_from_snapshot(
             slices=restore_result.slices,
-            consecutive_failures=restore_result.consecutive_failures,
             last_scale_up=restore_result.last_scale_up,
             last_scale_down=restore_result.last_scale_down,
-            backoff_until=restore_result.backoff_until,
-            quota_exceeded_until=restore_result.quota_exceeded_until,
-            quota_reason=restore_result.quota_reason,
         )
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)

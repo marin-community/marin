@@ -35,6 +35,9 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 
 ### `job run` gotchas
 
+- **Remote jobs only see env vars you put in the job spec.** The submitter's
+  shell env is not copied into the container. Pass required values explicitly:
+  `iris job run -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" -- python train.py`.
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
@@ -154,20 +157,13 @@ Namespaces:
 
 - `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
 - `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `captured_at`. Filter on `source` for one of `/job/.../task/N`, `/system/worker/<id>`, `/system/controller`. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
 
-Retention: finelog evicts the globally-oldest sealed Parquet segments once either cap is exceeded. The caps are `DuckDBLogStore(max_local_segments=..., max_local_bytes=...)` constructor args (defaults: 1000 segments / 100 GB; see `lib/finelog/src/finelog/store/duckdb_store.py`). To change them on the controller-bundled store, edit the `DuckDBLogStore(...)` call in `_start_local_log_server`. For production-scale deployments, run `finelog-server` out-of-band and pass caps there.
+Retention is finelog segment-based. Target for `iris.profile` is 7 days.
 
-Example — utilization for a worker over the last hour:
+Get a profile for a task — open the dashboard task page and use the "Profile history" panel; rows are CPU captures from the worker's 10-minute periodic loop plus any on-demand captures, click to download. To capture on demand, hit the "Profile now" button on the task page, the worker page (`/system/worker/<id>`), or the controller status page (`/system/controller`).
 
-```sql
-SELECT ts, cpu_pct, mem_bytes, disk_used_bytes, running_task_count
-FROM "iris.worker"
-WHERE worker_id = 'WORKER_ID_HERE'
-  AND ts > now() - INTERVAL '1 hour'
-ORDER BY ts ASC;
-```
-
-Run via the StatsService `Query` RPC on the bundled log-server endpoint.
+Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (on-demand only), and by the controller for `/system/controller` self-captures.
 
 ## Users & Auth
 
@@ -208,7 +204,7 @@ gcloud compute ssh iris-controller-marin --zone=us-central1-a \
   --project=hai-gcp-models --tunnel-through-iap -- -L 10000:localhost:10000 -N
 
 # Then: iris --controller-url=http://localhost:10000 ...
-# Or config-based auto-tunnel: iris --config=lib/iris/examples/marin.yaml ...
+# Or config-based auto-tunnel: iris --config=lib/iris/config/marin.yaml ...
 ```
 
 Configs: `marin.yaml` (production), `marin-dev.yaml` (dev, smaller scale caps).
@@ -242,7 +238,7 @@ Only delete the specific bad node. If multiple nodes fail simultaneously or the 
 
 ### GCP State
 
-State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages), `controller-state/` (SQLite checkpoints), `logs/` (Parquet).
+State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages) and `controller-state/` (SQLite checkpoints). Per-task log parquet segments are shipped separately by finelog under `<finelog.remote_log_dir>/log/` (see `lib/finelog/config/<cluster>.yaml`).
 
 ### GCP Gotchas
 
@@ -255,7 +251,7 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 ## CoreWeave (GPU) Operations
 
 Always read [`docs/coreweave.md`](docs/coreweave.md) before operating a
-GPU/CoreWeave cluster. Use `lib/iris/examples/coreweave-*.yaml` for CoreWeave
+GPU/CoreWeave cluster. Use `lib/iris/config/coreweave-*.yaml` for CoreWeave
 cluster configs.
 
 ## CI Workflows

@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import click
-from finelog.deploy._gcp import _resolve_image_digest, _ssh_args, _wait_health
+from finelog.deploy._gcp import _resolve_image_digest, _ssh_args, _wait_health_via_ssh
 from finelog.deploy.bootstrap import CONTAINER_NAME, render_bootstrap
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
@@ -98,8 +98,7 @@ def _bootstrap_with_image(cfg: FinelogConfig, image: str) -> None:
 
 def _verify_health(cfg: FinelogConfig) -> bool:
     assert cfg.deployment.gcp is not None
-    gcp = cfg.deployment.gcp
-    return _wait_health(cfg.name, gcp.project, gcp.zone, cfg.port)
+    return _wait_health_via_ssh(cfg, cfg.port)
 
 
 @click.group()

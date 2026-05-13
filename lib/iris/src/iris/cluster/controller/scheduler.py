@@ -10,8 +10,9 @@ be in BUILDING state on each worker, preventing resource exhaustion.
 
 The scheduler operates exclusively on scheduler-owned types (JobRequirements,
 WorkerCapacity, SchedulingContext) and has ZERO runtime imports from controller
-state. The boundary conversion from worker rows to WorkerCapacity happens
-via the WorkerSnapshot protocol in create_scheduling_context.
+state. Callers project worker rows into ``WorkerSnapshot`` (via
+``worker_snapshot_from_row``) at the boundary before invoking
+``create_scheduling_context``.
 """
 
 import logging
@@ -33,10 +34,7 @@ from iris.cluster.constraints import (
 from iris.cluster.types import (
     JobName,
     WorkerId,
-    get_gpu_count,
-    get_tpu_count,
 )
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -57,25 +55,83 @@ spare CPU can absorb multiple tasks, preventing false demand signals.
 """
 
 
-class WorkerSnapshot(Protocol):
-    """What the scheduler needs from a worker to build a capacity snapshot.
+@dataclass(frozen=True, slots=True)
+class WorkerSnapshot:
+    """Bundled scheduler input: worker totals, currently-held resources, attributes.
 
-    This protocol decouples the scheduler from a concrete worker row type. Any object
-    exposing these fields can be used.  Fields mirror the DB column names so that
-    projection row classes satisfy this protocol without computed properties.
+    The scheduler's sole worker input type — independent of any DB row class.
+    Callers project their row types plus per-cycle usage (derived from
+    ``task_attempts``) into this dataclass at the boundary via
+    ``worker_snapshot_from_row``. ``WorkerCapacity`` is then derived directly
+    from the snapshot: ``available_* = total_* - committed_*``.
+
+    The ``committed_*`` fields hold the resources reserved by unfinished
+    worker-bound attempts at cycle start; they are *not* persisted on the
+    workers table — the controller fetches them per cycle from
+    ``reads.scheduler.resource_usage_by_worker``.
     """
 
     worker_id: WorkerId
     total_cpu_millicores: int
-    committed_cpu_millicores: int
     total_memory_bytes: int
-    committed_mem: int
     total_gpu_count: int
-    committed_gpu: int
     total_tpu_count: int
-    committed_tpu: int
+    committed_cpu_millicores: int
+    committed_memory_bytes: int
+    committed_gpu_count: int
+    committed_tpu_count: int
     attributes: dict[str, AttributeValue]
-    healthy: bool
+
+
+class _WorkerRowLike(Protocol):
+    """Structural shape of any worker row that ``worker_snapshot_from_row`` accepts."""
+
+    worker_id: WorkerId
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    attributes: dict[str, AttributeValue]
+
+
+class _ResourceUsageLike(Protocol):
+    """Structural shape of any per-worker resource-usage record."""
+
+    cpu_millicores: int
+    memory_bytes: int
+    gpu_count: int
+    tpu_count: int
+
+
+def worker_snapshot_from_row(
+    row: "_WorkerRowLike",
+    usage: "_ResourceUsageLike | None" = None,
+) -> "WorkerSnapshot":
+    """Project a DB worker row + per-cycle usage into a ``WorkerSnapshot``.
+
+    The single boundary adapter between row-shaped objects in the controller/DB
+    layer and the scheduler's narrow input. Callers must use this helper rather
+    than handing rows directly to the scheduler so the scheduler input contract
+    stays decoupled from row schemas. ``usage`` defaults to all-zero held
+    resources for tests and diagnostic paths that operate on synthetic worker
+    lists with no live attempts.
+    """
+    cpu = usage.cpu_millicores if usage is not None else 0
+    mem = usage.memory_bytes if usage is not None else 0
+    gpu = usage.gpu_count if usage is not None else 0
+    tpu = usage.tpu_count if usage is not None else 0
+    return WorkerSnapshot(
+        worker_id=row.worker_id,
+        total_cpu_millicores=row.total_cpu_millicores,
+        total_memory_bytes=row.total_memory_bytes,
+        total_gpu_count=row.total_gpu_count,
+        total_tpu_count=row.total_tpu_count,
+        committed_cpu_millicores=cpu,
+        committed_memory_bytes=mem,
+        committed_gpu_count=gpu,
+        committed_tpu_count=tpu,
+        attributes=row.attributes,
+    )
 
 
 class RejectionKind(StrEnum):
@@ -125,28 +181,20 @@ class RejectionReason:
 class JobRequirements:
     """What a job needs from a worker. Scheduler's input type.
 
-    The four cached scalars (`req_cpu_millicores`, `req_memory_bytes`,
-    `req_gpu_count`, `req_tpu_count`) are derived once from the proto in
-    `__post_init__` so the scheduler's per-(task, worker) `can_fit` hot loop
-    does not pay protobuf attribute access overhead. The hot loop runs
-    ~pending x workers times per scheduling cycle (≈10^5 on the marin cluster).
+    Scalar resource fields are used directly in the per-(task, worker) `can_fit`
+    hot loop, which runs ~pending x workers times per scheduling cycle (≈10^5 on
+    the marin cluster). `device_variant` carries the device variant string (e.g.
+    ``"v5p-64"``) for preemption same-variant gating; None means CPU-only.
     """
 
-    resources: job_pb2.ResourceSpecProto
+    req_cpu_millicores: int
+    req_memory_bytes: int
+    req_gpu_count: int
+    req_tpu_count: int
+    device_variant: str | None
     constraints: list[Constraint]
     is_coscheduled: bool
     coscheduling_group_by: str | None
-
-    req_cpu_millicores: int = field(init=False)
-    req_memory_bytes: int = field(init=False)
-    req_gpu_count: int = field(init=False)
-    req_tpu_count: int = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.req_cpu_millicores = self.resources.cpu_millicores
-        self.req_memory_bytes = self.resources.memory_bytes
-        self.req_gpu_count = get_gpu_count(self.resources.device)
-        self.req_tpu_count = get_tpu_count(self.resources.device)
 
 
 _evaluate_constraint = evaluate_constraint
@@ -175,22 +223,25 @@ class WorkerCapacity:
     @staticmethod
     def from_worker(
         worker: WorkerSnapshot,
+        *,
         building_count: int = 0,
         max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     ) -> "WorkerCapacity":
         """Create capacity snapshot from a worker's current state.
 
         Args:
-            worker: The worker to snapshot (any object satisfying WorkerSnapshot)
+            worker: Bundled snapshot carrying totals, currently-committed
+                resources (held by unfinished worker-bound attempts) and
+                attributes.
             building_count: Number of tasks currently in BUILDING state on this worker
             max_building_tasks: Maximum allowed building tasks per worker
         """
         return WorkerCapacity(
             worker_id=worker.worker_id,
             available_cpu_millicores=worker.total_cpu_millicores - worker.committed_cpu_millicores,
-            available_memory=worker.total_memory_bytes - worker.committed_mem,
-            available_gpus=worker.total_gpu_count - worker.committed_gpu,
-            available_tpus=worker.total_tpu_count - worker.committed_tpu,
+            available_memory=worker.total_memory_bytes - worker.committed_memory_bytes,
+            available_gpus=worker.total_gpu_count - worker.committed_gpu_count,
+            available_tpus=worker.total_tpu_count - worker.committed_tpu_count,
             attributes=dict(worker.attributes),
             building_task_count=building_count,
             max_building_tasks=max_building_tasks,
@@ -322,7 +373,8 @@ class SchedulingContext:
         ConstraintIndex for fast attribute matching.
 
         Args:
-            workers: List of workers to include in scheduling context
+            workers: Bundled ``WorkerSnapshot`` instances (totals, committed
+                resources, attributes) for the cycle.
             building_counts: Map of worker_id -> count of tasks in BUILDING state
             max_building_tasks: Maximum building tasks allowed per worker
             pending_tasks: Task IDs in scheduling priority order
@@ -338,7 +390,6 @@ class SchedulingContext:
                 max_building_tasks=max_building_tasks,
             )
             for w in workers
-            if w.healthy
         }
 
         str_to_wid: dict[str, WorkerId] = {}
@@ -489,16 +540,14 @@ def explain_unfittable(
         if rejection.kind not in rejection_samples:
             rejection_samples[rejection.kind] = rejection
 
-    res = req.resources
-
     if rejection_counts:
         if RejectionKind.BUILDING_LIMIT in rejection_counts:
             workers_with_capacity = sum(
                 1
                 for cwid in candidates
                 if context.assignment_counts.get(cwid, 0) < max_per_worker
-                and context.capacities[cwid].available_cpu_millicores >= res.cpu_millicores
-                and context.capacities[cwid].available_memory >= res.memory_bytes
+                and context.capacities[cwid].available_cpu_millicores >= req.req_cpu_millicores
+                and context.capacities[cwid].available_memory >= req.req_memory_bytes
             )
             if workers_with_capacity > 0:
                 count = rejection_counts[RejectionKind.BUILDING_LIMIT]
@@ -523,12 +572,12 @@ def explain_unfittable(
         constraint_keys = [c.key for c in hard_constraints]
         return (
             f"No worker matches constraints and has sufficient resources "
-            f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
+            f"(need cpu={req.req_cpu_millicores / 1000:g} cores, memory={req.req_memory_bytes}, "
             f"constraints={constraint_keys})"
         )
     return (
         f"No worker has sufficient resources "
-        f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes})"
+        f"(need cpu={req.req_cpu_millicores / 1000:g} cores, memory={req.req_memory_bytes})"
     )
 
 
@@ -748,11 +797,13 @@ class Scheduler:
     ) -> SchedulingContext:
         """Create a scheduling context for the given workers.
 
-        This is the boundary conversion point: accepts WorkerSnapshot-compatible
-        objects (e.g. worker rows) and converts them to scheduler-internal types.
+        Callers project DB rows + per-cycle resource usage into
+        ``WorkerSnapshot`` (via ``worker_snapshot_from_row``) before calling
+        this method, so the scheduler only sees its own bundled input type.
 
         Args:
-            workers: Workers to include (any objects satisfying WorkerSnapshot)
+            workers: ``WorkerSnapshot`` instances (totals + committed resources
+                + attributes) to include in the cycle.
             building_counts: Map of worker_id -> count of tasks in BUILDING state
             pending_tasks: Task IDs in scheduling priority order
             jobs: Job requirements indexed by job ID

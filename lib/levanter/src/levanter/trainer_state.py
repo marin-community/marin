@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import typing
-from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar
+from typing import Any, Callable, Generic, Optional, TypeVar
 
 import equinox as eqx
 import jax
@@ -26,10 +25,7 @@ M = TypeVar("M", bound=PyTree)
 S = TypeVar("S")
 
 
-if TYPE_CHECKING:
-    from _typeshed import DataclassInstance  # type: ignore
-else:
-    DataclassInstance = typing.Any
+DataclassInstance = Any  # _typeshed is stub-only; use Any at runtime
 
 
 def _ensure_int_is_array(x):

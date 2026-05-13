@@ -521,6 +521,22 @@ class LogClient:
             self._invalidate(_format_exc_summary(exc))
             raise
 
+    def query(self, sql: str, *, max_rows: int = 100_000) -> pa.Table:
+        """Run Postgres-flavored SQL against any registered namespace.
+
+        Unlike :meth:`Table.query`, this does not require a local Table
+        handle; the server resolves namespaces from the FROM clause. Raises
+        :class:`QueryResultTooLargeError` if the row count exceeds
+        ``max_rows``.
+        """
+        result = self._stats_query(sql)
+        if result.num_rows > max_rows:
+            raise QueryResultTooLargeError(
+                f"query returned {result.num_rows} rows, exceeds max_rows={max_rows} "
+                f"(add a LIMIT or pass a higher max_rows)"
+            )
+        return result
+
     def flush(self, timeout: float | None = None) -> FlushResult:
         """Flush the ``log`` namespace's Table, if any."""
         table = self._tables.get(LOG_NAMESPACE)

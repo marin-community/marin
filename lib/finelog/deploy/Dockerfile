@@ -31,6 +31,7 @@ LABEL org.opencontainers.image.description="finelog log server image"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    gdb \
     && rm -rf /var/lib/apt/lists/*
 
 # uv (matches the version pinned by lib/iris/Dockerfile)
@@ -53,7 +54,7 @@ COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     printf '[tool.uv.workspace]\nmembers = ["lib/finelog", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package marin-finelog --no-install-project
+    && uv sync --package marin-finelog --extra server --no-install-project
 
 # Full source, then install the project itself. `lib/finelog/config/` is
 # force-included by hatchling's wheel build (see lib/finelog/pyproject.toml);
@@ -62,28 +63,11 @@ COPY lib/rigging/src/ ./lib/rigging/src/
 COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/finelog/config/ ./lib/finelog/config/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package marin-finelog
-
-# gcsfs is a runtime requirement when --remote-log-dir uses gs:// URIs, but
-# is declared in the dev dependency group. Install it explicitly so the
-# production image can offload to GCS.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install "gcsfs>=2024.0.0"
-
-# Profiling tools — installed after uv sync so they aren't pruned by the exact
-# sync. Mirrors lib/iris/Dockerfile so `memray attach` / `py-spy dump` work
-# against the live server without rebuilding.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install py-spy memray
+    uv sync --package marin-finelog --extra server
 
 
 # ── Stage: runtime ───────────────────────────────────────────────────
 FROM deps AS runtime
-
-# memray attach shells out to gdb at runtime; bake it into the image so we
-# don't have to apt-get install on a live container.
-RUN apt-get update && apt-get install -y --no-install-recommends gdb \
-    && rm -rf /var/lib/apt/lists/*
 
 # Pre-built dashboard SPA. Served by the asgi app at "/" and "/static/*".
 COPY --from=dashboard /build/dashboard/dist ./dashboard/dist

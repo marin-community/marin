@@ -30,7 +30,6 @@ import uuid
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
 from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
@@ -53,7 +52,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, get_thread_container
+from iris.managed_thread import get_thread_container
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -113,7 +112,6 @@ class ProcessContainer:
     config: ContainerConfig
     command: list[str]  # Pre-computed command with remapped paths
     _process: subprocess.Popen | None = field(default=None, repr=False)
-    _log_thread: ManagedThread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
@@ -165,7 +163,7 @@ class ProcessContainer:
 
             # Spawn thread to stream logs asynchronously
             name_suffix = self.config.task_id or self.config.job_id or "unnamed"
-            self._log_thread = get_thread_container().spawn(
+            get_thread_container().spawn(
                 target=self._stream_logs,
                 name=f"logs-{name_suffix}",
             )
@@ -184,47 +182,30 @@ class ProcessContainer:
         if not self._process:
             return
 
+        assert self._process.stdout is not None
+        assert self._process.stderr is not None
+        stdout, stderr = self._process.stdout, self._process.stderr
+
+        def emit(source: str, line: str) -> None:
+            self._logs.append(LogLine.now(source, line.rstrip()))
+
         try:
             while self._process.poll() is None:
                 if stop_event.is_set():
                     break
 
                 # Non-blocking read with timeout
-                assert self._process.stdout is not None
-                assert self._process.stderr is not None
-                ready, _, _ = select.select([self._process.stdout, self._process.stderr], [], [], 0.1)
-
+                ready, _, _ = select.select([stdout, stderr], [], [], 0.1)
                 for stream in ready:
                     line = stream.readline()
                     if line:
-                        source = "stdout" if stream == self._process.stdout else "stderr"
-                        self._logs.append(
-                            LogLine(
-                                timestamp=datetime.now(timezone.utc),
-                                source=source,
-                                data=line.rstrip(),
-                            )
-                        )
+                        emit("stdout" if stream is stdout else "stderr", line)
 
             # Process exited - drain remaining output
-            if self._process.stdout:
-                for line in self._process.stdout:
-                    self._logs.append(
-                        LogLine(
-                            timestamp=datetime.now(timezone.utc),
-                            source="stdout",
-                            data=line.rstrip(),
-                        )
-                    )
-            if self._process.stderr:
-                for line in self._process.stderr:
-                    self._logs.append(
-                        LogLine(
-                            timestamp=datetime.now(timezone.utc),
-                            source="stderr",
-                            data=line.rstrip(),
-                        )
-                    )
+            for line in stdout:
+                emit("stdout", line)
+            for line in stderr:
+                emit("stderr", line)
 
             self._exit_code = self._process.returncode
             self._running = False

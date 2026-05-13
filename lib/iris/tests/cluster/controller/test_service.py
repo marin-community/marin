@@ -7,6 +7,9 @@ These tests verify the RPC contract (input -> output) of the ControllerServiceIm
 State changes are verified via RPC calls rather than internal state inspection.
 """
 
+import concurrent.futures
+import logging
+import time
 from datetime import date, timedelta
 
 import pytest
@@ -14,12 +17,18 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
+from iris.cluster.controller import reads, writes
+from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.schema import jobs_table, task_attempts_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
+    MAX_LIST_JOBS_OFFSET,
     ControllerServiceImpl,
     _check_client_freshness,
+    _job_status_counts,
 )
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -29,7 +38,9 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import func
+from sqlalchemy import update as sa_update
 
 from tests.cluster.conftest import fake_log_client_from_service
 
@@ -58,7 +69,7 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
         memory_bytes=16 * 1024**3,
         disk_bytes=100 * 1024**3,
     )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.register_or_refresh_worker(
             cur,
             worker_id=worker_id,
@@ -69,10 +80,8 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
 
 
 def _set_job_state(state: ControllerTransitions, job_id: JobName, state_value: int) -> None:
-    state._db.execute(
-        "UPDATE jobs SET state = ? WHERE job_id = ?",
-        (state_value, job_id.to_wire()),
-    )
+    with state._db.transaction() as cur:
+        cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(state=state_value))
 
 
 def _assign_and_transition(
@@ -83,9 +92,9 @@ def _assign_and_transition(
     *,
     error: str | None = None,
 ) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -94,7 +103,7 @@ def _assign_and_transition(
             ),
         )
     if target_state != job_pb2.TASK_STATE_RUNNING:
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_task_updates(
                 cur,
                 HeartbeatApplyRequest(
@@ -213,141 +222,189 @@ def test_launch_job_rejects_duplicate_name(service):
     assert "still running" in exc_info.value.message
 
 
-def test_launch_job_replaces_finished_job_by_default(service, state):
-    """Verify launch_job replaces finished jobs by default."""
-    request = make_job_request("replaceable-job")
-    job_id = JobName.root("test-user", "replaceable-job")
+@pytest.mark.parametrize(
+    "pre_state,policy,expect_replace",
+    [
+        # Finished job, default policy: replaced.
+        pytest.param(
+            job_pb2.JOB_STATE_FAILED,
+            job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+            True,
+            id="failed_default_replaces",
+        ),
+        # Finished job, ERROR policy: rejected.
+        pytest.param(
+            job_pb2.JOB_STATE_SUCCEEDED,
+            job_pb2.EXISTING_JOB_POLICY_ERROR,
+            False,
+            id="succeeded_error_rejects",
+        ),
+        # Running job, KEEP policy: existing handle returned, original kept.
+        pytest.param(
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.EXISTING_JOB_POLICY_KEEP,
+            True,
+            id="running_keep_preserves",
+        ),
+        # Running job, RECREATE policy: cancel + replace.
+        pytest.param(
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.EXISTING_JOB_POLICY_RECREATE,
+            True,
+            id="running_recreate_replaces",
+        ),
+        # Running job, ERROR policy: rejected.
+        pytest.param(
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.EXISTING_JOB_POLICY_ERROR,
+            False,
+            id="running_error_rejects",
+        ),
+        # Running job, default policy: rejected (cannot replace a live job).
+        pytest.param(
+            job_pb2.JOB_STATE_PENDING,
+            job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+            False,
+            id="running_default_rejects",
+        ),
+    ],
+)
+def test_existing_job_policy(service, state, pre_state, policy, expect_replace):
+    """Re-submission outcome is fully determined by (pre-state, policy)."""
+    name = "policy-job"
+    job_id = JobName.root("test-user", name)
+    service.launch_job(make_job_request(name), None)
 
-    # Submit initial job
-    response = service.launch_job(request, None)
+    if pre_state != job_pb2.JOB_STATE_PENDING:
+        _set_job_state(state, job_id, pre_state)
+        assert _query_job(state, job_id).state == pre_state
+
+    resubmit = make_job_request(name)
+    resubmit.existing_job_policy = policy
+
+    if not expect_replace:
+        with pytest.raises(ConnectError) as exc_info:
+            service.launch_job(resubmit, None)
+        assert exc_info.value.code == Code.ALREADY_EXISTS
+        return
+
+    response = service.launch_job(resubmit, None)
     assert response.job_id == job_id.to_wire()
-
-    # Mark the job as failed
-    job = _query_job(state, job_id)
-    assert job is not None
-    tasks = _query_tasks_with_attempts(state, job.job_id)
-    assert len(tasks) == 1
-    _set_job_state(state, job.job_id, job_pb2.JOB_STATE_FAILED)
-
-    # Verify job is now failed
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_FAILED
-
-    # Submit again - should succeed (replaces the finished job)
-    response = service.launch_job(request, None)
-    assert response.job_id == job_id.to_wire()
-
-    # Verify the new job is pending
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
+    # Whether the existing handle was kept (KEEP) or the row was rewritten
+    # (RECREATE / default replace), the post-condition is identical: a
+    # PENDING job at the same id.
+    assert _query_job(state, job_id).state == job_pb2.JOB_STATE_PENDING
 
 
-def test_launch_job_error_policy_prevents_replacement(service, state):
-    """Verify EXISTING_JOB_POLICY_ERROR prevents replacing finished jobs."""
-    request = make_job_request("no-replace-job")
-    job_id = JobName.root("test-user", "no-replace-job")
+def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, state, monkeypatch):
+    """Production regression (/larry/iris-run-job-20260511-024915).
 
-    # Submit initial job
-    response = service.launch_job(request, None)
-    assert response.job_id == job_id.to_wire()
+    A parent job spawned a child training task that was preempted by a higher-
+    priority tenant. The producer transition (`preempt_task`) marked the task
+    terminal but left the attempt with ``worker_id != NULL, finished_at_ms =
+    NULL``: the worker still owned the container and the heartbeat hadn't
+    landed the finalization yet. The parent's retry resubmitted the child with
+    ``EXISTING_JOB_POLICY_KEEP``; the old service.py raised
+    ``FAILED_PRECONDITION`` immediately because the unfinished attempt blocked
+    ``remove_finished_job``. After the fix, the resubmit must block on drain
+    and succeed once the finalizing heartbeat arrives.
+    """
+    # Tighten the drain wait so the test fails fast on regression instead
+    # of waiting the production 30s.
+    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(5))
 
-    # Mark the job as succeeded
-    job = _query_job(state, job_id)
-    _set_job_state(state, job.job_id, job_pb2.JOB_STATE_SUCCEEDED)
+    child_name = "/test-user/parent/child"
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request(child_name), None)
+    child_job = JobName.from_string(child_name)
 
-    # Verify job is now succeeded
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_SUCCEEDED
+    # Dispatch the child task to a worker, then preempt it with no retry
+    # budget. ``preempt_task`` marks the task terminal (PREEMPTED) but leaves
+    # the attempt unfinalized — exactly the production state.
+    worker = WorkerId("preempting-worker")
+    _register_worker(state, worker)
+    child_task = _query_tasks_with_attempts(state, child_job)[0]
+    _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
+    with state._db.transaction() as cur:
+        state.preempt_task(cur, child_task.task_id, reason="evicted by prod tenant")
 
-    # Submit again with ERROR policy - should fail
-    request_no_replace = make_job_request("no-replace-job")
-    request_no_replace.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_ERROR
+    # Sanity: child is terminal but its attempt still holds the worker.
+    with state._db.read_snapshot() as snap:
+        assert reads.has_unfinished_worker_attempts(snap, child_job)
 
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request_no_replace, None)
+    # Re-submit the child with KEEP. The unfinished attempt should make the
+    # service block in the drain wait rather than raise FAILED_PRECONDITION.
+    request = make_job_request(child_name)
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
 
-    assert exc_info.value.code == Code.ALREADY_EXISTS
-    assert "SUCCEEDED" in exc_info.value.message
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(service.launch_job, request, None)
+        # Confirm the call is blocked on drain (didn't immediately raise).
+        with pytest.raises(concurrent.futures.TimeoutError):
+            fut.result(timeout=0.3)
 
+        # Synthesize the finalizing heartbeat that the production worker would
+        # have eventually sent. Stamping finished_at_ms releases the predicate
+        # ``_wait_until_job_drained`` polls.
+        child_task_after_preempt = _query_tasks_with_attempts(state, child_job)[0]
+        with state._db.transaction() as cur:
+            # Heartbeat-equivalent stamp: set finished_at_ms (COALESCE preserves
+            # any earlier stamp) and final state so the drain predicate fires.
+            cur.execute(
+                sa_update(task_attempts_table)
+                .where(
+                    task_attempts_table.c.task_id == child_task_after_preempt.task_id,
+                    task_attempts_table.c.attempt_id == child_task_after_preempt.current_attempt_id,
+                )
+                .values(
+                    state=job_pb2.TASK_STATE_PREEMPTED,
+                    finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, int(time.time() * 1000)),
+                    error="finalized after preemption",
+                )
+            )
 
-def test_existing_job_policy_keep_running(service, state):
-    """KEEP policy on a running job returns the existing handle without re-creating."""
-    request = make_job_request("keep-job")
-    job_id = JobName.root("test-user", "keep-job")
+        # The blocked launch should now wake up and succeed within one backoff
+        # cycle (max 1s per ExponentialBackoff config).
+        response = fut.result(timeout=4.0)
 
-    service.launch_job(request, None)
-
-    # Job is still running (PENDING). Submit again with KEEP policy.
-    request_keep = make_job_request("keep-job")
-    request_keep.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
-    response = service.launch_job(request_keep, None)
-
-    assert response.job_id == job_id.to_wire()
-    # Job should still be in its original PENDING state (not replaced).
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
-
-
-def test_existing_job_policy_recreate_running(service, state):
-    """RECREATE policy cancels a running job and replaces it."""
-    request = make_job_request("recreate-job")
-    job_id = JobName.root("test-user", "recreate-job")
-
-    service.launch_job(request, None)
-    # Confirm job exists and is pending
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
-
-    request_recreate = make_job_request("recreate-job")
-    request_recreate.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
-    response = service.launch_job(request_recreate, None)
-
-    assert response.job_id == job_id.to_wire()
-    # New job should be pending (the old one was cancelled and removed).
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
-
-
-def test_existing_job_policy_error_any_state(service, state):
-    """ERROR policy rejects submission regardless of job state."""
-    request = make_job_request("error-policy-job")
-    job_id = JobName.root("test-user", "error-policy-job")
-
-    service.launch_job(request, None)
-
-    # Running job with ERROR policy -> error
-    request_err = make_job_request("error-policy-job")
-    request_err.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_ERROR
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request_err, None)
-    assert exc_info.value.code == Code.ALREADY_EXISTS
-
-    # Mark job as finished, ERROR policy should still reject
-    _set_job_state(state, job_id, job_pb2.JOB_STATE_SUCCEEDED)
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request_err, None)
-    assert exc_info.value.code == Code.ALREADY_EXISTS
+    assert response.job_id == child_job.to_wire()
+    # New child is pending (the old PREEMPTED row was replaced).
+    new_job = _query_job(state, child_job)
+    assert new_job is not None
+    assert new_job.state == job_pb2.JOB_STATE_PENDING
 
 
-def test_existing_job_policy_unspecified_preserves_current_behavior(service, state):
-    """Default (UNSPECIFIED) policy replaces finished jobs and errors on running ones."""
-    request = make_job_request("default-policy-job")
-    job_id = JobName.root("test-user", "default-policy-job")
+def test_existing_job_policy_keep_force_reaps_after_drain_wait(service, state, monkeypatch, caplog):
+    """If a replaced job's worker-bound attempts never finalize, launch_job
+    must not block the new submission forever. After the drain wait elapses
+    it logs a warning, CASCADE-deletes the predecessor, and proceeds with
+    the replacement. (Earlier behavior raised DEADLINE_EXCEEDED.)"""
+    monkeypatch.setattr(service_module, "_JOB_REPLACEMENT_DRAIN_WAIT", Duration.from_seconds(1))
 
-    service.launch_job(request, None)
+    child_name = "/test-user/parent/child"
+    service.launch_job(make_job_request("parent"), None)
+    service.launch_job(make_job_request(child_name), None)
+    child_job = JobName.from_string(child_name)
 
-    # Running job -> error (same as before)
-    with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
-    assert exc_info.value.code == Code.ALREADY_EXISTS
-    assert "still running" in exc_info.value.message
+    worker = WorkerId("stuck-worker")
+    _register_worker(state, worker)
+    child_task = _query_tasks_with_attempts(state, child_job)[0]
+    _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
+    with state._db.transaction() as cur:
+        state.preempt_task(cur, child_task.task_id, reason="evicted, worker stuck")
 
-    # Finished job -> replaced
-    _set_job_state(state, job_id, job_pb2.JOB_STATE_FAILED)
-    response = service.launch_job(request, None)
-    assert response.job_id == job_id.to_wire()
-    job = _query_job(state, job_id)
-    assert job.state == job_pb2.JOB_STATE_PENDING
+    request = make_job_request(child_name)
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_KEEP
+
+    with caplog.at_level(logging.WARNING, logger=service_module.__name__):
+        response = service.launch_job(request, None)
+    assert response.job_id == child_job.to_wire()
+    assert any("did not drain" in r.message for r in caplog.records), caplog.text
+
+    # Predecessor was reaped and replaced — fresh row is PENDING.
+    new_job = _query_job(state, child_job)
+    assert new_job is not None
+    assert new_job.state == job_pb2.JOB_STATE_PENDING
 
 
 def test_launch_job_rejects_empty_name(service, state):
@@ -394,7 +451,7 @@ def test_get_job_status_reports_has_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
@@ -685,14 +742,20 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -716,14 +779,20 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
     """Cannot submit a child job under another user's hierarchy."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -895,6 +964,16 @@ def test_list_jobs_sql_pagination(service):
     assert response3.has_more is False
 
 
+def test_list_jobs_rejects_deep_offset(service):
+    """Offsets past MAX_LIST_JOBS_OFFSET are rejected to force callers to filter."""
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(offset=MAX_LIST_JOBS_OFFSET + 1, limit=500)
+    )
+    with pytest.raises(ConnectError) as exc_info:
+        service.list_jobs(request, None)
+    assert exc_info.value.code == Code.INVALID_ARGUMENT
+
+
 def test_list_jobs_state_filter(service):
     """SQL pagination respects state_filter."""
     service.launch_job(make_job_request("job-a"), None)
@@ -913,16 +992,89 @@ def test_list_jobs_state_filter(service):
     assert response.jobs[0].state == job_pb2.JOB_STATE_KILLED
 
 
-def test_list_jobs_name_filter(service):
-    """Name filter returns only matching jobs."""
+_INT32_MAX = (1 << 31) - 1
+
+
+@pytest.mark.parametrize(
+    "query_kwargs,expected_job_ids",
+    [
+        # name_filter is a case-insensitive substring on the stored job name.
+        pytest.param({"name_filter": "alpha"}, {"/test-user/alpha-job"}, id="name_filter_substring"),
+        # job_id_prefix anchors on the full wire-form job_id, so the user
+        # segment must be part of the prefix.
+        pytest.param(
+            {"job_id_prefix": "/test-user/alpha"},
+            {"/test-user/alpha-job"},
+            id="job_id_prefix_matches_user_and_name",
+        ),
+        # The bare "%" in a prefix must be treated literally; without escaping
+        # this would degenerate into "LIKE '%a%'" and match every job.
+        pytest.param({"job_id_prefix": "%a"}, set(), id="job_id_prefix_escapes_sql_wildcards"),
+        # A prefix anchored to a path that doesn't exist returns nothing even
+        # when the substring appears elsewhere in some id.
+        pytest.param({"job_id_prefix": "/test-user/zzz"}, set(), id="job_id_prefix_no_match"),
+    ],
+)
+def test_list_jobs_filter(service, query_kwargs, expected_job_ids):
+    """ListJobs supports two distinct filter shapes — verify both end-to-end."""
     service.launch_job(make_job_request("alpha-job"), None)
     service.launch_job(make_job_request("beta-job"), None)
 
-    request = controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="alpha"))
+    request = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(**query_kwargs),
+    )
     response = service.list_jobs(request, None)
 
-    assert len(response.jobs) == 1
-    assert "alpha" in response.jobs[0].name.lower()
+    assert {j.job_id for j in response.jobs} == expected_job_ids
+
+
+@pytest.mark.parametrize(
+    "summary,expected,expect_warning",
+    [
+        pytest.param(
+            None,
+            {
+                "failure_count": 0,
+                "preemption_count": 0,
+                "task_count": 0,
+                "completed_count": 0,
+                "task_state_counts": {},
+            },
+            False,
+            id="none_summary_zero_fill",
+        ),
+        pytest.param(
+            TaskJobSummary(
+                job_id=JobName.from_wire("/alice/runaway"),
+                # 6_442_450_944 is the literal value from the prod stack trace
+                # (3 * 2^31). Mixing in one in-range value confirms we only
+                # touch the overflowing fields.
+                task_count=_INT32_MAX + 5,
+                completed_count=10,
+                failure_count=6_442_450_944,
+                preemption_count=_INT32_MAX + 1,
+                task_state_counts={job_pb2.TASK_STATE_FAILED: _INT32_MAX + 7},
+            ),
+            {
+                "failure_count": _INT32_MAX,
+                "preemption_count": _INT32_MAX,
+                "task_count": _INT32_MAX,
+                "completed_count": 10,
+                "task_state_counts": {"failed": _INT32_MAX},
+            },
+            True,
+            id="clamps_overflowing_counters",
+        ),
+    ],
+)
+def test_job_status_counts(summary, expected, expect_warning, caplog):
+    """``_job_status_counts`` clamps int32 overflow + handles missing summary."""
+    job_id = JobName.from_wire("/alice/runaway")
+    with caplog.at_level("WARNING", logger="iris.cluster.controller.service"):
+        out = _job_status_counts(summary, job_id)
+    assert out == expected
+    has_warning = any("/alice/runaway" in rec.getMessage() for rec in caplog.records)
+    assert has_warning is expect_warning
 
 
 def test_list_jobs_all_scope_includes_descendants(service, state):
@@ -937,7 +1089,7 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
@@ -962,7 +1114,7 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     roots_response = service.list_jobs(
@@ -992,15 +1144,13 @@ def test_list_jobs_job_query_roots_and_children(service, state):
 
 
 def test_task_summaries_sql_group_by(state, service):
-    """_task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
-    from iris.cluster.controller.service import _task_summaries_for_jobs
-
+    """task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
     # Launch a job with 3 replicas
     service.launch_job(make_job_request("multi-task", replicas=3), None)
 
     job_id = JobName.root("test-user", "multi-task")
     with state._db.read_snapshot() as q:
-        summaries = _task_summaries_for_jobs(q, {job_id})
+        summaries = reads.task_summaries_for_jobs(q, {job_id})
 
     assert job_id in summaries
     s = summaries[job_id]
@@ -1035,31 +1185,6 @@ def test_live_user_stats_sql_aggregation(state, service):
     assert total_tasks == 3
 
 
-def test_worker_addresses_for_tasks(state, service):
-    """_worker_addresses_for_tasks fetches only referenced workers."""
-    from iris.cluster.controller.service import _worker_addresses_for_tasks
-
-    # Register workers
-    _register_worker(state, WorkerId("w-1"))
-    _register_worker(state, WorkerId("w-2"))
-    _register_worker(state, WorkerId("w-3"))
-
-    # Launch job and assign one task to w-1
-    service.launch_job(make_job_request("assigned-job"), None)
-    job_id = JobName.root("test-user", "assigned-job")
-    task_id = JobName.from_wire(job_id.to_wire() + "/0")
-    with state._store.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
-
-    # Get tasks with attempts
-    tasks = _query_tasks_with_attempts(state, job_id)
-    addresses = _worker_addresses_for_tasks(state._db, tasks)
-
-    # Should only have w-1
-    assert WorkerId("w-1") in addresses
-    assert len(addresses) == 1
-
-
 # =============================================================================
 # Worker Tests
 # =============================================================================
@@ -1070,7 +1195,8 @@ def test_list_workers_returns_all(service, state):
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
-    db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(3):
@@ -1098,7 +1224,8 @@ def test_list_workers_returns_all(service, state):
 def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
-    state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    with state._db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(count_cpu):
@@ -1271,19 +1398,26 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     now = Timestamp.now()
-    db.ensure_user("alice", now, role="user")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "alice", now, role="user")
 
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
     )
 
@@ -1307,19 +1441,26 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     """Worker-role user can call register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     now = Timestamp.now()
-    db.ensure_user("system:worker", now, role="worker")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", now, role="worker")
 
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
     )
 
@@ -1339,10 +1480,7 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
-    """get_scheduler_state must not crash when there are running tasks.
-
-    Regression: JobName has no `.job` attribute — the code must use `.parent`.
-    """
+    """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     # Submit a job and move a task to RUNNING
@@ -1354,11 +1492,11 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, job_id, request, Timestamp.now())
 
     w1 = WorkerId("w1")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.register_or_refresh_worker(
             cur,
             worker_id=w1,
@@ -1382,8 +1520,12 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
             None,
         )
         assert resp.total_running == 1
-        assert resp.running_tasks[0].job_id == job_id.to_wire()
-        assert resp.running_tasks[0].user_id == "alice"
+        assert len(resp.running_buckets) == 1
+        bucket = resp.running_buckets[0]
+        assert bucket.job_id == job_id.to_wire()
+        assert bucket.user_id == "alice"
+        assert bucket.worker_id == "w1"
+        assert bucket.count == 1
         # alice has no explicit user_budgets row but has an active task — the
         # scheduler state must report her spend using UserBudgetDefaults so the
         # dashboard renders Spent/Limit/Utilization instead of '-'.
@@ -1406,49 +1548,55 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
 _REF_NOW = date(2026, 6, 1)
 
 
-def test_check_client_freshness_accepts_today():
-    """A client built today is inside the window (upper edge)."""
-    _check_client_freshness(_REF_NOW.isoformat(), _REF_NOW)
-
-
-def test_check_client_freshness_accepts_at_window_edge():
-    """A client exactly FRESHNESS_WINDOW old is still accepted (lower edge)."""
-    edge = _REF_NOW - FRESHNESS_WINDOW
-    _check_client_freshness(edge.isoformat(), _REF_NOW)
-
-
-def test_check_client_freshness_rejects_over_window():
-    """A client one day past the window is rejected."""
-    stale = _REF_NOW - FRESHNESS_WINDOW - timedelta(days=1)
+@pytest.mark.parametrize(
+    "client_date,now,expected_code",
+    [
+        # Upper edge: a client built today is inside the window.
+        pytest.param(_REF_NOW.isoformat(), _REF_NOW, None, id="today_accepted"),
+        # Lower edge: exactly FRESHNESS_WINDOW old is still inside the window.
+        pytest.param((_REF_NOW - FRESHNESS_WINDOW).isoformat(), _REF_NOW, None, id="window_edge_accepted"),
+        # One day past the window: rejected as FAILED_PRECONDITION.
+        pytest.param(
+            (_REF_NOW - FRESHNESS_WINDOW - timedelta(days=1)).isoformat(),
+            _REF_NOW,
+            Code.FAILED_PRECONDITION,
+            id="over_window_rejected",
+        ),
+        # Empty client date is substituted with FEATURE_INTRODUCTION_DATE — at
+        # ship time the substitution still passes the window check.
+        pytest.param("", FEATURE_INTRODUCTION_DATE, None, id="empty_at_introduction_accepted"),
+        # Same substitution, well past the grace period — now rejected.
+        pytest.param(
+            "",
+            FEATURE_INTRODUCTION_DATE + FRESHNESS_WINDOW + timedelta(days=1),
+            Code.FAILED_PRECONDITION,
+            id="empty_well_past_rejected",
+        ),
+        # Garbage strings are rejected as INVALID_ARGUMENT, not silently
+        # treated as stale.
+        pytest.param("not-a-date", _REF_NOW, Code.INVALID_ARGUMENT, id="malformed_rejected"),
+    ],
+)
+def test_check_client_freshness(client_date, now, expected_code):
+    """Verify the freshness check accepts/rejects across the boundary cases."""
+    if expected_code is None:
+        _check_client_freshness(client_date, now)
+        return
     with pytest.raises(ConnectError) as exc_info:
-        _check_client_freshness(stale.isoformat(), _REF_NOW)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
-    assert stale.isoformat() in exc_info.value.message
-
-
-def test_check_client_freshness_empty_is_introduction_date():
-    """Empty string is substituted with FEATURE_INTRODUCTION_DATE."""
-    # Right at ship time: empty clients still inside window, succeed.
-    _check_client_freshness("", FEATURE_INTRODUCTION_DATE)
-    # Well past the grace period: empty clients fail.
-    well_past = FEATURE_INTRODUCTION_DATE + FRESHNESS_WINDOW + timedelta(days=1)
-    with pytest.raises(ConnectError) as exc_info:
-        _check_client_freshness("", well_past)
-    assert exc_info.value.code == Code.FAILED_PRECONDITION
-
-
-def test_check_client_freshness_rejects_malformed():
-    """Non-ISO strings are rejected as INVALID_ARGUMENT."""
-    with pytest.raises(ConnectError) as exc_info:
-        _check_client_freshness("not-a-date", _REF_NOW)
-    assert exc_info.value.code == Code.INVALID_ARGUMENT
+        _check_client_freshness(client_date, now)
+    assert exc_info.value.code == expected_code
+    if expected_code == Code.FAILED_PRECONDITION and client_date:
+        # FAILED_PRECONDITION carries the offending client date so users can
+        # see what the server thinks they sent. Empty-string inputs were
+        # substituted before the check, so the original "" won't appear.
+        assert client_date in exc_info.value.message
 
 
 def test_launch_job_root_with_fresh_client_date(service):
     """Root submission with today's date succeeds end-to-end through launch_job."""
     request = make_job_request("fresh-client")
     request.client_revision_date = date.today().isoformat()
-    response = service.launch_job(request, None)
+    response = service.launch_job(request, object())
     assert response.job_id == JobName.root("test-user", "fresh-client").to_wire()
 
 
@@ -1457,7 +1605,7 @@ def test_launch_job_root_with_stale_client_date(service):
     request = make_job_request("stale-client")
     request.client_revision_date = "2000-01-01"
     with pytest.raises(ConnectError) as exc_info:
-        service.launch_job(request, None)
+        service.launch_job(request, object())
     assert exc_info.value.code == Code.FAILED_PRECONDITION
 
 
@@ -1492,5 +1640,38 @@ def test_set_task_status_text_persists_via_store(service):
         status_text_summary_md=summary_text,
     )
     service.set_task_status_text(request, None)
-    assert service._store.tasks.get_status_text_detail(task_id.to_wire()) == detail_text
-    assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text
+    assert service._transitions.get_status_text_detail(task_id.to_wire()) == detail_text
+    assert service._transitions.get_status_text_summary(task_id.to_wire()) == summary_text
+
+
+def test_list_tasks_returns_current_attempt_timing(service, state):
+    """ListTasks must surface the current attempt's started_at and exactly one attempt entry.
+
+    Regression target: ``_tasks_for_listing`` previously returned tasks with
+    empty ``attempts``, so the proto's ``started_at`` (read from the current
+    attempt) was never populated and retry status text was missing on the
+    dashboard. The fixed version JOINs the current attempt only — at most one
+    row per task — to avoid the IN-clause blowup on long histories.
+    """
+    request = make_job_request("list-tasks-timing")
+    service.launch_job(request, None)
+    job_id = JobName.root("test-user", "list-tasks-timing")
+    task_id = job_id.task(0)
+    worker_id = WorkerId("w-list-timing")
+    _register_worker(state, worker_id)
+    _assign_and_transition(state, task_id, worker_id, job_pb2.TASK_STATE_RUNNING)
+
+    response = service.list_tasks(
+        controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()),
+        None,
+    )
+
+    assert len(response.tasks) == 1
+    proto = response.tasks[0]
+    assert proto.task_id == task_id.to_wire()
+    assert proto.state == job_pb2.TASK_STATE_RUNNING
+    # current attempt is loaded -> started_at on the proto is populated
+    assert proto.started_at.epoch_ms > 0
+    # exactly one attempt entry — the current one — even if more existed
+    assert len(proto.attempts) == 1
+    assert proto.attempts[0].attempt_id == proto.current_attempt_id
