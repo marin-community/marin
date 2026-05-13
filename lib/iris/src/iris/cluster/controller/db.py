@@ -42,6 +42,8 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
+from iris.cluster.controller.schema import auth_metadata, metadata
+
 logger = logging.getLogger(__name__)
 
 
@@ -209,6 +211,7 @@ class ControllerDB:
 
     DB_FILENAME = "controller.sqlite3"
     AUTH_DB_FILENAME = "auth.sqlite3"
+    BASELINE_MIGRATION = "0001_baseline.py"
 
     def __init__(self, db_dir: Path):
         self._db_dir = db_dir
@@ -216,6 +219,7 @@ class ControllerDB:
         self._db_path = self._db_dir / self.DB_FILENAME
         self._auth_db_path = self._db_dir / self.AUTH_DB_FILENAME
         self._lock = RLock()
+        self._reopen_hooks: list[Callable[[], None]] = []
 
         # Build SA engines first so apply_migrations can use raw_connection().
         t0 = time.monotonic()
@@ -241,11 +245,6 @@ class ControllerDB:
         finally:
             raw_conn.close()
         logger.info("ANALYZE completed in %.2fs", time.monotonic() - t0)
-
-        # Callables invoked at the end of ``replace_from`` so callers with
-        # caches over DB contents (e.g. projections) can reload them
-        # after a checkpoint restore. Registered via ``register_reopen_hook``.
-        self._reopen_hooks: list[Callable[[], None]] = []
 
         # Enforce the @writes_to invariant. Importing the writes package
         # re-exports every entity module so REGISTERED_WRITE_FUNCTIONS is
@@ -362,124 +361,159 @@ class ControllerDB:
             yield tx
 
     def apply_migrations(self) -> None:
-        """Apply pending migrations from the migrations/ directory.
+        """Bring the DB to the current schema, then apply any delta migrations.
 
-        Supports Python migration files that define a ``migrate(conn)``
-        function. Migration names are matched by stem so a migration recorded
-        under its ``.sql`` name is not re-run after conversion to ``.py``.
+        The current schema is materialized declaratively from ``schema.py``'s
+        ``metadata`` / ``auth_metadata`` via ``Table.create_all`` — a single
+        ``0001_baseline`` step that runs once per DB. Pre-baseline history
+        (the original ``0001_init`` through the last pre-baseline migration)
+        is no longer carried as files; any prod DB seeded under that scheme
+        already has the schema, and we detect that case and self-heal by
+        recording the baseline marker without recreating anything.
 
-        Migrations run outside a transaction because executescript() implicitly
-        commits. This is fine: migrations only run at startup before any
-        concurrent access. Each migration is applied then recorded; if the
-        process crashes mid-migration the partially-applied file won't be in
-        schema_migrations and the next startup will re-run it (migrations must
-        be idempotent via IF NOT EXISTS / IF EXISTS guards).
+        Anything in ``migrations/`` after baseline is a delta — a small Python
+        module exposing ``migrate(raw_conn)`` — applied in lexicographic order
+        and recorded in ``schema_migrations`` by stem. Stems already recorded
+        are skipped (including legacy pre-baseline stems on upgraded prod DBs).
+        Deltas must be idempotent under ``IF [NOT] EXISTS`` so a crash mid-run
+        is safe to retry.
         """
-        migrations_dir = Path(__file__).with_name("migrations")
-        migrations_dir.mkdir(parents=True, exist_ok=True)
+        baseline_stem = Path(self.BASELINE_MIGRATION).stem
 
-        # Use a raw sqlite3 connection so we can call executescript() and flip
-        # PRAGMAs outside any SA transaction context. The pool_size=1 write
-        # engine is used; we hold this connection for the entire migration run
-        # and close it before returning so the pool is free afterwards.
+        # Baseline step. ``metadata.create_all`` checks out its own connection
+        # from the write engine, which collides with the pool_size=1 pool if we
+        # hold one ourselves — so scope each raw-connection use tightly.
+        raw_conn = self._sa_write_engine.raw_connection()
+        try:
+            self._ensure_schema_migrations_table(raw_conn)
+            applied_stems = self._applied_migration_stems(raw_conn)
+            needs_baseline = baseline_stem not in applied_stems
+            has_user_tables = self._has_user_tables(raw_conn) if needs_baseline else False
+        finally:
+            raw_conn.close()
+
+        if needs_baseline:
+            if not has_user_tables:
+                t0 = time.monotonic()
+                metadata.create_all(self._sa_write_engine)
+                # auth_metadata's Tables don't carry a schema= so create_all
+                # would target the engine's main DB. Open a one-shot engine
+                # pointing at auth.sqlite3 so the tables land there.
+                auth_write = _make_write_engine(self._auth_db_path, None)
+                try:
+                    auth_metadata.create_all(auth_write)
+                finally:
+                    auth_write.dispose()
+                logger.info("Baseline schema created in %.2fs", time.monotonic() - t0)
+            else:
+                logger.info("Legacy DB detected; recording baseline marker without recreating schema")
+            self._record_migration(self.BASELINE_MIGRATION)
+            applied_stems.add(baseline_stem)
+
+        # Delta migrations.
+        raw_conn = self._sa_write_engine.raw_connection()
+        try:
+            self._apply_delta_migrations(raw_conn, applied_stems)
+        finally:
+            raw_conn.close()
+
+        # Migrations may have churned the WAL; reclaim and truncate.
+        # wal_checkpoint() takes its own raw connection, so do it after
+        # releasing ours back to the pool_size=1 write pool.
+        busy, log_frames, checkpointed = self.wal_checkpoint()
+        logger.info(
+            "Post-migration wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
+            busy,
+            log_frames,
+            checkpointed,
+        )
+
+    @staticmethod
+    def _ensure_schema_migrations_table(raw_conn) -> None:
+        raw_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        raw_conn.commit()
+
+    @staticmethod
+    def _applied_migration_stems(raw_conn) -> set[str]:
+        rows = raw_conn.execute("SELECT name FROM schema_migrations").fetchall()
+        return {Path(row[0]).stem for row in rows}
+
+    @staticmethod
+    def _has_user_tables(raw_conn) -> bool:
+        return (
+            raw_conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'schema_migrations' "
+                "LIMIT 1"
+            ).fetchone()
+            is not None
+        )
+
+    def _record_migration(self, name: str) -> None:
         raw_conn = self._sa_write_engine.raw_connection()
         try:
             raw_conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    name TEXT PRIMARY KEY,
-                    applied_at_ms INTEGER NOT NULL
-                )
-                """
+                "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
+                (name, Timestamp.now().epoch_ms()),
             )
             raw_conn.commit()
-            applied = {row[0] for row in raw_conn.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()}
-
-            # Match by stem: a migration recorded under its .sql name is not
-            # re-run after conversion to .py.
-            applied_stems = {Path(name).stem for name in applied}
-
-            pending = []
-            for path in sorted(migrations_dir.glob("*.py")):
-                if path.name.startswith("__"):
-                    continue
-                if path.stem in applied_stems:
-                    continue
-                pending.append(path)
-
-            if not pending:
-                return
-
-            logger.info("Applying %d pending migration(s): %s", len(pending), [p.name for p in pending])
-
-            # Flip to fast-mode PRAGMAs for the duration of the migration loop.
-            # Safe: migrations run at startup before any concurrent access, and a
-            # crash re-runs the migration from schema_migrations. journal_mode
-            # cannot change inside a transaction, so commit first and restore at
-            # the end.
-            raw_conn.commit()
-            raw_conn.execute("PRAGMA synchronous=OFF")
-            # journal_mode returns a row; consume it so the cursor is closed and
-            # cannot hold a statement-level lock that would block wal_checkpoint.
-            raw_conn.execute("PRAGMA journal_mode=MEMORY").fetchall()
-            raw_conn.execute("PRAGMA temp_store=MEMORY")
-            # Migrations 0005/0014/0020/0023 reference `profiles.task_profiles`.
-            # Attach profiles.sqlite3 for the migration loop; 0046 and the
-            # finally block below detach and unlink it.
-            profiles_path = self._db_dir / "profiles.sqlite3"
-            raw_conn.execute("ATTACH DATABASE ? AS profiles", (str(profiles_path),))
-            try:
-                for path in pending:
-                    t0 = time.monotonic()
-                    spec = importlib.util.spec_from_file_location(path.stem, path)
-                    assert spec is not None and spec.loader is not None
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-                    module.migrate(raw_conn)
-                    # Commit any implicit transaction left open by migrate() (e.g.
-                    # row-by-row UPDATEs in 0008) so the next BEGIN IMMEDIATE succeeds.
-                    raw_conn.commit()
-                    logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
-
-                    raw_conn.execute("BEGIN IMMEDIATE")
-                    try:
-                        raw_conn.execute(
-                            "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
-                            (path.name, Timestamp.now().epoch_ms()),
-                        )
-                        raw_conn.commit()
-                    except Exception:
-                        raw_conn.execute("ROLLBACK")
-                        raise
-            finally:
-                raw_conn.commit()
-                raw_conn.execute("PRAGMA synchronous=NORMAL")
-                raw_conn.execute("PRAGMA journal_mode=WAL").fetchall()
-                # Detach + unlink profiles.sqlite3. Idempotent — 0046 may
-                # already have detached and unlinked it.
-                try:
-                    raw_conn.execute("DETACH DATABASE profiles")
-                except sqlite3.OperationalError:
-                    pass
-                try:
-                    profiles_path.unlink()
-                except FileNotFoundError:
-                    pass
-                # Checkpoint inline: must release raw_conn back to the pool first
-                # because wal_checkpoint() acquires a new raw_connection() and the
-                # write engine pool_size=1 would deadlock if we held raw_conn here.
-                raw_conn.close()
-                raw_conn = None
-                busy, log_frames, checkpointed = self.wal_checkpoint()
-                logger.info(
-                    "Post-migration wal_checkpoint(TRUNCATE): busy=%d log_frames=%d checkpointed=%d",
-                    busy,
-                    log_frames,
-                    checkpointed,
-                )
         finally:
-            if raw_conn is not None:
-                raw_conn.close()
+            raw_conn.close()
+
+    def _apply_delta_migrations(self, raw_conn, applied_stems: set[str]) -> None:
+        migrations_dir = Path(__file__).with_name("migrations")
+        if not migrations_dir.exists():
+            return
+
+        pending = [
+            path
+            for path in sorted(migrations_dir.glob("*.py"))
+            if not path.name.startswith("__") and path.stem not in applied_stems
+        ]
+        if not pending:
+            return
+
+        logger.info("Applying %d pending migration(s): %s", len(pending), [p.name for p in pending])
+
+        raw_conn.execute("PRAGMA synchronous=OFF")
+        # journal_mode returns a row; consume so the cursor closes and cannot
+        # hold a statement-level lock that would block wal_checkpoint.
+        raw_conn.execute("PRAGMA journal_mode=MEMORY").fetchall()
+        raw_conn.execute("PRAGMA temp_store=MEMORY")
+        try:
+            for path in pending:
+                t0 = time.monotonic()
+                spec = importlib.util.spec_from_file_location(path.stem, path)
+                assert spec is not None and spec.loader is not None
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                module.migrate(raw_conn)
+                # Commit any implicit transaction left open by migrate() so
+                # the next BEGIN IMMEDIATE succeeds.
+                raw_conn.commit()
+                logger.info("Migration %s applied in %.2fs", path.name, time.monotonic() - t0)
+
+                raw_conn.execute("BEGIN IMMEDIATE")
+                try:
+                    raw_conn.execute(
+                        "INSERT INTO schema_migrations(name, applied_at_ms) VALUES (?, ?)",
+                        (path.name, Timestamp.now().epoch_ms()),
+                    )
+                    raw_conn.commit()
+                except Exception:
+                    raw_conn.execute("ROLLBACK")
+                    raise
+        finally:
+            raw_conn.commit()
+            raw_conn.execute("PRAGMA synchronous=NORMAL")
+            raw_conn.execute("PRAGMA journal_mode=WAL").fetchall()
 
     @property
     def api_keys_table(self) -> str:
