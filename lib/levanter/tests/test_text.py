@@ -417,6 +417,42 @@ def test_supervised_text_cache_masks_target_tokens_for_training_and_eval(tmp_pat
     np.testing.assert_array_equal(eval_example.loss_weight.array, np.array([0.0, 1.0, 1.0, 0.0]))
 
 
+def test_supervised_text_processor_preserves_input_target_token_boundary():
+    class BoundaryMergingTokenizer:
+        name_or_path = "boundary-merging"
+        vocab_size = 128
+        bos_token_id = None
+        eos_token_id = None
+        pad_token_id = None
+        bos_token = None
+        eos_token = None
+        chat_template = None
+
+        def __len__(self):
+            return self.vocab_size
+
+        def encode(self, text, *, add_special_tokens=False):
+            if text == "ab":
+                return [99]
+            if text == "a":
+                return [1]
+            if text == "b":
+                return [2]
+            raise ValueError(f"Unexpected text: {text!r}")
+
+    processor = preprocessor_for_format(
+        SupervisedLmDatasetFormat(input_key="input", target_key="target"),
+        BoundaryMergingTokenizer(),  # type: ignore[arg-type]
+        enforce_bos=False,
+        enforce_eos=False,
+    )
+
+    row = processor([{"input": "a", "target": "b"}])[0]
+
+    np.testing.assert_array_equal(row["input_ids"], np.array([1, 2], dtype=np.int32))
+    np.testing.assert_array_equal(row["loss_weights"], np.array([1.0, 0.0], dtype=np.float32))
+
+
 def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
     records = [
         {"input": "1 ", "target": "2"},

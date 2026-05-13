@@ -101,12 +101,13 @@ class SupervisedTextProcessor(BatchProcessor[dict, dict]):
                     f"Supervised fields '{self.input_field}' and '{self.target_field}' must both be strings."
                 )
 
-            full_text = input_text + target_text
+            target_text_with_eos = target_text
             if eos_str is not None:
-                full_text = full_text + " " + eos_str
+                target_text_with_eos = target_text_with_eos + " " + eos_str
 
             input_ids = self.tokenizer.encode(input_text, add_special_tokens=False)
-            full_ids = self.tokenizer.encode(full_text, add_special_tokens=False)
+            target_ids = self.tokenizer.encode(target_text_with_eos, add_special_tokens=False)
+            full_ids = [*input_ids, *target_ids]
 
             prompt_length = len(input_ids)
             if bos_id is not None:
