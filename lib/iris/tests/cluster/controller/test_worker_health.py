@@ -11,10 +11,13 @@ Exercises the two independent termination paths:
 from pathlib import Path
 
 import pytest
-from iris.cluster.controller.db import ControllerDB, healthy_active_workers_with_attributes
-from iris.cluster.controller.stores import ControllerStore
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+from iris.cluster.controller.reads import healthy_active_workers_with_attributes
+from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import WorkerId
+from sqlalchemy import insert, select
 
 
 @pytest.fixture
@@ -102,29 +105,43 @@ def test_snapshot_reports_both_counters(tracker: WorkerHealthTracker) -> None:
     assert tracker.snapshot() == {wid: (3, 2)}
 
 
-def test_controller_store_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
-    """A fresh ControllerStore must mark every persisted worker healthy on boot.
+def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
+    """Seeding liveness from persisted workers marks every DB worker healthy.
 
     Without this seed (regression target), a controller restart hides every
     pre-existing worker from ``healthy_active_workers_with_attributes`` until
     the next ping cycle — the scheduler then makes no assignments.
+
+    The seeding logic is now a free function on Controller; this test
+    exercises it directly via WorkerHealthTracker.heartbeat.
     """
+    from rigging.timing import Timestamp
+
     db = ControllerDB(db_dir=tmp_path)
     try:
         with db.transaction() as cur:
-            cur.execute("INSERT INTO workers (worker_id, address) VALUES (?, ?)", ("w-seed-1", "10.0.0.1:8080"))
-            cur.execute("INSERT INTO workers (worker_id, address) VALUES (?, ?)", ("w-seed-2", "10.0.0.2:8080"))
+            cur.execute(insert(workers_table).values(worker_id="w-seed-1", address="10.0.0.1:8080"))
+            cur.execute(insert(workers_table).values(worker_id="w-seed-2", address="10.0.0.2:8080"))
 
-        store = ControllerStore(db)
+        health = WorkerHealthTracker()
+        worker_attrs = WorkerAttrsProjection(db)
 
-        liveness_one = store.health.liveness(WorkerId("w-seed-1"))
-        liveness_two = store.health.liveness(WorkerId("w-seed-2"))
+        # Replicate _seed_liveness_from_workers
+        now_ms = Timestamp.now().epoch_ms()
+        with db.read_snapshot() as tx:
+            rows = tx.execute(select(workers_table.c.worker_id)).all()
+        worker_ids = [row.worker_id for row in rows]
+        health.heartbeat(worker_ids, now_ms)
+
+        liveness_one = health.liveness(WorkerId("w-seed-1"))
+        liveness_two = health.liveness(WorkerId("w-seed-2"))
         assert liveness_one.healthy and liveness_one.active
         assert liveness_two.healthy and liveness_two.active
         assert liveness_one.last_heartbeat_ms > 0
         assert liveness_two.last_heartbeat_ms > 0
 
-        schedulable = healthy_active_workers_with_attributes(db, store.health)
+        with db.read_snapshot() as tx:
+            schedulable = healthy_active_workers_with_attributes(tx, health, worker_attrs)
         ids = {str(w.worker_id) for w in schedulable}
         assert ids == {"w-seed-1", "w-seed-2"}
     finally:

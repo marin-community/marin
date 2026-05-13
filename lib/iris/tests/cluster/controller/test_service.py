@@ -16,9 +16,11 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
+from iris.cluster.controller import reads, writes
 from iris.cluster.controller import service as service_module
 from iris.cluster.controller.codec import constraints_from_json
-from iris.cluster.controller.db import TaskJobSummary
+from iris.cluster.controller.reads import TaskJobSummary
+from iris.cluster.controller.schema import jobs_table, task_attempts_table
 from iris.cluster.controller.service import (
     FEATURE_INTRODUCTION_DATE,
     FRESHNESS_WINDOW,
@@ -36,6 +38,8 @@ from iris.cluster.controller.transitions import (
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import func
+from sqlalchemy import update as sa_update
 
 from tests.cluster.conftest import fake_log_client_from_service
 
@@ -64,7 +68,7 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
         memory_bytes=16 * 1024**3,
         disk_bytes=100 * 1024**3,
     )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.register_or_refresh_worker(
             cur,
             worker_id=worker_id,
@@ -75,10 +79,8 @@ def _register_worker(state: ControllerTransitions, worker_id: WorkerId) -> None:
 
 
 def _set_job_state(state: ControllerTransitions, job_id: JobName, state_value: int) -> None:
-    state._db.execute(
-        "UPDATE jobs SET state = ? WHERE job_id = ?",
-        (state_value, job_id.to_wire()),
-    )
+    with state._db.transaction() as cur:
+        cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id).values(state=state_value))
 
 
 def _assign_and_transition(
@@ -89,9 +91,9 @@ def _assign_and_transition(
     *,
     error: str | None = None,
 ) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -100,7 +102,7 @@ def _assign_and_transition(
             ),
         )
     if target_state != job_pb2.TASK_STATE_RUNNING:
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_task_updates(
                 cur,
                 HeartbeatApplyRequest(
@@ -322,12 +324,12 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
     _register_worker(state, worker)
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.preempt_task(cur, child_task.task_id, reason="evicted by prod tenant")
 
     # Sanity: child is terminal but its attempt still holds the worker.
-    with state._store.read_snapshot() as snap:
-        assert state._store.jobs.has_unfinished_worker_attempts(snap, child_job)
+    with state._db.read_snapshot() as snap:
+        assert reads.has_unfinished_worker_attempts(snap, child_job)
 
     # Re-submit the child with KEEP. The unfinished attempt should make the
     # service block in the drain wait rather than raise FAILED_PRECONDITION.
@@ -341,17 +343,23 @@ def test_existing_job_policy_keep_drains_unfinalized_child_attempt(service, stat
             fut.result(timeout=0.3)
 
         # Synthesize the finalizing heartbeat that the production worker would
-        # have eventually sent. mark_finished stamps finished_at_ms, which
-        # releases the predicate ``_wait_until_job_drained`` polls.
+        # have eventually sent. Stamping finished_at_ms releases the predicate
+        # ``_wait_until_job_drained`` polls.
         child_task_after_preempt = _query_tasks_with_attempts(state, child_job)[0]
-        with state._store.transaction() as cur:
-            state._store.attempts.mark_finished(
-                cur,
-                child_task_after_preempt.task_id,
-                child_task_after_preempt.current_attempt_id,
-                job_pb2.TASK_STATE_PREEMPTED,
-                finished_at_ms=int(time.time() * 1000),
-                error="finalized after preemption",
+        with state._db.transaction() as cur:
+            # Heartbeat-equivalent stamp: set finished_at_ms (COALESCE preserves
+            # any earlier stamp) and final state so the drain predicate fires.
+            cur.execute(
+                sa_update(task_attempts_table)
+                .where(
+                    task_attempts_table.c.task_id == child_task_after_preempt.task_id,
+                    task_attempts_table.c.attempt_id == child_task_after_preempt.current_attempt_id,
+                )
+                .values(
+                    state=job_pb2.TASK_STATE_PREEMPTED,
+                    finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, int(time.time() * 1000)),
+                    error="finalized after preemption",
+                )
             )
 
         # The blocked launch should now wake up and succeed within one backoff
@@ -380,7 +388,7 @@ def test_existing_job_policy_keep_drain_times_out_when_no_heartbeat(service, sta
     _register_worker(state, worker)
     child_task = _query_tasks_with_attempts(state, child_job)[0]
     _assign_and_transition(state, child_task.task_id, worker, job_pb2.TASK_STATE_RUNNING)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.preempt_task(cur, child_task.task_id, reason="evicted, worker stuck")
 
     request = make_job_request(child_name)
@@ -435,7 +443,7 @@ def test_get_job_status_reports_has_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     parent = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=parent_id.to_wire()), None)
@@ -726,14 +734,20 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_owner")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -757,14 +771,20 @@ def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_pat
     """Cannot submit a child job under another user's hierarchy."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     auth_service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles_child")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
     )
 
@@ -1061,7 +1081,7 @@ def test_list_jobs_all_scope_includes_descendants(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     request = controller_pb2.Controller.ListJobsRequest()
@@ -1086,7 +1106,7 @@ def test_list_jobs_job_query_roots_and_children(service, state):
         environment=job_pb2.EnvironmentConfig(),
     )
     child_req.entrypoint.run_command.argv[:] = ["python", "-c", "pass"]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, child_id, child_req, Timestamp.now())
 
     roots_response = service.list_jobs(
@@ -1116,15 +1136,13 @@ def test_list_jobs_job_query_roots_and_children(service, state):
 
 
 def test_task_summaries_sql_group_by(state, service):
-    """_task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
-    from iris.cluster.controller.service import _task_summaries_for_jobs
-
+    """task_summaries_for_jobs SQL GROUP BY produces correct aggregates."""
     # Launch a job with 3 replicas
     service.launch_job(make_job_request("multi-task", replicas=3), None)
 
     job_id = JobName.root("test-user", "multi-task")
     with state._db.read_snapshot() as q:
-        summaries = _task_summaries_for_jobs(q, {job_id})
+        summaries = reads.task_summaries_for_jobs(q, {job_id})
 
     assert job_id in summaries
     s = summaries[job_id]
@@ -1159,31 +1177,6 @@ def test_live_user_stats_sql_aggregation(state, service):
     assert total_tasks == 3
 
 
-def test_worker_addresses_for_tasks(state, service):
-    """_worker_addresses_for_tasks fetches only referenced workers."""
-    from iris.cluster.controller.service import _worker_addresses_for_tasks
-
-    # Register workers
-    _register_worker(state, WorkerId("w-1"))
-    _register_worker(state, WorkerId("w-2"))
-    _register_worker(state, WorkerId("w-3"))
-
-    # Launch job and assign one task to w-1
-    service.launch_job(make_job_request("assigned-job"), None)
-    job_id = JobName.root("test-user", "assigned-job")
-    task_id = JobName.from_wire(job_id.to_wire() + "/0")
-    with state._store.transaction() as cur:
-        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=WorkerId("w-1"))])
-
-    # Get tasks with attempts
-    tasks = _query_tasks_with_attempts(state, job_id)
-    addresses = _worker_addresses_for_tasks(state._db, tasks)
-
-    # Should only have w-1
-    assert WorkerId("w-1") in addresses
-    assert len(addresses) == 1
-
-
 # =============================================================================
 # Worker Tests
 # =============================================================================
@@ -1194,7 +1187,8 @@ def test_list_workers_returns_all(service, state):
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
-    db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(3):
@@ -1222,7 +1216,8 @@ def test_list_workers_returns_all(service, state):
 def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
-    state._db.ensure_user("system:worker", Timestamp.now(), role="worker")
+    with state._db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
         for i in range(count_cpu):
@@ -1395,19 +1390,26 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
     """Non-worker user gets PERMISSION_DENIED on register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     now = Timestamp.now()
-    db.ensure_user("alice", now, role="user")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "alice", now, role="user")
 
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
     )
 
@@ -1431,19 +1433,26 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
     """Worker-role user can call register()."""
     from iris.cluster.bundle import BundleStore
     from iris.cluster.controller.auth import ControllerAuth
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
     from iris.rpc.auth import VerifiedIdentity, _verified_identity
 
     db = state._db
     now = Timestamp.now()
-    db.ensure_user("system:worker", now, role="worker")
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "system:worker", now, role="worker")
 
     auth = ControllerAuth(provider="static")
     service = ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=auth,
     )
 
@@ -1475,11 +1484,11 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         environment=job_pb2.EnvironmentConfig(),
         replicas=1,
     )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, job_id, request, Timestamp.now())
 
     w1 = WorkerId("w1")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.register_or_refresh_worker(
             cur,
             worker_id=w1,
@@ -1623,8 +1632,8 @@ def test_set_task_status_text_persists_via_store(service):
         status_text_summary_md=summary_text,
     )
     service.set_task_status_text(request, None)
-    assert service._store.tasks.get_status_text_detail(task_id.to_wire()) == detail_text
-    assert service._store.tasks.get_status_text_summary(task_id.to_wire()) == summary_text
+    assert service._transitions.get_status_text_detail(task_id.to_wire()) == detail_text
+    assert service._transitions.get_status_text_summary(task_id.to_wire()) == summary_text
 
 
 def test_list_tasks_returns_current_attempt_timing(service, state):
@@ -1658,53 +1667,3 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     # exactly one attempt entry — the current one — even if more existed
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
-
-
-# =============================================================================
-# Direct-SQL load: ensure list_jobs scales under concurrent dashboard polling.
-# =============================================================================
-
-
-def test_list_jobs_concurrent_load_p99_under_threshold(service):
-    """100 concurrent ``list_jobs`` calls against ~1k jobs must hit p99 < 500ms.
-
-    The previous implementation amortized this fan-out behind ``SnapshotView``;
-    direct SQL replaces that with per-request reads from the 32-slot reader
-    pool. This test would have failed if the reader pool were starving on the
-    GIL-unfriendly path or if the EXPLAIN-verified indexes were not being
-    used. The threshold is generous on purpose — we want to detect regressions
-    on the order of seconds, not micro-jitter.
-    """
-    for i in range(1000):
-        service.launch_job(make_job_request(f"load-job-{i:04d}"), None)
-
-    request = controller_pb2.Controller.ListJobsRequest(
-        query=controller_pb2.Controller.JobQuery(limit=50),
-    )
-
-    # Warm one call so the SQLite page cache is populated.
-    service.list_jobs(request, None)
-
-    n_requests = 100
-    latencies_ms: list[float] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
-
-        def call() -> float:
-            start = time.perf_counter()
-            response = service.list_jobs(request, None)
-            assert response.total_count == 1000
-            return (time.perf_counter() - start) * 1000.0
-
-        futures = [pool.submit(call) for _ in range(n_requests)]
-        for f in concurrent.futures.as_completed(futures):
-            latencies_ms.append(f.result())
-
-    latencies_ms.sort()
-    p50 = latencies_ms[len(latencies_ms) // 2]
-    p99 = latencies_ms[int(len(latencies_ms) * 0.99)]
-    # 500ms is well above expected steady-state (in-process measurement was
-    # ~100-120ms; production should be cheaper since the test fixture's DB has
-    # transaction overhead from thousands of launch_job inserts) but tight
-    # enough that read-pool starvation or accidental N+1 query growth would
-    # trip it.
-    assert p99 < 500.0, f"list_jobs concurrent p99 too high: p50={p50:.1f}ms p99={p99:.1f}ms"

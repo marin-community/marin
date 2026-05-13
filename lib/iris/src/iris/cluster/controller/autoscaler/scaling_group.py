@@ -11,7 +11,6 @@ helpers.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from collections.abc import Sequence
@@ -19,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 
 from rigging.timing import Deadline, Duration, Timestamp, TokenBucket
+from sqlalchemy import delete, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.chaos import chaos_raise
 from iris.cluster.constraints import (
@@ -33,6 +34,7 @@ from iris.cluster.constraints import (
     is_cpu_device_type_constraint,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import scaling_groups_table, slices_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
 from iris.cluster.types import (
@@ -352,8 +354,9 @@ class ScalingGroup:
         if self._db is not None:
             with self._db.transaction() as cur:
                 cur.execute(
-                    "INSERT OR IGNORE INTO scaling_groups(name, updated_at_ms) VALUES (?, ?)",
-                    (self.name, Timestamp.now().epoch_ms()),
+                    sqlite_insert(scaling_groups_table)
+                    .values(name=self.name, updated_at_ms=Timestamp.now().epoch_ms())
+                    .on_conflict_do_nothing(index_elements=["name"])
                 )
 
     # -----------------------------------------------------------------------
@@ -365,51 +368,58 @@ class ScalingGroup:
             return
         with self._db.transaction() as cur:
             cur.execute(
-                "INSERT OR REPLACE INTO slices "
-                "(slice_id, scale_group, lifecycle, worker_ids, created_at_ms, error_message) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    slice_id,
-                    self.name,
-                    state.lifecycle.value,
-                    json.dumps(list(state.worker_ids)),
-                    state.handle.created_at.epoch_ms(),
-                    state.error_message,
-                ),
+                sqlite_insert(slices_table)
+                .values(
+                    slice_id=slice_id,
+                    scale_group=self.name,
+                    lifecycle=state.lifecycle.value,
+                    worker_ids=list(state.worker_ids),
+                    created_at_ms=state.handle.created_at.epoch_ms(),
+                    error_message=state.error_message or "",
+                )
+                .on_conflict_do_update(
+                    index_elements=["slice_id"],
+                    set_={
+                        "scale_group": self.name,
+                        "lifecycle": state.lifecycle.value,
+                        "worker_ids": list(state.worker_ids),
+                        "created_at_ms": state.handle.created_at.epoch_ms(),
+                        "error_message": state.error_message or "",
+                    },
+                )
             )
 
     def _db_remove_slice(self, slice_id: str) -> None:
         if self._db is None:
             return
         with self._db.transaction() as cur:
-            cur.execute("DELETE FROM slices WHERE slice_id = ?", (slice_id,))
+            cur.execute(delete(slices_table).where(slices_table.c.slice_id == slice_id))
 
     def _db_update_group(self) -> None:
         if self._db is None:
             return
         with self._db.transaction() as cur:
             cur.execute(
-                "UPDATE scaling_groups SET "
-                "consecutive_failures=?, backoff_until_ms=?, last_scale_up_ms=?, "
-                "last_scale_down_ms=?, quota_exceeded_until_ms=?, quota_reason=?, updated_at_ms=? "
-                "WHERE name=?",
-                (
-                    self._consecutive_failures,
-                    self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
-                    self._last_scale_up.epoch_ms(),
-                    self._last_scale_down.epoch_ms(),
-                    self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0,
-                    self._quota_reason,
-                    Timestamp.now().epoch_ms(),
-                    self.name,
-                ),
+                update(scaling_groups_table)
+                .where(scaling_groups_table.c.name == self.name)
+                .values(
+                    consecutive_failures=self._consecutive_failures,
+                    backoff_until_ms=self._backoff_until.as_timestamp().epoch_ms() if self._backoff_until else 0,
+                    last_scale_up_ms=self._last_scale_up.epoch_ms(),
+                    last_scale_down_ms=self._last_scale_down.epoch_ms(),
+                    quota_exceeded_until_ms=(
+                        self._quota_exceeded_until.as_timestamp().epoch_ms() if self._quota_exceeded_until else 0
+                    ),
+                    quota_reason=self._quota_reason,
+                    updated_at_ms=Timestamp.now().epoch_ms(),
+                )
             )
 
     def _db_clear_slices(self) -> None:
         if self._db is None:
             return
         with self._db.transaction() as cur:
-            cur.execute("DELETE FROM slices WHERE scale_group = ?", (self.name,))
+            cur.execute(delete(slices_table).where(slices_table.c.scale_group == self.name))
 
     @property
     def platform(self) -> WorkerInfraProvider:
