@@ -487,8 +487,6 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
     ]
     if _warmup_mode():
         tags.append("warmup")
-    if mix.initialize_from_checkpoint_path is not None:
-        tags.append(f"init_from={mix.initialize_from_checkpoint_path}")
 
     inner = TrainLmConfig(
         data=_build_data_mixture(mix),
