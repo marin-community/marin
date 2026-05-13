@@ -35,6 +35,11 @@ _REPO_ROOT = Path(__file__).parents[2]
 JOB_STATE_SUCCEEDED = job_pb2.JobState.Name(job_pb2.JOB_STATE_SUCCEEDED)
 _MAX_CHILD_WAIT_POLL_INTERVAL = 30.0
 
+
+def _job_id_prefix(job_id: str) -> str:
+    return JobName.from_wire(job_id).to_wire()
+
+
 _HOST_SSH_COMMAND = """\
 set +e
 echo '=== docker ps -a ==='
@@ -156,8 +161,9 @@ def job_status(
     repo_root: Path,
     controller_url: str | None = None,
 ) -> job_pb2.JobStatus:
+    prefix = _job_id_prefix(job_id)
     with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
-        for job in client.list_jobs(prefix=JobName.from_wire(job_id)):
+        for job in client.list_jobs(prefix=prefix):
             if job.job_id == job_id:
                 return job
 
@@ -174,7 +180,7 @@ def wait_for_job(
     controller_url: str | None = None,
 ) -> job_pb2.JobStatus:
     """Poll until the job reaches a terminal state. Raises TimeoutError if `timeout` elapses."""
-    prefix = JobName.from_wire(job_id)
+    prefix = _job_id_prefix(job_id)
     start = time.monotonic()
     with _open_iris_client(iris_config=iris_config, repo_root=repo_root, controller_url=controller_url) as client:
         while True:
@@ -203,7 +209,7 @@ def wait_for_child_job(
     Once any child has started, the child wait timeout is dropped — total runtime is bounded by the caller's
     wall clock (e.g. GitHub ``timeout-minutes``).
     """
-    prefix = JobName.from_wire(job_id)
+    prefix = _job_id_prefix(job_id)
     deadline = time.monotonic() + child_wait_timeout
     backoff = ExponentialBackoff(
         initial=min(poll_interval, _MAX_CHILD_WAIT_POLL_INTERVAL),
