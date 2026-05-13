@@ -176,19 +176,46 @@ def test_outcome_aging_uses_fate_at(detector: BackoffDetector) -> None:
     assert detector.health(now) == GroupHealth.CHURNING
 
 
-def test_long_lived_inflight_outcome_ages_out(detector: BackoffDetector) -> None:
-    """An in-flight outcome past long_lived_threshold should still get evicted
-    when the window expires from its created_at."""
+def test_long_lived_inflight_outcome_is_retained(detector: BackoffDetector) -> None:
+    """In-flight outcomes are kept past the window so the slice can be
+    correctly classified when it eventually terminates.
+
+    If we evicted them, a normal preemption of a long-lived survivor would
+    look like an "unknown slice died" (no record_created found), get a
+    synthetic ``created_at = terminated_at``, and be mis-classified as a
+    short-lived failure — inflating churn on healthy steady-state groups.
+    """
     detector.record_created("alive", ts(0))
-    # 31 minutes later: window from created_at is 30 min, so this should evict.
     now = ts(31 * 60)
-    # Force a GC by calling churn_rate.
-    _ = detector.churn_rate(now)
-    # No more records.
     detector.record_create_failed(now)
     detector.record_create_failed(now)
     detector.record_create_failed(now)
-    assert detector.churn_rate(now) == 1.0
+    # 1 LONG_LIVED (in-flight, aged past long_lived_threshold) + 3 BOOT_FAILED
+    # → 3/4 = 75% → CHURNING (not HOSTILE).
+    assert detector.churn_rate(now) == pytest.approx(3 / 4)
+    assert detector.health(now) == GroupHealth.CHURNING
+
+
+def test_long_lived_survivor_preemption_is_not_short_lived(
+    detector: BackoffDetector,
+) -> None:
+    """Regression: a slice that survived past the window and is then preempted
+    must still classify as LONG_LIVED, not as a fabricated short-lived event."""
+    detector.record_created("survivor", ts(0))
+    # Slice quietly survives for 45 minutes (past the 30-min window).
+    # Then GCP preempts it. With the old GC, the slice would have been evicted
+    # at age=30min and the termination record would fabricate created_at=now,
+    # classifying as PREEMPTED short-lived. With the corrected GC, the
+    # in-flight outcome is retained and the termination records age=45min
+    # → LONG_LIVED.
+    detector.record_terminated("survivor", SliceFate.PREEMPTED, ts(45 * 60))
+    now = ts(45 * 60 + 1)
+    # Need min_samples=3 to compute a rate; add two BOOT_FAILED.
+    detector.record_create_failed(now)
+    detector.record_create_failed(now)
+    # 1 LONG_LIVED + 2 BOOT_FAILED → 2/3 churn → CHURNING.
+    # Critically, the survivor was NOT counted as a failure.
+    assert detector.churn_rate(now) == pytest.approx(2 / 3)
 
 
 def test_record_terminated_long_lived_raises(detector: BackoffDetector) -> None:

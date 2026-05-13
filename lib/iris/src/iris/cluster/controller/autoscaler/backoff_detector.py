@@ -25,9 +25,10 @@ sample, so a healthy steady-state group whose slices are all alive reads
 as LONG_LIVED across the window and produces ``churn_rate = 0`` -- one
 unlucky preemption against many healthy slices does not move the needle.
 
-Quota-exhaustion backoff lives elsewhere
-(``ScalingGroup._quota_exceeded_until``). Quota is a categorical "GCP
-said no", not churn, and has a different recovery pattern.
+Quota-exhaustion gating lives inside this class (``_quota_until``,
+``record_quota_exceeded``, ``clear_quota_block``). Quota is a categorical
+"GCP said no", not churn, so it does not contribute to the churn rate
+and has its own fixed-duration block.
 
 The detector is in-memory only: on controller restart, the window starts
 empty and is repopulated as slices live and die. A short period of "no
@@ -272,13 +273,15 @@ class BackoffDetector:
 
     def can_scale_up(self, now: Timestamp) -> bool:
         """False when the group is HOSTILE or inside the quota block window."""
-        if self._quota_active(now):
+        quota_deadline, _ = self._snapshot_quota()
+        if quota_deadline is not None and not quota_deadline.expired(now=now):
             return False
         return self.health(now) != GroupHealth.HOSTILE
 
     def scale_up_rate_multiplier(self, now: Timestamp) -> float:
         """Multiplier applied to the desired scale-up batch size."""
-        if self._quota_active(now):
+        quota_deadline, _ = self._snapshot_quota()
+        if quota_deadline is not None and not quota_deadline.expired(now=now):
             return 0.0
         return _RATE_MULTIPLIERS[self.health(now)]
 
@@ -292,19 +295,19 @@ class BackoffDetector:
 
     def block_reason(self, now: Timestamp) -> str | None:
         """Human-readable reason scale-up is currently blocked, or ``None``."""
-        if self._quota_active(now):
-            return f"quota exceeded: {self._quota_reason}" if self._quota_reason else "quota exceeded"
+        quota_deadline, quota_reason = self._snapshot_quota()
+        if quota_deadline is not None and not quota_deadline.expired(now=now):
+            return f"quota exceeded: {quota_reason}" if quota_reason else "quota exceeded"
         if self.health(now) == GroupHealth.HOSTILE:
             return f"churn rate {self.churn_rate(now):.0%}"
         return None
 
     def quota_deadline(self, now: Timestamp) -> Timestamp | None:
         """Active quota-block expiry, or ``None`` if quota isn't currently blocking."""
-        if not self._quota_active(now):
+        deadline, _ = self._snapshot_quota()
+        if deadline is None or deadline.expired(now=now):
             return None
-        # _quota_until is non-None because _quota_active returned True.
-        assert self._quota_until is not None
-        return self._quota_until.as_timestamp()
+        return deadline.as_timestamp()
 
     def recent_failure_count(self, now: Timestamp) -> int:
         """Count of recent classified-as-failure outcomes — for status display."""
@@ -315,28 +318,35 @@ class BackoffDetector:
             ]
         return sum(1 for fate in classified if fate != SliceFate.LONG_LIVED)
 
-    def _quota_active(self, now: Timestamp) -> bool:
-        return self._quota_until is not None and not self._quota_until.expired(now=now)
+    def _snapshot_quota(self) -> tuple[Deadline | None, str]:
+        """Snapshot (deadline, reason) under the lock for race-free reads."""
+        with self._lock:
+            return self._quota_until, self._quota_reason
 
     # -----------------------------------------------------------------------
     # Internals (caller must hold _lock for _gc; _classify is pure)
     # -----------------------------------------------------------------------
 
     def _gc(self, now: Timestamp) -> None:
-        """Drop outcomes whose reference time has aged out of the window."""
+        """Drop resolved outcomes whose ``fate_at`` has aged out of the window.
+
+        In-flight outcomes are intentionally **not** evicted: a slice that
+        legitimately runs longer than the window must still be recognised when
+        it eventually terminates, otherwise a normal preemption of a long-lived
+        survivor would be mis-classified as a short-lived failure (the missing
+        ``record_created`` would cause :meth:`record_terminated` to fabricate
+        ``created_at = terminated_at``, age=0). The no-ghost guarantee from
+        the runtime ensures every in-flight outcome eventually resolves, at
+        which point it ages out via its ``fate_at``.
+        """
         cutoff_ms = now.epoch_ms() - self._window.to_ms()
         stale = [
-            slice_id for slice_id, outcome in self._outcomes.items() if self._outcome_reference_ms(outcome) < cutoff_ms
+            slice_id
+            for slice_id, outcome in self._outcomes.items()
+            if outcome.fate_at is not None and outcome.fate_at.epoch_ms() < cutoff_ms
         ]
         for slice_id in stale:
             del self._outcomes[slice_id]
-
-    @staticmethod
-    def _outcome_reference_ms(outcome: SliceOutcome) -> int:
-        """The time the outcome 'ages out' from: fate_at if resolved, else created_at."""
-        if outcome.fate_at is not None:
-            return outcome.fate_at.epoch_ms()
-        return outcome.created_at.epoch_ms()
 
     def _classify(self, outcome: SliceOutcome, now: Timestamp) -> SliceFate | None:
         """Classify a single outcome into PREEMPTED / BOOT_FAILED / LONG_LIVED / None.
