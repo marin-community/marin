@@ -7,7 +7,7 @@ import gzip
 import json
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import marin.profiling.cli as cli_module
 import marin.profiling.xplane as xplane_module
@@ -578,6 +578,43 @@ def test_summarize_cli_xplane_file_honors_breakdown_mode(tmp_path: Path, monkeyp
     assert capsys.readouterr().out.strip() == str(output_path)
     summary = profile_summary_from_dict(json.loads(output_path.read_text(encoding="utf-8")))
     assert summary.time_breakdown.duration_basis == "exclusive_duration_global_timeline"
+
+
+def test_summarize_cli_artifact_honors_download_root(tmp_path: Path, monkeypatch, capsys) -> None:
+    seen_download_root = []
+    output_path = tmp_path / "summary.json"
+    download_root = tmp_path / "downloads"
+
+    def download_artifact(artifact_ref: str, *, download_root: Path | None = None):
+        seen_download_root.append(download_root)
+        return SimpleNamespace(artifact_dir=tmp_path / "artifact", run_metadata=None)
+
+    def summarize_artifact(*args, **kwargs):
+        trace_path = tmp_path / "trace.json.gz"
+        _write_trace(trace_path, step_durations=[100], softmax_duration=10)
+        return summarize_trace(trace_path, warmup_steps=0)
+
+    monkeypatch.setattr(cli_module, "download_wandb_profile_artifact", download_artifact)
+    monkeypatch.setattr(cli_module, "summarize_profile_artifact", summarize_artifact)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "profile_summary.py",
+            "summarize",
+            "--artifact",
+            "entity/project/artifact:v0",
+            "--download-root",
+            str(download_root),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    cli_module.main()
+
+    assert capsys.readouterr().out.strip() == str(output_path)
+    assert seen_download_root == [download_root]
 
 
 def test_summarize_xplane_with_installed_xprof_exports_tables(tmp_path: Path) -> None:

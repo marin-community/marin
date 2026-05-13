@@ -401,7 +401,7 @@ def _handle_summarize(args: argparse.Namespace):
         )
 
     if args.artifact:
-        downloaded = download_wandb_profile_artifact(args.artifact)
+        downloaded = download_wandb_profile_artifact(args.artifact, download_root=args.download_root)
         return summarize_profile_artifact(
             downloaded.artifact_dir,
             run_metadata=downloaded.run_metadata,
