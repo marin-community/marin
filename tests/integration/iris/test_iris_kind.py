@@ -31,9 +31,11 @@ from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.providers.k8s.fake import FakeNodeResources, InMemoryK8sService
 from iris.cluster.providers.k8s.service import CloudK8sService
 from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE, K8sTaskProvider
@@ -75,10 +77,10 @@ class ServiceTestHarness:
 
     def sync_k8s(self) -> None:
         assert self.k8s_provider is not None, "sync_k8s requires K8s harness"
-        with self.state._store.transaction() as cur:
+        with self.state._db.transaction() as cur:
             batch = self.state.drain_for_direct_provider(cur)
         result = self.k8s_provider.sync(batch)
-        with self.state._store.transaction() as cur:
+        with self.state._db.transaction() as cur:
             self.state.apply_direct_provider_updates(cur, result.updates)
 
 
@@ -162,8 +164,10 @@ class _FakeLogClient:
 def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
     db = ControllerDB(db_dir=tmp_path / "cw_db")
     log_service = LogServiceImpl(log_dir=tmp_path / "cw_logs")
-    store = ControllerStore(db)
-    state = ControllerTransitions(store=store)
+    health = WorkerHealthTracker()
+    endpoints = EndpointsProjection(db)
+    worker_attrs = WorkerAttrsProjection(db)
+    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     k8s = InMemoryK8sService()
     k8s.add_node_pool(
@@ -205,10 +209,13 @@ def _make_coreweave_harness(tmp_path: Path) -> ServiceTestHarness:
 
     service = ControllerServiceImpl(
         state,
-        store,
         controller=ctrl,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "cw_bundles")),
         log_client=_FakeLogClient(log_service),
+        db=db,
+        health=health,
+        endpoints=endpoints,
+        worker_attrs=worker_attrs,
     )
 
     return ServiceTestHarness(
