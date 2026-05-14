@@ -61,6 +61,8 @@ _POINTS: tuple[tuple[int, float], ...] = (
 
 # (label, override-dict on GrugMoeMuonHMayArchGNLrConfig)
 _TRIALS: tuple[tuple[str, dict], ...] = (
+    # Unperturbed anchor (gn_lr_scale=1.0, gn_wup_lr_scale=1.0).
+    ("default", {}),
     ("gn-1p3", {"gn_lr_scale": 1.3}),
     ("gn-0p7", {"gn_lr_scale": 0.7}),
     ("gnwup-1p3", {"gn_wup_lr_scale": 1.3}),
