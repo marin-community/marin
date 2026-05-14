@@ -18,6 +18,8 @@ import chex
 import jax
 import jax.numpy as jnp
 import optax
+from jax.sharding import PartitionSpec as P
+from jax.sharding import reshard
 
 
 class ScaleByKLSoapHState(NamedTuple):
@@ -84,7 +86,12 @@ def _eye_leading(p, axis: int):
     return jnp.asarray(eye, dtype=jnp.float32)
 
 
-def _klsoaph_step_2d(
+def _replicated_pspec(ndim: int) -> P:
+    """PartitionSpec with `ndim` None entries (fully replicated)."""
+    return P(*(None,) * ndim)
+
+
+def _klsoaph_step(
     grad: jnp.ndarray,
     exp_avg: jnp.ndarray,
     exp_avg_sq: jnp.ndarray,
@@ -99,22 +106,45 @@ def _klsoaph_step_2d(
     eps: float,
     precond_freq: int,
 ):
-    """One SOAP step for a single 2-D (rows, cols) gradient.
+    """One SOAP step. Works for 2-D ``(rows, cols)`` gradients and 3-D
+    ``(stack, rows, cols)`` gradients via einsum ellipsis.
 
-    All arrays are float32. Matches upstream KLSOAPH.step() in
-    KellerJordan/modded-nanogpt PR #290, sans the hyperball post-step
-    (applied later by _scale_invariant_hyperball_updates).
+    Replicates every intermediate fully across the mesh so contracting-dim
+    sharding ambiguities cannot occur (matching the legacy MuonH replicated
+    Newton-Schulz pattern in ``levanter.optim.grugmuon``). The caller's
+    parameter-sharding is restored downstream by
+    ``_match_named_update_sharding`` in ``optimizer.py``.
     """
-    rows = grad.shape[0]
-    cols = grad.shape[1]
+    rows = grad.shape[-2]
+    cols = grad.shape[-1]
+
+    has_mesh = not jax.sharding.get_abstract_mesh().empty
+    out_pspec = _replicated_pspec(grad.ndim) if has_mesh else None
+    # Gram matrices and eigenbases live on the inner 2-D axes only; their
+    # explicit pspec has the same leading rank as the gradient.
+    out_pspec_l = _replicated_pspec(grad.ndim) if has_mesh else None  # (..., rows, rows)
+    out_pspec_r = _replicated_pspec(grad.ndim) if has_mesh else None  # (..., cols, cols)
 
     g32 = grad.astype(jnp.float32)
-    gg_l = shampoo_beta * gg_l + (1.0 - shampoo_beta) * (g32 @ g32.T) / cols
-    gg_r = shampoo_beta * gg_r + (1.0 - shampoo_beta) * (g32.T @ g32) / rows
+    if has_mesh:
+        g32 = reshard(g32, _replicated_pspec(grad.ndim))
+        gg_l = reshard(gg_l, _replicated_pspec(grad.ndim))
+        gg_r = reshard(gg_r, _replicated_pspec(grad.ndim))
+        q_l = reshard(q_l, _replicated_pspec(grad.ndim))
+        q_r = reshard(q_r, _replicated_pspec(grad.ndim))
+        exp_avg = reshard(exp_avg, _replicated_pspec(grad.ndim))
+        exp_avg_sq = reshard(exp_avg_sq, _replicated_pspec(grad.ndim))
+
+    # Gram matrices: gg_l += (1-beta)*(g g^T)/cols and gg_r += (1-beta)*(g^T g)/rows
+    g_gT = jnp.einsum("...ik,...jk->...ij", g32, g32, out_sharding=out_pspec_l)
+    gT_g = jnp.einsum("...ki,...kj->...ij", g32, g32, out_sharding=out_pspec_r)
+    gg_l = shampoo_beta * gg_l + (1.0 - shampoo_beta) * g_gT / cols
+    gg_r = shampoo_beta * gg_r + (1.0 - shampoo_beta) * gT_g / rows
 
     should_refresh = jnp.equal(jnp.remainder(step, precond_freq), 0)
 
     def _refresh(_):
+        # eigh batches automatically over leading axes when input is replicated.
         _, ql_new = jnp.linalg.eigh(gg_l)
         _, qr_new = jnp.linalg.eigh(gg_r)
         return ql_new, qr_new
@@ -124,11 +154,17 @@ def _klsoaph_step_2d(
 
     q_l, q_r = jax.lax.cond(should_refresh, _refresh, _keep, operand=None)
 
-    g_proj = q_l.T @ g32 @ q_r
+    # g_proj = q_l.T @ g @ q_r, all replicated.
+    g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r, out_sharding=out_pspec)
+    g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr, out_sharding=out_pspec)
+
     exp_avg = beta1 * exp_avg + (1.0 - beta1) * g_proj
     exp_avg_sq = beta2 * exp_avg_sq + (1.0 - beta2) * g_proj * g_proj
     precond_proj = exp_avg / (jnp.sqrt(exp_avg_sq) + eps)
-    direction = q_l @ precond_proj @ q_r.T
+
+    # direction = q_l @ precond_proj @ q_r.T, all replicated.
+    precond_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r, out_sharding=out_pspec)
+    direction = jnp.einsum("...ij,...jk->...ik", q_l, precond_qrt, out_sharding=out_pspec)
 
     return direction.astype(grad.dtype), exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r
 
@@ -170,40 +206,21 @@ def scale_by_klsoaph(
         def per_leaf(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r):
             if grad is None or exp_avg is None:
                 return _SoapStepResult(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r)
-            if grad.ndim == 2:
-                out = _klsoaph_step_2d(
-                    grad,
-                    exp_avg,
-                    exp_avg_sq,
-                    gg_l,
-                    gg_r,
-                    q_l,
-                    q_r,
-                    next_count,
-                    beta1=beta1,
-                    beta2=beta2,
-                    shampoo_beta=shampoo_beta,
-                    eps=eps,
-                    precond_freq=precond_freq,
-                )
-                return _SoapStepResult(*out)
-            out = jax.vmap(
-                lambda g, ea, eas, gl, gr, ql, qr: _klsoaph_step_2d(
-                    g,
-                    ea,
-                    eas,
-                    gl,
-                    gr,
-                    ql,
-                    qr,
-                    next_count,
-                    beta1=beta1,
-                    beta2=beta2,
-                    shampoo_beta=shampoo_beta,
-                    eps=eps,
-                    precond_freq=precond_freq,
-                )
-            )(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r)
+            out = _klsoaph_step(
+                grad,
+                exp_avg,
+                exp_avg_sq,
+                gg_l,
+                gg_r,
+                q_l,
+                q_r,
+                next_count,
+                beta1=beta1,
+                beta2=beta2,
+                shampoo_beta=shampoo_beta,
+                eps=eps,
+                precond_freq=precond_freq,
+            )
             return _SoapStepResult(*out)
 
         results = jax.tree.map(

@@ -138,8 +138,9 @@ def test_grug_normuonh_tracks_output_axis_for_fan_in_fan_out_arrays():
     [
         scale_with_grug_muonh(momentum=0.0, nesterov=False, steps=1, learning_rate=0.01),
         scale_with_grug_normuonh(momentum=0.0, nesterov=False, beta2=0.0, steps=1, learning_rate=0.01),
+        scale_with_grug_klsoaph(precond_freq=1, learning_rate=0.01),
     ],
-    ids=["muonh", "normuonh"],
+    ids=["muonh", "normuonh", "klsoaph"],
 )
 def test_grug_hyperball_update_handles_expert_parameter_sharding(transform):
     mesh = jax.sharding.AbstractMesh(
