@@ -224,7 +224,7 @@ def test_restore_discards_slice_missing_from_cloud():
     )
 
     assert "slice-gone" not in result.slices
-    assert result.discarded_count == 1
+    assert result.discarded_slice_ids == ["slice-gone"]
 
 
 def test_restore_discards_failed_slice_missing_from_cloud():

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -20,7 +21,9 @@ from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, Tr
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.schema import scaling_groups_table, slices_table, workers_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import SliceHandle
+from iris.cluster.providers.types import CloudSliceState, SliceHandle
+
+_LIVE_CLOUD_STATES = frozenset({CloudSliceState.CREATING, CloudSliceState.READY, CloudSliceState.REPAIRING})
 
 logger = logging.getLogger(__name__)
 
@@ -112,10 +115,12 @@ def restore_autoscaler_state(
 ) -> dict[str, TrackedWorker]:
     """Restore scaling groups and tracked workers from a checkpoint."""
 
-    all_cloud_slices = platform.list_all_slices()
     cloud_by_group: dict[str, list[SliceHandle]] = {}
-    for handle in all_cloud_slices:
-        cloud_by_group.setdefault(handle.scale_group, []).append(handle)
+    for listed in platform.list_all_slices():
+        if listed.state not in _LIVE_CLOUD_STATES:
+            _reclaim_dead_slice(listed.handle, listed.state)
+            continue
+        cloud_by_group.setdefault(listed.handle.scale_group, []).append(listed.handle)
 
     for group_snapshot in checkpoint.group_snapshots.values():
         group = groups.get(group_snapshot.name)
@@ -135,5 +140,24 @@ def restore_autoscaler_state(
             last_scale_up=restore_result.last_scale_up,
             last_scale_down=restore_result.last_scale_down,
         )
+        group.purge_persisted_slice_rows(restore_result.discarded_slice_ids)
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)
+
+
+def _reclaim_dead_slice(handle: SliceHandle, state: CloudSliceState) -> None:
+    """Best-effort terminate of a dead slice in a daemon thread.
+
+    Boot recovery must not block on or fail because of a stale cloud resource:
+    terminate() can hit transient API errors and is not guaranteed to be fast.
+    Errors are logged; on the next restart the slice will surface again.
+    """
+    logger.info("Reclaiming dead slice %s (state=%s, zone=%s)", handle.slice_id, state, handle.zone)
+
+    def _run() -> None:
+        try:
+            handle.terminate()
+        except Exception as e:
+            logger.warning("Failed to terminate dead slice %s: %s", handle.slice_id, e)
+
+    threading.Thread(target=_run, name=f"reclaim-{handle.slice_id}", daemon=True).start()

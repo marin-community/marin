@@ -409,6 +409,13 @@ class ScalingGroup:
         with self._db.transaction() as cur:
             cur.execute(delete(slices_table).where(slices_table.c.scale_group == self.name))
 
+    def purge_persisted_slice_rows(self, slice_ids: Sequence[str]) -> None:
+        """Delete the named slice rows from the slices table in a single transaction."""
+        if self._db is None or not slice_ids:
+            return
+        with self._db.transaction() as cur:
+            cur.execute(delete(slices_table).where(slices_table.c.slice_id.in_(list(slice_ids))))
+
     @property
     def platform(self) -> WorkerInfraProvider:
         """Worker infrastructure provider for this scale group."""
@@ -1213,7 +1220,7 @@ class ScalingGroupRestoreResult:
     """Result of restoring a single scaling group from checkpoint metadata."""
 
     slices: dict[str, SliceState] = field(default_factory=dict)
-    discarded_count: int = 0
+    discarded_slice_ids: list[str] = field(default_factory=list)
     adopted_count: int = 0
     last_scale_up: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
     last_scale_down: Timestamp = field(default_factory=lambda: Timestamp.from_ms(0))
@@ -1234,7 +1241,7 @@ def restore_scaling_group(
         cloud_handle = cloud_by_id.get(slice_id)
         if cloud_handle is None:
             logger.info("Scaling group %s: discarding slice %s (missing from cloud)", group_snapshot.name, slice_id)
-            result.discarded_count += 1
+            result.discarded_slice_ids.append(slice_id)
             continue
 
         try:
@@ -1274,7 +1281,7 @@ def restore_scaling_group(
         "Restored scaling group %s: %d slices (%d discarded, %d adopted)",
         group_snapshot.name,
         len(result.slices),
-        result.discarded_count,
+        len(result.discarded_slice_ids),
         result.adopted_count,
     )
     return result
