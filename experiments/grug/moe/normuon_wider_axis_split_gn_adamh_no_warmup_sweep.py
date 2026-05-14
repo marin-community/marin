@@ -57,8 +57,8 @@ _GATE_1_POINTS: tuple[tuple[int, float], ...] = (
     (768, 1.70e18),
 )
 _GATE_2_POINTS: tuple[tuple[int, float], ...] = (
+    # Narrowed to d1024 only — d1280 deferred.
     (1024, 9.00e18),
-    (1280, 2.83e19),
 )
 
 _BASELINE_TARGET_STEPS: int = 2**14
@@ -164,7 +164,7 @@ def _build_steps(gate: str, run_suffix: str = "") -> list[ExecutorStep]:
     return [_build_step(hidden_dim=hidden_dim, budget=budget, run_suffix=run_suffix) for hidden_dim, budget in points]
 
 
-_GATE: str = "1"  # "1" | "2" | "both"
+_GATE: str = "2"  # "1" | "2" | "both"
 # Bumped to v2 — v1 failed at step 4999 (d512) and step 650 (d768).
 # Fresh executor cache miss; old crashed paths in dial_moe stay untouched.
 _RUN_SUFFIX: str = "v2"
