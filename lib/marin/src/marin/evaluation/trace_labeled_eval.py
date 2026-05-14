@@ -684,7 +684,7 @@ def trace_labeled_eval(config: TraceLabeledEvalConfig) -> None:
                         block_cross_document_attention=True,
                     )
 
-                    evaluator = LabeledEvaluator.from_labeled_lm(
+                    evaluator = LabeledEvaluator.for_labeled_examples(
                         EvalBatch,
                         dataset,
                         label_spec=current_dataset_config.trace_format.loss_label_spec(),
