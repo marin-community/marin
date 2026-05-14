@@ -79,7 +79,7 @@ container_milli_cpus=$(( host_cpus * 1000 - 500 ))
 if [ "$container_milli_cpus" -lt 500 ]; then container_milli_cpus=500; fi
 container_cpus=$(awk -v m="$container_milli_cpus" 'BEGIN{printf "%.3f", m/1000}')
 host_mem_mib=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
-host_reserved_mem_mib=1700
+host_reserved_mem_mib=2048
 container_mem_mib=$(( host_mem_mib - host_reserved_mem_mib ))
 if [ "$container_mem_mib" -lt 256 ]; then container_mem_mib=256; fi
 echo "[finelog-init] host=${host_cpus}cpu/${host_mem_mib}MiB" \\
