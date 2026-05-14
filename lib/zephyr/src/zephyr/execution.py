@@ -1653,13 +1653,22 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
-        # pull_task and self-terminate via shutdown_event → exit_actor()
-        # before worker_group.shutdown() tears down any remaining actors.
+        # pull_task and self-terminate via shutdown_event → exit_actor(). Then
+        # give the worker job a brief window to land in a terminal state on
+        # its own so its Iris tasks record SUCCEEDED instead of KILLED
+        # (#5484); fall back to forcibly terminating if they don't.
         with suppress(Exception):
             coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
             with suppress(Exception):
-                worker_group.shutdown()
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if worker_group.is_done():
+                        break
+                    time.sleep(0.5)
+                else:
+                    logger.warning("Workers did not exit naturally, terminating")
+                    worker_group.shutdown()
         with suppress(Exception):
             hosted.shutdown()
 
