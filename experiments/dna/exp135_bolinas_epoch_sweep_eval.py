@@ -88,8 +88,8 @@ from experiments.evals.task_configs import TRAITGYM_MENDELIAN_V2_255, convert_to
 # =============================================================================
 
 EVAL_VERSION = "v0.3"
-TMP_BUCKET = marin_temp_bucket(ttl_days=21, prefix=f"exp135-eval-{EVAL_VERSION}")
-EVAL_RESOURCES = ResourceConfig.with_tpu("v5p-8", ram="64g")
+TMP_BUCKET = marin_temp_bucket(ttl_days=30, prefix=f"exp135-eval-{EVAL_VERSION}")
+EVAL_RESOURCES = ResourceConfig.with_tpu("v6e-4", ram="64g")
 FS = fsspec.filesystem("gs")
 
 
@@ -146,8 +146,11 @@ def _submit_eval_job(
     args: Sequence[Any],
     resources: ResourceConfig,
     env_vars: dict[str, str] | None,
-) -> None:
-    """Resolve env, build a JobRequest, submit to Iris, block on completion.
+):
+    """Resolve env, build a JobRequest, submit to Iris, return the handle.
+
+    Does NOT wait — caller is responsible for ``handle.wait(...)`` so the
+    coordinator can fan out many sub-jobs in parallel.
 
     Worker extras: ``extras_for_resources(resources)`` (e.g. ``tpu``) plus
     ``lm_eval`` so the eval harness library is available on the TPU pod.
@@ -162,8 +165,7 @@ def _submit_eval_job(
         resources=resources,
         environment=create_environment(env_vars=env, extras=extras),
     )
-    handle = fray_client.current_client().submit(job_request)
-    handle.wait(raise_on_failure=True)
+    return fray_client.current_client().submit(job_request)
 
 
 # =============================================================================
@@ -208,11 +210,13 @@ def _eval_on_worker(run: str, step: int, ckpt_path: str, out_path: str) -> None:
 # =============================================================================
 
 
-def _submit_one(run: str, step: int, ckpt_path: str) -> None:
+def _submit_one(run: str, step: int, ckpt_path: str):
+    """Submit one eval Fray sub-job; return the handle, or ``None`` if the
+    result JSON is already present (idempotence skip)."""
     out_path = _result_path(run, step)
     if FS.exists(out_path):
-        return
-    _submit_eval_job(
+        return None
+    return _submit_eval_job(
         name=f"exp135-eval-{run}-step-{step}",
         entrypoint_callable=_eval_on_worker,
         args=[run, step, ckpt_path, out_path],
@@ -254,10 +258,19 @@ def _selected_steps(steps: list[tuple[int, str]]) -> list[tuple[int, str]]:
 
 
 def main() -> None:
+    # Fan-out: submit every eval first, collect handles, then wait on all.
+    # Handles are waited in submission order — if an earlier job is slowest
+    # we block until it finishes, but every other job is running in parallel.
+    handles = []
     for idx, mix in _selected_mixes():
         run = _run_name(idx, mix.name)
         for step, ckpt in _selected_steps(_find_checkpoints(run)):
-            _submit_one(run, step, ckpt)
+            handle = _submit_one(run, step, ckpt)
+            if handle is not None:
+                handles.append(handle)
+    print(f"submitted {len(handles)} eval sub-jobs; waiting for all to finish", flush=True)
+    for handle in handles:
+        handle.wait(raise_on_failure=True)
     print(f"merged -> {_merge()}")
 
 
