@@ -11,10 +11,10 @@ layout below the prefix. Intermediate preprocessing steps between download and
 normalize are NOT synced — downstream consumers only need the raw inputs and
 the canonical normalized artifact.
 
-Use ``--scope`` to narrow the copy: ``raw`` syncs only the download leaves,
-``normalized`` syncs only the normalize output, ``all`` (default) syncs both.
-Per-scope shard markers and step-status are namespaced so different scopes
-never collide on cache state.
+Use ``--scope`` to widen or narrow the copy: ``normalized`` (default) syncs
+only the normalize output, ``raw`` syncs only the download leaves, ``all``
+syncs both. Per-scope shard markers and step-status are namespaced so
+different scopes never collide on cache state.
 
 Typical use is GCS -> R2 (e.g. ``gs://marin-us-central1`` to
 ``s3://marin-na/marin``); the reverse works too.
@@ -464,7 +464,7 @@ def sync_source_step(
     *,
     src_prefix: str,
     dest_prefix: str,
-    scope: SyncScope = SyncScope.ALL,
+    scope: SyncScope = SyncScope.NORMALIZED,
     files_per_shard: int = DEFAULT_FILES_PER_SHARD,
     copy_threads: int = DEFAULT_COPY_THREADS_PER_SHARD,
     status_prefix: str = DEFAULT_STATUS_PREFIX,
@@ -483,7 +483,7 @@ def sync_source_step(
         source: The DatakitSource to copy.
         src_prefix: Source root to read from (e.g. ``gs://marin-us-central1``).
         dest_prefix: Destination root to write to (e.g. ``s3://marin-na/marin``).
-        scope: Which subset of ``source``'s paths to sync (default: ALL).
+        scope: Which subset of ``source``'s paths to sync (default: NORMALIZED).
         files_per_shard: Files per Zephyr shard (default 64). The shard
             boundaries are deterministic; ``Dataset.from_list`` preserves
             ordering so the same input set always produces the same shards.
@@ -585,11 +585,11 @@ def _parse_args() -> argparse.Namespace:
         "--scope",
         type=SyncScope,
         choices=list(SyncScope),
-        default=SyncScope.ALL,
+        default=SyncScope.NORMALIZED,
         help=(
-            "What to sync per source: 'all' (raw downloads + normalized output), "
-            "'raw' (download leaves only), or 'normalized' (normalize output only). "
-            "Default: all."
+            "What to sync per source: 'normalized' (normalize output only), "
+            "'raw' (download leaves only), or 'all' (raw downloads + normalized output). "
+            "Default: normalized."
         ),
     )
     parser.add_argument(
