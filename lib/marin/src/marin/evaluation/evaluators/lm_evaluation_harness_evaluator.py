@@ -117,6 +117,7 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                             tasks=[eval_task.name],
                             num_fewshot=eval_task.num_fewshot,
                             model_args=pretrained_args_local,
+                            gen_kwargs=model.generation_params or None,
                             apply_chat_template=resolved_model.apply_chat_template,
                             batch_size="auto",
                             confirm_run_unsafe_code=True,
