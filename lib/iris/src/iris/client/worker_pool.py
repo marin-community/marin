@@ -476,11 +476,9 @@ class WorkerPool:
         if min_workers is None:
             min_workers = self._config.num_workers
 
-        ExponentialBackoff(initial=0.05, maximum=1.0).wait_until_or_raise(
-            lambda: self.size >= min_workers,
-            timeout=timeout,
-            error_message=f"Only {self.size} of {min_workers} workers registered within {timeout}s",
-        )
+        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        if not backoff.wait_until(lambda: self.size >= min_workers, timeout=timeout):
+            raise TimeoutError(f"Only {self.size} of {min_workers} workers registered within {timeout}")
 
     def submit(
         self,
