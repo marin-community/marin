@@ -11,6 +11,11 @@ layout below the prefix. Intermediate preprocessing steps between download and
 normalize are NOT synced — downstream consumers only need the raw inputs and
 the canonical normalized artifact.
 
+Use ``--scope`` to narrow the copy: ``raw`` syncs only the download leaves,
+``normalized`` syncs only the normalize output, ``all`` (default) syncs both.
+Per-scope shard markers and step-status are namespaced so different scopes
+never collide on cache state.
+
 Typical use is GCS -> R2 (e.g. ``gs://marin-us-central1`` to
 ``s3://marin-na/marin``); the reverse works too.
 
@@ -70,6 +75,7 @@ import argparse
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import StrEnum
 
 import fsspec
 from fray import ResourceConfig
@@ -89,6 +95,22 @@ DEFAULT_FILES_PER_SHARD = 64
 DEFAULT_COPY_THREADS_PER_SHARD = 16
 DEFAULT_STATUS_PREFIX = "gs://marin-us-central1/data/datakit/sync"
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+class SyncScope(StrEnum):
+    """Which subset of a source's paths to sync.
+
+    ``ALL`` copies both the raw-download leaves and the normalized output;
+    ``RAW`` copies only the leaves; ``NORMALIZED`` copies only
+    ``source.normalized.output_path``. Different scopes have disjoint
+    shard-marker and step-status namespaces so a ``raw``-only run can't
+    falsely satisfy a later ``normalized`` run's cache check.
+    """
+
+    ALL = "all"
+    RAW = "raw"
+    NORMALIZED = "normalized"
+
 
 # Matches the ``.tmp.<uuid.hex>`` suffix that ``zephyr.writers.atomic_rename``
 # uses for its intermediate write key. Used to filter orphan leftovers out
@@ -130,6 +152,22 @@ def _rebase(src_path: str, src_prefix: str, dst_prefix: str) -> str:
     if not src_path.startswith(s):
         raise ValueError(f"path {src_path!r} does not start with prefix {s!r}")
     return d + src_path[len(s) :]
+
+
+def _canonical_paths_for(source: DatakitSource, scope: SyncScope) -> list[str]:
+    """Return the canonical-prefixed source paths to sync under ``scope``.
+
+    ``RAW`` -> DAG leaves of ``source.normalized`` (the raw downloads).
+    ``NORMALIZED`` -> just ``source.normalized.output_path``.
+    ``ALL`` -> union of the two (deduped; a normalize step with no deps
+    appears in both sets and the ``set`` union folds it to one entry).
+    """
+    paths: set[str] = set()
+    if scope is SyncScope.RAW or scope is SyncScope.ALL:
+        paths.update(leaf.output_path for leaf in _leaf_downloads(source.normalized))
+    if scope is SyncScope.NORMALIZED or scope is SyncScope.ALL:
+        paths.add(source.normalized.output_path)
+    return sorted(paths)
 
 
 # ----------------------------------------------------------------------
@@ -426,24 +464,26 @@ def sync_source_step(
     *,
     src_prefix: str,
     dest_prefix: str,
+    scope: SyncScope = SyncScope.ALL,
     files_per_shard: int = DEFAULT_FILES_PER_SHARD,
     copy_threads: int = DEFAULT_COPY_THREADS_PER_SHARD,
     status_prefix: str = DEFAULT_STATUS_PREFIX,
 ) -> StepSpec:
-    """Build a StepSpec that copies ``source``'s raw downloads + normalized output between two prefixes.
+    """Build a StepSpec that copies ``source``'s paths under ``scope`` between two prefixes.
 
-    The set of source paths is the union of the DAG leaves reachable from
-    ``source.normalized`` (the raw downloads) and ``source.normalized.output_path``
-    itself (the canonical normalized artifact). Each path is listed canonically
-    against ``marin_prefix()``, then re-anchored to both ``src_prefix`` and
-    ``dest_prefix`` so the same relative-under-prefix layout is preserved on
-    either side. Pick the direction by what you pass: ``src_prefix=gs://…`` +
-    ``dest_prefix=s3://…`` pushes to R2, the swap pulls back.
+    The set of source paths is :func:`_canonical_paths_for` ``(source, scope)``:
+    raw-download leaves, the normalized output, or both. Each path is listed
+    canonically against ``marin_prefix()``, then re-anchored to both
+    ``src_prefix`` and ``dest_prefix`` so the same relative-under-prefix
+    layout is preserved on either side. Pick the direction by what you pass:
+    ``src_prefix=gs://…`` + ``dest_prefix=s3://…`` pushes to R2, the swap
+    pulls back.
 
     Args:
-        source: The DatakitSource whose raw downloads + normalized output we want to copy.
+        source: The DatakitSource to copy.
         src_prefix: Source root to read from (e.g. ``gs://marin-us-central1``).
         dest_prefix: Destination root to write to (e.g. ``s3://marin-na/marin``).
+        scope: Which subset of ``source``'s paths to sync (default: ALL).
         files_per_shard: Files per Zephyr shard (default 64). The shard
             boundaries are deterministic; ``Dataset.from_list`` preserves
             ordering so the same input set always produces the same shards.
@@ -451,19 +491,18 @@ def sync_source_step(
         status_prefix: Where per-shard JSONLs and the executor status marker
             live (default ``gs://marin-us-central1/data/datakit/sync``). The
             shard and step namespaces are further qualified by a hash of
-            ``(src_prefix, dest_prefix)`` so different directions never
-            share markers (their fingerprints aren't comparable anyway).
+            ``(src_prefix, dest_prefix)`` and by ``scope`` so different
+            directions and scopes never share markers (their fingerprints
+            aren't comparable across directions anyway).
 
     Returns:
-        A StepSpec that, when run, copies every raw-download leaf and the
-        normalized output of ``source`` from ``src_prefix`` to ``dest_prefix``.
+        A StepSpec that, when run, copies the in-scope paths of ``source``
+        from ``src_prefix`` to ``dest_prefix``.
     """
     canonical_prefix = marin_prefix()
-    canonical_paths = sorted(
-        {leaf.output_path for leaf in _leaf_downloads(source.normalized)} | {source.normalized.output_path}
-    )
+    canonical_paths = _canonical_paths_for(source, scope)
     if not canonical_paths:
-        raise ValueError(f"source {source.name!r} has no paths to sync")
+        raise ValueError(f"source {source.name!r} has no paths to sync under scope={scope.value!r}")
     pairs = [
         (
             _rebase(path, canonical_prefix, src_prefix),
@@ -501,15 +540,19 @@ def sync_source_step(
     # the sync step's ``fn`` even runs — which is both wasteful and defeats
     # the point of pulling from the mirror.
     return StepSpec(
-        name=f"sync/{safe}",
+        name=f"sync/{safe}/{scope.value}",
         fn=_run,
         # Step status sits next to the shard sentinels so a single
-        # bucket-lifecycle rule manages the whole sync prefix.
-        override_output_path=f"{status_root}/step_status/{direction_key}/{safe}",
+        # bucket-lifecycle rule manages the whole sync prefix. The ``scope``
+        # segment keeps per-scope StepRunner cache state disjoint: a prior
+        # ``raw``-only success can't masquerade as a ``normalized`` success
+        # (StepRunner reads STATUS_SUCCESS at output_path before invoking fn).
+        override_output_path=f"{status_root}/step_status/{direction_key}/{safe}/{scope.value}",
         hash_attrs={
             "version": "v2",
             "src_prefix": src_prefix.rstrip("/"),
             "dest_prefix": dest_prefix.rstrip("/"),
+            "scope": scope.value,
             "src_paths": canonical_paths,
         },
     )
@@ -537,6 +580,17 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         default=None,
         help="Source name to sync (repeatable). Default: all registered sources.",
+    )
+    parser.add_argument(
+        "--scope",
+        type=SyncScope,
+        choices=list(SyncScope),
+        default=SyncScope.ALL,
+        help=(
+            "What to sync per source: 'all' (raw downloads + normalized output), "
+            "'raw' (download leaves only), or 'normalized' (normalize output only). "
+            "Default: all."
+        ),
     )
     parser.add_argument(
         "--files-per-shard",
@@ -572,20 +626,22 @@ def _select_sources(names: list[str] | None) -> list[DatakitSource]:
     return [all_src[n] for n in names]
 
 
-def _source_already_synced(source: DatakitSource, canonical_prefix: str, dest_prefix: str) -> bool:
-    """True if every synced path of ``source`` already has ``.executor_status`` on dst.
+def _source_already_synced(
+    source: DatakitSource,
+    canonical_prefix: str,
+    dest_prefix: str,
+    scope: SyncScope,
+) -> bool:
+    """True if every in-scope path of ``source`` already has ``.executor_status`` on dst.
 
-    Synced paths = the DAG leaves of ``source.normalized`` (raw downloads) plus
-    ``source.normalized.output_path`` (the normalized artifact). Whole-source
-    skip is the right granularity for our pipeline because (a) ``.executor_status``
-    is only written by ``_finalize_executor_status`` after the entire batch
-    completed, and (b) any partial-progress shard markers still live under
-    ``status_prefix`` and would handle in-path resume on their own — but if
-    every path has the final marker, there's nothing to do for this source.
+    The in-scope path set comes from :func:`_canonical_paths_for`. Whole-source
+    skip is the right granularity here because (a) ``.executor_status`` is only
+    written by ``_finalize_executor_status`` after the entire batch completed,
+    and (b) any partial-progress shard markers still live under ``status_prefix``
+    and would handle in-path resume on their own — but if every in-scope path
+    has the final marker, there's nothing to do for this source under this scope.
     """
-    canonical_paths = sorted(
-        {leaf.output_path for leaf in _leaf_downloads(source.normalized)} | {source.normalized.output_path}
-    )
+    canonical_paths = _canonical_paths_for(source, scope)
     if not canonical_paths:
         return False
     return all(_leaf_already_synced(_rebase(path, canonical_prefix, dest_prefix)) for path in canonical_paths)
@@ -603,25 +659,29 @@ def main() -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
     src_prefix = args.src_prefix or marin_prefix()
-    logger.info("Syncing %s -> %s", src_prefix, args.dest_prefix)
+    logger.info("Syncing %s -> %s (scope=%s)", src_prefix, args.dest_prefix, args.scope.value)
 
     sources = _select_sources(args.source)
 
     # Pre-flight: drop sources whose dst already has ``.executor_status`` on
-    # every synced path (raw-download leaves + normalized output). Parallelized
-    # because each check is one ``fs.exists`` and the listing can have 100+ sources.
+    # every in-scope path. Parallelized because each check is one ``fs.exists``
+    # and the listing can have 100+ sources.
     canonical_prefix = marin_prefix()
     with ThreadPoolExecutor(max_workers=32) as pool:
         already_synced_flags = list(
             pool.map(
-                lambda s: _source_already_synced(s, canonical_prefix, args.dest_prefix),
+                lambda s: _source_already_synced(s, canonical_prefix, args.dest_prefix, args.scope),
                 sources,
             )
         )
     todo: list[DatakitSource] = []
     for src, done in zip(sources, already_synced_flags, strict=True):
         if done:
-            logger.info("Skipping %s: dst already has .executor_status on every synced path", src.name)
+            logger.info(
+                "Skipping %s: dst already has .executor_status on every in-scope path (scope=%s)",
+                src.name,
+                args.scope.value,
+            )
         else:
             todo.append(src)
     if len(todo) < len(sources):
@@ -632,6 +692,7 @@ def main() -> None:
             src,
             src_prefix=src_prefix,
             dest_prefix=args.dest_prefix,
+            scope=args.scope,
             files_per_shard=args.files_per_shard,
             copy_threads=args.copy_threads,
             status_prefix=args.status_prefix,
