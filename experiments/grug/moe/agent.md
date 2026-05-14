@@ -126,16 +126,17 @@ Experiment issues should be titled `Agent MoE Experiment: [description]`.
 Include the exact prompt from the user that initiated the experiment in the
 issue body.
 
-After creating the issue, **add it as a sub-issue of #4281** (April 2026 MoE
-scaling tracking issue) using the GitHub GraphQL API. This is required — do not skip it. First get the node IDs, then
-call `addSubIssue`:
+After creating the issue, **add it as a sub-issue of #5358** (Land the
+scaling recipe for the June model — current MoE tracking issue) using the
+GitHub GraphQL API. This is required — do not skip it. First get the node
+IDs, then call `addSubIssue`:
 
 ```bash
 # 1. Get node IDs for the parent and the new issue
 gh api graphql -f query='
 query {
   repository(owner: "marin-community", name: "marin") {
-    parent: issue(number: 4281) { id }
+    parent: issue(number: 5358) { id }
     child: issue(number: <NEW_ISSUE_NUMBER>) { id }
   }
 }'
