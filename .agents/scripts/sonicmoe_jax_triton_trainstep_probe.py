@@ -28,6 +28,7 @@ from haliax.nn.ragged_dot import ragged_dot
 from levanter.grug.grug_moe import (
     _gather_sum_reference,
     _prepare_moe_dispatch_indices_with_assignment_ids,
+    moe_mlp,
     split_moe_w13_output,
 )
 from sonicmoe_jax_triton_overhead_probe import (
@@ -439,6 +440,88 @@ def _make_moe_train_step(
     return step
 
 
+def _make_moe_mlp_forward_loss_step(
+    *,
+    implementation: str,
+) -> Callable[[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array], jax.Array]:
+    @jax.jit
+    def step(
+        x: jax.Array,
+        selected_experts: jax.Array,
+        combine_weights: jax.Array,
+        w13_interleaved: jax.Array,
+        w2: jax.Array,
+        target: jax.Array,
+    ) -> jax.Array:
+        y = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w13_interleaved,
+            w2,
+            implementation=implementation,
+            mesh=None,
+        )
+        diff = y.astype(jnp.float32) - target.astype(jnp.float32)
+        return jnp.mean(diff * diff)
+
+    return step
+
+
+def _make_moe_mlp_train_step(
+    *,
+    implementation: str,
+) -> Callable[
+    [jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+]:
+    def loss_fn(
+        x: jax.Array,
+        selected_experts: jax.Array,
+        combine_weights: jax.Array,
+        w13_interleaved: jax.Array,
+        w2: jax.Array,
+        target: jax.Array,
+    ) -> jax.Array:
+        y = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w13_interleaved,
+            w2,
+            implementation=implementation,
+            mesh=None,
+        )
+        diff = y.astype(jnp.float32) - target.astype(jnp.float32)
+        return jnp.mean(diff * diff)
+
+    @jax.jit
+    def step(
+        x: jax.Array,
+        selected_experts: jax.Array,
+        combine_weights: jax.Array,
+        w13_interleaved: jax.Array,
+        w2: jax.Array,
+        target: jax.Array,
+        lr: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+        loss, (dx, d_combine, d_w13, d_w2) = jax.value_and_grad(loss_fn, argnums=(0, 2, 3, 4))(
+            x,
+            selected_experts,
+            combine_weights,
+            w13_interleaved,
+            w2,
+            target,
+        )
+        next_x = (x - lr.astype(x.dtype) * dx).astype(x.dtype)
+        next_combine = combine_weights - lr.astype(combine_weights.dtype) * d_combine
+        next_w13 = (w13_interleaved - lr.astype(w13_interleaved.dtype) * d_w13).astype(w13_interleaved.dtype)
+        next_w2 = (w2 - lr.astype(w2.dtype) * d_w2).astype(w2.dtype)
+        return loss, next_x, next_combine, next_w13, next_w2
+
+    return step
+
+
 def _compare_jax_outputs(raw_value, xla_value) -> tuple[float, float]:
     raw_leaves = jax.tree_util.tree_leaves(raw_value)
     xla_leaves = jax.tree_util.tree_leaves(xla_value)
@@ -626,11 +709,21 @@ def _make_moe_inputs(
     intermediate: int,
     num_experts: int,
     topk: int,
+    routing: str,
     seed: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     torch.manual_seed(seed)
-    token_ids = torch.arange(tokens, device="cuda", dtype=torch.int32)
-    selected_experts = torch.stack([(token_ids + expert_offset) % num_experts for expert_offset in range(topk)], dim=1)
+    if routing == "balanced":
+        token_ids = torch.arange(tokens, device="cuda", dtype=torch.int32)
+        selected_experts = torch.stack(
+            [(token_ids + expert_offset) % num_experts for expert_offset in range(topk)],
+            dim=1,
+        )
+    elif routing == "random_unique":
+        router_logits = torch.randn((tokens, num_experts), device="cuda", dtype=torch.float32)
+        selected_experts = torch.topk(router_logits, topk, dim=-1).indices.to(torch.int32)
+    else:
+        raise ValueError(f"routing must be 'balanced' or 'random_unique', got {routing!r}")
     combine_weights = torch.softmax(torch.randn((tokens, topk), device="cuda", dtype=torch.float32), dim=-1)
     scale = 0.02
     x = scale * torch.randn((tokens, hidden), device="cuda", dtype=torch.bfloat16)
@@ -657,8 +750,13 @@ def main() -> None:
     parser.add_argument("--multi-counts", default="1,2,4,8")
     parser.add_argument("--run-moe", action="store_true")
     parser.add_argument("--moe-repeats", type=int, default=0)
+    parser.add_argument(
+        "--moe-implementations",
+        default="sonic_xla_interleaved_w13,sonic_xla_interleaved_w13_quack_down",
+    )
     parser.add_argument("--intermediate", type=int, default=3072)
     parser.add_argument("--num-experts", type=int, default=8)
+    parser.add_argument("--routing", choices=("balanced", "random_unique"), default="balanced")
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -856,6 +954,7 @@ def main() -> None:
         intermediate=args.intermediate,
         num_experts=args.num_experts,
         topk=args.topk,
+        routing=args.routing,
         seed=args.seed + 1,
     )
     moe_x_j = _torch_to_jax(moe_x_t)
@@ -892,6 +991,47 @@ def main() -> None:
             repeats=moe_repeats,
         )
     )
+
+    for implementation in args.moe_implementations.split(","):
+        if not implementation:
+            continue
+        try:
+            moe_mlp_forward_step = _make_moe_mlp_forward_loss_step(implementation=implementation)
+            _print_result(
+                _run_pair(
+                    label=f"production_moe_{implementation}_forward_loss",
+                    mode="production_moe_forward",
+                    raw_step=moe_mlp_forward_step,
+                    xla_step=moe_xla_forward_step,
+                    args=(moe_x_j, selected_j, combine_j, w13_j, w2_j, moe_target_j),
+                    warmup=args.warmup,
+                    repeats=moe_repeats,
+                )
+            )
+
+            moe_mlp_train_step = _make_moe_mlp_train_step(implementation=implementation)
+            _print_result(
+                _run_pair(
+                    label=f"production_moe_{implementation}_train_step",
+                    mode="production_moe_fwd_bwd_update",
+                    raw_step=moe_mlp_train_step,
+                    xla_step=moe_xla_train_step,
+                    args=(moe_x_j, selected_j, combine_j, w13_j, w2_j, moe_target_j, lr_j),
+                    warmup=args.warmup,
+                    repeats=moe_repeats,
+                )
+            )
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "error": repr(exc),
+                        "implementation": implementation,
+                        "kind": "production_moe_error",
+                    },
+                    sort_keys=True,
+                )
+            )
 
 
 if __name__ == "__main__":

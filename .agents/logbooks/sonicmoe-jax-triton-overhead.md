@@ -125,3 +125,29 @@
   - The raw custom VJP for gather/combine is a real win over XLA autodiff for this boundary in the proxy: about `0.27 ms` for combine-only fwd/bwd/update and about `0.47 ms` in the full-MoE-shaped proxy.
   - The full-MoE proxy is not the exact production `MoEExpertMlp` path yet; it uses the same shape and `ragged_dot` W13/down, but synthetic balanced routing and a simple SGD-style update. Use the delta as evidence for the raw Sonic combine boundary, not as a replacement for the earlier Sonic/Grug whole-block numbers.
 - Next action: consider a production backend that uses raw Sonic jax-triton gather/combine with a custom VJP, then re-benchmark against `sonic_xla_interleaved_w13_quack_down`.
+
+### 2026-05-14 01:52 - Compare raw Sonic combine against current production MoE paths
+- Hypothesis: the useful comparison is not raw Sonic vs a hand-written XLA proxy, but raw Sonic vs the current production-ish `moe_mlp` paths where we rewrote pieces in JAX/CuTe/QuACK.
+- Command:
+  ```bash
+  uv run --package marin-iris --extra controller --group dev iris --cluster=coreweave-rno2a job run \
+    --job-name sonicmoe-jt-prod-compare-random-20260514-084909 --no-wait --max-retries 0 \
+    --enable-extra-resources --gpu GH200x1 --cpu 8 --memory 160g --disk 96g --timeout 3600 \
+    -e XLA_PYTHON_CLIENT_PREALLOCATE false -e JAX_TRACEBACK_FILTERING off \
+    -- bash -lc 'set -euxo pipefail; uv run --package marin --extra gpu --group dev --with jax-triton==0.3.1 --with triton==3.6.0 python .agents/scripts/sonicmoe_jax_triton_trainstep_probe.py --tokens 8192 --hidden 2048 --intermediate 3072 --num-experts 8 --topk 2 --routing random_unique --warmup 5 --repeats 20 --moe-repeats 20 --block-h 2048 --block-k 1 --num-warps 8 --bwd-block-h 2048 --bwd-num-warps 8 --multi-counts 1 --run-moe --moe-implementations sonic_xla_interleaved_w13,sonic_xla_interleaved_w13_quack_down'
+  ```
+- Config: GH200, JAX `0.10.0`, jax-triton `0.3.1`, Triton `3.6.0`, Torch `2.11.0+cu128`, random unique top-k routing, shape `T=8192 H=2048 I=3072 E=8 K=2 bf16`.
+- Result:
+
+  | path | forward loss | fwd/bwd/update | notes |
+  | --- | ---: | ---: | --- |
+  | XLA combine proxy | `1.5053 ms` | `5.0500 ms` | baseline in this harness |
+  | raw Sonic jax-triton combine custom VJP | `1.3955 ms` | `4.5626 ms` | `-0.4874 ms` vs XLA proxy |
+  | current `sonic_xla_interleaved_w13` | `1.3621 ms` | `4.7740 ms` | `+0.2114 ms` vs raw Sonic on fwd/bwd/update |
+  | current `sonic_xla_interleaved_w13_quack_down` | `1.3642 ms` | failed to lower | QuACK/CuTe backward failed with `RuntimeError('Unexpected index')` |
+
+- Additional check: a no-arg closed-over-array JIT for `sonic_xla_interleaved_w13_quack_down` also failed with the same `Unexpected index`, so the failure is not just dynamic train-step arguments. Balanced routing and random-unique routing both failed on the QuACK-down backward in this harness; forward-only succeeds because that path does not invoke the QuACK backward kernels.
+- Interpretation:
+  - Yes, comparing against the current rewritten path matters. In this apples-to-apples proxy, raw Sonic jax-triton combine/custom-VJP is about `4.4%` faster than the current non-QuACK interleaved production path on fwd/bwd/update (`4.5626 ms` vs `4.7740 ms`).
+  - The current QuACK-down backend is not measurable for train-step-shaped backward here because it fails to lower. Before relying on it as the production path, we need to resolve the CuTe/QuACK `Unexpected index` failure or identify the exact harness assumption it violates.
+- Next action: either wire raw Sonic jax-triton combine/custom-VJP as a production backend variant, or first debug the QuACK-down lowering failure if that backend is still the intended target.
