@@ -8,6 +8,7 @@ from typing import Any, TypeVar, overload
 from pydantic import BaseModel
 from rigging.filesystem import marin_prefix, open_url
 
+from marin.execution.executor_step_status import STATUS_SUCCESS, get_status_path
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
 T = TypeVar("T")
@@ -22,14 +23,20 @@ class Artifact:
 
     @overload
     @classmethod
-    def from_path(cls, base_path: str | StepSpec) -> dict[str, Any]: ...
+    def from_path(cls, base_path: str | StepSpec) -> "PathMetadata | dict[str, Any]": ...
 
     @classmethod
-    def from_path(cls, base_path: str | StepSpec, artifact_type: type[T] | None = None) -> T | dict[str, Any]:
+    def from_path(
+        cls, base_path: str | StepSpec, artifact_type: type[T] | None = None
+    ) -> "T | PathMetadata | dict[str, Any]":
         """Load an Artifact instance from the specified output base path.
 
         If ``base_path`` is a relative path (no URL scheme, doesn't start with ``/``),
         it is resolved against ``marin_prefix()``.
+
+        If ``base_path`` has no ``.artifact`` file but its ``.executor_status`` file
+        contains ``SUCCESS``, returns a :class:`PathMetadata` pointing at ``base_path``
+        — provided the caller asked for no specific type or for ``PathMetadata``.
         """
 
         if isinstance(base_path, StepSpec):
@@ -37,14 +44,39 @@ class Artifact:
         elif _is_relative_path(base_path):
             base_path = f"{marin_prefix()}/{base_path}"
 
-        with open_url(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:
-            if artifact_type is None:
-                return json.load(fd)
-            if issubclass(artifact_type, BaseModel):
-                return artifact_type.model_validate_json(fd.read())
-            if is_dataclass(artifact_type):
-                return artifact_type(**json.load(fd))  # type: ignore[not-callable]
-            raise ValueError(f"Unsupported artifact type: {artifact_type!r}")
+        try:
+            with open_url(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:
+                if artifact_type is None:
+                    return json.load(fd)
+                if issubclass(artifact_type, BaseModel):
+                    return artifact_type.model_validate_json(fd.read())
+                if is_dataclass(artifact_type):
+                    return artifact_type(**json.load(fd))  # type: ignore[not-callable]
+                raise ValueError(f"Unsupported artifact type: {artifact_type!r}")
+        except FileNotFoundError:
+            return cls._from_executor_status(base_path, artifact_type)
+
+    @classmethod
+    def _from_executor_status(cls, base_path: str, artifact_type: type[T] | None) -> "T | PathMetadata":
+        """Fallback when ``.artifact`` is absent: synthesize a :class:`PathMetadata`
+        if the step published ``.executor_status = SUCCESS``.
+
+        Only valid when the caller wants no type or ``PathMetadata`` — other types
+        cannot be reconstructed from a bare path.
+        """
+        if artifact_type is not None and artifact_type is not PathMetadata:
+            raise FileNotFoundError(
+                f"No {cls.__artifact_file_name} at {base_path}; cannot synthesize "
+                f"{artifact_type!r} from {get_status_path(base_path)!r}"
+            )
+        with open_url(get_status_path(base_path), "r") as fd:
+            status = fd.read().strip()
+        if status != STATUS_SUCCESS:
+            raise FileNotFoundError(
+                f"No {cls.__artifact_file_name} at {base_path} and "
+                f"{get_status_path(base_path)!r} is {status!r} (not {STATUS_SUCCESS!r})"
+            )
+        return PathMetadata(path=base_path)
 
     @classmethod
     def save(cls, artifact: T, base_path: str) -> None:
@@ -61,9 +93,12 @@ class Artifact:
                 fd.write(json.dumps(artifact).encode("utf-8"))
 
 
-@dataclass
-class PathMetadata:
-    """Represents a single output path"""
+class PathMetadata(BaseModel):
+    """Represents a single output path.
+
+    Also used as the synthetic return type of :meth:`Artifact.from_path` when the
+    step published a ``.executor_status = SUCCESS`` marker but no ``.artifact``.
+    """
 
     path: str
 

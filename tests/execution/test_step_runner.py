@@ -125,6 +125,51 @@ def test_artifact_load_relative_path_resolves_against_marin_prefix(tmp_path: Pat
     assert loaded == artifact
 
 
+def test_artifact_from_executor_status_success_untyped(tmp_path: Path):
+    """No .artifact, but .executor_status=SUCCESS: synthesize PathMetadata."""
+    (tmp_path / ".executor_status").write_text("SUCCESS")
+
+    loaded = Artifact.from_path(tmp_path.as_posix())
+    assert isinstance(loaded, PathMetadata)
+    assert loaded.path == tmp_path.as_posix()
+
+
+def test_artifact_from_executor_status_success_typed_pathmetadata(tmp_path: Path):
+    """No .artifact, but .executor_status=SUCCESS and caller asks for PathMetadata."""
+    (tmp_path / ".executor_status").write_text("SUCCESS")
+
+    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
+    assert loaded == PathMetadata(path=tmp_path.as_posix())
+
+
+def test_artifact_from_executor_status_success_typed_other_raises(tmp_path: Path):
+    """No .artifact, .executor_status=SUCCESS, but caller asks for a different type."""
+    (tmp_path / ".executor_status").write_text("SUCCESS")
+
+    with pytest.raises(FileNotFoundError, match="cannot synthesize"):
+        Artifact.from_path(tmp_path.as_posix(), TokenizeMetadata)
+
+
+def test_artifact_from_executor_status_non_success_raises(tmp_path: Path):
+    """No .artifact, .executor_status present but not SUCCESS."""
+    (tmp_path / ".executor_status").write_text("RUNNING")
+
+    with pytest.raises(FileNotFoundError, match="not 'SUCCESS'"):
+        Artifact.from_path(tmp_path.as_posix())
+
+
+def test_artifact_from_executor_status_relative_path(tmp_path: Path, monkeypatch):
+    """Fallback also works through MARIN_PREFIX-resolved relative paths."""
+    monkeypatch.setenv("MARIN_PREFIX", tmp_path.as_posix())
+    step_dir = tmp_path / "step_out"
+    step_dir.mkdir()
+    (step_dir / ".executor_status").write_text("SUCCESS")
+
+    loaded = Artifact.from_path("step_out")
+    assert isinstance(loaded, PathMetadata)
+    assert loaded.path == step_dir.as_posix()
+
+
 def test_artifact_save_and_load_untyped(tmp_path: Path):
     artifact = TokenizeMetadata(path="/tokenized", num_tokens=42)
     Artifact.save(artifact, tmp_path.as_posix())
