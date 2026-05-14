@@ -381,11 +381,11 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
     assert handle.scale_group == "cpu-vm"
 
     listed = platform.list_all_slices()
-    assert handle.slice_id in {s.slice_id for s in listed}
+    assert handle.slice_id in {s.handle.slice_id for s in listed}
 
     handle.terminate()
     listed_after = platform.list_all_slices()
-    assert handle.slice_id not in {s.slice_id for s in listed_after}
+    assert handle.slice_id not in {s.handle.slice_id for s in listed_after}
 
 
 def test_gcp_build_gce_resource_name_bounds_and_normalizes():
@@ -423,7 +423,7 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
     assert len(status.workers) == 1
     assert status.workers[0]._remote_exec.ssh_user == "iris"
     listed = platform.list_all_slices()
-    assert handle.slice_id in {s.slice_id for s in listed}
+    assert handle.slice_id in {s.handle.slice_id for s in listed}
 
 
 def test_gcp_vm_slice_os_login_sets_metadata_and_uses_gcloud_default_user():
@@ -617,7 +617,7 @@ def test_gcp_list_slices_skips_inactive_vm_instances():
             break
 
     listed = platform.list_all_slices()
-    assert handle.slice_id not in {s.slice_id for s in listed}
+    assert handle.slice_id not in {s.handle.slice_id for s in listed}
 
 
 def test_gcp_list_slices_preserves_vm_slice_discovery():
@@ -640,7 +640,7 @@ def test_gcp_list_slices_preserves_vm_slice_discovery():
 
     handle = platform.create_slice(cfg)
     listed = platform.list_all_slices()
-    listed_by_id = {s.slice_id: s for s in listed}
+    listed_by_id = {s.handle.slice_id: s.handle for s in listed}
     assert handle.slice_id in listed_by_id
     assert listed_by_id[handle.slice_id].created_at.epoch_ms() > 0
 
@@ -717,7 +717,7 @@ def test_list_all_slices_returns_created_slices(platform_env: PlatformEnv):
     cfg = _make_slice_config(platform_env, "group-a")
     handle = platform_env.platform.create_slice(cfg)
     all_slices = platform_env.platform.list_all_slices()
-    assert handle.slice_id in {s.slice_id for s in all_slices}
+    assert handle.slice_id in {s.handle.slice_id for s in all_slices}
 
 
 def test_list_all_slices_returns_all_managed(platform_env: PlatformEnv):
@@ -743,7 +743,7 @@ def test_list_all_slices_excludes_manual_slices(platform_env: PlatformEnv):
     handle_manual = platform_env.platform.create_slice(cfg_manual)
 
     all_slices = platform_env.platform.list_all_slices()
-    slice_ids = {s.slice_id for s in all_slices}
+    slice_ids = {s.handle.slice_id for s in all_slices}
     assert handle_auto.slice_id in slice_ids
     assert handle_manual.slice_id not in slice_ids
 
@@ -786,7 +786,7 @@ def test_gcp_list_all_slices_multi_zone():
     handle_b = platform.create_slice(cfg_b)
 
     all_slices = platform.list_all_slices()
-    slice_ids = {s.slice_id for s in all_slices}
+    slice_ids = {s.handle.slice_id for s in all_slices}
     assert handle_a.slice_id in slice_ids
     assert handle_b.slice_id in slice_ids
 

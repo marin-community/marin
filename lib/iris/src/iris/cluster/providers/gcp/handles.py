@@ -41,7 +41,9 @@ from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
-# GCP TPU state mapping
+# GCP TPU state mapping. States not in this map collapse to UNKNOWN; the boot
+# reconciler treats anything outside the alive set (CREATING/READY/REPAIRING)
+# as a candidate for reclaim.
 _TPU_STATE_MAP: dict[str, CloudSliceState] = {
     "CREATING": CloudSliceState.CREATING,
     "READY": CloudSliceState.READY,
@@ -222,7 +224,6 @@ class GcpSliceHandle:
         _gcp_service: GcpService,
         _ssh_config: config_pb2.SshConfig | None = None,
         _service_account: str | None = None,
-        _state: str = "READY",
         _bootstrapping: bool = False,
         _is_queued_resource: bool = False,
     ):
@@ -237,7 +238,6 @@ class GcpSliceHandle:
         self._accelerator_variant = _accelerator_variant
         self._ssh_config = _ssh_config
         self._service_account = _service_account
-        self._state = _state
         self.is_queued_resource: bool = _is_queued_resource
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
