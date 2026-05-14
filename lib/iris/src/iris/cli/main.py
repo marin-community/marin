@@ -137,7 +137,7 @@ def rpc_client(
 def require_controller_url(ctx: click.Context) -> str:
     """Get controller_url from context, establishing a tunnel lazily if needed.
 
-    On first call with a --config, this establishes the tunnel to the controller
+    On first call with a loaded config, this establishes the tunnel to the controller
     and caches the result. Subsequent calls return the cached URL.
     Commands that don't call this (e.g. ``cluster start``) never pay tunnel cost.
     """
@@ -192,12 +192,17 @@ def require_controller_url(ctx: click.Context) -> str:
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")
 @click.option("--controller-url", help="Controller URL (e.g., http://localhost:10000)")
-@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file")
+@click.option(
+    "--config",
+    "config_file",
+    type=click.Path(exists=True),
+    help="Exact cluster config YAML path; use for custom configs or pinned files",
+)
 @click.option(
     "--cluster",
     "cluster_name",
     default=None,
-    help="Cluster name (resolves config automatically) or used for token lookup",
+    help="Named cluster to resolve from config search paths; preferred for known clusters",
 )
 @click.pass_context
 def iris(

@@ -233,7 +233,10 @@ The controller will **fail at startup** if `storage.remote_state_dir` is not con
 
 ## CLI Reference
 
-**Note:** The `--cluster` option resolves a cluster name to a config file (e.g., `--cluster=marin` finds `lib/iris/config/marin.yaml`) and works from any directory. It is a global option that must appear after `iris` but before the subcommand (e.g., `iris --cluster=marin cluster start`).
+**Cluster selection:** Prefer `--cluster=<name>` for known clusters; it resolves named configs such as
+`marin` from the configured search paths. Use `--config=<path>` when you need to pin an exact YAML file,
+such as a custom config or local experiment. Both flags are global and must appear before the subcommand:
+`iris --cluster=marin cluster start`.
 
 ### Cluster Commands
 
@@ -250,8 +253,8 @@ iris --cluster=marin cluster status
 
 ```bash
 # Controller-specific operations
-iris --config=... cluster controller start          # Boot controller GCE VM
-iris --config=... cluster controller status          # Controller status
+iris --cluster=marin cluster controller start       # Boot controller GCE VM
+iris --cluster=marin cluster controller status      # Controller status
 ```
 
 ### VM Operations (via controller RPC)
@@ -274,8 +277,8 @@ iris build controller-image -t iris-controller:v1 --push --region us-central1
 
 ```bash
 # Remote clusters: opens SSH tunnel to controller dashboard
-iris --config=... cluster dashboard
-iris --config=... cluster dashboard --port 8080
+iris --cluster=marin cluster dashboard
+iris --cluster=marin cluster dashboard --port 8080
 
 # Local clusters: dashboard is at the URL printed by `cluster start --local`
 ```

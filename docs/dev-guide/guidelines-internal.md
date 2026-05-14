@@ -57,7 +57,7 @@ cluster. **You will need at least two terminal processes running for the followi
 
 ```bash
 # [Terminal 1] Open SSH tunnel, print the dashboard URL, and block.
-uv run iris --config lib/iris/config/marin.yaml cluster dashboard
+uv run iris --cluster=marin cluster dashboard
 
 # [Browser] Navigate to the URL printed above.
 # Clicking a job opens its per-task/log view.
@@ -71,18 +71,18 @@ To submit jobs, use `iris job run`. Job IDs are canonical paths of the form `/<u
 ```bash
 # [Terminal 2] Submit a job and return immediately.
 #   =>> Will print a line like `Job submitted: /<user>/hello_world-20260420-120000`
-uv run iris --config lib/iris/config/marin.yaml job run \
+uv run iris --cluster=marin job run \
     --no-wait --extra marin:tpu --tpu v5litepod-16 \
     -- python experiments/tutorials/hello_world.py
 
 # List jobs (filter by --state, --user, --prefix, etc).
-uv run iris --config lib/iris/config/marin.yaml job list
+uv run iris --cluster=marin job list
 
 # Follow logs (includes child-job task logs by default).
-uv run iris --config lib/iris/config/marin.yaml job logs /<user>/<job-name>
+uv run iris --cluster=marin job logs /<user>/<job-name>
 
 # Kill / Stop Job (if necessary / error / bug) -- kills the job and all its child tasks.
-uv run iris --config lib/iris/config/marin.yaml job stop /<user>/<job-name>
+uv run iris --cluster=marin job stop /<user>/<job-name>
 ```
 
 Notes:
