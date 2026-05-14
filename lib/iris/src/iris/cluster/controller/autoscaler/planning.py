@@ -93,15 +93,10 @@ class ScalePlan:
 
 
 def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timestamp) -> GroupScalePlan:
-    """Build the actionable scale-up plan for a group.
+    """Build a scale-up plan for one group.
 
-    ``slices_to_add`` is the honest desired count for this tick — what we
-    would launch if nothing were rate-limiting us. The actual throttle
-    happens later in ``runtime.execute``, where each launch must acquire
-    a token from the detector's scale-up bucket; the bucket's refill rate
-    is set to ``base_rate * health`` on every acquire, so degraded groups
-    still get a plan here every tick but only succeed at acquiring a
-    token at the AIMD-modulated cadence.
+    ``slices_to_add`` is the desired launch count for this tick before any
+    rate-limiting. Token-bucket throttling is applied at execution time.
     """
 
     counts = GroupSliceCounts.from_group(group)

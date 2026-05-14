@@ -124,13 +124,10 @@ class SliceState:
     """
 
     handle: SliceHandle
-    # Timestamp at which the slice transitioned from "any worker has a
-    # running task" to "all workers idle". None means the slice is currently
-    # active (or has never been observed; both cases stay alive). Eligibility
-    # for scale-down is `now - quiet_since >= idle_threshold`. Stored only in
-    # memory: persisting a continuously-updated activity stamp is what produced
-    # the periodic-flush bug, and the post-restart grace period that falls out
-    # of `quiet_since=None` is exactly the safe behaviour we want anyway.
+    # Timestamp at which the slice's workers all became idle. None means
+    # the slice is currently active or has never been observed; in both
+    # cases the slice is not eligible for scale-down. Scale-down kicks in
+    # once `now - quiet_since >= idle_threshold`. Memory-only.
     quiet_since: Timestamp | None = None
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     worker_ids: list[str] = field(default_factory=list)
@@ -325,18 +322,12 @@ class ScalingGroup:
 
         self._idle_threshold = idle_threshold
 
-        # Informational timestamps surfaced via the status proto. These do not
-        # gate scaling decisions any more — the churn detector below owns that.
+        # Informational timestamps surfaced in the status proto.
         self._last_scale_up: Timestamp = Timestamp.from_ms(0)
         self._last_scale_down: Timestamp = Timestamp.from_ms(0)
 
-        # Churn / health signal. Replaces the older exponential-backoff state
-        # (consecutive_failures, backoff_until, scale_up_cooldown). The detector
-        # owns the quota-exhaustion gate AND the scale-up token bucket — both
-        # "is this group blocked?" and "is this group rate-limited right now?"
-        # collapse into a single source of truth (``try_acquire_scale_up``),
-        # whose refill rate is health-modulated. See
-        # autoscaler/backoff_detector.py for the rationale.
+        # The detector owns the scale-up bucket and the quota-exhaustion gate;
+        # it is the single source of truth for "can this group scale up now?".
         scale_up_bucket = TokenBucket(capacity=scale_up_rate_limit, refill_period=Duration.from_minutes(1))
         self._detector = (
             detector
@@ -349,10 +340,7 @@ class ScalingGroup:
             )
         )
 
-        # Per-group token bucket rate limiter for scale-down API calls.
-        # This replaces the old cooldown-only gate so that multiple idle slices
-        # can be terminated in a single cycle, up to the token budget. Scale-down
-        # is not health-modulated, so the bucket stays on ScalingGroup directly.
+        # Scale-down rate limiter, owned by the group (not health-modulated).
         self._scale_down_bucket = TokenBucket(capacity=scale_down_rate_limit, refill_period=Duration.from_minutes(1))
 
         # Upsert scaling group row so it exists for future updates
@@ -401,13 +389,7 @@ class ScalingGroup:
             cur.execute(delete(slices_table).where(slices_table.c.slice_id == slice_id))
 
     def _db_update_group(self) -> None:
-        """Persist informational timestamps to ``scaling_groups``.
-
-        All gating state (``consecutive_failures``, ``backoff_until_ms``, quota)
-        now lives in the in-memory :class:`BackoffDetector`. The legacy columns
-        remain in the schema for the moment (column drop is a follow-up
-        migration) and will hold their ``server_default`` of ``0``/``''``.
-        """
+        """Persist informational timestamps to ``scaling_groups``."""
         if self._db is None:
             return
         with self._db.transaction() as cur:
@@ -501,7 +483,7 @@ class ScalingGroup:
 
     @property
     def detector(self) -> BackoffDetector:
-        """Churn detector for this group (replaces the old consecutive-failure backoff)."""
+        """AIMD health detector for this group."""
         return self._detector
 
     def health(self, timestamp: Timestamp | None = None) -> float:
@@ -513,12 +495,9 @@ class ScalingGroup:
         return self._detector.health_label(timestamp or Timestamp.now())
 
     def _failure_count_for_status(self, now: Timestamp) -> int:
-        """Estimated count of recent failures for the legacy proto field.
+        """Approximate failure count for the proto ``consecutive_failures`` field.
 
         Inverts the AIMD decay: ``health = decay^n`` → ``n = log(health) / log(decay)``.
-        Used only to populate the proto ``consecutive_failures`` field for
-        back-compat dashboards/SQL — the canonical signal is the float
-        ``health`` score itself.
         """
         score = self._detector.health(now)
         decay = self._detector._decay
@@ -539,10 +518,8 @@ class ScalingGroup:
         self._db_update_group()
 
     def complete_scale_up(self, handle: SliceHandle, timestamp: Timestamp | None = None) -> None:
-        """Record a successful scale-up: add the slice, register it with the
-        detector, and clear any stale quota-block (a successful create proves
-        GCP is currently allowing).
-        """
+        """Record a successful scale-up: track the slice, register it with the detector,
+        and clear any active quota block."""
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
@@ -559,13 +536,9 @@ class ScalingGroup:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
 
     def mark_slice_ready(self, slice_id: str, worker_ids: list[str], timestamp: Timestamp | None = None) -> None:
-        """Mark a slice as READY with its worker IDs. Called after successful bootstrap.
-
-        ``quiet_since`` is left unset (None) so the freshly-ready slice is
-        treated as active until the next autoscaler tick observes its workers;
-        if the workers come up idle, that tick will start the dwell-time clock.
-        """
-        del timestamp  # No timestamp to record now that quiet_since tracks transitions.
+        """Mark a slice READY with its worker IDs. ``quiet_since`` is left None so the next
+        autoscaler tick decides idle/active afresh."""
+        del timestamp
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
@@ -847,23 +820,13 @@ class ScalingGroup:
         target_capacity: int,
         timestamp: Timestamp,
     ) -> list[SliceHandle]:
-        """Scale down idle slices that exceed target capacity.
-
-        Terminates multiple idle slices in a single call, rate-limited by a
-        token bucket (matching the scale-up rate limiter). Scale-down is not
-        health-modulated — the AIMD machinery throttles scale-up cadence
-        only, so a degraded group still reaps its idle survivors at the
-        standard rate-limited cadence when target capacity drops.
-
-        Steps:
-        1. Update slice activity based on worker idle status
-        2. Check if we're over target capacity (using ready + pending)
-        3. Find eligible idle slices and terminate them (up to the token budget)
+        """Terminate idle slices over ``target_capacity``, rate-limited by the scale-down bucket.
 
         Args:
-            worker_status_map: Map of worker_id to worker status
-            target_capacity: Target number of slices (typically min(demand + buffer_slices, max_slices))
-            timestamp: Current timestamp for idle calculation
+            worker_status_map: Map of worker_id to worker status.
+            target_capacity: Target number of slices (typically
+                ``min(demand + buffer_slices, max_slices)``).
+            timestamp: Current timestamp for idle calculation.
 
         Returns:
             List of terminated slice handles (may be empty).
@@ -944,12 +907,7 @@ class ScalingGroup:
         return has_known_worker
 
     def can_scale_up(self, timestamp: Timestamp | None = None) -> bool:
-        """Check if scale-up is allowed.
-
-        Scale-up is blocked if:
-        - The churn detector says the zone is HOSTILE or quota-exhausted
-        - Already at max_slices (includes in-flight scale-ups)
-        """
+        """False if the detector blocks scale-up (quota) or the group is at ``max_slices``."""
         timestamp = timestamp or Timestamp.now()
         if not self._detector.can_scale_up(timestamp):
             return False
@@ -960,11 +918,7 @@ class ScalingGroup:
         return True
 
     def try_acquire_scale_up(self, timestamp: Timestamp | None = None) -> bool:
-        """Delegate to the detector, which owns the health-modulated bucket.
-
-        Returns False when the group is HOSTILE, quota-blocked, or the
-        bucket is empty at the current refill rate.
-        """
+        """Acquire a scale-up token from the detector's health-modulated bucket."""
         return self._detector.try_acquire_scale_up(timestamp or Timestamp.now())
 
     def acquire_scale_down_token(self, timestamp: Timestamp | None = None) -> bool:
@@ -976,20 +930,11 @@ class ScalingGroup:
         self._detector.record_quota_exceeded(reason, timestamp or Timestamp.now())
 
     def record_slice_preempted(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
-        """Record that a previously-READY slice has been terminated (preempted).
-
-        Routed to the churn detector, which classifies based on the slice's
-        age at termination: a slice that survived past short_lived_threshold
-        is a positive sample, a short-lived death is a failure.
-        """
+        """Record a preemption of a previously-created slice."""
         self._detector.record_terminated(slice_id, SliceFate.PREEMPTED, timestamp or Timestamp.now())
 
     def record_slice_boot_failed(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
-        """Record that a slice failed to reach READY (CREATING → FAILED, or UNKNOWN past timeout).
-
-        Always counted as a failure regardless of age — no useful work could
-        have happened on a slice that never booted.
-        """
+        """Record that a slice failed to reach READY (boot failure or unresolvable timeout)."""
         self._detector.record_terminated(slice_id, SliceFate.BOOT_FAILED, timestamp or Timestamp.now())
 
     def record_create_failed(self, timestamp: Timestamp | None = None) -> None:
@@ -1094,9 +1039,7 @@ class ScalingGroup:
                 quota_until,
             )
 
-        # HOSTILE label → waterfall routing prefers fallback. The detector still
-        # probes at the floor, but routing is best served sending active demand
-        # to a healthier zone when one exists.
+        # HOSTILE → BACKOFF so waterfall routing prefers a healthier group.
         if self._detector.health_label(timestamp) == GroupHealth.HOSTILE:
             score = self._detector.health(timestamp)
             return AvailabilityState(
@@ -1195,12 +1138,11 @@ class ScalingGroup:
         last_scale_up: Timestamp,
         last_scale_down: Timestamp,
     ) -> None:
-        """Restore state from a snapshot. Called before the autoscaler loop starts.
+        """Restore slices and scale timestamps from a snapshot.
 
-        Backoff/churn state is intentionally not restored: the detector runs in
-        memory and starts fresh on each controller boot. Restored slices are
-        seeded into the detector with their original ``created_at`` so the
-        churn window has accurate ages for survival classification.
+        The in-memory detector starts fresh on each controller boot; restored
+        slices are registered with their original ``created_at`` so age-based
+        termination classification stays accurate.
         """
         with self._slices_lock:
             self._slices = slices
@@ -1306,11 +1248,9 @@ def restore_scaling_group(
             )
             lifecycle = SliceLifecycleState.BOOTING
 
-        # Recovered slices start with quiet_since=None so the next autoscaler
-        # tick observes their workers and decides afresh: any active task →
-        # stays active; otherwise the tick stamps quiet_since and the dwell
-        # clock starts from there. This intentionally grants a full
-        # idle_threshold grace period after a controller restart.
+        # quiet_since defaults to None: the next tick decides idle/active
+        # from live worker state, granting a full idle_threshold grace
+        # period after restart.
         result.slices[slice_id] = SliceState(
             handle=cloud_handle,
             lifecycle=lifecycle,
