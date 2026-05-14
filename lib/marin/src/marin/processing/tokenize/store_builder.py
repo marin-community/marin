@@ -1,18 +1,26 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage B of the split tokenize pipeline: tokenized records → consolidated Levanter store.
+"""Stage B of the split tokenize pipeline: tokenized records → Levanter cache.
 
 Two entry points:
 
 * :func:`build_from_datasets` — modular core. Takes a caller-prepared zephyr
-  ``Dataset`` of ``{id, input_ids, ...}`` records and writes one consolidated
-  Levanter ``TreeStore``. Used by :func:`marin.processing.tokenize.tokenize.tokenize`
+  ``Dataset`` of ``{id, input_ids, ...}`` records and writes a Levanter cache
+  with a top-level sharded ledger referencing per-shard subdirectories under
+  ``output_path``. Used by :func:`marin.processing.tokenize.tokenize.tokenize`
   on the legacy hot path (no parquet round-trip) and by :func:`build_levanter_store`.
 
 * :func:`build_levanter_store` — convenience wrapper. Reads attribute parquet
-  partitions from one or more :class:`TokenizedAttrData` artifacts and builds a single
-  ``TreeStore`` per split.
+  partitions from one or more :class:`TokenizedAttrData` artifacts and builds a
+  Levanter cache per split.
+
+The output layout is the "sharded" layout introduced by Levanter ``#5430``:
+``cache_dir/shard_ledger.json`` aggregates the per-shard ledgers, while the
+shard data itself lives under ``cache_dir/part-NNNNN-of-MMMMM/`` and must NOT
+be removed — those subdirectories are the cache. Downstream readers load via
+``TreeCache.load`` (or ``UrlDatasetSourceConfig``), which transparently
+dispatches on the sharded layout.
 """
 from __future__ import annotations
 
@@ -42,9 +50,11 @@ class LevanterSplitStats(BaseModel):
     """Per-split summary of a built Levanter store.
 
     Attributes:
-        path: Cache directory for this split (consolidated Levanter ``TreeStore``).
+        path: Cache directory for this split. Contains a top-level
+            ``shard_ledger.json`` plus the per-shard subdirectories it references;
+            load via ``TreeCache.load``.
         total_elements: Document count, mirrors ``CacheLedger.total_num_rows``.
-        total_tokens: Total tokens across all documents (``input_ids`` data size).
+        total_tokens: Total tokens across all documents (``input_ids`` field count).
     """
 
     path: str
@@ -60,7 +70,7 @@ class LevanterStoreData(BaseModel):
 
     Attributes:
         version: Schema version.
-        cache_path: Base directory; each split's consolidated cache lives in
+        cache_path: Base directory; each split's Levanter cache lives in
             ``cache_path/<split>``.
         splits: Map from split name to per-split stats.
         source_dirs: For provenance — the ``output_dirs`` of each source
@@ -91,7 +101,7 @@ def build_from_datasets(
     batch_size: int | None = None,
     skip_existing: bool = True,
 ) -> CacheLedger:
-    """Write a consolidated Levanter ``TreeStore`` from a tokenized records dataset.
+    """Write a Levanter cache from a tokenized records dataset.
 
     The dataset is expected to yield per-doc records shaped like
     ``{id, input_ids, ...}``. ``id`` is stripped before writing because
@@ -99,9 +109,11 @@ def build_from_datasets(
     exemplar must already be in the post-strip shape (no ``id``); pass an
     exemplar derived from the post-tokenize record after dropping ``id``.
 
-    The dataset's shard structure determines the number of intermediate
-    Levanter shard caches written under ``{output_path}/part-NNNNN-of-MMMMM``;
-    those are consolidated into ``output_path`` and removed from caller view.
+    The dataset's shard structure determines the number of per-shard Levanter
+    caches written under ``{output_path}/part-NNNNN-of-MMMMM``. Those shard
+    directories *are* the cache and must remain in place; the consolidation
+    step only writes a top-level ``shard_ledger.json`` that references them by
+    relative path (sharded layout, see Levanter ``#5430``).
 
     Args:
         ctx: Zephyr context. The caller is responsible for setting any tokenizer
@@ -109,15 +121,16 @@ def build_from_datasets(
             if the upstream dataset relies on them.
         dataset: Zephyr ``Dataset`` of tokenized records.
         output_path: Destination cache directory.
-        exemplar: Output exemplar (without ``id``). Used by
-            :func:`consolidate_shard_cache_ledgers` to resolve the TreeStore tree shape.
+        exemplar: Output exemplar (without ``id``). Used as a fallback by
+            :func:`consolidate_shard_cache_ledgers` to derive ``field_counts``
+            for any shard whose own ledger lacks them.
         batch_size: Per-shard Levanter cache flush size. ``None`` keeps Levanter's
             default (16384). Lower values reduce peak memory for datasets with
             very large documents.
         skip_existing: Skip writing intermediate shards whose output already exists.
 
     Returns:
-        The consolidated ``CacheLedger``.
+        The merged sharded ``CacheLedger``.
     """
     if "id" in exemplar:
         raise ValueError("build_from_datasets: exemplar must not contain 'id'; pass a stripped exemplar")
@@ -157,7 +170,7 @@ def build_from_datasets(
 
 
 def write_stats_json(output_path: str, ledger: CacheLedger) -> tuple[str, dict[str, int]]:
-    """Write a ``.stats.json`` summary next to a consolidated Levanter cache.
+    """Write a ``.stats.json`` summary next to a Levanter cache.
 
     Returns ``(stats_path, stats_dict)`` where ``stats_dict`` carries
     ``total_tokens`` and ``total_elements``.
@@ -172,11 +185,11 @@ def write_stats_json(output_path: str, ledger: CacheLedger) -> tuple[str, dict[s
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class BuildLevanterStoreConfig:
-    """Config for assembling a Levanter ``TreeStore`` from one or more :class:`TokenizedAttrData` sources.
+    """Config for assembling a Levanter cache from one or more :class:`TokenizedAttrData` sources.
 
     All sources must agree on tokenizer/format — that's the caller's responsibility.
     The store builder concatenates attribute records across sources in the order
-    provided and writes one consolidated cache per split.
+    provided and writes one Levanter cache per split (sharded layout).
     """
 
     sources: list[TokenizedAttrData]
@@ -220,17 +233,18 @@ def _first_nonempty_exemplar(shard_paths: list[str]) -> dict:
 
 
 def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
-    """Build one consolidated Levanter store per split from :class:`TokenizedAttrData` sources.
+    """Build one Levanter cache per split from :class:`TokenizedAttrData` sources.
 
     For each split that exists in any source, this:
 
     1. Collects parquet shard paths across all sources.
-    2. Derives an exemplar from the first shard's first record.
-    3. Runs :func:`build_from_datasets` to write and consolidate.
-    4. Writes ``.stats.json`` next to the consolidated cache.
+    2. Derives an exemplar from the first non-empty shard's first record.
+    3. Runs :func:`build_from_datasets` to write per-shard caches and a
+       top-level sharded ledger.
+    4. Writes ``.stats.json`` next to the ledger.
 
-    Splits with no shards are skipped. If a split's consolidated ledger already
-    exists, this loads the existing stats rather than rebuilding.
+    Splits with no shards are skipped. If a split's ledger already exists,
+    this loads the existing stats rather than rebuilding.
 
     Returns:
         :class:`LevanterStoreData` describing the cache layout and per-split counts.
@@ -294,7 +308,7 @@ def build_levanter_store(config: BuildLevanterStoreConfig) -> LevanterStoreData:
 
 
 def _ledger_exists(cache_path: str) -> bool:
-    """Return whether a consolidated Levanter ledger already exists at ``cache_path``."""
+    """Return whether a Levanter cache ledger already exists at ``cache_path``."""
     return fsspec_exists(os.path.join(cache_path, "shard_ledger.json"))
 
 
@@ -310,8 +324,8 @@ def build_levanter_store_step(
     """Create a :class:`StepSpec` that assembles a Levanter store from one or more
     :class:`TokenizedAttrData` step outputs.
 
-    The step's output path becomes ``LevanterStoreData.cache_path``; per-split
-    consolidated caches live at ``cache_path/<split>``.
+    The step's output path becomes ``LevanterStoreData.cache_path``; each
+    split's Levanter cache lives at ``cache_path/<split>``.
 
     Args:
         name: Step name.

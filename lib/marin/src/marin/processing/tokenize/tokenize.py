@@ -4,9 +4,10 @@
 """Tokenize datasets directly into a Levanter cache (legacy end-to-end path).
 
 Supports both regular file paths and HuggingFace datasets. For HF datasets, downloads
-them first then tokenizes the downloaded files. The output is a single consolidated
-Levanter ``TreeStore`` per split (train/validation), as it was before the datakit
-split. No intermediate parquet round-trip is performed on this path.
+them first then tokenizes the downloaded files. The output is a Levanter cache per
+split (train/validation): a top-level sharded ``shard_ledger.json`` plus per-shard
+subdirectories under ``cache_path/<split>/part-NNNNN-of-MMMMM/``. No intermediate
+parquet round-trip is performed on this path.
 
 For datakit-style separation (per-doc attribute parquet → store assembly), see
 :mod:`marin.processing.tokenize.attributes` and :mod:`marin.processing.tokenize.store_builder`.
@@ -263,8 +264,8 @@ def _exemplar_for(
     """Compute a post-tokenize exemplar by running one record through the pipeline.
 
     The exemplar still carries ``id`` (because the shared tokenize pipeline emits
-    ``{id, input_ids, ...}``); :func:`build_from_datasets` strips it before opening
-    the TreeStore.
+    ``{id, input_ids, ...}``); :func:`build_from_datasets` strips it before
+    writing the cache.
     """
     sample_path = parquet_window_hint(file_groups)
     ds = Dataset.from_list(file_groups[0][0:1]).flat_map(load_file)

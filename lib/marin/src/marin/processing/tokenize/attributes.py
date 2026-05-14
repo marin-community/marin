@@ -17,7 +17,8 @@ datakit invariants hold by construction:
 Downstream:
 
 * :func:`marin.processing.tokenize.store_builder.build_levanter_store` consumes
-  one or more :class:`TokenizedAttrData` artifacts to produce a Levanter ``TreeStore``.
+  one or more :class:`TokenizedAttrData` artifacts to produce a Levanter cache
+  per split (sharded layout).
 * Other datakit attribute consumers (joins, mixing) can use the ``id`` column to
   align tokens with quality scores, dedup flags, etc.
 """
