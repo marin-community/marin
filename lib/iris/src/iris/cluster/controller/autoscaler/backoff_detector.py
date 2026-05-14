@@ -19,7 +19,10 @@ to the floor; sustained success lets it climb back smoothly.
 
 The bucket's ``refill_rate`` is set to ``base_rate * health`` on every
 ``try_acquire_scale_up`` call. Cadence — not batch size — is what gets
-throttled.
+throttled. Each failure also caps the bucket's current token inventory
+to ``capacity * health``, so a previously-healthy bucket that suddenly
+degrades can't burst its accumulated tokens before the lowered refill
+rate takes effect.
 
 The probe floor exists so a fully degraded zone still attempts at some low
 rate — without it, zero attempts means zero samples and the score could
@@ -171,9 +174,9 @@ class BackoffDetector:
             age_ms = terminated_at.epoch_ms() - created_at.epoch_ms()
             self._apply_recovery(terminated_at)
             if fate == SliceFate.BOOT_FAILED:
-                self._apply_decay()
+                self._apply_decay(terminated_at)
             elif fate == SliceFate.PREEMPTED and age_ms < self._short_lived_threshold.to_ms():
-                self._apply_decay()
+                self._apply_decay(terminated_at)
 
     def record_create_failed(self, ts: Timestamp) -> None:
         """Record a CreateSlice RPC error (no slice handle was returned).
@@ -182,7 +185,7 @@ class BackoffDetector:
         """
         with self._lock:
             self._apply_recovery(ts)
-            self._apply_decay()
+            self._apply_decay(ts)
 
     def record_quota_exceeded(self, reason: str, ts: Timestamp) -> None:
         """Record a quota error from GCP. Sets a fixed-duration hard block.
@@ -280,9 +283,16 @@ class BackoffDetector:
         self._health = min(1.0, self._health + self._recovery_per_second * (elapsed_ms / 1000.0))
         self._last_tick = now
 
-    def _apply_decay(self) -> None:
-        """Apply one multiplicative decay, clamped at the probe floor."""
+    def _apply_decay(self, now: Timestamp) -> None:
+        """Apply one multiplicative decay and drain bucket inventory to match.
+
+        Health drops to ``health * decay`` (clamped at the probe floor). The
+        bucket's accumulated tokens are then capped at ``capacity * health``,
+        so a previously-healthy group that suddenly degrades can't burst
+        through a full bucket before the new (lower) refill rate matters.
+        """
         self._health = max(self._floor, self._health * self._decay)
+        self._scale_up_bucket.cap_tokens(self._scale_up_bucket.capacity * self._health, now=now)
 
     def _snapshot_quota(self) -> tuple[Deadline | None, str]:
         with self._lock:

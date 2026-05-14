@@ -210,6 +210,39 @@ def test_refill_rate_tracks_health() -> None:
     assert bucket.refill_rate == pytest.approx(BASE_RATE_PER_SEC * DEFAULT_DECAY_PER_FAILURE, abs=1e-6)
 
 
+def test_decay_drains_stockpiled_bucket_tokens() -> None:
+    """A previously-healthy bucket cannot burst at its old rate after rapid failures.
+
+    Without inventory clamping, a bucket sitting at full capacity (because the
+    group has been healthy long enough) would let through ``capacity`` acquires
+    immediately after the group becomes HOSTILE — exactly the behaviour the
+    AIMD throttle is supposed to prevent. Each decay step caps the bucket's
+    current tokens at ``capacity * health``.
+    """
+    bucket = TokenBucket(capacity=BASE_RATE_PER_MIN, refill_period=Duration.from_minutes(1))
+    detector = BackoffDetector(
+        group_name="g",
+        scale_up_bucket=bucket,
+        base_scale_up_per_minute=BASE_RATE_PER_MIN,
+    )
+    # Fill the bucket: one acquire at t=60s refills 60s worth at full rate
+    # (clamped to capacity), then consumes one token. 15 of 16 remain.
+    assert detector.try_acquire_scale_up(ts(60))
+
+    # Burst of failures at the same timestamp. Each decay caps tokens at
+    # capacity * health, geometrically shrinking the available burst.
+    for _ in range(5):
+        detector.record_create_failed(ts(60))
+
+    # Health ≈ 0.7^5 ≈ 0.168 → max tokens ≈ 16 * 0.168 ≈ 2.7. At most ~3
+    # acquires succeed before the bucket is drained.
+    successes = 0
+    for _ in range(BASE_RATE_PER_MIN):
+        if detector.try_acquire_scale_up(ts(60)):
+            successes += 1
+    assert successes <= 3
+
+
 def test_probe_floor_clamps_health_above_zero() -> None:
     """Even with many failures, health never drops below the probe floor."""
     bucket = TokenBucket(capacity=BASE_RATE_PER_MIN, refill_period=Duration.from_minutes(1))
@@ -224,7 +257,10 @@ def test_probe_floor_clamps_health_above_zero() -> None:
         detector.record_create_failed(ts(1000))
     floor = floor_per_min / BASE_RATE_PER_MIN
     assert detector.health(ts(1000)) == pytest.approx(floor, abs=1e-9)
-    assert detector.try_acquire_scale_up(ts(1000))
+    # Bucket inventory was clamped on every decay → tokens ≈ capacity * floor = 0.5,
+    # below one whole token, so the immediate probe fails (no burst at the old rate).
+    # The refill rate still reflects the floor; one token accrues after ~120s at 0.5/min.
+    assert not detector.try_acquire_scale_up(ts(1000))
     assert bucket.refill_rate == pytest.approx(BASE_RATE_PER_SEC * floor, abs=1e-6)
 
 

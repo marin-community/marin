@@ -279,7 +279,8 @@ class TestScalingGroupScalingPolicy:
         assert not group.can_scale_up()
 
     def test_hostile_throttles_bucket_to_probe_floor(self, unbounded_config: config_pb2.ScaleGroupConfig):
-        """At 100% churn, try_acquire_scale_up still works but the bucket refills at the probe floor.
+        """At 100% churn, the bucket refills at the probe floor and acquires
+        succeed only after waiting one floor-tokens' worth of time.
 
         Continuous control: there is no hard "HOSTILE" block, only a low refill rate.
         ``can_scale_up`` only flips to False on quota.
@@ -288,14 +289,19 @@ class TestScalingGroupScalingPolicy:
         group = ScalingGroup(unbounded_config, platform)
         ts = Timestamp.from_ms(1_000_000)
         # With decay=0.7, 8 failures drive health below the probe floor → clamped to floor.
+        # Each decay also caps the bucket inventory at capacity * health, so by
+        # the time we're at the floor the bucket holds well under one token.
         for _ in range(8):
             group.record_create_failed(timestamp=ts)
         now = Timestamp.from_ms(1_001_000)
         # Health-driven throttling is not a "block" — quota would be.
         assert group.can_scale_up(timestamp=now)
-        # Bucket starts full so first acquire succeeds; refill rate is now the probe floor.
-        assert group.try_acquire_scale_up(timestamp=now)
-        assert group.detector.health_label(now) == GroupHealth.HOSTILE
+        # Immediate acquire fails: drained-on-decay bucket needs to refill at the floor rate.
+        assert not group.try_acquire_scale_up(timestamp=now)
+        # Default scale_up_rate_limit is 16/min, floor 0.5/min → one token in ~120s.
+        much_later = Timestamp.from_ms(ts.epoch_ms() + 5 * 60_000)
+        assert group.try_acquire_scale_up(timestamp=much_later)
+        assert group.detector.health_label(much_later) == GroupHealth.HOSTILE
 
     def test_scale_down_rate_limited_by_token_bucket(self, unbounded_config: config_pb2.ScaleGroupConfig):
         """acquire_scale_down_token() returns False when the token bucket is exhausted."""

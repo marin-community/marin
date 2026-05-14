@@ -850,17 +850,15 @@ class ScalingGroup:
         """Scale down idle slices that exceed target capacity.
 
         Terminates multiple idle slices in a single call, rate-limited by a
-        token bucket (matching the scale-up rate limiter). When the churn
-        detector reports CHURNING or HOSTILE for this group, scale-down is
-        suppressed entirely — the surviving slices are proven survivors of a
-        churning zone, and reaping them when we can't easily replace them
-        accelerates the sawtooth.
+        token bucket (matching the scale-up rate limiter). Scale-down is not
+        health-modulated — the AIMD machinery throttles scale-up cadence
+        only, so a degraded group still reaps its idle survivors at the
+        standard rate-limited cadence when target capacity drops.
 
         Steps:
         1. Update slice activity based on worker idle status
-        2. Skip if the detector says we shouldn't scale down right now
-        3. Check if we're over target capacity (using ready + pending)
-        4. Find eligible idle slices and terminate them (up to the token budget)
+        2. Check if we're over target capacity (using ready + pending)
+        3. Find eligible idle slices and terminate them (up to the token budget)
 
         Args:
             worker_status_map: Map of worker_id to worker status

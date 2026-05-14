@@ -99,10 +99,9 @@ def build_group_scale_plan(group: ScalingGroup, required_slices: int, ts: Timest
     would launch if nothing were rate-limiting us. The actual throttle
     happens later in ``runtime.execute``, where each launch must acquire
     a token from the detector's scale-up bucket; the bucket's refill rate
-    is modulated by health (SUSPECT halves it, CHURNING brings it to 10%,
-    HOSTILE refuses outright). That means CHURNING groups still get a plan
-    here every tick but only succeed at acquiring a token roughly 1/10 as
-    often, which is the actual cadence reduction.
+    is set to ``base_rate * health`` on every acquire, so degraded groups
+    still get a plan here every tick but only succeed at acquiring a
+    token at the AIMD-modulated cadence.
     """
 
     counts = GroupSliceCounts.from_group(group)

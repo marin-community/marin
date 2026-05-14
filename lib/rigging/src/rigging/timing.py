@@ -443,6 +443,26 @@ class TokenBucket:
         self._tokens = min(self._capacity, self._tokens + elapsed_seconds * self.refill_rate)
         self._last_refill = now
 
+    def cap_tokens(self, max_tokens: float, now: Timestamp | None = None) -> None:
+        """Drain stockpiled tokens down to ``max_tokens``.
+
+        Refills up to ``now`` first so the cap applies to the up-to-date
+        token count. Used by external rate-modulation (e.g. the AIMD
+        detector): when the effective refill rate is lowered, capped
+        inventory prevents a previously-healthy bucket from bursting
+        at its pre-drop rate.
+        """
+        now = now or Timestamp.now()
+        with self._lock:
+            self._refill(now)
+            if self._tokens > max_tokens:
+                self._tokens = max(0.0, max_tokens)
+
+    @property
+    def capacity(self) -> int:
+        """Maximum tokens the bucket can hold (exposed for external rate-modulation)."""
+        return self._capacity
+
     @property
     def available(self) -> int:
         """Current available tokens after refilling from elapsed time."""
