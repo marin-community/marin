@@ -22,7 +22,13 @@ LOSS_IGNORE_LABEL = 0
 
 @dataclass(frozen=True)
 class LossLabelSpan:
-    """An exclusive label span over next-token loss positions."""
+    """An exclusive typed span used to evaluate per-span-type LM loss.
+
+    The span is over next-token loss positions, not raw token positions:
+    `[start, end)` labels losses for predicting `tokens[start + 1]` through
+    `tokens[end]`. Spans are intentionally exclusive so each loss position has
+    one semantic type before aggregate metrics roll those types up.
+    """
 
     start: int
     end: int
@@ -143,10 +149,12 @@ class GrugLmExample:
 @register_dataclass
 @dataclass(frozen=True)
 class LabeledLmExample:
-    """A grug-conformant LM example with exclusive per-loss-position labels.
+    """A grug-conformant LM example with exclusive labels for loss evaluation.
 
-    `loss_labels[i]` labels the loss for predicting `tokens[i + 1]`. The final
-    position should normally use `LOSS_IGNORE_LABEL`, because it has no next
+    Use this when an eval needs to report loss by token or span type, such as
+    assistant text, tool calls, observations, or derived answer spans.
+    `loss_labels[i]` labels the loss for predicting `tokens[i + 1]`; the final
+    position should normally use `LOSS_IGNORE_LABEL` because it has no next
     token to predict.
     """
 

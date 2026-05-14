@@ -256,7 +256,7 @@ def test_labeled_lm_evaluator_accepts_labeled_lm_examples():
     label_spec = LossLabelSpec(id_to_name={0: "dont_score", 1: "assistant"})
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
-        evaluator = LabeledEvaluator.from_labeled_lm(
+        evaluator = LabeledEvaluator.for_labeled_examples(
             EvalBatch=EvalBatch,
             eval_set=ListAsyncDataset(examples),
             label_spec=label_spec,
@@ -271,6 +271,9 @@ def test_labeled_lm_evaluator_accepts_labeled_lm_examples():
 
 
 def test_loss_label_spec_validates_aggregates():
+    label_spec = LossLabelSpec(id_to_name={1: "assistant"})
+    assert label_spec.aggregate_names == ("assistant",)
+
     with np.testing.assert_raises_regex(ValueError, "unknown label id"):
         LossLabelSpec(
             id_to_name={0: "dont_score", 1: "assistant"},

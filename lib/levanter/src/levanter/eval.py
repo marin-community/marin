@@ -57,50 +57,57 @@ BatchedTagArray = Int[Array, "... tag"]
 
 @dataclasses.dataclass(frozen=True)
 class LossLabelSpec:
-    """Names exclusive per-loss-position labels and the aggregates to score."""
+    """Names exclusive loss labels and defines metric rollups.
+
+    `id_to_name` names the leaf span types stored in `LabeledLmExample.loss_labels`.
+    `aggregates` maps metric names to one or more leaf label ids, so callers can
+    report both specific span types and rollups such as assistant = assistant
+    text plus assistant tool calls. If aggregates is omitted, each non-ignored
+    label id gets its own metric.
+    """
 
     id_to_name: Mapping[int, str]
-    aggregates: Mapping[str, Sequence[int]] = dataclasses.field(default_factory=dict)
+    aggregates: Mapping[str, Sequence[int]] | None = None
     dont_score_label: int = LOSS_IGNORE_LABEL
 
     def __post_init__(self):
-        id_to_name = {int(label_id): str(name) for label_id, name in self.id_to_name.items()}
-        dont_score_label = int(self.dont_score_label)
-        if dont_score_label not in id_to_name:
-            raise ValueError(f"id_to_name must include dont_score_label={dont_score_label}")
-        if len(set(id_to_name.values())) != len(id_to_name):
+        for label_id, name in self.id_to_name.items():
+            if not isinstance(label_id, int):
+                raise TypeError(f"label id must be an int, got {label_id!r}")
+            if not isinstance(name, str):
+                raise TypeError(f"label name for id {label_id} must be a str, got {name!r}")
+        if len(set(self.id_to_name.values())) != len(self.id_to_name):
             raise ValueError("label names must be unique")
 
-        if self.aggregates:
-            aggregates = {
-                str(name): tuple(int(label_id) for label_id in label_ids)
-                for name, label_ids in self.aggregates.items()
-            }
-        else:
-            aggregates = {
-                label_name: (label_id,) for label_id, label_name in id_to_name.items() if label_id != dont_score_label
-            }
-
-        for name, label_ids in aggregates.items():
+        for name, label_ids in self._aggregate_mapping().items():
+            if not isinstance(name, str):
+                raise TypeError(f"aggregate name must be a str, got {name!r}")
             if not label_ids:
                 raise ValueError(f"aggregate {name!r} must include at least one label id")
-            if dont_score_label in label_ids:
-                raise ValueError(f"aggregate {name!r} includes dont_score_label={dont_score_label}")
+            if self.dont_score_label in label_ids:
+                raise ValueError(f"aggregate {name!r} includes dont_score_label={self.dont_score_label}")
             for label_id in label_ids:
-                if label_id not in id_to_name:
+                if not isinstance(label_id, int):
+                    raise TypeError(f"aggregate {name!r} label id must be an int, got {label_id!r}")
+                if label_id not in self.id_to_name:
                     raise ValueError(f"aggregate {name!r} references unknown label id {label_id}")
 
-        object.__setattr__(self, "id_to_name", id_to_name)
-        object.__setattr__(self, "aggregates", aggregates)
-        object.__setattr__(self, "dont_score_label", dont_score_label)
+    def _aggregate_mapping(self) -> Mapping[str, Sequence[int]]:
+        if self.aggregates is not None:
+            return self.aggregates
+        return {
+            label_name: (label_id,)
+            for label_id, label_name in self.id_to_name.items()
+            if label_id != self.dont_score_label
+        }
 
     @property
     def aggregate_names(self) -> tuple[str, ...]:
-        return tuple(self.aggregates.keys())
+        return tuple(self._aggregate_mapping().keys())
 
     @property
     def aggregate_label_ids(self) -> tuple[tuple[int, ...], ...]:
-        return tuple(tuple(label_ids) for label_ids in self.aggregates.values())
+        return tuple(tuple(label_ids) for label_ids in self._aggregate_mapping().values())
 
 
 @dataclasses.dataclass
@@ -275,18 +282,18 @@ def _default_lm_eval_loss_fn(
 def _ensure_named_labeled_lm_example(
     batch: LabeledLmExample,
     *,
-    EvalBatch: hax.Axis,
-    model_pos: hax.Axis,
+    batch_axis_name: str,
+    pos_axis_name: str,
 ) -> tuple[LmExample, hax.NamedArray]:
     if not isinstance(batch, LabeledLmExample):
         raise TypeError(f"Unsupported labeled eval batch type: {type(batch)}")
 
     if batch.tokens.ndim == 1:
-        Pos = model_pos.resize(batch.tokens.shape[0])
+        Pos = hax.Axis(pos_axis_name, batch.tokens.shape[0])
         return named_lm_example_from_labeled(batch, Pos=Pos)
     if batch.tokens.ndim == 2:
-        Pos = model_pos.resize(batch.tokens.shape[1])
-        return named_lm_example_from_labeled(batch, Pos=Pos, batch_axis=EvalBatch)
+        Pos = hax.Axis(pos_axis_name, batch.tokens.shape[1])
+        return named_lm_example_from_labeled(batch, Pos=Pos, batch_axis=batch_axis_name)
 
     raise ValueError(f"LabeledLmExample tokens must be rank-1 or rank-2 for eval, got rank={batch.tokens.ndim}")
 
@@ -299,7 +306,11 @@ def _default_labeled_lm_eval_loss_fn(
     mp: jmp.Policy | None,
 ) -> LabeledLossFnOutput:
     model = inference_mode(model, True)
-    named_batch, loss_labels = _ensure_named_labeled_lm_example(batch, EvalBatch=EvalBatch, model_pos=model.Pos)
+    named_batch, loss_labels = _ensure_named_labeled_lm_example(
+        batch,
+        batch_axis_name=EvalBatch.name,
+        pos_axis_name=model.Pos.name,
+    )
     if mp is not None:
         model = mp.cast_to_compute(model)
     per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
@@ -450,11 +461,11 @@ def cb_labeled_evaluate(
     *,
     prefix: str = "labeled_eval",
     eval_current: bool = True,
-    eval_ema: bool = True,
+    eval_model: bool = True,
 ) -> Callable[[StepInfo], None]:
-    """Build a callback that logs labeled eval metrics for current and/or eval model."""
-    if not eval_current and not eval_ema:
-        raise ValueError("At least one of eval_current or eval_ema should be True")
+    """Build a callback that logs labeled eval metrics for current and/or eval-mode model."""
+    if not eval_current and not eval_model:
+        raise ValueError("At least one of eval_current or eval_model should be True")
 
     last_eval_step: int | None = None
 
@@ -472,8 +483,8 @@ def cb_labeled_evaluate(
             log_dict = eval_labeled_model(evaluator, step.model, prefix=prefix)
             levanter.tracker.log(log_dict, step=step_count)
 
-        if eval_ema:
-            log_dict = eval_labeled_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+        if eval_model:
+            log_dict = eval_labeled_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "eval_model"))
             levanter.tracker.log(log_dict, step=step_count)
 
         last_eval_step = step_count
@@ -724,6 +735,14 @@ class TaggedEvaluator(Generic[Ex, M]):
 
 
 class LabeledEvaluator(Generic[Ex, M]):
+    """Evaluator that aggregates LM loss over exclusive token-label groups.
+
+    The loss callback returns per-position losses, exclusive integer labels, and
+    next-token ids. `LossLabelSpec` then rolls leaf labels up into named metrics,
+    so one example can report loss for both fine-grained span types and broader
+    groups without overlapping per-target masks.
+    """
+
     loss_fn: Callable[[M, Ex], LabeledLossFnOutput]
 
     def __init__(
@@ -738,7 +757,7 @@ class LabeledEvaluator(Generic[Ex, M]):
     ):
         if isinstance(EvalBatch, int):
             EvalBatch = hax.Axis("batch", EvalBatch)
-        if not label_spec.aggregates:
+        if not label_spec.aggregate_names:
             raise ValueError("label_spec must define at least one aggregate to score")
 
         self.loss_fn = loss_fn
@@ -766,7 +785,7 @@ class LabeledEvaluator(Generic[Ex, M]):
         self.accum_for_batch = self._make_accum_for_batch()
 
     @classmethod
-    def from_labeled_lm(
+    def for_labeled_examples(
         cls,
         EvalBatch: hax.Axis | int,
         eval_set: AsyncDataset[LabeledLmExample],
