@@ -15,7 +15,10 @@ T = TypeVar("T")
 
 
 class Artifact:
-    __artifact_file_name = ".artifact"
+    __artifact_file_name = "artifact.json"
+    # Legacy filename written before the rename; read-only fallback so historical
+    # GCS outputs remain loadable. Safe to remove once those prefixes are gone.
+    __legacy_artifact_file_name = ".artifact"
 
     @overload
     @classmethod
@@ -34,9 +37,10 @@ class Artifact:
         If ``base_path`` is a relative path (no URL scheme, doesn't start with ``/``),
         it is resolved against ``marin_prefix()``.
 
-        If ``base_path`` has no ``.artifact`` file but its ``.executor_status`` file
-        contains ``SUCCESS``, returns a :class:`PathMetadata` pointing at ``base_path``
-        — provided the caller asked for no specific type or for ``PathMetadata``.
+        If ``base_path`` has no ``artifact.json`` (or legacy ``.artifact``) file but
+        its ``.executor_status`` file contains ``SUCCESS``, returns a
+        :class:`PathMetadata` pointing at ``base_path`` — provided the caller asked
+        for no specific type or for ``PathMetadata``.
         """
 
         if isinstance(base_path, StepSpec):
@@ -44,19 +48,21 @@ class Artifact:
         elif _is_relative_path(base_path):
             base_path = f"{marin_prefix()}/{base_path}"
 
-        try:
-            with open_url(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:
-                if artifact_type is None:
-                    return json.load(fd)
-                if not issubclass(artifact_type, BaseModel):
-                    raise TypeError(f"artifact_type must be a pydantic BaseModel subclass, got {artifact_type!r}")
-                return artifact_type.model_validate_json(fd.read())
-        except FileNotFoundError:
-            return cls._from_executor_status(base_path, artifact_type)
+        for file_name in (cls.__artifact_file_name, cls.__legacy_artifact_file_name):
+            try:
+                with open_url(f"{base_path}/{file_name}", "rb") as fd:
+                    if artifact_type is None:
+                        return json.load(fd)
+                    if not issubclass(artifact_type, BaseModel):
+                        raise TypeError(f"artifact_type must be a pydantic BaseModel subclass, got {artifact_type!r}")
+                    return artifact_type.model_validate_json(fd.read())
+            except FileNotFoundError:
+                continue
+        return cls._from_executor_status(base_path, artifact_type)
 
     @classmethod
     def _from_executor_status(cls, base_path: str, artifact_type: type[T] | None) -> "T | PathMetadata":
-        """Fallback when ``.artifact`` is absent: synthesize a :class:`PathMetadata`
+        """Fallback when no artifact file is present: synthesize a :class:`PathMetadata`
         if the step published ``.executor_status = SUCCESS``.
 
         Only valid when the caller wants no type or ``PathMetadata`` — other types

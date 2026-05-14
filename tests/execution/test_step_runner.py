@@ -125,7 +125,7 @@ def test_artifact_load_relative_path_resolves_against_marin_prefix(tmp_path: Pat
 
 
 def test_artifact_from_executor_status_success_untyped(tmp_path: Path):
-    """No .artifact, but .executor_status=SUCCESS: synthesize PathMetadata."""
+    """No artifact file, but .executor_status=SUCCESS: synthesize PathMetadata."""
     (tmp_path / ".executor_status").write_text("SUCCESS")
 
     loaded = Artifact.from_path(tmp_path.as_posix())
@@ -134,7 +134,7 @@ def test_artifact_from_executor_status_success_untyped(tmp_path: Path):
 
 
 def test_artifact_from_executor_status_success_typed_pathmetadata(tmp_path: Path):
-    """No .artifact, but .executor_status=SUCCESS and caller asks for PathMetadata."""
+    """No artifact file, but .executor_status=SUCCESS and caller asks for PathMetadata."""
     (tmp_path / ".executor_status").write_text("SUCCESS")
 
     loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
@@ -142,7 +142,7 @@ def test_artifact_from_executor_status_success_typed_pathmetadata(tmp_path: Path
 
 
 def test_artifact_from_executor_status_success_typed_other_raises(tmp_path: Path):
-    """No .artifact, .executor_status=SUCCESS, but caller asks for a different type."""
+    """No artifact file, .executor_status=SUCCESS, but caller asks for a different type."""
     (tmp_path / ".executor_status").write_text("SUCCESS")
 
     with pytest.raises(FileNotFoundError, match="cannot synthesize"):
@@ -150,11 +150,19 @@ def test_artifact_from_executor_status_success_typed_other_raises(tmp_path: Path
 
 
 def test_artifact_from_executor_status_non_success_raises(tmp_path: Path):
-    """No .artifact, .executor_status present but not SUCCESS."""
+    """No artifact file, .executor_status present but not SUCCESS."""
     (tmp_path / ".executor_status").write_text("RUNNING")
 
     with pytest.raises(FileNotFoundError, match="not 'SUCCESS'"):
         Artifact.from_path(tmp_path.as_posix())
+
+
+def test_artifact_load_legacy_dotfile(tmp_path: Path):
+    """Historical outputs wrote `.artifact`; from_path should still load them."""
+    (tmp_path / ".artifact").write_text(json.dumps({"path": "/legacy"}))
+
+    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
+    assert loaded == PathMetadata(path="/legacy")
 
 
 def test_artifact_save_and_load_untyped(tmp_path: Path):
@@ -440,7 +448,7 @@ def test_runner_skips_completed_steps(tmp_path: Path):
     runner1.run(steps)
 
     # Record modification times
-    tokenize_artifact_path = os.path.join(steps[1].output_path, ".artifact")
+    tokenize_artifact_path = os.path.join(steps[1].output_path, "artifact.json")
     mtime_before = os.path.getmtime(tokenize_artifact_path)
 
     # Re-run — all steps should be skipped
