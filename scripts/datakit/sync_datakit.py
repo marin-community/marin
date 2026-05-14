@@ -68,6 +68,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import fsspec
 from fray import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_prefix
@@ -303,10 +304,14 @@ def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
 
 
 def _leaf_already_synced(dst_dir: str) -> bool:
-    """True if ``<dst_dir>/.executor_status`` already exists on the destination."""
-    dst = _executor_status_path(dst_dir)
-    fs, _ = fsspec.core.url_to_fs(dst)
-    return fs.exists(dst)
+    """True iff ``<dst_dir>/.executor_status`` exists AND its content is ``SUCCESS``.
+
+    A non-``SUCCESS`` marker (``FAILED``/``DEP_FAILED``/``RUNNING``/legacy
+    log) means the prior writer didn't finish cleanly — re-sync instead of
+    trusting it. Reuses :class:`StatusFile` so the legacy JSON-lines format
+    still parses correctly.
+    """
+    return StatusFile(dst_dir, worker_id="datakit-sync-check").status == STATUS_SUCCESS
 
 
 def _remove_tmp_orphans(dst_dir: str) -> None:
@@ -342,54 +347,67 @@ def _upload_dir(
     copy_threads: int,
     job_name: str,
 ) -> None:
-    """Drive the Zephyr pipeline that copies one source directory."""
-    rels = _list_relative_files(src_dir)
-    if not rels:
-        logger.warning("No files under %s — nothing to upload.", src_dir)
-        return
-    shards = _shard(rels, files_per_shard)
-    logger.info(
-        "Uploading %d files in %d shards (x%d copy threads/shard): %s -> %s",
-        len(rels),
-        len(shards),
-        copy_threads,
-        src_dir,
-        dst_dir,
-    )
+    """Drive the Zephyr pipeline that copies one source directory.
 
-    # Each shard's JSONL output is named after its content hash, so
-    # ``skip_existing=True`` doubles as the resume marker: if the source
-    # files haven't changed the hash matches an existing key and Zephyr
-    # short-circuits the whole shard. If any source file's fingerprint
-    # changes, the hash changes and the shard re-runs.
-    shard_paths = [f"{shard_prefix.rstrip('/')}/{_shard_hash(shard)}.jsonl.gz" for shard in shards]
-
-    pipeline = (
-        Dataset.from_list(shards)
-        .map(
-            lambda shard: _copy_shard(
-                shard,
-                src_dir=src_dir,
-                dst_dir=dst_dir,
-                copy_threads=copy_threads,
+    Serializes concurrent runs on the same leaf via :func:`step_lock` keyed
+    on ``dst_dir``. The lock writes ``RUNNING`` to ``<dst_dir>/.executor_status``
+    on acquisition; ``_finalize_executor_status`` overwrites it with the src
+    marker (``SUCCESS``) at the end. If another worker finalized the same leaf
+    while we waited for the lock, :class:`StepAlreadyDone` is raised — we
+    log and return without re-running.
+    """
+    try:
+        with step_lock(dst_dir, f"sync/{job_name}", force_run_failed=True):
+            rels = _list_relative_files(src_dir)
+            if not rels:
+                logger.warning("No files under %s — nothing to upload.", src_dir)
+                return
+            shards = _shard(rels, files_per_shard)
+            logger.info(
+                "Uploading %d files in %d shards (x%d copy threads/shard): %s -> %s",
+                len(rels),
+                len(shards),
+                copy_threads,
+                src_dir,
+                dst_dir,
             )
-        )
-        .write_jsonl(lambda shard_idx, _total: shard_paths[shard_idx], skip_existing=True)
-    )
-    # Each shard fans out into ``copy_threads`` blocking I/O threads, so the
-    # worker needs at least that many cores' worth of headroom.
-    ctx = ZephyrContext(
-        name=job_name,
-        resources=ResourceConfig(cpu=max(2, copy_threads // 4), ram="4g"),
-    )
-    ctx.execute(pipeline)
-    # Only now that every other file is at dst, publish ``.executor_status``
-    # — its presence is the canonical "this leaf is fully synced" signal that
-    # lets future runs skip the source entirely.
-    _finalize_executor_status(src_dir, dst_dir)
-    # With the marker in place, the leaf is canonical; any ``.tmp.<uuid>``
-    # debris under it is orphaned and can be removed.
-    _remove_tmp_orphans(dst_dir)
+
+            # Each shard's JSONL output is named after its content hash, so
+            # ``skip_existing=True`` doubles as the resume marker: if the source
+            # files haven't changed the hash matches an existing key and Zephyr
+            # short-circuits the whole shard. If any source file's fingerprint
+            # changes, the hash changes and the shard re-runs.
+            shard_paths = [f"{shard_prefix.rstrip('/')}/{_shard_hash(shard)}.jsonl.gz" for shard in shards]
+
+            pipeline = (
+                Dataset.from_list(shards)
+                .map(
+                    lambda shard: _copy_shard(
+                        shard,
+                        src_dir=src_dir,
+                        dst_dir=dst_dir,
+                        copy_threads=copy_threads,
+                    )
+                )
+                .write_jsonl(lambda shard_idx, _total: shard_paths[shard_idx], skip_existing=True)
+            )
+            # Each shard fans out into ``copy_threads`` blocking I/O threads, so the
+            # worker needs at least that many cores' worth of headroom.
+            ctx = ZephyrContext(
+                name=job_name,
+                resources=ResourceConfig(cpu=max(2, copy_threads // 4), ram="4g"),
+            )
+            ctx.execute(pipeline)
+            # Only now that every other file is at dst, publish ``.executor_status``
+            # — its presence is the canonical "this leaf is fully synced" signal that
+            # lets future runs skip the source entirely. Overwrites the ``RUNNING``
+            # marker that ``step_lock`` wrote on acquisition.
+            _finalize_executor_status(src_dir, dst_dir)
+            # With the marker in place, the leaf is canonical; any ``.tmp.<uuid>``
+            # debris under it is orphaned and can be removed.
+            _remove_tmp_orphans(dst_dir)
+    except StepAlreadyDone:
+        logger.info("Skip %s: another worker finalized it while we waited for the lock", dst_dir)
 
 
 # ----------------------------------------------------------------------
