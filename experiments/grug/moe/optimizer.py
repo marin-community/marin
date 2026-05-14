@@ -500,6 +500,131 @@ class GrugMoeMuonHPerGroupLrConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+@OptimizerConfig.register_subclass("grug_moe_muonh_four_group_lr_v1")
+@dataclass(frozen=True)
+class GrugMoeMuonHFourGroupLrConfig(OptimizerConfig):
+    """MuonH config with four independent LR groups.
+
+    Splits the AdamH-style large-matrix group into two: ``adamh_lmhead``
+    (just ``output_proj`` / ``lm_head``) and ``adamh_embed`` (just
+    ``token_embed`` — moved out of the small-LR ``adam`` group). Each
+    group has its own scale field multiplying either ``learning_rate``
+    (muonh / adamh_lmhead / adamh_embed) or ``adam_lr`` (adam).
+
+    Default scales bake in the new "tuned" point: lm_head and embed get
+    0.7x, the adam (router / norms / biases) group gets 1.3x, muonh
+    stays at 1.0x. Used by the second LR sensitivity sweep on top of
+    the muonh-drop-gn-attngate recipe.
+    """
+
+    adam_lr: float = 6e-4
+    momentum: float = 0.95
+    nesterov: bool = True
+    backend_steps: int = 5
+    beta1: float = 0.9
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    muon_epsilon: float = 1e-8
+    max_grad_norm: float | None = 1.0
+    coefficient_type: CoefficientType = "quintic"
+    muonh_lr_scale: float = 1.0
+    adamh_lmhead_lr_scale: float = 0.7
+    adamh_embed_lr_scale: float = 0.7
+    adam_lr_scale: float = 1.3
+
+    def build(self, num_train_steps):
+        muonh_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.learning_rate * self.muonh_lr_scale)
+        adamh_lmhead_lr_schedule = self.lr_scheduler(
+            num_train_steps, override_lr=self.learning_rate * self.adamh_lmhead_lr_scale
+        )
+        adamh_embed_lr_schedule = self.lr_scheduler(
+            num_train_steps, override_lr=self.learning_rate * self.adamh_embed_lr_scale
+        )
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr * self.adam_lr_scale)
+
+        def optimizer(muonh_lr, adamh_lmhead_lr, adamh_embed_lr, adam_lr):
+            def muonh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_muonh(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=muonh_lr,
+                        coefficient_type=self.coefficient_type,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_lmhead_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, adamh_lmhead_lr))
+                return optax.chain(*components)
+
+            def adamh_embed_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, adamh_embed_lr))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "muonh": muonh_transform(),
+                    "adamh_lmhead": adamh_lmhead_transform(),
+                    "adamh_embed": adamh_embed_transform(),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            muonh_lr=muonh_lr_schedule,
+            adamh_lmhead_lr=adamh_lmhead_lr_schedule,
+            adamh_embed_lr=adamh_embed_lr_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            # token_embed gets its own AdamH group (moved out of small-LR adam).
+            if "token_embed" in path_lower:
+                return "adamh_embed"
+            # adam group: router / router_bias / attn_gate (no token_embed!).
+            if "router_bias" in path_lower or path_lower.endswith(".attn_gate") or ".router" in path_lower:
+                return "adam"
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh_lmhead"
+            if "gated_norm" in path_lower:
+                # No GatedNorms in the drop-GN model, but keep the clause so the
+                # config is reusable. Route to adamh_lmhead since they share
+                # the same default LR.
+                return "adamh_lmhead"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "muonh"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
 @OptimizerConfig.register_subclass("grug_moe_normuonh_v1")
 @dataclass(frozen=True)
 class GrugMoeNorMuonHConfig(OptimizerConfig):
