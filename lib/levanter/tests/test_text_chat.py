@@ -5,9 +5,11 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import numpy as np
 import pytest
 
-from levanter.data.text import ChatProcessor
+from levanter.data.text import ChatProcessor, TraceChatProcessor
+from levanter.data.text.trace_chat import TRACE_LABEL_OBSERVATION
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 
@@ -264,6 +266,79 @@ def test_chat_processor_tool_call_support(tokenizer: MarinTokenizer):
     assert "<|start_header_id|>tool<|end_header_id|>" in rendered
     assert '{"result": 5}' in rendered
     assert result["assistant_masks"].sum() > 0
+
+
+def test_chat_template_with_masks_returns_message_spans(tokenizer: MarinTokenizer):
+    conversation = [
+        {"role": "user", "content": "Call the adder."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "add", "arguments": {"a": 2, "b": 3}},
+                }
+            ],
+        },
+        {"role": "tool", "content": {"result": 5}},
+    ]
+
+    result = tokenizer.apply_chat_template_with_masks(
+        [conversation],
+        chat_template=TOOL_TEMPLATE,
+        return_message_spans=True,
+    )
+
+    spans = result["message_spans"][0]
+    assert len(spans) == len(conversation)
+    assert all(start <= end for start, end in spans)
+    tool_start, tool_end = spans[2]
+    tool_text = decode_sequence(tokenizer, result["input_ids"][0][tool_start:tool_end])
+    assert '{"result": 5}' in tool_text
+
+
+def test_trace_chat_processor_emits_exclusive_loss_labels(tokenizer: MarinTokenizer):
+    processor = TraceChatProcessor(
+        tokenizer,
+        chat_template=TOOL_TEMPLATE,
+        loss_tags=("assistant", "assistant_text", "tool_call", "observation", "final_assistant"),
+    )
+
+    result = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Call the adder."},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "add", "arguments": {"a": 2, "b": 3}},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "content": {"result": 5}},
+                    {"role": "assistant", "content": "The sum is 5."},
+                ]
+            }
+        ]
+    )[0]
+
+    labels = result["loss_labels"]
+    nonzero_labels = labels[labels > 0]
+    assert nonzero_labels.size > 0
+    assert np.unique(nonzero_labels).size > 1
+    assert (labels == TRACE_LABEL_OBSERVATION).sum() > 0
+
+    label_spec = processor.label_spec
+    assert "assistant" in label_spec.aggregates
+    assert "assistant_text" in label_spec.aggregates
+    assert "tool_call" in label_spec.aggregates
 
 
 def test_tool_call_masking_behavior(tokenizer: MarinTokenizer):

@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict, cast
 
 import equinox as eqx
 import jax
@@ -34,7 +34,9 @@ from levanter.data.sharded_datasource import (
 )
 from levanter.data.text.cache import build_lm_dataset_cache, load_lm_dataset_cache
 from levanter.data.text.examples import (
+    GrugAttentionMask,
     GrugLmExample,
+    LabeledLmExample,
     named_lm_example_from_grug,
 )
 from levanter.data.text.formats import (
@@ -45,7 +47,9 @@ from levanter.data.text.formats import (
     SupervisedLmDatasetFormat,
     SupervisedTextProcessor,
     TextLmDatasetFormat,
+    TraceChatEvaluationFormat,
 )
+from levanter.data.text.trace_chat import ProcessedTraceChatDict
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions, TreeCache
@@ -470,6 +474,84 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
             return out
 
         super().__init__(self.packed, _create_lm_example)
+
+
+class TraceChatDataset(MappedAsyncDataset[tuple[ProcessedTraceChatDict, ProcessedTraceChatDict], LabeledLmExample]):
+    """A dataset that yields packed trace examples with exclusive loss labels."""
+
+    def __init__(
+        self,
+        cache: TreeCache[ProcessedTraceChatDict],
+        Pos: Axis,
+        max_segments_per_example: int = 64,
+        slice_strategy: Literal["left", "right", "raise"] = "left",
+        block_cross_document_attention: bool = True,
+    ):
+        self.packed: GreedyPrepackedDataset[ProcessedTraceChatDict] = GreedyPrepackedDataset(
+            cache.jagged_array_tree(),
+            Pos.size,
+            max_segments_per_example=max_segments_per_example,
+            slice_strategy=slice_strategy,
+        )
+        self.Pos = Pos
+        self.block_cross_document_attention = block_cross_document_attention
+
+        sharding = _single_cpu_sharding()
+
+        @functools.partial(eqx.filter_jit)
+        def _create_trace_example(e: tuple[ProcessedTraceChatDict, ProcessedTraceChatDict]) -> LabeledLmExample:
+            example, seg_ids = e
+            tokens = example["input_ids"]
+            segment_ids = seg_ids["input_ids"]
+
+            labels = jnp.roll(example["loss_labels"], -1, axis=-1)
+            next_segment_ids = jnp.roll(segment_ids, -1, axis=-1)
+            same_segment_next = (segment_ids == next_segment_ids) & (segment_ids >= 0)
+            same_segment_next = same_segment_next.at[-1].set(False)
+            labels = jnp.where(same_segment_next, labels, 0)
+
+            attn_mask = GrugAttentionMask.causal()
+            if block_cross_document_attention:
+                attn_mask = attn_mask.with_segment_ids(segment_ids)
+
+            out = LabeledLmExample(tokens=tokens, loss_labels=labels, attn_mask=attn_mask)
+            out = jax.lax.with_sharding_constraint(out, sharding)
+            return out
+
+        super().__init__(self.packed, _create_trace_example)
+
+
+def build_trace_chat_dataset_cache(
+    cache_dir: str,
+    source: ShardedDataSource[dict],
+    trace_format: TraceChatEvaluationFormat,
+    tokenizer: MarinTokenizer,
+    options: CacheOptions = CacheOptions.default(),
+) -> TreeCache[ProcessedTraceChatDict]:
+    processor = trace_format.build_preprocessor(tokenizer)
+    return cast(
+        TreeCache[ProcessedTraceChatDict], TreeCache.build_or_load(cache_dir, source, processor, options=options)
+    )
+
+
+def dataset_for_trace_chat_format(
+    trace_format: TraceChatEvaluationFormat,
+    Pos: Axis,
+    cache: TreeCache[ProcessedTraceChatDict],
+    *,
+    block_cross_document_attention: bool = True,
+) -> TraceChatDataset:
+    pack = trace_format.pack
+    if pack == "pad":
+        raise NotImplementedError("Padding mode not yet implemented.")
+    max_segments = 64 if pack is True or pack is None else int(pack)
+    return TraceChatDataset(
+        cache,
+        Pos,
+        max_segments_per_example=max_segments,
+        slice_strategy=trace_format.slice_strategy,
+        block_cross_document_attention=block_cross_document_attention,
+    )
 
 
 def dataset_for_component(
