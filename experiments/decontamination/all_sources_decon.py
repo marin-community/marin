@@ -33,8 +33,9 @@ in-region.
 
 Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 
-    uv run iris --config lib/iris/examples/marin.yaml job run --region europe-west4 -- \\
-        python experiments/decontamination/all_sources_decon.py
+    uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
+        --priority production \\
+        -- python experiments/decontamination/all_sources_decon.py
 """
 
 import logging
