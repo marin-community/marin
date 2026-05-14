@@ -138,7 +138,7 @@ class PerfReport:
     wall_seconds_total: float | None = None
     stage_wall_seconds: dict[str, float] = field(default_factory=dict)
     sum_task_wall_seconds_total: float | None = None
-    stage_sum_task_wall_seconds: dict[str, float] = field(default_factory=dict)
+    stage_sum_task_wall_seconds: dict[str, float | None] = field(default_factory=dict)
     cached_steps: list[str] = field(default_factory=list)
     ooms: int = 0
     failed_shards: int = 0
@@ -276,11 +276,14 @@ def fetch_raw_query_task_wall_ms_by_child(
         return None
 
 
-def bucket_by_step(by_child: dict[str, int], parent_id: str) -> dict[str, int]:
-    """Bucket per-child task_wall_ms into step names using the same prefix logic as compute_stage_wall_seconds."""
+def bucket_by_step(by_child: dict[str, int], parent_id: str) -> dict[str, int | None]:
+    """Bucket per-child task_wall_ms into step names using the same prefix logic as compute_stage_wall_seconds.
+
+    All EXPECTED_STEPS are always present; steps with no matching child jobs have value None.
+    """
     parent_depth = _job_depth(parent_id)
-    by_step: dict[str, int] = {}
-    for child_job_id, cpu_wall_ms in by_child.items():
+    by_step: dict[str, int | None] = {step: None for step in EXPECTED_STEPS}
+    for child_job_id, task_wall_ms in by_child.items():
         if not child_job_id.startswith(parent_id):
             continue
         if _job_depth(child_job_id) != parent_depth + 1:
@@ -288,7 +291,7 @@ def bucket_by_step(by_child: dict[str, int], parent_id: str) -> dict[str, int]:
         name = child_job_id.rsplit("/", 1)[-1]
         for prefix, step in _STEP_PREFIXES.items():
             if name.startswith(prefix):
-                by_step[step] = by_step.get(step, 0) + cpu_wall_ms
+                by_step[step] = (by_step.get(step) or 0) + task_wall_ms
                 break
     return by_step
 
@@ -676,7 +679,7 @@ def main(
             report.warnings.append("iris query by_child: failed; stage_sum_task_wall_seconds empty")
         else:
             report.stage_sum_task_wall_seconds = {
-                step: ms / 1000.0 for step, ms in bucket_by_step(by_child, job_id).items()
+                step: ms / 1000.0 if ms is not None else None for step, ms in bucket_by_step(by_child, job_id).items()
             }
 
     if out is not None:
