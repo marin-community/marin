@@ -7,6 +7,7 @@ import functools
 import logging
 import os
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Literal, NotRequired, TypeAlias, TypeVar, TypedDict
@@ -18,6 +19,7 @@ import numpy as np
 from draccus import ChoiceRegistry, field
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
+from rigging.timing import log_time
 
 import levanter
 from levanter.data import AsyncDataset
@@ -861,58 +863,78 @@ class LmDataConfig:
         return self._validation_datasets_unwrapped(Pos)
 
     def build_caches(self, split: str) -> dict[str, TreeCache[dict]]:
-        caches: dict[str, TreeCache[dict]] = {}
+        items: list[tuple[str, "DatasetComponent"]] = []
         for name, component in self.components.items():
             if split == "train" and not self._has_nonzero_weight(name):
                 continue
-
             if isinstance(component, DirectDatasetComponent):
                 continue
-
             if not isinstance(component, DatasetComponent):
                 raise ValueError(f"Unsupported component type for {name}: {type(component)}")
+            items.append((name, component))
 
+        if not items:
+            return {}
+
+        # Loads are pure GCS metadata reads and parallelize cleanly. Builds may
+        # enter `_distributed_build_cache`, which uses unidentified jax
+        # collectives paired across processes by dispatch order — running
+        # multiple of those concurrently can cross-wire status broadcasts or
+        # hang. Classify each component in the pool, then build any misses
+        # serially in the original component order.
+        def _load_or_defer(
+            item: tuple[str, "DatasetComponent"],
+        ) -> tuple[str, TreeCache[dict] | None, tuple[str, ShardedDataSource, LmDatasetFormatBase] | None]:
+            name, component = item
             cache_root = _component_cache_dir(name, component, self.cache_dir)
+            cache_path = os.path.join(cache_root, split)
             source = component.source
 
             if source is None:
                 try:
-                    caches[name] = load_lm_dataset_cache(
-                        os.path.join(cache_root, split), component.format, self.the_tokenizer, self.enforce_eos
-                    )
+                    cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
                 except FileNotFoundError:
                     raise ValueError(f"No source and no cache found for component {name} split {split}")
-                continue
+                return name, cache, None
 
             shard_source = source.get_shard_source(split)
+            cache_exists = fsspec_utils.exists(cache_path)
+
             if shard_source is None:
-                cache_path = os.path.join(cache_root, split)
-                if not fsspec_utils.exists(cache_path):
+                if not cache_exists:
                     logger.warning(f"No source for {name} in {split} split and no cache at {cache_path}, skipping")
-                    continue
-                caches[name] = load_lm_dataset_cache(
-                    cache_path, component.format, self.the_tokenizer, self.enforce_eos
-                )
-                continue
+                    return name, None, None
+                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                return name, cache, None
 
-            cache_path = os.path.join(cache_root, split)
             if not self.auto_build_caches:
-                if not fsspec_utils.exists(cache_path):
+                if not cache_exists:
                     raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
-                caches[name] = load_lm_dataset_cache(
-                    cache_path, component.format, self.the_tokenizer, self.enforce_eos
-                )
-                continue
+                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                return name, cache, None
 
+            if cache_exists:
+                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                return name, cache, None
+            return name, None, (cache_path, shard_source, component.format)
+
+        caches: dict[str, TreeCache[dict]] = {}
+        to_build: list[tuple[str, tuple[str, ShardedDataSource, LmDatasetFormatBase]]] = []
+        max_workers = min(32, len(items))
+        with (
+            log_time(f"build_caches[{split}] over {len(items)} components"),
+            ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="build_caches") as pool,
+        ):
+            for name, cache, build_args in pool.map(_load_or_defer, items):
+                if cache is not None:
+                    caches[name] = cache
+                elif build_args is not None:
+                    to_build.append((name, build_args))
+
+        for name, (cache_path, shard_source, fmt) in to_build:
             caches[name] = build_lm_dataset_cache(
-                cache_path,
-                shard_source,
-                component.format,
-                self.the_tokenizer,
-                self.cache_options,
-                self.enforce_eos,
+                cache_path, shard_source, fmt, self.the_tokenizer, self.cache_options, self.enforce_eos
             )
-
         return caches
 
     @property

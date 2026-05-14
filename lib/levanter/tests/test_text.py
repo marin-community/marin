@@ -779,3 +779,38 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
             # loss_weight should coincide with assistant tokens only
             assert_loss_weight_matches_all_assistants(ex, tokenizer)
+
+
+# --- LmDataConfig.build_caches ---------------------------------------------
+
+
+def _write_prebuilt_jsonl(path: Path, records: list[dict]) -> None:
+    with path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+
+def _prebuilt_train_component(jsonl_path: Path) -> DatasetComponent:
+    return DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(jsonl_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(),
+    )
+
+
+def test_build_caches_propagates_exception_from_one_component(tmp_path):
+    p_good = tmp_path / "good.jsonl"
+    _write_prebuilt_jsonl(p_good, [{"input_ids": [1, 2, 3, 4]}])
+    good = _prebuilt_train_component(p_good)
+    bad = DatasetComponent(
+        source=None,
+        cache_dir=str(tmp_path / "bad_missing"),
+        format=PrebuiltLmDatasetFormat(),
+    )
+    config = LmDataConfig(
+        components={"good": good, "bad": bad},
+        cache_dir=str(tmp_path / "caches"),
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+    with pytest.raises(ValueError, match="No source and no cache"):
+        config.build_caches("train")
