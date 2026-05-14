@@ -40,7 +40,6 @@ from typing import Any
 
 import dupekit
 import pyarrow as pa
-import pyarrow.parquet as pq
 from fray import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
@@ -611,10 +610,12 @@ def merge_eval_blooms(
     src_indexes = [bloom_paths(d)[1] for d in per_eval_bloom_dirs]
 
     def emit_rows() -> Iterator[dict[str, Any]]:
+        # Use zephyr's load_file so the read goes through rigging's
+        # CrossRegionGuardedFS wrapper. Passing it directly to pq.read_table's
+        # filesystem= kwarg trips pyarrow's strict type check (it expects a
+        # native pyarrow.fs.FileSystem).
         for src in src_indexes:
-            fs_idx, ip = url_to_fs(src)
-            table = pq.read_table(ip, filesystem=fs_idx)
-            yield from table.to_pylist()
+            yield from load_file(src)
 
     write_parquet_file(emit_rows(), output_path=out_index_path, schema=_INDEX_SCHEMA)
 
