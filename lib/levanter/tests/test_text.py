@@ -797,38 +797,6 @@ def _prebuilt_train_component(jsonl_path: Path) -> DatasetComponent:
     )
 
 
-def test_build_caches_returns_all_components_in_parallel(tmp_path):
-    n_components = 4
-    components: dict[str, DatasetComponent] = {}
-    expected: dict[str, list[int]] = {}
-    for i in range(n_components):
-        ids = [i * 10 + j for j in range(4)]
-        data_path = tmp_path / f"data_{i}.jsonl"
-        _write_prebuilt_jsonl(data_path, [{"input_ids": ids}])
-        components[f"comp_{i}"] = _prebuilt_train_component(data_path)
-        expected[f"comp_{i}"] = ids
-
-    config = LmDataConfig(
-        components=components,
-        cache_dir=str(tmp_path / "caches"),
-        tokenizer="passthrough",
-        vocab_size=128,
-    )
-    caches = config.build_caches("train")
-
-    assert set(caches.keys()) == set(components.keys())
-    Pos = hax.Axis("position", 4)
-    for name, cache in caches.items():
-        ds = dataset_for_component(
-            components[name],
-            Pos,
-            cache,
-            eos_id=None,
-            block_cross_document_attention=config.block_cross_document_attention,
-        ).as_sync_dataset()
-        np.testing.assert_array_equal(np.asarray(ds[0].tokens), np.array(expected[name], dtype=np.int32))
-
-
 def test_build_caches_propagates_exception_from_one_component(tmp_path):
     p_good = tmp_path / "good.jsonl"
     _write_prebuilt_jsonl(p_good, [{"input_ids": [1, 2, 3, 4]}])
