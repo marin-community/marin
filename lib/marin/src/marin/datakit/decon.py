@@ -471,7 +471,7 @@ def decon_step(
     return StepSpec(
         name=name,
         fn=lambda output_path: decon_to_parquet(
-            normalized_data=Artifact.load(normalized, NormalizedData),
+            normalized_data=Artifact.from_path(normalized, NormalizedData),
             eval_data_sources=[s.output_path for s in eval_data_sources],
             output_path=output_path,
             text_field=text_field,

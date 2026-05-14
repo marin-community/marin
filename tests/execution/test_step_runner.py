@@ -111,16 +111,25 @@ def test_artifact_save_and_load_typed(tmp_path: Path):
     artifact = PathMetadata(path="/data/shards")
     Artifact.save(artifact, tmp_path.as_posix())
 
-    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
+    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
     assert loaded == artifact
     assert loaded.path == "/data/shards"
+
+
+def test_artifact_load_relative_path_resolves_against_marin_prefix(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", tmp_path.as_posix())
+    artifact = PathMetadata(path="/data/shards")
+    Artifact.save(artifact, (tmp_path / "step_out").as_posix())
+
+    loaded = Artifact.from_path("step_out", PathMetadata)
+    assert loaded == artifact
 
 
 def test_artifact_save_and_load_untyped(tmp_path: Path):
     artifact = TokenizeMetadata(path="/tokenized", num_tokens=42)
     Artifact.save(artifact, tmp_path.as_posix())
 
-    loaded = Artifact.load(tmp_path.as_posix())
+    loaded = Artifact.from_path(tmp_path.as_posix())
     assert isinstance(loaded, dict)
     assert loaded["path"] == "/tokenized"
     assert loaded["num_tokens"] == 42
@@ -130,7 +139,7 @@ def test_artifact_save_nested_dataclass(tmp_path: Path):
     artifact = NestedMetadata(path="/nested", resources=ResourceConfig(cpu=2, ram="4g"))
     Artifact.save(artifact, tmp_path.as_posix())
 
-    loaded = Artifact.load(tmp_path.as_posix())
+    loaded = Artifact.from_path(tmp_path.as_posix())
     assert isinstance(loaded, dict)
     assert loaded["path"] == "/nested"
     assert loaded["resources"]["cpu"] == 2
@@ -147,7 +156,7 @@ def test_artifact_roundtrip_through_pipeline(tmp_path: Path):
     Artifact.save(raw, step1_out)
 
     # Step 2: tokenize — load upstream artifact, run, save
-    loaded_raw = Artifact.load(step1_out, PathMetadata)
+    loaded_raw = Artifact.from_path(step1_out, PathMetadata)
     tokenized = tokenize_data(step2_out, loaded_raw, "word")
     Artifact.save(tokenized, step2_out)
 
@@ -155,8 +164,8 @@ def test_artifact_roundtrip_through_pipeline(tmp_path: Path):
     assert tokenized.num_tokens == 60  # 30 docs * 2 words each
 
     # Both artifacts are loadable from their respective output paths
-    assert Artifact.load(step1_out, PathMetadata) == raw
-    assert Artifact.load(step2_out, TokenizeMetadata) == tokenized
+    assert Artifact.from_path(step1_out, PathMetadata) == raw
+    assert Artifact.from_path(step2_out, TokenizeMetadata) == tokenized
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +204,7 @@ def test_runner_saves_artifact_automatically(tmp_path):
     runner = StepRunner()
     runner.run([step])
 
-    loaded = Artifact.load(out, PathMetadata)
+    loaded = Artifact.from_path(out, PathMetadata)
     assert loaded.path == out
 
 
@@ -329,7 +338,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
 
     Each step function returns an artifact.  The runner auto-saves any
     BaseModel result to the step's output_path.  Inter-step data flows
-    through ``Artifact.load`` — deferred to execution time via lambdas.
+    through ``Artifact.from_path`` — deferred to execution time via lambdas.
     """
 
     tmp_path_posix = tmp_path.as_posix()
@@ -342,7 +351,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
         fn=lambda output_path: download_raw_data(output_path, source_url),
     )
 
-    # Artifact.load must be deferred to execution time (upstream hasn't run yet)
+    # Artifact.from_path must be deferred to execution time (upstream hasn't run yet)
     tokenizer = "word"
     tokenize_step = StepSpec(
         name="tokenize",
@@ -351,7 +360,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
         deps=[download_step],
         fn=lambda output_path: tokenize_data(
             output_path,
-            Artifact.load(download_step.output_path, PathMetadata),
+            Artifact.from_path(download_step.output_path, PathMetadata),
             tokenizer,
         ),
     )
@@ -360,7 +369,7 @@ def _build_pipeline(tmp_path: Path) -> list[StepSpec]:
         output_path_prefix=tmp_path_posix,
         deps=[tokenize_step],
         fn=lambda output_path: train_on_tokenized_data(
-            output_path, Artifact.load(tokenize_step.output_path, TokenizeMetadata)
+            output_path, Artifact.from_path(tokenize_step.output_path, TokenizeMetadata)
         ),
     )
     return [download_step, tokenize_step, train_step]
@@ -377,16 +386,16 @@ def test_runner_executes_pipeline(tmp_path: Path):
     train_path = steps[2].output_path
 
     # Download produced shards
-    raw_artifact = Artifact.load(download_path, PathMetadata)
+    raw_artifact = Artifact.from_path(download_path, PathMetadata)
     assert os.path.isdir(raw_artifact.path)
     assert len(os.listdir(raw_artifact.path)) == 3
 
     # Tokenize produced output with correct token count
-    tokenize_artifact = Artifact.load(tokenize_path, TokenizeMetadata)
+    tokenize_artifact = Artifact.from_path(tokenize_path, TokenizeMetadata)
     assert tokenize_artifact.num_tokens == 60  # 30 docs * 2 words each
 
     # Train produced a checkpoint
-    train_artifact = Artifact.load(train_path, TrainMetadata)
+    train_artifact = Artifact.from_path(train_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
     assert os.path.exists(train_artifact.checkpoint_path)
 
@@ -429,7 +438,7 @@ def test_runner_respects_dependency_order(tmp_path: Path):
     runner = StepRunner()
     runner.run(reversed_steps)
 
-    train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
+    train_artifact = Artifact.from_path(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
 
 
@@ -439,7 +448,7 @@ def test_runner_max_concurrent(tmp_path: Path):
     runner = StepRunner()
     runner.run(steps, max_concurrent=1)
 
-    train_artifact = Artifact.load(steps[2].output_path, TrainMetadata)
+    train_artifact = Artifact.from_path(steps[2].output_path, TrainMetadata)
     assert train_artifact.tokens_seen > 0
 
 
@@ -634,7 +643,7 @@ def test_step_with_remote_fn_uses_fray(tmp_path: Path):
     runner = StepRunner()
     runner.run([step])
 
-    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
+    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
     assert loaded.path == tmp_path.as_posix()
 
 
@@ -679,7 +688,7 @@ def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):
 
     assert len(spy.requests) == 1
     assert spy.requests[0].resources == custom
-    loaded = Artifact.load(tmp_path.as_posix(), PathMetadata)
+    loaded = Artifact.from_path(tmp_path.as_posix(), PathMetadata)
     assert loaded.path == tmp_path.as_posix()
 
 

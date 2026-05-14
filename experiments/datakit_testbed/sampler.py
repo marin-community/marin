@@ -315,7 +315,7 @@ def sample_normalized_shards_step(
 
     def sample(output_path: str) -> NormalizedData:
         return sample_normalized_shards(
-            source=Artifact.load(normalized_path, NormalizedData),
+            source=Artifact.from_path(normalized_path, NormalizedData),
             output_path=output_path,
             sample_fraction=sample_fraction,
         )
