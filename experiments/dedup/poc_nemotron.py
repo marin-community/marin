@@ -110,7 +110,7 @@ def fuzzy_dedup_steps() -> list[StepSpec]:
             name=f"minhash_nemotron/{q}",
             deps=[norm],
             fn=lambda op, norm=norm: compute_minhash_attrs(
-                source=Artifact.load(norm, NormalizedData),
+                source=Artifact.from_path(norm, NormalizedData),
                 output_path=op,
                 worker_resources=ResourceConfig(cpu=5, ram="32g", disk="5g"),
             ),
@@ -123,7 +123,7 @@ def fuzzy_dedup_steps() -> list[StepSpec]:
         output_path_prefix=marin_temp_bucket(ttl_days=2, prefix="rav"),
         deps=list(minhash_steps.values()),
         fn=lambda op: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.load(s, MinHashAttrData) for s in minhash_steps.values()],
+            inputs=[Artifact.from_path(s, MinHashAttrData) for s in minhash_steps.values()],
             output_path=op,
             max_parallelism=2048,
             worker_resources=ResourceConfig(cpu=1, ram="32g", disk="5g"),

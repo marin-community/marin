@@ -70,7 +70,7 @@ class NormalizedData(BaseModel):
 
     Persisted as the step's ``.artifact`` so counters and output paths are
     available to downstream consumers without re-running the pipeline. Load
-    via ``Artifact.load(step, NormalizedData)``.
+    via ``Artifact.from_path(step, NormalizedData)``.
 
     Attributes:
         main_output_dir: Directory containing the main output Parquet files.

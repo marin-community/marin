@@ -61,7 +61,7 @@ def _minhash_step(src_name: str, sampled: StepSpec, **params: int) -> StepSpec:
             "seed": params["seed"],
         },
         fn=lambda output_path, sampled=sampled: compute_minhash_attrs(
-            source=Artifact.load(sampled, NormalizedData),
+            source=Artifact.from_path(sampled, NormalizedData),
             output_path=output_path,
             num_perms=params["num_perms"],
             num_bands=params["num_bands"],
@@ -79,7 +79,7 @@ def _fuzzy_dups_step(minhash_steps: list[StepSpec], cc_max_iterations: int) -> S
         deps=list(minhash_steps),
         hash_attrs={"cc_max_iterations": cc_max_iterations},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.load(mh, MinHashAttrData) for mh in minhash_steps],
+            inputs=[Artifact.from_path(mh, MinHashAttrData) for mh in minhash_steps],
             output_path=output_path,
             cc_max_iterations=cc_max_iterations,
             max_parallelism=_FUZZY_DUPS_MAX_PARALLELISM,
@@ -98,14 +98,14 @@ def _deduped_step(src_name: str, sampled: StepSpec, fuzzy_dups: StepSpec) -> Ste
         name=f"data/datakit/deduped/{src_name}",
         deps=[sampled, fuzzy_dups],
         fn=lambda output_path, sampled=sampled: consolidate(
-            input_path=Artifact.load(sampled, NormalizedData).main_output_dir,
+            input_path=Artifact.from_path(sampled, NormalizedData).main_output_dir,
             output_path=os.path.join(output_path, "outputs/main"),
             filetype="parquet",
             filters=[
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=Artifact.load(fuzzy_dups, FuzzyDupsAttrData)
-                    .sources[Artifact.load(sampled, NormalizedData).main_output_dir]
+                    attribute_path=Artifact.from_path(fuzzy_dups, FuzzyDupsAttrData)
+                    .sources[Artifact.from_path(sampled, NormalizedData).main_output_dir]
                     .attr_dir,
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",

@@ -18,15 +18,15 @@ class Artifact:
 
     @overload
     @classmethod
-    def load(cls, base_path: str | StepSpec, artifact_type: type[T]) -> T: ...
+    def from_path(cls, base_path: str | StepSpec, artifact_type: type[T]) -> T: ...
 
     @overload
     @classmethod
-    def load(cls, base_path: str | StepSpec) -> dict[str, Any]: ...
+    def from_path(cls, base_path: str | StepSpec) -> dict[str, Any]: ...
 
     @classmethod
-    def load(cls, base_path: str | StepSpec, artifact_type: type[T] | None = None) -> T | dict[str, Any]:
-        """Loads an Artifact instance from the specified output base path.
+    def from_path(cls, base_path: str | StepSpec, artifact_type: type[T] | None = None) -> T | dict[str, Any]:
+        """Load an Artifact instance from the specified output base path.
 
         If ``base_path`` is a relative path (no URL scheme, doesn't start with ``/``),
         it is resolved against ``marin_prefix()``.
