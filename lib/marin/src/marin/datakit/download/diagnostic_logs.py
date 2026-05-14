@@ -71,7 +71,6 @@ DEFAULT_GHALOGS_MAX_MEMBERS = 10_000
 DEFAULT_LOGCHUNKS_MAX_EXAMPLES = 10_000
 DEFAULT_LOGHUB_MAX_FILES = 100
 DEFAULT_GHALOGS_MATERIALIZE_SHARDS = 128
-DEFAULT_GHALOGS_PARTITION_SHARDS = 16
 LONG_TAIL_PPL_EPIC_ISSUE = 5005
 PUBLIC_DIAGNOSTIC_LOGS_ISSUE = 5094
 _DOWNLOAD_CHUNK_BYTES = 1 << 20
@@ -699,20 +698,24 @@ def materialize_ghalogs_partition_to_parquet(
     output_path: str,
     *,
     partition: DiagnosticPartition,
-    num_shards: int = DEFAULT_GHALOGS_PARTITION_SHARDS,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> MaterializedDiagnosticLogParquet:
-    """Filter materialized GHALogs parquet shards down to one partition."""
-    if num_shards <= 0:
-        raise ValueError(f"num_shards must be positive, got {num_shards}")
+    """Filter materialized GHALogs parquet shards down to one partition.
 
+    Output shard count tracks the input (one output file per input parquet
+    from ``materialize_ghalogs_to_parquet``). No reshard between filter and
+    write — a shuffle here forced each map-side worker to buffer its outgoing
+    hash partitions in memory, blowing the worker RAM on the large ``train``
+    partition. Skipping the shuffle lets records stream straight through to
+    the per-shard parquet writer; smaller partitions just yield smaller
+    output files.
+    """
     pipeline = (
         Dataset.from_files(f"{input_path}/*.parquet")
         .load_parquet()
         .filter(lambda record: record.get("partition") == partition.value)
         .map(lambda record: _count_partition_record(record, partition))
-        .reshard(num_shards)
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
 
@@ -1016,7 +1019,6 @@ def materialize_ghalogs_partition_step(
     *,
     materialized: StepSpec,
     partition: DiagnosticPartition,
-    num_shards: int = DEFAULT_GHALOGS_PARTITION_SHARDS,
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that filters materialized GHALogs parquet to one partition."""
@@ -1029,14 +1031,12 @@ def materialize_ghalogs_partition_step(
             materialized.output_path,
             output_path,
             partition=partition,
-            num_shards=num_shards,
         ),
         hash_attrs={
-            "version": "v1",
+            "version": "v2",
             "source_label": source.source_label,
             "materialized_input": materialized.output_path,
             "partition": partition.value,
-            "num_shards": num_shards,
             "source_content_fingerprint": source.fingerprint(),
         },
     )
@@ -1047,7 +1047,6 @@ def ghalogs_public_normalize_steps(
     source_path: str = GHALOGS_STAGED_PREFIX,
     max_members: int | None = None,
     num_materialize_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
-    num_partition_shards: int = DEFAULT_GHALOGS_PARTITION_SHARDS,
     output_path_prefix: str | None = None,
 ) -> tuple[StepSpec, StepSpec, StepSpec]:
     """Return the Datakit ``(materialize, train-partition, normalize)`` chain for GHALogs."""
@@ -1060,7 +1059,6 @@ def ghalogs_public_normalize_steps(
     train_partition = materialize_ghalogs_partition_step(
         materialized=materialized,
         partition=DiagnosticPartition.TRAIN,
-        num_shards=num_partition_shards,
         output_path_prefix=output_path_prefix,
     )
     normalized = normalize_step(
