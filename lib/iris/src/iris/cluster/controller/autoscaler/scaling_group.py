@@ -12,6 +12,7 @@ helpers.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -331,21 +332,27 @@ class ScalingGroup:
 
         # Churn / health signal. Replaces the older exponential-backoff state
         # (consecutive_failures, backoff_until, scale_up_cooldown). The detector
-        # also owns the quota-exhaustion gate now, so all "is this group blocked
-        # from scaling up?" questions go through a single source of truth. See
+        # owns the quota-exhaustion gate AND the scale-up token bucket — both
+        # "is this group blocked?" and "is this group rate-limited right now?"
+        # collapse into a single source of truth (``try_acquire_scale_up``),
+        # whose refill rate is health-modulated. See
         # autoscaler/backoff_detector.py for the rationale.
+        scale_up_bucket = TokenBucket(capacity=scale_up_rate_limit, refill_period=Duration.from_minutes(1))
         self._detector = (
             detector
             if detector is not None
-            else BackoffDetector(group_name=config.name, quota_block_duration=quota_timeout)
+            else BackoffDetector(
+                group_name=config.name,
+                scale_up_bucket=scale_up_bucket,
+                base_scale_up_per_minute=scale_up_rate_limit,
+                quota_block_duration=quota_timeout,
+            )
         )
-
-        # Per-group token bucket rate limiter for scale-up API calls
-        self._scale_up_bucket = TokenBucket(capacity=scale_up_rate_limit, refill_period=Duration.from_minutes(1))
 
         # Per-group token bucket rate limiter for scale-down API calls.
         # This replaces the old cooldown-only gate so that multiple idle slices
-        # can be terminated in a single cycle, up to the token budget.
+        # can be terminated in a single cycle, up to the token budget. Scale-down
+        # is not health-modulated, so the bucket stays on ScalingGroup directly.
         self._scale_down_bucket = TokenBucket(capacity=scale_down_rate_limit, refill_period=Duration.from_minutes(1))
 
         # Upsert scaling group row so it exists for future updates
@@ -497,13 +504,27 @@ class ScalingGroup:
         """Churn detector for this group (replaces the old consecutive-failure backoff)."""
         return self._detector
 
-    def recent_failure_count(self, timestamp: Timestamp | None = None) -> int:
-        """Recent windowed failure count from the churn detector."""
-        return self._detector.recent_failure_count(timestamp or Timestamp.now())
-
-    def health(self, timestamp: Timestamp | None = None) -> GroupHealth:
-        """Current health classification (HEALTHY / SUSPECT / CHURNING / HOSTILE)."""
+    def health(self, timestamp: Timestamp | None = None) -> float:
+        """Current AIMD health score in ``[probe_floor, 1.0]``."""
         return self._detector.health(timestamp or Timestamp.now())
+
+    def health_label(self, timestamp: Timestamp | None = None) -> GroupHealth:
+        """Display label (HEALTHY / SUSPECT / CHURNING / HOSTILE)."""
+        return self._detector.health_label(timestamp or Timestamp.now())
+
+    def _failure_count_for_status(self, now: Timestamp) -> int:
+        """Estimated count of recent failures for the legacy proto field.
+
+        Inverts the AIMD decay: ``health = decay^n`` → ``n = log(health) / log(decay)``.
+        Used only to populate the proto ``consecutive_failures`` field for
+        back-compat dashboards/SQL — the canonical signal is the float
+        ``health`` score itself.
+        """
+        score = self._detector.health(now)
+        decay = self._detector._decay
+        if score >= 1.0 or decay >= 1.0 or decay <= 0:
+            return 0
+        return max(1, round(math.log(score) / math.log(decay)))
 
     def begin_scale_up(self, timestamp: Timestamp | None = None) -> None:
         """Mark that a scale-up is in progress.
@@ -829,17 +850,15 @@ class ScalingGroup:
         """Scale down idle slices that exceed target capacity.
 
         Terminates multiple idle slices in a single call, rate-limited by a
-        token bucket (matching the scale-up rate limiter). When the churn
-        detector reports CHURNING or HOSTILE for this group, scale-down is
-        suppressed entirely — the surviving slices are proven survivors of a
-        churning zone, and reaping them when we can't easily replace them
-        accelerates the sawtooth.
+        token bucket (matching the scale-up rate limiter). Scale-down is not
+        health-modulated — the AIMD machinery throttles scale-up cadence
+        only, so a degraded group still reaps its idle survivors at the
+        standard rate-limited cadence when target capacity drops.
 
         Steps:
         1. Update slice activity based on worker idle status
-        2. Skip if the detector says we shouldn't scale down right now
-        3. Check if we're over target capacity (using ready + pending)
-        4. Find eligible idle slices and terminate them (up to the token budget)
+        2. Check if we're over target capacity (using ready + pending)
+        3. Find eligible idle slices and terminate them (up to the token budget)
 
         Args:
             worker_status_map: Map of worker_id to worker status
@@ -851,10 +870,6 @@ class ScalingGroup:
         """
         # Update activity tracking
         self.update_slice_activity(worker_status_map, timestamp)
-
-        # Preserve survivors during a churning zone.
-        if self._detector.should_block_scale_down(timestamp):
-            return []
 
         # Use ready + pending for capacity check to prevent churn during boot
         counts = self.slice_state_counts()
@@ -944,9 +959,13 @@ class ScalingGroup:
             return False
         return True
 
-    def acquire_scale_up_token(self, timestamp: Timestamp | None = None) -> bool:
-        """Try to acquire a scale-up rate limit token. Returns False if rate-limited."""
-        return self._scale_up_bucket.try_acquire(now=timestamp)
+    def try_acquire_scale_up(self, timestamp: Timestamp | None = None) -> bool:
+        """Delegate to the detector, which owns the health-modulated bucket.
+
+        Returns False when the group is HOSTILE, quota-blocked, or the
+        bucket is empty at the current refill rate.
+        """
+        return self._detector.try_acquire_scale_up(timestamp or Timestamp.now())
 
     def acquire_scale_down_token(self, timestamp: Timestamp | None = None) -> bool:
         """Try to acquire a scale-down rate limit token. Returns False if rate-limited."""
@@ -1075,10 +1094,14 @@ class ScalingGroup:
                 quota_until,
             )
 
-        if self._detector.health(timestamp) == GroupHealth.HOSTILE:
+        # HOSTILE label → waterfall routing prefers fallback. The detector still
+        # probes at the floor, but routing is best served sending active demand
+        # to a healthier zone when one exists.
+        if self._detector.health_label(timestamp) == GroupHealth.HOSTILE:
+            score = self._detector.health(timestamp)
             return AvailabilityState(
                 GroupAvailability.BACKOFF,
-                self._detector.block_reason(timestamp) or "",
+                f"degraded (health={score:.2f})",
             )
 
         with self._slices_lock:
@@ -1201,7 +1224,7 @@ class ScalingGroup:
             current_demand=self._current_demand,
             peak_demand=self._peak_demand,
             backoff_until=timestamp_to_proto(Timestamp.from_ms(0)),
-            consecutive_failures=self._detector.recent_failure_count(now),
+            consecutive_failures=self._failure_count_for_status(now),
             last_scale_up=timestamp_to_proto(self._last_scale_up),
             last_scale_down=timestamp_to_proto(self._last_scale_down),
             availability_status=availability.status.value,

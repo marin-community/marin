@@ -115,19 +115,27 @@ class TestAutoscalerScaleUp:
 
         assert len(decisions) == 0
 
-    def test_no_scale_up_when_detector_hostile(self, scale_group_config: config_pb2.ScaleGroupConfig):
-        """Does not scale up when the churn detector reports HOSTILE."""
+    def test_hostile_zone_drops_to_backoff_for_routing(self, scale_group_config: config_pb2.ScaleGroupConfig):
+        """At HOSTILE label, the group's availability becomes BACKOFF so demand
+        waterfalls to a fallback. Note: this is routing-level behaviour, not a
+        detector-level hard block — ``can_scale_up`` only flips false on quota.
+        The detector instead throttles the per-group bucket's refill rate.
+        """
+        from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
+
         platform = make_mock_platform()
         group = ScalingGroup(scale_group_config, platform)
         ts = Timestamp.now()
-        for _ in range(3):
+        # With decay=0.7, 5 failures = 0.168 → HOSTILE (below 0.2 band).
+        for _ in range(5):
             group.record_create_failed(timestamp=ts)
-        autoscaler = make_autoscaler({"test-group": group})
 
-        demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5p-8")
-        decisions = autoscaler.evaluate(demand)
-
-        assert len(decisions) == 0
+        assert group.detector.health_label(ts) == GroupHealth.HOSTILE
+        # Detector itself: no hard block, would still hand out probe tokens.
+        assert group.can_scale_up()
+        # Routing: BACKOFF status keeps demand off this group entirely.
+        assert group.availability(ts).status == GroupAvailability.BACKOFF
 
     def test_scales_up_to_fill_buffer(self):
         """Scales up to fill buffer_slices even with zero demand."""
@@ -411,8 +419,9 @@ class TestAutoscalerExecution:
         autoscaler.execute([decision], timestamp=Timestamp.from_ms(1000))
         autoscaler._wait_for_inflight()
 
-        # The create-failure shows up in the detector's recent-failure count.
-        assert group.recent_failure_count(Timestamp.from_ms(2000)) == 1
+        # The create-failure decays the detector's health score below 1.0.
+        # One failure at decay=0.7 → health ~0.7 (and recovery over 2 ms is negligible).
+        assert group.detector.health(Timestamp.from_ms(2000)) < 1.0
 
     def test_run_once_evaluates_and_executes(self, empty_autoscaler: Autoscaler):
         """run_once() performs evaluate then execute."""
@@ -768,6 +777,7 @@ class TestAutoscalerQuotaHandling:
     def test_generic_error_triggers_backoff_not_quota(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """Non-quota errors push the churn detector, not the quota gate. Once enough
         failures accumulate, availability flips to BACKOFF (HOSTILE)."""
+        from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
         from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
 
         platform = make_mock_platform()
@@ -778,15 +788,16 @@ class TestAutoscalerQuotaHandling:
         config.evaluation_interval.CopyFrom(duration_to_proto(Duration.from_seconds(0.001)))
         autoscaler = make_autoscaler({"test-group": group}, config=config)
 
-        # Drive enough failures past min_samples to reach HOSTILE.
+        # Drive enough failures to reach the HOSTILE display band.
+        # With decay=0.7, 5 failures → health ≈ 0.168, < 0.2 → HOSTILE.
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")
-        for i in range(3):
+        for i in range(5):
             autoscaler.run_once(demand, {}, timestamp=Timestamp.from_ms(1000 + i))
             autoscaler._wait_for_inflight()
 
         state = group.availability(timestamp=Timestamp.from_ms(2000))
         assert state.status == GroupAvailability.BACKOFF
-        assert group.recent_failure_count(Timestamp.from_ms(2000)) >= 3
+        assert group.detector.health_label(Timestamp.from_ms(2000)) == GroupHealth.HOSTILE
 
 
 class TestAutoscalerActionLogging:
