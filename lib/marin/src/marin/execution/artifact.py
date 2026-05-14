@@ -6,9 +6,9 @@ from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, TypeVar, overload
 
 from pydantic import BaseModel
-from rigging.filesystem import open_url
+from rigging.filesystem import marin_prefix, open_url
 
-from marin.execution.step_spec import StepSpec
+from marin.execution.step_spec import StepSpec, _is_relative_path
 
 T = TypeVar("T")
 
@@ -26,10 +26,16 @@ class Artifact:
 
     @classmethod
     def load(cls, base_path: str | StepSpec, artifact_type: type[T] | None = None) -> T | dict[str, Any]:
-        """Loads an Artifact instance from the specified output base path"""
+        """Loads an Artifact instance from the specified output base path.
+
+        If ``base_path`` is a relative path (no URL scheme, doesn't start with ``/``),
+        it is resolved against ``marin_prefix()``.
+        """
 
         if isinstance(base_path, StepSpec):
             base_path = base_path.output_path
+        elif _is_relative_path(base_path):
+            base_path = f"{marin_prefix()}/{base_path}"
 
         with open_url(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:
             if artifact_type is None:

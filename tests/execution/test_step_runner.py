@@ -116,6 +116,15 @@ def test_artifact_save_and_load_typed(tmp_path: Path):
     assert loaded.path == "/data/shards"
 
 
+def test_artifact_load_relative_path_resolves_against_marin_prefix(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", tmp_path.as_posix())
+    artifact = PathMetadata(path="/data/shards")
+    Artifact.save(artifact, (tmp_path / "step_out").as_posix())
+
+    loaded = Artifact.load("step_out", PathMetadata)
+    assert loaded == artifact
+
+
 def test_artifact_save_and_load_untyped(tmp_path: Path):
     artifact = TokenizeMetadata(path="/tokenized", num_tokens=42)
     Artifact.save(artifact, tmp_path.as_posix())
