@@ -89,3 +89,39 @@
 - Follow-up: posted the result to issue #5328 at
   https://github.com/marin-community/marin/issues/5328#issuecomment-4447353963.
 - Next action: do not add jax-triton to the production GPU extra yet unless we have a production backend that benefits from the amortized path.
+
+### 2026-05-14 01:35 - Raw Sonic jax-triton inside train-step-shaped JIT
+- Hypothesis: the standalone `~60-80 us` jax-triton gap is mostly one outer JAX executable dispatch, so raw Sonic Triton kernels should be viable when embedded inside a single train-step executable.
+- Command:
+  ```bash
+  # Combine-only proxy, full production combine shape.
+  uv run --package marin-iris --extra controller --group dev iris --cluster=coreweave-rno2a job run \
+    --job-name sonicmoe-jt-trainstep-full-20260514-082827 --no-wait --max-retries 0 \
+    --enable-extra-resources --gpu GH200x1 --cpu 8 --memory 128g --disk 96g --timeout 3600 \
+    -e XLA_PYTHON_CLIENT_PREALLOCATE false -e JAX_TRACEBACK_FILTERING off \
+    -- bash -lc 'set -euxo pipefail; uv run --package marin --extra gpu --group dev --with jax-triton==0.3.1 --with triton==3.6.0 python .agents/scripts/sonicmoe_jax_triton_trainstep_probe.py --tokens 8192 --hidden 2048 --topk 2 --warmup 20 --repeats 100 --block-h 2048 --block-k 1 --num-warps 8 --bwd-block-h 2048 --bwd-num-warps 8 --multi-counts 1,2,4,8'
+
+  # Full-MoE-shaped proxy using ragged_dot W13/down plus raw Sonic combine.
+  uv run --package marin-iris --extra controller --group dev iris --cluster=coreweave-rno2a job run \
+    --job-name sonicmoe-jt-moe-full-20260514-083332 --no-wait --max-retries 0 \
+    --enable-extra-resources --gpu GH200x1 --cpu 8 --memory 160g --disk 96g --timeout 3600 \
+    -e XLA_PYTHON_CLIENT_PREALLOCATE false -e JAX_TRACEBACK_FILTERING off \
+    -- bash -lc 'set -euxo pipefail; uv run --package marin --extra gpu --group dev --with jax-triton==0.3.1 --with triton==3.6.0 python .agents/scripts/sonicmoe_jax_triton_trainstep_probe.py --tokens 8192 --hidden 2048 --intermediate 3072 --num-experts 8 --topk 2 --warmup 5 --repeats 20 --moe-repeats 20 --block-h 2048 --block-k 1 --num-warps 8 --bwd-block-h 2048 --bwd-num-warps 8 --multi-counts 1 --run-moe'
+  ```
+- Config: GH200, JAX `0.10.0`, jax-triton `0.3.1`, Triton `3.6.0`, Torch `2.11.0+cu128`, shape `T=8192 H=2048 I=3072 E=8 K=2 bf16`.
+- Result:
+
+  | probe | raw Sonic jax-triton | XLA reference | delta raw-XLA | notes |
+  | --- | ---: | ---: | ---: | --- |
+  | direct Triton raw gather fwd+bwd | `0.0843 ms` event / `0.0867 ms` wall | - | - | same raw kernels, host-launched |
+  | embedded combine forward loss | `0.1407 ms` | `0.1199 ms` | `+0.0208 ms` | raw forward inside one JIT |
+  | embedded combine fwd/bwd/update | `0.2603 ms` | `0.5345 ms` | `-0.2742 ms` | raw custom VJP beats XLA autodiff combine |
+  | embedded multi-combine forward, 1 call | `0.1402 ms` | `0.1192 ms` | `+0.0210 ms` | no standalone dispatch tax |
+  | full MoE forward loss | `1.3641 ms` | `1.4643 ms` | `-0.1002 ms` | ragged_dot W13/down plus raw Sonic combine |
+  | full MoE fwd/bwd/update | `4.5289 ms` | `5.0019 ms` | `-0.4729 ms` | same full-MoE-shaped proxy |
+
+- Interpretation:
+  - This confirms the standalone `jax_triton.triton_call` number was pessimistic for train-step use. Inside a single compiled JAX executable, raw Sonic gather/combine does not pay the large standalone dispatch floor per kernel.
+  - The raw custom VJP for gather/combine is a real win over XLA autodiff for this boundary in the proxy: about `0.27 ms` for combine-only fwd/bwd/update and about `0.47 ms` in the full-MoE-shaped proxy.
+  - The full-MoE proxy is not the exact production `MoEExpertMlp` path yet; it uses the same shape and `ragged_dot` W13/down, but synthetic balanced routing and a simple SGD-style update. Use the delta as evidence for the raw Sonic combine boundary, not as a replacement for the earlier Sonic/Grug whole-block numbers.
+- Next action: consider a production backend that uses raw Sonic jax-triton gather/combine with a custom VJP, then re-benchmark against `sonic_xla_interleaved_w13_quack_down`.
