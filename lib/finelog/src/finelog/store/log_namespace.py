@@ -529,13 +529,8 @@ class DiskLogNamespace:
         #      local file was evicted before the prior shutdown.
         #   2. Local parquet files — authoritative for unflushed catalog
         #      state (genuine boot from disk, no prior catalog).
-        #   3. Remote bucket — authoritative for wiped-catalog recovery,
-        #      handled below by ``_adopt_remote_segments`` *before* the
-        #      bg loop starts. We can't defer this to the first sync tick:
-        #      that tick's phase-2 orphan-delete would see an empty
-        #      catalog with a populated bucket and ``fs.rm`` everything.
-        #      The cost is a network round-trip per parquet file at boot
-        #      when the bucket is non-empty.
+        #   3. Remote bucket — handled below by
+        #      ``_reconcile_remote_segments``.
         #
         # Each catalog row is reattached to its on-disk file when present;
         # ``REMOTE``-only rows stay in the catalog but never enter the
@@ -619,12 +614,8 @@ class DiskLogNamespace:
         for seg in self._local_segments:
             self._catalog.upsert_segment(self._segment_to_row(seg))
 
-        # Wiped-catalog recovery: if the remote bucket has parquet files
-        # that no row references, adopt them as ``REMOTE``. Without this,
-        # the first ``_sync_step`` after a catalog wipe would treat the
-        # whole bucket as orphan and ``fs.rm`` everything.
         if self._remote_namespace_dir:
-            self._adopt_remote_segments(key_column=key_column)
+            self._reconcile_remote_segments(key_column=key_column)
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_config.check_interval_sec)
@@ -1198,30 +1189,35 @@ class DiskLogNamespace:
         finally:
             self._query_visibility_lock.write_release()
 
-    def _adopt_remote_segments(self, *, key_column: str | None) -> None:
-        """Insert ``REMOTE`` catalog rows for bucket files with no row.
+    def _reconcile_remote_segments(self, *, key_column: str | None) -> None:
+        """Adopt unknown remote files and drop redundant ones at boot.
 
-        Recovery path for a wiped catalog: the bucket is the only durable
-        record of every L>=1 segment, so we read each parquet footer
-        remotely to reconstruct row metadata. Footer fetches dominate
-        wall-time (one network round-trip per segment) and are run on a
-        thread pool; the catalog upserts then run serially because
-        ``Catalog._conn`` is a single DuckDB connection.
+        Runs once from ``__init__`` before the bg thread starts; no
+        compactor or sync activity is concurrent with it.
+
+        Adoption is the wiped-catalog recovery path: the bucket is the
+        only durable record of L>=1 segments after the local catalog is
+        lost, so each parquet footer is fetched to rebuild row metadata.
+
+        The redundancy pass drops any segment whose ``[min_seq, max_seq]``
+        is fully covered by a higher-level segment. Otherwise a crash
+        between a compaction commit and its ``fs.rm`` would leave the
+        input file in the bucket, and adoption on the next boot would
+        give it a permanent ``REMOTE`` row.
         """
         try:
             fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
-            # detail=True returns file size in the listing, so we don't
-            # need a separate fs.info() per file below.
             remote_info = fs.find(root, detail=True)
         except Exception:
-            logger.warning("remote adopt list failed for %s", self.name, exc_info=True)
+            logger.warning("remote reconcile list failed for %s", self.name, exc_info=True)
             return
 
-        catalog_basenames = {Path(r.path).name for r in self._catalog.list_segments(self.name)}
-        candidates: list[tuple[str, int, int, int]] = []  # (fs_path, level, min_seq, byte_size)
+        catalog_by_basename = {Path(r.path).name: r for r in self._catalog.list_segments(self.name, min_level=1)}
+
+        needs_footer: list[tuple[str, str, int, int, int]] = []  # (fs_path, basename, level, min_seq, byte_size)
         for fs_path, info in remote_info.items():
             basename = Path(fs_path).name
-            if basename in catalog_basenames:
+            if basename in catalog_by_basename:
                 continue
             parsed = parse_seg_filename(basename)
             if parsed is None:
@@ -1229,32 +1225,81 @@ class DiskLogNamespace:
                 continue
             level, min_seq = parsed
             byte_size = int(info.get("size", 0) or 0)
-            candidates.append((fs_path, level, min_seq, byte_size))
+            needs_footer.append((fs_path, basename, level, min_seq, byte_size))
 
-        if not candidates:
-            return
-
-        def _fetch_footer(fs_path: str) -> tuple[str, pq.FileMetaData | None]:
+        def _fetch_footer(
+            item: tuple[str, str, int, int, int],
+        ) -> tuple[str, str, int, int, int, pq.FileMetaData | None]:
+            fs_path, basename, level, min_seq, byte_size = item
             try:
                 with fs.open(fs_path, "rb") as f:
-                    return fs_path, pq.read_metadata(f)
+                    return basename, fs_path, level, min_seq, byte_size, pq.read_metadata(f)
             except Exception:
-                logger.warning(
-                    "failed reading remote parquet footer %s/%s", self.name, Path(fs_path).name, exc_info=True
-                )
-                return fs_path, None
+                logger.warning("failed reading remote parquet footer %s/%s", self.name, basename, exc_info=True)
+                return basename, fs_path, level, min_seq, byte_size, None
 
-        max_workers = min(32, len(candidates))
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="adopt-remote") as pool:
-            footers = dict(pool.map(_fetch_footer, [c[0] for c in candidates]))
+        # basename -> (fs_path, level, min_seq, max_seq, byte_size, metadata)
+        footer_results: dict[str, tuple[str, int, int, int, int, pq.FileMetaData]] = {}
+        if needs_footer:
+            max_workers = min(32, len(needs_footer))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reconcile-remote") as pool:
+                for basename, fs_path, level, min_seq, byte_size, metadata in pool.map(_fetch_footer, needs_footer):
+                    if metadata is None:
+                        continue
+                    max_seq = min_seq + max(metadata.num_rows - 1, 0)
+                    footer_results[basename] = (fs_path, level, min_seq, max_seq, byte_size, metadata)
+
+        # Union catalog + remote-only seq ranges, then mark any segment
+        # whose [min_seq, max_seq] is fully spanned by a strictly higher
+        # level. Transitivity (Y covers X, Z covers Y ⇒ Z covers X) means
+        # we don't need to filter out redundant Ys before checking X.
+        all_known: dict[str, tuple[int, int, int]] = {}
+        for basename, row in catalog_by_basename.items():
+            all_known[basename] = (row.level, row.min_seq, row.max_seq)
+        for basename, (_fs_path, level, min_seq, max_seq, _byte_size, _meta) in footer_results.items():
+            all_known[basename] = (level, min_seq, max_seq)
+
+        by_level: dict[int, list[tuple[int, int]]] = {}
+        for level, min_seq, max_seq in all_known.values():
+            by_level.setdefault(level, []).append((min_seq, max_seq))
+
+        redundant: set[str] = set()
+        for basename, (level, min_seq, max_seq) in all_known.items():
+            for higher_level, ranges in by_level.items():
+                if higher_level <= level:
+                    continue
+                if any(h_min <= min_seq and h_max >= max_seq for h_min, h_max in ranges):
+                    redundant.add(basename)
+                    break
+
+        for basename in redundant:
+            row = catalog_by_basename.get(basename)
+            if row is not None:
+                self._catalog.remove_segment(self.name, row.path)
+
+        # Batch fs.rm calls 8 at a time and run batches in parallel. The
+        # gcsfs path uses one BatchDelete request per chunk; otherwise a
+        # large first-deploy backlog of compaction orphans adds minutes
+        # to boot.
+        def _delete_chunk(chunk: list[str]) -> None:
+            paths = [f"{self._remote_namespace_dir}/{b}" for b in chunk]
+            try:
+                fs.rm(paths)
+            except Exception:
+                logger.warning("redundant remote delete failed: %s/%s", self.name, chunk, exc_info=True)
+
+        if redundant:
+            ordered = list(redundant)
+            chunks = [ordered[i : i + 8] for i in range(0, len(ordered), 8)]
+            max_workers = min(32, len(chunks))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reconcile-delete") as pool:
+                list(pool.map(_delete_chunk, chunks))
 
         now_ms = int(time.time() * 1000)
-        for fs_path, level, min_seq, byte_size in candidates:
-            metadata = footers.get(fs_path)
-            if metadata is None:
+        adopted = 0
+        for basename, (_fs_path, level, min_seq, max_seq, byte_size, metadata) in footer_results.items():
+            if basename in redundant:
                 continue
-            basename = Path(fs_path).name
-            num_rows = metadata.num_rows
             min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
             local_path = self._data_dir / basename
             self._catalog.upsert_segment(
@@ -1263,8 +1308,8 @@ class DiskLogNamespace:
                     path=str(local_path),
                     level=level,
                     min_seq=min_seq,
-                    max_seq=min_seq + max(num_rows - 1, 0),
-                    row_count=num_rows,
+                    max_seq=max_seq,
+                    row_count=metadata.num_rows,
                     byte_size=byte_size,
                     created_at_ms=now_ms,
                     location=SegmentLocation.REMOTE,
@@ -1272,11 +1317,15 @@ class DiskLogNamespace:
                     max_key_value=None if max_key is None else str(max_key),
                 )
             )
-        logger.info(
-            "Adopted %d remote segment(s) for namespace %s as REMOTE",
-            sum(1 for fs_path, *_ in candidates if footers.get(fs_path) is not None),
-            self.name,
-        )
+            adopted += 1
+
+        if adopted or redundant:
+            logger.info(
+                "Reconciled remote for %s: adopted=%d, dropped_redundant=%d",
+                self.name,
+                adopted,
+                len(redundant),
+            )
 
     def _sync_step(self) -> None:
         """Reconcile the remote namespace prefix with the catalog.
