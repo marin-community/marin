@@ -79,6 +79,16 @@ export function useWorkerRpc<T>(
   return useRpc<T>('iris.cluster.WorkerService', method, body)
 }
 
+/** Error thrown by one-shot RPC calls when the HTTP response is non-OK.
+ *  Carries the HTTP status so callers can branch on specific failures
+ *  (e.g. 404 NOT_FOUND from Connect RPC). */
+export class RpcError extends Error {
+  constructor(public readonly method: string, public readonly status: number, public readonly statusText: string) {
+    super(`${method}: ${status} ${statusText}`)
+    this.name = 'RpcError'
+  }
+}
+
 /** One-shot RPC call returning a Promise. For use in async functions that
  *  need to call multiple RPCs or handle the response imperatively. */
 export async function controllerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
@@ -88,7 +98,7 @@ export async function controllerRpcCall<T>(method: string, body?: Record<string,
     body: JSON.stringify(body ?? {}),
   })
   handleUnauthorized(resp)
-  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
+  if (!resp.ok) throw new RpcError(method, resp.status, resp.statusText)
   return resp.json() as Promise<T>
 }
 
