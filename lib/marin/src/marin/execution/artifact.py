@@ -48,11 +48,9 @@ class Artifact:
             with open_url(f"{base_path}/{cls.__artifact_file_name}", "rb") as fd:
                 if artifact_type is None:
                     return json.load(fd)
-                if issubclass(artifact_type, BaseModel):
-                    return artifact_type.model_validate_json(fd.read())
-                if is_dataclass(artifact_type):
-                    return artifact_type(**json.load(fd))  # type: ignore[not-callable]
-                raise ValueError(f"Unsupported artifact type: {artifact_type!r}")
+                if not issubclass(artifact_type, BaseModel):
+                    raise TypeError(f"artifact_type must be a pydantic BaseModel subclass, got {artifact_type!r}")
+                return artifact_type.model_validate_json(fd.read())
         except FileNotFoundError:
             return cls._from_executor_status(base_path, artifact_type)
 

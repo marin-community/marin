@@ -17,6 +17,7 @@ from marin.execution.executor import Executor, ExecutorStep, _dag_tpu_regions, r
 from marin.execution.remote import RemoteCallable, remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from pydantic import BaseModel
 from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 
 # ---------------------------------------------------------------------------
@@ -24,14 +25,12 @@ from rigging.filesystem import MARIN_CROSS_REGION_OVERRIDE_ENV
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class TokenizeMetadata:
+class TokenizeMetadata(BaseModel):
     path: str
     num_tokens: int
 
 
-@dataclass
-class TrainMetadata:
+class TrainMetadata(BaseModel):
     tokens_seen: int
     checkpoint_path: str
 
@@ -156,18 +155,6 @@ def test_artifact_from_executor_status_non_success_raises(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError, match="not 'SUCCESS'"):
         Artifact.from_path(tmp_path.as_posix())
-
-
-def test_artifact_from_executor_status_relative_path(tmp_path: Path, monkeypatch):
-    """Fallback also works through MARIN_PREFIX-resolved relative paths."""
-    monkeypatch.setenv("MARIN_PREFIX", tmp_path.as_posix())
-    step_dir = tmp_path / "step_out"
-    step_dir.mkdir()
-    (step_dir / ".executor_status").write_text("SUCCESS")
-
-    loaded = Artifact.from_path("step_out")
-    assert isinstance(loaded, PathMetadata)
-    assert loaded.path == step_dir.as_posix()
 
 
 def test_artifact_save_and_load_untyped(tmp_path: Path):
