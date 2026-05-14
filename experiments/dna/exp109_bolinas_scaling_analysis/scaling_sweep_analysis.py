@@ -52,6 +52,13 @@ EXP109_AGGREGATE_NAME = f"{EXP109_NAME}-*"
 WANDB_PROJECT = "eric-czech/marin"
 WANDB_RUN_PREFIX = f"dna-bolinas-scaling-{VERSION}-"
 
+# exp135: data-mix experiments compared against the TraitGym reference (no aggregate rollup).
+# Each entry maps a wandb display name to the short label used in the plot (e.g. mix1, mix2, ...).
+EXP135_NAME = "exp135"
+EXP135_RUNS: dict[str, str] = {
+    "dna-bolinas-mix-v0.9-p1B-i0-uniform": "1B-m1",
+}
+
 REFERENCE_PARQUET_URL = (
     "https://gist.githubusercontent.com/eric-czech/787e7ab1a0e0be87bfecc7bce1fa8e83/"
     "raw/a017bc68afd2a1ec78f8bb0074e9eb1acb6b274e/results.parquet"
@@ -59,6 +66,7 @@ REFERENCE_PARQUET_URL = (
 
 CACHE_DIR = Path("/tmp")
 WANDB_CACHE_PATH = CACHE_DIR / f"scaling_sweep_{VERSION}_lm_eval_final.json"
+EXP135_WANDB_CACHE_PATH = CACHE_DIR / "exp135_mix_lm_eval_final.json"
 REFERENCE_CACHE_PATH = CACHE_DIR / "exp55_58_59_results.parquet"
 
 RESULTS_DIR = Path(f"experiments/dna/exp109_bolinas_scaling_analysis/results/scaling/{VERSION}")
@@ -133,13 +141,28 @@ def _parse_run_name(name: str) -> tuple[int, str]:
 # =============================================================================
 
 
+def _extract_summary_metrics(run_name: str, summary) -> dict[str, float]:
+    """Pull the configured lm_eval keys from a wandb run summary, requiring finite floats.
+
+    A missing or non-finite summary value indicates an upstream logging issue and should fail
+    loudly rather than silently coerce or fall back.
+    """
+    metrics: dict[str, float] = {}
+    for key in WANDB_METRIC_KEYS:
+        if key not in summary:
+            raise KeyError(f"run {run_name!r} summary is missing required key {key!r}")
+        v = float(summary[key])
+        if not np.isfinite(v):
+            raise ValueError(f"run {run_name!r} summary key {key!r} is non-finite: {v}")
+        metrics[key] = v
+    return metrics
+
+
 def fetch_wandb(project: str, run_prefix: str) -> list[dict]:
     """Fetch the final (summary) value of each lm_eval metric for runs matching `run_prefix`.
 
     Summary keys are stored flat (slash-separated) by these runs — see WANDB_METRIC_KEYS for
-    the exact key strings used at log time. We require an exact, finite float for every key:
-    a missing or non-finite summary value indicates an upstream logging issue and should fail
-    loudly rather than silently coerce or fall back.
+    the exact key strings used at log time.
     """
     import wandb
 
@@ -147,23 +170,19 @@ def fetch_wandb(project: str, run_prefix: str) -> list[dict]:
     runs = list(api.runs(project, filters={"display_name": {"$regex": f"^{re.escape(run_prefix)}"}}))
     rows = []
     for r in runs:
+        # Only include fully completed runs — partial/crashed/running runs would log incomplete
+        # lm_eval summaries and skew the scaling comparison.
+        if r.state != "finished":
+            print(f"Skipping run {r.name!r} with non-finished state: {r.state!r}")
+            continue
         hidden, params = _parse_run_name(r.name)
-        summary = r.summary
-        metrics: dict[str, float] = {}
-        for key in WANDB_METRIC_KEYS:
-            if key not in summary:
-                raise KeyError(f"run {r.name!r} summary is missing required key {key!r}")
-            v = float(summary[key])
-            if not np.isfinite(v):
-                raise ValueError(f"run {r.name!r} summary key {key!r} is non-finite: {v}")
-            metrics[key] = v
         rows.append(
             {
                 "name": r.name,
                 "state": r.state,
                 "hidden_size": hidden,
                 "param_label": params,
-                "metrics": metrics,
+                "metrics": _extract_summary_metrics(r.name, r.summary),
             }
         )
     return rows
@@ -179,6 +198,49 @@ def load_wandb(refresh: bool = False) -> list[dict]:
     with open(WANDB_CACHE_PATH, "w") as f:
         json.dump(rows, f, indent=2)
     print(f"Fetched {len(rows)} wandb runs, cached to {WANDB_CACHE_PATH}")
+    return rows
+
+
+def fetch_wandb_exp135(project: str, run_to_label: dict[str, str]) -> list[dict]:
+    """Fetch the configured exp135 mix runs by exact display name.
+
+    Unlike the scaling sweep, exp135 runs are explicitly enumerated by the user, so we accept
+    runs in any state as long as the summary is populated — the user has already vetted the
+    inclusion. Run state is logged for visibility.
+    """
+    import wandb
+
+    api = wandb.Api(timeout=300)
+    rows = []
+    for run_name, label in run_to_label.items():
+        matches = list(api.runs(project, filters={"display_name": run_name}))
+        if not matches:
+            raise ValueError(f"no wandb run found for {run_name!r} ({label!r})")
+        if len(matches) > 1:
+            raise ValueError(f"multiple runs for {run_name!r}: {len(matches)}")
+        r = matches[0]
+        print(f"exp135 run {run_name!r} ({label!r}): state={r.state!r}")
+        rows.append(
+            {
+                "name": r.name,
+                "state": r.state,
+                "label": label,
+                "metrics": _extract_summary_metrics(r.name, r.summary),
+            }
+        )
+    return rows
+
+
+def load_wandb_exp135(refresh: bool = False) -> list[dict]:
+    if not refresh and EXP135_WANDB_CACHE_PATH.exists():
+        with open(EXP135_WANDB_CACHE_PATH) as f:
+            rows = json.load(f)
+        print(f"Loaded {len(rows)} exp135 wandb runs from cache ({EXP135_WANDB_CACHE_PATH})")
+        return rows
+    rows = fetch_wandb_exp135(WANDB_PROJECT, EXP135_RUNS)
+    with open(EXP135_WANDB_CACHE_PATH, "w") as f:
+        json.dump(rows, f, indent=2)
+    print(f"Fetched {len(rows)} exp135 wandb runs, cached to {EXP135_WANDB_CACHE_PATH}")
     return rows
 
 
@@ -279,6 +341,30 @@ def exp109_long(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame.from_records(records)
 
 
+def exp135_long(rows: list[dict]) -> pd.DataFrame:
+    """Flatten exp135 mix runs to long-form (no aggregate rollup; one row per run, metric).
+
+    The short mix label is stored in `param_label` so it can flow through the same composite
+    and viz selection machinery as exp109 without an extra column.
+    """
+    records = []
+    for row in rows:
+        for key, value in row["metrics"].items():
+            records.append(
+                {
+                    "experiment": EXP135_NAME,
+                    "dataset": "mix",
+                    "role": "raw",
+                    "metric": _normalize_wandb_metric(key),
+                    "value": float(value),
+                    "source": "wandb",
+                    "param_label": row["label"],
+                    "hidden_size": pd.NA,
+                }
+            )
+    return pd.DataFrame.from_records(records)
+
+
 def exp109_overall_max(long: pd.DataFrame, top_n: int) -> pd.DataFrame:
     """Per-metric MAX across the N largest exp109 models. Analogue of the reference overall_max.
 
@@ -299,15 +385,15 @@ def exp109_overall_max(long: pd.DataFrame, top_n: int) -> pd.DataFrame:
     return agg
 
 
-def merge_long(ref_long: pd.DataFrame, exp109_long_df: pd.DataFrame) -> pd.DataFrame:
-    """Stack reference + exp109 rows; keep every metric (outer-join semantics).
+def merge_long(ref_long: pd.DataFrame, wandb_long_df: pd.DataFrame) -> pd.DataFrame:
+    """Stack reference + wandb rows; keep every metric (outer-join semantics).
 
     Metrics that appear on only one side (e.g. `macro_avg_auprc` is wandb-only) are
     preserved — they simply have no counterpart on the other side.
     """
-    merged = pd.concat([ref_long, exp109_long_df], ignore_index=True, sort=False)
+    merged = pd.concat([ref_long, wandb_long_df], ignore_index=True, sort=False)
     ref_metrics = set(ref_long["metric"].unique())
-    wandb_metrics = set(exp109_long_df["metric"].unique())
+    wandb_metrics = set(wandb_long_df["metric"].unique())
     ref_only = sorted(ref_metrics - wandb_metrics)
     wandb_only = sorted(wandb_metrics - ref_metrics)
     both = sorted(ref_metrics & wandb_metrics)
@@ -381,7 +467,12 @@ def select_viz_rows(long: pd.DataFrame) -> pd.DataFrame:
     exp109_max_rows["display_name"] = EXP109_AGGREGATE_NAME
     exp109_max_rows["sort_key"] = 10 + EXP109_VIZ_MODEL_COUNT
 
-    viz = pd.concat([ref_rows, exp109_raw, exp109_max_rows], ignore_index=True, sort=False)
+    exp135_raw = long[(long["experiment"] == EXP135_NAME) & (long["role"] == "raw")].copy()
+    mix_labels = sorted(exp135_raw["param_label"].dropna().unique().tolist())
+    exp135_raw["display_name"] = EXP135_NAME + "-" + exp135_raw["param_label"]
+    exp135_raw["sort_key"] = 20 + exp135_raw["param_label"].map({label: i for i, label in enumerate(mix_labels)})
+
+    viz = pd.concat([ref_rows, exp109_raw, exp109_max_rows, exp135_raw], ignore_index=True, sort=False)
     return viz
 
 
@@ -423,11 +514,14 @@ def plot_composites(viz: pd.DataFrame) -> None:
         edgecolor="k",
         linewidth=0.4,
     )
-    # Hatch reference (non-exp109) bars to visually distinguish them from exp109 results.
+    # Hatch reference bars (//) and exp135 bars (xx) to visually distinguish them from exp109.
     reference_hatch = "//"
+    exp135_hatch = "xx"
     for bars in (bars1, bars2):
         for bar, name in zip(bars, order, strict=True):
-            if not name.startswith(EXP109_NAME):
+            if name.startswith(EXP135_NAME):
+                bar.set_hatch(exp135_hatch)
+            elif not name.startswith(EXP109_NAME):
                 bar.set_hatch(reference_hatch)
     for bars in (bars1, bars2):
         for bar in bars:
@@ -497,7 +591,11 @@ def main(refresh: bool = False) -> None:
     exp109_max = exp109_overall_max(exp109_df, EXP109_VIZ_MODEL_COUNT)
     exp109_df = pd.concat([exp109_df, exp109_max], ignore_index=True)
 
-    merged = merge_long(ref_long, exp109_df)
+    exp135_rows = load_wandb_exp135(refresh=refresh)
+    exp135_df = exp135_long(exp135_rows)
+
+    wandb_combined = pd.concat([exp109_df, exp135_df], ignore_index=True)
+    merged = merge_long(ref_long, wandb_combined)
     enriched = add_composites(merged)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)

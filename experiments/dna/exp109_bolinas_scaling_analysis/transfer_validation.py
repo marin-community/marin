@@ -14,6 +14,7 @@ Caches wandb data locally; pass --refresh to re-fetch.
 
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -29,10 +30,9 @@ PLOT_LR_PATH = RESULTS_DIR / "transfer_sweep_lr.png"
 PLOT_BETA2_PATH = RESULTS_DIR / "transfer_sweep_beta2.png"
 CSV_PATH = RESULTS_DIR / "transfer_sweep_data.csv"
 
-# Runs still "running" in wandb but within this many steps of num_train_steps are
-# treated as effectively complete. Covers the common case where the final eval
-# step lands just before the run flushes to "finished".
-STEP_TOLERANCE = 10
+# Crashed runs are kept only if they reached this fraction of training. Covers the common
+# case where a run completes training and the final eval but crashes during shutdown/upload.
+MIN_CRASHED_PROGRESS = 0.99
 
 
 def fetch_data(project: str, run_prefix: str) -> list[dict]:
@@ -55,6 +55,8 @@ def fetch_data(project: str, run_prefix: str) -> list[dict]:
                 else:
                     label = rest
                 break
+        # Strip a leading param-size segment (e.g. "p1B-", "p255M-") added by newer runs.
+        label = re.sub(r"^p\d+[MB]-", "", label)
         data.append(
             {
                 "name": r.name,
@@ -62,6 +64,7 @@ def fetch_data(project: str, run_prefix: str) -> list[dict]:
                 "state": r.state,
                 "step": r.summary.get("_step"),
                 "num_train_steps": trainer.get("num_train_steps"),
+                "run_progress": r.summary.get("run_progress"),
                 "eval/loss": r.summary.get("eval/loss"),
                 "eval/macro_loss": r.summary.get("eval/macro_loss"),
                 "learning_rate": optimizer.get("learning_rate"),
@@ -87,26 +90,25 @@ def load_data(refresh: bool = False) -> pd.DataFrame:
     df["eval/macro_loss"] = pd.to_numeric(df["eval/macro_loss"], errors="coerce")
     df["step"] = pd.to_numeric(df["step"], errors="coerce")
     df["num_train_steps"] = pd.to_numeric(df["num_train_steps"], errors="coerce")
+    df["run_progress"] = pd.to_numeric(df["run_progress"], errors="coerce")
     return df
 
 
 def filter_completed(df: pd.DataFrame) -> pd.DataFrame:
-    """Keep only runs that are state=finished or have reached num_train_steps (within tolerance).
+    """Keep finished runs and crashed runs that reached MIN_CRASHED_PROGRESS of training.
 
-    wandb occasionally leaves a run in 'running' for a short window after the final
-    step completes; STEP_TOLERANCE catches those without pulling in genuinely
-    in-flight runs.
+    Running/failed runs are excluded — only terminal states qualify, and crashed runs must
+    have logged enough progress to indicate training (and the final eval) actually completed.
     """
     is_finished = df["state"] == "finished"
-    reached_end = (
-        df["step"].notna() & df["num_train_steps"].notna() & (df["step"] >= df["num_train_steps"] - STEP_TOLERANCE)
+    is_crashed_late = (
+        (df["state"] == "crashed") & df["run_progress"].notna() & (df["run_progress"] > MIN_CRASHED_PROGRESS)
     )
-    keep = is_finished | reached_end
+    keep = is_finished | is_crashed_late
     dropped = df[~keep]
     if not dropped.empty:
         summary = ", ".join(
-            f"{row['label']}(state={row['state']}, step={row['step']}/{row['num_train_steps']})"
-            for _, row in dropped.iterrows()
+            f"{row['label']}(state={row['state']}, run_progress={row['run_progress']})" for _, row in dropped.iterrows()
         )
         print(f"Dropping {len(dropped)} incomplete run(s): {summary}")
     return df[keep].copy()
