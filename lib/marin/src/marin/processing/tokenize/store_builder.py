@@ -32,10 +32,11 @@ import time
 
 import pyarrow.parquet as pq
 from fray import ResourceConfig
-from levanter.store.cache import CacheLedger, consolidate_shard_cache_ledgers
+from levanter.store.cache import CacheLedger, consolidate_shard_cache_ledgers, write_levanter_cache
 from pydantic import BaseModel
 from rigging.filesystem import open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import format_shard_path
 from zephyr.readers import load_file
 
 from marin.execution.artifact import Artifact
@@ -137,12 +138,23 @@ def build_from_datasets(
 
     pipeline_start = time.monotonic()
 
-    temp_shards = dataset.map(_strip_id).write_levanter_cache(
-        f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}",
-        metadata={},
-        skip_existing=skip_existing,
-        batch_size=batch_size,
-    )
+    output_pattern = f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}"
+    write_kwargs: dict = {"metadata": {}}
+    if batch_size is not None:
+        write_kwargs["batch_size"] = batch_size
+
+    def _write_shard(records, shard_info):
+        shard_path = format_shard_path(output_pattern, shard_info.shard_idx, shard_info.total_shards)
+        if skip_existing:
+            fs = url_to_fs(shard_path)[0]
+            if fs.exists(f"{shard_path}/.success"):
+                logger.info("Skipping write, output exists: %s", shard_path)
+                yield shard_path
+                return
+        result = write_levanter_cache(records, shard_path, **write_kwargs)
+        yield result["path"]
+
+    temp_shards = dataset.map(_strip_id).map_shard(_write_shard)
 
     tokenize_start = time.monotonic()
     shard_paths = ctx.execute(temp_shards).results

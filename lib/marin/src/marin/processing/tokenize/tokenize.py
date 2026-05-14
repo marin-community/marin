@@ -333,7 +333,7 @@ def _run_split(
         batch_size=batch_size,
     )
 
-    stats_path, _ = write_stats_json(prefix, exemplar, ledger)
+    stats_path, _ = write_stats_json(prefix, ledger)
     pipeline_elapsed = time.monotonic() - pipeline_start
     logger.info(
         "%s pipeline complete: %d docs in %.1fs. Wrote stats to %s",
