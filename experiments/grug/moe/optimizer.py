@@ -13,6 +13,7 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+from experiments.grug.moe.klsoaph import scale_by_klsoaph
 
 
 def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
@@ -22,6 +23,16 @@ def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
         or "attn_gate" in path_lower
         or ".router" in path_lower
     )
+
+
+def _uses_klsoaph_baseline_adam_group(path_lower: str) -> bool:
+    """KL Soap H variant override: route attn_gate into the matrix group.
+
+    Same as _uses_adamh_baseline_adam_group but drops "attn_gate". The
+    attention gate parameter is a small 2-D tensor (hidden_dim, num_heads);
+    the KL Soap H sweep keeps it under the SOAP preconditioner.
+    """
+    return "token_embed" in path_lower or "router_bias" in path_lower or ".router" in path_lower
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -213,6 +224,41 @@ def scale_with_grug_normuonh(
         )
         normuonh_updates = _scale_invariant_hyperball_updates(params, normuon_updates, learning_rate)
         return normuonh_updates, ScaleByGrugNorMuonHState(muon_state=next_muon_state, row_nu=row_nu)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+def scale_with_grug_klsoaph(
+    beta1: float = 0.9,
+    beta2: float = 0.9,
+    shampoo_beta: float = 0.9,
+    eps: float = 1e-8,
+    precond_freq: int = 5,
+    learning_rate: float = 0.018,
+) -> optax.GradientTransformation:
+    """KL Soap H transform: SOAP-eigenbasis Adam direction + hyperball post-step.
+
+    Reproduces KLSOAPH from KellerJordan/modded-nanogpt PR #290 with one
+    deviation: precond_freq defaults to 5 (upstream uses 1) to amortize the
+    eigendecomposition cost.
+    """
+    soap_transform = scale_by_klsoaph(
+        beta1=beta1,
+        beta2=beta2,
+        shampoo_beta=shampoo_beta,
+        eps=eps,
+        precond_freq=precond_freq,
+    )
+
+    def init_fn(params):
+        return soap_transform.init(params)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_klsoaph requires params for norm-preserving updates")
+        direction, next_state = soap_transform.update(updates, state, params)
+        klsoaph_updates = _scale_invariant_hyperball_updates(params, direction, learning_rate)
+        return klsoaph_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -476,11 +522,107 @@ class GrugMoeNorMuonHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+@OptimizerConfig.register_subclass("grug_moe_klsoaph_v1")
+@dataclass(frozen=True)
+class GrugMoeKLSoapHConfig(OptimizerConfig):
+    """KL Soap H for Grug MoE.
+
+    Reproduces KLSOAPH from KellerJordan/modded-nanogpt PR #290. The "KL"
+    qualifier names the scale-invariant ("hyperball") post-step, not a
+    KL-divergence projection.
+
+    Variant override versus MuonH/NorMuonH: the attention gate parameter
+    (`attn_gate`) is routed to KL Soap H rather than the baseline Adam
+    group, since it is a 2-D matrix and benefits from the preconditioner.
+
+    - klsoaph: matrix leaves outside the variant baseline Adam group
+    - adamh: lm head / output projection matrix
+    - adam: leaves that the variant routes to plain Adam
+    """
+
+    adam_lr: float = 6e-4
+    beta1: float = 0.9
+    beta2: float = 0.9
+    shampoo_beta: float = 0.9
+    epsilon: float = 1e-8
+    precond_freq: int = 5
+    max_grad_norm: float | None = 1.0
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, adam_lr):
+            def klsoaph_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_klsoaph(
+                        beta1=self.beta1,
+                        beta2=self.beta2,
+                        shampoo_beta=self.shampoo_beta,
+                        eps=self.epsilon,
+                        precond_freq=self.precond_freq,
+                        learning_rate=learning_rate,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "klsoaph": klsoaph_transform(),
+                    "adamh": adamh_transform(),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if _uses_klsoaph_baseline_adam_group(path_lower):
+                return "adam"
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "klsoaph"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
 __all__ = [
     "GrugMoeAdamHConfig",
+    "GrugMoeKLSoapHConfig",
     "GrugMoeMuonHConfig",
     "GrugMoeNorMuonHConfig",
     "ScaleByGrugNorMuonHState",
+    "scale_with_grug_klsoaph",
     "scale_with_grug_muonh",
     "scale_with_grug_normuonh",
 ]
