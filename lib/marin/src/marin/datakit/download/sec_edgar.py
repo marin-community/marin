@@ -102,32 +102,25 @@ def transform(input_path: str, output_path: str) -> None:
     ctx.execute(pipeline)
 
 
-def _download_sec_edgar_step() -> StepSpec:
-    return download_hf_step(
+def download_sec_edgar_step() -> StepSpec:
+    """Download SEC-EDGAR from HF and rewrite each shard via DuckDB."""
+    dl = download_hf_step(
         "raw/sec-edgar",
         hf_dataset_id=HF_DATASET_ID,
         revision=HF_REVISION,
         hf_urls_glob=[f"{f}/*.parquet" for f in FILING_TYPES],
     )
-
-
-def _transform_sec_edgar_step() -> StepSpec:
-    dl = _download_sec_edgar_step()
     return StepSpec(
         name="processed/sec-edgar",
         deps=[dl],
         fn=lambda output_path: transform(input_path=dl.output_path, output_path=output_path),
-        hash_attrs={"version": "v1", "transform": "duckdb-readback-no-stats"},
+        hash_attrs={"version": "v1"},
     )
 
 
 def sec_edgar_normalize_steps() -> tuple[StepSpec, ...]:
-    """Return the ``(transform, normalize)`` chain for SEC-EDGAR.
-
-    The download step is a transitive dep of the transform; ``StepRunner``
-    walks back through deps and runs it first.
-    """
-    processed = _transform_sec_edgar_step()
+    """Return the ``(download+transform, normalize)`` chain for SEC-EDGAR."""
+    processed = download_sec_edgar_step()
     return (
         processed,
         normalize_step(
