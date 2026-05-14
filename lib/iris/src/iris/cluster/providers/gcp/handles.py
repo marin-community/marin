@@ -60,6 +60,19 @@ _VM_STATE_MAP: dict[str, CloudSliceState] = {
 }
 
 _ACTIVE_VM_SLICE_STATES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
+
+# Queued-resource (reserved TPU) state mapping. Non-live states must surface so
+# the boot reconciler can reclaim them; ACTIVE is transient (the matching TPU
+# VM is what list_all_slices normally returns) and only appears here briefly.
+_QR_STATE_MAP: dict[str, CloudSliceState] = {
+    "QUEUED": CloudSliceState.CREATING,
+    "WAITING_FOR_RESOURCES": CloudSliceState.CREATING,
+    "PROVISIONING": CloudSliceState.CREATING,
+    "ACTIVE": CloudSliceState.READY,
+    "FAILED": CloudSliceState.FAILED,
+    "SUSPENDED": CloudSliceState.FAILED,
+    "DELETING": CloudSliceState.DELETING,
+}
 _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")

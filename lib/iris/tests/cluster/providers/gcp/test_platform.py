@@ -592,8 +592,9 @@ def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
     assert wc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
 
 
-def test_gcp_list_slices_skips_inactive_vm_instances():
-    """list_slices omits VM-backed slices for instances in inactive states."""
+def test_gcp_list_all_slices_includes_terminated_vm_instances():
+    """list_all_slices surfaces VM-backed slices in non-live states so the boot
+    reconciler can reclaim them. list_slices (live discovery) still filters."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
@@ -617,7 +618,12 @@ def test_gcp_list_slices_skips_inactive_vm_instances():
             break
 
     listed = platform.list_all_slices()
-    assert handle.slice_id not in {s.handle.slice_id for s in listed}
+    by_id = {s.handle.slice_id: s for s in listed}
+    assert handle.slice_id in by_id
+    assert by_id[handle.slice_id].state == CloudSliceState.DELETING
+
+    live = platform.list_slices(zones=["us-central2-b"])
+    assert handle.slice_id not in {s.slice_id for s in live}
 
 
 def test_gcp_list_slices_preserves_vm_slice_discovery():

@@ -27,6 +27,7 @@ from iris.cluster.providers.gcp.bootstrap import (
 )
 from iris.cluster.providers.gcp.handles import (
     _ACTIVE_VM_SLICE_STATES,
+    _QR_STATE_MAP,
     _TPU_STATE_MAP,
     _VM_STATE_MAP,
     CloudSliceState,
@@ -701,17 +702,16 @@ class GcpWorkerProvider:
             )
             listed.append(ListedSlice(handle=handle, state=_TPU_STATE_MAP.get(tpu.state, CloudSliceState.UNKNOWN)))
 
-        # Discover queued resources (reserved TPUs) not yet visible as TPU VMs.
-        # These are in QUEUED/PROVISIONING/WAITING_FOR_RESOURCES and need handles
-        # so the controller doesn't orphan them on restart.
+        # Discover queued resources (reserved TPUs) not already represented by a
+        # TPU VM. We surface every state — including FAILED/SUSPENDED/DELETING —
+        # so the boot reconciler can reclaim dead reservations instead of
+        # orphaning them in GCP.
         tpu_names = {item.handle.slice_id for item in listed}
         qr_infos = self._gcp.queued_resource_list(zones=[], labels=managed_labels)
         for qr in qr_infos:
             if qr.name in tpu_names:
                 continue
-            if qr.state in ("FAILED", "SUSPENDED", "DELETING"):
-                continue
-            if qr.labels.get(manual_label) == "true":
+            if qr.labels and qr.labels.get(manual_label) == "true":
                 continue
             handle = GcpSliceHandle(
                 _slice_id=qr.name,
@@ -726,11 +726,12 @@ class GcpWorkerProvider:
                 _ssh_config=self._ssh_config,
                 _is_queued_resource=True,
             )
-            listed.append(ListedSlice(handle=handle, state=CloudSliceState.CREATING))
+            listed.append(ListedSlice(handle=handle, state=_QR_STATE_MAP.get(qr.state, CloudSliceState.UNKNOWN)))
 
+        # Surface every managed VM regardless of cloud state. Stopped/terminated
+        # instances are exactly what the boot reconciler needs to reclaim; the
+        # active-only filter belongs in list_slices(), used for live discovery.
         for vm in vm_infos:
-            if vm.status not in _ACTIVE_VM_SLICE_STATES:
-                continue
             slice_id = vm.labels.get(self._iris_labels.iris_slice_id, "")
             if not slice_id:
                 continue
