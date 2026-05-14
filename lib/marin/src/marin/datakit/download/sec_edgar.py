@@ -3,18 +3,20 @@
 
 """TeraflopAI/SEC-EDGAR download + transform + normalize helpers.
 
-8M filings (~43B tokens) from the SEC EDGAR database, organized into
-per-filing-type subdirectories: 10-K, 10-Q, 8-K, 20-F, S-1, S-8, 144,
-and Form 3/4/5. Text lives in the upstream ``content`` column.
+~8M filings (~335B marin_tokenizer tokens) from the SEC EDGAR database,
+organized into per-filing-type subdirectories: 10-K, 10-Q, 8-K, 20-F,
+S-1, S-8, 144, and Form 3/4/5. Text lives in the upstream ``content``
+column.
 
-A transform step sits between download and normalize because the upstream
-parquet shards trip ``apache/arrow#46404`` — PyArrow's parquet reader
+A transform step sits between download and normalize as a workaround
+for https://github.com/marin-community/marin/issues/5334 — the upstream
+parquet shards trip ``apache/arrow#46404`` (PyArrow's parquet reader
 can't decode page headers >8 MiB, which the multi-MB filings in the
-``content`` column overflow on per-page string statistics. The transform
-reads each shard via DuckDB (no such cap) and rewrites it with
-``write_statistics=False`` so the rewritten shards don't reproduce the
-bug for downstream PyArrow readers (normalize, tokenize). Once
-``apache/arrow#47758`` lands `max_page_header_size` in a released
+``content`` column overflow on per-page string statistics). The
+transform reads each shard via DuckDB (no such cap) and rewrites it
+with ``write_statistics=False`` so the rewritten shards don't reproduce
+the bug for downstream PyArrow readers (normalize, tokenize). Once
+``apache/arrow#47758`` lands ``max_page_header_size`` in a released
 PyArrow we can pin, this transform can be deleted.
 """
 

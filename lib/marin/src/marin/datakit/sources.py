@@ -156,7 +156,7 @@ def all_sources() -> dict[str, DatakitSource]:
         ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
-        ("sec-edgar", sec_edgar_normalize_steps, 43.73),
+        ("sec-edgar", sec_edgar_normalize_steps, 334.90),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
         ("svg", svgfind_creativecommons_normalize_steps, 8.95),
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
