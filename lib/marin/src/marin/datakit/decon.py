@@ -22,6 +22,11 @@ to specific eval records.
 Output is co-partitioned with the source: one ``part-NNNNN-of-MMMMM.parquet``
 per input partition, preserving the source filenames so consolidate can
 sorted-merge-join without a shuffle.
+
+The bloom can also be built once and shared across many corpus marks via
+:func:`build_eval_bloom` (single-source) and :func:`merge_eval_blooms`
+(combine pre-built per-eval blooms). Pass the resulting directory to
+:func:`decon_to_parquet` as ``prebuilt_bloom_dir`` to skip the inline build.
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ from typing import Any
 
 import dupekit
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray import ResourceConfig
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
@@ -84,6 +90,55 @@ class DeconAttributes(BaseModel):
     num_partitions: int
     eval_hash_index_path: str
     counters: dict[str, int]
+
+
+_BLOOM_FILENAME = "filter.bin"
+_INDEX_FILENAME = "eval_hash_index.parquet"
+
+
+def bloom_paths(bloom_dir: str) -> tuple[str, str]:
+    """Return ``(bloom_path, eval_hash_index_path)`` for a bloom directory.
+
+    A "bloom directory" is any directory under which a bloom + sidecar live at
+    ``<bloom_dir>/_bloom/filter.bin`` and ``<bloom_dir>/_bloom/eval_hash_index.parquet``.
+    This is the layout written by :func:`build_eval_bloom`,
+    :func:`merge_eval_blooms`, and the inline-build path of
+    :func:`decon_to_parquet`.
+    """
+    return (
+        os.path.join(bloom_dir, "_bloom", _BLOOM_FILENAME),
+        os.path.join(bloom_dir, "_bloom", _INDEX_FILENAME),
+    )
+
+
+class EvalBloom(BaseModel):
+    """Artifact describing a pre-built eval bloom filter + hash index sidecar.
+
+    Persisted as the step's ``.artifact`` so downstream consumers can locate
+    the bloom without re-running the build. Pass the producing step's
+    ``output_path`` to :func:`decon_to_parquet`'s ``prebuilt_bloom_dir`` to
+    skip the inline build.
+
+    Attributes:
+        bloom_dir: Directory containing ``_bloom/filter.bin`` and
+            ``_bloom/eval_hash_index.parquet``. Equal to the producing step's
+            ``output_path``.
+        bloom_path, eval_hash_index_path: Resolved leaf paths (redundant with
+            ``bloom_dir`` + the layout convention; included for convenience).
+        estimated_doc_count, false_positive_rate: Sizing parameters the bloom
+            was built with. Per-eval blooms intended for merging must share
+            both values — ``dupekit.Bloom.update`` requires identical sizing.
+        n_eval_records: Total eval records that contributed at least one
+            feature. For a merged bloom, the sum across inputs.
+    """
+
+    version: str = "v1"
+    bloom_dir: str
+    bloom_path: str
+    eval_hash_index_path: str
+    estimated_doc_count: int
+    false_positive_rate: float
+    n_eval_records: int = 0
 
 
 def _bloom_hash(x: str) -> int:
@@ -208,7 +263,7 @@ def _build_filter(
     ngram: NGramConfig | None,
     estimated_doc_count: int,
     false_positive_rate: float,
-) -> None:
+) -> int:
     """Build a bloom filter and a streaming hash → eval_id sidecar.
 
     The hash index is written incrementally via :func:`write_parquet_file` so
@@ -270,6 +325,7 @@ def _build_filter(
         bloom_path,
         index_path,
     )
+    return stats["n_records"]
 
 
 _OUTPUT_SCHEMA = pa.schema(
@@ -338,7 +394,8 @@ def _make_marker(
 def decon_to_parquet(
     *,
     normalized_data: NormalizedData,
-    eval_data_sources: str | list[str],
+    eval_data_sources: str | list[str] | None = None,
+    prebuilt_bloom_dir: str | None = None,
     output_path: str,
     text_field: str = "text",
     ngram: NGramConfig | None = None,
@@ -347,7 +404,16 @@ def decon_to_parquet(
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> DeconAttributes:
-    """Mark records in *normalized_data* that overlap with text in *eval_data_sources*.
+    """Mark records in *normalized_data* that overlap with eval text.
+
+    Provide exactly one of:
+
+    * ``eval_data_sources`` — paths to eval data. Builds the bloom inline
+      under ``<output_path>/_bloom/`` (single-corpus pattern).
+    * ``prebuilt_bloom_dir`` — directory produced by :func:`build_eval_bloom`
+      or :func:`merge_eval_blooms`. Skips the build stage; the same bloom can
+      be reused by many corpus marks (multi-corpus pattern, used by
+      ``experiments/decontamination/all_sources_decon.py``).
 
     Args:
         normalized_data: Upstream :class:`NormalizedData` artifact. Reads from
@@ -363,6 +429,13 @@ def decon_to_parquet(
             attribution ``eval_id`` is ``record["id"]`` when present, else
             ``f"{full_path}::{idx}"`` (full path keeps fallback IDs unique across
             nested or multi-source eval directories that share file basenames).
+            Mutually exclusive with ``prebuilt_bloom_dir``.
+        prebuilt_bloom_dir: Directory containing ``_bloom/filter.bin`` and
+            ``_bloom/eval_hash_index.parquet`` to reuse instead of building.
+            Mutually exclusive with ``eval_data_sources``. ``ngram``,
+            ``estimated_doc_count``, ``false_positive_rate`` are ignored for
+            the bloom but still drive the mark stage (``ngram`` must match
+            whatever was used at build time).
         output_path: Directory for co-partitioned Parquet attributes. One
             output file is written per input partition, preserving filenames.
         text_field: Text column name in both input and eval records.
@@ -371,7 +444,8 @@ def decon_to_parquet(
             contaminated; exact-paragraph mode records any non-zero match.
         estimated_doc_count, false_positive_rate: Bloom sizing parameters; size
             for expected total *ngram* count across the eval suite (not record
-            count). Defaults handle ~1M unique ngrams cleanly.
+            count). Defaults handle ~1M unique ngrams cleanly. Ignored when
+            ``prebuilt_bloom_dir`` is set.
         worker_resources: Per-shard resource request for the marking pipeline.
             Defaults to 2 CPU / 4GB RAM.
         max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
@@ -379,9 +453,8 @@ def decon_to_parquet(
     Returns:
         :class:`DeconAttributes` describing the output dataset and counters.
     """
-    eval_paths = [eval_data_sources] if isinstance(eval_data_sources, str) else list(eval_data_sources)
-    if not eval_paths:
-        raise ValueError("eval_data_sources must be non-empty")
+    if (eval_data_sources is None) == (prebuilt_bloom_dir is None):
+        raise ValueError("provide exactly one of eval_data_sources or prebuilt_bloom_dir")
 
     input_path = normalized_data.main_output_dir
     files = _discover_parquet_partitions(input_path)
@@ -390,17 +463,23 @@ def decon_to_parquet(
     num_partitions = len(files)
     logger.info("decon: %s → %s, %d input partitions", input_path, output_path, num_partitions)
 
-    bloom_path = os.path.join(output_path, "_bloom", "filter.bin")
-    index_path = os.path.join(output_path, "_bloom", "eval_hash_index.parquet")
-    _build_filter(
-        eval_paths=eval_paths,
-        bloom_path=bloom_path,
-        index_path=index_path,
-        text_field=text_field,
-        ngram=ngram,
-        estimated_doc_count=estimated_doc_count,
-        false_positive_rate=false_positive_rate,
-    )
+    if prebuilt_bloom_dir is not None:
+        bloom_path, index_path = bloom_paths(prebuilt_bloom_dir)
+        logger.info("decon: reusing prebuilt bloom at %s", bloom_path)
+    else:
+        eval_paths = [eval_data_sources] if isinstance(eval_data_sources, str) else list(eval_data_sources)  # type: ignore[arg-type]
+        if not eval_paths:
+            raise ValueError("eval_data_sources must be non-empty")
+        bloom_path, index_path = bloom_paths(output_path)
+        _build_filter(
+            eval_paths=eval_paths,
+            bloom_path=bloom_path,
+            index_path=index_path,
+            text_field=text_field,
+            ngram=ngram,
+            estimated_doc_count=estimated_doc_count,
+            false_positive_rate=false_positive_rate,
+        )
 
     pipeline = (
         Dataset.from_list(files)
@@ -423,11 +502,238 @@ def decon_to_parquet(
     )
 
 
+def build_eval_bloom(
+    *,
+    eval_data_sources: str | list[str],
+    output_path: str,
+    text_field: str = "text",
+    ngram: NGramConfig | None = None,
+    estimated_doc_count: int = 1_000_000,
+    false_positive_rate: float = 1e-9,
+) -> EvalBloom:
+    """Build a reusable bloom + hash-index sidecar from one or more eval sources.
+
+    Writes ``<output_path>/_bloom/filter.bin`` and
+    ``<output_path>/_bloom/eval_hash_index.parquet``. The resulting directory
+    can be passed to :func:`decon_to_parquet`'s ``prebuilt_bloom_dir`` to scan
+    many corpora against the same bloom without re-doing this work.
+
+    For multi-eval suites where you want to cache per-eval results
+    independently (so adding one new eval invalidates only one build), call
+    this once per eval and then :func:`merge_eval_blooms` to combine.
+
+    Args:
+        eval_data_sources: One eval source or a list. Walked recursively for
+            zephyr-readable files; sidecar/hidden files skipped. ``eval_id``
+            attribution comes from the record's ``id`` field, falling back to
+            ``"{full_path}::{record_idx}"``.
+        output_path: Directory to write the bloom + sidecar under.
+        text_field: Text column name in eval records.
+        ngram: Word-ngram matching config. ``None`` = whole-paragraph hashing.
+        estimated_doc_count, false_positive_rate: Bloom sizing parameters. Per-eval
+            blooms intended for :func:`merge_eval_blooms` MUST share both
+            values across all per-eval builds — ``dupekit.Bloom.update``
+            requires identical sizing.
+
+    Returns:
+        :class:`EvalBloom` artifact pointing at the produced files.
+    """
+    eval_paths = [eval_data_sources] if isinstance(eval_data_sources, str) else list(eval_data_sources)
+    if not eval_paths:
+        raise ValueError("eval_data_sources must be non-empty")
+
+    bloom_path, index_path = bloom_paths(output_path)
+    n_records = _build_filter(
+        eval_paths=eval_paths,
+        bloom_path=bloom_path,
+        index_path=index_path,
+        text_field=text_field,
+        ngram=ngram,
+        estimated_doc_count=estimated_doc_count,
+        false_positive_rate=false_positive_rate,
+    )
+    return EvalBloom(
+        bloom_dir=output_path,
+        bloom_path=bloom_path,
+        eval_hash_index_path=index_path,
+        estimated_doc_count=estimated_doc_count,
+        false_positive_rate=false_positive_rate,
+        n_eval_records=n_records,
+    )
+
+
+def merge_eval_blooms(
+    *,
+    per_eval_bloom_dirs: list[str],
+    output_path: str,
+) -> EvalBloom:
+    """Merge N pre-built per-eval blooms into one combined bloom + index.
+
+    Bit-OR-merges the bloom filters via :meth:`dupekit.Bloom.update` (which
+    requires identical sizing across inputs) and concatenates the per-eval
+    ``eval_hash_index.parquet`` sidecars. Output layout matches
+    :func:`build_eval_bloom`.
+
+    Args:
+        per_eval_bloom_dirs: Directories produced by :func:`build_eval_bloom`,
+            each containing ``_bloom/filter.bin`` and
+            ``_bloom/eval_hash_index.parquet``.
+        output_path: Directory to write the combined bloom + sidecar under.
+
+    Returns:
+        :class:`EvalBloom` artifact pointing at the merged files.
+    """
+    if not per_eval_bloom_dirs:
+        raise ValueError("per_eval_bloom_dirs must be non-empty")
+
+    out_bloom_path, out_index_path = bloom_paths(output_path)
+    fs_bf, bp = url_to_fs(out_bloom_path)
+    out_dir = os.path.dirname(bp)
+    if out_dir:
+        fs_bf.makedirs(out_dir, exist_ok=True)
+
+    # Bit-OR merge of input blooms (dupekit raises on size mismatch).
+    merged: dupekit.Bloom | None = None
+    for d in per_eval_bloom_dirs:
+        src_bloom, _ = bloom_paths(d)
+        fs, p = url_to_fs(src_bloom)
+        with fs.open(p, "rb") as f:
+            bf = dupekit.Bloom.load_bytes(f.read())
+        if merged is None:
+            merged = bf
+        else:
+            merged.update(bf)
+    assert merged is not None  # non-empty list checked above
+    with fs_bf.open(bp, "wb") as f:
+        f.write(merged.save_bytes())
+
+    # Concatenate per-eval hash-index parquets, streaming row-by-row.
+    src_indexes = [bloom_paths(d)[1] for d in per_eval_bloom_dirs]
+
+    def emit_rows() -> Iterator[dict[str, Any]]:
+        for src in src_indexes:
+            fs_idx, ip = url_to_fs(src)
+            table = pq.read_table(ip, filesystem=fs_idx)
+            yield from table.to_pylist()
+
+    write_parquet_file(emit_rows(), output_path=out_index_path, schema=_INDEX_SCHEMA)
+
+    # Roll up sizing + record counts from upstream artifacts (best-effort —
+    # informational; merge doesn't actually need these values to succeed).
+    estimated = 0
+    fpr = 0.0
+    n_records = 0
+    for d in per_eval_bloom_dirs:
+        try:
+            up: EvalBloom = Artifact.from_path(d, EvalBloom)
+        except FileNotFoundError:
+            continue
+        if estimated == 0:
+            estimated = up.estimated_doc_count
+            fpr = up.false_positive_rate
+        n_records += up.n_eval_records
+
+    logger.info("decon: merged %d per-eval blooms → %s", len(per_eval_bloom_dirs), output_path)
+    return EvalBloom(
+        bloom_dir=output_path,
+        bloom_path=out_bloom_path,
+        eval_hash_index_path=out_index_path,
+        estimated_doc_count=estimated,
+        false_positive_rate=fpr,
+        n_eval_records=n_records,
+    )
+
+
+def build_eval_bloom_step(
+    *,
+    name: str,
+    eval_data_sources: list[str | StepSpec],
+    text_field: str = "text",
+    ngram_length: int | None = 13,
+    overlap_threshold: float = 0.5,
+    estimated_doc_count: int = 1_000_000,
+    false_positive_rate: float = 1e-9,
+    output_path_prefix: str | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """StepSpec factory for :func:`build_eval_bloom`.
+
+    Args:
+        name: Step name (e.g. ``"datakit/bloom/mmlu"``).
+        eval_data_sources: Mix of raw paths (str) and upstream StepSpecs. Raw
+            paths go into ``hash_attrs`` (so changing them invalidates the
+            cache); StepSpec entries become DAG deps.
+        text_field, ngram_length, overlap_threshold: ngram config.
+        estimated_doc_count, false_positive_rate: bloom sizing.
+        output_path_prefix, override_output_path: StepSpec routing.
+    """
+    raw_paths: list[str] = []
+    step_deps: list[StepSpec] = []
+    for s in eval_data_sources:
+        if isinstance(s, StepSpec):
+            step_deps.append(s)
+            raw_paths.append(s.output_path)
+        else:
+            raw_paths.append(s)
+
+    ngram: NGramConfig | None = (
+        NGramConfig(ngram_length=ngram_length, overlap_threshold=overlap_threshold) if ngram_length is not None else None
+    )
+
+    hash_attrs: dict[str, Any] = {
+        "text_field": text_field,
+        "ngram_length": ngram_length,
+        "overlap_threshold": overlap_threshold,
+        "estimated_doc_count": estimated_doc_count,
+        "false_positive_rate": false_positive_rate,
+        # Raw paths aren't deps — fingerprint them so swapping a path
+        # invalidates the cache.
+        "eval_data_sources": tuple(sorted(s for s in raw_paths if s not in (d.output_path for d in step_deps))),
+    }
+
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: build_eval_bloom(
+            eval_data_sources=raw_paths,
+            output_path=output_path,
+            text_field=text_field,
+            ngram=ngram,
+            estimated_doc_count=estimated_doc_count,
+            false_positive_rate=false_positive_rate,
+        ),
+        deps=step_deps,
+        hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
+        override_output_path=override_output_path,
+    )
+
+
+def merge_eval_blooms_step(
+    *,
+    name: str,
+    per_eval_bloom_steps: list[StepSpec],
+    output_path_prefix: str | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """StepSpec factory for :func:`merge_eval_blooms`."""
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: merge_eval_blooms(
+            per_eval_bloom_dirs=[s.output_path for s in per_eval_bloom_steps],
+            output_path=output_path,
+        ),
+        deps=list(per_eval_bloom_steps),
+        output_path_prefix=output_path_prefix,
+        override_output_path=override_output_path,
+    )
+
+
 def decon_step(
     *,
     name: str,
     normalized: StepSpec,
-    eval_data_sources: list[StepSpec],
+    eval_data_sources: list[StepSpec] | None = None,
+    prebuilt_bloom: StepSpec | None = None,
     text_field: str = "text",
     ngram_length: int | None = 13,
     overlap_threshold: float = 0.5,
@@ -438,7 +744,12 @@ def decon_step(
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
-    """Create a StepSpec that decontaminates a normalized dataset against eval sources.
+    """Create a StepSpec that decontaminates a normalized dataset.
+
+    Provide exactly one of ``eval_data_sources`` (build bloom inline,
+    single-corpus pattern) or ``prebuilt_bloom`` (reuse a shared bloom
+    produced by :func:`build_eval_bloom_step` / :func:`merge_eval_blooms_step`,
+    multi-corpus pattern).
 
     Args:
         name: Step name (e.g. ``"fineweb/decon"``).
@@ -446,15 +757,22 @@ def decon_step(
         eval_data_sources: List of eval source steps (any zephyr-readable
             format) to build the bloom filter from. All eval sources are
             merged into one bloom; per-eval attribution is preserved in the
-            ``eval_hash_index`` sidecar.
+            ``eval_hash_index`` sidecar. Mutually exclusive with ``prebuilt_bloom``.
+        prebuilt_bloom: Pre-built bloom StepSpec (output of
+            :func:`build_eval_bloom_step` or :func:`merge_eval_blooms_step`).
+            Mutually exclusive with ``eval_data_sources``.
         text_field: Text column name in both input and eval records.
         ngram_length: Word ngram length. ``None`` = exact whole-paragraph match.
         overlap_threshold: Per-paragraph overlap fraction needed to mark a record
             contaminated. Ignored in exact-paragraph mode.
         estimated_doc_count, false_positive_rate: Bloom sizing parameters.
+            Ignored when ``prebuilt_bloom`` is set.
         worker_resources, max_workers: Zephyr execution knobs.
         output_path_prefix, override_output_path: StepSpec routing.
     """
+    if (eval_data_sources is None) == (prebuilt_bloom is None):
+        raise ValueError("provide exactly one of eval_data_sources or prebuilt_bloom")
+
     ngram: NGramConfig | None = (
         NGramConfig(ngram_length=ngram_length, overlap_threshold=overlap_threshold) if ngram_length is not None else None
     )
@@ -467,11 +785,32 @@ def decon_step(
         "false_positive_rate": false_positive_rate,
     }
 
+    if prebuilt_bloom is not None:
+        bloom_step = prebuilt_bloom
+        return StepSpec(
+            name=name,
+            fn=lambda output_path: decon_to_parquet(
+                normalized_data=Artifact.from_path(normalized, NormalizedData),
+                prebuilt_bloom_dir=bloom_step.output_path,
+                output_path=output_path,
+                text_field=text_field,
+                ngram=ngram,
+                worker_resources=worker_resources,
+                max_workers=max_workers,
+            ),
+            deps=[normalized, bloom_step],
+            hash_attrs=hash_attrs,
+            output_path_prefix=output_path_prefix,
+            override_output_path=override_output_path,
+        )
+
+    assert eval_data_sources is not None  # mutex check above
+    eval_steps = list(eval_data_sources)
     return StepSpec(
         name=name,
         fn=lambda output_path: decon_to_parquet(
             normalized_data=Artifact.from_path(normalized, NormalizedData),
-            eval_data_sources=[s.output_path for s in eval_data_sources],
+            eval_data_sources=[s.output_path for s in eval_steps],
             output_path=output_path,
             text_field=text_field,
             ngram=ngram,
@@ -480,7 +819,7 @@ def decon_step(
             worker_resources=worker_resources,
             max_workers=max_workers,
         ),
-        deps=[normalized, *eval_data_sources],
+        deps=[normalized, *eval_steps],
         hash_attrs=hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
