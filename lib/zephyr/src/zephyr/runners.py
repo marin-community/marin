@@ -16,10 +16,6 @@ Two implementations ship here:
   worker actor. Slower (~700ms of cold-import overhead per task).
 
 Pick the runner pipeline-wide via ``ZephyrContext(stage_runner_factory=...)``.
-The factory is invoked once per worker actor; each worker holds its own
-runner instance. The runner's ``live_counters()`` is polled by the worker's
-heartbeat thread, so per-runner state (counter file pointer, in-memory ctx)
-stays encapsulated.
 """
 
 from __future__ import annotations
@@ -87,12 +83,13 @@ class _InProcessWorkerContext:
     of the task.
     """
 
-    def __init__(self, chunk_prefix: str, execution_id: str):
+    def __init__(self, chunk_prefix: str, execution_id: str, num_workers: int = 1):
         self._chunk_prefix = chunk_prefix
         self._execution_id = execution_id
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, int] = {}
         self._generation = 0
+        self._num_workers = num_workers
 
     def get_shared(self, name: str) -> Any:
         if name not in self._shared_data_cache:
@@ -108,6 +105,10 @@ class _InProcessWorkerContext:
     def get_counter_snapshot(self) -> CounterSnapshot:
         self._generation += 1
         return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
+
+    @property
+    def num_workers(self) -> int:
+        return self._num_workers
 
 
 _T = TypeVar("_T")
@@ -175,7 +176,8 @@ class InlineRunner:
     here, and tests run dramatically faster than under ``SubprocessRunner``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, num_workers: int = 1) -> None:
+        self._num_workers = num_workers
         self._ctx: _InProcessWorkerContext | None = None
 
     def execute(
@@ -184,14 +186,14 @@ class InlineRunner:
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, int]]:
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id)
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, num_workers=self._num_workers)
         self._ctx = ctx
-        token = _worker_ctx_var.set(ctx)
+        worker_token = _worker_ctx_var.set(ctx)
         try:
             result = _run_stage_with_ctx(task, chunk_prefix, execution_id, ctx)
             return result, dict(ctx._counters)
         finally:
-            _worker_ctx_var.reset(token)
+            _worker_ctx_var.reset(worker_token)
             self._ctx = None
 
     def live_counters(self) -> dict[str, int]:
@@ -263,9 +265,15 @@ class SubprocessRunner:
     ``returncode != 0`` task errors. Costs ~700ms per task in cold Python
     imports plus pickle round-trip; reserve for stages with leak-prone or
     crash-prone user code.
+
+    Args:
+        num_workers: Total number of concurrent subprocess workers sharing this
+            actor's RAM. Passed to child processes via ``ZEPHYR_NUM_WORKERS_PER_ACTOR``
+            so each child scales its scatter-write buffer budget proportionally.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, num_workers: int = 1) -> None:
+        self._num_workers = num_workers
         self._counter_file: str | None = None
 
     def execute(
@@ -290,6 +298,7 @@ class SubprocessRunner:
                 [sys.executable, "-u", "-m", "zephyr.runners", task_file, result_file],
                 stdout=sys.stdout,
                 stderr=sys.stderr,
+                env={**os.environ, "ZEPHYR_NUM_WORKERS_PER_ACTOR": str(self._num_workers)},
             )
 
             if proc.returncode != 0:
@@ -355,6 +364,8 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
     # stderr instead of a bare ``returncode < 0``.
     configure_logging(level=logging.INFO)
 
+    num_workers = int(os.environ.get("ZEPHYR_NUM_WORKERS_PER_ACTOR", "1"))
+
     counter_file = f"{result_file}.counters"
     stop_event = threading.Event()
     flusher: threading.Thread | None = None
@@ -365,7 +376,7 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
         with open(task_file, "rb") as f:
             task, chunk_prefix, execution_id = cloudpickle.load(f)
 
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id)
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, num_workers=num_workers)
         _worker_ctx_var.set(ctx)
 
         shard_monotonic_start = time.monotonic()
