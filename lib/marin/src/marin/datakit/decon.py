@@ -777,12 +777,14 @@ def decon_step(
         NGramConfig(ngram_length=ngram_length, overlap_threshold=overlap_threshold) if ngram_length is not None else None
     )
 
+    # Mark stage hash_attrs: only what actually affects per-record marking
+    # output. Bloom sizing is hashed into the bloom-producing step's
+    # output_path (a dep below), so it propagates without polluting the
+    # mark cache.
     hash_attrs: dict[str, Any] = {
         "text_field": text_field,
         "ngram_length": ngram_length,
         "overlap_threshold": overlap_threshold,
-        "estimated_doc_count": estimated_doc_count,
-        "false_positive_rate": false_positive_rate,
     }
 
     if prebuilt_bloom is not None:
@@ -806,6 +808,13 @@ def decon_step(
 
     assert eval_data_sources is not None  # mutex check above
     eval_steps = list(eval_data_sources)
+    # Inline-build path adds bloom sizing to hash_attrs since this step
+    # owns both the build and the mark.
+    inline_hash_attrs = {
+        **hash_attrs,
+        "estimated_doc_count": estimated_doc_count,
+        "false_positive_rate": false_positive_rate,
+    }
     return StepSpec(
         name=name,
         fn=lambda output_path: decon_to_parquet(
@@ -820,7 +829,7 @@ def decon_step(
             max_workers=max_workers,
         ),
         deps=[normalized, *eval_steps],
-        hash_attrs=hash_attrs,
+        hash_attrs=inline_hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )

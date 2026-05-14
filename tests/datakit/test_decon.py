@@ -881,7 +881,7 @@ def test_merge_eval_blooms_rejects_size_mismatch(tmp_path: Path):
         estimated_doc_count=100_000,  # different size -> dupekit will reject
         false_positive_rate=1e-9,
     )
-    with pytest.raises(Exception, match=""):
+    with pytest.raises(ValueError, match="size and max false positive rate"):
         merge_eval_blooms(
             per_eval_bloom_dirs=[str(tmp_path / "bloom_a"), str(tmp_path / "bloom_b")],
             output_path=str(tmp_path / "merged"),
