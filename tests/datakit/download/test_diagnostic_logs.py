@@ -363,7 +363,6 @@ def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path
         str(materialized_dir),
         str(partition_dir),
         partition=DiagnosticPartition.TRAIN,
-        num_shards=1,
         max_workers=1,
     )
 
@@ -389,7 +388,6 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
         source_path=str(input_dir),
         max_members=2,
         num_materialize_shards=1,
-        num_partition_shards=1,
         output_path_prefix=str(tmp_path / "steps"),
     )
     StepRunner().run(list(steps))
