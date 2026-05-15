@@ -1091,7 +1091,7 @@ class ControllerConfig:
     remote_state_dir: str = ""
     """Remote URI for controller checkpoints and worker profiles (e.g. gs://bucket/iris/state)."""
 
-    scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
+    scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
     """Minimum scheduling loop interval (used when cluster is active)."""
 
     scheduler_max_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
