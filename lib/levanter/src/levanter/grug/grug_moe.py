@@ -20,6 +20,7 @@ from collections.abc import Callable
 from functools import partial
 from typing import Literal, TypeAlias, cast, get_args
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call, tree_checkpoint_name
@@ -34,8 +35,27 @@ _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
 
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
-MoeImplementation: TypeAlias = Literal["ring", "ragged_all_to_all"]
+MoeImplementation: TypeAlias = Literal[
+    "ring",
+    "ragged_all_to_all",
+    "scatter",
+    "sonic_xla",
+    "sonic_xla_interleaved_w13",
+    "sonic_xla_interleaved_w13_custom_vjp_down",
+]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
+_EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all")
+_LOCAL_MOE_IMPLEMENTATIONS = (
+    "scatter",
+    "sonic_xla",
+    "sonic_xla_interleaved_w13",
+    "sonic_xla_interleaved_w13_custom_vjp_down",
+)
+_INTERLEAVED_W13_MOE_IMPLEMENTATIONS = (
+    "sonic_xla_interleaved_w13",
+    "sonic_xla_interleaved_w13_custom_vjp_down",
+)
+_CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved_w13_custom_vjp_down",)
 
 
 def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
@@ -66,17 +86,136 @@ def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
     return P(("data",))
 
 
-def resolve_moe_implementation(
-    implementation: MoeImplementation | str | None,
-    mesh: jax.sharding.AbstractMesh | None,
-) -> MoeImplementation:
-    if implementation is not None:
-        if implementation not in _VALID_MOE_IMPLEMENTATIONS:
-            valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
-            raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
-        return cast(MoeImplementation, implementation)
+def _reshard_for_init(x: jax.Array, spec: P) -> jax.Array:
+    mesh = _current_mesh()
+    if mesh is None or mesh.empty:
+        return x
+    return reshard(x, NamedSharding(mesh, spec))
 
-    return "ring"
+
+def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
+    if implementation is None:
+        return "ring"
+    if implementation not in _VALID_MOE_IMPLEMENTATIONS:
+        valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
+        raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
+    return cast(MoeImplementation, implementation)
+
+
+def moe_implementation_uses_interleaved_w13(
+    implementation: MoeImplementation | str | None,
+) -> bool:
+    return resolve_moe_implementation(implementation) in _INTERLEAVED_W13_MOE_IMPLEMENTATIONS
+
+
+def interleave_moe_w13(w_gate: jax.Array, w_up: jax.Array) -> jax.Array:
+    """Pack concat-style gate/up expert weights into Sonic's interleaved GLU layout."""
+    if w_gate.shape != w_up.shape:
+        raise ValueError(f"w_gate and w_up must have the same shape, got {w_gate.shape} vs {w_up.shape}")
+    return jnp.stack((w_gate, w_up), axis=-1).reshape(*w_gate.shape[:-1], 2 * w_gate.shape[-1])
+
+
+def split_moe_w13_output(
+    w13_out: jax.Array, *, intermediate_dim: int, interleaved: bool
+) -> tuple[jax.Array, jax.Array]:
+    expected = 2 * intermediate_dim
+    if w13_out.shape[-1] != expected:
+        raise ValueError(f"w13 output last dimension must be {expected}, got shape={w13_out.shape}")
+    if interleaved:
+        return w13_out[..., 0::2], w13_out[..., 1::2]
+    gate, up = jnp.split(w13_out, [intermediate_dim], axis=-1)
+    return gate, up
+
+
+def _init_weight(key: jax.Array, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
+    return std * jax.random.truncated_normal(key, -3, 3, shape)
+
+
+class MoEExpertMlp(eqx.Module):
+    """Expert MLP weights plus backend-specific W13 layout for routed MoE calls."""
+
+    w_gate_up: jax.Array
+    w_down: jax.Array
+    implementation: MoeImplementation = eqx.field(static=True)
+    activation: MoeActivation = eqx.field(static=True)
+    capacity_factor: float = eqx.field(static=True)
+
+    @staticmethod
+    def init(
+        *,
+        num_experts: int,
+        hidden_dim: int,
+        intermediate_dim: int,
+        initializer_std: float,
+        key: jax.Array,
+        implementation: MoeImplementation | str | None = None,
+        activation: MoeActivation = ActivationFunctionEnum.silu,
+        capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+    ) -> "MoEExpertMlp":
+        resolved_implementation = resolve_moe_implementation(implementation)
+        k_gate, k_up, k_down = jax.random.split(key, 3)
+        w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
+        w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
+        if moe_implementation_uses_interleaved_w13(resolved_implementation):
+            w_gate_up = interleave_moe_w13(w_gate, w_up)
+        else:
+            w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
+
+        return MoEExpertMlp(
+            w_gate_up=_reshard_for_init(w_gate_up, P("expert", "data", "model")),
+            w_down=_reshard_for_init(
+                _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
+                P("expert", "model", "data"),
+            ),
+            implementation=resolved_implementation,
+            activation=activation,
+            capacity_factor=capacity_factor,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "T D"],
+        selected_experts: Int[Array, "T K"],
+        combine_weights: Float[Array, "T K"],
+        *,
+        mesh: jax.sharding.AbstractMesh | None = None,
+        report_capacity_overflow: bool = False,
+    ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
+        return moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            self.w_gate_up,
+            self.w_down,
+            activation=self.activation,
+            implementation=self.implementation,
+            mesh=mesh,
+            capacity_factor=self.capacity_factor,
+            report_capacity_overflow=report_capacity_overflow,
+        )
+
+
+def _custom_vjp_interleaved_down_gather_sum(
+    w13_out_interleaved: jax.Array,
+    combine_weights: jax.Array,
+    moe_w2: jax.Array,
+    token_ids_sort: jax.Array,
+    sorted_assignment_ids: jax.Array,
+    dispatch_positions: jax.Array,
+    group_sizes: jax.Array,
+) -> jax.Array:
+    from levanter.grug.custom_vjp_moe import custom_vjp_interleaved_down_gather_sum
+
+    return custom_vjp_interleaved_down_gather_sum(
+        w13_out_interleaved,
+        combine_weights,
+        moe_w2,
+        token_ids_sort,
+        sorted_assignment_ids,
+        dispatch_positions,
+        group_sizes,
+    )
 
 
 @named_call
@@ -108,7 +247,55 @@ def _prepare_moe_dispatch(
     return x_sort, w_sort, token_ids_sort, group_sizes
 
 
-def _moe_mlp_local(
+@named_call
+def _prepare_moe_dispatch_indices_with_assignment_ids(
+    selected_experts: Int[Array, "T K"],
+    *,
+    num_experts: int,
+) -> tuple[
+    Int[Array, "TK"],
+    Int[Array, "T K"],
+    Int[Array, "E"],
+    Int[Array, "TK"],
+]:
+    """Prepare expert-sorted token ids plus reverse positions without gathering x."""
+    tokens, topk = selected_experts.shape
+    assignments = tokens * topk
+    expert_ids = selected_experts.reshape(assignments)
+
+    sort_idx = jnp.argsort(expert_ids, axis=0)
+    assignment_ids = jnp.arange(assignments, dtype=jnp.int32)
+    sorted_assignment_ids = assignment_ids[sort_idx]
+    token_ids_sort = sorted_assignment_ids // topk
+
+    sorted_positions = jnp.arange(assignments, dtype=jnp.int32)
+    dispatch_positions = jnp.zeros((assignments,), dtype=jnp.int32).at[sort_idx].set(sorted_positions)
+    dispatch_positions = dispatch_positions.reshape(tokens, topk)
+
+    group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
+    return token_ids_sort, dispatch_positions, group_sizes, sorted_assignment_ids
+
+
+def _gather_sum_reference(
+    dispatch_output: Float[Array, "TK D"],
+    dispatch_positions: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+) -> Float[Array, "T D"]:
+    acc = jnp.zeros((dispatch_positions.shape[0], dispatch_output.shape[1]), dtype=dispatch_output.dtype)
+    weights = combine_weights.astype(dispatch_output.dtype)
+    for topk_index in range(dispatch_positions.shape[1]):
+        gathered = jnp.take(dispatch_output, dispatch_positions[:, topk_index], axis=0)
+        acc = (acc + (gathered * weights[:, topk_index, None]).astype(dispatch_output.dtype)).astype(
+            dispatch_output.dtype
+        )
+    return acc
+
+
+def _zero_dropped_assignments() -> Int[Array, ""]:
+    return jnp.array(0, dtype=jnp.int32)
+
+
+def _moe_mlp_local_scatter(
     x: Float[Array, "T D"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
@@ -118,7 +305,7 @@ def _moe_mlp_local(
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
 ) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
-    """Per-shard non-EP MoE FFN path with argsort routing + grouped matmul."""
+    """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
         x,
         selected_experts,
@@ -130,7 +317,7 @@ def _moe_mlp_local(
     with jax.named_scope("moe_up_down"):
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
         moe_dim = moe_w2.shape[1]
-        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         out_dispatch = tree_checkpoint_name(
             ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
             "grug_moe_dispatch_output",
@@ -138,7 +325,141 @@ def _moe_mlp_local(
 
     with jax.named_scope("scatter"):
         out = jnp.zeros_like(x).at[token_dispatch].add(out_dispatch * w_dispatch[:, None], mode="drop")
-    return out, jnp.array(0, dtype=jnp.int32)
+    return out, _zero_dropped_assignments()
+
+
+def _moe_mlp_local_sonic_xla(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    moe_w13: Float[Array, "E D I2"],
+    moe_w2: Float[Array, "E I D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+    """Local Sonic-style path with XLA gather-sum combine and concat W13 layout."""
+    token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
+        _prepare_moe_dispatch_indices_with_assignment_ids(
+            selected_experts,
+            num_experts=num_experts,
+        )
+    )
+    x_dispatch = tree_checkpoint_name(x[token_ids_sort], "grug_moe_dispatch_input")
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
+        moe_dim = moe_w2.shape[1]
+        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
+        out_dispatch = tree_checkpoint_name(
+            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
+            "grug_moe_dispatch_output",
+        )
+
+    with jax.named_scope("gather_sum"):
+        out = _gather_sum_reference(out_dispatch, dispatch_positions, combine_weights)
+    return out, _zero_dropped_assignments()
+
+
+def _moe_mlp_local_sonic_xla_interleaved_w13(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    moe_w13: Float[Array, "E D I2"],
+    moe_w2: Float[Array, "E I D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+    """Local Sonic-style path with XLA gather-sum combine and interleaved W13 layout."""
+    token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
+        _prepare_moe_dispatch_indices_with_assignment_ids(
+            selected_experts,
+            num_experts=num_experts,
+        )
+    )
+    x_dispatch = tree_checkpoint_name(x[token_ids_sort], "grug_moe_dispatch_input")
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
+        moe_dim = moe_w2.shape[1]
+        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=True)
+        out_dispatch = tree_checkpoint_name(
+            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
+            "grug_moe_dispatch_output",
+        )
+
+    with jax.named_scope("gather_sum"):
+        out = _gather_sum_reference(out_dispatch, dispatch_positions, combine_weights)
+    return out, _zero_dropped_assignments()
+
+
+def _moe_mlp_local_sonic_xla_interleaved_w13_custom_vjp_down(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    moe_w13: Float[Array, "E D I2"],
+    moe_w2: Float[Array, "E I D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+    """Local Sonic-style path with XLA W13 and a custom-VJP down/gather boundary."""
+    del activation_fn
+    token_ids_sort, dispatch_positions, group_sizes, sorted_assignment_ids = (
+        _prepare_moe_dispatch_indices_with_assignment_ids(
+            selected_experts,
+            num_experts=num_experts,
+        )
+    )
+    x_dispatch = tree_checkpoint_name(x[token_ids_sort], "grug_moe_dispatch_input")
+
+    with jax.named_scope("moe_up_down"):
+        w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), "grug_moe_expert_hidden")
+        out = tree_checkpoint_name(
+            _custom_vjp_interleaved_down_gather_sum(
+                w13_out,
+                combine_weights,
+                moe_w2,
+                token_ids_sort,
+                sorted_assignment_ids,
+                dispatch_positions,
+                group_sizes,
+            ),
+            "grug_moe_output",
+        )
+    return out, _zero_dropped_assignments()
+
+
+_MOE_LOCAL_FNS = {
+    "scatter": _moe_mlp_local_scatter,
+    "sonic_xla": _moe_mlp_local_sonic_xla,
+    "sonic_xla_interleaved_w13": _moe_mlp_local_sonic_xla_interleaved_w13,
+    "sonic_xla_interleaved_w13_custom_vjp_down": _moe_mlp_local_sonic_xla_interleaved_w13_custom_vjp_down,
+}
+
+
+def _moe_mlp_local(
+    x: Float[Array, "T D"],
+    selected_experts: Int[Array, "T K"],
+    combine_weights: Float[Array, "T K"],
+    moe_w13: Float[Array, "E D I2"],
+    moe_w2: Float[Array, "E I D"],
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    implementation: MoeImplementation,
+) -> tuple[Float[Array, "T D"], Int[Array, ""]]:
+    local_key = implementation if implementation in _LOCAL_MOE_IMPLEMENTATIONS else "scatter"
+    return _MOE_LOCAL_FNS[local_key](
+        x,
+        selected_experts,
+        combine_weights,
+        moe_w13,
+        moe_w2,
+        activation_fn=activation_fn,
+        num_experts=num_experts,
+    )
 
 
 def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
@@ -561,6 +882,10 @@ def moe_mlp(
     Set `report_capacity_overflow=True` to also return a scalar count of
     dropped expert assignments from EP capacity clipping.
     """
+    resolved_implementation = resolve_moe_implementation(implementation)
+    if resolved_implementation in _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS and activation != ActivationFunctionEnum.silu:
+        raise ValueError("sonic_xla_interleaved_w13_custom_vjp_down only supports silu/SwiGLU activation")
+
     if mesh is None:
         mesh = _current_mesh()
 
@@ -592,7 +917,6 @@ def moe_mlp(
 
     has_expert_axis = _mesh_has_axis(mesh, "expert")
     expert_axis_size = _mesh_axis_size(mesh, "expert")
-    resolved_implementation = resolve_moe_implementation(implementation, mesh)
 
     if mesh is None or mesh.empty:
         out, dropped = _moe_mlp_local(
@@ -603,6 +927,7 @@ def moe_mlp(
             w_down,
             activation_fn=activation_fn,
             num_experts=num_experts,
+            implementation=resolved_implementation,
         )
         if report_capacity_overflow:
             return out, dropped
@@ -611,6 +936,11 @@ def moe_mlp(
     batch_spec = _batch_spec_from_x(x, mesh)
 
     if has_expert_axis and expert_axis_size > 1:
+        if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
+            raise ValueError(
+                "Sonic local MoE implementations are only supported for the non-EP local Grug MoE path; "
+                f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
+            )
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
 
@@ -674,6 +1004,7 @@ def moe_mlp(
             _moe_mlp_local,
             activation_fn=activation_fn,
             num_experts=num_experts,
+            implementation=resolved_implementation,
         ),
         mesh=mesh,
         in_specs=(
@@ -694,7 +1025,11 @@ def moe_mlp(
 
 __all__ = [
     "MoeActivation",
+    "MoEExpertMlp",
     "MoeImplementation",
+    "interleave_moe_w13",
     "moe_mlp",
+    "moe_implementation_uses_interleaved_w13",
     "resolve_moe_implementation",
+    "split_moe_w13_output",
 ]

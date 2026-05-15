@@ -11,10 +11,12 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionS
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug.grug_moe import (
+    MoEExpertMlp,
     MoeImplementation,
     _compact_by_keep_mask,
     _expand_from_keep_mask,
     _shard_a2a_params,
+    interleave_moe_w13,
     moe_mlp,
 )
 from levanter.utils.activation import ActivationFunctionEnum
@@ -81,6 +83,16 @@ def _make_inputs(
     return x, selected_experts, combine_weights, w_up_gate, w_down
 
 
+def _interleave_concat_w13(w_up_gate: jax.Array) -> jax.Array:
+    intermediate = w_up_gate.shape[-1] // 2
+    return interleave_moe_w13(w_up_gate[..., :intermediate], w_up_gate[..., intermediate:])
+
+
+def _skip_small_ragged_dot_grad_on_tpu() -> None:
+    if any(device.platform == "tpu" for device in jax.devices()):
+        pytest.skip("small-shape ragged_dot backward lowers through TPU megablox block constraints")
+
+
 def test_moe_mlp_runs_without_ep_axis():
     mesh = _make_dense_mesh()
     tokens = max(8, len(jax.devices()) * 8)
@@ -134,6 +146,216 @@ def test_moe_mlp_default_matches_explicit_ring_without_ep_axis():
     y_default = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, mesh=None)
     y_ring = moe_mlp(x, selected_experts, combine_weights, w_up_gate, w_down, implementation="ring", mesh=None)
     np.testing.assert_allclose(np.asarray(y_default), np.asarray(y_ring), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_mlp_sonic_xla_matches_scatter_values_and_gradients():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(18),
+        tokens=20,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=4,
+        topk=2,
+    )
+
+    y_scatter = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        mesh=None,
+        implementation="scatter",
+    )
+    y_sonic = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        mesh=None,
+        implementation="sonic_xla",
+    )
+    np.testing.assert_allclose(np.asarray(y_sonic), np.asarray(y_scatter), rtol=1e-5, atol=1e-5)
+
+    def loss(implementation, x, combine_weights, w_up_gate, w_down):
+        y = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            mesh=None,
+            implementation=implementation,
+        )
+        return jnp.mean(y * y)
+
+    _skip_small_ragged_dot_grad_on_tpu()
+    scatter_grads = jax.grad(loss, argnums=(1, 2, 3, 4))("scatter", x, combine_weights, w_up_gate, w_down)
+    sonic_grads = jax.grad(loss, argnums=(1, 2, 3, 4))("sonic_xla", x, combine_weights, w_up_gate, w_down)
+
+    for sonic_grad, scatter_grad in zip(sonic_grads, scatter_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(sonic_grad), np.asarray(scatter_grad), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_mlp_sonic_xla_interleaved_w13_matches_concat_values_and_gradients():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(19),
+        tokens=20,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=4,
+        topk=2,
+    )
+
+    y_concat = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w_up_gate,
+        w_down,
+        mesh=None,
+        implementation="sonic_xla",
+    )
+    y_interleaved = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        _interleave_concat_w13(w_up_gate),
+        w_down,
+        mesh=None,
+        implementation="sonic_xla_interleaved_w13",
+    )
+    np.testing.assert_allclose(np.asarray(y_interleaved), np.asarray(y_concat), rtol=1e-5, atol=1e-5)
+
+    def concat_loss(x, combine_weights, w_up_gate, w_down):
+        y = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            mesh=None,
+            implementation="sonic_xla",
+        )
+        return jnp.mean(y * y)
+
+    def interleaved_loss(x, combine_weights, w_up_gate, w_down):
+        y = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            _interleave_concat_w13(w_up_gate),
+            w_down,
+            mesh=None,
+            implementation="sonic_xla_interleaved_w13",
+        )
+        return jnp.mean(y * y)
+
+    _skip_small_ragged_dot_grad_on_tpu()
+    concat_grads = jax.grad(concat_loss, argnums=(0, 1, 2, 3))(x, combine_weights, w_up_gate, w_down)
+    interleaved_grads = jax.grad(interleaved_loss, argnums=(0, 1, 2, 3))(x, combine_weights, w_up_gate, w_down)
+
+    for interleaved_grad, concat_grad in zip(interleaved_grads, concat_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(interleaved_grad), np.asarray(concat_grad), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_expert_mlp_init_hides_interleaved_w13_layout():
+    k_x, k_sel, k_logits, k_mlp = jax.random.split(jax.random.key(26), 4)
+    tokens = 20
+    hidden_dim = 16
+    intermediate_dim = 24
+    num_experts = 4
+    topk = 2
+
+    x = jax.random.normal(k_x, (tokens, hidden_dim), dtype=jnp.float32)
+    selected_experts = jax.random.randint(k_sel, (tokens, topk), 0, num_experts, dtype=jnp.int32)
+    combine_weights = jax.nn.softmax(jax.random.normal(k_logits, (tokens, topk), dtype=jnp.float32), axis=-1)
+
+    concat_mlp = MoEExpertMlp.init(
+        num_experts=num_experts,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        initializer_std=0.02,
+        key=k_mlp,
+        implementation="sonic_xla",
+    )
+    interleaved_mlp = MoEExpertMlp.init(
+        num_experts=num_experts,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        initializer_std=0.02,
+        key=k_mlp,
+        implementation="sonic_xla_interleaved_w13",
+    )
+
+    y_concat = concat_mlp(x, selected_experts, combine_weights, mesh=None)
+    y_interleaved = interleaved_mlp(x, selected_experts, combine_weights, mesh=None)
+
+    np.testing.assert_allclose(np.asarray(y_interleaved), np.asarray(y_concat), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_mlp_custom_vjp_down_matches_interleaved_values_and_gradients():
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(20),
+        tokens=20,
+        hidden_dim=16,
+        intermediate_dim=24,
+        num_experts=4,
+        topk=2,
+    )
+    w13_interleaved = _interleave_concat_w13(w_up_gate)
+
+    y_interleaved = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w13_interleaved,
+        w_down,
+        mesh=None,
+        implementation="sonic_xla_interleaved_w13",
+    )
+    y_custom_vjp = moe_mlp(
+        x,
+        selected_experts,
+        combine_weights,
+        w13_interleaved,
+        w_down,
+        mesh=None,
+        implementation="sonic_xla_interleaved_w13_custom_vjp_down",
+    )
+    np.testing.assert_allclose(np.asarray(y_custom_vjp), np.asarray(y_interleaved), rtol=1e-5, atol=1e-5)
+
+    def loss(implementation, x, combine_weights, w13_interleaved, w_down):
+        y = moe_mlp(
+            x,
+            selected_experts,
+            combine_weights,
+            w13_interleaved,
+            w_down,
+            mesh=None,
+            implementation=implementation,
+        )
+        return jnp.mean(y * y)
+
+    _skip_small_ragged_dot_grad_on_tpu()
+    interleaved_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(
+        "sonic_xla_interleaved_w13",
+        x,
+        combine_weights,
+        w13_interleaved,
+        w_down,
+    )
+    custom_vjp_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(
+        "sonic_xla_interleaved_w13_custom_vjp_down",
+        x,
+        combine_weights,
+        w13_interleaved,
+        w_down,
+    )
+
+    for custom_vjp_grad, interleaved_grad in zip(custom_vjp_grads, interleaved_grads, strict=True):
+        np.testing.assert_allclose(np.asarray(custom_vjp_grad), np.asarray(interleaved_grad), rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
