@@ -21,8 +21,15 @@ Usage:
     uv run python lib/iris/scripts/benchmark_controller.py --only polling
 """
 
+import dataclasses
+import math
+import os
 import shutil
+import signal
+import socket
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -36,21 +43,23 @@ import yaml
 from iris.cluster.controller import reads
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
-    _pending_tasks_with_jobs as _schedulable_tasks,
+    Controller,
+    ControllerConfig,
+    compute_demand_entries,
 )
 from iris.cluster.controller.controller import (
-    compute_demand_entries,
+    _pending_tasks_with_jobs as _schedulable_tasks,
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.db import Tx as _Tx
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.managed_thread import ThreadContainer
 
 # Branch removed Tx.fetchall/fetchone; restore for this benchmark script.
 if not hasattr(_Tx, "fetchall"):
     _Tx.fetchall = lambda self, stmt, params=None: self.execute(stmt, params).all()
     _Tx.fetchone = lambda self, stmt, params=None: self.execute(stmt, params).first()
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
-from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import SchedulableWorker, healthy_active_workers_with_attributes  # noqa: F401
 from iris.cluster.controller.scheduler import Scheduler
 from iris.cluster.controller.schema import (
@@ -64,7 +73,6 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.service import (
     USER_JOB_STATES,
-    _query_jobs,
     _tasks_for_listing,
     _worker_roster,
 )
@@ -76,7 +84,9 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.version import client_revision_date
 from rigging.timing import Timestamp
 from sqlalchemy import func, select, text, update
 
@@ -110,6 +120,361 @@ def _marin_remote_state_dir() -> str:
     with _MARIN_YAML.open() as fh:
         cfg = yaml.safe_load(fh)
     return cfg["storage"]["remote_state_dir"]
+
+
+# ---------------------------------------------------------------------------
+# RPC harness: real Controller(dry_run=True) + Connect sync client
+# ---------------------------------------------------------------------------
+
+
+class _FakeProvider:
+    """Minimal TaskProvider that satisfies Controller's wiring without making
+    real cluster calls. Mirrors tests/cluster/controller/conftest.py:FakeProvider.
+
+    Used in combination with ``dry_run=True`` so the polling loop's reconcile
+    short-circuits before it would ever call the provider — but we still need a
+    real provider object to satisfy the constructor's type contract.
+    """
+
+    def get_process_status(self, worker_id, address, request):
+        raise RuntimeError("fake provider")
+
+    def on_worker_failed(self, worker_id, address):
+        pass
+
+    def profile_task(self, address, request, timeout_ms):
+        raise RuntimeError("fake provider")
+
+    def ping_workers(self, workers):
+        return []
+
+    def reconcile_workers(self, plans):
+        # Same shape the test-suite FakeProvider returns. Only exercised if
+        # someone disables dry_run on the harness.
+        from iris.cluster.controller.worker_provider import WorkerReconcileResult
+
+        return [
+            WorkerReconcileResult(
+                worker_id=plan.worker_id,
+                start_response=worker_pb2.Worker.StartTasksResponse() if plan.start_tasks else None,
+                start_error=None,
+                poll_updates=[],
+                poll_error=None,
+            )
+            for plan in plans
+        ]
+
+    def close(self):
+        pass
+
+
+def _find_free_port() -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+class RpcHarness:
+    """In-process Controller(dry_run=True) + pooled sync Connect client.
+
+    A real Controller drives the dashboard ASGI mount (so RPCs go through the
+    production stack: HTTP, Connect, AsyncServiceAdapter, every interceptor).
+    ``dry_run=True`` gates every side-effecting write the scheduler/polling/
+    autoscaler loops would otherwise emit — so the cloned snapshot stays
+    stable across benchmark iterations, but RPCs still contend with the
+    scheduler's reads and the loop's CPU cost, matching production shape.
+
+    The harness reuses the caller's ``ControllerDB`` directly (no clone here).
+    Caller still owns the DB and is responsible for closing it.
+    """
+
+    def __init__(self, db: ControllerDB, tmp: Path) -> None:
+        """Boot the harness.
+
+        The scheduler / polling / ping / heartbeat loops run at their natural
+        ControllerConfig defaults (10s scheduler, 1s poll, 5s heartbeat) so
+        RPC numbers include the same background DB-read pressure prod sees.
+        Checkpoint writes are gated by ``dry_run=True``.
+        """
+        self.db = db
+        tmp.mkdir(parents=True, exist_ok=True)
+
+        # ``remote_state_dir`` is required by ControllerConfig even in dry_run
+        # (validated up front). file:// keeps the controller off the network.
+        port = _find_free_port()
+        config = ControllerConfig(
+            host="127.0.0.1",
+            port=port,
+            remote_state_dir=f"file://{tmp / 'remote'}",
+            local_state_dir=tmp / "local",
+            dry_run=True,
+            checkpoint_interval=None,
+        )
+
+        self._threads = ThreadContainer("bench-harness")
+        self.controller = Controller(
+            config=config,
+            provider=_FakeProvider(),
+            db=db,
+            threads=self._threads,
+        )
+        self.controller.start()
+        # Block until uvicorn has bound the listening socket.
+        deadline = time.time() + 10.0
+        while time.time() < deadline:
+            srv = self.controller._server
+            if srv is not None and srv.started:
+                break
+            time.sleep(0.02)
+        else:
+            raise RuntimeError("Controller server did not start within 10s")
+
+        self.url = self.controller.url
+        # ControllerServiceClientSync uses pyqwest's SyncClient under the hood,
+        # which already keeps connections alive per-instance. One client per
+        # caller thread is enough — no httpx pool needed.
+        self.client = ControllerServiceClientSync(address=self.url, timeout_ms=30000)
+
+        # Expose the live projections so benchmarks needing direct DB writes
+        # (reset() between iterations, sample inspection) reuse the same
+        # in-memory state as the running service.
+        self.transitions = self.controller._transitions
+        self.health = self.controller._health
+        self.endpoints = self.controller._endpoints
+        self.worker_attrs = self.controller._worker_attrs
+
+    def make_client(self) -> ControllerServiceClientSync:
+        """Build an additional client (for multi-threaded throughput probes)."""
+        return ControllerServiceClientSync(address=self.url, timeout_ms=30000)
+
+    def close(self) -> None:
+        try:
+            self.client.close()
+        except Exception:
+            pass
+        try:
+            self.controller.stop()
+        except Exception:
+            pass
+
+
+class SubprocessRpcHarness:
+    """Out-of-process Controller(dry_run=True) + sync Connect clients.
+
+    Spawns ``benchmark_controller.py serve --db-path X --state-dir Y`` as a
+    child process. The child reads ``READY port=N`` to stdout once the HTTP
+    server is up. Benchmark threads in the parent then hit the child over
+    real TCP — no shared GIL, no shared event loop. Mirrors production
+    where each task process is its own client connection to the controller.
+
+    API matches the in-process ``RpcHarness`` for ``url``, ``make_client``,
+    and ``close`` so callers that don't reach into ``transitions`` /
+    ``endpoints`` etc. swap in transparently. Callers that DO need access
+    to the controller's in-memory projections (the rehydrate-after-DELETE
+    pattern in ``benchmark_rpcs``) must use ``RpcHarness`` instead.
+    """
+
+    def __init__(self, db_path: Path, tmp: Path, *, startup_timeout_s: float = 30.0) -> None:
+        tmp.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            sys.executable,
+            "-u",
+            str(Path(__file__).resolve()),
+            "serve",
+            "--db-path",
+            str(db_path),
+            "--state-dir",
+            str(tmp / "server-state"),
+        ]
+        self._proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+            # New session so SIGINT to the parent (Ctrl-C) doesn't immediately
+            # SIGINT the child; we send SIGTERM explicitly in close().
+            preexec_fn=os.setsid if os.name == "posix" else None,
+        )
+        port: int | None = None
+        deadline = time.time() + startup_timeout_s
+        while time.time() < deadline:
+            line = self._proc.stdout.readline() if self._proc.stdout else ""
+            if not line:
+                rc = self._proc.poll()
+                if rc is not None:
+                    raise RuntimeError(f"serve subprocess exited before READY (rc={rc})")
+                continue
+            line = line.rstrip()
+            if line.startswith("READY port="):
+                port = int(line.split("=", 1)[1])
+                break
+            print(f"[serve] {line}")
+        if port is None:
+            self._proc.send_signal(signal.SIGTERM)
+            raise RuntimeError(f"serve subprocess did not send READY in {startup_timeout_s}s")
+
+        # Drain remaining stdout in a daemon thread so the pipe doesn't fill
+        # and block the child mid-run.
+        self._drain_thread = threading.Thread(target=self._drain_stdout, name="serve-stdout-drain", daemon=True)
+        self._drain_thread.start()
+
+        self.url = f"http://127.0.0.1:{port}"
+        self.client = ControllerServiceClientSync(address=self.url, timeout_ms=30000)
+
+    def _drain_stdout(self) -> None:
+        if self._proc.stdout is None:
+            return
+        for line in self._proc.stdout:
+            sys.stdout.write(f"[serve] {line}")
+
+    def make_client(self) -> ControllerServiceClientSync:
+        return ControllerServiceClientSync(address=self.url, timeout_ms=30000)
+
+    def close(self) -> None:
+        try:
+            self.client.close()
+        except Exception:
+            pass
+        if self._proc.poll() is None:
+            self._proc.send_signal(signal.SIGTERM)
+            try:
+                self._proc.wait(timeout=15.0)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=5.0)
+
+
+# ---------------------------------------------------------------------------
+# Scenario abstractions
+# ---------------------------------------------------------------------------
+
+_MAX_PER_THREAD_RPS = 200.0
+
+_SCENARIO_SCALE: float = 1.0
+_SCENARIO_DURATION: float = 60.0
+
+
+@dataclasses.dataclass
+class RpcLoad:
+    name: str
+    target_rps: float
+    invoke: Callable[[ControllerServiceClientSync], None]
+    n_clients_min: int = 1
+    """Minimum number of client threads / connections for this load.
+
+    The runner picks ``max(n_clients_min, ceil(target_rps / MAX_PER_THREAD_RPS))``.
+    Set this above 1 to model loads where the *connection count* matters
+    independently of throughput — e.g. SetTaskStatusText in production is
+    pushed by ~200 task processes, each holding its own connection. A single
+    thread doing 316 rps doesn't expose the same concurrency on the server.
+    """
+
+
+@dataclasses.dataclass
+class Scenario:
+    name: str
+    loads: list[RpcLoad]
+    duration_s: float
+
+
+class ScenarioRunner:
+    def __init__(self, harness: "RpcHarness | SubprocessRpcHarness", scenario: Scenario) -> None:
+        self.harness = harness
+        self.scenario = scenario
+
+    def run(self) -> dict[str, dict]:
+        stop = threading.Event()
+        per_load_results: dict[str, dict] = {}
+        lock = threading.Lock()
+        all_threads: list[threading.Thread] = []
+
+        for load in self.scenario.loads:
+            n_threads = max(load.n_clients_min, math.ceil(load.target_rps / _MAX_PER_THREAD_RPS))
+            per_thread_rps = load.target_rps / n_threads
+            thread_latencies: list[list[float]] = [[] for _ in range(n_threads)]
+            thread_errors: list[list[Exception]] = [[] for _ in range(n_threads)]
+
+            def make_worker(
+                idx: int, tl: list[float], te: list[Exception], lload: RpcLoad, ptr: float
+            ) -> threading.Thread:
+                def worker() -> None:
+                    client = self.harness.make_client()
+                    interval = 1.0 / ptr
+                    next_call = time.perf_counter()
+                    try:
+                        while not stop.is_set():
+                            delay = next_call - time.perf_counter()
+                            if delay > 0:
+                                if stop.wait(min(delay, 0.5)):
+                                    break
+                                continue
+                            t0 = time.perf_counter()
+                            try:
+                                lload.invoke(client)
+                            except Exception as e:
+                                te.append(e)
+                            tl.append((time.perf_counter() - t0) * 1000.0)
+                            next_call += interval
+                    finally:
+                        try:
+                            client.close()
+                        except Exception:
+                            pass
+
+                return threading.Thread(target=worker, name=f"scenario-{lload.name}-{idx}", daemon=True)
+
+            threads_for_load = [
+                make_worker(i, thread_latencies[i], thread_errors[i], load, per_thread_rps) for i in range(n_threads)
+            ]
+            all_threads.extend(threads_for_load)
+
+            with lock:
+                per_load_results[load.name] = {
+                    "_latencies": thread_latencies,
+                    "_errors": thread_errors,
+                    "_n_threads": n_threads,
+                }
+
+        t_start = time.perf_counter()
+        for t in all_threads:
+            t.start()
+        stop.wait(self.scenario.duration_s)
+        stop.set()
+        for t in all_threads:
+            t.join(timeout=30.0)
+        elapsed = time.perf_counter() - t_start
+
+        results: dict[str, dict] = {}
+        for load in self.scenario.loads:
+            raw = per_load_results[load.name]
+            all_latencies = [v for sub in raw["_latencies"] for v in sub]
+            all_errors = [e for sub in raw["_errors"] for e in sub]
+            n = len(all_latencies)
+            if n == 0:
+                results[load.name] = {
+                    "n": 0,
+                    "errors": len(all_errors),
+                    "actual_rps": 0.0,
+                    "p50": 0.0,
+                    "p95": 0.0,
+                    "p99": 0.0,
+                    "max": 0.0,
+                }
+            else:
+                p50, p95, p99, _p999, mx = _percentiles_ms(all_latencies)
+                results[load.name] = {
+                    "n": n,
+                    "errors": len(all_errors),
+                    "actual_rps": n / elapsed,
+                    "p50": p50,
+                    "p95": p95,
+                    "p99": p99,
+                    "max": mx,
+                }
+        return results
 
 
 # ---------------------------------------------------------------------------
@@ -334,133 +699,435 @@ def _has_committed_columns(db: ControllerDB) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# === Section: RPC load factories ===
+# ---------------------------------------------------------------------------
+
+
+def load_set_task_status_text(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    task_ids = [f"/bench/sts/{i:04d}" for i in range(50)]
+    counter = {"n": 0}
+    payload = "x" * 256
+    short = payload[:32]
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        tid = task_ids[counter["n"] % len(task_ids)]
+        counter["n"] += 1
+        client.set_task_status_text(
+            job_pb2.SetTaskStatusTextRequest(
+                task_id=tid,
+                status_text_detail_md=payload,
+                status_text_summary_md=short,
+            )
+        )
+
+    # Production reality: ~200 task processes each push their own status,
+    # so the connection count on the server matters as much as the throughput.
+    return RpcLoad(name="SetTaskStatusText", target_rps=rps, invoke=invoke, n_clients_min=200)
+
+
+def load_get_job_state(harness: RpcHarness, db: ControllerDB, rps: float, batch: int = 1) -> RpcLoad | None:
+    with db.read_snapshot() as tx:
+        rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
+    if not rows:
+        return None
+    job_ids = [str(r.job_id) for r in rows[:batch]]
+    req = controller_pb2.Controller.GetJobStateRequest(job_ids=job_ids)
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.get_job_state(req)
+
+    return RpcLoad(name="GetJobState", target_rps=rps, invoke=invoke)
+
+
+def load_update_task_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    hb_requests = _build_heartbeat_requests(db)
+    if not hb_requests:
+        return None
+    mid = hb_requests[len(hb_requests) // 2]
+    rpc_req = controller_pb2.Controller.UpdateTaskStatusRequest(
+        worker_id=str(mid.worker_id),
+        updates=[
+            job_pb2.WorkerTaskStatus(
+                task_id=u.task_id.to_wire(),
+                attempt_id=u.attempt_id,
+                state=u.new_state,
+            )
+            for u in mid.updates
+        ],
+    )
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.update_task_status(rpc_req)
+
+    return RpcLoad(name="UpdateTaskStatus", target_rps=rps, invoke=invoke)
+
+
+def load_register_endpoint(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    sample = _active_task_sample(db, limit=300)
+    if not sample:
+        return None
+    task_id, attempt_id = sample[0]
+    lock = threading.Lock()
+    counter = {"n": 0}
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        with lock:
+            n = counter["n"]
+            counter["n"] += 1
+        client.register_endpoint(
+            controller_pb2.Controller.RegisterEndpointRequest(
+                name=f"/bench/endpoint/{n:010d}",
+                address="127.0.0.1:0",
+                task_id=str(task_id),
+                attempt_id=int(attempt_id),
+                metadata={"bench": "true"},
+            )
+        )
+
+    return RpcLoad(name="RegisterEndpoint", target_rps=rps, invoke=invoke)
+
+
+def load_register(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    sample_meta = _build_sample_worker_metadata()
+    lock = threading.Lock()
+    counter = {"n": 0}
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        with lock:
+            n = counter["n"]
+            counter["n"] += 1
+        wid = f"bench-reg-{n:010d}"
+        client.register(
+            controller_pb2.Controller.RegisterRequest(
+                worker_id=wid,
+                address=f"tcp://{wid}:1234",
+                metadata=sample_meta,
+                slice_id="",
+                scale_group="bench",
+            )
+        )
+
+    return RpcLoad(name="Register", target_rps=rps, invoke=invoke)
+
+
+def load_launch_job(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    client_date = client_revision_date()
+    lock = threading.Lock()
+    counter = {"n": 0}
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        with lock:
+            n = counter["n"]
+            counter["n"] += 1
+        jid = JobName.from_wire(f"/bench/launch-scenario-{n:010d}")
+        client.launch_job(
+            controller_pb2.Controller.LaunchJobRequest(
+                name=jid.to_wire(),
+                replicas=1,
+                entrypoint=job_pb2.RuntimeEntrypoint(
+                    run_command=job_pb2.CommandEntrypoint(argv=["echo", "hi"]),
+                ),
+                environment=job_pb2.EnvironmentConfig(),
+                resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+                client_revision_date=client_date,
+            )
+        )
+
+    return RpcLoad(name="LaunchJob", target_rps=rps, invoke=invoke)
+
+
+def load_terminate_job(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    with db.read_snapshot() as tx:
+        rows = tx.fetchall(
+            select(jobs_table.c.job_id)
+            .where(jobs_table.c.state == job_pb2.JOB_STATE_RUNNING, jobs_table.c.depth == 1)
+            .limit(50)
+        )
+    if not rows:
+        return None
+    targets = [str(r.job_id) for r in rows]
+    counter = {"i": 0}
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        jid = targets[counter["i"] % len(targets)]
+        counter["i"] += 1
+        client.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=jid))
+
+    return RpcLoad(name="TerminateJob", target_rps=rps, invoke=invoke)
+
+
+def load_list_jobs(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    req = controller_pb2.Controller.ListJobsRequest(
+        query=controller_pb2.Controller.JobQuery(
+            scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+            limit=50,
+        )
+    )
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.list_jobs(req)
+
+    return RpcLoad(name="ListJobs", target_rps=rps, invoke=invoke)
+
+
+def load_list_endpoints(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    req = controller_pb2.Controller.ListEndpointsRequest()
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.list_endpoints(req)
+
+    return RpcLoad(name="ListEndpoints", target_rps=rps, invoke=invoke)
+
+
+def load_list_workers(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    req = controller_pb2.Controller.ListWorkersRequest()
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.list_workers(req)
+
+    return RpcLoad(name="ListWorkers", target_rps=rps, invoke=invoke)
+
+
+def load_list_tasks(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    with db.read_snapshot() as tx:
+        rows = tx.fetchall(select(jobs_table.c.job_id).limit(1))
+    if not rows:
+        return None
+    job_id = str(rows[0].job_id)
+    req = controller_pb2.Controller.ListTasksRequest(job_id=job_id)
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.list_tasks(req)
+
+    return RpcLoad(name="ListTasks", target_rps=rps, invoke=invoke)
+
+
+def load_get_job_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    with db.read_snapshot() as tx:
+        rows = tx.fetchall(select(jobs_table.c.job_id).limit(1))
+    if not rows:
+        return None
+    job_id = str(rows[0].job_id)
+    req = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.get_job_status(req)
+
+    return RpcLoad(name="GetJobStatus", target_rps=rps, invoke=invoke)
+
+
+def load_execute_raw_query(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    req = query_pb2.RawQueryRequest(sql="SELECT COUNT(*) FROM jobs")
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.execute_raw_query(req)
+
+    return RpcLoad(name="ExecuteRawQuery", target_rps=rps, invoke=invoke)
+
+
+def load_get_scheduler_state(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    req = controller_pb2.Controller.GetSchedulerStateRequest()
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.get_scheduler_state(req)
+
+    return RpcLoad(name="GetSchedulerState", target_rps=rps, invoke=invoke)
+
+
+def load_list_users(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    req = controller_pb2.Controller.ListUsersRequest()
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.list_users(req)
+
+    return RpcLoad(name="ListUsers", target_rps=rps, invoke=invoke)
+
+
+def load_get_autoscaler_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    req = controller_pb2.Controller.GetAutoscalerStatusRequest()
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.get_autoscaler_status(req)
+
+    return RpcLoad(name="GetAutoscalerStatus", target_rps=rps, invoke=invoke)
+
+
+def load_get_process_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
+    roster = _worker_roster(db)
+    if not roster:
+        return None
+    worker_id = str(next(iter(roster)))
+    req = job_pb2.GetProcessStatusRequest(max_log_lines=10, target=worker_id)
+
+    def invoke(client: ControllerServiceClientSync) -> None:
+        client.get_process_status(req)
+
+    return RpcLoad(name="GetProcessStatus", target_rps=rps, invoke=invoke)
+
+
+PRODUCTION_MIX_RPS: dict[str, float] = {
+    "SetTaskStatusText": 316.0,
+    "GetJobState": 7.85,
+    "UpdateTaskStatus": 1.71,
+    "ListEndpoints": 0.90,
+    "GetJobStatus": 0.73,
+    "RegisterEndpoint": 0.45,
+    "ListJobs": 0.29,
+    "Register": 0.16,
+    "ExecuteRawQuery": 0.10,
+    "LaunchJob": 0.052,
+    "ListWorkers": 0.032,
+    "ListTasks": 0.018,
+    "GetProcessStatus": 0.01,
+    "TerminateJob": 0.01,
+    "GetSchedulerState": 0.01,
+    "ListUsers": 0.005,
+    "GetAutoscalerStatus": 0.005,
+}
+
+_FACTORY_BY_NAME: dict[str, Callable[..., RpcLoad | None]] = {
+    "SetTaskStatusText": load_set_task_status_text,
+    "GetJobState": load_get_job_state,
+    "UpdateTaskStatus": load_update_task_status,
+    "ListEndpoints": load_list_endpoints,
+    "GetJobStatus": load_get_job_status,
+    "RegisterEndpoint": load_register_endpoint,
+    "ListJobs": load_list_jobs,
+    "Register": load_register,
+    "ExecuteRawQuery": load_execute_raw_query,
+    "LaunchJob": load_launch_job,
+    "ListWorkers": load_list_workers,
+    "ListTasks": load_list_tasks,
+    "GetProcessStatus": load_get_process_status,
+    "TerminateJob": load_terminate_job,
+    "GetSchedulerState": load_get_scheduler_state,
+    "ListUsers": load_list_users,
+    "GetAutoscalerStatus": load_get_autoscaler_status,
+}
+
+
+def build_production_scenario(
+    harness: RpcHarness,
+    db: ControllerDB,
+    *,
+    scale: float = 1.0,
+    duration_s: float = 60.0,
+) -> Scenario:
+    loads: list[RpcLoad] = []
+    for name, base_rps in PRODUCTION_MIX_RPS.items():
+        factory = _FACTORY_BY_NAME[name]
+        target_rps = base_rps * scale
+        load = factory(harness, db, rps=target_rps)
+        if load is None:
+            print(f"  WARNING: {name} skipped — factory returned None (no suitable snapshot sample)")
+        else:
+            loads.append(load)
+    return Scenario(name="production_mix", loads=loads, duration_s=duration_s)
+
+
+# ---------------------------------------------------------------------------
 # Group: RPCs (high-frequency RPC handlers, weighted by production volume)
 # ---------------------------------------------------------------------------
+
+
+def _bench_load(name: str, harness: RpcHarness, load: RpcLoad | None, **bench_kwargs) -> None:
+    if load is None:
+        print(f"  {name:64s}  (skipped, no suitable snapshot sample)")
+        return
+    client = harness.make_client()
+    bench(name, lambda: load.invoke(client), **bench_kwargs)
 
 
 def benchmark_rpcs(db: ControllerDB) -> None:
     """Cover the highest-volume RPCs: GetJobState, ListJobs, GetJobStatus,
     Register, RegisterEndpoint, LaunchJob, TerminateJob, UpdateTaskStatus.
+
+    All RPCs go through ``RpcHarness`` (real Controller in dry_run + Connect
+    HTTP). Numbers include serialization, ASGI dispatch, AsyncServiceAdapter,
+    and any contention from the controller's read-only scheduling loop.
     """
-    health = WorkerHealthTracker()
-    _seed_health(db, health)
-
-    # ---- GetJobState (172k/day) — batched job-state lookup. ----
-    with db.read_snapshot() as tx:
-        rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
-    job_ids = [str(r.job_id) for r in rows]
-    if job_ids:
-        _jnames = [JobName.from_wire(j) for j in job_ids]
-
-        def _get_job_state():
-            with db.read_snapshot() as tx:
-                tx.fetchall(select(jobs_table.c.job_id, jobs_table.c.state).where(jobs_table.c.job_id.in_(_jnames)))
-
-        bench(f"RPC: GetJobState (batch={len(job_ids)})", _get_job_state)
-
-    # Single-id lookup is the realistic worst-case shape — many dashboards poll one.
-    if job_ids:
-        _single = JobName.from_wire(job_ids[0])
-
-        def _get_job_state_single():
-            with db.read_snapshot() as tx:
-                tx.fetchall(select(jobs_table.c.job_id, jobs_table.c.state).where(jobs_table.c.job_id == _single))
-
-        bench("RPC: GetJobState (single id)", _get_job_state_single)
-
-    # ---- ListJobs (3.2k/day, p95=2.86s — known hot path). ----
-    with db.read_snapshot() as q:
-        page, _ = _query_jobs(
-            q,
-            controller_pb2.Controller.JobQuery(scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS, limit=50),
-            USER_JOB_STATES,
-        )
-    page_ids = [j.job_id for j in page]
-
-    def _list_jobs_full():
-        with db.read_snapshot() as q:
-            page, _total = _query_jobs(
-                q,
-                controller_pb2.Controller.JobQuery(scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS, limit=50),
-                USER_JOB_STATES,
-            )
-            ids = [j.job_id for j in page]
-            if ids:
-                reads.task_summaries_for_jobs(q, set(ids))
-                reads.parent_ids_with_children(q, ids)
-
-    bench(f"RPC: ListJobs (roots, limit=50, paged={len(page_ids)})", _list_jobs_full)
-
-    # ---- GetJobStatus (10k/day) — single-job page. ----
-    if page:
-        sample_job_id = page[0].job_id
-
-        def _get_job_status():
-            with db.read_snapshot() as q:
-                reads.get_job_detail(q, sample_job_id)
-                reads.task_summaries_for_jobs(q, {sample_job_id})
-                reads.parent_ids_with_children(q, [sample_job_id])
-
-        bench("RPC: GetJobStatus", _get_job_status)
-
-    # ---- RegisterEndpoint (128/day, p95=245ms) — write txn through add_endpoint. ----
     write_db = clone_db(db)
-    write_endpoints = EndpointsProjection(write_db)
-    write_worker_attrs = WorkerAttrsProjection(write_db)
-    write_txns = ControllerTransitions(write_db, endpoints=write_endpoints, worker_attrs=write_worker_attrs)
+    harness_dir = Path(tempfile.mkdtemp(prefix="iris_bench_harness_"))
+    harness = RpcHarness(write_db, harness_dir)
     try:
+        # ---- GetJobState (172k/day) — batched job-state lookup. ----
+        with write_db.read_snapshot() as tx:
+            rows = tx.fetchall(select(jobs_table.c.job_id).limit(50))
+        job_ids = [str(r.job_id) for r in rows]
+        if job_ids:
+            _bench_load(
+                f"RPC: GetJobState (batch={len(job_ids)})",
+                harness,
+                load_get_job_state(harness, write_db, rps=0, batch=len(job_ids)),
+            )
+            # Single-id lookup is the realistic worst-case shape — many dashboards poll one.
+            _bench_load(
+                "RPC: GetJobState (single id)",
+                harness,
+                load_get_job_state(harness, write_db, rps=0, batch=1),
+            )
+
+        # ---- ListJobs (3.2k/day, p95=2.86s — known hot path). ----
+        list_load = load_list_jobs(harness, write_db, rps=0)
+        if list_load is not None:
+            tmp_client = harness.make_client()
+            first_resp = tmp_client.list_jobs(
+                controller_pb2.Controller.ListJobsRequest(
+                    query=controller_pb2.Controller.JobQuery(
+                        scope=controller_pb2.Controller.JOB_QUERY_SCOPE_ROOTS,
+                        limit=50,
+                    )
+                )
+            )
+            page_ids = [j.job_id for j in first_resp.jobs]
+            bench_client = harness.make_client()
+            bench(
+                f"RPC: ListJobs (roots, limit=50, paged={len(page_ids)})",
+                lambda: list_load.invoke(bench_client),
+            )
+
+            # ---- GetJobStatus (10k/day) — single-job page. ----
+            if page_ids:
+                status_load = load_get_job_status(harness, write_db, rps=0)
+                if status_load is not None:
+                    bench(
+                        "RPC: GetJobStatus",
+                        lambda: status_load.invoke(bench_client),
+                    )
+
+        # ---- RegisterEndpoint (128/day, p95=245ms). ----
         sample = _active_task_sample(write_db, limit=300)
         if sample:
-            single_task, single_attempt = sample[0]
-
-            def _register_endpoint_one():
-                with write_db.transaction() as cur:
-                    write_txns.add_endpoint(cur, _make_endpoint(single_task, single_attempt))
+            ep_load = load_register_endpoint(harness, write_db, rps=0)
 
             def _reset_endpoint():
                 with write_db.transaction() as _tx:
                     _tx.execute(text("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'"))
-                write_endpoints.rehydrate()
+                harness.endpoints.rehydrate()
 
-            bench("RPC: RegisterEndpoint (1 write)", _register_endpoint_one, reset=_reset_endpoint)
+            _bench_load("RPC: RegisterEndpoint (1 write)", harness, ep_load, reset=_reset_endpoint)
 
         # ---- Register (192/day, p95=340ms) — fresh worker UPSERT. ----
+        _bench_load("RPC: Register (1 fresh worker, WRITE)", harness, load_register(harness, write_db, rps=0))
+
+        # _register_burst_100 is bespoke: it batches 100 sequential calls into one timed unit.
         sample_meta = _build_sample_worker_metadata()
-
-        register_counter = {"n": 0}
-
-        def _register_one():
-            register_counter["n"] += 1
-            wid = WorkerId(f"bench-reg-{uuid.uuid4().hex[:6]}-{register_counter['n']}")
-            with write_db.transaction() as cur:
-                write_txns.register_worker(
-                    cur,
-                    worker_id=wid,
-                    address=f"tcp://{wid}:1234",
-                    metadata=sample_meta,
-                    ts=Timestamp.now(),
-                    slice_id="",
-                    scale_group="bench",
-                )
-
-        bench("RPC: Register (1 fresh worker, WRITE)", _register_one)
-
+        burst_client = harness.make_client()
         burst_counter = {"n": 0}
 
         def _register_burst_100():
             burst_counter["n"] += 1
             base = f"bench-burst-{uuid.uuid4().hex[:6]}-{burst_counter['n']}"
             for i in range(100):
-                with write_db.transaction() as cur:
-                    write_txns.register_worker(
-                        cur,
-                        worker_id=WorkerId(f"{base}-{i}"),
+                burst_client.register(
+                    controller_pb2.Controller.RegisterRequest(
+                        worker_id=f"{base}-{i}",
                         address=f"tcp://{base}-{i}:1234",
                         metadata=sample_meta,
-                        ts=Timestamp.now(),
                         slice_id="",
                         scale_group="bench",
                     )
+                )
 
         bench(
             "RPC: Register (burst x100, WRITE)",
@@ -469,83 +1136,97 @@ def benchmark_rpcs(db: ControllerDB) -> None:
             min_time_s=2.0,
         )
 
-        # ---- LaunchJob (1.4k/day) — submit_job + task expansion. ----
-        # Skip the auth/budget surface; benchmark the dominant write path
-        # (insert + per-task expansion) as transitions.submit_job.
-        replicas_set = (1, 8)
-        for replicas in replicas_set:
-            launch_counter = {"n": 0}
+        # ---- LaunchJob (1.4k/day) — full handler path including budget guard. ----
+        _bench_load("RPC: LaunchJob (replicas=1, WRITE)", harness, load_launch_job(harness, write_db, rps=0))
 
-            def _launch(_n=replicas, counter=launch_counter):
-                counter["n"] += 1
-                jid = JobName.from_wire(f"/bench/launch-{uuid.uuid4().hex[:6]}-{counter['n']}")
-                req = controller_pb2.Controller.LaunchJobRequest(
+        # replicas=8 variant: factory always uses replicas=1; build this one bespoke.
+        client_date = client_revision_date()
+        launch8_client = harness.make_client()
+        launch8_counter = {"n": 0}
+
+        def _launch8():
+            launch8_counter["n"] += 1
+            jid = JobName.from_wire(f"/bench/launch8-{uuid.uuid4().hex[:6]}-{launch8_counter['n']}")
+            launch8_client.launch_job(
+                controller_pb2.Controller.LaunchJobRequest(
                     name=jid.to_wire(),
-                    replicas=_n,
+                    replicas=8,
                     entrypoint=job_pb2.RuntimeEntrypoint(
                         run_command=job_pb2.CommandEntrypoint(argv=["echo", "hi"]),
                     ),
                     environment=job_pb2.EnvironmentConfig(),
                     resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+                    client_revision_date=client_date,
                 )
-                with write_db.transaction() as cur:
-                    write_txns.submit_job(cur, jid, req, Timestamp.now())
+            )
 
-            bench(f"RPC: LaunchJob (replicas={replicas}, WRITE)", _launch)
+        bench("RPC: LaunchJob (replicas=8, WRITE)", _launch8)
 
-        # ---- TerminateJob (73/day, p95=274ms) — cancel_job over a subtree. ----
-        # Pre-clone a dedicated DB so cancel_job has many distinct running
-        # jobs to chew through without exhausting them across reset cycles.
-        cancel_db = clone_db(db)
-        cancel_txns = ControllerTransitions(cancel_db)
-        try:
-            with cancel_db.read_snapshot() as _tx:
+        # ---- TerminateJob (73/day, p95=274ms). ----
+        terminate_load = load_terminate_job(harness, write_db, rps=0)
+        if terminate_load is not None:
+            with write_db.read_snapshot() as _tx:
                 running_rows = _tx.fetchall(
                     select(jobs_table.c.job_id)
                     .where(jobs_table.c.state == job_pb2.JOB_STATE_RUNNING, jobs_table.c.depth == 1)
                     .limit(50)
                 )
-            cancel_targets = [row.job_id for row in running_rows]
-            if cancel_targets:
-                cancel_idx = {"i": 0}
+            n_cancel = len(running_rows)
+            _bench_load(
+                f"RPC: TerminateJob (cancel_job, n={n_cancel} jobs)",
+                harness,
+                terminate_load,
+                min_runs=min(5, n_cancel),
+                max_runs=n_cancel,
+            )
+        else:
+            print("  RPC: TerminateJob                                                 (skipped, no running jobs)")
 
-                def _terminate():
-                    if cancel_idx["i"] >= len(cancel_targets):
-                        return
-                    jid = cancel_targets[cancel_idx["i"]]
-                    cancel_idx["i"] += 1
-                    with cancel_db.transaction() as cur:
-                        cancel_txns.cancel_job(cur, jid, "benchmark")
-
-                bench(
-                    f"RPC: TerminateJob (cancel_job, n={len(cancel_targets)} jobs)",
-                    _terminate,
-                    min_runs=min(5, len(cancel_targets)),
-                    max_runs=len(cancel_targets),
-                )
-            else:
-                print("  RPC: TerminateJob                                                 (skipped, no running jobs)")
-        finally:
-            cancel_db.close()
-            shutil.rmtree(cancel_db._db_dir, ignore_errors=True)
-
-        # ---- UpdateTaskStatus (4.8k/day, p95=256ms) — apply_heartbeats_batch.
+        # ---- UpdateTaskStatus (4.8k/day, p95=256ms) — one RPC per worker.
         hb_requests = _build_heartbeat_requests(write_db)
-        total_t = sum(len(r.updates) for r in hb_requests)
         if hb_requests:
-            print(f"  (heartbeat batch: {len(hb_requests)} workers, {total_t} task updates per call)")
+            total_t = sum(len(r.updates) for r in hb_requests)
+            print(f"  (UpdateTaskStatus batch: {len(hb_requests)} workers, {total_t} task updates total)")
 
-            def _apply_hb():
-                with write_db.transaction() as cur:
-                    write_txns.apply_heartbeats_batch(cur, hb_requests)
+            rpc_hb_requests = [
+                controller_pb2.Controller.UpdateTaskStatusRequest(
+                    worker_id=str(req.worker_id),
+                    updates=[
+                        job_pb2.WorkerTaskStatus(
+                            task_id=u.task_id.to_wire(),
+                            attempt_id=u.attempt_id,
+                            state=u.new_state,
+                        )
+                        for u in req.updates
+                    ],
+                )
+                for req in hb_requests
+            ]
+            mid = rpc_hb_requests[len(rpc_hb_requests) // 2]
+            update_client = harness.make_client()
 
             bench(
-                f"RPC: UpdateTaskStatus (apply_heartbeats_batch, w={len(hb_requests)}, t={total_t})",
-                _apply_hb,
+                f"RPC: UpdateTaskStatus (1 worker, t={len(mid.updates)})",
+                lambda: update_client.update_task_status(mid),
+            )
+
+            # _update_all_serial is bespoke: it issues one call per worker in sequence
+            # so total latency is the sum — a different measurement than per-RPC.
+            def _update_all_serial():
+                for req in rpc_hb_requests:
+                    update_client.update_task_status(req)
+
+            bench(
+                f"RPC: UpdateTaskStatus (w={len(rpc_hb_requests)} serial, t={total_t})",
+                _update_all_serial,
+                min_runs=3,
+                min_time_s=2.0,
             )
     finally:
+        harness.close()
         write_db.close()
         shutil.rmtree(write_db._db_dir, ignore_errors=True)
+        shutil.rmtree(harness_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1272,6 +1953,472 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Group: set_task_status_text (on_loop vs threadpool dispatch comparison)
+# ---------------------------------------------------------------------------
+
+
+def _toggle_set_task_status_text_on_loop(enabled: bool) -> None:
+    """Flip the @on_loop attribute on ControllerServiceImpl.set_task_status_text.
+
+    AsyncServiceAdapter reads this attribute once when the ASGI endpoint table
+    is built, so the toggle MUST happen before a harness boots and stays put
+    for that controller's lifetime. We patch the attribute directly instead of
+    editing source so both variants can run in one process.
+    """
+    from iris.cluster.controller.service import ControllerServiceImpl
+    from iris.rpc.async_adapter import _ON_LOOP_ATTR
+
+    fn = ControllerServiceImpl.set_task_status_text
+    if enabled:
+        setattr(fn, _ON_LOOP_ATTR, True)
+    else:
+        try:
+            delattr(fn, _ON_LOOP_ATTR)
+        except AttributeError:
+            pass
+
+
+def _percentiles_ms(latencies: list[float]) -> tuple[float, float, float, float, float]:
+    latencies.sort()
+    n = len(latencies)
+    return (
+        latencies[n // 2],
+        latencies[int(n * 0.95)],
+        latencies[int(n * 0.99)],
+        latencies[min(int(n * 0.999), n - 1)],
+        latencies[-1],
+    )
+
+
+def _set_status_text_probe(
+    harness: "RpcHarness",
+    *,
+    n_threads: int,
+    duration_s: float,
+    payload_size: int = 256,
+) -> dict:
+    """Saturate SetTaskStatusText from ``n_threads`` client threads.
+
+    Each thread runs a tight loop with its own pooled client — no rate
+    limiting — so the result is the ceiling, not a hand-throttled target.
+    """
+    stop = threading.Event()
+    payload = "x" * payload_size
+    per_thread: list[list[float]] = [[] for _ in range(n_threads)]
+    errors: list[BaseException] = []
+
+    def worker(idx: int) -> None:
+        client = harness.make_client()
+        latencies = per_thread[idx]
+        task_id = f"/u/probe/{uuid.uuid4().hex[:8]}-{idx}"
+        try:
+            while not stop.is_set():
+                t0 = time.perf_counter()
+                client.set_task_status_text(
+                    job_pb2.SetTaskStatusTextRequest(
+                        task_id=task_id,
+                        status_text_detail_md=payload,
+                        status_text_summary_md=payload[:32],
+                    )
+                )
+                latencies.append((time.perf_counter() - t0) * 1000.0)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    threads = [threading.Thread(target=worker, args=(i,), name=f"sts-probe-{i}") for i in range(n_threads)]
+    t_start = time.perf_counter()
+    for t in threads:
+        t.start()
+    time.sleep(duration_s)
+    stop.set()
+    for t in threads:
+        t.join(timeout=30.0)
+    elapsed = time.perf_counter() - t_start
+
+    if errors:
+        print(f"  probe worker errors: {errors[0]!r}")
+    all_latencies = [v for sub in per_thread for v in sub]
+    if not all_latencies:
+        return {"n": 0, "rps": 0.0}
+    p50, p95, p99, p999, mx = _percentiles_ms(all_latencies)
+    return {
+        "n": len(all_latencies),
+        "rps": len(all_latencies) / elapsed,
+        "p50": p50,
+        "p95": p95,
+        "p99": p99,
+        "p999": p999,
+        "max": mx,
+    }
+
+
+def _print_probe(label: str, r: dict) -> None:
+    if r["n"] == 0:
+        print(f"  {label:36s}  (no samples)")
+        return
+    print(
+        f"  {label:36s}  n={r['n']:6d}  rps={r['rps']:8.1f}  "
+        f"p50={r['p50']:6.2f}ms  p95={r['p95']:7.2f}ms  "
+        f"p99={r['p99']:7.2f}ms  p99.9={r['p999']:7.2f}ms  max={r['max']:7.2f}ms"
+    )
+    _results.append((label, r["p50"], r["p95"], r["n"]))
+
+
+def _print_scenario_table(scenario: Scenario, results: dict[str, dict]) -> None:
+    header = (
+        f"  {'RPC':<26}  {'target_rps':>10}  {'actual_rps':>10}  {'n':>6}  "
+        f"{'errs':>5}  {'p50':>7}  {'p95':>7}  {'p99':>7}  {'max':>7}"
+    )
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    empty_row_cells = "  ".join(
+        [f"{'—':>10}", f"{'0':>6}", f"{'0':>5}", f"{'—':>7}", f"{'—':>7}", f"{'—':>7}", f"{'—':>7}"]
+    )
+    for load in scenario.loads:
+        r = results.get(load.name, {})
+        if not r or r["n"] == 0:
+            print(f"  {load.name:<26}  {load.target_rps:>10.2f}  {empty_row_cells}")
+            continue
+        print(
+            f"  {load.name:<26}  {load.target_rps:>10.2f}  {r['actual_rps']:>10.2f}  "
+            f"{r['n']:>6}  {r['errors']:>5}  "
+            f"{r['p50']:>6.1f}ms  {r['p95']:>6.1f}ms  {r['p99']:>6.1f}ms  {r['max']:>6.1f}ms"
+        )
+        _results.append((f"Scenario: {load.name}", r["p50"], r["p95"], r["n"]))
+
+
+def _run_set_status_text_variant(
+    db: ControllerDB,
+    *,
+    on_loop: bool,
+    n_threads: int,
+    duration_s: float,
+) -> dict:
+    """Boot a fresh harness with the requested dispatch mode and run the probe."""
+    _toggle_set_task_status_text_on_loop(on_loop)
+    label = "on_loop=True" if on_loop else "on_loop=False (threadpool)"
+    harness_dir = Path(tempfile.mkdtemp(prefix="iris_sts_probe_"))
+    harness = RpcHarness(db, harness_dir)
+    try:
+        # Warmup: prime the connection / event loop with a single call.
+        warmup = harness.make_client()
+        try:
+            warmup.set_task_status_text(
+                job_pb2.SetTaskStatusTextRequest(
+                    task_id="/u/warmup/0",
+                    status_text_detail_md="",
+                    status_text_summary_md="",
+                )
+            )
+        finally:
+            warmup.close()
+        # Single-call baseline (sequential, low load) so the on_loop dispatch
+        # cost is visible without saturation effects.
+        baseline_client = harness.make_client()
+        baseline_latencies: list[float] = []
+        try:
+            for _ in range(200):
+                t0 = time.perf_counter()
+                baseline_client.set_task_status_text(
+                    job_pb2.SetTaskStatusTextRequest(
+                        task_id="/u/baseline/0",
+                        status_text_detail_md="x" * 256,
+                        status_text_summary_md="x" * 32,
+                    )
+                )
+                baseline_latencies.append((time.perf_counter() - t0) * 1000.0)
+        finally:
+            baseline_client.close()
+        baseline_p50, baseline_p95, baseline_p99, _, _ = _percentiles_ms(baseline_latencies)
+        print(
+            f"  SetTaskStatusText [{label}] single-client baseline: "
+            f"p50={baseline_p50:.2f}ms  p95={baseline_p95:.2f}ms  p99={baseline_p99:.2f}ms  (n=200)"
+        )
+        _results.append((f"RPC: SetTaskStatusText baseline [{label}]", baseline_p50, baseline_p95, 200))
+
+        # Saturation probe.
+        return _set_status_text_probe(harness, n_threads=n_threads, duration_s=duration_s)
+    finally:
+        harness.close()
+        shutil.rmtree(harness_dir, ignore_errors=True)
+
+
+def _measure_update_task_status_under_storm(
+    db: ControllerDB,
+    *,
+    on_loop: bool,
+    storm_rps_target: int,
+    storm_threads: int,
+    victim_duration_s: float,
+) -> tuple[dict, dict]:
+    """Run a victim UpdateTaskStatus RPC alongside a SetTaskStatusText storm.
+
+    Returns ``(baseline, under_storm)`` results so the caller can quantify the
+    blast radius. Both phases share the same harness (and therefore the same
+    background scheduler/polling/ping cadence) so the only changing variable
+    is whether the storm is running.
+
+    The victim is a real ``UpdateTaskStatus`` RPC built from the snapshot's
+    live worker→task attribution. Sample a worker that actually has updates
+    to push so we measure a write-touching call, not a no-op early-return.
+    """
+    _toggle_set_task_status_text_on_loop(on_loop)
+    label = "on_loop=True" if on_loop else "on_loop=False (threadpool)"
+    harness_dir = Path(tempfile.mkdtemp(prefix="iris_sts_contend_"))
+    harness = RpcHarness(db, harness_dir)
+    try:
+        # Build the victim request. Bias toward a worker with non-empty updates.
+        hb_requests = _build_heartbeat_requests(db)
+        candidates = [req for req in hb_requests if req.updates]
+        if not candidates:
+            print(f"  [{label}] (skipped: no worker with active tasks for victim)")
+            return ({"n": 0, "rps": 0.0}, {"n": 0, "rps": 0.0})
+        sample = candidates[len(candidates) // 2]
+        victim_req = controller_pb2.Controller.UpdateTaskStatusRequest(
+            worker_id=str(sample.worker_id),
+            updates=[
+                job_pb2.WorkerTaskStatus(
+                    task_id=u.task_id.to_wire(),
+                    attempt_id=u.attempt_id,
+                    state=u.new_state,
+                )
+                for u in sample.updates
+            ],
+        )
+
+        def _victim_run(seconds: float) -> dict:
+            client = harness.make_client()
+            latencies: list[float] = []
+            try:
+                deadline = time.perf_counter() + seconds
+                while time.perf_counter() < deadline:
+                    t0 = time.perf_counter()
+                    client.update_task_status(victim_req)
+                    latencies.append((time.perf_counter() - t0) * 1000.0)
+            finally:
+                client.close()
+            if not latencies:
+                return {"n": 0, "rps": 0.0}
+            p50, p95, p99, p999, mx = _percentiles_ms(latencies)
+            return {
+                "n": len(latencies),
+                "rps": len(latencies) / seconds,
+                "p50": p50,
+                "p95": p95,
+                "p99": p99,
+                "p999": p999,
+                "max": mx,
+            }
+
+        # Warmup: prime connections + JIT paths.
+        warmup_client = harness.make_client()
+        try:
+            warmup_client.update_task_status(victim_req)
+            warmup_client.set_task_status_text(
+                job_pb2.SetTaskStatusTextRequest(
+                    task_id="/u/warmup/0", status_text_detail_md="", status_text_summary_md=""
+                )
+            )
+        finally:
+            warmup_client.close()
+
+        # Phase 1: victim baseline (no storm).
+        baseline = _victim_run(victim_duration_s)
+
+        # Phase 2: storm + victim concurrently. The storm threads rate-limit
+        # themselves to ``storm_rps_target`` total so we're testing the
+        # production scenario (1000 RPS), not the saturation ceiling.
+        stop = threading.Event()
+        per_thread_target = storm_rps_target / storm_threads
+        storm_payload = "x" * 256
+        storm_short = storm_payload[:32]
+        storm_latencies: list[list[float]] = [[] for _ in range(storm_threads)]
+
+        def _storm_worker(idx: int) -> None:
+            client = harness.make_client()
+            latencies = storm_latencies[idx]
+            task_id = f"/u/storm/{uuid.uuid4().hex[:8]}-{idx}"
+            interval = 1.0 / per_thread_target if per_thread_target > 0 else 0.0
+            next_send = time.perf_counter()
+            try:
+                while not stop.is_set():
+                    now = time.perf_counter()
+                    wait = next_send - now
+                    if wait > 0:
+                        # Sleep in small slices so stop signal is responsive.
+                        time.sleep(min(wait, 0.05))
+                        continue
+                    t0 = time.perf_counter()
+                    client.set_task_status_text(
+                        job_pb2.SetTaskStatusTextRequest(
+                            task_id=task_id,
+                            status_text_detail_md=storm_payload,
+                            status_text_summary_md=storm_short,
+                        )
+                    )
+                    latencies.append((time.perf_counter() - t0) * 1000.0)
+                    next_send += interval
+                    # If we fell badly behind, don't try to catch up — reset the
+                    # baseline so a slow tail doesn't compound.
+                    if next_send < time.perf_counter() - interval:
+                        next_send = time.perf_counter()
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+        threads = [
+            threading.Thread(target=_storm_worker, args=(i,), name=f"sts-storm-{i}") for i in range(storm_threads)
+        ]
+        for t in threads:
+            t.start()
+        # Let the storm reach steady state before measuring the victim.
+        time.sleep(0.5)
+        under_storm = _victim_run(victim_duration_s)
+        stop.set()
+        for t in threads:
+            t.join(timeout=10.0)
+
+        storm_total = sum(len(s) for s in storm_latencies)
+        storm_rps_actual = storm_total / (victim_duration_s + 0.5)
+        print(
+            f"  [{label}] storm actual: {storm_rps_actual:.0f} rps "
+            f"(target {storm_rps_target} rps from {storm_threads} threads, sent {storm_total})"
+        )
+        return baseline, under_storm
+    finally:
+        harness.close()
+        shutil.rmtree(harness_dir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Group: scenario (production-mix concurrent RPC benchmark)
+# ---------------------------------------------------------------------------
+
+
+def benchmark_scenario(db: ControllerDB) -> None:
+    """Drive a production-mix RPC scenario against an out-of-process controller.
+
+    The controller runs in a separate Python process (``SubprocessRpcHarness``)
+    so the benchmark process's client threads don't share a GIL with the
+    server. Mirrors production where each task pushes from its own
+    interpreter.
+    """
+    write_db = clone_db(db)
+    harness_dir = Path(tempfile.mkdtemp(prefix="iris_scenario_"))
+    db_path = write_db._db_dir / ControllerDB.DB_FILENAME
+    # Close the parent's writer connection so the subprocess owns the DB:
+    # we still read samples through ``write_db.read_snapshot()`` (WAL handles
+    # concurrent readers), but the parent doesn't need a writer.
+    write_db.close()
+    harness = SubprocessRpcHarness(db_path, harness_dir)
+    # Re-open for read-only sampling by the factories. Safe under WAL because
+    # the subprocess controller has already migrated and opened the file.
+    sample_db = ControllerDB(db_dir=write_db._db_dir)
+    try:
+        scenario = build_production_scenario(harness, sample_db, scale=_SCENARIO_SCALE, duration_s=_SCENARIO_DURATION)
+        results = ScenarioRunner(harness, scenario).run()
+        _print_scenario_table(scenario, results)
+    finally:
+        harness.close()
+        sample_db.close()
+        shutil.rmtree(write_db._db_dir, ignore_errors=True)
+        shutil.rmtree(harness_dir, ignore_errors=True)
+
+
+def benchmark_set_task_status_text(db: ControllerDB) -> None:
+    """Compare SetTaskStatusText latency & throughput with @on_loop vs threadpool.
+
+    Production sees ~1000 SetTaskStatusText/sec. The handler body is two
+    in-memory dict writes (microseconds); what changes between the two
+    dispatch modes is whether each call runs inline on the asyncio event loop
+    (one-at-a-time, blocks every other on_loop handler) or hops into a thread
+    via ``asyncio.to_thread`` (parallel-capable, pays a thread-hop per call).
+
+    Two scenarios:
+
+    1. **Saturation probe**: N client threads in a tight loop hitting
+       SetTaskStatusText with no rate limiting — surfaces the ceiling and
+       lets us compare modes head-to-head.
+
+    2. **Production-shape contention**: a victim ``UpdateTaskStatus`` RPC
+       runs alongside a 1000 RPS SetTaskStatusText storm. The delta between
+       victim-baseline and victim-under-storm is the blast radius the prod
+       traffic imposes on every other handler.
+
+    Both scenarios run the controller's scheduler / polling / ping loops at
+    their natural production cadence (10s / 1s / etc).
+    """
+    n_threads = 8
+    duration_s = 5.0
+
+    # ---- Saturation probe ----
+    print(f"  (saturation probe: {n_threads} client threads, {duration_s:.0f}s per variant, no rate-limit)")
+    threadpool_result = _run_set_status_text_variant(db, on_loop=False, n_threads=n_threads, duration_s=duration_s)
+    _print_probe("RPC: SetTaskStatusText [threadpool]", threadpool_result)
+
+    on_loop_result = _run_set_status_text_variant(db, on_loop=True, n_threads=n_threads, duration_s=duration_s)
+    _print_probe("RPC: SetTaskStatusText [on_loop]", on_loop_result)
+
+    if threadpool_result["n"] and on_loop_result["n"]:
+        rps_ratio = on_loop_result["rps"] / threadpool_result["rps"]
+        p99_ratio = on_loop_result["p99"] / threadpool_result["p99"]
+        print(f"  saturation: on_loop / threadpool ratio  rps x{rps_ratio:.2f}, p99 x{p99_ratio:.2f}")
+
+    # ---- Production-shape contention: victim UpdateTaskStatus + 1000 RPS storm. ----
+    print()
+    storm_rps = 1000
+    storm_threads = 8
+    victim_seconds = 5.0
+    print(
+        f"  (contention probe: victim=UpdateTaskStatus, storm={storm_rps} rps SetTaskStatusText "
+        f"from {storm_threads} threads, {victim_seconds:.0f}s)"
+    )
+    tp_baseline, tp_under = _measure_update_task_status_under_storm(
+        db, on_loop=False, storm_rps_target=storm_rps, storm_threads=storm_threads, victim_duration_s=victim_seconds
+    )
+    _print_probe("Victim: UpdateTaskStatus [storm=threadpool] baseline", tp_baseline)
+    _print_probe("Victim: UpdateTaskStatus [storm=threadpool] +storm", tp_under)
+
+    ol_baseline, ol_under = _measure_update_task_status_under_storm(
+        db, on_loop=True, storm_rps_target=storm_rps, storm_threads=storm_threads, victim_duration_s=victim_seconds
+    )
+    _print_probe("Victim: UpdateTaskStatus [storm=on_loop] baseline", ol_baseline)
+    _print_probe("Victim: UpdateTaskStatus [storm=on_loop] +storm", ol_under)
+
+    # Blast-radius summary: how much does the storm cost the victim?
+    def _ratio(under: dict, base: dict, key: str) -> str:
+        if not under.get("n") or not base.get("n") or base[key] == 0:
+            return "—"
+        return f"x{under[key] / base[key]:.2f}"
+
+    print()
+    print("  blast radius (victim under storm / victim baseline):")
+    print(
+        f"    threadpool storm:  p50 {_ratio(tp_under, tp_baseline, 'p50')}  "
+        f"p95 {_ratio(tp_under, tp_baseline, 'p95')}  "
+        f"p99 {_ratio(tp_under, tp_baseline, 'p99')}  "
+        f"max {_ratio(tp_under, tp_baseline, 'max')}"
+    )
+    print(
+        f"    on_loop storm:     p50 {_ratio(ol_under, ol_baseline, 'p50')}  "
+        f"p95 {_ratio(ol_under, ol_baseline, 'p95')}  "
+        f"p99 {_ratio(ol_under, ol_baseline, 'p99')}  "
+        f"max {_ratio(ol_under, ol_baseline, 'max')}"
+    )
+
+    # Restore the function attribute to whatever the source file declares so
+    # subsequent groups in the same run aren't observably mutated.
+    _toggle_set_task_status_text_on_loop(False)
+
+
+# ---------------------------------------------------------------------------
 # Header / footer
 # ---------------------------------------------------------------------------
 
@@ -1363,10 +2510,24 @@ def _ensure_db(db_path: Path | None) -> Path:
     return db_file
 
 
-_GROUPS = ("rpcs", "scheduling", "polling", "dashboard", "endpoints", "apply_contention")
+_GROUPS = (
+    "rpcs",
+    "scheduling",
+    "polling",
+    "dashboard",
+    "endpoints",
+    "apply_contention",
+    "set_task_status_text",
+    "scenario",
+)
 
 
-@click.command()
+@click.group()
+def main() -> None:
+    """Benchmark the Iris controller against a local checkpoint."""
+
+
+@main.command("run")
 @click.option(
     "--db",
     "db_path",
@@ -1380,8 +2541,25 @@ _GROUPS = ("rpcs", "scheduling", "polling", "dashboard", "endpoints", "apply_con
     type=click.Choice(_GROUPS),
     help="Run only this group.",
 )
-def main(db_path: Path | None, only_group: str | None) -> None:
-    """Benchmark Iris controller hot paths against a local checkpoint."""
+@click.option(
+    "--scale",
+    "scenario_scale",
+    type=float,
+    default=1.0,
+    help="Scale all production_mix rates by this factor.",
+)
+@click.option(
+    "--scenario-duration",
+    "scenario_duration",
+    type=float,
+    default=60.0,
+    help="Scenario runtime in seconds.",
+)
+def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float, scenario_duration: float) -> None:
+    """Run the benchmark groups."""
+    global _SCENARIO_SCALE, _SCENARIO_DURATION
+    _SCENARIO_SCALE = scenario_scale
+    _SCENARIO_DURATION = scenario_duration
     _results.clear()
     db_path = _ensure_db(db_path)
     db = ControllerDB(db_dir=db_path.parent)
@@ -1404,6 +2582,8 @@ def main(db_path: Path | None, only_group: str | None) -> None:
         ("dashboard", benchmark_dashboard),
         ("endpoints", benchmark_endpoints),
         ("apply_contention", benchmark_apply_contention),
+        ("set_task_status_text", benchmark_set_task_status_text),
+        ("scenario", benchmark_scenario),
     ]
     for name, fn in groups:
         if only_group is not None and only_group != name:
@@ -1413,6 +2593,66 @@ def main(db_path: Path | None, only_group: str | None) -> None:
         print()
 
     print_summary()
+    db.close()
+
+
+@main.command("serve")
+@click.option(
+    "--db-path",
+    "db_path",
+    type=click.Path(exists=True, path_type=Path),
+    required=True,
+    help="Path to the controller.sqlite3 file the dry-run server should open.",
+)
+@click.option(
+    "--state-dir",
+    "state_dir",
+    type=click.Path(path_type=Path),
+    required=True,
+    help="Scratch directory for the controller's local state / remote-state-dir.",
+)
+def serve_cmd(db_path: Path, state_dir: Path) -> None:
+    """Boot a Controller(dry_run=True) bound to ``db_path`` and serve over RPC.
+
+    Prints ``READY port=N`` to stdout once the HTTP server is accepting
+    connections, then blocks until SIGTERM. Used by ``SubprocessRpcHarness``
+    so the benchmark process and the controller have independent GILs.
+    """
+    state_dir.mkdir(parents=True, exist_ok=True)
+    db = ControllerDB(db_dir=db_path.parent)
+    db.apply_migrations()
+
+    config = ControllerConfig(
+        host="127.0.0.1",
+        port=0,
+        remote_state_dir=f"file://{state_dir / 'remote'}",
+        local_state_dir=state_dir / "local",
+        dry_run=True,
+        checkpoint_interval=None,
+    )
+    threads = ThreadContainer("bench-serve")
+    controller = Controller(config=config, provider=_FakeProvider(), db=db, threads=threads)
+    controller.start()
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        if controller._server is not None and controller._server.started:
+            break
+        time.sleep(0.02)
+    else:
+        controller.stop()
+        raise click.ClickException("Controller server did not start within 10s")
+
+    print(f"READY port={controller.port}", flush=True)
+
+    stop = threading.Event()
+
+    def _shutdown(_signum, _frame):
+        stop.set()
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+    stop.wait()
+    controller.stop()
     db.close()
 
 

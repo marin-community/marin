@@ -314,7 +314,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
     if task.state == job_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].state in TERMINAL_TASK_STATES:
         last = task.attempts[-1]
         proto.pending_reason = (
-            f"Retrying (attempt {len(task.attempts)}, " f"last: {job_pb2.TaskState.Name(last.state).lower()})"
+            f"Retrying (attempt {len(task.attempts)}, last: {job_pb2.TaskState.Name(last.state).lower()})"
         )
         proto.can_be_scheduled = True
     return proto
@@ -1003,7 +1003,7 @@ class ControllerServiceImpl:
             with self._db.read_snapshot() as tx:
                 return not reads.has_unfinished_worker_attempts(tx, job_id)
 
-        return ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until(drained, timeout=wait)
+        return ExponentialBackoff(initial=1.0, maximum=10.0, factor=2).wait_until(drained, timeout=wait)
 
     def _replace_finished_job(self, cur, job_id: JobName) -> bool:
         """Attempt to replace a terminal job; signal whether a drain is needed.
