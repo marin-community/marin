@@ -35,7 +35,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 3.14t needs a large budget for the cold-start uv sync — many deps
+    # (duckdb, grpcio, zstandard, pyarrow, …) have no free-threaded wheels yet
+    # and get built from sdist. Once setup-uv caches the built wheels (cache
+    # is python-version-aware), warm runs finish quickly.
+    timeout-minutes: ${{ matrix.python-version == '3.14t' && 60 || 10 }}
     strategy:
       fail-fast: false
       matrix:
@@ -72,7 +76,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 3.14t needs a large budget for the cold-start uv sync — many deps
+    # (duckdb, grpcio, zstandard, pyarrow, …) have no free-threaded wheels yet
+    # and get built from sdist. Once setup-uv caches the built wheels (cache
+    # is python-version-aware), warm runs finish quickly.
+    timeout-minutes: ${{ matrix.python-version == '3.14t' && 60 || 10 }}
     strategy:
       fail-fast: false
       matrix:
