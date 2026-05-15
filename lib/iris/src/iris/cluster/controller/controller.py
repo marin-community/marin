@@ -75,6 +75,7 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     JobRequirements,
     Scheduler,
@@ -328,13 +329,24 @@ def compute_demand_entries(
         dry_run_workers = _inject_reservation_taints(snapshots, claims)
         dry_run_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
-        context = scheduler.create_scheduling_context(
-            dry_run_workers,
+        # Dry-run scheduling context — only the per-(task, worker) matching loop
+        # consumes capacities/jobs/pending_tasks, so the raw-read fields stay
+        # empty. Building/assignment limits are disabled so big workers can
+        # absorb multiple tasks (prevents false demand on idle clusters).
+        context = SchedulingContext(
+            workers=dry_run_workers,
             building_counts=building_counts,
-            pending_tasks=task_ids,
-            jobs=dry_run_jobs,
             max_building_tasks=_UNLIMITED,
             max_assignments_per_worker=_UNLIMITED,
+            pending_tasks=task_ids,
+            jobs=dry_run_jobs,
+            pending_task_rows=[],
+            user_spend={},
+            user_budget_limits={},
+            requested_bands={},
+            reserved_job_ids=frozenset(),
+            reservation_entry_counts={},
+            user_budget_defaults=UserBudgetDefaults(),
         )
         result = scheduler.find_assignments(context)
         for task_id, _ in result.assignments:
@@ -1032,10 +1044,13 @@ def build_scheduling_context(
 
     snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
     sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
-    return SchedulingContext.from_workers(
-        snapshots,
+    return SchedulingContext(
+        workers=snapshots,
         building_counts=building_counts,
         max_building_tasks=max_building_tasks,
+        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+        pending_tasks=[],
+        jobs={},
         pending_task_rows=sorted_pending,
         user_spend=user_spend,
         user_budget_limits=user_budget_limits,
@@ -1467,6 +1482,12 @@ class Controller:
         # avoiding expensive scheduler work on every CLI poll.
         self._scheduling_diagnostics: dict[str, str] = {}
         self._scheduling_round: int = 0
+
+        # Last completed scheduling context — None until the first tick runs.
+        # The dashboard diagnostics path reads this instead of rebuilding from
+        # the DB. This is the only ``| None`` attribute on Controller: it is
+        # genuinely None before the first scheduling tick has run.
+        self._last_scheduling_context: SchedulingContext | None = None
 
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
@@ -1974,6 +1995,7 @@ class Controller:
 
         if not ctx.pending_task_rows:
             self._scheduling_diagnostics = {}
+            self._last_scheduling_context = ctx
             return SchedulingOutcome.NO_PENDING_TASKS
 
         gated = apply_scheduling_gates(
@@ -1989,6 +2011,7 @@ class Controller:
 
         if not gated.schedulable_task_ids:
             self._scheduling_diagnostics = {}
+            self._last_scheduling_context = ctx
             return SchedulingOutcome.NO_PENDING_TASKS
 
         order = compute_scheduling_order(ctx, gated, trace=trace)
@@ -1998,6 +2021,9 @@ class Controller:
         preemptions = self._apply_preemptions(order, tainted_jobs, all_assignments, claims, context)
 
         self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
+        # Post-taint context (or the un-tainted ctx when no claims were active)
+        # — exposed via ``last_scheduling_context`` for dashboard diagnostics.
+        self._last_scheduling_context = context
 
         if all_assignments or preemptions:
             log_event(
@@ -2048,11 +2074,12 @@ class Controller:
         if claims:
             modified_workers = _inject_reservation_taints(list(ctx.workers), claims)
             building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
-            context = self._scheduler.create_scheduling_context(
-                modified_workers,
-                building_counts=building_counts,
-                pending_tasks=order.ordered_task_ids,
+            ctx.pending_tasks = list(order.ordered_task_ids)
+            context = ctx.evolve_with_workers(
+                workers=modified_workers,
                 jobs=modified_jobs,
+                building_counts=building_counts,
+                max_building_tasks=self._scheduler.max_building_tasks_per_worker,
             )
         else:
             ctx.pending_tasks = list(order.ordered_task_ids)
@@ -2274,16 +2301,16 @@ class Controller:
                 reason=f"Scheduling timeout exceeded ({timeout})",
             )
 
-    def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext:
-        """Create a worker-only scheduling context for diagnostics and dashboard RPCs."""
-        with self._db.read_snapshot() as snap:
-            building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
-            usage_by_worker = reads.resource_usage_by_worker(snap)
-        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
-        return self._scheduler.create_scheduling_context(
-            snapshots,
-            building_counts=building_counts,
-        )
+    @property
+    def last_scheduling_context(self) -> "SchedulingContext | None":
+        """Return the most recent finalized scheduling context.
+
+        ``None`` before the first scheduling tick has run; otherwise the
+        post-taint context from the last completed ``_run_scheduling`` pass.
+        Consumed by dashboard diagnostics that need a snapshot of capacities
+        and pending tasks without rebuilding from the DB.
+        """
+        return self._last_scheduling_context
 
     # =========================================================================
     # Worker lifecycle RPC dispatch (Reconcile / Ping)

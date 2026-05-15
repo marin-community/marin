@@ -55,7 +55,7 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.controller.reads import SchedulableWorker, TaskJobSummary
+from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -878,11 +878,12 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext: ...
-
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
     def begin_checkpoint(self) -> tuple[str, Any]: ...
+
+    @property
+    def last_scheduling_context(self) -> SchedulingContext | None: ...
 
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...

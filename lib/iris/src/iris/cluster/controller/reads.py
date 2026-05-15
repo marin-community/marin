@@ -1074,8 +1074,8 @@ class SchedulableWorker:
     """Worker shape consumed by the scheduler.
 
     Field names mirror the :class:`scheduler.WorkerSnapshot` protocol so
-    instances flow into ``Scheduler.create_scheduling_context`` without
-    an adapter.
+    instances flow through ``worker_snapshot_from_row`` into
+    ``SchedulingContext`` without an adapter.
     """
 
     worker_id: WorkerId

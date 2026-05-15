@@ -49,8 +49,8 @@ def _make_service(db, auth=None):
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
-    controller_mock.create_scheduling_context = Mock(return_value=Mock())
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
+    controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = None
     controller_mock.provider = Mock()
     controller_mock.has_direct_provider = False

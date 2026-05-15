@@ -11,8 +11,8 @@ be in BUILDING state on each worker, preventing resource exhaustion.
 The scheduler operates exclusively on scheduler-owned types (JobRequirements,
 WorkerCapacity, SchedulingContext) and has ZERO runtime imports from controller
 state. Callers project worker rows into ``WorkerSnapshot`` (via
-``worker_snapshot_from_row``) at the boundary before invoking
-``create_scheduling_context``.
+``worker_snapshot_from_row``) at the boundary before constructing
+``SchedulingContext`` directly.
 
 """
 
@@ -328,100 +328,96 @@ class SchedulingContext:
     gates/order pipeline and derived structures (``index``, ``capacities``) for
     the per-(task, worker) matching hot loop.
 
+    Construction is direct: callers supply ``workers``, ``building_counts``,
+    ``max_building_tasks``, and the raw-read fields; ``__post_init__`` derives
+    ``capacities``, ``index``, and ``_str_to_wid`` once. To rebuild the index
+    after taint injection mid-tick, use :meth:`evolve_with_workers` which reuses
+    the raw-read fields and only redoes the per-worker derivation.
+
     Posting lists are read-only after construction; capacity deductions don't
     touch them. Workers are tracked via ``assignment_counts`` to bound tasks
     per worker per cycle.
     """
 
-    index: ConstraintIndex
+    workers: list[WorkerSnapshot]
+    building_counts: dict[WorkerId, int]
+    max_building_tasks: int
+    max_assignments_per_worker: int
+    pending_tasks: list[JobName]
+    jobs: dict[JobName, JobRequirements]
+    pending_task_rows: list[PendingTask]
+    user_spend: dict[str, int]
+    user_budget_limits: dict[str, int]
+    requested_bands: dict[JobName, int]
+    reserved_job_ids: frozenset[JobName]
+    reservation_entry_counts: dict[JobName, int]
+    user_budget_defaults: UserBudgetDefaults
 
-    # Worker capacities indexed by worker ID
-    capacities: dict[WorkerId, WorkerCapacity]
+    # Derived from ``workers`` in __post_init__.
+    capacities: dict[WorkerId, WorkerCapacity] = field(init=False)
+    index: ConstraintIndex = field(init=False)
+    _str_to_wid: dict[str, WorkerId] = field(init=False)
 
-    # Reverse map from string ID back to WorkerId
-    _str_to_wid: dict[str, WorkerId]
-
-    assignment_counts: dict[WorkerId, int] = field(default_factory=dict)
-    max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
-
-    # Task IDs in scheduling priority order; populated after gates+order resolve.
-    pending_tasks: list[JobName] = field(default_factory=list)
-    jobs: dict[JobName, JobRequirements] = field(default_factory=dict)
-
-    # Raw per-tick reads — consumed by gates/order helpers; empty for diagnostics/dry-run.
-    pending_task_rows: list[PendingTask] = field(default_factory=list)
-    workers: list[WorkerSnapshot] = field(default_factory=list)
-    user_spend: dict[str, int] = field(default_factory=dict)
-    user_budget_limits: dict[str, int] = field(default_factory=dict)
-    requested_bands: dict[JobName, int] = field(default_factory=dict)
-    reserved_job_ids: frozenset[JobName] = field(default_factory=frozenset)
-    reservation_entry_counts: dict[JobName, int] = field(default_factory=dict)
-    user_budget_defaults: UserBudgetDefaults | None = None
+    # Per-cycle mutable state; always starts empty.
+    assignment_counts: dict[WorkerId, int] = field(init=False)
 
     # Scores memoized per (worker, soft-constraints) tuple; worker attributes are
     # stable within a tick so the same pair always yields the same score.
-    _soft_score_cache: dict[tuple[WorkerId, tuple[Constraint, ...]], int] = field(default_factory=dict)
+    _soft_score_cache: dict[tuple[WorkerId, tuple[Constraint, ...]], int] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.capacities = {
+            w.worker_id: WorkerCapacity.from_worker(
+                w,
+                building_count=self.building_counts.get(w.worker_id, 0),
+                max_building_tasks=self.max_building_tasks,
+            )
+            for w in self.workers
+        }
+        str_to_wid: dict[str, WorkerId] = {}
+        entity_attrs: dict[str, dict[str, AttributeValue]] = {}
+        for wid, cap in self.capacities.items():
+            key = str(wid)
+            str_to_wid[key] = wid
+            entity_attrs[key] = dict(cap.attributes)
+        self._str_to_wid = str_to_wid
+        self.index = ConstraintIndex.build(entity_attrs)
+        self.assignment_counts = {}
+        self._soft_score_cache = {}
 
     @property
     def all_worker_ids(self) -> set[WorkerId]:
         return {self._str_to_wid[s] for s in self.index._all_ids}
 
-    @classmethod
-    def from_workers(
-        cls,
+    def evolve_with_workers(
+        self,
         workers: list[WorkerSnapshot],
-        building_counts: dict[WorkerId, int] | None = None,
-        max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
-        pending_tasks: list[JobName] | None = None,
-        jobs: dict[JobName, JobRequirements] | None = None,
-        max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
-        pending_task_rows: list[PendingTask] | None = None,
-        user_spend: dict[str, int] | None = None,
-        user_budget_limits: dict[str, int] | None = None,
-        requested_bands: dict[JobName, int] | None = None,
-        reserved_job_ids: frozenset[JobName] | None = None,
-        reservation_entry_counts: dict[JobName, int] | None = None,
-        user_budget_defaults: UserBudgetDefaults | None = None,
+        jobs: dict[JobName, JobRequirements],
+        building_counts: dict[WorkerId, int],
+        max_building_tasks: int,
     ) -> "SchedulingContext":
-        """Build scheduling context from worker list.
+        """Rebuild capacities/index for taint-injected workers.
 
-        Creates capacity snapshots and a ConstraintIndex for fast attribute matching.
+        Reuses all raw-read fields (``pending_task_rows``, ``user_spend``, etc.)
+        verbatim. The caller supplies updated ``workers``/``jobs`` (e.g. after
+        reservation taint injection) and fresh ``building_counts``. The
+        returned context starts a fresh placement pass with empty
+        ``assignment_counts`` and an empty soft-score cache.
         """
-        building_counts = building_counts or {}
-
-        capacities = {
-            w.worker_id: WorkerCapacity.from_worker(
-                w,
-                building_count=building_counts.get(w.worker_id, 0),
-                max_building_tasks=max_building_tasks,
-            )
-            for w in workers
-        }
-
-        str_to_wid: dict[str, WorkerId] = {}
-        entity_attrs: dict[str, dict[str, AttributeValue]] = {}
-        for wid, cap in capacities.items():
-            key = str(wid)
-            str_to_wid[key] = wid
-            entity_attrs[key] = dict(cap.attributes)
-
-        index = ConstraintIndex.build(entity_attrs)
-
-        return cls(
-            index=index,
-            capacities=capacities,
-            _str_to_wid=str_to_wid,
-            pending_tasks=pending_tasks or [],
-            jobs=jobs or {},
-            max_assignments_per_worker=max_assignments_per_worker,
-            pending_task_rows=list(pending_task_rows or []),
-            workers=list(workers),
-            user_spend=dict(user_spend or {}),
-            user_budget_limits=dict(user_budget_limits or {}),
-            requested_bands=dict(requested_bands or {}),
-            reserved_job_ids=frozenset(reserved_job_ids or ()),
-            reservation_entry_counts=dict(reservation_entry_counts or {}),
-            user_budget_defaults=user_budget_defaults,
+        return SchedulingContext(
+            workers=workers,
+            building_counts=building_counts,
+            max_building_tasks=max_building_tasks,
+            max_assignments_per_worker=self.max_assignments_per_worker,
+            pending_tasks=self.pending_tasks,
+            jobs=jobs,
+            pending_task_rows=self.pending_task_rows,
+            user_spend=self.user_spend,
+            user_budget_limits=self.user_budget_limits,
+            requested_bands=self.requested_bands,
+            reserved_job_ids=self.reserved_job_ids,
+            reservation_entry_counts=self.reservation_entry_counts,
+            user_budget_defaults=self.user_budget_defaults,
         )
 
     def matching_workers(self, constraints: Sequence[Constraint]) -> set[WorkerId]:
@@ -617,6 +613,11 @@ class Scheduler:
         max_building_tasks_per_worker: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     ):
         self._max_building_tasks_per_worker = max_building_tasks_per_worker
+
+    @property
+    def max_building_tasks_per_worker(self) -> int:
+        """Per-worker BUILDING-state limit applied to fresh scheduling contexts."""
+        return self._max_building_tasks_per_worker
 
     def find_assignments(
         self,
@@ -815,35 +816,6 @@ class Scheduler:
             group_by,
         )
         return None
-
-    def create_scheduling_context(
-        self,
-        workers: list[WorkerSnapshot],
-        building_counts: dict[WorkerId, int] | None = None,
-        pending_tasks: list[JobName] | None = None,
-        jobs: dict[JobName, JobRequirements] | None = None,
-        max_building_tasks: int | None = None,
-        max_assignments_per_worker: int | None = None,
-    ) -> SchedulingContext:
-        """Create a scheduling context for the given workers.
-
-        Convenience wrapper for tests, diagnostics, and the autoscaler dry-run
-        path. Does not populate the raw read fields (``pending_task_rows``,
-        ``user_spend``, etc.); use ``build_scheduling_context`` for the full
-        scheduling-loop construction.
-        """
-        limit = max_building_tasks if max_building_tasks is not None else self._max_building_tasks_per_worker
-        assignments_limit = (
-            max_assignments_per_worker if max_assignments_per_worker is not None else DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
-        )
-        return SchedulingContext.from_workers(
-            workers,
-            building_counts=building_counts,
-            max_building_tasks=limit,
-            pending_tasks=pending_tasks,
-            jobs=jobs,
-            max_assignments_per_worker=assignments_limit,
-        )
 
     def get_job_scheduling_diagnostics(
         self,

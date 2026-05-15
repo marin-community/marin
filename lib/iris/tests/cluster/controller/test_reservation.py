@@ -39,7 +39,14 @@ from iris.cluster.controller.controller import (
     job_requirements_from_job,
 )
 from iris.cluster.controller.reads import SchedulableWorker
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, SchedulingContext, worker_snapshot_from_row
+from iris.cluster.controller.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    worker_snapshot_from_row,
+)
 from iris.cluster.controller.task_state import task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     RESERVATION_HOLDER_JOB_NAME,
@@ -48,7 +55,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.types import JobName, WorkerId, is_job_finished
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, is_job_finished
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
@@ -764,12 +771,21 @@ def _build_context_with_workers(
     pending_tasks: list[JobName],
     jobs: dict[JobName, JobRequirements],
 ) -> SchedulingContext:
-    scheduler = Scheduler()
     snapshots = [worker_snapshot_from_row(w) for w in workers]
-    return scheduler.create_scheduling_context(
-        snapshots,
+    return SchedulingContext(
+        workers=snapshots,
+        building_counts={},
+        max_building_tasks=DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
         pending_tasks=pending_tasks,
         jobs=jobs,
+        pending_task_rows=[],
+        user_spend={},
+        user_budget_limits={},
+        requested_bands={},
+        reserved_job_ids=frozenset(),
+        reservation_entry_counts={},
+        user_budget_defaults=UserBudgetDefaults(),
     )
 
 
