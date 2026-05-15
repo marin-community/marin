@@ -1,0 +1,483 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Run a fasttext classifier over datakit-normalized data.
+
+Reads datakit-normalized Parquet (``id``, ``text``, ``partition_id``), runs a
+fasttext ``.bin`` model over each record's text, and emits a co-partitioned
+Parquet attributes dataset with the predicted label distribution.
+
+Schema of the emitted Parquet attributes (datakit ``{id, attributes}`` convention,
+consumable by :func:`marin.processing.classification.consolidate.consolidate`):
+
+    id                       : string         — matches source document id
+    partition_id             : int            — matches source partition
+    attributes               : struct
+        top_label            : string         — fasttext top-1 label (``__label__`` stripped)
+        top_score            : float          — top-1 probability
+        labels               : list[string]   — all labels in fasttext score order
+        scores               : list[float]    — corresponding probabilities
+
+The model itself is materialized once via :func:`prepare_fasttext_model_step` —
+a tiny prep step that pulls the model ``.bin`` from HuggingFace and stages it
+into the step's ``output_path`` on GCS. Workers in the classify step then read
+from the in-region GCS path, so a 100-source fan-out doesn't hammer the HF Hub.
+
+Output is co-partitioned with the source: one ``part-NNNNN-of-MMMMM.parquet``
+per input partition, preserving the source filenames so consolidate can
+sorted-merge-join without a shuffle.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from typing import Any
+
+import pyarrow as pa
+from fray import ResourceConfig
+from marin.datakit.normalize import NormalizedData
+from marin.execution.artifact import Artifact
+from marin.execution.step_spec import StepSpec
+from pydantic import BaseModel
+from rigging.filesystem import open_url, url_to_fs
+from zephyr import Dataset, ShardInfo, ZephyrContext, atomic_rename, counters, write_parquet_file
+from zephyr.readers import load_file
+
+logger = logging.getLogger(__name__)
+
+
+# Default cap on text length sent to the classifier. The Dolma3 topic
+# classifier (and most fasttext web-text classifiers) is trained on short,
+# truncated documents — passing megabytes of text just slows the predict
+# loop without improving the prediction. 100 KiB ~ first ~25 K tokens at 4
+# chars/token, plenty for a topic decision and matches what AllenAI's own
+# pipeline does upstream of this classifier.
+DEFAULT_MAX_TEXT_CHARS = 100_000
+
+# fasttext.predict rejects strings containing a literal newline, so we
+# replace them with a single space before predicting. Matches the
+# canonical preprocessing every fasttext-on-web-text pipeline applies.
+_NEWLINE_REPLACEMENT = " "
+
+
+@dataclass(frozen=True)
+class FastTextConfig:
+    """Inference-time knobs for the classifier.
+
+    Attributes:
+        max_text_chars: Truncate input text to this many UTF-8 chars before
+            predict. ``None`` disables truncation.
+        k: Top-K labels to keep from each prediction. ``-1`` keeps the full
+            label distribution (recommended so downstream consolidate can
+            apply different thresholds without re-classifying).
+        threshold: Minimum score for a label to be kept. ``0.0`` keeps all
+            labels returned by fasttext (with default ``k=-1`` this is the
+            entire vocabulary).
+    """
+
+    max_text_chars: int | None = DEFAULT_MAX_TEXT_CHARS
+    k: int = -1
+    threshold: float = 0.0
+
+
+class FastTextModel(BaseModel):
+    """Artifact: a fasttext ``.bin`` model staged at a stable GCS path.
+
+    Persisted as the prep step's ``.artifact`` so downstream classify steps
+    can locate the model without re-running the download.
+
+    Attributes:
+        model_dir: Directory containing ``model.bin``. Equal to the prep
+            step's ``output_path``.
+        model_path: Resolved path to the ``.bin`` (``<model_dir>/model.bin``).
+        hf_repo_id: Source HF repo (e.g. ``"allenai/dolma3-fasttext-weborganizer-topic-classifier"``).
+        hf_filename: Filename within the HF repo that was downloaded.
+        revision: HF commit / branch / tag pulled.
+        size_bytes: Size of the staged ``.bin``.
+    """
+
+    version: str = "v1"
+    model_dir: str
+    model_path: str
+    hf_repo_id: str
+    hf_filename: str
+    revision: str
+    size_bytes: int
+
+
+class FastTextAttributes(BaseModel):
+    """Outcome of :func:`classify_fasttext_to_parquet`: a co-partitioned attributes dataset.
+
+    Persisted as the step's ``.artifact`` so downstream consumers can locate
+    the output without re-running the pipeline.
+
+    Attributes:
+        output_dir: Directory containing ``part-NNNNN-of-MMMMM.parquet`` files.
+        num_partitions: Number of output partitions; matches the source.
+        model_path: Path to the fasttext ``.bin`` used to produce these
+            attributes. Recorded so consumers can confirm provenance.
+        counters: Aggregated zephyr counters from the classify pipeline.
+    """
+
+    version: str = "v1"
+    output_dir: str
+    num_partitions: int
+    model_path: str
+    counters: dict[str, int]
+
+
+_MODEL_FILENAME = "model.bin"
+_LABEL_PREFIX = "__label__"
+
+
+def model_path(model_dir: str) -> str:
+    """Return the canonical model.bin path inside a prep step's output dir."""
+    return os.path.join(model_dir, _MODEL_FILENAME)
+
+
+def _stream_hf_to_gcs(*, hf_repo_id: str, hf_filename: str, revision: str, target_path: str) -> int:
+    """Stream ``<hf_repo_id>@<revision>/<hf_filename>`` to ``target_path``.
+
+    Uses ``HfFileSystem`` via fsspec (the same path the bulk download helper
+    uses), wrapped in :func:`atomic_rename` so a crashed prep run leaves no
+    half-written ``.bin`` behind. Returns the number of bytes written.
+    """
+    # Imports are local because huggingface_hub is only needed at prep time
+    # and we don't want to make it a hard dep of the classify-mark workers.
+    from huggingface_hub import HfFileSystem
+
+    hf_fs = HfFileSystem()
+    src = f"{hf_repo_id}@{revision}/{hf_filename}"
+    target_fs, resolved = url_to_fs(target_path)
+    target_fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
+    bytes_written = 0
+    with atomic_rename(target_path) as temp_path:
+        with hf_fs.open(src, "rb") as src_file, open_url(temp_path, "wb") as dst_file:
+            while True:
+                chunk = src_file.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                dst_file.write(chunk)
+                bytes_written += len(chunk)
+    logger.info(
+        "classify: staged %s@%s/%s → %s (%d bytes)", hf_repo_id, revision, hf_filename, target_path, bytes_written
+    )
+    return bytes_written
+
+
+def prepare_fasttext_model(
+    *,
+    hf_repo_id: str,
+    hf_filename: str,
+    revision: str,
+    output_path: str,
+) -> FastTextModel:
+    """Download a fasttext ``.bin`` from HF and stage it at ``<output_path>/model.bin``.
+
+    Args:
+        hf_repo_id: HuggingFace repo id (e.g. ``"allenai/dolma3-fasttext-weborganizer-topic-classifier"``).
+        hf_filename: Filename within the repo (e.g. ``"model.bin"``).
+        revision: HF commit hash / tag. Pin this — fasttext models are silently
+            re-uploaded on the Hub and we want the cache key tied to bytes.
+        output_path: Step output directory. ``model.bin`` is written into it.
+
+    Returns:
+        :class:`FastTextModel` artifact pointing at the staged ``.bin``.
+    """
+    target = model_path(output_path)
+    size = _stream_hf_to_gcs(
+        hf_repo_id=hf_repo_id,
+        hf_filename=hf_filename,
+        revision=revision,
+        target_path=target,
+    )
+    return FastTextModel(
+        model_dir=output_path,
+        model_path=target,
+        hf_repo_id=hf_repo_id,
+        hf_filename=hf_filename,
+        revision=revision,
+        size_bytes=size,
+    )
+
+
+def _normalize_for_fasttext(text: str, max_chars: int | None) -> str:
+    """Strip newlines and truncate. Matches the canonical fasttext-on-web preprocessing."""
+    if max_chars is not None and len(text) > max_chars:
+        text = text[:max_chars]
+    return text.replace("\n", _NEWLINE_REPLACEMENT).replace("\r", _NEWLINE_REPLACEMENT)
+
+
+def _strip_label_prefix(label: str) -> str:
+    """Drop the leading ``__label__`` fasttext attaches to every class name."""
+    return label.removeprefix(_LABEL_PREFIX)
+
+
+_ATTRIBUTES_STRUCT = pa.struct(
+    [
+        pa.field("top_label", pa.string()),
+        pa.field("top_score", pa.float64()),
+        pa.field("labels", pa.list_(pa.string())),
+        pa.field("scores", pa.list_(pa.float64())),
+    ]
+)
+
+_OUTPUT_SCHEMA = pa.schema(
+    [
+        pa.field("id", pa.string()),
+        pa.field("partition_id", pa.int64()),
+        pa.field("attributes", _ATTRIBUTES_STRUCT),
+    ]
+)
+
+
+def _discover_parquet_partitions(input_path: str) -> list[str]:
+    """Walk *input_path* recursively, return sorted list of .parquet files.
+
+    Mirrors :func:`marin.datakit.decon._discover_parquet_partitions`: caller must
+    point at the flat datakit-normalize output dir (``NormalizedData.main_output_dir``).
+    """
+    fs, resolved = url_to_fs(input_path)
+    protocol = input_path.split("://")[0] if "://" in input_path else ""
+    discovered: list[str] = []
+    for root, _dirs, files in fs.walk(resolved):
+        rel = os.path.relpath(root, resolved)
+        if rel != "." and any(p.startswith(".") for p in rel.split(os.sep)):
+            continue
+        for fname in files:
+            if fname.startswith(".") or not fname.endswith(".parquet"):
+                continue
+            full = os.path.join(root, fname)
+            discovered.append(f"{protocol}://{full}" if protocol else full)
+    discovered.sort()
+    return discovered
+
+
+def _make_classifier(
+    model_path_str: str,
+    output_dir: str,
+    text_field: str,
+    cfg: FastTextConfig,
+) -> Callable[[Iterator[str], ShardInfo], Iterator[dict[str, Any]]]:
+    """Return a ``map_shard`` function that classifies one input parquet → one output parquet."""
+
+    def classify_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
+        # Local import so workers without fasttext (e.g. the driver) don't
+        # crash at module-import time. fasttext is a heavyweight C-extension
+        # dep; only the classify workers need it.
+        import fasttext
+
+        # Load the .bin into worker-local /tmp once per shard; fasttext can't
+        # read directly from GCS. Reuse across all input partitions assigned
+        # to this shard.
+        fs, resolved = url_to_fs(model_path_str)
+        local = f"/tmp/fasttext-{os.path.basename(resolved)}"
+        if not os.path.exists(local):
+            with fs.open(resolved, "rb") as src, open(local, "wb") as dst:
+                while True:
+                    chunk = src.read(8 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+        model = fasttext.load_model(local)
+
+        for input_path in paths:
+
+            def rows_for(p: str) -> Iterator[dict[str, Any]]:
+                for record in load_file(p):
+                    text = str(record.get(text_field, "") or "")
+                    if not text:
+                        counters.increment("classify/empty_text")
+                        yield {
+                            "id": record["id"],
+                            "partition_id": record.get("partition_id", shard.shard_idx),
+                            "attributes": {
+                                "top_label": "",
+                                "top_score": 0.0,
+                                "labels": [],
+                                "scores": [],
+                            },
+                        }
+                        continue
+                    cleaned = _normalize_for_fasttext(text, cfg.max_text_chars)
+                    labels, probs = model.predict(cleaned, k=cfg.k, threshold=cfg.threshold)
+                    stripped = [_strip_label_prefix(label) for label in labels]
+                    top_label = stripped[0] if stripped else ""
+                    top_score = float(probs[0]) if len(probs) > 0 else 0.0
+                    counters.increment("classify/predicted")
+                    yield {
+                        "id": record["id"],
+                        "partition_id": record.get("partition_id", shard.shard_idx),
+                        "attributes": {
+                            "top_label": top_label,
+                            "top_score": top_score,
+                            "labels": stripped,
+                            "scores": [float(p) for p in probs],
+                        },
+                    }
+
+            out_filename = os.path.basename(input_path)
+            out_path = f"{output_dir.rstrip('/')}/{out_filename}"
+            result = write_parquet_file(rows_for(input_path), output_path=out_path, schema=_OUTPUT_SCHEMA)
+            yield result
+
+    return classify_shard
+
+
+def classify_fasttext_to_parquet(
+    *,
+    normalized_data: NormalizedData,
+    model: FastTextModel,
+    output_path: str,
+    text_field: str = "text",
+    cfg: FastTextConfig | None = None,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+) -> FastTextAttributes:
+    """Classify records in *normalized_data* with the fasttext model at *model*.
+
+    Args:
+        normalized_data: Upstream :class:`NormalizedData` artifact. Reads from
+            ``normalized_data.main_output_dir`` (the flat, co-partitioned
+            Parquet directory produced by datakit normalize). Records must
+            have ``id``, ``text``, and ``partition_id`` columns.
+        model: :class:`FastTextModel` artifact pointing at a staged
+            ``.bin``. The mark workers stream the bin from GCS to local
+            ``/tmp`` once per worker process.
+        output_path: Directory for co-partitioned Parquet attributes. One
+            output file is written per input partition, preserving filenames.
+        text_field: Text column name in the input records.
+        cfg: Inference-time knobs. ``None`` uses :class:`FastTextConfig`'s
+            defaults (full label distribution, 100 KiB truncation).
+        worker_resources: Per-shard resource request. Defaults to 2 CPU /
+            8 GB RAM, matching the decon mark step.
+        max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
+
+    Returns:
+        :class:`FastTextAttributes` describing the output dataset and counters.
+    """
+    cfg = cfg or FastTextConfig()
+    input_path = normalized_data.main_output_dir
+    files = _discover_parquet_partitions(input_path)
+    if not files:
+        raise FileNotFoundError(f"No .parquet files found under {input_path}")
+    num_partitions = len(files)
+    logger.info(
+        "classify: %s → %s, %d input partitions, model=%s",
+        input_path,
+        output_path,
+        num_partitions,
+        model.model_path,
+    )
+
+    pipeline = (
+        Dataset.from_list(files)
+        .reshard(num_shards=num_partitions)
+        .map_shard(_make_classifier(model.model_path, output_path, text_field, cfg))
+    )
+
+    resources = worker_resources or ResourceConfig(cpu=2, ram="8g")
+    ctx_kwargs: dict[str, Any] = {"name": "classify-fasttext", "resources": resources}
+    if max_workers is not None:
+        ctx_kwargs["max_workers"] = max_workers
+    ctx = ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(pipeline)
+
+    return FastTextAttributes(
+        output_dir=output_path,
+        num_partitions=num_partitions,
+        model_path=model.model_path,
+        counters=dict(outcome.counters),
+    )
+
+
+def prepare_fasttext_model_step(
+    *,
+    name: str,
+    hf_repo_id: str,
+    hf_filename: str,
+    revision: str,
+    output_path_prefix: str | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """StepSpec factory for :func:`prepare_fasttext_model`.
+
+    Args:
+        name: Step name (e.g. ``"datakit/classify/_model/dolma3-weborg-topic"``).
+        hf_repo_id, hf_filename, revision: Identify the exact ``.bin`` to
+            stage. All three feed ``hash_attrs`` so re-pinning re-stages.
+        output_path_prefix, override_output_path: StepSpec routing.
+    """
+    hash_attrs: dict[str, Any] = {
+        "hf_repo_id": hf_repo_id,
+        "hf_filename": hf_filename,
+        "revision": revision,
+    }
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: prepare_fasttext_model(
+            hf_repo_id=hf_repo_id,
+            hf_filename=hf_filename,
+            revision=revision,
+            output_path=output_path,
+        ),
+        hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
+        override_output_path=override_output_path,
+    )
+
+
+def classify_fasttext_step(
+    *,
+    name: str,
+    normalized: StepSpec,
+    model_step: StepSpec,
+    text_field: str = "text",
+    max_text_chars: int | None = DEFAULT_MAX_TEXT_CHARS,
+    k: int = -1,
+    threshold: float = 0.0,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+    output_path_prefix: str | None = None,
+    override_output_path: str | None = None,
+) -> StepSpec:
+    """Create a StepSpec that classifies a normalized dataset with a fasttext model.
+
+    Args:
+        name: Step name (e.g. ``"datakit/classify/topic/fineweb"``).
+        normalized: Upstream datakit normalize step whose output is the input.
+        model_step: Upstream :func:`prepare_fasttext_model_step` whose output
+            directory holds the ``.bin``.
+        text_field: Text column name in the input records.
+        max_text_chars: Truncate input text to this many chars before predict.
+            ``None`` disables truncation.
+        k: Top-K labels to keep. ``-1`` keeps the full distribution.
+        threshold: Minimum probability for a label to be kept.
+        worker_resources, max_workers: Zephyr execution knobs.
+        output_path_prefix, override_output_path: StepSpec routing.
+    """
+    hash_attrs: dict[str, Any] = {
+        "text_field": text_field,
+        "max_text_chars": max_text_chars,
+        "k": k,
+        "threshold": threshold,
+    }
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: classify_fasttext_to_parquet(
+            normalized_data=Artifact.from_path(normalized, NormalizedData),
+            model=Artifact.from_path(model_step, FastTextModel),
+            output_path=output_path,
+            text_field=text_field,
+            cfg=FastTextConfig(max_text_chars=max_text_chars, k=k, threshold=threshold),
+            worker_resources=worker_resources,
+            max_workers=max_workers,
+        ),
+        deps=[normalized, model_step],
+        hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
+        override_output_path=override_output_path,
+    )
