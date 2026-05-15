@@ -145,7 +145,7 @@ def all_sources() -> dict[str, DatakitSource]:
         # cp/biodiversity is carved out of common_pile (see common_pile.py)
         # because it needs page-stitching before normalize.
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
-        ("climblab-ja", climblab_ja_normalize_steps, 300.0),
+        ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
