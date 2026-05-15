@@ -1,34 +1,40 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Assign every doc in a source's EmbeddingAttrData to its nearest centroid.
+"""Map-only Zephyr assign pipeline: EmbeddingAttrData -> co-partitioned AssignmentAttrData parquet.
 
-Output is itself a datakit attribute dataset (:class:`AssignmentAttrData`):
-one parquet shard per input embedding shard, sharing basenames, sorted by
-``id`` (row order preserved end-to-end from normalized → embedding →
-assignment). Columns::
+Each embedding parquet shard becomes one Zephyr task producing one output
+parquet shard with the same basename. Schema::
 
     id              string
-    cluster_5000    int32     # K=k_train assignment
-    dist_5000       float32   # squared L2 distance to assigned centroid
-    cluster_1000    int32     # via agglomerative-merge lookup
-    cluster_40      int32     # via agglomerative-merge lookup
+    cluster_<K>     int32     # K=k_train assignment
+    dist_<K>        float32   # squared L2 distance to assigned centroid
+    cluster_<k>     int32     # for each coarser k in lookups (via agglomerative merge)
 
-Per-doc cost at K=5000, d=192 is ~1M FLOP; FAISS BLAS on cpu=8 hits
-roughly ~1M docs/min. 15B docs / 1M docs/min / 1000 workers ~= 15 min.
+FAISS centroids + lookups are loaded per worker process and cached, so a
+worker handles many shards with a single load. ``InlineRunner`` keeps that
+cache valid across Zephyr tasks.
+
+Counters: ``assign/docs_in``, ``assign/shards_in``.
 """
+
+from __future__ import annotations
 
 import logging
 import os
 import tempfile
+from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
+from fray import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.utils import fsspec_glob
 from pydantic import BaseModel
 from rigging.filesystem import open_url
+from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file
+from zephyr.runners import InlineRunner
 
 from experiments.embed_clusters_full.embed_source import EmbeddingAttrData, dequantize_to_fp32
 
@@ -36,12 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 class AssignmentAttrData(BaseModel):
-    """Co-partitioned per-source cluster-assignment parquet shards.
-
-    Mirrors the upstream :class:`EmbeddingAttrData` (and thus the
-    ``NormalizedData.main_output_dir``) shard-for-shard, with the same
-    basenames and the same row order. Persisted as the step's ``.artifact``.
-    """
+    """Co-partitioned per-source cluster-assignment parquet shards."""
 
     version: str = "v1"
     output_dir: str
@@ -64,76 +65,167 @@ def _read_npy(uri: str) -> np.ndarray:
     return arr
 
 
+# Per-process FAISS index + lookups cache (one-time download + index.add per worker).
+_INDEX_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _get_index(centroids_uri: str, lookup_uris: dict[int, str]) -> dict[str, Any]:
+    """Build or fetch a cached FAISS index + lookups for this worker process."""
+    if centroids_uri not in _INDEX_CACHE:
+        import faiss
+
+        logger.info("Loading centroids from %s", centroids_uri)
+        centroids = _read_npy(centroids_uri).astype(np.float32, copy=False)
+        k_train, d = centroids.shape
+        index = faiss.IndexFlatL2(d)
+        index.add(centroids)
+        lookups = {k: _read_npy(uri).astype(np.int32, copy=False) for k, uri in lookup_uris.items()}
+        _INDEX_CACHE[centroids_uri] = {
+            "index": index,
+            "k_train": int(k_train),
+            "dim": int(d),
+            "lookups": lookups,
+        }
+    return _INDEX_CACHE[centroids_uri]
+
+
+def _assign_shard(
+    batches: Iterator[list[dict]],
+    shard: ShardInfo,
+    *,
+    centroids_uri: str,
+    lookup_uris: dict[int, str],
+    quant_scale: float,
+) -> Iterator[dict]:
+    """Per-shard map: dequantize int8 embeddings, FAISS-search against centroids, emit assignments."""
+    ctx = _get_index(centroids_uri, lookup_uris)
+    index = ctx["index"]
+    k_train: int = ctx["k_train"]
+    d: int = ctx["dim"]
+    lookups: dict[int, np.ndarray] = ctx["lookups"]
+    cluster_col = f"cluster_{k_train}"
+    dist_col = f"dist_{k_train}"
+
+    n_docs = 0
+    for batch in batches:
+        ids = [r["id"] for r in batch]
+        # embeddings come in as list[int] per record from upstream parquet read;
+        # reshape into a (B, dim) int8 matrix then dequantize.
+        flat_int8 = np.asarray([r["embedding"] for r in batch], dtype=np.int8)
+        embeddings = dequantize_to_fp32(flat_int8.reshape(-1, d), scale=quant_scale)
+        dist, cluster_train = index.search(embeddings, 1)
+        cluster_train_arr = cluster_train[:, 0].astype(np.int32, copy=False)
+        dist_train_arr = dist[:, 0].astype(np.float32, copy=False)
+        n_docs += len(ids)
+
+        # Precompute the coarser-K cluster ids for this batch via the lookups.
+        coarser = {k: lookups[k][cluster_train_arr] for k in lookups}
+
+        for i, did in enumerate(ids):
+            rec: dict[str, Any] = {
+                "id": did,
+                cluster_col: int(cluster_train_arr[i]),
+                dist_col: float(dist_train_arr[i]),
+            }
+            for k in lookups:
+                rec[f"cluster_{k}"] = int(coarser[k][i])
+            yield rec
+
+    counters.increment("assign/docs_in", n_docs)
+    counters.increment("assign/shards_in", 1)
+    logger.info(
+        "shard %d/%d: %d docs assigned (K=%d centroids, %d coarser views)",
+        shard.shard_idx,
+        shard.total_shards,
+        n_docs,
+        k_train,
+        len(lookups),
+    )
+
+
+def _output_schema(k_train: int, k_views: list[int]) -> pa.Schema:
+    fields: list[pa.Field] = [
+        pa.field("id", pa.string()),
+        pa.field(f"cluster_{k_train}", pa.int32()),
+        pa.field(f"dist_{k_train}", pa.float32()),
+    ]
+    for k in sorted(k_views):
+        fields.append(pa.field(f"cluster_{k}", pa.int32()))
+    return pa.schema(fields)
+
+
 def assign_source(
     output_path: str,
     embedding_step_output: str,
     centroids_uri: str,
     lookup_uris: dict[int, str],
+    *,
+    window_size: int = 4096,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int = 128,
 ) -> AssignmentAttrData:
-    """Assign every shard of one source's EmbeddingAttrData; emit AssignmentAttrData."""
-    import faiss
-
+    """Map-only Zephyr assign of every shard in one source's EmbeddingAttrData."""
     embed_attr = Artifact.from_path(embedding_step_output, EmbeddingAttrData)
-    centroids = _read_npy(centroids_uri).astype(np.float32, copy=False)
-    k_train, d = centroids.shape
+    embedding_shards = embed_attr.shard_paths()
+    if not embedding_shards:
+        raise RuntimeError(f"No embedding shards under {embed_attr.output_dir}")
+
+    # Load centroids on the driver just to discover (k_train, dim) for the schema.
+    # Workers do their own loads (cached) — this driver read is small (~MB).
+    centroids = _read_npy(centroids_uri)
+    k_train, d = int(centroids.shape[0]), int(centroids.shape[1])
     if d != embed_attr.embedding_dim:
         raise ValueError(f"centroid dim {d} != embedding dim {embed_attr.embedding_dim}")
-    lookups = {k: _read_npy(uri).astype(np.int32, copy=False) for k, uri in lookup_uris.items()}
+    k_views = sorted(int(k) for k in lookup_uris)
+    schema = _output_schema(k_train, k_views)
 
-    index = faiss.IndexFlatL2(d)
-    index.add(centroids)
+    output_basenames = tuple(os.path.basename(p) for p in embedding_shards)
 
-    schema_fields: list[pa.Field] = [
-        pa.field("id", pa.string()),
-        pa.field(f"cluster_{k_train}", pa.int32()),
-        pa.field(f"dist_{k_train}", pa.float32()),
-    ]
-    for k in sorted(lookups):
-        schema_fields.append(pa.field(f"cluster_{k}", pa.int32()))
-    out_schema = pa.schema(schema_fields)
+    def _output_path(shard_idx: int, _total: int, bn: tuple[str, ...] = output_basenames) -> str:
+        return f"{output_path.rstrip('/')}/{bn[shard_idx]}"
 
-    shards = embed_attr.shard_paths()
-    logger.info("Assigning %d shards from %s against K=%d centroids", len(shards), embed_attr.output_dir, k_train)
+    logger.info(
+        "Assigning %d shards from %s against K=%d centroids (views: %s)",
+        len(embedding_shards),
+        embed_attr.output_dir,
+        k_train,
+        k_views,
+    )
 
-    total = 0
-    for shard_uri in shards:
-        basename = os.path.basename(shard_uri)
-        table = pq.read_table(shard_uri)
-        ids = table["id"]
-        # ChunkedArray -> FixedSizeListArray -> flat int8 values array.
-        fsl = table["embedding"].combine_chunks()
-        flat_int8 = fsl.values.to_numpy(zero_copy_only=False)
-        embeddings = dequantize_to_fp32(flat_int8.reshape(-1, d), scale=embed_attr.quantization_scale)
+    source_specs = [InputFileSpec(path=p, columns=["id", "embedding"]) for p in embedding_shards]
 
-        dist, cluster_train = index.search(embeddings, 1)
-        cluster_train_arr = cluster_train[:, 0].astype(np.int32, copy=False)
-        dist_train_arr = dist[:, 0].astype(np.float32, copy=False)
+    quant_scale = embed_attr.quantization_scale
 
-        cols: dict[str, pa.Array | pa.ChunkedArray] = {
-            "id": ids,
-            f"cluster_{k_train}": pa.array(cluster_train_arr, type=pa.int32()),
-            f"dist_{k_train}": pa.array(dist_train_arr, type=pa.float32()),
-        }
-        for k in sorted(lookups):
-            cols[f"cluster_{k}"] = pa.array(lookups[k][cluster_train_arr], type=pa.int32())
-        out_table = pa.table(cols, schema=out_schema)
+    ds = (
+        Dataset.from_list(source_specs)
+        .flat_map(load_file)
+        .window(window_size)
+        .map_shard(
+            lambda batches, shard, cu=centroids_uri, lu=lookup_uris, qs=quant_scale: _assign_shard(
+                batches, shard, centroids_uri=cu, lookup_uris=lu, quant_scale=qs
+            )
+        )
+        .write_parquet(_output_path, schema=schema, skip_existing=True)
+    )
 
-        local_out = os.path.join(tempfile.gettempdir(), basename)
-        pq.write_table(out_table, local_out, compression="zstd", use_dictionary=True)
-        with open(local_out, "rb") as src, open_url(f"{output_path.rstrip('/')}/{basename}", "wb") as dst:
-            dst.write(src.read())
-        os.remove(local_out)
+    if worker_resources is None:
+        worker_resources = ResourceConfig(cpu=4, ram="8g")
 
-        total += out_table.num_rows
-        logger.info("Wrote %d assignments to %s", out_table.num_rows, basename)
+    ctx_z = ZephyrContext(
+        resources=worker_resources,
+        max_workers=min(max_workers, len(embedding_shards)),
+        name=f"assign-k{k_train}-{os.path.basename(embed_attr.output_dir)[:8]}",
+        stage_runner_factory=InlineRunner,
+    )
+    outcome = ctx_z.execute(ds, verbose=True)
 
     artifact = AssignmentAttrData(
         output_dir=output_path,
         source_main_dir=embed_attr.source_main_dir,
         embedding_output_dir=embed_attr.output_dir,
-        k_train=int(k_train),
-        k_views=sorted(lookups.keys()),
-        counters={"shards_out": len(shards), "docs_out": total},
+        k_train=k_train,
+        k_views=k_views,
+        counters=dict(outcome.counters),
     )
     Artifact.save(artifact, output_path)
     return artifact

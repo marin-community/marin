@@ -1,65 +1,62 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stream a datakit-normalized source through Luxical-One, write co-partitioned embedding parquet shards.
+"""Map-only Zephyr embed pipeline: NormalizedData -> co-partitioned int8 embedding parquet.
 
-Output is a datakit attribute dataset (mirrors :class:`TokenizedAttrData`):
-each output parquet shard has the same basename as its source shard, with
-columns ``id: string`` and ``embedding: FixedSizeList<int8, 192>``.
-Row order matches the source, so the sort-by-id invariant carries through.
+Each source parquet shard becomes one Zephyr task producing one output
+parquet shard with the same basename. Schema:
 
-We quantize fp32 embeddings symmetrically to int8 with
-``scale = 0.6 / 127`` (255 levels covering [-0.6, 0.6]). That gives
-guaranteed 1-byte-per-value storage AND 4x in-memory savings when
-loaded; consumers dequantize on read via :func:`dequantize_to_fp32`
-(one line: ``int8.astype(np.float32) * scale``). Mean cos sim of an
-int8 round trip is ~0.9998 on real Luxical-One output (see the
-QUANT_RANGE comment below for the envelope sweep). ``scale`` is
-recorded on the :class:`EmbeddingAttrData` artifact so consumers
-don't have to hard-code it.
+    id         string
+    embedding  list<int8> length 192   (Luxical-One quantized symmetrically
+                                        to +/-0.6 via scale 0.6/127)
 
-NOTE: at full scale, ``embed_source_shard`` should be invoked once per
-shard via Zephyr (one worker per parquet shard); ``embed_source`` here
-processes a whole source sequentially and is the right call only for
-small sources.
+Storage: ~1 byte per embedded value (no Parquet dictionary needed because we
+write int8 directly). Consumers ``pq.read_table`` then dequantize with
+``dequantize_to_fp32`` (``int8.astype(float32) * scale``).
+
+Model load is amortized via a per-process cache and ``InlineRunner`` so
+each Zephyr worker process loads Luxical exactly once and handles many
+shards under that single load — without this, the model would reload
+once per shard under the default ``SubprocessRunner`` (~9 s each).
+
+Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``.
 """
+
+from __future__ import annotations
 
 import logging
 import os
-import tempfile
+from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
+from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
 from marin.utils import fsspec_glob
 from pydantic import BaseModel
-from rigging.filesystem import open_url
+from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file
+from zephyr.runners import InlineRunner
 
 logger = logging.getLogger(__name__)
 
-LUXICAL_MODEL = "DatologyAI/luxical-one"
+LUXICAL_REPO = "DatologyAI/luxical-one"
+LUXICAL_WEIGHTS_FILE = "luxical_one_rc4.npz"
 LUXICAL_DIM = 192
-DEFAULT_BATCH_SIZE = 256
-DEFAULT_CHUNK_DOCS = 50_000
 
-# Quantization envelope. Empirically sweeping the per-vector cos-sim of an
-# int8 round trip over 10k real Luxical-One embeddings of nemotron_cc_v2/
-# high_quality showed:
-#
-#    range    mean_cos   min_cos   clip_pct
-#    +/-0.3   0.9809     0.9546     1.015%   <- too tight; tails clipped
-#    +/-0.5   0.9997     0.9948     0.249%
-#    +/-0.6   0.99982    0.9997     0.001%   <- best
-#    +/-0.7   0.99976    0.9997     0.000%
-#    +/-1.0   0.99951    0.9994     0.000%
-#
-# Luxical-One's sparse-to-dense projection produces per-dim values whose
-# p99.9 abs is ~0.53 and max abs is ~0.62 on real CC text — wider tails
-# than the original "or so" quote suggested. +/-0.6 covers the whole
-# observed range with effectively zero clipping while keeping the
-# quantization step as fine as possible.
+# Window size for per-encode batches. The native ``luxical.embedder.Embedder``
+# takes the whole list at once (no explicit batch_size arg), so this primarily
+# bounds in-flight memory. Benched on Iris cpu=8 (see bench_batch_size.py):
+# native throughput climbs from 218 docs/s at window=64 to 1516 docs/s at
+# window=4096 and plateaus there (window=10000 was identical). Memory at
+# window=4096: ~48 MB of in-flight text + BoW state — trivial in a ram=16g
+# worker. Bumping further wastes RAM with no throughput gain.
+DEFAULT_WINDOW = 4096
+
+# Quantization envelope. Sweep against real Luxical-One output (10K docs of
+# nemotron_cc_v2/high_quality) showed +/-0.6 keeps mean cos sim 0.9998 with
+# 0.001% clipping; +/-0.3 dropped cos sim to 0.98. See git history.
 QUANT_RANGE = 0.6
 QUANT_SCALE: float = QUANT_RANGE / 127  # int8 [-127, 127] -> fp32 [-0.6, 0.6] (255 levels, symmetric)
 
@@ -74,22 +71,23 @@ _EMBEDDING_SCHEMA = pa.schema(
 class EmbeddingAttrData(BaseModel):
     """Co-partitioned per-source embedding parquet shards.
 
-    Persisted as the step's ``.artifact``. Load via
-    ``Artifact.from_path(step, EmbeddingAttrData)``.
+    Mirrors :class:`~marin.processing.tokenize.attributes.TokenizedAttrData`.
+    One output parquet shard per source shard, sharing basename and row order
+    (sort-by-id invariant carries through). Persisted as the step's ``.artifact``.
+    Load via ``Artifact.from_path(step, EmbeddingAttrData)``.
 
     Attributes:
-        output_dir: Directory containing ``<basename>.parquet`` shards
-            (same basenames as ``source_main_dir``).
-        source_main_dir: ``NormalizedData.main_output_dir`` this dataset
-            mirrors. Co-partitioning means consumers can join
-            ``(basename, row_idx)`` directly without an id index.
-        model_name: HuggingFace model id used for encoding.
+        output_dir: Directory containing the per-shard parquet outputs.
+        source_main_dir: ``NormalizedData.main_output_dir`` this mirrors.
+            Co-partitioning means consumers can join ``(basename, row_idx)``
+            without an id index.
+        model_name: HuggingFace model id.
         embedding_dim: Vector dimension (192 for Luxical-One).
-        quantization_scale: Multiply the stored int8 by this to recover fp32
-            (i.e. ``fp32 = int8.astype(np.float32) * quantization_scale``).
-        quantization_range: Original clipping envelope before quantization
-            (informational; ``quantization_range == quantization_scale * 127``).
-        counters: aggregate `{shards_out, docs_out}`.
+        quantization_scale: ``fp32 = int8.astype(float32) * scale``.
+        quantization_range: Original envelope before quantization.
+        window_size: Encode batch size used (informational; recoverable
+            from logs, but recorded for reproducibility).
+        counters: Aggregated zephyr counters from the embed pipeline.
     """
 
     version: str = "v1"
@@ -99,6 +97,7 @@ class EmbeddingAttrData(BaseModel):
     embedding_dim: int
     quantization_scale: float
     quantization_range: float
+    window_size: int
     counters: dict[str, int] = {}
 
     def shard_paths(self) -> list[str]:
@@ -106,7 +105,7 @@ class EmbeddingAttrData(BaseModel):
 
 
 def quantize_to_int8(arr: np.ndarray) -> np.ndarray:
-    """Quantize fp32 to int8 using ``QUANT_SCALE`` (symmetric, 255 levels in [-0.3, 0.3])."""
+    """Quantize fp32 to int8 with ``QUANT_SCALE`` (255 symmetric levels in [-0.6, 0.6])."""
     return np.clip(np.round(arr / QUANT_SCALE), -127, 127).astype(np.int8)
 
 
@@ -115,115 +114,148 @@ def dequantize_to_fp32(arr: np.ndarray, scale: float = QUANT_SCALE) -> np.ndarra
     return arr.astype(np.float32) * scale
 
 
-def _encode_chunk(model, texts: list[str], batch_size: int) -> np.ndarray:
-    raw = np.asarray(
-        model.encode(texts, batch_size=batch_size, show_progress_bar=False, normalize_embeddings=True),
-        dtype=np.float32,
-    )
-    return quantize_to_int8(raw)
+# Per-process embedder cache — survives across map_shard calls under InlineRunner,
+# so a worker loads Luxical exactly once regardless of how many shards it handles.
+_EMBEDDER_CACHE: dict[tuple[str, str], Any] = {}
 
 
-def _embedding_record_batch(ids: list[str], embeddings_int8: np.ndarray) -> pa.RecordBatch:
-    flat = pa.array(embeddings_int8.reshape(-1), type=pa.int8())
-    emb_col = pa.FixedSizeListArray.from_arrays(flat, LUXICAL_DIM)
-    return pa.RecordBatch.from_arrays([pa.array(ids, type=pa.string()), emb_col], schema=_EMBEDDING_SCHEMA)
+def _get_embedder(repo_id: str, weights_filename: str) -> Any:
+    """Return the native Luxical Embedder, downloading weights on first use."""
+    key = (repo_id, weights_filename)
+    if key not in _EMBEDDER_CACHE:
+        from huggingface_hub import hf_hub_download
+        from luxical.embedder import Embedder
+
+        logger.info("Fetching luxical weights %s/%s", repo_id, weights_filename)
+        npz_path = hf_hub_download(repo_id=repo_id, filename=weights_filename)
+        logger.info("Loading native Luxical embedder from %s", npz_path)
+        _EMBEDDER_CACHE[key] = Embedder.load(npz_path)
+    return _EMBEDDER_CACHE[key]
 
 
-def embed_source_shard(
-    output_path: str,
-    shard_uri: str,
-    model_name: str = LUXICAL_MODEL,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    chunk_docs: int = DEFAULT_CHUNK_DOCS,
-) -> int:
-    """Embed one normalized parquet shard → parquet shard with the same basename.
+def _l2_normalize(arr: np.ndarray) -> np.ndarray:
+    """Row-wise L2 normalize. The native Embedder returns un-normalized vectors;
+    we normalize ourselves so the downstream pipeline can treat embeddings as unit-norm
+    (cosine K-means, int8 round trip)."""
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return arr / norms
 
-    Returns the number of docs written.
+
+def _embed_shard(
+    batches: Iterator[list[dict]],
+    shard: ShardInfo,
+    *,
+    repo_id: str,
+    weights_filename: str,
+) -> Iterator[dict]:
+    """Per-shard map: each ``batches`` window is one ``embedder(texts)`` call.
+
+    Yields ``{id, embedding}`` records preserving input order. Emits zephyr
+    counters with the totals for the shard.
     """
-    from sentence_transformers import SentenceTransformer
-
-    basename = os.path.basename(shard_uri)
-    out_uri = f"{output_path.rstrip('/')}/{basename}"
-    logger.info("Embedding %s -> %s", shard_uri, out_uri)
-
-    model = SentenceTransformer(model_name, trust_remote_code=True)
-    pf = pq.ParquetFile(shard_uri)
-
-    local_out = os.path.join(tempfile.gettempdir(), basename)
-    # use_dictionary is redundant for int8 (already 1 byte/value) but zstd still helps
-    # on repeated bytes from low-entropy dimensions.
-    writer = pq.ParquetWriter(local_out, _EMBEDDING_SCHEMA, compression="zstd", use_dictionary=False)
-
-    total = 0
-    buf_texts: list[str] = []
-    buf_ids: list[str] = []
-
-    def _flush() -> None:
-        nonlocal total
-        if not buf_texts:
-            return
-        emb = _encode_chunk(model, buf_texts, batch_size)
-        writer.write_batch(_embedding_record_batch(buf_ids, emb))
-        total += len(buf_ids)
-        buf_texts.clear()
-        buf_ids.clear()
-
-    for i in range(pf.num_row_groups):
-        rg = pf.read_row_group(i, columns=["id", "text"]).to_pylist()
-        for row in rg:
-            buf_texts.append(row["text"])
-            buf_ids.append(row["id"])
-            if len(buf_texts) >= chunk_docs:
-                _flush()
-    _flush()
-    writer.close()
-
-    with open(local_out, "rb") as src, open_url(out_uri, "wb") as dst:
-        dst.write(src.read())
-    os.remove(local_out)
-
-    logger.info("Encoded %d docs from %s", total, basename)
-    return total
+    embedder = _get_embedder(repo_id, weights_filename)
+    n_docs = 0
+    n_bytes = 0
+    for batch in batches:
+        ids = [r["id"] for r in batch]
+        texts = [r["text"] for r in batch]
+        n_docs += len(ids)
+        n_bytes += sum(len(t) for t in texts)
+        raw = np.asarray(embedder(texts, progress_bars=False), dtype=np.float32)
+        raw = _l2_normalize(raw)
+        q = quantize_to_int8(raw)
+        for i, did in enumerate(ids):
+            yield {"id": did, "embedding": q[i].tolist()}
+    counters.increment("embed/docs_in", n_docs)
+    counters.increment("embed/bytes_in", n_bytes)
+    counters.increment("embed/shards_in", 1)
+    logger.info(
+        "shard %d/%d: %d docs (%.1f MB) encoded",
+        shard.shard_idx,
+        shard.total_shards,
+        n_docs,
+        n_bytes / 1024 / 1024,
+    )
 
 
 def embed_source(
     output_path: str,
     normalized_path: str,
-    model_name: str = LUXICAL_MODEL,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    chunk_docs: int = DEFAULT_CHUNK_DOCS,
+    *,
+    repo_id: str = LUXICAL_REPO,
+    weights_filename: str = LUXICAL_WEIGHTS_FILE,
+    window_size: int = DEFAULT_WINDOW,
     max_shards: int | None = None,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int = 128,
 ) -> EmbeddingAttrData:
-    """Embed every shard under normalized.main_output_dir; persist EmbeddingAttrData.
+    """Map-only Zephyr embed of every shard under ``NormalizedData.main_output_dir``.
 
-    ``max_shards`` caps the number of source shards processed (useful for
-    smoke tests). For huge sources at full scale, replace this with a
-    Zephyr-driven per-shard fan-out invoking :func:`embed_source_shard`.
+    Each Zephyr task reads one source parquet shard, encodes records in
+    ``window_size``-sized batches via the native :mod:`luxical.embedder`
+    Embedder, L2-normalizes, quantizes to int8, and writes one output
+    parquet shard with the same basename.
     """
     normalized = Artifact.from_path(normalized_path, NormalizedData)
-    shards = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    source_shards = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
     if max_shards is not None:
-        shards = shards[:max_shards]
-    logger.info("Embedding %d shards from %s with %s", len(shards), normalized.main_output_dir, model_name)
+        source_shards = source_shards[:max_shards]
+    if not source_shards:
+        raise RuntimeError(f"No source parquet shards under {normalized.main_output_dir}")
 
-    total = 0
-    for shard_uri in shards:
-        total += embed_source_shard(
-            output_path=output_path,
-            shard_uri=shard_uri,
-            model_name=model_name,
-            batch_size=batch_size,
-            chunk_docs=chunk_docs,
+    output_basenames = tuple(os.path.basename(p) for p in source_shards)
+
+    def _output_path(shard_idx: int, _total: int, bn: tuple[str, ...] = output_basenames) -> str:
+        return f"{output_path.rstrip('/')}/{bn[shard_idx]}"
+
+    logger.info(
+        "Embedding %d shards from %s with %s/%s (window=%d)",
+        len(source_shards),
+        normalized.main_output_dir,
+        repo_id,
+        weights_filename,
+        window_size,
+    )
+
+    # Project columns at read time — partition_id (~8 B/row) is ~120 GB of
+    # extra read at 15 B-doc scale, and we don't need it.
+    source_specs = [InputFileSpec(path=p, columns=["id", "text"]) for p in source_shards]
+
+    ds = (
+        Dataset.from_list(source_specs)
+        .flat_map(load_file)
+        .window(window_size)
+        .map_shard(
+            lambda batches, shard, rid=repo_id, wf=weights_filename: _embed_shard(
+                batches, shard, repo_id=rid, weights_filename=wf
+            )
         )
+        .write_parquet(_output_path, schema=_EMBEDDING_SCHEMA, skip_existing=True)
+    )
+
+    if worker_resources is None:
+        worker_resources = ResourceConfig(cpu=8, ram="16g")
+
+    ctx = ZephyrContext(
+        resources=worker_resources,
+        max_workers=min(max_workers, len(source_shards)),
+        name=f"embed-luxical-{os.path.basename(normalized.main_output_dir)[:8]}",
+        # Override Iris's default SubprocessRunner so the per-process embedder
+        # cache actually gets reused across shards (huge win at this load cost).
+        stage_runner_factory=InlineRunner,
+    )
+    outcome = ctx.execute(ds, verbose=True)
 
     artifact = EmbeddingAttrData(
         output_dir=output_path,
         source_main_dir=normalized.main_output_dir,
-        model_name=model_name,
+        model_name=f"{repo_id}/{weights_filename}",
         embedding_dim=LUXICAL_DIM,
         quantization_scale=QUANT_SCALE,
         quantization_range=QUANT_RANGE,
-        counters={"shards_out": len(shards), "docs_out": total},
+        window_size=window_size,
+        counters=dict(outcome.counters),
     )
     Artifact.save(artifact, output_path)
     return artifact

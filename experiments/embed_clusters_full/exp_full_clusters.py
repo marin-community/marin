@@ -47,7 +47,7 @@ from marin.execution.step_spec import StepSpec  # noqa: E402
 from rigging.filesystem import marin_temp_bucket  # noqa: E402
 
 from experiments.embed_clusters_full.assign import assign_source  # noqa: E402
-from experiments.embed_clusters_full.embed_source import LUXICAL_MODEL, embed_source  # noqa: E402
+from experiments.embed_clusters_full.embed_source import LUXICAL_REPO, LUXICAL_WEIGHTS_FILE, embed_source  # noqa: E402
 from experiments.embed_clusters_full.sample import sample_centroid_inputs  # noqa: E402
 from experiments.embed_clusters_full.summarize import summarize_at_k  # noqa: E402
 from experiments.embed_clusters_full.train import train_centroids  # noqa: E402
@@ -64,6 +64,17 @@ K_VIEWS: tuple[int, ...] = (40, 1000)
 N_PER_SOURCE_FOR_SAMPLE = 100_000  # ~100 sources x 100k = ~10M-row centroid sample
 N_SAMPLE_PER_CLUSTER_AT_K_TRAIN = 200
 N_SAMPLE_PER_CLUSTER_AT_K_COARSER = 2_000
+
+EMBED_WINDOW = 4096  # bench plateau on native Luxical API at Iris cpu=8
+ASSIGN_WINDOW = 4096
+
+# Zephyr worker resources (one worker per source shard, many in parallel).
+# The StepSpec itself runs only the coordinator (build dataset, submit, wait).
+EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="16g", regions=[DATA_REGION])
+ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="8g", regions=[DATA_REGION])
+COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g", regions=[DATA_REGION])
+EMBED_MAX_WORKERS_PER_SOURCE = 128  # cap per-source worker fan-out; tune to cluster headroom
+ASSIGN_MAX_WORKERS_PER_SOURCE = 128
 
 _THREAD_ENV = {
     var: "8"
@@ -94,15 +105,25 @@ def _build_steps() -> list[StepSpec]:
             name=f"embed_luxical/{source_name}",
             output_path_prefix=_OUTPUT_PREFIX,
             deps=[normalized],
-            hash_attrs={"model": LUXICAL_MODEL, "quant_dtype": "int8", "quant_range": 0.6, "v": 1},
+            hash_attrs={
+                "luxical_repo": LUXICAL_REPO,
+                "luxical_weights": LUXICAL_WEIGHTS_FILE,
+                "quant_dtype": "int8",
+                "quant_range": 0.6,
+                "window": EMBED_WINDOW,
+                "v": 2,
+            },
             fn=remote(
                 lambda output_path, normalized_path=normalized_path: embed_source(
                     output_path=output_path,
                     normalized_path=normalized_path,
+                    window_size=EMBED_WINDOW,
+                    worker_resources=EMBED_WORKER_RESOURCES,
+                    max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
                 ),
-                # cpu=8 is the Luxical sweet spot per #5410; ram leaves headroom
-                # for sentence-transformers + numba caches and the 50k-doc encode buffer.
-                resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=8, ram="16g", disk="20g"),
+                # Just the coordinator: builds the dataset, submits to Zephyr,
+                # waits, writes the artifact. Workers come from ZephyrContext.
+                resources=COORDINATOR_RESOURCES,
                 env_vars=_THREAD_ENV,
                 pip_dependency_groups=["embed"],
             ),
@@ -155,15 +176,18 @@ def _build_steps() -> list[StepSpec]:
             name=f"assign/{source_name}",
             output_path_prefix=_OUTPUT_PREFIX,
             deps=[embed_step, train_step],
-            hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "v": 1},
+            hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "window": ASSIGN_WINDOW, "v": 2},
             fn=remote(
                 lambda output_path, embed_step_output=embed_step.output_path: assign_source(
                     output_path=output_path,
                     embedding_step_output=embed_step_output,
                     centroids_uri=centroids_uri,
                     lookup_uris=lookup_uris,
+                    window_size=ASSIGN_WINDOW,
+                    worker_resources=ASSIGN_WORKER_RESOURCES,
+                    max_workers=ASSIGN_MAX_WORKERS_PER_SOURCE,
                 ),
-                resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=8, ram="16g"),
+                resources=COORDINATOR_RESOURCES,
                 pip_dependency_groups=["cluster"],
             ),
         )

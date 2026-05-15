@@ -38,7 +38,7 @@ from marin.execution.step_spec import StepSpec  # noqa: E402
 from rigging.filesystem import marin_temp_bucket  # noqa: E402
 
 from experiments.embed_clusters_full.assign import assign_source  # noqa: E402
-from experiments.embed_clusters_full.embed_source import LUXICAL_MODEL, embed_source  # noqa: E402
+from experiments.embed_clusters_full.embed_source import LUXICAL_REPO, LUXICAL_WEIGHTS_FILE, embed_source  # noqa: E402
 from experiments.embed_clusters_full.sample import sample_centroid_inputs  # noqa: E402
 from experiments.embed_clusters_full.summarize import summarize_at_k  # noqa: E402
 from experiments.embed_clusters_full.train import train_centroids  # noqa: E402
@@ -48,12 +48,24 @@ logger = logging.getLogger(__name__)
 SOURCE_NAME = "nemotron_cc_v2/high_quality"
 MAX_SHARDS = 2
 
-K_TRAIN = 200
-K_VIEWS: tuple[int, ...] = (10, 40)
+K_TRAIN = 1000
+K_VIEWS: tuple[int, ...] = (40, 200)
 
 N_PER_SOURCE_FOR_SAMPLE = 50_000
 N_SAMPLE_PER_CLUSTER_AT_K_TRAIN = 20
 N_SAMPLE_PER_CLUSTER_AT_K_COARSER = 100
+
+EMBED_WINDOW = 4096  # picked by bench_batch_size.py: throughput plateau on native API
+ASSIGN_WINDOW = 4096
+
+# Per-Zephyr-worker resources for embed/assign. ZephyrContext spawns these
+# from the StepSpec coordinator. The StepSpec itself (which just runs the
+# coordinator code) gets coordinator_resources below.
+EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="16g", regions=[DATA_REGION])
+ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="8g", regions=[DATA_REGION])
+COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g", regions=[DATA_REGION])
+EMBED_MAX_WORKERS = 8  # bounded for smoke; production raises this
+ASSIGN_MAX_WORKERS = 8
 
 _THREAD_ENV = {
     var: "8"
@@ -83,19 +95,24 @@ def _build_steps() -> list[StepSpec]:
         output_path_prefix=_OUTPUT_PREFIX,
         deps=[normalized],
         hash_attrs={
-            "model": LUXICAL_MODEL,
+            "luxical_repo": LUXICAL_REPO,
+            "luxical_weights": LUXICAL_WEIGHTS_FILE,
             "quant_dtype": "int8",
             "quant_range": 0.6,
+            "window": EMBED_WINDOW,
             "max_shards": MAX_SHARDS,
-            "v": 1,
+            "v": 2,
         },
         fn=remote(
             lambda output_path, normalized_path=normalized.output_path: embed_source(
                 output_path=output_path,
                 normalized_path=normalized_path,
+                window_size=EMBED_WINDOW,
                 max_shards=MAX_SHARDS,
+                worker_resources=EMBED_WORKER_RESOURCES,
+                max_workers=EMBED_MAX_WORKERS,
             ),
-            resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=8, ram="16g", disk="20g"),
+            resources=COORDINATOR_RESOURCES,
             env_vars=_THREAD_ENV,
             pip_dependency_groups=["embed"],
         ),
@@ -142,15 +159,18 @@ def _build_steps() -> list[StepSpec]:
         name=f"assign/{SOURCE_NAME}",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=[embed_step, train_step],
-        hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "v": 1},
+        hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "window": ASSIGN_WINDOW, "v": 2},
         fn=remote(
             lambda output_path, embed_step_output=embed_step.output_path: assign_source(
                 output_path=output_path,
                 embedding_step_output=embed_step_output,
                 centroids_uri=centroids_uri,
                 lookup_uris=lookup_uris,
+                window_size=ASSIGN_WINDOW,
+                worker_resources=ASSIGN_WORKER_RESOURCES,
+                max_workers=ASSIGN_MAX_WORKERS,
             ),
-            resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=4, ram="8g"),
+            resources=COORDINATOR_RESOURCES,
             pip_dependency_groups=["cluster"],
         ),
     )

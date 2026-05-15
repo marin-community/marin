@@ -212,7 +212,7 @@ dedup = [
 
 embed = [
     "luxical",
-    "sentence-transformers",
+    "huggingface-hub",
 ]
 
 probe = [
