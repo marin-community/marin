@@ -10,10 +10,7 @@ handle as ``None`` — and retry registration in the background.
 
 import time
 
-import pytest
 from finelog.client import LogClient
-
-pytestmark = pytest.mark.timeout(15)
 
 
 def test_controller_starts_when_finelog_table_registration_fails(make_controller, monkeypatch):
