@@ -126,7 +126,7 @@ def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
     the write side, which blocks until in-flight readers release.
     """
     store.register_table("iris.worker", _worker_schema())
-    ns = store._namespaces["iris.worker"]
+    ns = store._catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
     ns._flush_step()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
@@ -162,7 +162,7 @@ def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
 def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):
     """Read path is independent of which physical files back the namespace."""
     store.register_table("iris.worker", _worker_schema())
-    ns = store._namespaces["iris.worker"]
+    ns = store._catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
     ns._flush_step()
     ns._force_compact_l0()
@@ -186,7 +186,7 @@ def test_writes_proceed_during_compaction_copy(store: DuckDBLogStore, monkeypatc
     release the gate — proving the insertion lock is not held across the COPY.
     """
     store.register_table("iris.worker", _worker_schema())
-    ns = store._namespaces["iris.worker"]
+    ns = store._catalog["iris.worker"]
 
     # Two L0 segments so ``_compaction_step`` plans an actual merge.
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))

@@ -3,12 +3,17 @@
 
 """Namespace registry over the DuckDB-backed log store.
 
-:class:`DuckDBLogStore` holds the global locks (insertion mutex +
-query-visibility rwlock) and the shared connection pool, and routes RPCs to
-per-namespace storage (:class:`LogNamespaceProtocol`). Schemas persist via
-:class:`Catalog` and are rehydrated on startup. The ``log`` namespace is
-upserted on first boot for back-compat with deployments whose registry DB
-pre-dates the namespace registry.
+:class:`DuckDBLogStore` is a thin façade over :class:`Catalog`. The
+catalog owns every piece of namespace state — schemas, segment rows,
+the live ``LogNamespaceProtocol`` dict, and the in-flight drop set —
+behind a single mutex; the store routes RPCs through it. The
+query-visibility rwlock on the store is held across reads so compaction
+can't unlink files mid-scan. Per-namespace ``_insertion_lock``s on each
+namespace serialize append/flush/compaction for that namespace only;
+writes against different namespaces don't contend. Schemas persist in
+the catalog DB and are rehydrated on startup. The ``log`` namespace is
+upserted on first boot for back-compat with deployments whose registry
+DB pre-dates the namespace registry.
 """
 
 from __future__ import annotations
@@ -26,13 +31,12 @@ import pyarrow as pa
 import pyarrow.ipc as paipc
 
 from finelog.rpc import logging_pb2
-from finelog.store.catalog import Catalog, NamespaceStats
+from finelog.store.catalog import Catalog
 from finelog.store.compactor import CompactionConfig
 from finelog.store.layout_migration import LOG_NAMESPACE_DIR
 from finelog.store.log_namespace import (
     LOG_REGISTERED_SCHEMA,
     DiskLogNamespace,
-    LogNamespaceProtocol,
     MemoryLogNamespace,
 )
 from finelog.store.rwlock import RWLock
@@ -40,7 +44,6 @@ from finelog.store.schema import (
     MAX_WRITE_ROWS_BYTES,
     MAX_WRITE_ROWS_ROWS,
     InvalidNamespaceError,
-    NamespaceNotFoundError,
     Schema,
     SchemaValidationError,
     duckdb_type_for,
@@ -50,6 +53,7 @@ from finelog.store.schema import (
     with_implicit_seq,
 )
 from finelog.store.sql_escape import quote_ident, quote_literal
+from finelog.store.types import LogNamespaceProtocol, NamespaceStats
 from finelog.types import LogReadResult
 
 logger = logging.getLogger(__name__)
@@ -201,10 +205,12 @@ def _validate_namespace_name(name: str, data_dir: Path | None) -> Path | None:
 class DuckDBLogStore:
     """Namespace registry routing log + stats RPCs to per-namespace storage.
 
-    Concurrency: the registry owns the global insertion mutex (held by every
-    write and every compaction's slow phase) and the query-visibility rwlock
-    (queries hold read for their full duration; commits and drops briefly
-    hold write).
+    Concurrency: :class:`Catalog` owns the registry mutex (covering
+    schemas, segment rows, the live namespace dict, and the in-flight
+    drop set). Per-namespace insertion mutexes live on each namespace
+    and serialize append/flush/compaction for that namespace. The
+    query-visibility rwlock is held across reads so compaction can't
+    unlink files mid-scan.
 
     Layout: per-namespace under ``{log_dir}/{name}/``; schema sidecar at
     ``{log_dir}/_finelog_registry.duckdb``. ``log_dir=None`` selects
@@ -227,7 +233,6 @@ class DuckDBLogStore:
         if log_dir is not None:
             log_dir.mkdir(parents=True, exist_ok=True)
 
-        self._insertion_lock = Lock()
         self._query_visibility_lock = RWLock()
         # Spill into the data dir, not CWD — the prod container runs with a
         # read-only working directory.
@@ -238,17 +243,6 @@ class DuckDBLogStore:
             temp_directory=pool_tmp,
         )
         self._catalog = Catalog(self._data_dir)
-
-        self._namespace_registered_at: dict[str, int] = {}
-        self._namespaces: dict[str, LogNamespaceProtocol] = {}
-        # Names currently being dropped. ``drop_table`` reserves the name
-        # here under ``_insertion_lock`` so a concurrent ``register_table``
-        # cannot recreate the namespace in the window between popping
-        # ``_namespaces`` and the late ``catalog.delete`` /
-        # ``remove_local_storage``. Without this, the late steps would
-        # delete the freshly registered namespace's catalog row and wipe
-        # its on-disk directory.
-        self._dropping: set[str] = set()
 
         # Disk-only kwargs; ignored by memory namespaces. ``duckdb_memory_limit``
         # in this dict feeds the per-namespace compaction connection in
@@ -272,7 +266,6 @@ class DuckDBLogStore:
             return MemoryLogNamespace(
                 name=name,
                 schema=schema,
-                insertion_lock=self._insertion_lock,
                 query_visibility_lock=self._query_visibility_lock,
                 read_pool=self._pool,
             )
@@ -282,7 +275,6 @@ class DuckDBLogStore:
             name=name,
             schema=schema,
             data_dir=namespace_dir,
-            insertion_lock=self._insertion_lock,
             query_visibility_lock=self._query_visibility_lock,
             read_pool=self._pool,
             catalog=self._catalog,
@@ -292,21 +284,22 @@ class DuckDBLogStore:
     def _rehydrate_from_registry(self) -> None:
         for name, schema in self._catalog.list_all().items():
             namespace_dir = self._namespace_dir(name)
-            self._namespaces[name] = self._make_namespace(name, schema, namespace_dir)
-            # Monotonic counter as the eviction tiebreak.
-            self._namespace_registered_at[name] = len(self._namespace_registered_at)
+            ns = self._make_namespace(name, schema, namespace_dir)
+            self._catalog.insert_live(name, ns)
 
     def _ensure_log_namespace_registered(self) -> None:
         """First-boot fixup: materialize the ``log`` registry row if missing."""
-        if LOG_NAMESPACE_NAME in self._namespaces:
+        if LOG_NAMESPACE_NAME in self._catalog:
             return
         log_dir = self._data_dir / LOG_NAMESPACE_DIR if self._data_dir is not None else None
         resolve_key_column(LOG_REGISTERED_SCHEMA)
         stored_schema = with_implicit_seq(LOG_REGISTERED_SCHEMA)
-        with self._insertion_lock:
-            self._catalog.upsert(LOG_NAMESPACE_NAME, stored_schema)
-            self._namespaces[LOG_NAMESPACE_NAME] = self._make_namespace(LOG_NAMESPACE_NAME, stored_schema, log_dir)
-            self._namespace_registered_at.setdefault(LOG_NAMESPACE_NAME, len(self._namespace_registered_at))
+        self._catalog.register_or_evolve(
+            LOG_NAMESPACE_NAME,
+            stored_schema,
+            lambda schema: self._make_namespace(LOG_NAMESPACE_NAME, schema, log_dir),
+            on_existing=lambda existing: existing.schema,
+        )
 
     def _namespace_dir(self, name: str) -> Path | None:
         if self._data_dir is None:
@@ -328,24 +321,7 @@ class DuckDBLogStore:
         resolve_key_column(schema)
         stored_schema = with_implicit_seq(schema)
 
-        with self._insertion_lock:
-            if name in self._dropping:
-                # A concurrent ``drop_table`` has already removed the
-                # namespace from ``_namespaces`` but has not yet finished
-                # its catalog/storage cleanup. Recreating the namespace
-                # now would let that cleanup wipe the new state. Surface
-                # this as a transient validation error; the caller can
-                # retry once the drop completes.
-                raise InvalidNamespaceError(
-                    f"namespace {name!r} is currently being dropped; retry once drop_table completes"
-                )
-            existing_ns = self._namespaces.get(name)
-            if existing_ns is None:
-                self._catalog.upsert(name, stored_schema)
-                self._namespaces[name] = self._make_namespace(name, stored_schema, namespace_dir)
-                self._namespace_registered_at[name] = len(self._namespace_registered_at)
-                return stored_schema
-
+        def on_existing(existing_ns: LogNamespaceProtocol) -> Schema:
             # merge_schemas raises SchemaConflictError on non-additive change.
             effective = merge_schemas(existing_ns.schema, stored_schema)
             if effective != existing_ns.schema:
@@ -353,13 +329,15 @@ class DuckDBLogStore:
                 existing_ns.update_schema(effective)
             return effective
 
+        return self._catalog.register_or_evolve(
+            name,
+            stored_schema,
+            lambda effective_schema: self._make_namespace(name, effective_schema, namespace_dir),
+            on_existing=on_existing,
+        )
+
     def list_namespaces(self) -> list[tuple[str, Schema]]:
-        with self._insertion_lock:
-            items = sorted(
-                self._namespaces.items(),
-                key=lambda kv: self._namespace_registered_at.get(kv[0], 0),
-            )
-            return [(name, ns.schema) for name, ns in items]
+        return [(name, ns.schema) for name, ns in self._catalog.snapshot_live()]
 
     def list_namespaces_with_stats(self) -> list[tuple[str, Schema, NamespaceStats]]:
         """Like :meth:`list_namespaces`, but also returns per-namespace stats.
@@ -370,20 +348,14 @@ class DuckDBLogStore:
         dashboard relies on it to render the namespace summary table without
         issuing per-namespace ``count(*)`` queries against parquet.
         """
-        with self._insertion_lock:
-            items = sorted(
-                self._namespaces.items(),
-                key=lambda kv: self._namespace_registered_at.get(kv[0], 0),
-            )
-            namespaces = [(name, ns) for name, ns in items]
+        # ns.stats() takes the per-namespace insertion lock; we want the
+        # registry snapshot to release the catalog lock before any stats()
+        # call so a slow namespace can't stall this call for every other.
+        namespaces = self._catalog.snapshot_live()
         return [(name, ns.schema, ns.stats()) for name, ns in namespaces]
 
     def get_table_schema(self, name: str) -> Schema:
-        with self._insertion_lock:
-            ns = self._namespaces.get(name)
-            if ns is None:
-                raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            return ns.schema
+        return self._catalog.require_live(name).schema
 
     def memory_summary(self) -> dict[str, int]:
         """Aggregate ram_bytes / chunk_count across namespaces, for diagnostics.
@@ -391,17 +363,17 @@ class DuckDBLogStore:
         Used by the periodic pool-diagnostics logger in the standalone server.
         ``MemoryLogNamespace`` reports zeros (no in-RAM segmented buffer).
         """
+        namespaces = self._catalog.live_values()
         total_ram_bytes = 0
         total_chunks = 0
-        with self._insertion_lock:
-            for ns in self._namespaces.values():
-                total_ram_bytes += ns.ram_bytes()
-                total_chunks += ns.chunk_count()
-            return {
-                "namespaces": len(self._namespaces),
-                "ram_bytes": total_ram_bytes,
-                "chunks": total_chunks,
-            }
+        for ns in namespaces:
+            total_ram_bytes += ns.ram_bytes()
+            total_chunks += ns.chunk_count()
+        return {
+            "namespaces": len(namespaces),
+            "ram_bytes": total_ram_bytes,
+            "chunks": total_chunks,
+        }
 
     def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> int:
         """Validate ``arrow_ipc_bytes`` and append the rows to ``name``.
@@ -418,15 +390,15 @@ class DuckDBLogStore:
         if batch.num_rows > MAX_WRITE_ROWS_ROWS:
             raise SchemaValidationError(f"WriteRows batch {batch.num_rows} rows exceeds {MAX_WRITE_ROWS_ROWS} limit")
 
-        # The lookup must happen under the insertion mutex: drop_table
-        # removes the namespace from the dict under the same mutex, so
-        # any write that observes a namespace here is guaranteed to see
-        # it survive the subsequent append (which retakes the mutex).
-        with self._insertion_lock:
-            ns = self._namespaces.get(name)
-            if ns is None:
-                raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            aligned = validate_and_align_batch(batch, ns.schema)
+        # Resolve the namespace + schema, then validate outside any lock:
+        # validate_and_align_batch is the bulk of the CPU work per WriteRows,
+        # and pinning it under the catalog lock would serialize every writer
+        # across every namespace. Schema is monotonic-additive — if it
+        # evolves between snapshot and append, ``_stamp_seq_column``
+        # NULL-fills the new columns at projection time.
+        ns = self._catalog.require_live(name)
+        schema = ns.schema
+        aligned = validate_and_align_batch(batch, schema)
         ns.append_record_batch(aligned)
         return aligned.num_rows
 
@@ -444,10 +416,10 @@ class DuckDBLogStore:
         self._query_visibility_lock.read_acquire()
         try:
             with self._pool.cursor() as cursor:
-                # Snapshot under the insertion lock so a concurrent drop_table
-                # can't trigger "dictionary changed size during iteration".
-                with self._insertion_lock:
-                    ns_snapshot = list(self._namespaces.items())
+                # Snapshot the live registry under the catalog lock so a
+                # concurrent drop_table can't trigger "dictionary changed
+                # size during iteration".
+                ns_snapshot = self._catalog.snapshot_live()
 
                 extra_registered: list[str] = []
                 try:
@@ -484,14 +456,12 @@ class DuckDBLogStore:
     def drop_table(self, name: str) -> None:
         """Remove ``name`` from the registry and delete its local segments.
 
-        We can't hold the insertion mutex end-to-end because the bg flush
-        thread itself takes it every iteration; joining under the mutex
-        would deadlock. The order is:
+        The order is:
 
-          1. Under the mutex: remove from the registry *and* mark ``name``
-             as ``_dropping`` (new ops fail fast — including a concurrent
-             ``register_table``, which would otherwise recreate the
-             namespace and have its state wiped by the cleanup steps
+          1. ``Catalog.begin_drop``: atomically pop from the live registry
+             and reserve the name in ``_dropping`` so new ops fail fast
+             (a concurrent ``register_table`` would otherwise recreate
+             the namespace and have its state wiped by the cleanup steps
              below).
           2. Stop and join the bg thread — *before* dropping catalog rows,
              because ``_sync_step`` would otherwise see an empty catalog
@@ -500,8 +470,8 @@ class DuckDBLogStore:
           3. Drop the catalog rows now that no concurrent reader can act
              on them.
           4. Take the rwlock write side and delete the segment directory.
-          5. Clear the ``_dropping`` reservation under the mutex; the name
-             is now free to be re-registered.
+          5. ``Catalog.finish_drop`` clears the reservation; the name is
+             now free to be re-registered.
 
         GCS-archived data is intentionally preserved; the bucket is the
         caller's to clean up.
@@ -509,19 +479,10 @@ class DuckDBLogStore:
         if name == LOG_NAMESPACE_NAME:
             raise InvalidNamespaceError(f"namespace {name!r} is privileged and cannot be dropped via DropTable")
 
-        with self._insertion_lock:
-            ns = self._namespaces.get(name)
-            if ns is None:
-                raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            del self._namespaces[name]
-            self._namespace_registered_at.pop(name, None)
-            self._dropping.add(name)
-
+        ns = self._catalog.begin_drop(name)
         try:
             ns.stop_and_join()
-
-            with self._insertion_lock:
-                self._catalog.delete(name)
+            self._catalog.delete(name)
 
             self._query_visibility_lock.write_acquire()
             try:
@@ -529,8 +490,7 @@ class DuckDBLogStore:
             finally:
                 self._query_visibility_lock.write_release()
         finally:
-            with self._insertion_lock:
-                self._dropping.discard(name)
+            self._catalog.finish_drop(name)
 
     def append(self, key: str, entries: list) -> None:
         if not entries:
@@ -538,7 +498,7 @@ class DuckDBLogStore:
         self.append_batch([(key, entries)])
 
     def append_batch(self, items: list[tuple[str, list]]) -> None:
-        self._namespaces[LOG_NAMESPACE_NAME].append_log_batch(items)
+        self._catalog[LOG_NAMESPACE_NAME].append_log_batch(items)
 
     def get_logs(
         self,
@@ -552,7 +512,7 @@ class DuckDBLogStore:
         tail: bool = False,
         min_level: str = "",
     ) -> LogReadResult:
-        return self._namespaces[LOG_NAMESPACE_NAME].get_logs(
+        return self._catalog[LOG_NAMESPACE_NAME].get_logs(
             key,
             match_scope=match_scope,
             since_ms=since_ms,
@@ -573,7 +533,7 @@ class DuckDBLogStore:
         return LogCursor(self, key)
 
     def close(self) -> None:
-        for ns in self._namespaces.values():
+        for ns in self._catalog.live_values():
             ns.close()
         self._pool.close()
         self._catalog.close()
@@ -582,7 +542,7 @@ class DuckDBLogStore:
 
     @property
     def _log_namespace(self) -> DiskLogNamespace:
-        ns = self._namespaces[LOG_NAMESPACE_NAME]
+        ns = self._catalog[LOG_NAMESPACE_NAME]
         assert isinstance(ns, DiskLogNamespace), "test hook called on memory-mode store"
         return ns
 

@@ -25,7 +25,7 @@ def test_sync_uploads_compacted_segments(tmp_path: Path) -> None:
     try:
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = store._namespaces["iris.worker"]
+        ns = store._catalog["iris.worker"]
         assert isinstance(ns, DiskLogNamespace)
 
         ns._flush_step()
@@ -53,7 +53,7 @@ def test_sync_deletes_orphaned_remote_segments(tmp_path: Path) -> None:
     try:
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = store._namespaces["iris.worker"]
+        ns = store._catalog["iris.worker"]
         assert isinstance(ns, DiskLogNamespace)
         ns._flush_step()
         ns._force_compact_l0()
@@ -82,7 +82,7 @@ def test_close_drains_pending_uploads(tmp_path: Path) -> None:
     try:
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = store._namespaces["iris.worker"]
+        ns = store._catalog["iris.worker"]
         assert isinstance(ns, DiskLogNamespace)
         ns._flush_step()
         ns._force_compact_l0()
@@ -111,7 +111,7 @@ def test_sync_does_not_delete_remote_after_eviction(tmp_path: Path) -> None:
     try:
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = store._namespaces["iris.worker"]
+        ns = store._catalog["iris.worker"]
         ns._flush_step()
         while ns._compaction_step():
             pass
@@ -157,7 +157,7 @@ def test_orphan_delete_runs_only_after_replacement_uploaded(tmp_path: Path) -> N
     )
     try:
         store.register_table("iris.worker", _worker_schema())
-        ns = store._namespaces["iris.worker"]
+        ns = store._catalog["iris.worker"]
 
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns._flush_step()
@@ -178,7 +178,8 @@ def test_orphan_delete_runs_only_after_replacement_uploaded(tmp_path: Path) -> N
 def test_wiped_catalog_recovers_from_remote(tmp_path: Path) -> None:
     """If the catalog DB is wiped while remote survives, the next boot
     must adopt remote files as ``REMOTE`` rows (not delete them as orphans)."""
-    from finelog.store.catalog import CATALOG_DB_FILENAME, SegmentLocation
+    from finelog.store.catalog import CATALOG_DB_FILENAME
+    from finelog.store.types import SegmentLocation
 
     remote = tmp_path / "remote"
     remote.mkdir()
@@ -188,7 +189,7 @@ def test_wiped_catalog_recovers_from_remote(tmp_path: Path) -> None:
     try:
         s1.register_table("iris.worker", _worker_schema())
         s1.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = s1._namespaces["iris.worker"]
+        ns = s1._catalog["iris.worker"]
         ns._flush_step()
         ns._force_compact_l0()
         ns._sync_step()
@@ -206,7 +207,7 @@ def test_wiped_catalog_recovers_from_remote(tmp_path: Path) -> None:
     s2 = DuckDBLogStore(log_dir=log_dir, remote_log_dir=str(remote))
     try:
         s2.register_table("iris.worker", _worker_schema())
-        ns = s2._namespaces["iris.worker"]
+        ns = s2._catalog["iris.worker"]
         rows = ns._catalog.list_segments("iris.worker")
         adopted = [r for r in rows if r.location is SegmentLocation.REMOTE]
         assert {Path(r.path).name for r in adopted} == set(bucket_files_before)
@@ -244,7 +245,7 @@ def test_reconcile_drops_stale_compaction_inputs_at_boot(tmp_path: Path) -> None
     try:
         s1.register_table("iris.worker", _worker_schema())
         s1.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = s1._namespaces["iris.worker"]
+        ns = s1._catalog["iris.worker"]
         ns._flush_step()
         while ns._compaction_step():
             pass
@@ -272,7 +273,7 @@ def test_reconcile_drops_stale_compaction_inputs_at_boot(tmp_path: Path) -> None
     s2 = DuckDBLogStore(log_dir=log_dir, remote_log_dir=str(remote), compaction_config=config)
     try:
         s2.register_table("iris.worker", _worker_schema())
-        ns = s2._namespaces["iris.worker"]
+        ns = s2._catalog["iris.worker"]
         rows = ns._catalog.list_segments("iris.worker")
         # The L1 must not be in the catalog (dropped as redundant).
         assert not any(r.level == 1 for r in rows), rows
@@ -287,7 +288,8 @@ def test_reconcile_drops_stale_compaction_inputs_at_boot(tmp_path: Path) -> None
 def test_reconcile_preserves_uncovered_lower_level(tmp_path: Path) -> None:
     """An L_n segment NOT covered by any higher-level segment must be
     adopted — only redundant inputs are dropped."""
-    from finelog.store.catalog import CATALOG_DB_FILENAME, SegmentLocation
+    from finelog.store.catalog import CATALOG_DB_FILENAME
+    from finelog.store.types import SegmentLocation
 
     remote = tmp_path / "remote"
     remote.mkdir()
@@ -297,7 +299,7 @@ def test_reconcile_preserves_uncovered_lower_level(tmp_path: Path) -> None:
     try:
         s1.register_table("iris.worker", _worker_schema())
         s1.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = s1._namespaces["iris.worker"]
+        ns = s1._catalog["iris.worker"]
         ns._flush_step()
         ns._force_compact_l0()
         ns._sync_step()
@@ -314,7 +316,7 @@ def test_reconcile_preserves_uncovered_lower_level(tmp_path: Path) -> None:
     s2 = DuckDBLogStore(log_dir=log_dir, remote_log_dir=str(remote))
     try:
         s2.register_table("iris.worker", _worker_schema())
-        ns = s2._namespaces["iris.worker"]
+        ns = s2._catalog["iris.worker"]
         rows = ns._catalog.list_segments("iris.worker")
         adopted = [r for r in rows if r.location is SegmentLocation.REMOTE]
         assert {Path(r.path).name for r in adopted} == set(bucket_files)

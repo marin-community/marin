@@ -57,10 +57,10 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
 
     if drop_succeeded:
         # In-memory chunks for successful writes evaporate by design.
-        assert "iris.worker" not in store._namespaces
+        assert "iris.worker" not in store._catalog
     else:
-        assert "iris.worker" in store._namespaces
-        ns = store._namespaces["iris.worker"]
+        assert "iris.worker" in store._catalog
+        ns = store._catalog["iris.worker"]
         ns._flush_step()
         ns._force_compact_l0()
         table = store.query('SELECT worker_id FROM "iris.worker"')
@@ -70,8 +70,8 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
 def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
     """A query iterating namespaces is safe against a concurrent drop.
 
-    Regression: ``query()`` must snapshot ``self._namespaces`` under the
-    insertion lock so a concurrent ``drop_table`` can't trigger
+    Regression: ``query()`` must snapshot the live namespace dict under
+    the catalog lock so a concurrent ``drop_table`` can't trigger
     ``RuntimeError: dictionary changed size during iteration``.
     """
     store.register_table("ns.alpha", _worker_schema())
@@ -79,7 +79,7 @@ def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
     store.write_rows("ns.alpha", _ipc_bytes(_worker_batch(["a"], [1], [1])))
     _seal(store, "ns.alpha")
 
-    alpha_ns = store._namespaces["ns.alpha"]
+    alpha_ns = store._catalog["ns.alpha"]
     in_loop = threading.Event()
     proceed = threading.Event()
     orig_query_snapshot = alpha_ns.query_snapshot
@@ -124,7 +124,7 @@ def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
 def test_query_acquires_read_lock_for_duration(store: DuckDBLogStore):
     """``store.query`` takes the read lock; the write lock waits for it."""
     store.register_table("iris.worker", _worker_schema())
-    ns = store._namespaces["iris.worker"]
+    ns = store._catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
     ns._flush_step()
     ns._force_compact_l0()

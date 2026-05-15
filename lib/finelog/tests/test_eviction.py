@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from finelog.store.catalog import SegmentLocation
 from finelog.store.compactor import CompactionConfig
 from finelog.store.duckdb_store import DuckDBLogStore
+from finelog.store.types import SegmentLocation
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 
@@ -15,12 +15,10 @@ from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 def _list_segments_locked(store: DuckDBLogStore, namespace: str):
     """Catalog read serialized against the bg thread.
 
-    DuckDB connections aren't thread-safe and the catalog docstring is
-    explicit that callers hold ``_insertion_lock``. Tests that read directly
-    must do the same.
+    DuckDB connections aren't thread-safe, but ``Catalog`` is internally
+    locked so this is a plain pass-through.
     """
-    with store._insertion_lock:
-        return store._catalog.list_segments(namespace)
+    return store._catalog.list_segments(namespace)
 
 
 def test_eviction_drops_oldest_segment_when_cap_exceeded(tmp_path: Path):
@@ -44,7 +42,7 @@ def test_eviction_drops_oldest_segment_when_cap_exceeded(tmp_path: Path):
         store.write_rows("ns", _ipc_bytes(_worker_batch(["b"], [2], [2])))
         _seal(store, "ns")
         # Drive the eviction tick (compaction tail invokes _eviction_step).
-        store._namespaces["ns"]._eviction_step()
+        store._catalog["ns"]._eviction_step()
 
         remaining = sorted((tmp_path / "data" / "ns").glob("seg_L1_*.parquet"))
         assert len(remaining) == 1
@@ -66,7 +64,7 @@ def test_eviction_skips_segments_not_yet_copied(tmp_path: Path):
         _seal(store, "ns")
 
         # Two L1s on disk, neither marked copied; eviction must skip both.
-        store._namespaces["ns"]._eviction_step()
+        store._catalog["ns"]._eviction_step()
         all_files = sorted((tmp_path / "data" / "ns").glob("seg_L1_*.parquet"))
         assert len(all_files) == 2
     finally:
@@ -106,7 +104,7 @@ def test_fifo_eviction_across_mixed_levels(tmp_path: Path):
     )
     try:
         store.register_table("ns", _worker_schema())
-        ns = store._namespaces["ns"]
+        ns = store._catalog["ns"]
 
         # Three flush+compact cycles drive promotions: with level_targets=(1, 2)
         # each L0 hits the size threshold and promotes to L1 then L2.

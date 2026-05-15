@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import shutil
 import threading
 import time
 from collections import deque
@@ -38,18 +37,12 @@ from rigging.timing import RateLimiter
 
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.store.catalog import (
-    Catalog,
-    NamespaceStats,
-    SegmentLocation,
-    SegmentRow,
-)
+from finelog.store.catalog import Catalog
 from finelog.store.compactor import (
     CompactionConfig,
     CompactionJob,
     Compactor,
     aggregate_key_bounds,
-    compaction_sort_keys,
     parse_seg_filename,
     seg_filename,
 )
@@ -59,6 +52,12 @@ from finelog.store.schema import (
     Column,
     Schema,
     schema_to_arrow,
+)
+from finelog.store.types import (
+    LocalSegment,
+    NamespaceStats,
+    SegmentLocation,
+    SegmentRow,
 )
 from finelog.types import LogReadResult, parse_attempt_id, str_to_log_level
 
@@ -92,9 +91,6 @@ _BG_HEARTBEAT_INTERVAL_SEC = 10.0
 # Hard ceiling on the per-read parquet working set; safety net for body-LIKE
 # queries that cannot be pruned by row-group statistics.
 _MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
-
-# 4 MiB amortizes GCS per-write overhead without growing with segment size.
-_REMOTE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
 
 
 class SegmentMetadata(NamedTuple):
@@ -261,41 +257,26 @@ class _SealedBuffer:
         self.num_rows: int = self.table.num_rows
 
 
-@dataclass
-class LocalSegment:
-    path: str
-    size_bytes: int
-    level: int
-    min_seq: int
-    max_seq: int
-    row_count: int
-    # ``created_at_ms`` is stamped once at flush/merge time and preserved
-    # across level bumps and catalog reconcile. Currently informational
-    # only — the planner promotes by byte target or segment count, not
-    # age — but kept as the catalog's canonical birth time for ops
-    # tools / future age-based policies.
-    created_at_ms: int = 0
-    # Typed key-column bounds (Python int / str / float / bool / bytes
-    # depending on schema). Stringified only at the catalog boundary in
-    # ``_segment_to_row``; held typed in memory so ``aggregate_key_bounds``
-    # can compare numeric keys with native ordering.
-    min_key_value: object | None = None
-    max_key_value: object | None = None
-    # Where the bytes live. The deque only ever holds ``LOCAL`` or ``BOTH``
-    # entries; eviction flips to ``REMOTE`` and removes the entry from the
-    # deque (the row stays in the catalog as a durable-archive pointer).
-    location: SegmentLocation = SegmentLocation.LOCAL
-
-
 def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
-    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled."""
+    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled.
+
+    Columns in ``arrow_schema`` that are missing from ``batch`` are filled
+    with NULL arrays. This tolerates a benign race where ``write_rows``
+    validates an incoming batch against schema version v, an additive
+    ``update_schema`` to v+1 lands before the per-namespace lock is taken,
+    and the append projects onto v+1's columns. Additive evolution only
+    adds nullable columns, so a NULL fill is sound.
+    """
     seq_array = pa.array(range(first_seq, first_seq + batch.num_rows), type=pa.int64())
+    batch_columns = set(batch.schema.names)
     arrays: list[pa.Array] = []
     for field in arrow_schema:
         if field.name == IMPLICIT_SEQ_COLUMN:
             arrays.append(seq_array)
-        else:
+        elif field.name in batch_columns:
             arrays.append(batch.column(field.name))
+        else:
+            arrays.append(pa.nulls(batch.num_rows, type=field.type))
     return pa.Table.from_arrays(arrays, schema=arrow_schema)
 
 
@@ -421,48 +402,6 @@ class RamBuffers:
         return snap
 
 
-class LogNamespaceProtocol(Protocol):
-    name: str
-    schema: Schema
-
-    def append_log_batch(self, items: list[tuple[str, list]]) -> None: ...
-
-    def append_record_batch(self, batch: pa.RecordBatch) -> None: ...
-
-    def get_logs(
-        self,
-        key: str,
-        *,
-        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
-        since_ms: int = 0,
-        cursor: int = 0,
-        substring_filter: str = "",
-        max_lines: int = 0,
-        tail: bool = False,
-        min_level: str = "",
-    ) -> LogReadResult: ...
-
-    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]: ...
-
-    def all_segments_unlocked(self) -> list[LocalSegment]: ...
-
-    def update_schema(self, new_schema: Schema) -> None: ...
-
-    def evict_segment(self, path: str) -> int: ...
-
-    def remove_local_storage(self) -> None: ...
-
-    def close(self) -> None: ...
-
-    def stop_and_join(self) -> None: ...
-
-    def stats(self) -> NamespaceStats: ...
-
-    def ram_bytes(self) -> int: ...
-
-    def chunk_count(self) -> int: ...
-
-
 class DiskLogNamespace:
     """Disk-backed per-namespace storage.
 
@@ -482,7 +421,6 @@ class DiskLogNamespace:
         segment_target_bytes: int,
         flush_interval_sec: float,
         compaction_config: CompactionConfig,
-        insertion_lock: Lock,
         query_visibility_lock: RWLock,
         duckdb_memory_limit: str,
         read_pool: _ReadPoolProtocol,
@@ -500,7 +438,11 @@ class DiskLogNamespace:
         self._segment_target_bytes = segment_target_bytes
         self._compactor = Compactor(compaction_config)
 
-        self._insertion_lock = insertion_lock
+        # Per-namespace insertion mutex. Guards ``_buffers`` (seq counter,
+        # ram chunks, flushing buffer) and ``_local_segments``. Writes to
+        # different namespaces don't serialize against each other; the
+        # catalog mutex is held only for registry mutations and snapshots.
+        self._insertion_lock = Lock()
         self._query_visibility_lock = query_visibility_lock
         # Prevents the test ``_force_flush`` hook racing the bg thread on
         # the same segment filename (both derive from this namespace's
@@ -769,10 +711,12 @@ class DiskLogNamespace:
         self._bg_thread.join()
 
     def ram_bytes(self) -> int:
-        return self._buffers.ram_bytes()
+        with self._insertion_lock:
+            return self._buffers.ram_bytes()
 
     def chunk_count(self) -> int:
-        return self._buffers.chunk_count()
+        with self._insertion_lock:
+            return self._buffers.chunk_count()
 
     def update_schema(self, new_schema: Schema) -> None:
         _assert_additive_schema_evolution(self.schema, new_schema)
@@ -784,6 +728,9 @@ class DiskLogNamespace:
         last_flush_at = time.monotonic()
         last_compact_at = time.monotonic()
         while not self._stop.is_set():
+            # Read internal buffer fields directly under the lock; the
+            # public ``ram_bytes`` / ``chunk_count`` accessors also take
+            # this lock, so we'd deadlock if we used them here.
             with self._insertion_lock:
                 ram_bytes = self._buffers.ram_bytes()
                 chunk_count = self._buffers.chunk_count()
@@ -858,8 +805,14 @@ class DiskLogNamespace:
                 visible.max_seq,
             )
 
+            # L0 is written unsorted. Rows already arrive seq-monotonic
+            # (seq is allocated under the insertion lock at append time),
+            # and L0 segments don't get bloom filters or footer-stat-based
+            # key pruning. The L0 → L1 compaction COPY does an explicit
+            # ``ORDER BY (key_column, seq)`` so the sort cost lands once,
+            # in the bg compactor thread, instead of on every flush.
             sealed = _SealedBuffer(
-                table=self._sort_for_flush(visible.table),
+                table=visible.table,
                 min_seq=visible.min_seq,
                 max_seq=visible.max_seq,
             )
@@ -879,10 +832,6 @@ class DiskLogNamespace:
             with self._flush_generation_cond:
                 self._flush_generation += 1
                 self._flush_generation_cond.notify_all()
-
-    def _sort_for_flush(self, table: pa.Table) -> pa.Table:
-        keys = compaction_sort_keys(self.schema)
-        return table.sort_by([(name, "ascending") for name in keys])
 
     def _key_bounds_from_table(self, table: pa.Table) -> tuple[object | None, object | None]:
         """Compute (min, max) over the namespace's ``key_column`` in ``table``.
@@ -1393,16 +1342,23 @@ class DiskLogNamespace:
                 logger.warning("orphan delete failed: %s/%s", self.name, basename, exc_info=True)
 
     def _upload(self, local_path: Path) -> bool:
-        """Stream ``local_path`` to remote. Returns True on success;
-        the next sync retries on failure."""
+        """Upload ``local_path`` to the remote bucket. Returns True on
+        success; the next sync retries on failure.
+
+        Uses ``fs.put_file`` so each backend picks its optimal strategy.
+        For ``gcsfs`` this is a single PUT for sub-block-size files —
+        much faster than streaming through ``open()`` + ``copyfileobj``,
+        which would issue one resumable-upload PUT per chunk and
+        serialize on the request boundaries.
+        """
         remote_path = f"{self._remote_namespace_dir}/{local_path.name}"
         upload_start = time.monotonic()
         try:
-            with (
-                fsspec.core.open(str(local_path), "rb") as f_src,
-                fsspec.core.open(remote_path, "wb") as f_dst,
-            ):
-                shutil.copyfileobj(f_src, f_dst, length=_REMOTE_UPLOAD_CHUNK_BYTES)
+            fs, _ = fsspec.core.url_to_fs(remote_path)
+            # gcsfs / s3fs treat the prefix as virtual; LocalFileSystem
+            # needs the directory to exist before put_file's shutil.copyfile.
+            fs.makedirs(self._remote_namespace_dir, exist_ok=True)
+            fs.put_file(str(local_path), remote_path)
         except Exception:
             logger.warning("Failed to copy %s to %s", local_path, remote_path, exc_info=True)
             return False
@@ -1626,14 +1582,15 @@ class MemoryLogNamespace:
         *,
         name: str,
         schema: Schema,
-        insertion_lock: Lock,
         query_visibility_lock: RWLock,
         read_pool: _ReadPoolProtocol,
     ) -> None:
         self.name = name
         self.schema = schema
         self._arrow_schema = schema_to_arrow(schema)
-        self._insertion_lock = insertion_lock
+        # Per-instance insertion mutex; in-memory mode never needs to
+        # coordinate across namespaces.
+        self._insertion_lock = Lock()
         self._query_visibility_lock = query_visibility_lock
         self._read_pool = read_pool
         # Empty against the registered schema so consumers can register it

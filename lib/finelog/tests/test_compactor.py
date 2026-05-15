@@ -12,12 +12,12 @@ planner shows up with a clear failure.
 
 from __future__ import annotations
 
-from finelog.store.catalog import SegmentRow
 from finelog.store.compactor import (
     CompactionConfig,
     Compactor,
     aggregate_key_bounds,
 )
+from finelog.store.types import SegmentRow
 
 
 def _row(

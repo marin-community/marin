@@ -95,7 +95,7 @@ def test_query_and_drop_via_asgi(tmp_path: Path):
             )
             assert resp.status_code == 200, resp.text
 
-            ns = log_service.log_store._namespaces["iris.worker"]
+            ns = log_service.log_store._catalog["iris.worker"]
             ns._flush_step()
             ns._force_compact_l0()
 
