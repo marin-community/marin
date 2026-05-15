@@ -90,7 +90,6 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
-from iris.rpc.async_adapter import on_loop
 from iris.rpc.auth import (
     AuthzAction,
     authorize,
@@ -1312,7 +1311,6 @@ class ControllerServiceImpl:
             request=redact_request_env_vars(reconstructed_request),
         )
 
-    @on_loop
     def get_job_state(
         self,
         request: controller_pb2.Controller.GetJobStateRequest,
@@ -2591,7 +2589,6 @@ class ControllerServiceImpl:
 
     # --- Task Status Text Push ---
 
-    @on_loop
     def set_task_status_text(
         self,
         request: job_pb2.SetTaskStatusTextRequest,
