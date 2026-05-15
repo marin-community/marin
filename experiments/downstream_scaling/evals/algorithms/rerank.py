@@ -34,12 +34,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class RerankSamplingConfig:
-    n_rollouts: int
-    proposal_samples: int
+    n_samples: int
+    n_proposals: int
     temperature: float
     top_p: float
     top_k: int
-    chunk_tokens: int
+    proposal_len: int
     max_tokens: int
     seed: int
     stop: tuple[str, ...] | None = None
@@ -49,16 +49,13 @@ class RerankSamplingConfig:
 @dataclass(frozen=True)
 class RerankScorerConfig:
     max_model_len: int = 8192
-    tensor_parallel_size: int = 1
     data_parallel_size: int = 1
     enable_prefix_caching: bool = True
-    enable_prefix_caching_with_prompt_logprobs: bool = True
 
 
 @dataclass(frozen=True)
 class RerankProposalConfig:
-    max_model_len: int | None = None
-    tensor_parallel_size: int = 1
+    max_model_len: int = 8192
     data_parallel_size: int = 1
     gpu_memory_utilization: float | None = None
 
@@ -66,7 +63,7 @@ class RerankProposalConfig:
 @dataclass(frozen=True)
 class RerankExecutionConfig:
     num_workers: int
-    requests_per_chunk: int
+    chunk_size: int
     worker_resources: ResourceConfig
     scorer_actor_resources: ResourceConfig
 
@@ -90,7 +87,7 @@ class RerankCompletionStepConfig:
     scorer: RerankScorerConfig
     proposal: RerankProposalConfig
     num_workers: int
-    requests_per_chunk: int
+    chunk_size: int
     worker_resources: ResourceConfig
     scorer_actor_resources: ResourceConfig
 
@@ -140,13 +137,13 @@ class VLLMScorerActor:
 
         resolved_model_path = discover_hf_checkpoints(model_path)[-1]
         logger.info("Resolved scoring model %s -> %s", model_path, resolved_model_path)
+        tensor_parallel_size = _tensor_parallel_size_for_model(resolved_model_path)
         self._scorer = VLLMLogprobScorerTPU(
             resolved_model_path,
             max_model_len=scorer.max_model_len,
-            tensor_parallel_size=scorer.tensor_parallel_size,
+            tensor_parallel_size=tensor_parallel_size,
             data_parallel_size=scorer.data_parallel_size,
             enable_prefix_caching=scorer.enable_prefix_caching,
-            enable_prefix_caching_with_prompt_logprobs=scorer.enable_prefix_caching_with_prompt_logprobs,
         )
         self._eos_token = self._scorer.tokenizer.eos_token or ""
 
@@ -187,7 +184,7 @@ def make_rerank_completion_step(
             scorer=versioned(config.scorer),  # type: ignore[arg-type]
             proposal=versioned(config.proposal),  # type: ignore[arg-type]
             num_workers=config.execution.num_workers,
-            requests_per_chunk=versioned(config.execution.requests_per_chunk),  # type: ignore[arg-type]
+            chunk_size=versioned(config.execution.chunk_size),  # type: ignore[arg-type]
             worker_resources=config.execution.worker_resources,
             scorer_actor_resources=config.execution.scorer_actor_resources,
         ),
@@ -199,17 +196,39 @@ def _set_vllm_tpu_env_vars() -> None:
         os.environ.setdefault(key, value)
 
 
-def _chunk_specs(chunks_dir: str, num_prompts: int, n_rollouts: int, requests_per_chunk: int) -> list[RerankChunkSpec]:
-    total_requests = num_prompts * n_rollouts
+def _patch_rpa_kernel_block_sizes() -> None:
+    import tpu_inference.kernels.ragged_paged_attention.v3.kernel as rpa_kernel
+
+    if getattr(rpa_kernel.get_tuned_block_sizes, "_marin_rerank_patched", False):
+        return
+
+    orig_get_tuned = rpa_kernel.get_tuned_block_sizes
+
+    def patched_get_tuned(*args, **kwargs):
+        bkv_p, bq_sz = orig_get_tuned(*args, **kwargs)
+        return (max(1, bkv_p // 2), bq_sz)
+
+    patched_get_tuned._marin_rerank_patched = True
+    rpa_kernel.get_tuned_block_sizes = patched_get_tuned
+
+
+def _tensor_parallel_size_for_model(resolved_model_path: str) -> int:
+    with fsspec.open(f"{resolved_model_path}/config.json", "r") as f:
+        n_heads = json.load(f)["num_attention_heads"]
+    return 2 if n_heads % 2 == 0 else 1
+
+
+def _chunk_specs(chunks_dir: str, num_prompts: int, n_samples: int, chunk_size: int) -> list[RerankChunkSpec]:
+    total_requests = num_prompts * n_samples
     return [
         RerankChunkSpec(
             chunk_id=chunk_id,
             chunk_start=start,
-            chunk_end=min(start + requests_per_chunk, total_requests),
+            chunk_end=min(start + chunk_size, total_requests),
             output_path=os.path.join(chunks_dir, f"chunk-{chunk_id:06d}.jsonl.gz"),
             success_path=os.path.join(chunks_dir, f"chunk-{chunk_id:06d}.SUCCESS"),
         )
-        for chunk_id, start in enumerate(range(0, total_requests, requests_per_chunk))
+        for chunk_id, start in enumerate(range(0, total_requests, chunk_size))
     ]
 
 
@@ -219,17 +238,19 @@ def _best_index(scores: list[float]) -> int:
 
 def _load_proposal_vllm(model_path: str, proposal: RerankProposalConfig, seed: int):
     _set_vllm_tpu_env_vars()
+    _patch_rpa_kernel_block_sizes()
 
     from vllm import LLM, SamplingParams
 
     resolved_model_path = discover_hf_checkpoints(model_path)[-1]
     logger.info("Resolved proposal model %s -> %s", model_path, resolved_model_path)
+    tensor_parallel_size = _tensor_parallel_size_for_model(resolved_model_path)
     kwargs: dict[str, Any] = {
         "model": resolved_model_path,
         "trust_remote_code": True,
         "load_format": "runai_streamer",
         "seed": seed,
-        "tensor_parallel_size": proposal.tensor_parallel_size,
+        "tensor_parallel_size": tensor_parallel_size,
         "data_parallel_size": proposal.data_parallel_size,
     }
     if proposal.max_model_len is not None:
@@ -248,7 +269,7 @@ def _generate_proposals(
     max_tokens: int,
 ) -> list[dict[str, Any]]:
     sampling_params = SamplingParams(
-        n=sampling.proposal_samples,
+        n=sampling.n_proposals,
         max_tokens=max_tokens,
         temperature=sampling.temperature,
         top_p=sampling.top_p,
@@ -310,7 +331,7 @@ def _rerank_one_prompt(
     stats = RerankStats(remaining_tokens=remaining_tokens)
 
     while remaining_tokens > 0:
-        step_tokens = min(sampling.chunk_tokens, remaining_tokens)
+        step_tokens = min(sampling.proposal_len, remaining_tokens)
 
         proposal_start = time.perf_counter()
         candidates = _generate_proposals(
@@ -381,7 +402,7 @@ def _process_rerank_shard(
     prompt_ids: list[str],
     prompts: list[str],
 ):
-    n_rollouts = config.sampling.n_rollouts
+    n_samples = config.sampling.n_samples
     proposal_llm, SamplingParams = _load_proposal_vllm(
         config.proposal_model_path,
         config.proposal,
@@ -398,8 +419,8 @@ def _process_rerank_shard(
 
             records = []
             for request_index in range(chunk.chunk_start, chunk.chunk_end):
-                prompt_index = request_index // n_rollouts
-                completion_index = request_index % n_rollouts
+                prompt_index = request_index // n_samples
+                completion_index = request_index % n_samples
                 completion, stats = _rerank_one_prompt(
                     proposal_llm=proposal_llm,
                     SamplingParams=SamplingParams,
@@ -433,8 +454,8 @@ def run_rerank_completion_chunks(config: RerankCompletionStepConfig) -> None:
     prompt_rows = list(read_prompt_rows(config.prompts_path))
     prompt_ids = [row["id"] for row in prompt_rows]
     prompts = [row["prompt"] for row in prompt_rows]
-    chunks_dir = os.path.join(config.output_path, "chunks", f"requests_per_chunk={config.requests_per_chunk}")
-    chunks = _chunk_specs(chunks_dir, len(prompt_rows), config.sampling.n_rollouts, config.requests_per_chunk)
+    chunks_dir = os.path.join(config.output_path, "chunks", f"chunk_size={config.chunk_size}")
+    chunks = _chunk_specs(chunks_dir, len(prompt_rows), config.sampling.n_samples, config.chunk_size)
 
     process_shard = partial(
         _process_rerank_shard,

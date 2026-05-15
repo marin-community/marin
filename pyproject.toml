@@ -49,6 +49,8 @@ override-dependencies = [
     "wheel>=0.46.2",
     "datasets>=3.1.0,<5.0.0",
     "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
+    "jax==0.8.0",
+    "jaxlib==0.8.0",
     "authlib>=1.7.2",
     "cbor2>=6.0.1",
     "click>=8.3.1",
@@ -125,6 +127,7 @@ marin-zephyr = { workspace = true }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }
+tpu-inference = { git = "https://github.com/RohithKuditipudi/tpu-inference.git", branch = "experiment/force-next-token" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 

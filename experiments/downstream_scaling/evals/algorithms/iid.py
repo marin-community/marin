@@ -117,11 +117,17 @@ def _load_vllm(model_path: str, seed: int):
 
     resolved_model_path = discover_hf_checkpoints(model_path)[-1]
     logger.info("Resolved %s -> %s", model_path, resolved_model_path)
+
+    with fsspec.open(f"{resolved_model_path}/config.json", "r") as f:
+        n_heads = json.load(f)["num_attention_heads"]
+    tp = 2 if n_heads % 2 == 0 else 1
+
     llm = LLM(
         model=resolved_model_path,
         trust_remote_code=True,
         load_format="runai_streamer",
         seed=seed,
+        tensor_parallel_size=tp,
     )
     return llm, SamplingParams
 

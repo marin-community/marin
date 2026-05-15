@@ -228,7 +228,7 @@ cheaper to catch here than after a Gate 1 ferry.
 ```bash
 ( cd "$TREATMENT_WT" && \
   ./infra/pre-commit.py lib/zephyr/ && \
-  uv run pyrefly && \
+  uv run pyrefly check && \
   uv run pytest lib/zephyr/tests/ )
 ```
 

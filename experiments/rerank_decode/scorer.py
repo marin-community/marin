@@ -114,23 +114,8 @@ class VLLMLogprobScorerTPU(Scorer):
         tensor_parallel_size: int = 1,
         data_parallel_size: int = 1,
         enable_prefix_caching: bool = True,
-        enable_prefix_caching_with_prompt_logprobs: bool = True,
     ):
-        from vllm import LLM, SamplingParams
-        from vllm.engine.arg_utils import EngineArgs
-
-        backend_supports_apc_prompt_logprobs = (
-            "enable_prefix_caching_with_prompt_logprobs"
-            in EngineArgs.__dataclass_fields__
-        )
-        if (
-            enable_prefix_caching_with_prompt_logprobs
-            and not backend_supports_apc_prompt_logprobs
-        ):
-            raise ValueError(
-                "Installed LLM does not support "
-                "enable_prefix_caching_with_prompt_logprobs"
-            )
+        from vllm import LLM
 
         llm_kwargs = dict(
             model=model,
@@ -139,17 +124,8 @@ class VLLMLogprobScorerTPU(Scorer):
             data_parallel_size=data_parallel_size,
             enable_prefix_caching=enable_prefix_caching,
         )
-        if backend_supports_apc_prompt_logprobs:
-            llm_kwargs["enable_prefix_caching_with_prompt_logprobs"] = (
-                enable_prefix_caching_with_prompt_logprobs
-            )
 
         self.llm = LLM(**llm_kwargs)
-        self.sampling_params = SamplingParams(
-            temperature=0.0,
-            max_tokens=1,
-            prompt_logprobs=1,
-        )
         self.tokenizer = self.llm.get_tokenizer()
         self._cached_prompt_text: str | None = None
         self._cached_prompt_ids: list[int] | None = None

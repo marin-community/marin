@@ -55,6 +55,7 @@ HOLDER_COMMAND = (
 )
 
 STATE_DIR = Path.home() / ".cache" / "marin" / "dev_tpu_iris"
+CONTROLLER_RPC_TIMEOUT_MS = 300_000
 
 
 @dataclass
@@ -174,7 +175,7 @@ def controller_client(config_file: str) -> Iterable[IrisClient]:
     if not controller_address:
         controller_address = controller.discover_controller(iris_config.proto.controller)
     with controller.tunnel(address=controller_address) as tunneled:
-        client = IrisClient.remote(tunneled, workspace=workspace)
+        client = IrisClient.remote(tunneled, workspace=workspace, timeout_ms=CONTROLLER_RPC_TIMEOUT_MS)
         try:
             yield client
         finally:

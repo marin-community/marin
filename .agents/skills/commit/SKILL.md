@@ -18,6 +18,48 @@ Lint, commit, and push the current work-in-progress to the remote branch.
 If pre-commit reports errors that `--fix` cannot resolve automatically, fix
 them manually before proceeding. Do not skip or weaken checks.
 
+### 1b. Run Pyrefly when type checking is needed
+
+Use the current Pyrefly subcommand:
+
+```bash
+uv run pyrefly check
+```
+
+Do not use bare `uv run pyrefly`; current Pyrefly requires a subcommand.
+
+For files under `experiments/**`, the repo config excludes those files and does
+not query site packages by default. To type-check an experiment file, use a
+temporary config that includes the repo root, library source roots, and the
+local venv interpreter:
+
+```toml
+# /private/tmp/pyrefly_check.toml
+project-includes = ["/abs/path/to/file.py"]
+search-path = [
+    "/Users/rohith/research/marin",
+    "/Users/rohith/research/marin/lib/marin/src",
+    "/Users/rohith/research/marin/lib/levanter/src",
+    "/Users/rohith/research/marin/lib/haliax/src",
+    "/Users/rohith/research/marin/lib/rigging/src",
+    "/Users/rohith/research/marin/lib/zephyr/src",
+    "/Users/rohith/research/marin/lib/fray/src",
+    "/Users/rohith/research/marin/lib/iris/src",
+]
+disable-search-path-heuristics = false
+python-interpreter-path = "/Users/rohith/research/marin/.venv/bin/python"
+```
+
+Then run:
+
+```bash
+uv run pyrefly check /abs/path/to/file.py --config /private/tmp/pyrefly_check.toml
+```
+
+If Pyrefly exits nonzero but prints only `INFO N error(s)` and no diagnostic,
+the repo config is suppressing the visible error. Re-run with a temporary config
+like the above before drawing conclusions.
+
 ### 2. Stage changes
 
 Stage all modified and new files that are part of the current work. Review
