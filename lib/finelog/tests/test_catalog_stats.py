@@ -33,7 +33,7 @@ def _stats(store: DuckDBLogStore, namespace: str) -> NamespaceStats:
 
 def _segments(store: DuckDBLogStore, namespace: str):
     # Catalog is internally thread-safe.
-    return store._catalog.list_segments(namespace)
+    return store.catalog.list_segments(namespace)
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ def test_stats_after_flush_match_segments_table(store):
     batch = _worker_batch(["w-0", "w-1"], [1, 2], [10, 20])
     store.write_rows("iris.worker", _ipc_bytes(batch))
 
-    store._catalog["iris.worker"]._flush_step()
+    store.catalog["iris.worker"]._flush_step()
 
     stats = _stats(store, "iris.worker")
     assert stats.row_count == 2
@@ -82,14 +82,14 @@ def test_compaction_replaces_l0_rows_atomically(store):
     for i in range(3):
         batch = _worker_batch([f"w-{i}"], [i], [i])
         store.write_rows("iris.worker", _ipc_bytes(batch))
-        store._catalog["iris.worker"]._flush_step()
+        store.catalog["iris.worker"]._flush_step()
 
     # Three L0 segments before compaction.
     pre = _segments(store, "iris.worker")
     assert len(pre) == 3
     assert all(s.level == 0 for s in pre)
 
-    store._catalog["iris.worker"]._force_compact_l0()
+    store.catalog["iris.worker"]._force_compact_l0()
 
     post = _segments(store, "iris.worker")
     assert len(post) == 1
@@ -116,7 +116,7 @@ def test_eviction_local_only_drops_row(store):
     path = segs[0].path
     assert segs[0].location is SegmentLocation.LOCAL
 
-    store._catalog["iris.worker"].evict_segment(path)
+    store.catalog["iris.worker"].evict_segment(path)
 
     assert _segments(store, "iris.worker") == []
     stats = _stats(store, "iris.worker")
@@ -134,7 +134,7 @@ def test_eviction_flips_remote_durable_segment(tmp_path):
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-0"], [1], [1])))
         _seal(store, "iris.worker")
-        ns = store._catalog["iris.worker"]
+        ns = store.catalog["iris.worker"]
         ns._sync_step()
         segs = _segments(store, "iris.worker")
         assert len(segs) == 1
@@ -214,7 +214,7 @@ def test_reconcile_preserves_location(tmp_path):
     _seal(s1, "iris.worker")
     seg = _segments(s1, "iris.worker")[0]
     # Simulate a successful copy via the catalog's public API.
-    s1._catalog["iris.worker"]._mark_uploaded(seg.path)
+    s1.catalog["iris.worker"]._mark_uploaded(seg.path)
     assert _segments(s1, "iris.worker")[0].location is SegmentLocation.BOTH
     s1.close()
 
@@ -283,7 +283,7 @@ def test_log_namespace_stats_count_pushed_logs(store):
 
 
 def _flush_one(store: DuckDBLogStore, namespace: str) -> None:
-    store._catalog[namespace]._flush_step()
+    store.catalog[namespace]._flush_step()
 
 
 def test_key_value_bounds_populated_for_log_namespace(store):
@@ -322,7 +322,7 @@ def test_key_value_bounds_survive_compaction(store):
     pre = _segments(store, "log")
     assert {s.min_key_value for s in pre} == {"/system/aaa", "/system/zzz"}
 
-    store._catalog["log"]._force_compact_l0()
+    store.catalog["log"]._force_compact_l0()
 
     post = _segments(store, "log")
     assert len(post) == 1

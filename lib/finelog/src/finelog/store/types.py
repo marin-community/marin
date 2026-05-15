@@ -18,7 +18,7 @@ from typing import Protocol
 import pyarrow as pa
 
 from finelog.rpc import logging_pb2
-from finelog.store.schema import Schema
+from finelog.store.schema import AlignedBatch, Schema
 from finelog.types import LogReadResult
 
 
@@ -113,7 +113,7 @@ class LogNamespaceProtocol(Protocol):
 
     def append_log_batch(self, items: list[tuple[str, list]]) -> None: ...
 
-    def append_record_batch(self, batch: pa.RecordBatch) -> None: ...
+    def append_aligned_batch(self, aligned: AlignedBatch) -> None: ...
 
     def get_logs(
         self,

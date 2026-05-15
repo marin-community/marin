@@ -50,7 +50,7 @@ def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) ->
 
 def _seal(store: DuckDBLogStore, namespace: str) -> None:
     """Run flush -> compact -> sync synchronously, mirroring one bg-loop tick."""
-    ns = store._catalog[namespace]
+    ns = store.catalog[namespace]
     ns._flush_step()
     ns._force_compact_l0()
     ns._sync_step()

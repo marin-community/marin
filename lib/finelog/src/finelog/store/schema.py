@@ -352,15 +352,39 @@ def _decode_dictionary_columns(batch: pa.RecordBatch) -> pa.RecordBatch:
     return pa.RecordBatch.from_arrays(columns, schema=pa.schema(fields))
 
 
-def validate_and_align_batch(batch: pa.RecordBatch, registered: Schema) -> pa.RecordBatch:
-    """Validate an incoming RecordBatch against a registered schema; return the aligned batch.
+@dataclass(frozen=True)
+class AlignedBatch:
+    """Validated, schema-aligned arrays for the append hot path.
 
-    Aligns the batch to the registered schema column order, filling missing
-    nullable columns with NULL arrays. Implicit server-assigned columns
-    (``seq``) are skipped — callers do not provide them and the namespace
-    stamps them on at append time. The returned batch's schema matches
-    ``schema_to_arrow(registered minus implicit)`` so the append path can
-    add the implicit columns and write to a typed Parquet writer.
+    Fields and arrays are in registered column order with the implicit
+    ``seq`` column skipped — the namespace stamps it on under the
+    insertion lock and builds the final Arrow Table in one pass.
+
+    ``byte_size`` sums raw buffer sizes (no slice-aware walk like
+    ``RecordBatch.nbytes``/``ReferencedBufferSize``). It feeds the
+    flush-trigger accounting in ``RamBuffers``, which only needs a
+    monotone approximation.
+    """
+
+    arrays: tuple[pa.Array, ...]
+    fields: tuple[pa.Field, ...]
+    num_rows: int
+    byte_size: int
+
+
+def _array_buffer_size(arr: pa.Array) -> int:
+    return sum(buf.size for buf in arr.buffers() if buf is not None)
+
+
+def validate_and_align_batch(batch: pa.RecordBatch, registered: Schema) -> AlignedBatch:
+    """Validate an incoming RecordBatch against a registered schema.
+
+    Returns the aligned arrays + fields in registered column order with the
+    implicit ``seq`` column skipped (the namespace stamps it on at append
+    time). Missing nullable columns are filled with NULL arrays. We
+    deliberately do not return a ``RecordBatch`` here — the append path
+    needs the arrays anyway to inject ``seq`` and build the final Table in
+    a single ``Table.from_arrays`` call.
 
     Raises:
         SchemaValidationError: caller declared an implicit column in the
@@ -384,11 +408,10 @@ def validate_and_align_batch(batch: pa.RecordBatch, registered: Schema) -> pa.Re
 
     aligned_arrays: list[pa.Array] = []
     aligned_fields: list[pa.Field] = []
+    byte_size = 0
     n_rows = decoded.num_rows
     for col in registered.columns:
         if col.name == IMPLICIT_SEQ_COLUMN:
-            # Stamped on by the namespace at append time; not part of the
-            # wire-aligned batch.
             continue
         if col.name in by_name_batch:
             field, array = by_name_batch[col.name]
@@ -400,13 +423,21 @@ def validate_and_align_batch(batch: pa.RecordBatch, registered: Schema) -> pa.Re
                     f"batch={stats_pb2.ColumnType.Name(actual_type)}"
                 )
             aligned_arrays.append(array)
+            byte_size += _array_buffer_size(array)
         else:
             if not col.nullable:
                 raise SchemaValidationError(f"column {col.name!r}: missing required (non-nullable) column")
-            aligned_arrays.append(pa.nulls(n_rows, type=_ARROW_TYPE_FOR[col.type]))
+            null_array = pa.nulls(n_rows, type=_ARROW_TYPE_FOR[col.type])
+            aligned_arrays.append(null_array)
+            byte_size += _array_buffer_size(null_array)
         aligned_fields.append(pa.field(col.name, _ARROW_TYPE_FOR[col.type], nullable=col.nullable))
 
-    return pa.RecordBatch.from_arrays(aligned_arrays, schema=pa.schema(aligned_fields))
+    return AlignedBatch(
+        arrays=tuple(aligned_arrays),
+        fields=tuple(aligned_fields),
+        num_rows=n_rows,
+        byte_size=byte_size,
+    )
 
 
 # ---------------------------------------------------------------------------

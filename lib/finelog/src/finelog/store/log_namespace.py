@@ -30,6 +30,7 @@ from typing import NamedTuple, Protocol
 
 import duckdb
 import fsspec.core
+import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
@@ -49,6 +50,7 @@ from finelog.store.compactor import (
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
+    AlignedBatch,
     Column,
     Schema,
     schema_to_arrow,
@@ -222,62 +224,88 @@ def _recover_next_seq(log_dir: Path) -> int:
     return next_seq
 
 
-def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
-    """Log-structured merge: keep each chunk at least 2x the previous one.
+def _maintain_chunk_invariant(chunks: list[pa.Table]) -> None:
+    """Restore the LSM-style invariant ``chunks[i-1].num_rows > chunks[i].num_rows``.
 
-    Bounds ``len(chunks)`` logarithmically in total row count.
+    Called after each append. Only the tail can violate the invariant —
+    every earlier prefix already satisfied it before this append — so we
+    cascade-merge from the tail until the previous chunk is strictly
+    larger than the last. Bounds ``len(chunks)`` logarithmically in total
+    row count.
+
+    Mutates ``chunks`` in place: no list rebuild when the new chunk
+    already satisfies the invariant (the common case), versus the prior
+    implementation which reallocated the list on every append.
     """
-    if len(chunks) < 2:
-        return chunks
-    merged = [chunks[0]]
-    for chunk in chunks[1:]:
-        if merged[-1].num_rows <= chunk.num_rows:
-            merged[-1] = pa.concat_tables([merged[-1], chunk])
-        else:
-            merged.append(chunk)
-    return merged
+    while len(chunks) >= 2 and chunks[-2].num_rows <= chunks[-1].num_rows:
+        merged = pa.concat_tables([chunks[-2], chunks[-1]])
+        chunks.pop()
+        chunks[-1] = merged
 
 
 @dataclass
 class _SealedBuffer:
     """An immutable, in-flight flush buffer.
 
-    ``nbytes`` and ``num_rows`` are snapshotted at construction so the hot
-    path (``RamBuffers.ram_bytes`` / ``ram_rows``) doesn't re-walk every
-    column buffer on each call — ``pa.Table.nbytes`` is O(chunks * columns)
-    and was the dominant cost under sustained write load.
+    ``nbytes`` and ``num_rows`` are supplied by the caller (carried over
+    from ``RamBuffers`` accounting) so neither the hot path nor seal-time
+    has to walk the table's buffers. ``pa.Table.nbytes`` is O(chunks x
+    columns) via ``arrow::util::ReferencedBufferSize`` and was the
+    dominant per-WriteRows cost under sustained load.
     """
 
     table: pa.Table
+    nbytes: int
+    num_rows: int
     min_seq: int
     max_seq: int
 
-    def __post_init__(self) -> None:
-        self.nbytes: int = self.table.nbytes
-        self.num_rows: int = self.table.num_rows
 
+def _stamp_seq_and_build(
+    aligned: AlignedBatch,
+    first_seq: int,
+    arrow_schema: pa.Schema,
+) -> pa.Table:
+    """Build the seq-stamped Table from ``aligned`` in a single ``Table.from_arrays``.
 
-def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
-    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled.
+    ``aligned.fields`` is in registered column order minus the implicit
+    seq column. The common path is a linear merge against ``arrow_schema``
+    (zero name lookups). The slow path handles a benign race: the writer
+    validated against schema v, then an additive evolution landed before
+    the namespace took its lock; ``arrow_schema`` now declares columns
+    not present in ``aligned`` and those are NULL-filled.
 
-    Columns in ``arrow_schema`` that are missing from ``batch`` are filled
-    with NULL arrays. This tolerates a benign race where ``write_rows``
-    validates an incoming batch against schema version v, an additive
-    ``update_schema`` to v+1 lands before the per-namespace lock is taken,
-    and the append projects onto v+1's columns. Additive evolution only
-    adds nullable columns, so a NULL fill is sound.
+    The seq array is materialized via NumPy to skip the Python-int boxing
+    that ``pa.array(range(...))`` incurs per element.
     """
-    seq_array = pa.array(range(first_seq, first_seq + batch.num_rows), type=pa.int64())
-    batch_columns = set(batch.schema.names)
-    arrays: list[pa.Array] = []
+    seq_array = pa.array(np.arange(first_seq, first_seq + aligned.num_rows, dtype=np.int64))
+
+    if len(aligned.fields) + 1 == len(arrow_schema):
+        out_arrays: list[pa.Array] = []
+        ai = 0
+        match = True
+        for field in arrow_schema:
+            if field.name == IMPLICIT_SEQ_COLUMN:
+                out_arrays.append(seq_array)
+            elif ai < len(aligned.fields) and aligned.fields[ai].name == field.name:
+                out_arrays.append(aligned.arrays[ai])
+                ai += 1
+            else:
+                match = False
+                break
+        if match and ai == len(aligned.fields):
+            return pa.Table.from_arrays(out_arrays, schema=arrow_schema)
+
+    aligned_by_name = {f.name: a for f, a in zip(aligned.fields, aligned.arrays, strict=True)}
+    fallback: list[pa.Array] = []
     for field in arrow_schema:
         if field.name == IMPLICIT_SEQ_COLUMN:
-            arrays.append(seq_array)
-        elif field.name in batch_columns:
-            arrays.append(batch.column(field.name))
+            fallback.append(seq_array)
+        elif field.name in aligned_by_name:
+            fallback.append(aligned_by_name[field.name])
         else:
-            arrays.append(pa.nulls(batch.num_rows, type=field.type))
-    return pa.Table.from_arrays(arrays, schema=arrow_schema)
+            fallback.append(pa.nulls(aligned.num_rows, type=field.type))
+    return pa.Table.from_arrays(fallback, schema=arrow_schema)
 
 
 def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
@@ -337,11 +365,17 @@ class RamBuffers:
         self._next_seq += count
         return first
 
-    def append_table(self, table: pa.Table) -> None:
-        added = table.nbytes
+    def append_table(self, table: pa.Table, *, added_bytes: int) -> None:
+        """Append ``table`` to the chunk list; caller supplies ``added_bytes``.
+
+        ``pa.Table.nbytes`` is O(buffers) and was the dominant per-write
+        cost (it walks ``ReferencedBufferSize`` over every chunked array).
+        Callers compute byte size cheaply at the schema boundary via
+        ``AlignedBatch.byte_size`` plus 8 bytes per row for the seq column.
+        """
         self._chunks.append(table)
-        self._chunks = _merge_chunks(self._chunks)
-        self._ram_bytes += added
+        _maintain_chunk_invariant(self._chunks)
+        self._ram_bytes += added_bytes
         self._ram_rows += table.num_rows
 
     def ram_bytes(self) -> int:
@@ -367,6 +401,8 @@ class RamBuffers:
         if not self._chunks:
             return None
         tables = self._chunks
+        sealed_bytes = self._ram_bytes
+        sealed_rows = self._ram_rows
         self._chunks = []
         self._ram_bytes = 0
         self._ram_rows = 0
@@ -374,6 +410,8 @@ class RamBuffers:
         seq_col = visible_table.column(IMPLICIT_SEQ_COLUMN)
         sealed = _SealedBuffer(
             table=visible_table,
+            nbytes=sealed_bytes,
+            num_rows=sealed_rows,
             min_seq=pc.min(seq_col).as_py(),
             max_seq=pc.max(seq_col).as_py(),
         )
@@ -388,10 +426,9 @@ class RamBuffers:
         """Push the in-flight buffer back to the head of chunks (write failed)."""
         if self._flushing is None:
             return
-        table = self._flushing.table
-        self._chunks.insert(0, table)
-        self._ram_bytes += table.nbytes
-        self._ram_rows += table.num_rows
+        self._chunks.insert(0, self._flushing.table)
+        self._ram_bytes += self._flushing.nbytes
+        self._ram_rows += self._flushing.num_rows
         self._flushing = None
 
     def query_snapshot(self) -> list[pa.Table]:
@@ -628,18 +665,25 @@ class DiskLogNamespace:
         datas_arr = pa.array(datas, type=pa.string())
         ts_arr = pa.array(epoch_ms, type=pa.int64())
         levels_arr = pa.array(levels, type=pa.int32())
+        non_seq_bytes = sum(
+            buf.size
+            for arr in (keys_arr, sources_arr, datas_arr, ts_arr, levels_arr)
+            for buf in arr.buffers()
+            if buf is not None
+        )
         t_prepared = time.monotonic()
 
         wait_start = time.monotonic()
         with self._insertion_lock:
             critical_start = time.monotonic()
             first_seq = self._buffers.allocate_seq(total)
-            seqs_arr = pa.array(range(first_seq, first_seq + total), type=pa.int64())
+            seqs_arr = pa.array(np.arange(first_seq, first_seq + total, dtype=np.int64))
             self._buffers.append_table(
                 pa.table(
                     [seqs_arr, keys_arr, sources_arr, datas_arr, ts_arr, levels_arr],
                     schema=self._arrow_schema,
-                )
+                ),
+                added_bytes=non_seq_bytes + 8 * total,
             )
             needs_drain = self._buffers.ram_bytes() >= self._segment_target_bytes
         critical_end = time.monotonic()
@@ -658,13 +702,15 @@ class DiskLogNamespace:
                 total_ms,
             )
 
-    def append_record_batch(self, batch: pa.RecordBatch) -> None:
-        """Stamp ``seq`` values onto ``batch`` and append it to the in-RAM chunks."""
-        if batch.num_rows == 0:
+    def append_aligned_batch(self, aligned: AlignedBatch) -> None:
+        """Stamp ``seq`` values onto ``aligned`` and append it to the in-RAM chunks."""
+        if aligned.num_rows == 0:
             return
         with self._insertion_lock:
-            first_seq = self._buffers.allocate_seq(batch.num_rows)
-            self._buffers.append_table(_stamp_seq_column(batch, first_seq, self._arrow_schema))
+            first_seq = self._buffers.allocate_seq(aligned.num_rows)
+            stamped = _stamp_seq_and_build(aligned, first_seq, self._arrow_schema)
+            # 8 bytes per row for the stamped int64 seq column.
+            self._buffers.append_table(stamped, added_bytes=aligned.byte_size + 8 * aligned.num_rows)
             needs_drain = self._buffers.ram_bytes() >= self._segment_target_bytes
         if needs_drain:
             self._wake.set()
@@ -811,14 +857,8 @@ class DiskLogNamespace:
             # key pruning. The L0 → L1 compaction COPY does an explicit
             # ``ORDER BY (key_column, seq)`` so the sort cost lands once,
             # in the bg compactor thread, instead of on every flush.
-            sealed = _SealedBuffer(
-                table=visible.table,
-                min_seq=visible.min_seq,
-                max_seq=visible.max_seq,
-            )
-
             try:
-                self._write_new_segment(sealed)
+                self._write_new_segment(visible)
             except Exception:
                 logger.warning(
                     "Flush failed after %d ms, restoring data to chunks",
@@ -1612,13 +1652,13 @@ class MemoryLogNamespace:
                 new_tables.append(_build_log_table(rows, self._arrow_schema))
             self._table = pa.concat_tables(new_tables) if len(new_tables) > 1 else self._table
 
-    def append_record_batch(self, batch: pa.RecordBatch) -> None:
-        if batch.num_rows == 0:
+    def append_aligned_batch(self, aligned: AlignedBatch) -> None:
+        if aligned.num_rows == 0:
             return
         with self._insertion_lock:
             first_seq = self._next_seq
-            self._next_seq += batch.num_rows
-            stamped = _stamp_seq_column(batch, first_seq, self._arrow_schema)
+            self._next_seq += aligned.num_rows
+            stamped = _stamp_seq_and_build(aligned, first_seq, self._arrow_schema)
             self._table = pa.concat_tables([self._table, stamped])
 
     def get_logs(

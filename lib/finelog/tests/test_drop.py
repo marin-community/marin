@@ -18,12 +18,12 @@ def test_drop_table_removes_namespace(store: DuckDBLogStore):
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
     _seal(store, "iris.worker")
 
-    ns = store._catalog["iris.worker"]
+    ns = store.catalog["iris.worker"]
     assert any(s.level >= 1 for s in ns.all_segments_unlocked()), "expected an L>=1 segment after _seal"
 
     store.drop_table("iris.worker")
 
-    assert "iris.worker" not in store._catalog
+    assert "iris.worker" not in store.catalog
 
 
 def test_drop_table_then_query_raises(store: DuckDBLogStore):
@@ -51,7 +51,7 @@ def test_drop_table_unknown_namespace_raises(store: DuckDBLogStore):
 def test_drop_table_log_namespace_rejected(store: DuckDBLogStore):
     with pytest.raises(InvalidNamespaceError):
         store.drop_table("log")
-    assert "log" in store._catalog
+    assert "log" in store.catalog
 
 
 def test_drop_table_then_register_starts_fresh(store: DuckDBLogStore):
@@ -79,7 +79,7 @@ def test_drop_table_does_not_delete_remote_objects(tmp_path: Path):
     try:
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = store._catalog["iris.worker"]
+        ns = store.catalog["iris.worker"]
         ns._flush_step()
         # Only compacted segments are uploaded.
         ns._force_compact_l0()
@@ -119,7 +119,7 @@ def test_drop_table_rejects_concurrent_register(tmp_path: Path):
         schema = _worker_schema()
         store.register_table("iris.worker", schema)
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = store._catalog["iris.worker"]
+        ns = store.catalog["iris.worker"]
         ns._flush_step()
         ns._force_compact_l0()
         ns._sync_step()
@@ -147,8 +147,8 @@ def test_drop_table_rejects_concurrent_register(tmp_path: Path):
         # Once the drop has fully completed the reservation is cleared
         # and the name is re-registrable.
         store.register_table("iris.worker", schema)
-        assert "iris.worker" in store._catalog
-        assert not store._catalog.is_dropping("iris.worker")
+        assert "iris.worker" in store.catalog
+        assert not store.catalog.is_dropping("iris.worker")
     finally:
         store.close()
 
@@ -168,7 +168,7 @@ def test_drop_table_stops_bg_thread_before_dropping_catalog_rows(tmp_path: Path)
     try:
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns = store._catalog["iris.worker"]
+        ns = store.catalog["iris.worker"]
         ns._flush_step()
         ns._force_compact_l0()
         ns._sync_step()
@@ -181,7 +181,7 @@ def test_drop_table_stops_bg_thread_before_dropping_catalog_rows(tmp_path: Path)
         original_stop = ns.stop_and_join
 
         def spy() -> None:
-            observed["rows_at_stop"] = list(store._catalog.list_segments("iris.worker"))
+            observed["rows_at_stop"] = list(store.catalog.list_segments("iris.worker"))
             original_stop()
 
         ns.stop_and_join = spy  # type: ignore[method-assign]
