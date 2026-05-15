@@ -10,11 +10,12 @@ pipelines.
 
 import os.path
 
-from experiments.marin_models import marin_tokenizer
 from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
+
+from experiments.marin_models import marin_tokenizer
 
 _download_spec, _normalize_spec = climblab_ja_normalize_steps()
 
