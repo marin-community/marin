@@ -199,6 +199,46 @@ def test_tpu_bad_node_stderr_promotes_to_worker_failed(mock_worker, mock_runtime
     assert "Couldn't open iommu group" in final_task.error
 
 
+def test_jax_distributed_peer_loss_stderr_promotes_to_worker_failed(mock_worker, mock_runtime):
+    """Sibling self-exit on JAX-distributed-RPC unavailability -> WORKER_FAILED (issue #5753)."""
+    peer_loss_stderr = [
+        LogLine.now(source="stdout", data="step 12345: loss=2.41"),
+        LogLine.now(
+            source="stderr",
+            data=(
+                "Traceback (most recent call last):\n"
+                "  ...jaxlib.xla_extension.XlaRuntimeError: UNKNOWN: Error received from peer"
+                ' {grpc_message:"Socket closed", grpc_status:14}'
+            ),
+        ),
+    ]
+    populated_reader = FakeLogReader(_logs=list(peer_loss_stderr))
+
+    class _HandleWithStderr(FakeContainerHandle):
+        def log_reader(self) -> FakeLogReader:
+            return populated_reader
+
+    mock_handle = _HandleWithStderr(
+        status_sequence=[
+            ContainerStatus(phase=ContainerPhase.RUNNING),
+            ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=1),
+        ]
+    )
+    mock_runtime.create_container = Mock(return_value=mock_handle)
+
+    request = create_run_task_request()
+    task_id = mock_worker.submit_task(request)
+
+    task = mock_worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    final_task = mock_worker.get_task(task_id)
+    assert final_task.status == job_pb2.TASK_STATE_WORKER_FAILED
+    assert final_task.exit_code == 1
+    assert final_task.error is not None
+    assert "Socket closed" in final_task.error
+
+
 def test_non_tpu_stderr_still_maps_to_failed(mock_worker, mock_runtime):
     """Non-zero exit with unrelated stderr stays FAILED (no false promotion)."""
     user_stderr = [
