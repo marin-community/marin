@@ -1276,17 +1276,24 @@ class Controller:
             k8s_provider = self._provider
             k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
             k8s_provider.log_client = k8s_log_client
+
+            def _install_k8s_task_stats_table(table: Table) -> None:
+                k8s_provider.task_stats_table = table
+
+            def _install_k8s_profile_table(table: Table) -> None:
+                k8s_provider.profile_table = table
+
             k8s_provider.task_stats_table = self._register_finelog_table(
                 k8s_log_client,
                 TASK_STATS_NAMESPACE,
                 IrisTaskStat,
-                on_late_success=lambda t: setattr(k8s_provider, "task_stats_table", t),
+                on_late_success=_install_k8s_task_stats_table,
             )
             k8s_provider.profile_table = self._register_finelog_table(
                 k8s_log_client,
                 PROFILE_NAMESPACE,
                 IrisProfile,
-                on_late_success=lambda t: setattr(k8s_provider, "profile_table", t),
+                on_late_success=_install_k8s_profile_table,
             )
 
         # Controller process logs ship to the log server via RemoteLogHandler.
