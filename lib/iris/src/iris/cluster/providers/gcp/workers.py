@@ -27,6 +27,9 @@ from iris.cluster.providers.gcp.bootstrap import (
 )
 from iris.cluster.providers.gcp.handles import (
     _ACTIVE_VM_SLICE_STATES,
+    _QR_STATE_MAP,
+    _TPU_STATE_MAP,
+    _VM_STATE_MAP,
     CloudSliceState,
     GcpSliceHandle,
     GcpStandaloneWorkerHandle,
@@ -46,6 +49,7 @@ from iris.cluster.providers.remote_exec import GceRemoteExec
 from iris.cluster.providers.types import (
     InfraError,
     Labels,
+    ListedSlice,
     SliceHandle,
     generate_slice_suffix,
 )
@@ -628,7 +632,6 @@ class GcpWorkerProvider:
                     _gcp_service=self._gcp,
                     _ssh_config=self._ssh_config,
                     _service_account=tpu.service_account,
-                    _state=tpu.state,
                 )
             )
 
@@ -657,102 +660,99 @@ class GcpWorkerProvider:
 
         return handles
 
-    def list_all_slices(self) -> list[GcpSliceHandle | GcpVmSliceHandle]:
-        """List all autoscaler-managed slices for this cluster.
+    def list_all_slices(self) -> list[ListedSlice]:
+        """List every autoscaler-managed slice for this cluster, regardless of cloud state.
 
         Uses project-wide queries (empty zones = all zones) via GcpService,
         filtered by iris-{prefix}-managed=true. Slices tagged
-        iris-{prefix}-manual=true (operator-created via `iris cluster
-        create-slice`) are excluded: the autoscaler and `cluster stop` must
-        not see or terminate them.
+        iris-{prefix}-manual=true are excluded — those are operator-created
+        and never autoscaler-owned.
         """
         managed_labels = {self._iris_labels.iris_managed: "true"}
         manual_label = self._iris_labels.iris_manual
 
         if self._gcp.mode == ServiceMode.LOCAL:
             local_handles = self._gcp.get_local_slices(managed_labels)
-            return [h for h in local_handles if h.labels.get(manual_label) != "true"]  # type: ignore[return-value]
+            return [
+                ListedSlice(handle=h, state=CloudSliceState.READY)
+                for h in local_handles
+                if h.labels.get(manual_label) != "true"
+            ]
 
         tpu_infos = self._gcp.tpu_list(zones=[], labels=managed_labels)
         vm_infos = self._gcp.vm_list(zones=[], labels=managed_labels)
 
-        handles: list[GcpSliceHandle | GcpVmSliceHandle] = []
+        listed: list[ListedSlice] = []
 
         for tpu in tpu_infos:
-            if tpu.state not in ("READY", "CREATING"):
-                continue
             if tpu.labels.get(manual_label) == "true":
                 continue
-            handles.append(
-                GcpSliceHandle(
-                    _slice_id=tpu.name,
-                    _zone=tpu.zone,
-                    _project_id=self._project_id,
-                    _labels=tpu.labels,
-                    _created_at=tpu.created_at,
-                    _label_prefix=self._label_prefix,
-                    _accelerator_variant=tpu.accelerator_type,
-                    _gcp_service=self._gcp,
-                    _ssh_config=self._ssh_config,
-                    _service_account=tpu.service_account,
-                    _state=tpu.state,
-                    _is_queued_resource=tpu.labels.get(CAPACITY_TYPE_LABEL) == CAPACITY_TYPE_RESERVED_VALUE,
-                )
+            handle = GcpSliceHandle(
+                _slice_id=tpu.name,
+                _zone=tpu.zone,
+                _project_id=self._project_id,
+                _labels=tpu.labels,
+                _created_at=tpu.created_at,
+                _label_prefix=self._label_prefix,
+                _accelerator_variant=tpu.accelerator_type,
+                _gcp_service=self._gcp,
+                _ssh_config=self._ssh_config,
+                _service_account=tpu.service_account,
+                _is_queued_resource=tpu.labels.get(CAPACITY_TYPE_LABEL) == CAPACITY_TYPE_RESERVED_VALUE,
             )
+            listed.append(ListedSlice(handle=handle, state=_TPU_STATE_MAP.get(tpu.state, CloudSliceState.UNKNOWN)))
 
-        # Discover queued resources (reserved TPUs) not yet visible as TPU VMs.
-        # These are in QUEUED/PROVISIONING/WAITING_FOR_RESOURCES and need handles
-        # so the controller doesn't orphan them on restart.
-        tpu_names = {h.slice_id for h in handles}
+        # Discover queued resources (reserved TPUs) not already represented by a
+        # TPU VM. We surface every state — including FAILED/SUSPENDED/DELETING —
+        # so the boot reconciler can reclaim dead reservations instead of
+        # orphaning them in GCP.
+        tpu_names = {item.handle.slice_id for item in listed}
         qr_infos = self._gcp.queued_resource_list(zones=[], labels=managed_labels)
         for qr in qr_infos:
             if qr.name in tpu_names:
                 continue
-            if qr.state in ("FAILED", "SUSPENDED", "DELETING"):
+            if qr.labels and qr.labels.get(manual_label) == "true":
                 continue
-            if qr.labels.get(manual_label) == "true":
-                continue
-            handles.append(
-                GcpSliceHandle(
-                    _slice_id=qr.name,
-                    _zone=qr.zone,
-                    _project_id=self._project_id,
-                    _labels=qr.labels
-                    or {CAPACITY_TYPE_LABEL: CAPACITY_TYPE_RESERVED_VALUE, self._iris_labels.iris_managed: "true"},
-                    _created_at=Timestamp.now(),
-                    _label_prefix=self._label_prefix,
-                    _accelerator_variant="",
-                    _gcp_service=self._gcp,
-                    _ssh_config=self._ssh_config,
-                    _is_queued_resource=True,
-                )
+            handle = GcpSliceHandle(
+                _slice_id=qr.name,
+                _zone=qr.zone,
+                _project_id=self._project_id,
+                _labels=qr.labels
+                or {CAPACITY_TYPE_LABEL: CAPACITY_TYPE_RESERVED_VALUE, self._iris_labels.iris_managed: "true"},
+                _created_at=Timestamp.now(),
+                _label_prefix=self._label_prefix,
+                _accelerator_variant="",
+                _gcp_service=self._gcp,
+                _ssh_config=self._ssh_config,
+                _is_queued_resource=True,
             )
+            listed.append(ListedSlice(handle=handle, state=_QR_STATE_MAP.get(qr.state, CloudSliceState.UNKNOWN)))
 
+        # Surface every managed VM regardless of cloud state. Stopped/terminated
+        # instances are exactly what the boot reconciler needs to reclaim; the
+        # active-only filter belongs in list_slices(), used for live discovery.
         for vm in vm_infos:
-            if vm.status not in _ACTIVE_VM_SLICE_STATES:
-                continue
             slice_id = vm.labels.get(self._iris_labels.iris_slice_id, "")
             if not slice_id:
                 continue
             if vm.labels.get(manual_label) == "true":
                 continue
-            handles.append(
-                GcpVmSliceHandle(
-                    _slice_id=slice_id,
-                    _vm_name=vm.name,
-                    _zone=vm.zone,
-                    _project_id=self._project_id,
-                    _gcp_service=self._gcp,
-                    _labels=vm.labels,
-                    _created_at=vm.created_at,
-                    _label_prefix=self._label_prefix,
-                    _ssh_config=self._ssh_config,
-                    _service_account=vm.service_account,
-                )
+            handle = GcpVmSliceHandle(
+                _slice_id=slice_id,
+                _vm_name=vm.name,
+                _zone=vm.zone,
+                _project_id=self._project_id,
+                _gcp_service=self._gcp,
+                _labels=vm.labels,
+                _created_at=vm.created_at,
+                _label_prefix=self._label_prefix,
+                _ssh_config=self._ssh_config,
+                _service_account=vm.service_account,
             )
+            listed.append(ListedSlice(handle=handle, state=_VM_STATE_MAP.get(vm.status, CloudSliceState.UNKNOWN)))
 
-        logger.info("list_all_slices: found %d managed slices", len(handles))
-        return handles
+        logger.info("list_all_slices: found %d managed slices", len(listed))
+        return listed
 
     def list_vms(
         self,

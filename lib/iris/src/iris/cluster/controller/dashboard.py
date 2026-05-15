@@ -43,7 +43,6 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
-from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
@@ -472,22 +471,16 @@ class ControllerDashboard:
         log_wsgi_app._endpoints["/PushLogs"] = log_wsgi_app._endpoints[_LOG_PUSH_ENDPOINT]
         _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
 
-        self._actor_proxy = ActorProxy(self._service._store)
-
         def _resolve_endpoint(name: str) -> str | None:
             # Task-registered endpoints live in the SQL store; system endpoints
             # (``/system/...``) live in an in-memory dict on the service.
             # Same fallback order as ListEndpoints' system-endpoint branch.
-            row = self._service._store.endpoints.resolve(name)
+            row = self._service._endpoints.resolve(name)
             if row is not None:
                 return row.address
             return self._service._system_endpoints.get(name)
 
         self._endpoint_proxy = EndpointProxy(_resolve_endpoint)
-
-        @requires_auth
-        async def _proxy_actor_rpc(request: Request) -> Response:
-            return await self._actor_proxy.handle(request)
 
         @requires_auth
         async def _proxy_endpoint(request: Request) -> Response:
@@ -524,7 +517,6 @@ class ControllerDashboard:
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
-            Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
             Route(
                 "/proxy/{endpoint_name:str}",
                 _proxy_endpoint_redirect,
@@ -551,7 +543,7 @@ class ControllerDashboard:
 
         app: Starlette | _RouteAuthMiddleware = Starlette(
             routes=routes,
-            lifespan=on_shutdown(self._actor_proxy.close, self._endpoint_proxy.close),
+            lifespan=on_shutdown(self._endpoint_proxy.close),
         )
         # Starlette's default trailing-slash redirect builds an absolute
         # Location from ``scope["server"]`` (or the request's Host header).

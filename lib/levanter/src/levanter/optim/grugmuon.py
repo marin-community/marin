@@ -17,6 +17,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from jax.sharding import PartitionSpec
+from jax.sharding import reshard
 from optax import tree_utils as otu
 
 from levanter.optim.config import OptimizerConfig
@@ -282,8 +283,7 @@ def _zeropower_via_newtonschulz_replicated(
     ambiguities in the X @ X.T contractions. The caller is responsible for
     restoring the final parameter layout. Kept for A/B benchmarking.
     """
-    from jax.sharding import PartitionSpec as P, reshard
-
+    P = PartitionSpec
     assert X.ndim == 2
     del target_pspec  # Kept for signature parity with the other Newton-Schulz helpers.
 
@@ -319,8 +319,6 @@ def _zeropower_via_newtonschulz_batched_stack_sharded(
     target_pspec: PartitionSpec | None = None,
 ) -> jax.Array:
     """Run Newton-Schulz on a stacked batch of matrices with only the batch axis sharded."""
-    from jax.sharding import reshard
-
     assert X.ndim == 3
 
     coeffs = NEWTON_SCHULZ_COEFFICIENTS[coefficient_type]

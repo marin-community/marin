@@ -43,7 +43,7 @@ accept with rationale).
 
 The agent must ask before:
 
-- Re-running on a different cluster than `lib/iris/examples/marin.yaml`.
+- Re-running on a different cluster than `lib/iris/config/marin.yaml`.
 - Stopping a ferry that has not crossed its tier wall-time.
 
 ## Trigger / Scope

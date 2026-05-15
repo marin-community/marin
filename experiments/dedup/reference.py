@@ -29,7 +29,7 @@ def build_steps() -> list[StepSpec]:
         name="minhash/fineweb-edu-sample-10bt",
         deps=[normalized],
         fn=lambda op: compute_minhash_attrs(
-            source=Artifact.load(normalized, NormalizedData),
+            source=Artifact.from_path(normalized, NormalizedData),
             output_path=op,
         ),
     )
@@ -37,7 +37,7 @@ def build_steps() -> list[StepSpec]:
         name="dedup_sample/10BT",
         deps=[minhash],
         fn=lambda op: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.load(minhash, MinHashAttrData)],
+            inputs=[Artifact.from_path(minhash, MinHashAttrData)],
             output_path=op,
             max_parallelism=1024,
         ),

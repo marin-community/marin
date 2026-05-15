@@ -96,12 +96,16 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
+from fray.current_client import current_client
+from fray.iris_backend import FrayIrisClient
 from fray.types import ResourceConfig, TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
+from iris.rpc import config_pb2
 from rigging.filesystem import (
     collect_gcs_paths,
     get_bucket_location,
     marin_prefix,
+    mirror_budget,
     open_url,
     region_from_prefix,
     split_gcs_path,
@@ -307,10 +311,6 @@ def _allowed_regions_for_step(
 
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
-    from fray.client import current_client
-    from fray.iris_backend import FrayIrisClient
-    from iris.rpc import config_pb2
-
     try:
         client = current_client()
     except Exception:
@@ -532,9 +532,6 @@ def _component_tpu_pins(
 
 
 def _iris_backend_is_active() -> bool:
-    from fray.client import current_client
-    from fray.iris_backend import FrayIrisClient
-
     try:
         client = current_client()
     except Exception:
@@ -672,8 +669,6 @@ def resolve_executor_step(
 
     def resolved_fn(output_path):
         if captured_budget is not None:
-            from rigging.filesystem import mirror_budget
-
             with mirror_budget(captured_budget):
                 return captured_fn(captured_config)
         return captured_fn(captured_config)
@@ -1317,8 +1312,8 @@ class Executor:
 
         Args:
             steps: The steps to run.
-            dry_run: If True, only print out what needs to be done. Reads existing
-                statuses to report which steps would actually be executed.
+            dry_run: If True, walk the step graph and log what would run, without
+                touching remote filesystems or launching any work.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
             max_concurrent: Maximum number of steps to run concurrently. If None, run all ready steps in parallel.
@@ -1350,8 +1345,11 @@ class Executor:
         if steps_to_run != self.steps:
             logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
 
-        logger.info("### Writing metadata ###")
-        self.write_infos()
+        if dry_run:
+            logger.info("### Skipping metadata write (dry run) ###")
+        else:
+            logger.info("### Writing metadata ###")
+            self.write_infos()
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
         if max_concurrent is not None:
@@ -1757,11 +1755,12 @@ def executor_main(
     )
     time_out = time.time()
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
-    # print json path again so it's easy to copy
-    logger.info(f"Executor info written to {executor.executor_info_path}")
-    if not executor.prefix.startswith("gs://"):
-        logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
-    logger.info(f"View the experiment at {executor.get_experiment_url()}")
+    if not config.dry_run:
+        # print json path again so it's easy to copy
+        logger.info(f"Executor info written to {executor.executor_info_path}")
+        if not executor.prefix.startswith("gs://"):
+            logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
+        logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 
 def _make_prefix_absolute_path(prefix, override_path):

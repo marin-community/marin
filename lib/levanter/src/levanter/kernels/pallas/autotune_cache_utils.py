@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 from typing import Any, Optional, cast
 
 import jax
@@ -14,8 +15,6 @@ _AUTOTUNE_CACHE_SUBDIR = "levanter_kernel_autotune"
 
 def is_enabled_from_env(env_var: str, default: bool = True) -> bool:
     """Read a boolean-ish env var used to gate autotuning behavior."""
-    import os
-
     value = os.environ.get(env_var)
     if value is None:
         return default

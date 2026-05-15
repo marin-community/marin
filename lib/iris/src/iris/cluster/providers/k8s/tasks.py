@@ -42,7 +42,16 @@ from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource, KubectlError, KubectlLogLine, parse_k8s_quantity
 from iris.cluster.runtime.env import build_common_iris_env, normalize_workdir_relative_path
-from iris.cluster.runtime.profile import IrisProfile, build_profile_row
+from iris.cluster.runtime.profile import (
+    IrisProfile,
+    build_memray_attach_cmd,
+    build_memray_transform_cmd,
+    build_profile_row,
+    build_pyspy_cmd,
+    build_pyspy_dump_cmd,
+    resolve_cpu_spec,
+    resolve_memory_spec,
+)
 from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
 from iris.cluster.worker.stats import build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -1268,16 +1277,12 @@ class K8sTaskProvider:
 
     def _profile_threads(self, pod_name: str, threads_config: job_pb2.ThreadsProfile) -> job_pb2.ProfileTaskResponse:
         """Get thread stacks via py-spy dump."""
-        from iris.cluster.runtime.profile import build_pyspy_dump_cmd
-
         cmd = shlex.join(build_pyspy_dump_cmd("1", include_locals=threads_config.locals))
         stdout = self._kubectl_exec_shell(pod_name, cmd, timeout=30)
         return job_pb2.ProfileTaskResponse(profile_data=stdout.encode("utf-8"))
 
     def _profile_cpu(self, pod_name: str, cpu_config: job_pb2.CpuProfile, duration: int) -> job_pb2.ProfileTaskResponse:
         """Record CPU profile via py-spy."""
-        from iris.cluster.runtime.profile import build_pyspy_cmd, resolve_cpu_spec
-
         spec = resolve_cpu_spec(cpu_config, duration, pid="1")
         output_path = f"/tmp/iris-profile.{spec.ext}"
         cmd = shlex.join(build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path))
@@ -1290,12 +1295,6 @@ class K8sTaskProvider:
         self, pod_name: str, memory_config: job_pb2.MemoryProfile, duration: int
     ) -> job_pb2.ProfileTaskResponse:
         """Record memory profile via memray."""
-        from iris.cluster.runtime.profile import (
-            build_memray_attach_cmd,
-            build_memray_transform_cmd,
-            resolve_memory_spec,
-        )
-
         spec = resolve_memory_spec(memory_config, duration, pid="1")
         trace_path = "/tmp/iris-memray.bin"
         output_path = f"/tmp/iris-memray.{spec.ext}"

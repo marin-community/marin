@@ -23,10 +23,11 @@ import dataclasses
 import logging
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
 from levanter.tracker.wandb import WandbConfig
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import (
     TokenizeConfig,
@@ -36,6 +37,7 @@ from marin.processing.tokenize import (
 )
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+from experiments.datakit_testbed.mixture import read_bucket_weights
 from experiments.datakit_testbed.settings import TESTBED_SEQ_LEN, TESTBED_TOKENIZER
 from experiments.defaults import default_validation_sets
 from experiments.grug.moe.heuristic import build_from_heuristic
@@ -91,11 +93,33 @@ def testbed_tokenize(
     )
 
 
+@dataclass(frozen=True)
+class TestbedTrialConfig:
+    """Wraps a ``GrugMoeLaunchConfig`` plus a path to a runtime-computed weights file.
+
+    ``weights_path`` is an ``InputName`` at construction (output of
+    ``tokenized_bucket_weights_step``) and a concrete path at runtime. The
+    runner reads the JSON file, patches ``train_weights`` on the embedded
+    data config, and dispatches to ``run_grug_moe_trial``.
+    """
+
+    weights_path: str
+    grug_config: GrugMoeLaunchConfig
+
+
+def run_testbed_trial(config: TestbedTrialConfig) -> None:
+    """Read bucket weights, splice into the data config, then run Grug-MoE."""
+    weights = read_bucket_weights(config.weights_path)
+    data = dataclasses.replace(config.grug_config.data, train_weights=weights)
+    grug = dataclasses.replace(config.grug_config, data=data)
+    run_grug_moe_trial(grug)
+
+
 def run_testbed_config(
     *,
     name: str,
     tokenized_buckets: dict[str, TokenizerStep],
-    weights: dict[str, float],
+    weights_step: ExecutorStep,
     compute_budget_flops: float = DEFAULT_COMPUTE_BUDGET_FLOPS,
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     target_steps: int = DEFAULT_TARGET_STEPS,
@@ -115,9 +139,10 @@ def run_testbed_config(
             builds these from its own bucketed view of the sampled data
             — baseline buckets by provenance (one tokenize per source);
             other configs may bucket differently (e.g. by quality tier).
-        weights: Per-bucket mixture weights. Keys must match
-            ``tokenized_buckets``. Typically computed from on-disk
-            ``train/.stats.json`` via ``weights_from_tokenized_bucket_stats``.
+        weights_step: ExecutorStep that produces a ``weights.json`` artifact
+            (see :func:`tokenized_bucket_weights_step`). Real weights are
+            read at training time, so the training DAG can be validated
+            via ``--dry_run`` without the tokenize outputs existing yet.
         compute_budget_flops: FLOP budget fed to ``build_from_heuristic``.
         hidden_dim: Model hidden dimension for the heuristic.
         target_steps: Heuristic target steps; default ``2**14`` matches Grug.
@@ -131,13 +156,11 @@ def run_testbed_config(
         tpu: Fray TPU request string (e.g. ``"v5p-8"``).
 
     Returns:
-        An ``ExecutorStep`` whose ``fn`` is ``run_grug_moe_trial``. Pass to
-        ``executor_main`` to actually train.
+        An ``ExecutorStep`` whose ``fn`` is ``run_testbed_trial``. Pass to
+        ``executor_main`` to validate the DAG (dry-run) or actually train.
     """
     if not tokenized_buckets:
         raise ValueError("tokenized_buckets must be non-empty")
-    if weights.keys() != tokenized_buckets.keys():
-        raise ValueError(f"weights keys {sorted(weights)} must match tokenized_buckets keys {sorted(tokenized_buckets)}")
 
     model_cfg, opt_cfg, batch_size, steps = build_from_heuristic(
         budget=compute_budget_flops,
@@ -145,7 +168,11 @@ def run_testbed_config(
         target_steps=target_steps,
     )
 
-    data = lm_mixture_data_config(components=tokenized_buckets, weights=weights)
+    # Placeholder uniform weights — only the structure of LmDataConfig matters
+    # at construction; ``run_testbed_trial`` overwrites ``train_weights`` from
+    # the on-disk weights.json before dispatching to ``run_grug_moe_trial``.
+    placeholder_weights = {bucket: 1.0 for bucket in tokenized_buckets}
+    data = lm_mixture_data_config(components=tokenized_buckets, weights=placeholder_weights)
     data = add_validation_sets_to_mixture(
         data,
         default_validation_sets(tokenizer=tokenizer),
@@ -174,41 +201,46 @@ def run_testbed_config(
         target_budget_tokens / 1e9,
     )
 
+    grug_config = GrugMoeLaunchConfig(
+        model=versioned(model_cfg),
+        data=data,
+        output_path=this_output_path(),
+        run_id=f"datakit-testbed-{name}",
+        resources=versioned(ResourceConfig.with_tpu(tpu)),
+        steps=versioned(steps),
+        batch_size=versioned(batch_size),
+        seed=versioned(seed),
+        mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
+        tracker=WandbConfig(
+            project="marin",
+            tags=list(wandb_tags),
+            group=wandb_group,
+            name=None,
+        ),
+        optimizer=versioned(opt_cfg),
+        grug_trainer=versioned(
+            GrugTrainerConfig(
+                z_loss_weight=1e-4,
+                ema_beta=None,
+                log_every=10,
+            )
+        ),
+        eval=versioned(
+            GrugEvalConfig(
+                eval_batch_size=512,
+                steps_per_eval=1000,
+                max_eval_batches=8,
+                eval_current=True,
+                eval_ema=False,
+            )
+        ),
+    )
+
     return ExecutorStep(
         name=f"data/datakit/train/{name}",
-        fn=run_grug_moe_trial,
-        config=GrugMoeLaunchConfig(
-            model=versioned(model_cfg),
-            data=data,
-            output_path=this_output_path(),
-            run_id=f"datakit-testbed-{name}",
-            resources=versioned(ResourceConfig.with_tpu(tpu)),
-            steps=versioned(steps),
-            batch_size=versioned(batch_size),
-            seed=versioned(seed),
-            mp=versioned("params=float32,compute=bfloat16,output=bfloat16"),
-            tracker=WandbConfig(
-                project="marin",
-                tags=list(wandb_tags),
-                group=wandb_group,
-                name=None,
-            ),
-            optimizer=versioned(opt_cfg),
-            grug_trainer=versioned(
-                GrugTrainerConfig(
-                    z_loss_weight=1e-4,
-                    ema_beta=None,
-                    log_every=10,
-                )
-            ),
-            eval=versioned(
-                GrugEvalConfig(
-                    eval_batch_size=512,
-                    steps_per_eval=1000,
-                    max_eval_batches=8,
-                    eval_current=True,
-                    eval_ema=False,
-                )
-            ),
+        fn=run_testbed_trial,
+        config=TestbedTrialConfig(
+            weights_path=output_path_of(weights_step),
+            grug_config=grug_config,
         ),
     )

@@ -21,6 +21,9 @@ from enum import StrEnum
 from http.cookies import SimpleCookie
 from typing import Protocol
 
+import google.auth
+import google.auth.transport.requests
+import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
@@ -179,8 +182,6 @@ class GcpAccessTokenVerifier:
         self._project_id = project_id
 
     def verify(self, token: str) -> VerifiedIdentity:
-        import requests
-
         resp = requests.get(self._TOKENINFO_URL, params={"access_token": token}, timeout=10)
         if resp.status_code != 200:
             raise ValueError(f"Token verification failed (status {resp.status_code})")
@@ -379,9 +380,6 @@ class GcpAccessTokenProvider:
     def get_token(self) -> str | None:
         if self._cached_token is not None and time.monotonic() < self._expires_at:
             return self._cached_token
-
-        import google.auth
-        import google.auth.transport.requests
 
         if self._creds is None:
             self._creds, _ = google.auth.default()

@@ -70,7 +70,7 @@ class NormalizedData(BaseModel):
 
     Persisted as the step's ``.artifact`` so counters and output paths are
     available to downstream consumers without re-running the pipeline. Load
-    via ``Artifact.load(step, NormalizedData)``.
+    via ``Artifact.from_path(step, NormalizedData)``.
 
     Attributes:
         main_output_dir: Directory containing the main output Parquet files.
@@ -103,6 +103,7 @@ def generate_id(text: str) -> str:
 def _make_normalize_fn(
     text_field: str,
     id_field: str,
+    bare: bool = False,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Return a record-level transform function.
 
@@ -110,7 +111,15 @@ def _make_normalize_fn(
     1. Extracts ``text`` from *text_field*.
     2. Generates a deterministic ``id`` via xxh3_128.
     3. If *id_field* exists in the record, preserves it as ``source_id``.
-    4. Keeps all other columns.
+    4. Keeps all other columns unless *bare* is set (see below).
+
+    *bare* takes the strict path: drop every column that isn't ``id``,
+    ``text``, or ``source_id``. Use this for sources whose extra columns
+    vary across shards (e.g. starcoderdata's 87 language subdirs each
+    ship a different set of GitHub-meta columns, or proof-pile-2's
+    nested ``meta`` dict with optional-typed fields); the parquet writer
+    can't add columns mid-write and the reduce stage can't widen
+    null-vs-typed, so a uniform schema is the only safe option.
 
     Records with missing or blank text must be filtered out before calling
     the returned function.
@@ -126,13 +135,14 @@ def _make_normalize_fn(
         # --- build output ---
         out: dict[str, Any] = {}
 
-        # Copy all original columns except the ones we're replacing
-        for k, v in record.items():
-            if k == id_field:
-                continue
-            if k == text_field and text_field != "text":
-                continue
-            out[k] = v
+        if not bare:
+            # Copy all original columns except the ones we're replacing
+            for k, v in record.items():
+                if k == id_field:
+                    continue
+                if k == text_field and text_field != "text":
+                    continue
+                out[k] = v
 
         out["id"] = generate_id(text)
         out["text"] = text
@@ -315,9 +325,10 @@ def _build_pipeline(
     id_field: str | None,
     dedup_mode: DedupMode,
     max_whitespace_run_chars: int,
+    bare: bool = False,
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
-    normalize_record = _make_normalize_fn(text_field, id_field)
+    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare)
 
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
@@ -371,6 +382,7 @@ def normalize_to_parquet(
     max_workers: int | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    bare: bool = False,
 ) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
@@ -441,6 +453,7 @@ def normalize_to_parquet(
         id_field,
         dedup_mode,
         max_whitespace_run_chars,
+        bare=bare,
     )
     ctx_kwargs: dict = {"name": "normalize", "resources": resources}
     if max_workers is not None:
@@ -482,6 +495,7 @@ def normalize_step(
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     version: str | None = None,
+    bare: bool = False,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -531,6 +545,10 @@ def normalize_step(
         "file_extensions": file_extensions,
         "dedup_mode": dedup_mode,
     }
+    # Only include bare in hash when set so default callers' hash_id stays
+    # identical to pre-feature step specs (cache identity).
+    if bare:
+        hash_attrs["bare"] = bare
     # Only include the version key when the caller explicitly opts in, so
     # default callers preserve their existing hash_id and cache hits.
     if version is not None:
@@ -549,6 +567,7 @@ def normalize_step(
             max_workers=max_workers,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
+            bare=bare,
         ),
         deps=[download],
         hash_attrs=hash_attrs,
