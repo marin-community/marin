@@ -446,6 +446,11 @@ class ZephyrCoordinator:
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
+        # Signaled whenever a state change matters to ``_wait_for_stage`` —
+        # result completion, error, abort, or a worker (re)registering after
+        # all workers had died. Replaces a 1s polling backoff so stage waits
+        # are bounded by RPC time, not the poll interval.
+        self._stage_done = threading.Event()
         self._is_last_stage: bool = False
         self._initialized: bool = False
         self._pipeline_running: bool = False
@@ -513,6 +518,9 @@ class ZephyrCoordinator:
             self._worker_handles[worker_id] = worker_handle
             self._worker_states[worker_id] = WorkerState.READY
             self._last_seen[worker_id] = time.monotonic()
+            # Wake _wait_for_stage in case it was parked on the "no alive
+            # workers" timer; a freshly registered worker resets that timer.
+            self._stage_done.set()
 
             logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
 
@@ -696,6 +704,9 @@ class ZephyrCoordinator:
 
         # Bump generation regardless of kind so report_result rejects stale attempts.
         self._task_attempts[shard_idx] += 1
+        # Wake _wait_for_stage on every accounted failure (requeue or abort);
+        # the waiter re-checks _fatal_error / completed counts after waking.
+        self._stage_done.set()
 
         if kind is ShardFailureKind.TASK:
             self._task_error_attempts[shard_idx] += 1
@@ -856,6 +867,7 @@ class ZephyrCoordinator:
             # Zero the in-flight counters but keep the generation watermark
             # so late heartbeats from this task are rejected.
             self._worker_counters[worker_id] = CounterSnapshot.empty(counter_snapshot.generation)
+            self._stage_done.set()
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. Re-queues up to MAX_SHARD_FAILURES."""
@@ -929,6 +941,7 @@ class ZephyrCoordinator:
             if self._fatal_error is None:
                 logger.error("Coordinator aborted: %s", reason)
                 self._fatal_error = reason
+                self._stage_done.set()
 
     def _start_stage(
         self,
@@ -961,6 +974,7 @@ class ZephyrCoordinator:
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
             self._stage_monotonic_start = time.monotonic()
+            self._stage_done.clear()
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
@@ -969,7 +983,6 @@ class ZephyrCoordinator:
         start_time = time.monotonic()
         all_dead_since: float | None = None
         no_workers_timeout = self._no_workers_timeout
-        stage_done = threading.Event()
 
         while True:
             with self._lock:
@@ -1013,7 +1026,12 @@ class ZephyrCoordinator:
                 last_log_completed = completed
                 backoff.reset()
 
-            stage_done.wait(timeout=backoff.next_interval())
+            # State-change signal wakes us promptly on completions, errors,
+            # aborts, and worker re-registration. The timeout still bounds
+            # how long we can sleep so the no-alive-workers timer fires even
+            # if no signal ever arrives.
+            if self._stage_done.wait(timeout=backoff.next_interval()):
+                self._stage_done.clear()
 
     def _collect_results(self) -> dict[int, TaskResult]:
         """Return results for the completed stage."""
