@@ -10,6 +10,8 @@ Connection selectors:
 
 Use `iris cluster list` to see named clusters. Use `--config` when you mean a custom or pinned file path.
 
+> **Troubleshooting entry point.** If the controller is suspected slow, stuck, or unreachable, start with [`docs/controller-health.md`](docs/controller-health.md) — a step-by-step vitals → capture → evaluate → act flow. The reference below stays organized topically.
+
 ## Cluster Lifecycle
 
 ```bash
