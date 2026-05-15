@@ -10,7 +10,7 @@ from typing import Any, TypedDict
 import numpy as np
 
 from levanter.data._preprocessor import BatchProcessor
-from levanter.eval import LossLabelSpec
+from levanter.data.text.examples import LossLabelSpec
 from levanter.tokenizers import MarinTokenizer
 
 

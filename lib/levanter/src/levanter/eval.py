@@ -27,9 +27,9 @@ import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
 from levanter.data.text.examples import (
-    LOSS_IGNORE_LABEL,
     GrugLmExample,
     LabeledLmExample,
+    LossLabelSpec,
     named_lm_example_from_grug,
     named_lm_example_from_labeled,
 )
@@ -53,61 +53,6 @@ LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 LabeledLossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
-
-
-@dataclasses.dataclass(frozen=True)
-class LossLabelSpec:
-    """Names exclusive loss labels and defines metric rollups.
-
-    `id_to_name` names the leaf span types stored in `LabeledLmExample.loss_labels`.
-    `aggregates` maps metric names to one or more leaf label ids, so callers can
-    report both specific span types and rollups such as assistant = assistant
-    text plus assistant tool calls. If aggregates is omitted, each non-ignored
-    label id gets its own metric.
-    """
-
-    id_to_name: Mapping[int, str]
-    aggregates: Mapping[str, Sequence[int]] | None = None
-    dont_score_label: int = LOSS_IGNORE_LABEL
-
-    def __post_init__(self):
-        for label_id, name in self.id_to_name.items():
-            if not isinstance(label_id, int):
-                raise TypeError(f"label id must be an int, got {label_id!r}")
-            if not isinstance(name, str):
-                raise TypeError(f"label name for id {label_id} must be a str, got {name!r}")
-        if len(set(self.id_to_name.values())) != len(self.id_to_name):
-            raise ValueError("label names must be unique")
-
-        for name, label_ids in self._aggregate_mapping().items():
-            if not isinstance(name, str):
-                raise TypeError(f"aggregate name must be a str, got {name!r}")
-            if not label_ids:
-                raise ValueError(f"aggregate {name!r} must include at least one label id")
-            if self.dont_score_label in label_ids:
-                raise ValueError(f"aggregate {name!r} includes dont_score_label={self.dont_score_label}")
-            for label_id in label_ids:
-                if not isinstance(label_id, int):
-                    raise TypeError(f"aggregate {name!r} label id must be an int, got {label_id!r}")
-                if label_id not in self.id_to_name:
-                    raise ValueError(f"aggregate {name!r} references unknown label id {label_id}")
-
-    def _aggregate_mapping(self) -> Mapping[str, Sequence[int]]:
-        if self.aggregates is not None:
-            return self.aggregates
-        return {
-            label_name: (label_id,)
-            for label_id, label_name in self.id_to_name.items()
-            if label_id != self.dont_score_label
-        }
-
-    @property
-    def aggregate_names(self) -> tuple[str, ...]:
-        return tuple(self._aggregate_mapping().keys())
-
-    @property
-    def aggregate_label_ids(self) -> tuple[tuple[int, ...], ...]:
-        return tuple(tuple(label_ids) for label_ids in self._aggregate_mapping().values())
 
 
 @dataclasses.dataclass
