@@ -19,6 +19,7 @@ from iris.cluster.controller.codec import device_counts_from_json
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.schema import job_config_table, tasks_table
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import config_pb2, job_pb2
 
 logger = logging.getLogger(__name__)
@@ -34,26 +35,6 @@ class UserTask(Generic[T]):
 
 # Task states that count as "active" for budget spend (re-exported from db for local use)
 _ACTIVE_TASK_STATES = tuple(ACTIVE_TASK_STATES)
-
-
-@dataclass
-class UserBudgetDefaults:
-    """Budget settings for users without an explicit user_budgets row.
-
-    An absent row means "defaults apply" — we no longer stamp a row into the
-    table at first-submit time, so the scheduler and launch-job guard both
-    fall back to these values when the lookup misses.
-    """
-
-    budget_limit: int = 1000
-    """Max budget value applied to users without an override row.
-
-    A value of 0 means unlimited; any positive value caps accumulated spend
-    before :func:`compute_effective_band` downgrades INTERACTIVE work to BATCH.
-    """
-
-    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
-    """Default max priority band (proto int) for users without an override row."""
 
 
 def resource_value(cpu_millicores: int, memory_bytes: int, accelerator_count: int) -> int:

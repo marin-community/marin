@@ -1430,7 +1430,7 @@ class ControllerTransitions:
             cur.execute(
                 sa_update(tasks_table)
                 .where(
-                    tasks_table.c.job_id.in_(subtree),
+                    tasks_table.c.job_id.in_(bindparam("subtree_ids", expanding=True)),
                     tasks_table.c.state.not_in(TERMINAL_TASK_STATES),
                 )
                 .values(
@@ -1439,7 +1439,8 @@ class ControllerTransitions:
                     finished_at_ms=func.coalesce(tasks_table.c.finished_at_ms, now_ms),
                     current_worker_id=None,
                     current_worker_address=None,
-                )
+                ),
+                {"subtree_ids": list(subtree)},
             )
         # Roll the attempt to KILLED for dashboard accuracy; leave
         # ``finished_at_ms`` NULL so the scheduler counts the worker's
@@ -1449,14 +1450,17 @@ class ControllerTransitions:
                 sa_update(task_attempts_table)
                 .where(
                     task_attempts_table.c.task_id.in_(
-                        select(tasks_table.c.task_id).where(tasks_table.c.job_id.in_(subtree))
+                        select(tasks_table.c.task_id).where(
+                            tasks_table.c.job_id.in_(bindparam("subtree_ids", expanding=True))
+                        )
                     ),
-                    task_attempts_table.c.state.in_(set(ACTIVE_TASK_STATES)),
+                    task_attempts_table.c.state.in_(bindparam("active_states", expanding=True)),
                 )
                 .values(
                     state=job_pb2.TASK_STATE_KILLED,
                     error=func.coalesce(task_attempts_table.c.error, reason),
-                )
+                ),
+                {"subtree_ids": list(subtree), "active_states": list(ACTIVE_TASK_STATES)},
             )
         # Allow worker-failed jobs to transition to KILLED on cancel —
         # exclude that state from the cancel guard.
@@ -1465,14 +1469,15 @@ class ControllerTransitions:
             cur.execute(
                 sa_update(jobs_table)
                 .where(
-                    jobs_table.c.job_id.in_(subtree),
-                    jobs_table.c.state.not_in(list(cancel_guard_states)),
+                    jobs_table.c.job_id.in_(bindparam("subtree_ids", expanding=True)),
+                    jobs_table.c.state.not_in(bindparam("guard_states", expanding=True)),
                 )
                 .values(
                     state=job_pb2.JOB_STATE_KILLED,
                     error=reason,
                     finished_at_ms=func.coalesce(jobs_table.c.finished_at_ms, now_ms),
-                )
+                ),
+                {"subtree_ids": list(subtree), "guard_states": list(cancel_guard_states)},
             )
         self._endpoints.remove_by_job_ids(cur, subtree)
         log_event("job_cancelled", job_id.to_wire(), reason=reason)
