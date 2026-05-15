@@ -664,6 +664,14 @@ class CrossRegionGuardedFS(fsspec.AbstractFileSystem):
     # Attributes that must resolve on this wrapper instead of being delegated
     # to ``self._fs``. Anything not in this set (and not a dunder) routes to the
     # wrapped filesystem via __getattribute__ below.
+    #
+    # Includes the AbstractFileSystem class-level config attributes
+    # (``async_impl``, ``mirror_sync_methods``, ``blocksize``, ``protocol``,
+    # ``sep``, ``root_marker``, ``fsid``, ``transaction``) — fsspec's ``_Cached``
+    # metaclass reads ``async_impl`` and ``mirror_sync_methods`` immediately
+    # after ``__init__``, so they must resolve via the wrapper's own class
+    # hierarchy rather than the wrapped fs (which in tests may be a duck-typed
+    # fake that doesn't carry those attributes).
     _OWN_ATTRS = frozenset(
         {
             "_budget",
@@ -673,12 +681,20 @@ class CrossRegionGuardedFS(fsspec.AbstractFileSystem):
             "_guard_read",
             "_is_cross_region",
             "_OWN_ATTRS",
+            "async_impl",
+            "blocksize",
             "cachable",
             "cat",
             "cat_file",
+            "fsid",
             "get",
             "get_file",
+            "mirror_sync_methods",
             "open",
+            "protocol",
+            "root_marker",
+            "sep",
+            "transaction",
         }
     )
 
