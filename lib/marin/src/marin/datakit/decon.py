@@ -7,17 +7,20 @@ Reads datakit-normalized Parquet (``id``, ``text``), builds an in-memory
 bloom filter from the eval text, and emits a co-partitioned Parquet
 attributes dataset marking which records overlap with eval text.
 
-Schema of the emitted Parquet attributes:
-    id             : string         — matches source document id
-    partition_id   : int            — source partition index (from sorted file order)
-    contaminated   : bool           — max paragraph overlap meets the threshold
-    max_overlap    : float          — highest paragraph overlap fraction in [0, 1]
-    matched_hashes : list[uint64]   — bloom-hit ngram hashes from this record
+Schema of the emitted Parquet attributes (datakit ``{id, attributes}`` convention,
+consumable by :func:`marin.processing.classification.consolidate.consolidate`):
+
+    id                       : string         — matches source document id
+    partition_id             : int            — source partition index (from sorted file order)
+    attributes               : struct
+        contaminated         : bool           — max paragraph overlap meets the threshold
+        max_overlap          : float          — highest paragraph overlap fraction in [0, 1]
+        matched_hashes       : list[uint64]   — bloom-hit ngram hashes from this record
 
 Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
 ``hash: uint64, eval_id: string`` (flattened, one row per (hash, eval_id) pair).
-Join ``matched_hashes`` against this sidecar to attribute contamination back
-to specific eval records.
+Join ``attributes.matched_hashes`` against this sidecar to attribute
+contamination back to specific eval records.
 
 Output is co-partitioned with the source: one ``part-NNNNN-of-MMMMM.parquet``
 per input partition, preserving the source filenames so consolidate can
@@ -79,12 +82,12 @@ class DeconAttributes(BaseModel):
         output_dir: Directory containing ``part-NNNNN-of-MMMMM.parquet`` files.
         num_partitions: Number of output partitions; matches the source.
         eval_hash_index_path: Path to the ``hash → eval_id`` sidecar Parquet.
-            Join the per-record ``matched_hashes`` column against this to
-            attribute contamination to specific eval records.
+            Join the per-record ``attributes.matched_hashes`` column against
+            this to attribute contamination to specific eval records.
         counters: Aggregated zephyr counters from the marking pipeline.
     """
 
-    version: str = "v1"
+    version: str = "v2"
     output_dir: str
     num_partitions: int
     eval_hash_index_path: str
@@ -327,13 +330,24 @@ def _build_filter(
     return stats["n_records"]
 
 
+_ATTRIBUTES_STRUCT = pa.struct(
+    [
+        pa.field("contaminated", pa.bool_()),
+        pa.field("max_overlap", pa.float64()),
+        pa.field("matched_hashes", pa.list_(pa.uint64())),
+    ]
+)
+
+# Wrapped-attributes schema -- matches the datakit convention consumed by
+# ``marin.processing.classification.consolidate``: top-level ``id`` (join key)
+# and ``partition_id`` (co-partitioning invariant), with the per-record decon
+# facts grouped under ``attributes`` so a ``FilterConfig(name="contaminated")``
+# resolves correctly.
 _OUTPUT_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
         pa.field("partition_id", pa.int64()),
-        pa.field("contaminated", pa.bool_()),
-        pa.field("max_overlap", pa.float64()),
-        pa.field("matched_hashes", pa.list_(pa.uint64())),
+        pa.field("attributes", _ATTRIBUTES_STRUCT),
     ]
 )
 
@@ -377,9 +391,11 @@ def _make_marker(
                     yield {
                         "id": record["id"],
                         "partition_id": shard.shard_idx,
-                        "contaminated": contaminated,
-                        "max_overlap": max_score,
-                        "matched_hashes": list(matched),
+                        "attributes": {
+                            "contaminated": contaminated,
+                            "max_overlap": max_score,
+                            "matched_hashes": list(matched),
+                        },
                     }
 
             out_filename = os.path.basename(input_path)
