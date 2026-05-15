@@ -35,7 +35,9 @@ def _sample_from_shard(
 ) -> np.ndarray:
     """Load int8 embeddings from one parquet shard, dequantize, return ``take`` random rows as fp32."""
     table = pq.read_table(shard_uri, columns=["embedding"])
-    flat_int8 = table["embedding"].values.to_numpy(zero_copy_only=False)
+    # ChunkedArray -> FixedSizeListArray -> flat int8 values array.
+    fsl = table["embedding"].combine_chunks()
+    flat_int8 = fsl.values.to_numpy(zero_copy_only=False)
     embeddings_int8 = flat_int8.reshape(-1, dim)
     if take < len(embeddings_int8):
         idx = rng.choice(len(embeddings_int8), size=take, replace=False)

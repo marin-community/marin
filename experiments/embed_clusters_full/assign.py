@@ -100,7 +100,9 @@ def assign_source(
         basename = os.path.basename(shard_uri)
         table = pq.read_table(shard_uri)
         ids = table["id"]
-        flat_int8 = table["embedding"].values.to_numpy(zero_copy_only=False)
+        # ChunkedArray -> FixedSizeListArray -> flat int8 values array.
+        fsl = table["embedding"].combine_chunks()
+        flat_int8 = fsl.values.to_numpy(zero_copy_only=False)
         embeddings = dequantize_to_fp32(flat_int8.reshape(-1, d), scale=embed_attr.quantization_scale)
 
         dist, cluster_train = index.search(embeddings, 1)

@@ -76,7 +76,10 @@ _THREAD_ENV = {
     )
 }
 
-_OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="rav/clustering-full")
+# Pin to eu-west4 explicitly so the output path doesn't drift with the driver's
+# worker region (marin_temp_bucket otherwise resolves against the runtime
+# MARIN_PREFIX, which is set per-worker).
+_OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="rav/clustering-full", source_prefix="gs://marin-eu-west4")
 
 
 def _build_steps() -> list[StepSpec]:

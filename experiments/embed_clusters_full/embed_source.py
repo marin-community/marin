@@ -192,14 +192,18 @@ def embed_source(
     model_name: str = LUXICAL_MODEL,
     batch_size: int = DEFAULT_BATCH_SIZE,
     chunk_docs: int = DEFAULT_CHUNK_DOCS,
+    max_shards: int | None = None,
 ) -> EmbeddingAttrData:
     """Embed every shard under normalized.main_output_dir; persist EmbeddingAttrData.
 
-    For huge sources, replace this with a Zephyr-driven per-shard fan-out
-    invoking :func:`embed_source_shard` directly.
+    ``max_shards`` caps the number of source shards processed (useful for
+    smoke tests). For huge sources at full scale, replace this with a
+    Zephyr-driven per-shard fan-out invoking :func:`embed_source_shard`.
     """
     normalized = Artifact.from_path(normalized_path, NormalizedData)
     shards = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    if max_shards is not None:
+        shards = shards[:max_shards]
     logger.info("Embedding %d shards from %s with %s", len(shards), normalized.main_output_dir, model_name)
 
     total = 0
