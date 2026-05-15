@@ -1,10 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""StatsService RPC implementation; delegates to DuckDBLogStore."""
+"""StatsService RPC implementation; delegates to DuckDBLogStore.
+
+Handlers are async so ``write_rows`` can park its persistence wait on the
+event loop. The underlying LogStore is sync; CPU/IO-bound calls go
+through :func:`asyncio.to_thread` so the loop never blocks on duckdb or
+parquet work.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from typing import Any
@@ -26,6 +33,8 @@ from finelog.store.schema import (
     schema_to_proto,
 )
 
+from .persistence_wait import DEFAULT_PERSIST_TIMEOUT_SEC, await_persisted
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,17 +52,23 @@ class StatsServiceImpl:
     process serves both surfaces against one storage state.
     """
 
-    def __init__(self, *, log_store: LogStore) -> None:
+    def __init__(
+        self,
+        *,
+        log_store: LogStore,
+        persist_timeout_sec: float = DEFAULT_PERSIST_TIMEOUT_SEC,
+    ) -> None:
         self._log_store = log_store
+        self._persist_timeout_sec = persist_timeout_sec
 
-    def register_table(
+    async def register_table(
         self,
         request: stats_pb2.RegisterTableRequest,
         ctx: Any,
     ) -> stats_pb2.RegisterTableResponse:
         try:
             schema = schema_from_proto(request.schema)
-            effective = self._log_store.register_table(request.namespace, schema)
+            effective = await asyncio.to_thread(self._log_store.register_table, request.namespace, schema)
         except InvalidNamespaceError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         except SchemaConflictError as exc:
@@ -62,20 +77,28 @@ class StatsServiceImpl:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         return stats_pb2.RegisterTableResponse(effective_schema=schema_to_proto(effective))
 
-    def write_rows(
+    async def write_rows(
         self,
         request: stats_pb2.WriteRowsRequest,
         ctx: Any,
     ) -> stats_pb2.WriteRowsResponse:
         try:
-            n = self._log_store.write_rows(request.namespace, bytes(request.arrow_ipc))
+            n, last_seq = await asyncio.to_thread(
+                self._log_store.write_rows, request.namespace, bytes(request.arrow_ipc)
+            )
         except NamespaceNotFoundError as exc:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
         except SchemaValidationError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
+        await await_persisted(
+            self._log_store,
+            request.namespace,
+            last_seq,
+            timeout=self._persist_timeout_sec,
+        )
         return stats_pb2.WriteRowsResponse(rows_written=n)
 
-    def query(
+    async def query(
         self,
         request: stats_pb2.QueryRequest,
         ctx: Any,
@@ -85,7 +108,7 @@ class StatsServiceImpl:
         # Other exceptions propagate as INTERNAL — the right signal for
         # "operator: this is a server bug".
         try:
-            table = self._log_store.query(request.sql)
+            table = await asyncio.to_thread(self._log_store.query, request.sql)
         except (InvalidNamespaceError, SchemaValidationError) as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         except duckdb.Error as exc:
@@ -93,24 +116,25 @@ class StatsServiceImpl:
         ipc = _arrow_table_to_ipc_bytes(table)
         return stats_pb2.QueryResponse(arrow_ipc=ipc, row_count=table.num_rows)
 
-    def drop_table(
+    async def drop_table(
         self,
         request: stats_pb2.DropTableRequest,
         ctx: Any,
     ) -> stats_pb2.DropTableResponse:
         try:
-            self._log_store.drop_table(request.namespace)
+            await asyncio.to_thread(self._log_store.drop_table, request.namespace)
         except NamespaceNotFoundError as exc:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
         except InvalidNamespaceError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
         return stats_pb2.DropTableResponse()
 
-    def list_namespaces(
+    async def list_namespaces(
         self,
         request: stats_pb2.ListNamespacesRequest,
         ctx: Any,
     ) -> stats_pb2.ListNamespacesResponse:
+        entries = await asyncio.to_thread(self._log_store.list_namespaces_with_stats)
         infos = [
             stats_pb2.NamespaceInfo(
                 namespace=name,
@@ -121,17 +145,17 @@ class StatsServiceImpl:
                 max_seq=stats.max_seq,
                 segment_count=stats.segment_count,
             )
-            for name, schema, stats in self._log_store.list_namespaces_with_stats()
+            for name, schema, stats in entries
         ]
         return stats_pb2.ListNamespacesResponse(namespaces=infos)
 
-    def get_table_schema(
+    async def get_table_schema(
         self,
         request: stats_pb2.GetTableSchemaRequest,
         ctx: Any,
     ) -> stats_pb2.GetTableSchemaResponse:
         try:
-            schema = self._log_store.get_table_schema(request.namespace)
+            schema = await asyncio.to_thread(self._log_store.get_table_schema, request.namespace)
         except NamespaceNotFoundError as exc:
             raise ConnectError(Code.NOT_FOUND, str(exc)) from exc
         return stats_pb2.GetTableSchemaResponse(schema=schema_to_proto(schema))

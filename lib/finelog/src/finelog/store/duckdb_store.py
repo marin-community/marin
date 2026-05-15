@@ -36,7 +36,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Timer
 
 import duckdb
 import pyarrow as pa
@@ -73,7 +73,12 @@ logger = logging.getLogger(__name__)
 LOG_NAMESPACE_NAME = "log"
 
 SEGMENT_TARGET_BYTES = 100 * 1024 * 1024
-DEFAULT_FLUSH_INTERVAL_SEC = 60.0
+# Bounds the worst-case "in RAM but not on disk" window. Service handlers
+# block writers until their rows are persisted by polling
+# ``DiskLogNamespace.max_persisted_seq()``; the bg loop's wake cadence
+# combined with this interval determine the floor on observable WriteRows
+# latency under low load.
+DEFAULT_FLUSH_INTERVAL_SEC = 5.0
 
 # 4GB was the previous default but in practice finelog's read pattern
 # rarely needs more than tens of MB; the high cap mostly let mimalloc/DuckDB
@@ -85,7 +90,15 @@ _DEFAULT_DUCKDB_MEMORY_LIMIT = "2GB"
 # COPY (... ORDER BY ...) is several x the output size, and the prod
 # 1 GB cap was OOMing.
 _DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "4GB"
-_DEFAULT_DUCKDB_THREADS = "4"
+# Read-pool thread cap. Sized so a single query can't monopolize a small VM
+# and starve the namespace bg threads (flush + compaction). On a 4-vCPU host
+# we have 4 namespace bg threads + RPC handlers + per-namespace compaction
+# (each capped at 2 threads); leaving the read pool at host cpu_count
+# created multi-hundred-ms tail latency on parquet encode under flush bursts
+# because the read pool's threads competed for the same cores. 2 threads is
+# enough to keep large list_recent / range scans parallel without
+# co-monopolizing the box.
+_DEFAULT_DUCKDB_THREADS = "2"
 
 # Embedded mode (iris controller's bundled log-server) keeps VMS small so the
 # parent doesn't trip Linux's overcommit heuristic when forking subprocesses.
@@ -111,6 +124,51 @@ def _next_cursor_id() -> int:
 
 _DEFAULT_POOL_RECYCLE_SEC = 600.0
 
+# Wall-clock cap on a single read-pool cursor scope. DuckDB has no
+# statement_timeout pragma; we enforce it by arming a watchdog that calls
+# ``connection.interrupt()`` if the scope is still active when the timer
+# fires. Sized to be longer than any legitimate dashboard / list_recent
+# query but short enough that a runaway scan cannot pin the read pool's
+# single connection and starve other readers.
+_DEFAULT_DUCKDB_QUERY_TIMEOUT_SEC = 10.0
+
+
+class _QueryWatchdog:
+    """One-shot timer that calls ``cursor.interrupt()`` if not disarmed in time.
+
+    The interrupt target must be the cursor actually running the query —
+    ``parent_conn.interrupt()`` does not propagate down to a cursor obtained
+    via ``parent_conn.cursor()``.
+
+    ``threading.Timer.cancel`` does not prevent an already-running callback,
+    so we additionally guard the interrupt with a flag+lock: ``disarm`` marks
+    the watchdog dead, and the callback drops out if it sees that flag.
+    This keeps a late-firing timer from interrupting the cleanup queries
+    that run after the user's ``with cursor()`` block exits normally.
+    """
+
+    def __init__(self, cursor: duckdb.DuckDBPyConnection, timeout_sec: float) -> None:
+        self._cursor = cursor
+        self._lock = Lock()
+        self._done = False
+        self._timer = Timer(timeout_sec, self._fire)
+        self._timer.daemon = True
+
+    def start(self) -> None:
+        self._timer.start()
+
+    def _fire(self) -> None:
+        with self._lock:
+            if self._done:
+                return
+            self._cursor.interrupt()
+
+    def disarm(self) -> None:
+        self._timer.cancel()
+        with self._lock:
+            self._done = True
+        self._timer.join()
+
 
 class ConnectionPool:
     """Single DuckDB read connection shared across all read paths.
@@ -130,12 +188,14 @@ class ConnectionPool:
         threads: str = _DEFAULT_DUCKDB_THREADS,
         temp_directory: Path | None = None,
         recycle_sec: float = _DEFAULT_POOL_RECYCLE_SEC,
+        query_timeout_sec: float | None = _DEFAULT_DUCKDB_QUERY_TIMEOUT_SEC,
     ):
         self._config: dict[str, str] = {"memory_limit": memory_limit, "threads": threads}
         if temp_directory is not None:
             temp_directory.mkdir(parents=True, exist_ok=True)
             self._config["temp_directory"] = str(temp_directory)
         self._recycle_sec = recycle_sec
+        self._query_timeout_sec = query_timeout_sec
         self._conn = self._new_conn()
         self._conn_born = time.monotonic()
         self._lock = Lock()
@@ -173,6 +233,10 @@ class ConnectionPool:
             cur = self._conn.cursor()
             registered: list[str] = []
             views: list[str] = []
+            watchdog: _QueryWatchdog | None = None
+            if self._query_timeout_sec is not None and self._query_timeout_sec > 0:
+                watchdog = _QueryWatchdog(cur, self._query_timeout_sec)
+                watchdog.start()
             try:
                 for view_name, tables in (buffers or {}).items():
                     parts: list[str] = []
@@ -185,6 +249,10 @@ class ConnectionPool:
                     views.append(view_name)
                 yield cur
             finally:
+                # Disarm before running cleanup so a late-firing watchdog
+                # cannot interrupt the DROP VIEW / unregister calls below.
+                if watchdog is not None:
+                    watchdog.disarm()
                 for v in views:
                     cur.execute(f"DROP VIEW IF EXISTS {v}")
                 for r in registered:
@@ -244,6 +312,7 @@ class DuckDBLogStore:
         duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
         duckdb_compaction_memory_limit: str = _DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT,
         duckdb_threads: str = _DEFAULT_DUCKDB_THREADS,
+        duckdb_query_timeout_sec: float | None = _DEFAULT_DUCKDB_QUERY_TIMEOUT_SEC,
     ):
         self._data_dir: Path | None = log_dir
         if log_dir is not None:
@@ -257,6 +326,7 @@ class DuckDBLogStore:
             memory_limit=duckdb_memory_limit,
             threads=duckdb_threads,
             temp_directory=pool_tmp,
+            query_timeout_sec=duckdb_query_timeout_sec,
         )
         self.catalog = Catalog(self._data_dir)
 
@@ -388,11 +458,12 @@ class DuckDBLogStore:
             "chunks": total_chunks,
         }
 
-    def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> int:
+    def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> tuple[int, int]:
         """Validate ``arrow_ipc_bytes`` and append the rows to ``name``.
 
-        ``arrow_ipc_bytes`` carries exactly one RecordBatch. Returns the
-        number of rows appended.
+        ``arrow_ipc_bytes`` carries exactly one RecordBatch. Returns
+        ``(rows_written, last_seq)`` where ``last_seq`` is the durability
+        target the caller should wait on (``-1`` if the batch was empty).
         """
         if len(arrow_ipc_bytes) > MAX_WRITE_ROWS_BYTES:
             raise SchemaValidationError(
@@ -412,8 +483,17 @@ class DuckDBLogStore:
         ns = self.catalog.require_live(name)
         schema = ns.schema
         aligned = validate_and_align_batch(batch, schema)
-        ns.append_aligned_batch(aligned)
-        return aligned.num_rows
+        last_seq = ns.append_aligned_batch(aligned)
+        return aligned.num_rows, last_seq
+
+    def max_persisted_seq(self, name: str) -> int:
+        """Highest seq durably persisted in namespace ``name``.
+
+        Service handlers poll this on the event loop to gate WriteRows /
+        PushLogs replies until the bg flush thread has written an L0
+        parquet segment covering the caller's rows.
+        """
+        return self.catalog.require_live(name).max_persisted_seq()
 
     def query(self, sql: str) -> pa.Table:
         """Execute ``sql`` against a DuckDB view of every registered namespace.
@@ -505,13 +585,14 @@ class DuckDBLogStore:
         finally:
             self.catalog.finish_drop(name)
 
-    def append(self, key: str, entries: list) -> None:
+    def append(self, key: str, entries: list) -> int:
         if not entries:
-            return
-        self.append_batch([(key, entries)])
+            return -1
+        return self.append_batch([(key, entries)])
 
-    def append_batch(self, items: list[tuple[str, list]]) -> None:
-        self.catalog[LOG_NAMESPACE_NAME].append_log_batch(items)
+    def append_batch(self, items: list[tuple[str, list]]) -> int:
+        """Append log-namespace items; returns the last seq allocated (or -1)."""
+        return self.catalog[LOG_NAMESPACE_NAME].append_log_batch(items)
 
     def get_logs(
         self,
@@ -562,30 +643,24 @@ class DuckDBLogStore:
     def _force_flush(self) -> None:
         self._log_namespace._flush_step()
 
-    def _wait_for_flush(self, timeout: float = 10.0) -> None:
-        ns = self._log_namespace
-        start_gen = ns._flush_generation
-        deadline = time.monotonic() + timeout
-        with ns._flush_generation_cond:
-            while ns._flush_generation == start_gen:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("timed out waiting for flush")
-                ns._flush_generation_cond.wait(timeout=remaining)
-
     def _force_compaction(self) -> None:
         self._log_namespace._force_compact_l0()
 
-    def _wait_for_compaction(self, timeout: float = 10.0) -> None:
-        ns = self._log_namespace
-        start_gen = ns._compaction_generation
+    def _wait_persisted(self, name: str, target_seq: int, timeout: float = 10.0) -> None:
+        """Test helper: spin until ``max_persisted_seq(name) >= target_seq``.
+
+        Mirrors the async polling loop in the service handlers without
+        requiring an event loop in sync tests.
+        """
+        ns = self.catalog.require_live(name)
         deadline = time.monotonic() + timeout
-        with ns._compaction_generation_cond:
-            while ns._compaction_generation == start_gen:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("timed out waiting for compaction")
-                ns._compaction_generation_cond.wait(timeout=remaining)
+        while ns.max_persisted_seq() < target_seq:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"timed out waiting for ns={name!r} persisted_seq>={target_seq} "
+                    f"(current={ns.max_persisted_seq()})"
+                )
+            time.sleep(0.02)
 
 
 def _decode_single_record_batch(arrow_ipc_bytes: bytes) -> pa.RecordBatch:

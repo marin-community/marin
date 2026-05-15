@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Condition, Lock
+from threading import Lock
 from typing import NamedTuple, Protocol
 
 import duckdb
@@ -604,10 +604,12 @@ class DiskLogNamespace:
         self._compaction_rl.mark_run()
         self._stop = threading.Event()
         self._wake = threading.Event()
-        self._flush_generation = 0
-        self._flush_generation_cond = Condition(Lock())
-        self._compaction_generation = 0
-        self._compaction_generation_cond = Condition(Lock())
+        # Highest ``seq`` value durably written to an L0 (or higher) parquet
+        # segment. Service handlers poll this to block writers until their
+        # rows are persisted. Int reads/writes are atomic under the GIL so
+        # no explicit synchronization is required; the bg flush thread is
+        # the sole writer.
+        self._max_persisted_seq = -1
         self._bg_thread = threading.Thread(
             target=self._bg_loop,
             name=f"finelog_flush_{self.name}",
@@ -633,13 +635,17 @@ class DiskLogNamespace:
             }
         )
 
-    def append_log_batch(self, items: list[tuple[str, list]]) -> None:
+    def append_log_batch(self, items: list[tuple[str, list]]) -> int:
         """Log-namespace-only append for ``PushLogs`` RPCs.
 
         Pre-builds all five non-seq columns from the protobuf entries
         outside the lock — that's the bulk of the per-row Python work.
         Inside the lock we only allocate the seq range, materialize the
         seq array, assemble the Arrow table, and hand it to the buffer.
+
+        Returns the last ``seq`` allocated by this call. Callers use it as
+        the durability target when polling :meth:`max_persisted_seq`. When
+        ``items`` carries zero entries, returns ``-1`` (no seqs allocated).
         """
         t_enter = time.monotonic()
         # Outside the lock: flatten items into one combined columnar batch.
@@ -659,7 +665,7 @@ class DiskLogNamespace:
             levels.extend(int(e.level) for e in entries)
         total = len(keys)
         if total == 0:
-            return
+            return -1
         keys_arr = pa.array(keys, type=pa.string())
         sources_arr = pa.array(sources, type=pa.string())
         datas_arr = pa.array(datas, type=pa.string())
@@ -685,10 +691,12 @@ class DiskLogNamespace:
                 ),
                 added_bytes=non_seq_bytes + 8 * total,
             )
-            needs_drain = self._buffers.ram_bytes() >= self._segment_target_bytes
         critical_end = time.monotonic()
-        if needs_drain:
-            self._wake.set()
+        # Always wake the bg loop: the loop treats an append-driven wake as
+        # a flush request so service handlers blocking on
+        # ``max_persisted_seq`` see L0 within one turnaround instead of the
+        # idle ``flush_interval_sec`` ceiling.
+        self._wake.set()
 
         total_ms = int((critical_end - t_enter) * 1000)
         if total_ms >= _SLOW_APPEND_THRESHOLD_MS:
@@ -701,19 +709,30 @@ class DiskLogNamespace:
                 int((critical_end - critical_start) * 1000),
                 total_ms,
             )
+        return first_seq + total - 1
 
-    def append_aligned_batch(self, aligned: AlignedBatch) -> None:
-        """Stamp ``seq`` values onto ``aligned`` and append it to the in-RAM chunks."""
+    def append_aligned_batch(self, aligned: AlignedBatch) -> int:
+        """Stamp ``seq`` values onto ``aligned`` and append it to the in-RAM chunks.
+
+        Returns the last ``seq`` allocated by this call (or ``-1`` if
+        ``aligned`` is empty). Callers use it as the durability target
+        when polling :meth:`max_persisted_seq`.
+        """
         if aligned.num_rows == 0:
-            return
+            return -1
         with self._insertion_lock:
             first_seq = self._buffers.allocate_seq(aligned.num_rows)
             stamped = _stamp_seq_and_build(aligned, first_seq, self._arrow_schema)
             # 8 bytes per row for the stamped int64 seq column.
             self._buffers.append_table(stamped, added_bytes=aligned.byte_size + 8 * aligned.num_rows)
-            needs_drain = self._buffers.ram_bytes() >= self._segment_target_bytes
-        if needs_drain:
-            self._wake.set()
+        # Wake the bg loop on every non-empty append: writers blocked on the
+        # persistence cursor get a flush within one turnaround.
+        self._wake.set()
+        return first_seq + aligned.num_rows - 1
+
+    def max_persisted_seq(self) -> int:
+        """Highest ``seq`` durably written to an L0 (or higher) segment."""
+        return self._max_persisted_seq
 
     def get_logs(
         self,
@@ -773,6 +792,7 @@ class DiskLogNamespace:
         last_heartbeat = 0.0
         last_flush_at = time.monotonic()
         last_compact_at = time.monotonic()
+        woken_by_append = False
         while not self._stop.is_set():
             # Read internal buffer fields directly under the lock; the
             # public ``ram_bytes`` / ``chunk_count`` accessors also take
@@ -784,6 +804,12 @@ class DiskLogNamespace:
                 level_counts = _level_histogram(self._local_segments)
                 level_bytes = _level_bytes_summary(self._local_segments, self._compactor.config.level_targets)
             force_drain = ram_bytes >= self._segment_target_bytes
+            # Appends ``_wake.set()`` on every non-empty batch so writers
+            # blocked on ``max_persisted_seq`` see a flush within one bg
+            # turnaround (~ms) instead of the configured ``flush_interval``
+            # ceiling. The rate-limiter / size-threshold path still governs
+            # idle ticks where no writer is waiting.
+            writer_pending = woken_by_append and chunk_count > 0
 
             now = time.monotonic()
             if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
@@ -801,7 +827,7 @@ class DiskLogNamespace:
                 )
                 last_heartbeat = now
 
-            if force_drain:
+            if force_drain or writer_pending:
                 self._flush_step()
                 self._flush_rl.mark_run()
                 last_flush_at = time.monotonic()
@@ -829,7 +855,7 @@ class DiskLogNamespace:
                 self._sync_step()
                 self._eviction_step()
 
-            self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
+            woken_by_append = self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
             self._wake.clear()
 
     def _flush_step(self) -> None:
@@ -869,9 +895,9 @@ class DiskLogNamespace:
                     self._buffers.restore_flush()
                 return
 
-            with self._flush_generation_cond:
-                self._flush_generation += 1
-                self._flush_generation_cond.notify_all()
+            # Atomic int write; service handlers polling
+            # ``max_persisted_seq()`` will observe this on their next tick.
+            self._max_persisted_seq = visible.max_seq
 
     def _key_bounds_from_table(self, table: pa.Table) -> tuple[object | None, object | None]:
         """Compute (min, max) over the namespace's ``key_column`` in ``table``.
@@ -957,15 +983,23 @@ class DiskLogNamespace:
             row_group_size=_ROW_GROUP_SIZE,
             write_page_index=True,
         )
+        encoded_buffer = buf.getvalue()
+        t_encode_done = time.monotonic()
+
         with pa.OSFile(str(staging_path), "wb") as out:
-            out.write(buf.getvalue())
+            out.write(encoded_buffer)
         staging_path.rename(filepath)
+        t_write_done = time.monotonic()
+
         # Compute key_column bounds from the in-memory table — much cheaper
         # than re-opening the freshly written parquet and reading its footer.
         min_key_value, max_key_value = self._key_bounds_from_table(sealed.table)
+        stat_size = filepath.stat().st_size
+        t_meta_done = time.monotonic()
+
         seg = LocalSegment(
             path=str(filepath),
-            size_bytes=filepath.stat().st_size,
+            size_bytes=stat_size,
             level=0,
             min_seq=sealed.min_seq,
             max_seq=sealed.max_seq,
@@ -975,19 +1009,28 @@ class DiskLogNamespace:
             max_key_value=max_key_value,
         )
 
+        t_before_lock = time.monotonic()
         with self._insertion_lock:
+            t_after_lock = time.monotonic()
             self._local_segments.append(seg)
             self._buffers.commit_flush()
             self._catalog.upsert_segment(self._segment_to_row(seg))
+        t_after_catalog = time.monotonic()
 
         logger.info(
-            "Wrote L0 segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d",
+            "Wrote L0 segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d "
+            "(encode=%d write=%d meta=%d ins_lock_wait=%d catalog=%d)",
             filename,
             sealed.table.num_rows,
             seg.size_bytes,
             sealed.min_seq,
             sealed.max_seq,
-            int((time.monotonic() - write_start) * 1000),
+            int((t_after_catalog - write_start) * 1000),
+            int((t_encode_done - write_start) * 1000),
+            int((t_write_done - t_encode_done) * 1000),
+            int((t_meta_done - t_write_done) * 1000),
+            int((t_after_lock - t_before_lock) * 1000),
+            int((t_after_catalog - t_after_lock) * 1000),
         )
 
     def _compaction_step(self) -> bool:
@@ -1036,9 +1079,6 @@ class DiskLogNamespace:
             self._apply_level_bump(job)
         else:
             self._apply_merge(job)
-        with self._compaction_generation_cond:
-            self._compaction_generation += 1
-            self._compaction_generation_cond.notify_all()
 
     def _apply_level_bump(self, job: CompactionJob) -> None:
         old = job.inputs[0]
@@ -1638,28 +1678,39 @@ class MemoryLogNamespace:
         self._table: pa.Table = self._arrow_schema.empty_table()
         self._next_seq = 1
 
-    def append_log_batch(self, items: list[tuple[str, list]]) -> None:
+    def append_log_batch(self, items: list[tuple[str, list]]) -> int:
         with self._insertion_lock:
             new_tables: list[pa.Table] = [self._table]
+            appended = 0
             for key, entries in items:
                 if not entries:
                     continue
                 first_seq = self._next_seq
                 self._next_seq += len(entries)
+                appended += len(entries)
                 rows = [
                     (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
                 ]
                 new_tables.append(_build_log_table(rows, self._arrow_schema))
             self._table = pa.concat_tables(new_tables) if len(new_tables) > 1 else self._table
+            if appended == 0:
+                return -1
+            return self._next_seq - 1
 
-    def append_aligned_batch(self, aligned: AlignedBatch) -> None:
+    def append_aligned_batch(self, aligned: AlignedBatch) -> int:
         if aligned.num_rows == 0:
-            return
+            return -1
         with self._insertion_lock:
             first_seq = self._next_seq
             self._next_seq += aligned.num_rows
             stamped = _stamp_seq_and_build(aligned, first_seq, self._arrow_schema)
             self._table = pa.concat_tables([self._table, stamped])
+            return self._next_seq - 1
+
+    def max_persisted_seq(self) -> int:
+        # In-memory mode has no flush boundary: rows are visible immediately,
+        # so every allocated seq is treated as persisted.
+        return self._next_seq - 1
 
     def get_logs(
         self,

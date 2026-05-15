@@ -25,7 +25,7 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
 
     def writer():
         try:
-            n = store.write_rows("iris.worker", payload)
+            n, _ = store.write_rows("iris.worker", payload)
             write_results.append(n)
         except Exception as exc:
             write_results.append(exc)

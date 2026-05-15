@@ -31,9 +31,9 @@ from urllib.parse import urlparse
 import httpx
 from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.rpc.finelog_stats_connect import (
-    StatsServiceWSGIApplication as FinelogStatsServiceWSGIApplication,
+    StatsServiceASGIApplication as FinelogStatsServiceASGIApplication,
 )
-from finelog.rpc.logging_connect import LogServiceWSGIApplication
+from finelog.rpc.logging_connect import LogServiceASGIApplication
 from finelog.server import LogServiceImpl
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
@@ -452,23 +452,24 @@ class ControllerDashboard:
         # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
         # parallel DuckDB scans. See duckdb_store.py for working-set caps.
         log_interceptors = [auth_interceptor, log_timing, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
-        log_wsgi_app = LogServiceWSGIApplication(
+        log_app = LogServiceASGIApplication(
             service=self._log_service, interceptors=log_interceptors, compressions=IRIS_RPC_COMPRESSIONS
         )
-        log_app = WSGIMiddleware(log_wsgi_app)
 
         # Backward-compat: clients/workers built before the finelog lift call
         # /iris.logging.LogService/{FetchLogs,PushLogs}. Wire bytes are identical
-        # to /finelog.logging.LogService/*, so mount the same WSGI app at the
+        # to /finelog.logging.LogService/*, so mount the same ASGI app at the
         # legacy prefix and register relative-path aliases.
-        # connectrpc dispatch (_server_sync.py:206-210) first looks up PATH_INFO
-        # directly; the existing /finelog.logging.LogService mount only hits via
-        # the SCRIPT_NAME==self.path fallback. Adding relative keys lets the
-        # first lookup succeeds regardless of which mount handled the request.
+        # connectrpc dispatch (_server_async.py) first looks up scope["path"]
+        # directly; under the Starlette Mount the legacy prefix is stripped to
+        # a relative path. Adding relative keys lets that first lookup succeed
+        # regardless of which mount handled the request. We pre-resolve so the
+        # aliased dict survives lifespan/lazy resolution.
         _LOG_FETCH_ENDPOINT = "/finelog.logging.LogService/FetchLogs"
         _LOG_PUSH_ENDPOINT = "/finelog.logging.LogService/PushLogs"
-        log_wsgi_app._endpoints["/FetchLogs"] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
-        log_wsgi_app._endpoints["/PushLogs"] = log_wsgi_app._endpoints[_LOG_PUSH_ENDPOINT]
+        log_app._resolved_endpoints = dict(log_app._resolve_endpoints(self._log_service))
+        log_app._resolved_endpoints["/FetchLogs"] = log_app._resolved_endpoints[_LOG_FETCH_ENDPOINT]
+        log_app._resolved_endpoints["/PushLogs"] = log_app._resolved_endpoints[_LOG_PUSH_ENDPOINT]
         _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
 
         def _resolve_endpoint(name: str) -> str | None:
@@ -527,18 +528,18 @@ class ControllerDashboard:
                 _proxy_endpoint,
                 methods=list(endpoint_proxy.ALLOWED_METHODS),
             ),
-            Mount(log_wsgi_app.path, app=log_app),
+            Mount(log_app.path, app=log_app),
             Mount(_LEGACY_LOG_SERVICE_PATH, app=log_app),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(stats_wsgi_app.path, app=stats_app),
         ]
         if self._finelog_stats_service is not None:
-            finelog_stats_wsgi_app = FinelogStatsServiceWSGIApplication(
+            finelog_stats_asgi_app = FinelogStatsServiceASGIApplication(
                 service=self._finelog_stats_service,
                 interceptors=[auth_interceptor],
                 compressions=IRIS_RPC_COMPRESSIONS,
             )
-            routes.append(Mount(finelog_stats_wsgi_app.path, app=WSGIMiddleware(finelog_stats_wsgi_app)))
+            routes.append(Mount(finelog_stats_asgi_app.path, app=finelog_stats_asgi_app))
         routes.append(static_files_mount())
 
         app: Starlette | _RouteAuthMiddleware = Starlette(

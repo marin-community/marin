@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -34,14 +35,17 @@ def test_fetch_logs_concurrency_cap_enforced_by_interceptor(service: LogServiceI
 
     original_fetch = service.fetch_logs
 
-    def slow_fetch(request, ctx):
+    async def slow_fetch(request, ctx):
         nonlocal in_flight, peak
         with lock:
             in_flight += 1
             peak = max(peak, in_flight)
         try:
-            assert release.wait(timeout=5.0), "handler never released"
-            return original_fetch(request, ctx)
+            # ``release.wait`` is blocking; hop off the loop so concurrent
+            # handlers can also enter and the interceptor's semaphore cap
+            # gets exercised.
+            assert await asyncio.to_thread(release.wait, 5.0), "handler never released"
+            return await original_fetch(request, ctx)
         finally:
             with lock:
                 in_flight -= 1
@@ -148,14 +152,14 @@ def test_query_concurrency_cap_enforced_by_interceptor(tmp_path: Path):
 
     original_query = stats_service.query
 
-    def slow_query(request, ctx):
+    async def slow_query(request, ctx):
         nonlocal in_flight, peak
         with lock:
             in_flight += 1
             peak = max(peak, in_flight)
         try:
-            assert release.wait(timeout=5.0), "handler never released"
-            return original_query(request, ctx)
+            assert await asyncio.to_thread(release.wait, 5.0), "handler never released"
+            return await original_query(request, ctx)
         finally:
             with lock:
                 in_flight -= 1

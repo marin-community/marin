@@ -4,18 +4,24 @@
 """LogService RPC implementation.
 
 Owns a LogStore instance and exposes push (ingest) and fetch (query)
-operations via Connect/RPC. In production, hosted in a standalone process
-(see finelog/server/main.py). Tests use LogServiceImpl in-process directly.
+operations via Connect/RPC. Handlers are async so the durability wait in
+``push_logs`` can park a coroutine instead of a threadpool worker; the
+LogStore underneath is sync, so CPU/IO is dispatched to a worker thread
+via :func:`asyncio.to_thread`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
 
 from finelog.rpc import logging_pb2
 from finelog.store import LogStore
+from finelog.store.duckdb_store import LOG_NAMESPACE_NAME
+
+from .persistence_wait import DEFAULT_PERSIST_TIMEOUT_SEC, await_persisted
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +39,7 @@ class LogServiceImpl:
         log_dir: Path | None = None,
         remote_log_dir: str = "",
         log_store: LogStore | None = None,
+        persist_timeout_sec: float = DEFAULT_PERSIST_TIMEOUT_SEC,
     ) -> None:
         if log_store is not None:
             self._log_store = log_store
@@ -40,6 +47,7 @@ class LogServiceImpl:
             self._log_store = LogStore(log_dir=log_dir, remote_log_dir=remote_log_dir)
         else:
             self._log_store = LogStore()
+        self._persist_timeout_sec = persist_timeout_sec
 
     @property
     def log_store(self) -> LogStore:
@@ -52,16 +60,23 @@ class LogServiceImpl:
         """Close the underlying log store."""
         self._log_store.close()
 
-    def push_logs(
+    async def push_logs(
         self,
         request: logging_pb2.PushLogsRequest,
         ctx: Any,
     ) -> logging_pb2.PushLogsResponse:
-        if request.entries:
-            self._log_store.append(request.key, list(request.entries))
+        if not request.entries:
+            return logging_pb2.PushLogsResponse()
+        last_seq = await asyncio.to_thread(self._log_store.append, request.key, list(request.entries))
+        await await_persisted(
+            self._log_store,
+            LOG_NAMESPACE_NAME,
+            last_seq,
+            timeout=self._persist_timeout_sec,
+        )
         return logging_pb2.PushLogsResponse()
 
-    def fetch_logs(
+    async def fetch_logs(
         self,
         request: logging_pb2.FetchLogsRequest,
         ctx: Any,
@@ -73,7 +88,8 @@ class LogServiceImpl:
         if match_scope == logging_pb2.MATCH_SCOPE_UNSPECIFIED:
             match_scope = logging_pb2.MATCH_SCOPE_REGEX
         max_lines = request.max_lines if request.max_lines > 0 else 1000
-        result = self._log_store.get_logs(
+        result = await asyncio.to_thread(
+            self._log_store.get_logs,
             request.source,
             match_scope=match_scope,
             since_ms=request.since_ms,
