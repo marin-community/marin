@@ -13,21 +13,25 @@ for https://github.com/marin-community/marin/issues/5334 — the upstream
 parquet shards trip ``apache/arrow#46404`` (PyArrow's parquet reader
 can't decode page headers >8 MiB, which the multi-MB filings in the
 ``content`` column overflow on per-page string statistics). The
-transform reads each shard via DuckDB (no such cap) and rewrites it
-with ``write_statistics=False`` so the rewritten shards don't reproduce
-the bug for downstream PyArrow readers (normalize, tokenize). Once
-``apache/arrow#47758`` lands ``max_page_header_size`` in a released
-PyArrow we can pin, this transform can be deleted.
+transform routes the read through ``read_parquet_via_duckdb`` (DuckDB
+has no such cap) so the upstream bytes survive into a re-write that
+PyArrow's own writer produces with safely-truncated stats — readable by
+downstream PyArrow consumers (normalize, tokenize) again.
+
+Scoped to this source per the discussion in
+https://github.com/marin-community/marin/pull/5335 — if more datasets
+hit the page-header cap or we move off PyArrow wholesale, lift
+``read_parquet_via_duckdb`` into a shared helper.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import duckdb
-import pyarrow.parquet as pq
 from fray import ResourceConfig
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ZephyrContext, counters
-from zephyr.writers import atomic_rename, ensure_parent_dir
 
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
@@ -38,69 +42,36 @@ HF_REVISION = "43de32c"
 
 FILING_TYPES = ("10-K", "10-Q", "8-K", "20-F", "S-1", "S-8", "144", "3", "4", "5")
 
-# Rows per output row group on rewrite. With ~1.3 MB/row mean and ~50 MB tail,
-# 16 keeps row groups well under 1 GB on the 16 GiB worker.
-_REWRITE_ROWS_PER_BATCH = 16
 
+def read_parquet_via_duckdb(path: str) -> Iterator[dict]:
+    """Yield records from a parquet file using DuckDB instead of PyArrow.
 
-def _list_input_parquets(input_path: str) -> list[str]:
-    fs, root = url_to_fs(input_path)
-    proto = input_path.split("://", 1)[0] if "://" in input_path else ""
-    files: list[str] = []
-    for ftype in FILING_TYPES:
-        for p in fs.glob(f"{root}/{ftype}/*.parquet"):
-            files.append(f"{proto}://{p}" if proto else p)
-    files.sort()
-    return files
-
-
-def _convert_one(task: dict) -> dict:
-    """Read one upstream shard via DuckDB, rewrite with stats disabled."""
-    src = task["src"]
-    dst = task["dst"]
-
-    src_fs, _ = url_to_fs(src)
+    Drop-in replacement for ``zephyr.load_parquet`` for the SEC-EDGAR
+    pipeline. DuckDB's reader has no 8 MiB page-header cap, so it can
+    decode shards PyArrow rejects (see module docstring + #5334).
+    """
+    src_fs, _ = url_to_fs(path)
     con = duckdb.connect(":memory:")
     try:
         con.register_filesystem(src_fs)
-        result = con.execute("SELECT * FROM read_parquet(?)", [src])
-        reader = result.fetch_record_batch(rows_per_batch=_REWRITE_ROWS_PER_BATCH)
-        first = next(reader, None)
-        if first is None:
-            counters.increment("sec_edgar/empty_input")
-            return {"src": src, "dst": dst, "count": 0}
-        ensure_parent_dir(dst)
-        count = 0
-        with atomic_rename(dst) as tmp:
-            with pq.ParquetWriter(tmp, first.schema, write_statistics=False) as writer:
-                writer.write_batch(first)
-                count += first.num_rows
-                for batch in reader:
-                    writer.write_batch(batch)
-                    count += batch.num_rows
-        counters.increment("sec_edgar/rows_converted", count)
-        return {"src": src, "dst": dst, "count": count}
+        result = con.execute("SELECT * FROM read_parquet(?)", [path])
+        reader = result.fetch_record_batch(rows_per_batch=8)
+        for batch in reader:
+            counters.increment("sec_edgar/rows_read", batch.num_rows)
+            rows = batch.to_pydict()
+            for i in range(batch.num_rows):
+                yield {k: rows[k][i] for k in rows}
     finally:
         con.close()
 
 
 def transform(input_path: str, output_path: str) -> None:
-    src_files = _list_input_parquets(input_path)
-    if not src_files:
-        raise ValueError(f"No parquet files under {input_path}")
-
-    root_url = input_path.rstrip("/")
-    tasks = [{"src": src, "dst": f"{output_path}/{src.removeprefix(root_url + '/')}"} for src in src_files]
-
     pipeline = (
-        Dataset.from_list(tasks)
-        .map(_convert_one)
-        .write_jsonl(
-            f"{output_path}/.metrics/convert-{{shard:05d}}-of-{{total:05d}}.jsonl",
-            skip_existing=True,
-        )
+        Dataset.from_files(f"{input_path}/**/*.parquet")
+        .flat_map(read_parquet_via_duckdb)
+        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
-    ctx = ZephyrContext(name="sec-edgar-transform", resources=ResourceConfig(cpu=1, ram="16g"))
+    ctx = ZephyrContext(name="sec-edgar-transform", resources=ResourceConfig(cpu=1, ram="32g"))
     ctx.execute(pipeline)
 
 
