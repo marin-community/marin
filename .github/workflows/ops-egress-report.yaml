@@ -4,8 +4,6 @@ on:
   schedule:
     - cron: '0 14 * * *'
   workflow_dispatch: {}
-  push:
-    branches: [egress-discord-env-var]
 
 permissions:
   contents: read
