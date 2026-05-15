@@ -422,7 +422,7 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
             "include_final_assistant_tag": self.include_final_assistant_tag,
             "parse_text_tool_calls": self.parse_text_tool_calls,
             "label_spec": {
-                "id_to_name": self.label_spec.id_to_name,
+                "id_to_name": {str(label_id): name for label_id, name in self.label_spec.id_to_name.items()},
                 "aggregates": {name: list(label_ids) for name, label_ids in self.label_spec.aggregates.items()},
             },
         }

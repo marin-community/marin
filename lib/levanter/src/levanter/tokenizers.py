@@ -195,12 +195,18 @@ class _GenerationStripExtension(jinja2.ext.Extension):
 
 def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
     """Create a jinja2 environment matching HF's template rendering settings."""
-    return jinja2.Environment(
+    env = jinja2.Environment(
         undefined=jinja2.StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
         extensions=extensions,
     )
+    env.globals["raise_exception"] = _raise_chat_template_exception
+    return env
+
+
+def _raise_chat_template_exception(message: str) -> None:
+    raise jinja2.exceptions.TemplateError(message)
 
 
 def _chat_template_block_contents(block: str) -> str:
