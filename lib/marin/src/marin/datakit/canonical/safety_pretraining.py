@@ -22,6 +22,7 @@ Subsets per dataset (each a top-level directory in the raw repo):
 from fray import ResourceConfig
 
 from marin.datakit.download.huggingface import download_hf_step
+from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 
 # Mapping of canonical family name → (HF repo id, default revision, subsets).
@@ -132,3 +133,25 @@ def download_fineweb_annotated(
         hf_urls_glob=hf_urls_glob,
         worker_resources=worker_resources,
     )
+
+
+def safety_pretraining_normalize_steps() -> dict[str, tuple[StepSpec, ...]]:
+    """Return ``(download, normalize)`` chains for every Safety Pretraining subset.
+
+    Keyed by the registry name ``"safety_pt/<family>/<subset>"``. The family
+    download is materialized once per family and reused across its subsets;
+    each subset gets its own ``normalize`` step pointed at the corresponding
+    score-bucket directory via ``relative_input_path``.
+    """
+    chains: dict[str, tuple[StepSpec, ...]] = {}
+    for family, (_, _, subsets) in SAFETY_PRETRAINING_FAMILIES.items():
+        download = _download(family)
+        for subset in subsets:
+            marin_name = f"safety_pt/{family}/{subset}"
+            normalize = normalize_step(
+                name=f"normalized/{marin_name}",
+                download=download,
+                relative_input_path=subset,
+            )
+            chains[marin_name] = (download, normalize)
+    return chains
