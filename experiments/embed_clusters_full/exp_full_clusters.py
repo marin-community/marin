@@ -44,7 +44,6 @@ from marin.datakit.sources import all_sources  # noqa: E402
 from marin.execution.remote import remote  # noqa: E402
 from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
-from rigging.filesystem import marin_temp_bucket  # noqa: E402
 
 from experiments.embed_clusters_full.assign import assign_source  # noqa: E402
 from experiments.embed_clusters_full.embed_source import LUXICAL_REPO, LUXICAL_WEIGHTS_FILE, embed_source  # noqa: E402
@@ -87,10 +86,16 @@ _THREAD_ENV = {
     )
 }
 
-# Pin to eu-west4 explicitly so the output path doesn't drift with the driver's
-# worker region (marin_temp_bucket otherwise resolves against the runtime
-# MARIN_PREFIX, which is set per-worker).
-_OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="rav/clustering-full", source_prefix="gs://marin-eu-west4")
+# Hard-pinned to eu-west4 (don't rely on the driver's MARIN_PREFIX). Layout:
+#   datakit/embed/luxical/<source>_<hash>/   <- one EmbeddingAttrData per source
+#   datakit/cluster/sample_centroids_<hash>/
+#   datakit/cluster/train_centroids_<hash>/
+#   datakit/cluster/assign/<source>_<hash>/  <- one AssignmentAttrData per source
+#   datakit/cluster/summarize_k{N}_<hash>/cluster_stats_{N}.json
+# Embed gets its own top-level since embeddings are reusable beyond clustering
+# (decon, ANN, downstream attribute joins, etc.); the cluster-specific steps
+# live together under cluster/.
+_OUTPUT_PREFIX = "gs://marin-eu-west4/datakit"
 
 
 def _build_steps() -> list[StepSpec]:
@@ -102,7 +107,7 @@ def _build_steps() -> list[StepSpec]:
         normalized = source.normalized
         normalized_path = normalized.output_path
         embed_steps[source_name] = StepSpec(
-            name=f"embed_luxical/{source_name}",
+            name=f"embed/luxical/{source_name}",
             output_path_prefix=_OUTPUT_PREFIX,
             deps=[normalized],
             hash_attrs={
@@ -133,7 +138,7 @@ def _build_steps() -> list[StepSpec]:
 
     # --- Sample step (depends on all embeds) --------------------------------
     sample_step = StepSpec(
-        name="sample_centroids",
+        name="cluster/sample_centroids",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=list(embed_steps.values()),
         hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "v": 1},
@@ -149,7 +154,7 @@ def _build_steps() -> list[StepSpec]:
 
     # --- Train step ---------------------------------------------------------
     train_step = StepSpec(
-        name="train_centroids",
+        name="cluster/train_centroids",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=[sample_step],
         hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "v": 1},
@@ -173,7 +178,7 @@ def _build_steps() -> list[StepSpec]:
     assign_steps: dict[str, StepSpec] = {}
     for source_name, embed_step in embed_steps.items():
         assign_steps[source_name] = StepSpec(
-            name=f"assign/{source_name}",
+            name=f"cluster/assign/{source_name}",
             output_path_prefix=_OUTPUT_PREFIX,
             deps=[embed_step, train_step],
             hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "window": ASSIGN_WINDOW, "v": 2},
@@ -200,7 +205,7 @@ def _build_steps() -> list[StepSpec]:
         n_sample = N_SAMPLE_PER_CLUSTER_AT_K_TRAIN if k_view == K_TRAIN else N_SAMPLE_PER_CLUSTER_AT_K_COARSER
         summarize_steps.append(
             StepSpec(
-                name=f"summarize_k{k_view}",
+                name=f"cluster/summarize_k{k_view}",
                 output_path_prefix=_OUTPUT_PREFIX,
                 deps=[train_step, *assign_steps.values()],
                 hash_attrs={"k_train": K_TRAIN, "k_view": k_view, "n_sample": n_sample, "v": 1},

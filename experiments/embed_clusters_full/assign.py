@@ -97,7 +97,7 @@ def _assign_shard(
     lookup_uris: dict[int, str],
     quant_scale: float,
 ) -> Iterator[dict]:
-    """Per-shard map: dequantize int8 embeddings, FAISS-search against centroids, emit assignments."""
+    """Per-shard map: dequantize int8 embeddings, FAISS-search against centroids, emit cluster ids."""
     ctx = _get_index(centroids_uri, lookup_uris)
     index = ctx["index"]
     k_train: int = ctx["k_train"]
@@ -164,7 +164,7 @@ def assign_source(
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 128,
 ) -> AssignmentAttrData:
-    """Map-only Zephyr assign of every shard in one source's EmbeddingAttrData."""
+    """Map-only Zephyr cluster of every shard in one source's EmbeddingAttrData."""
     embed_attr = Artifact.from_path(embedding_step_output, EmbeddingAttrData)
     embedding_shards = embed_attr.shard_paths()
     if not embedding_shards:

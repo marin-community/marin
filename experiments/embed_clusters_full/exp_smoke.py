@@ -64,8 +64,8 @@ ASSIGN_WINDOW = 4096
 EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="16g", regions=[DATA_REGION])
 ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="8g", regions=[DATA_REGION])
 COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g", regions=[DATA_REGION])
-EMBED_MAX_WORKERS = 8  # bounded for smoke; production raises this
-ASSIGN_MAX_WORKERS = 8
+EMBED_MAX_WORKERS = 128
+ASSIGN_MAX_WORKERS = 128
 
 _THREAD_ENV = {
     var: "8"
@@ -91,7 +91,7 @@ def _build_steps() -> list[StepSpec]:
     normalized = source.normalized
 
     embed_step = StepSpec(
-        name=f"embed_luxical/{SOURCE_NAME}",
+        name=f"embed/luxical/{SOURCE_NAME}",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=[normalized],
         hash_attrs={
@@ -121,7 +121,7 @@ def _build_steps() -> list[StepSpec]:
     embed_step_outputs = {SOURCE_NAME: embed_step.output_path}
 
     sample_step = StepSpec(
-        name="sample_centroids",
+        name="cluster/sample_centroids",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=[embed_step],
         hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "v": 1},
@@ -136,7 +136,7 @@ def _build_steps() -> list[StepSpec]:
     )
 
     train_step = StepSpec(
-        name="train_centroids",
+        name="cluster/train_centroids",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=[sample_step],
         hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "v": 1},
@@ -156,7 +156,7 @@ def _build_steps() -> list[StepSpec]:
     lookup_uris = {k: f"{train_step.output_path}/lookup_{K_TRAIN}_to_{k}.npy" for k in K_VIEWS}
 
     assign_step = StepSpec(
-        name=f"assign/{SOURCE_NAME}",
+        name=f"cluster/assign/{SOURCE_NAME}",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=[embed_step, train_step],
         hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "window": ASSIGN_WINDOW, "v": 2},
@@ -182,7 +182,7 @@ def _build_steps() -> list[StepSpec]:
         n_sample = N_SAMPLE_PER_CLUSTER_AT_K_TRAIN if k_view == K_TRAIN else N_SAMPLE_PER_CLUSTER_AT_K_COARSER
         summarize_steps.append(
             StepSpec(
-                name=f"summarize_k{k_view}",
+                name=f"cluster/summarize_k{k_view}",
                 output_path_prefix=_OUTPUT_PREFIX,
                 deps=[train_step, assign_step],
                 hash_attrs={"k_train": K_TRAIN, "k_view": k_view, "n_sample": n_sample, "v": 1},
