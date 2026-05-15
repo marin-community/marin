@@ -13,6 +13,7 @@ WorkerCapacity, SchedulingContext) and has ZERO runtime imports from controller
 state. Callers project worker rows into ``WorkerSnapshot`` (via
 ``worker_snapshot_from_row``) at the boundary before invoking
 ``create_scheduling_context``.
+
 """
 
 import logging
@@ -33,6 +34,8 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import (
     JobName,
+    PendingTask,
+    UserBudgetDefaults,
     WorkerId,
 )
 
@@ -318,19 +321,16 @@ class WorkerCapacity:
 
 @dataclass
 class SchedulingContext:
-    """Transient index for a single scheduling cycle.
+    """Single-tick scheduling state: raw reads + derived indexes.
 
-    Built from worker capacities at cycle start. Provides O(1) constraint
-    matching for common cases (EQ on string attributes, EXISTS/NOT_EXISTS)
-    via posting lists. Falls back to linear scan for numeric comparisons.
+    Built once per scheduling cycle inside a single DB snapshot. Carries raw
+    per-tick reads (``pending_task_rows``, ``user_spend``, etc.) for the
+    gates/order pipeline and derived structures (``index``, ``capacities``) for
+    the per-(task, worker) matching hot loop.
 
-    The posting lists are read-only after construction. As workers are
-    tentatively assigned, we track capacity changes in the capacities dict,
-    but do not update the posting lists. This is safe because posting lists
-    are only used for attribute matching, not capacity checks.
-
-    Workers are tracked via assignment_counts to limit how many tasks each
-    worker receives per cycle (default 1 for round-robin distribution).
+    Posting lists are read-only after construction; capacity deductions don't
+    touch them. Workers are tracked via ``assignment_counts`` to bound tasks
+    per worker per cycle.
     """
 
     index: ConstraintIndex
@@ -341,17 +341,26 @@ class SchedulingContext:
     # Reverse map from string ID back to WorkerId
     _str_to_wid: dict[str, WorkerId]
 
-    # Per-worker assignment count this cycle (replaces scheduled_workers set)
     assignment_counts: dict[WorkerId, int] = field(default_factory=dict)
-
-    # Maximum assignments per worker per cycle
     max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
 
-    # Task IDs of pending tasks, in scheduling priority order
+    # Task IDs in scheduling priority order; populated after gates+order resolve.
     pending_tasks: list[JobName] = field(default_factory=list)
-
-    # Job requirements indexed by job ID
     jobs: dict[JobName, JobRequirements] = field(default_factory=dict)
+
+    # Raw per-tick reads — consumed by gates/order helpers; empty for diagnostics/dry-run.
+    pending_task_rows: list[PendingTask] = field(default_factory=list)
+    workers: list[WorkerSnapshot] = field(default_factory=list)
+    user_spend: dict[str, int] = field(default_factory=dict)
+    user_budget_limits: dict[str, int] = field(default_factory=dict)
+    requested_bands: dict[JobName, int] = field(default_factory=dict)
+    reserved_job_ids: frozenset[JobName] = field(default_factory=frozenset)
+    reservation_entry_counts: dict[JobName, int] = field(default_factory=dict)
+    user_budget_defaults: UserBudgetDefaults | None = None
+
+    # Scores memoized per (worker, soft-constraints) tuple; worker attributes are
+    # stable within a tick so the same pair always yields the same score.
+    _soft_score_cache: dict[tuple[WorkerId, tuple[Constraint, ...]], int] = field(default_factory=dict)
 
     @property
     def all_worker_ids(self) -> set[WorkerId]:
@@ -366,20 +375,17 @@ class SchedulingContext:
         pending_tasks: list[JobName] | None = None,
         jobs: dict[JobName, JobRequirements] | None = None,
         max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+        pending_task_rows: list[PendingTask] | None = None,
+        user_spend: dict[str, int] | None = None,
+        user_budget_limits: dict[str, int] | None = None,
+        requested_bands: dict[JobName, int] | None = None,
+        reserved_job_ids: frozenset[JobName] | None = None,
+        reservation_entry_counts: dict[JobName, int] | None = None,
+        user_budget_defaults: UserBudgetDefaults | None = None,
     ) -> "SchedulingContext":
         """Build scheduling context from worker list.
 
-        Creates capacity snapshots for healthy workers and builds a
-        ConstraintIndex for fast attribute matching.
-
-        Args:
-            workers: Bundled ``WorkerSnapshot`` instances (totals, committed
-                resources, attributes) for the cycle.
-            building_counts: Map of worker_id -> count of tasks in BUILDING state
-            max_building_tasks: Maximum building tasks allowed per worker
-            pending_tasks: Task IDs in scheduling priority order
-            jobs: Job requirements indexed by job ID
-            max_assignments_per_worker: Maximum task assignments per worker per cycle
+        Creates capacity snapshots and a ConstraintIndex for fast attribute matching.
         """
         building_counts = building_counts or {}
 
@@ -408,6 +414,14 @@ class SchedulingContext:
             pending_tasks=pending_tasks or [],
             jobs=jobs or {},
             max_assignments_per_worker=max_assignments_per_worker,
+            pending_task_rows=list(pending_task_rows or []),
+            workers=list(workers),
+            user_spend=dict(user_spend or {}),
+            user_budget_limits=dict(user_budget_limits or {}),
+            requested_bands=dict(requested_bands or {}),
+            reserved_job_ids=frozenset(reserved_job_ids or ()),
+            reservation_entry_counts=dict(reservation_entry_counts or {}),
+            user_budget_defaults=user_budget_defaults,
         )
 
     def matching_workers(self, constraints: Sequence[Constraint]) -> set[WorkerId]:
@@ -456,15 +470,22 @@ def rank_by_soft_score(
 ) -> list[WorkerId]:
     """Sort candidate workers by soft-constraint satisfaction (descending).
 
-    Workers satisfying more soft constraints are tried first. Workers with the
-    same score retain arbitrary (set) order.
+    Workers satisfying more soft constraints are tried first. Scores are
+    memoized on the context so the same (worker, constraint set) is computed
+    at most once per tick.
     """
+    key_tail = tuple(soft_constraints)
+    cache = context._soft_score_cache
     scored: list[tuple[int, WorkerId]] = []
     for wid in candidate_ids:
         cap = context.capacities.get(wid)
         if cap is None:
             continue
-        score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+        key = (wid, key_tail)
+        score = cache.get(key)
+        if score is None:
+            score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+            cache[key] = score
         scored.append((score, wid))
     # Sort descending by score so soft-preferred workers are tried first
     scored.sort(key=lambda t: t[0], reverse=True)
@@ -730,14 +751,23 @@ class Scheduler:
         groups = context.workers_by_group(group_by, matching_worker_ids)
 
         # Sort groups so those satisfying more soft constraints are tried first.
+        soft_key_tail = tuple(soft_constraints)
+        cache = context._soft_score_cache
+
         def _group_soft_score(group_worker_ids: list[WorkerId]) -> int:
             if not soft_constraints:
                 return 0
             total = 0
             for wid in group_worker_ids:
                 cap = context.capacities.get(wid)
-                if cap is not None:
-                    total += soft_constraint_score(dict(cap.attributes), soft_constraints)
+                if cap is None:
+                    continue
+                key = (wid, soft_key_tail)
+                score = cache.get(key)
+                if score is None:
+                    score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+                    cache[key] = score
+                total += score
             return total
 
         sorted_groups = sorted(groups.items(), key=lambda kv: _group_soft_score(kv[1]), reverse=True)
@@ -797,20 +827,10 @@ class Scheduler:
     ) -> SchedulingContext:
         """Create a scheduling context for the given workers.
 
-        Callers project DB rows + per-cycle resource usage into
-        ``WorkerSnapshot`` (via ``worker_snapshot_from_row``) before calling
-        this method, so the scheduler only sees its own bundled input type.
-
-        Args:
-            workers: ``WorkerSnapshot`` instances (totals + committed resources
-                + attributes) to include in the cycle.
-            building_counts: Map of worker_id -> count of tasks in BUILDING state
-            pending_tasks: Task IDs in scheduling priority order
-            jobs: Job requirements indexed by job ID
-            max_building_tasks: Override for max building tasks per worker.
-                If None, uses the scheduler's configured default.
-            max_assignments_per_worker: Override for max assignments per worker per cycle.
-                If None, uses DEFAULT_MAX_ASSIGNMENTS_PER_WORKER.
+        Convenience wrapper for tests, diagnostics, and the autoscaler dry-run
+        path. Does not populate the raw read fields (``pending_task_rows``,
+        ``user_spend``, etc.); use ``build_scheduling_context`` for the full
+        scheduling-loop construction.
         """
         limit = max_building_tasks if max_building_tasks is not None else self._max_building_tasks_per_worker
         assignments_limit = (

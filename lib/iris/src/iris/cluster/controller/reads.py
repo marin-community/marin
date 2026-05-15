@@ -295,7 +295,7 @@ def _apply_job_filters(
         stmt = stmt.where(jobs_table.c.depth == depth_filter)
     if parent_filter is not None:
         stmt = stmt.where(jobs_table.c.parent_job_id == JobName.from_wire(parent_filter))
-    stmt = stmt.where(jobs_table.c.state.in_(list(state_ids)))
+    stmt = stmt.where(jobs_table.c.state.in_(bindparam("job_state_ids", expanding=True)))
     if name_filter:
         stmt = stmt.where(jobs_table.c.name.like(f"%{name_filter.lower()}%"))
     if job_id_prefix:
@@ -379,9 +379,23 @@ def list_jobs(
     if limit > 0:
         stmt = stmt.limit(limit).offset(offset)
 
-    rows = tx.execute(stmt).all()
-    total = int(tx.execute(count_stmt).scalar() or 0)
+    params = {"job_state_ids": list(state_ids)}
+    rows = tx.execute(stmt, params).all()
+    total = int(tx.execute(count_stmt, params).scalar() or 0)
     return rows, total
+
+
+_TASK_SUMMARIES_FOR_JOBS_STMT = (
+    select(
+        tasks_table.c.job_id,
+        tasks_table.c.state,
+        func.count().label("cnt"),
+        cast(func.coalesce(func.sum(tasks_table.c.failure_count), 0), Integer).label("total_failures"),
+        cast(func.coalesce(func.sum(tasks_table.c.preemption_count), 0), Integer).label("total_preemptions"),
+    )
+    .where(tasks_table.c.job_id.in_(bindparam("job_ids", expanding=True)))
+    .group_by(tasks_table.c.job_id, tasks_table.c.state)
+)
 
 
 def task_summaries_for_jobs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, TaskJobSummary]:
@@ -390,19 +404,7 @@ def task_summaries_for_jobs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName,
     if not ids:
         return {}
 
-    stmt = (
-        select(
-            tasks_table.c.job_id,
-            tasks_table.c.state,
-            func.count().label("cnt"),
-            cast(func.coalesce(func.sum(tasks_table.c.failure_count), 0), Integer).label("total_failures"),
-            cast(func.coalesce(func.sum(tasks_table.c.preemption_count), 0), Integer).label("total_preemptions"),
-        )
-        .where(tasks_table.c.job_id.in_(ids))
-        .group_by(tasks_table.c.job_id, tasks_table.c.state)
-    )
-
-    rows = tx.execute(stmt).all()
+    rows = tx.execute(_TASK_SUMMARIES_FOR_JOBS_STMT, {"job_ids": ids}).all()
     summaries: dict[JobName, TaskJobSummary] = {}
     for row in rows:
         jid = row.job_id
@@ -509,8 +511,8 @@ def get_job_config(tx: Tx, job_id: JobName) -> dict | None:
     return dict(row) if row is not None else None
 
 
-def _priority_bands_stmt(ids: list[JobName]):
-    """Build a recursive CTE that walks the parent_job_id chain for each id.
+def _build_priority_bands_stmt():
+    """Build the recursive-CTE statement once with an expanding bindparam.
 
     Walks parent_job_id chain until a non-UNSPECIFIED priority_band is found.
     """
@@ -524,7 +526,7 @@ def _priority_bands_stmt(ids: list[JobName]):
             j.c.parent_job_id.label("parent_id"),
         )
         .select_from(j.join(jc, jc.c.job_id == j.c.job_id))
-        .where(j.c.job_id.in_(ids))
+        .where(j.c.job_id.in_(bindparam("job_ids", expanding=True)))
     )
     chain = base_q.cte("chain", recursive=True)
     j2 = jobs_table.alias("j2")
@@ -543,6 +545,9 @@ def _priority_bands_stmt(ids: list[JobName]):
     return select(full_chain.c.input_id, full_chain.c.current_band).where(full_chain.c.current_band != 0)
 
 
+_PRIORITY_BANDS_STMT = _build_priority_bands_stmt()
+
+
 def get_priority_bands(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
     """Return ``{job_id: resolved priority_band}`` for the given jobs.
 
@@ -553,7 +558,7 @@ def get_priority_bands(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]
     ids = list(job_ids)
     if not ids:
         return {}
-    rows = tx.execute(_priority_bands_stmt(ids)).all()
+    rows = tx.execute(_PRIORITY_BANDS_STMT, {"job_ids": ids}).all()
     resolved: dict[JobName, int] = {}
     for row in rows:
         resolved[row.input_id] = int(row.current_band)
@@ -690,15 +695,48 @@ _SCHEDULER_ACTIVE_TASK_STATES = (
 )
 
 
+_RUNNING_TASKS_BY_WORKER_STMT = select(tasks_table.c.current_worker_id.label("worker_id"), tasks_table.c.task_id).where(
+    tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
+    tasks_table.c.state.in_(bindparam("states", expanding=True)),
+)
+
+
+_BUILDING_COUNTS_STATES = (job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED)
+
+
+_BUILDING_COUNTS_STMT = (
+    select(
+        tasks_table.c.current_worker_id.label("worker_id"),
+        func.count().label("cnt"),
+    )
+    .select_from(tasks_table.join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id))
+    .where(
+        tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
+        tasks_table.c.state.in_(bindparam("states", expanding=True)),
+        jobs_table.c.is_reservation_holder == 0,
+    )
+    .group_by(tasks_table.c.current_worker_id)
+)
+
+
+def building_counts(tx: Tx, worker_ids: Sequence[WorkerId]) -> dict[WorkerId, int]:
+    """Count BUILDING+ASSIGNED tasks per worker, excluding reservation-holder jobs."""
+    if not worker_ids:
+        return {}
+    rows = tx.execute(
+        _BUILDING_COUNTS_STMT,
+        {"worker_ids": list(worker_ids), "states": list(_BUILDING_COUNTS_STATES)},
+    ).all()
+    return {row.worker_id: int(row.cnt) for row in rows}
+
+
 def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId, set[JobName]]:
     """Return the set of currently-running task IDs for each worker."""
     if not worker_ids:
         return {}
     rows = tx.execute(
-        select(tasks_table.c.current_worker_id.label("worker_id"), tasks_table.c.task_id).where(
-            tasks_table.c.current_worker_id.in_(list(worker_ids)),
-            tasks_table.c.state.in_(list(_SCHEDULER_ACTIVE_TASK_STATES)),
-        ),
+        _RUNNING_TASKS_BY_WORKER_STMT,
+        {"worker_ids": list(worker_ids), "states": list(_SCHEDULER_ACTIVE_TASK_STATES)},
     ).all()
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:
@@ -724,6 +762,10 @@ ATTEMPT_COLS = (
 
 _BULK_GET_CHUNK_SIZE = 450
 
+_BULK_GET_ATTEMPTS_STMT = select(*ATTEMPT_COLS).where(
+    tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id).in_(bindparam("keys", expanding=True))
+)
+
 
 def bulk_get_attempts(
     tx: Tx,
@@ -739,11 +781,9 @@ def bulk_get_attempts(
         return {}
     unique: list[tuple[JobName, int]] = list({k: None for k in keys}.keys())
     result: dict[tuple[JobName, int], object] = {}
-    pair_cols = tuple_(task_attempts_table.c.task_id, task_attempts_table.c.attempt_id)
     for chunk_start in range(0, len(unique), _BULK_GET_CHUNK_SIZE):
         chunk = unique[chunk_start : chunk_start + _BULK_GET_CHUNK_SIZE]
-        stmt = select(*ATTEMPT_COLS).where(pair_cols.in_(chunk))
-        rows = tx.execute(stmt).all()
+        rows = tx.execute(_BULK_GET_ATTEMPTS_STMT, {"keys": chunk}).all()
         for row in rows:
             result[(row.task_id, row.attempt_id)] = row
     return result
@@ -902,22 +942,26 @@ def list_active_tasks(
 
     stmt = select(*_ACTIVE_TASK_COLS).select_from(_ACTIVE_TASK_FROM)
 
+    params: dict[str, object] = {}
     if scope.job_id is not None:
         stmt = stmt.where(tasks_table.c.job_id == scope.job_id)
     elif scope.job_subtree is not None:
         if not scope.job_subtree:
             return []
-        stmt = stmt.where(tasks_table.c.job_id.in_(list(scope.job_subtree)))
+        stmt = stmt.where(tasks_table.c.job_id.in_(bindparam("scope_job_ids", expanding=True)))
+        params["scope_job_ids"] = list(scope.job_subtree)
     elif scope.worker_id is not None:
         stmt = stmt.where(tasks_table.c.current_worker_id == scope.worker_id)
     elif scope.worker_ids is not None:
         if not scope.worker_ids:
             return []
-        stmt = stmt.where(tasks_table.c.current_worker_id.in_(list(scope.worker_ids)))
+        stmt = stmt.where(tasks_table.c.current_worker_id.in_(bindparam("scope_worker_ids", expanding=True)))
+        params["scope_worker_ids"] = list(scope.worker_ids)
     elif scope.task_ids is not None:
         if not scope.task_ids:
             return []
-        stmt = stmt.where(tasks_table.c.task_id.in_(list(scope.task_ids)))
+        stmt = stmt.where(tasks_table.c.task_id.in_(bindparam("scope_task_ids", expanding=True)))
+        params["scope_task_ids"] = list(scope.task_ids)
     else:  # null_worker
         stmt = stmt.where(tasks_table.c.current_worker_id.is_(None))
 
@@ -926,13 +970,14 @@ def list_active_tasks(
     if exclude_reservation_holders:
         stmt = stmt.where(jobs_table.c.is_reservation_holder == False)  # noqa: E712
 
-    stmt = stmt.where(tasks_table.c.state.in_(states_tuple))
+    stmt = stmt.where(tasks_table.c.state.in_(bindparam("active_states", expanding=True)))
+    params["active_states"] = list(states_tuple)
     if order_by_task_id:
         stmt = stmt.order_by(tasks_table.c.task_id.asc())
     if limit is not None:
         stmt = stmt.limit(limit)
 
-    rows = tx.execute(stmt).all()
+    rows = tx.execute(stmt, params).all()
     return [_row_to_active_task(row) for row in rows]
 
 

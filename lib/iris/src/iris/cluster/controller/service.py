@@ -21,7 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
-from sqlalchemy import func, select, text, tuple_
+from sqlalchemy import bindparam, func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -37,7 +37,6 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.budget import (
-    UserBudgetDefaults,
     compute_effective_band,
     compute_user_spend,
 )
@@ -86,6 +85,7 @@ from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
+    UserBudgetDefaults,
     WorkerId,
     is_job_finished,
 )
@@ -535,8 +535,9 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
             )
             .where(
                 task_attempts_table.c.worker_id == worker_id,
-                tasks_table.c.state.in_(list(ACTIVE_TASK_STATES)),
-            )
+                tasks_table.c.state.in_(bindparam("active_states", expanding=True)),
+            ),
+            {"active_states": list(ACTIVE_TASK_STATES)},
         ).all()
     return _WorkerDetail(
         worker=worker,
@@ -748,7 +749,8 @@ def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
                 worker_attributes_table.c.str_value,
                 worker_attributes_table.c.int_value,
                 worker_attributes_table.c.float_value,
-            ).where(worker_attributes_table.c.worker_id.in_(worker_ids))
+            ).where(worker_attributes_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))),
+            {"worker_ids": list(worker_ids)},
         ).all()
         attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
         for row in attr_rows:
@@ -767,6 +769,7 @@ _ACTIVE_JOB_STATES = (
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
     """Aggregate job/task counts per user for active (non-terminal) jobs."""
+    active_states = list(_ACTIVE_JOB_STATES)
     with db.read_snapshot() as tx:
         job_rows = tx.execute(
             select(
@@ -774,8 +777,9 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
                 jobs_table.c.state,
                 func.count().label("cnt"),
             )
-            .where(jobs_table.c.state.in_(list(_ACTIVE_JOB_STATES)))
-            .group_by(jobs_table.c.user_id, jobs_table.c.state)
+            .where(jobs_table.c.state.in_(bindparam("active_states", expanding=True)))
+            .group_by(jobs_table.c.user_id, jobs_table.c.state),
+            {"active_states": active_states},
         ).all()
         task_rows = tx.execute(
             select(
@@ -784,8 +788,9 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
                 func.count().label("cnt"),
             )
             .select_from(tasks_table.join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id))
-            .where(jobs_table.c.state.in_(list(_ACTIVE_JOB_STATES)))
-            .group_by(jobs_table.c.user_id, tasks_table.c.state)
+            .where(jobs_table.c.state.in_(bindparam("active_states", expanding=True)))
+            .group_by(jobs_table.c.user_id, tasks_table.c.state),
+            {"active_states": active_states},
         ).all()
     by_user: dict[str, UserStats] = {}
     for row in job_rows:
@@ -1328,7 +1333,10 @@ class ControllerServiceImpl:
 
         with self._db.read_snapshot() as tx:
             rows = tx.execute(
-                select(jobs_table.c.job_id, jobs_table.c.state).where(jobs_table.c.job_id.in_(wire_ids))
+                select(jobs_table.c.job_id, jobs_table.c.state).where(
+                    jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True))
+                ),
+                {"job_ids": wire_ids},
             ).all()
 
         states = {row.job_id.to_wire(): int(row.state) for row in rows}

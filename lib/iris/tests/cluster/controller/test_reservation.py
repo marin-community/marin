@@ -34,6 +34,8 @@ from iris.cluster.controller.controller import (
     _reservation_region_constraints,
     _reserved_job_ids,
     _worker_matches_reservation_entry,
+    apply_scheduling_gates,
+    build_scheduling_context,
     job_requirements_from_job,
 )
 from iris.cluster.controller.reads import SchedulableWorker
@@ -511,12 +513,12 @@ def test_cleanup_preserves_valid_claims(ctrl):
 
 
 # =============================================================================
-# _is_reservation_satisfied (gate check)
+# Reservation gate (via apply_scheduling_gates)
 # =============================================================================
 
 
 def test_gate_satisfied_when_claims_meet_entries(ctrl):
-    """Gate opens when claimed workers >= reservation entries."""
+    """Gate passes a reservation task when claimed workers >= reservation entries."""
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry()],
@@ -524,12 +526,15 @@ def test_gate_satisfied_when_claims_meet_entries(ctrl):
     jid = _submit_job(ctrl.state, "j1", req)
     ctrl._claim_workers_for_reservations()
 
-    job = _query_job(ctrl.state, jid)
-    assert ctrl._is_reservation_satisfied(job)
+    claims = ctrl.reservation_claims
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
+    # The task_id for a 1-replica job is jid.task(0)
+    assert jid.task(0) in gated.schedulable_task_ids
 
 
 def test_gate_unsatisfied_when_claims_below_entries(ctrl):
-    """Gate stays closed when fewer workers are claimed than entries required."""
+    """Gate blocks a reservation task when fewer workers are claimed than entries required."""
     _register_worker(ctrl.state, "w1")
     req = _make_job_request_with_reservation(
         reservation_entries=[_make_reservation_entry(), _make_reservation_entry()],
@@ -537,13 +542,15 @@ def test_gate_unsatisfied_when_claims_below_entries(ctrl):
     jid = _submit_job(ctrl.state, "j1", req)
     ctrl._claim_workers_for_reservations()
 
-    job = _query_job(ctrl.state, jid)
-    # Only 1 worker available for 2 entries
-    assert not ctrl._is_reservation_satisfied(job)
+    # Only 1 worker available for 2 entries — gate must stay closed.
+    claims = ctrl.reservation_claims
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
+    assert jid.task(0) not in gated.schedulable_task_ids
 
 
 def test_gate_satisfied_for_jobs_without_reservation(ctrl):
-    """Jobs without a reservation always pass the gate."""
+    """Tasks with no reservation always pass the gate."""
     req = controller_pb2.Controller.LaunchJobRequest(
         name="no-res",
         entrypoint=_entrypoint(),
@@ -553,8 +560,10 @@ def test_gate_satisfied_for_jobs_without_reservation(ctrl):
     )
     jid = _submit_job(ctrl.state, "no-res", req)
 
-    job = _query_job(ctrl.state, jid)
-    assert ctrl._is_reservation_satisfied(job)
+    claims: dict[WorkerId, ReservationClaim] = {}
+    ctx = build_scheduling_context(ctrl._db, ctrl._health, ctrl._worker_attrs, ctrl._config.user_budget_defaults)
+    gated = apply_scheduling_gates(ctx, claims, max_tasks_per_job_per_cycle=0)
+    assert jid.task(0) in gated.schedulable_task_ids
 
 
 # =============================================================================

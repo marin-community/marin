@@ -20,4 +20,6 @@ from connectrpc.compression.zstd import ZstdCompression
 # without the entry points having to remember to import it themselves.
 from iris.rpc import codecs as _codecs  # noqa: F401
 
-IRIS_RPC_COMPRESSIONS = (ZstdCompression(), GzipCompression())
+# zstd level -1 ("fast") trades ratio for ~3-5x lower CPU at the encoder.
+# Iris controller spent ~5% serving-thread CPU on zstd at the default level 3.
+IRIS_RPC_COMPRESSIONS = (ZstdCompression(level=-1), GzipCompression())
