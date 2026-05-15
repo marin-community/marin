@@ -1,104 +1,191 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TeraflopAI/SEC-EDGAR download + transform + normalize helpers.
+"""TeraflopAI/SEC-EDGAR download + normalize helpers.
 
 ~8M filings (~335B marin_tokenizer tokens) from the SEC EDGAR database,
 organized into per-filing-type subdirectories: 10-K, 10-Q, 8-K, 20-F,
 S-1, S-8, 144, and Form 3/4/5. Text lives in the upstream ``content``
 column.
 
-A transform step sits between download and normalize as a workaround
-for https://github.com/marin-community/marin/issues/5334 — the upstream
-parquet shards trip ``apache/arrow#46404`` (PyArrow's parquet reader
+The download uses DuckDB instead of byte-streaming because the upstream
+parquet shards trip ``apache/arrow#46404`` — PyArrow's parquet reader
 can't decode page headers >8 MiB, which the multi-MB filings in the
-``content`` column overflow on per-page string statistics). The
-transform routes the read through ``read_parquet_via_duckdb`` (DuckDB
-has no such cap) so the upstream bytes survive into a re-write that
-PyArrow's own writer produces with safely-truncated stats — readable by
-downstream PyArrow consumers (normalize, tokenize) again.
+``content`` column overflow on per-page string statistics. DuckDB has
+no such cap, so we re-encode through it once at download time: each
+upstream shard is read via DuckDB and rewritten via PyArrow's default
+writer (whose stats are safely truncated for huge strings — verified
+locally on the offending SEC files). The result is a PyArrow-readable
+``raw/sec-edgar/<form-type>/<file>.parquet`` tree that normalize and
+tokenize consume directly, with no intermediate staging copy.
 
-Scoped to this source per the discussion in
-https://github.com/marin-community/marin/pull/5335 — if more datasets
-hit the page-header cap or we move off PyArrow wholesale, lift
-``read_parquet_via_duckdb`` into a shared helper.
+Scoped to this source per https://github.com/marin-community/marin/pull/5335
+— if more datasets hit the page-header cap or we move off PyArrow
+wholesale, lift ``read_parquet_via_duckdb`` into a shared helper.
+Tracking: https://github.com/marin-community/marin/issues/5334.
 """
 
 from __future__ import annotations
 
+import logging
+import os
+import random
+import time
 from collections.abc import Iterator
 
 import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
 from fray import ResourceConfig
-from rigging.filesystem import url_to_fs
+from huggingface_hub import HfFileSystem
 from zephyr import Dataset, ZephyrContext, counters
+from zephyr.writers import atomic_rename, ensure_parent_dir
 
-from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
+from marin.utilities.validation_utils import write_provenance_json
+
+logger = logging.getLogger(__name__)
 
 HF_DATASET_ID = "TeraflopAI/SEC-EDGAR"
 HF_REVISION = "43de32c"
 
 FILING_TYPES = ("10-K", "10-Q", "8-K", "20-F", "S-1", "S-8", "144", "3", "4", "5")
 
+# HF rate-limits aggressively; a small batch reader keeps memory bounded
+# while one big SEC row group (~700 MB decompressed) is in flight.
+_ROWS_PER_BATCH = 8
 
-def read_parquet_via_duckdb(path: str) -> Iterator[dict]:
-    """Yield records from a parquet file using DuckDB instead of PyArrow.
+# Per-file retry policy (HfHubHTTPError 429s, network blips, xet-bridge hiccups).
+_MAX_RETRIES = 20
+_BASE_WAIT_S = 5
+_MAX_WAIT_S = 15 * 60
 
-    Drop-in replacement for ``zephyr.load_parquet`` for the SEC-EDGAR
-    pipeline. DuckDB's reader has no 8 MiB page-header cap, so it can
-    decode shards PyArrow rejects (see module docstring + #5334).
+
+def read_parquet_via_duckdb(path: str, *, fs: object | None = None) -> Iterator[pa.RecordBatch]:
+    """Yield Arrow RecordBatches from a parquet via DuckDB.
+
+    Works around https://github.com/marin-community/marin/issues/5334
+    (apache/arrow#46404) — PyArrow can't decode page headers >8 MiB,
+    which SEC's multi-MB ``content`` column overflows. DuckDB has no
+    such limit.
+
+    ``fs`` is the fsspec filesystem to register with the DuckDB
+    connection. Defaults to an ``HfFileSystem`` so callers reading
+    ``hf://...`` paths don't have to wire one up.
     """
-    src_fs, _ = url_to_fs(path)
+    if fs is None:
+        fs = HfFileSystem()
     con = duckdb.connect(":memory:")
     try:
-        con.register_filesystem(src_fs)
+        con.register_filesystem(fs)
         result = con.execute("SELECT * FROM read_parquet(?)", [path])
-        reader = result.fetch_record_batch(rows_per_batch=8)
-        for batch in reader:
-            counters.increment("sec_edgar/rows_read", batch.num_rows)
-            rows = batch.to_pydict()
-            for i in range(batch.num_rows):
-                yield {k: rows[k][i] for k in rows}
+        yield from result.fetch_record_batch(rows_per_batch=_ROWS_PER_BATCH)
     finally:
         con.close()
 
 
-def transform(input_path: str, output_path: str) -> None:
+def _download_one(task: dict) -> dict:
+    """Stream one upstream parquet via DuckDB, write a PyArrow-readable shard at ``dst``."""
+    hf_path = task["hf_path"]
+    dst = task["dst"]
+
+    last_exc: BaseException | None = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            ensure_parent_dir(dst)
+            count = 0
+            batches = read_parquet_via_duckdb(hf_path)
+            first = next(batches, None)
+            if first is None:
+                counters.increment("sec_edgar/empty_input")
+                return {"hf_path": hf_path, "dst": dst, "rows": 0}
+            with atomic_rename(dst) as tmp:
+                with pq.ParquetWriter(tmp, first.schema) as writer:
+                    writer.write_batch(first)
+                    count += first.num_rows
+                    for batch in batches:
+                        writer.write_batch(batch)
+                        count += batch.num_rows
+            counters.increment("sec_edgar/rows_downloaded", count)
+            return {"hf_path": hf_path, "dst": dst, "rows": count}
+        except Exception as e:
+            last_exc = e
+            wait = min(_MAX_WAIT_S, _BASE_WAIT_S * (2**attempt)) + random.uniform(0, 10)
+            logger.warning(
+                "Attempt %d/%d failed for %s: %s: %s; retrying in %.1fs",
+                attempt + 1,
+                _MAX_RETRIES,
+                hf_path,
+                type(e).__name__,
+                e,
+                wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError(f"Failed to download {hf_path} after {_MAX_RETRIES} attempts") from last_exc
+
+
+def _list_hf_parquets() -> list[str]:
+    """List all upstream parquet paths in ``hf://datasets/...`` form, pinned to revision."""
+    hf = HfFileSystem()
+    paths: list[str] = []
+    for ftype in FILING_TYPES:
+        pattern = f"datasets/{HF_DATASET_ID}/{ftype}/*.parquet"
+        for p in hf.glob(pattern, revision=HF_REVISION):
+            paths.append(f"hf://{p}")
+    paths.sort()
+    return paths
+
+
+def download_sec_edgar(output_path: str) -> None:
+    """Pull SEC-EDGAR from HF via DuckDB, write PyArrow-readable shards under ``output_path``."""
+    files = _list_hf_parquets()
+    if not files:
+        raise ValueError(f"No parquet files matched for {HF_DATASET_ID}@{HF_REVISION}")
+    logger.info("Found %d upstream parquet files", len(files))
+
+    base = f"hf://datasets/{HF_DATASET_ID}/"
+    tasks = [{"hf_path": p, "dst": os.path.join(output_path, p.removeprefix(base))} for p in files]
+
     pipeline = (
-        Dataset.from_files(f"{input_path}/**/*.parquet")
-        .flat_map(read_parquet_via_duckdb)
-        .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
+        Dataset.from_list(tasks)
+        .map(_download_one)
+        .write_jsonl(
+            f"{output_path}/.metrics/download-{{shard:05d}}-of-{{total:05d}}.jsonl",
+            skip_existing=True,
+        )
     )
-    ctx = ZephyrContext(name="sec-edgar-transform", resources=ResourceConfig(cpu=1, ram="32g"))
+    ctx = ZephyrContext(name="download-sec-edgar", resources=ResourceConfig(cpu=1, ram="16g"))
     ctx.execute(pipeline)
+
+    write_provenance_json(
+        output_path,
+        metadata={"dataset": HF_DATASET_ID, "version": HF_REVISION, "links": files},
+    )
+    logger.info("SEC-EDGAR download complete.")
 
 
 def download_sec_edgar_step() -> StepSpec:
-    """Download SEC-EDGAR from HF and rewrite each shard via DuckDB."""
-    dl = download_hf_step(
-        "raw/sec-edgar",
-        hf_dataset_id=HF_DATASET_ID,
-        revision=HF_REVISION,
-        hf_urls_glob=[f"{f}/*.parquet" for f in FILING_TYPES],
-    )
     return StepSpec(
-        name="processed/sec-edgar",
-        deps=[dl],
-        fn=lambda output_path: transform(input_path=dl.output_path, output_path=output_path),
-        hash_attrs={"version": "v1"},
+        name="raw/sec-edgar",
+        fn=download_sec_edgar,
+        hash_attrs={
+            "hf_dataset_id": HF_DATASET_ID,
+            "revision": HF_REVISION,
+            "filing_types": list(FILING_TYPES),
+            "reader": "duckdb",
+        },
     )
 
 
 def sec_edgar_normalize_steps() -> tuple[StepSpec, ...]:
-    """Return the ``(download+transform, normalize)`` chain for SEC-EDGAR."""
-    processed = download_sec_edgar_step()
+    """Return the ``(download, normalize)`` chain for SEC-EDGAR."""
+    download = download_sec_edgar_step()
     return (
-        processed,
+        download,
         normalize_step(
             name="normalized/sec-edgar",
-            download=processed,
+            download=download,
             text_field="content",
             file_extensions=(".parquet",),
         ),
