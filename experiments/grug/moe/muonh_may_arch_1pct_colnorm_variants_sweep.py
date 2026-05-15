@@ -14,7 +14,10 @@ d512=3.6427). Adds col-norm targeting to one of two subgroups:
 (Both have the 1pct-noclip recipe: 1% warmup, ``max_grad_norm=None``,
 embed -> AdamH, GN -> muonh by default, may_arch architecture.)
 
-Submit at d512 and d768 only (4 runs).
+Submitted at d512 and d768 for both variants (4 runs). kv-colnorm beat
+the 1pct-noclip anchor at d768 (3.3005 vs 3.3040), so we promote it
+alone to d1024 (one additional run, the gn-colnorm d1024 is skipped
+because at d768 it landed slightly worse than default).
 """
 
 import dataclasses
@@ -32,15 +35,15 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHMayArchColNormVariantConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
-_POINTS: tuple[tuple[int, float], ...] = (
-    (512, 2.19e17),
-    (768, 1.70e18),
-)
+_KV_COLNORM_OVERRIDES: dict = {"gn_colnorm": False, "kv_colnorm": True}
 
-_TRIALS: tuple[tuple[str, dict], ...] = (
-    ("gn-colnorm", {"gn_colnorm": True, "kv_colnorm": False}),
-    ("kv-colnorm", {"gn_colnorm": False, "kv_colnorm": True}),
-)
+# Only the kv-colnorm d1024 promotion. Gate-1 (d512/d768) for both
+# gn-colnorm and kv-colnorm was already submitted via the original
+# launcher revision; gn-colnorm came in slightly worse than the
+# 1pct-noclip anchor at both gate-1 scales so it is not promoted to
+# d1024. Re-running this launcher will only enqueue the new d1024 step;
+# the gate-1 outputs are content-hash cached and untouched.
+_RUNS: tuple[tuple[int, float, str, dict], ...] = ((1024, 9.00e18, "kv-colnorm", _KV_COLNORM_OVERRIDES),)
 
 _WARMUP_FRACTION: float = 0.01
 _NUM_EXPERTS: int = 256
@@ -146,13 +149,12 @@ _RUN_SUFFIX: str = "v1"
 if __name__ == "__main__":
     steps = [
         _build_step(hidden_dim=dim, budget=budget, trial_label=label, overrides=overrides, run_suffix=_RUN_SUFFIX)
-        for dim, budget in _POINTS
-        for label, overrides in _TRIALS
+        for dim, budget, label, overrides in _RUNS
     ]
     executor_main(
         steps=steps,
         description=(
-            f"MoE may_arch + 1pct-noclip + col-norm variants (gn-colnorm, kv-colnorm) "
-            f"at d512 and d768 (4 runs, run_suffix={_RUN_SUFFIX!r})."
+            f"MoE may_arch + 1pct-noclip + kv-colnorm promotion to d1024 "
+            f"({len(_RUNS)} run, run_suffix={_RUN_SUFFIX!r})."
         ),
     )
