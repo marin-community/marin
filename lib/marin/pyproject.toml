@@ -210,6 +210,21 @@ dedup = [
     "marin-dupekit",
 ]
 
+embed = [
+    "luxical",
+    "sentence-transformers",
+]
+
+probe = [
+    "scikit-learn",
+    "scipy",
+]
+
+cluster = [
+    "faiss-cpu",
+    "scipy",
+]
+
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
