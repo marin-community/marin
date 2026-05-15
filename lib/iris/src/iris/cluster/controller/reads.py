@@ -509,6 +509,19 @@ def get_job_config(tx: Tx, job_id: JobName) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def bulk_get_job_configs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, dict]:
+    """Return ``{job_id: row_dict}`` for each ``job_config`` row found.
+
+    Missing ids are absent from the result; callers treat absence as
+    ``get_job_config -> None``.
+    """
+    ids = list(job_ids)
+    if not ids:
+        return {}
+    rows = tx.execute(select(job_config_table).where(job_config_table.c.job_id.in_(ids))).mappings().all()
+    return {row["job_id"]: dict(row) for row in rows}
+
+
 def _priority_bands_stmt(ids: list[JobName]):
     """Build a recursive CTE that walks the parent_job_id chain for each id.
 

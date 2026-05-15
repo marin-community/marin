@@ -928,6 +928,162 @@ def _resolve_task_failure_state(
 # =============================================================================
 
 
+@dataclass
+class _TransitionDecision:
+    """Pure outcome of running one update through the task state machine."""
+
+    task_state: int
+    task_error: str | None
+    task_exit: int | None
+    terminal_ms: int | None
+    started_ms: int | None
+    failure_count: int
+    preemption_count: int
+    attempt_terminal_ms: int | None
+    # Worker to blame for a BUILDING->FAILED or ASSIGNED->WORKER_FAILED transition.
+    # ``None`` whenever attribution is not appropriate (no worker, or the caller
+    # opted out via ``emit_build_failed=False``).
+    build_failed_worker: WorkerId | None
+
+
+def _compute_transition(
+    update: "TaskUpdate",
+    task: Any,
+    attempt: Any,
+    now_ms: int,
+    *,
+    emit_build_failed: bool,
+) -> _TransitionDecision:
+    """State machine shared by the heartbeat and direct-provider planners.
+
+    Callers must filter out the "skip" preconditions (task finished, stale
+    attempt, fast-path no-op) before invoking. ``emit_build_failed`` controls
+    whether BUILDING -> FAILED and ASSIGNED -> WORKER_FAILED transitions
+    attribute the failure to the attempt's worker; the direct-provider path
+    passes ``False`` because it does not track worker health.
+    """
+    prior_state = task.state
+    worker_id = attempt.worker_id
+    terminal_ms: int | None = None
+    started_ms: int | None = None
+    task_state = prior_state
+    task_error = update.error
+    task_exit = update.exit_code
+    failure_count = task.failure_count
+    preemption_count = task.preemption_count
+    build_failed_worker: WorkerId | None = None
+
+    if update.new_state == job_pb2.TASK_STATE_RUNNING:
+        started_ms = now_ms
+        task_state = job_pb2.TASK_STATE_RUNNING
+    elif update.new_state == job_pb2.TASK_STATE_BUILDING:
+        task_state = job_pb2.TASK_STATE_BUILDING
+    elif update.new_state in (
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_SUCCEEDED,
+    ):
+        terminal_ms = now_ms
+        task_state = int(update.new_state)
+        if update.new_state == job_pb2.TASK_STATE_SUCCEEDED and task_exit is None:
+            task_exit = 0
+        if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
+            task_error = "Scheduling timeout exceeded"
+        if update.new_state == job_pb2.TASK_STATE_FAILED:
+            failure_count += 1
+            # A FAILED while still BUILDING almost always means the worker
+            # couldn't pull the image or set up the runtime. User-code failures
+            # only appear once the task has reached RUNNING.
+            if emit_build_failed and prior_state == job_pb2.TASK_STATE_BUILDING and worker_id is not None:
+                build_failed_worker = WorkerId(str(worker_id))
+        if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
+            # A worker that truly died will also miss its next ping/heartbeat
+            # RPC, which bumps the tracker on the observer side; do not
+            # double-count that signal here.
+            preemption_count += 1
+        if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
+            task_state = job_pb2.TASK_STATE_PENDING
+            terminal_ms = None
+            # ASSIGNED -> WORKER_FAILED means the worker accepted the task but
+            # couldn't bring it up. Attribute to the worker so a host that
+            # keeps failing launches gets reaped.
+            if emit_build_failed and worker_id is not None:
+                build_failed_worker = WorkerId(str(worker_id))
+        if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
+            task_state = job_pb2.TASK_STATE_PENDING
+            terminal_ms = None
+        if (
+            update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
+            and preemption_count <= task.max_retries_preemption
+            and prior_state in EXECUTING_TASK_STATES
+        ):
+            task_state = job_pb2.TASK_STATE_PENDING
+            terminal_ms = None
+
+    attempt_terminal_ms = now_ms if int(update.new_state) in TERMINAL_TASK_STATES else None
+
+    return _TransitionDecision(
+        task_state=task_state,
+        task_error=task_error,
+        task_exit=task_exit,
+        terminal_ms=terminal_ms,
+        started_ms=started_ms,
+        failure_count=failure_count,
+        preemption_count=preemption_count,
+        attempt_terminal_ms=attempt_terminal_ms,
+        build_failed_worker=build_failed_worker,
+    )
+
+
+@dataclass
+class _CascadeAction:
+    """Per-update post-write work: coscheduled sibling termination or requeue."""
+
+    req_idx: int
+    worker_log_id: str
+    job_id: JobName
+    failed_task_id: JobName
+    final_task_state: int
+
+
+@dataclass
+class _RecomputeAction:
+    """Per-request post-write work: job-state recompute for changed jobs."""
+
+    req_idx: int
+    worker_log_id: str
+    event_name: str
+    jobs: set[JobName]
+
+
+@dataclass
+class _TransitionPlan:
+    """Buffered transitions emitted by the planner.
+
+    Steady-state per-task writes (attempt + task UPDATEs and endpoint deletes)
+    accumulate in ``attempt_writes`` / ``task_writes`` / ``endpoints_to_delete``
+    and are flushed in bulk by the dispatcher. Cascade and recompute work is
+    queued as actions so it can run after the bulk writes are visible.
+
+    ``stranded_attempt_finalizations`` covers a rare race: a worker re-reports a
+    terminal state for an already-finished task whose attempt never had its
+    ``finished_at_ms`` stamped. Each entry writes only ``finished_at_ms`` and is
+    kept out of the main attempt batch to preserve the "no state overwrite"
+    semantics.
+    """
+
+    attempt_writes: list[dict] = field(default_factory=list)
+    task_writes: list[dict] = field(default_factory=list)
+    endpoints_to_delete: list[JobName] = field(default_factory=list)
+    container_id_writes: list[dict] = field(default_factory=list)
+    stranded_attempt_finalizations: list[dict] = field(default_factory=list)
+    build_failed_workers: list[WorkerId] = field(default_factory=list)
+    cascade_actions: list[_CascadeAction] = field(default_factory=list)
+    recompute_actions: list[_RecomputeAction] = field(default_factory=list)
+
+
 # Per-job RunTaskRequest templates are cached on ``ControllerTransitions``.
 # 4096 templates ~= worst-case concurrent job count we expect in a single
 # controller process. Same-name replacement reuses the original ``job_id``,
@@ -1698,50 +1854,50 @@ class ControllerTransitions:
         self._health.heartbeat([req.worker_id], now_ms)
         return True
 
-    def _apply_task_transitions(
+    def _plan_task_transitions(
         self,
-        cur: Tx,
+        req_idx: int,
         req: HeartbeatApplyRequest,
         now_ms: int,
         task_map: dict[JobName, Any],
         attempt_map: dict[tuple[JobName, int], Any],
+        job_config_map: dict[JobName, dict],
+        plan: _TransitionPlan,
     ) -> TxResult:
-        """Apply task state updates for one worker within an existing transaction.
+        """Plan task transitions for one worker into the shared ``plan``.
 
-        Handles the full state machine: state transitions, retry logic,
-        coscheduled cascade, resource decommit, endpoint cleanup, and
-        deduplicated job recompute.
+        Steady-state writes (attempt + task UPDATEs, endpoint deletes, in-memory
+        health events) are accumulated into ``plan`` so the dispatcher can flush
+        them in bulk. Cascade and recompute work is queued onto ``plan`` as
+        actions: it must run after the bulk writes have been applied so the
+        reads it depends on observe the new task / attempt state.
 
-        ``task_map`` and ``attempt_map`` are pre-fetched by
-        ``apply_heartbeats_batch`` so this loop avoids per-update SELECTs.
+        Returns the request's ``TxResult``; the dispatcher mutates its
+        ``tasks_to_kill`` / ``task_kill_workers`` sets in place when it runs
+        the queued cascade and recompute actions.
         """
-        tasks_to_kill: set[JobName] = set()
-        task_kill_workers: dict[JobName, WorkerId] = {}
-        cascaded_jobs: set[JobName] = set()
+        result = TxResult(tasks_to_kill=set(), task_kill_workers={})
         jobs_to_recompute: set[JobName] = set()
-        # Cache job_config rows keyed by job_id wire format.
-        job_config_cache: dict[str, dict | None] = {}
 
         for update in req.updates:
             task = task_map.get(update.task_id)
             if task is None:
-                # Defensive fallback; the bulk fetch should have covered every id.
-                logger.warning("task_map miss for task_id=%s; falling back to per-row fetch", update.task_id)
-                task = reads.get_task_detail(cur, update.task_id)
-            if task is None:
+                # The bulk fetch covers every relevant id; a miss here means
+                # the upstream filter let through an irrelevant update.
+                logger.warning("task_map miss for task_id=%s; skipping update", update.task_id)
                 continue
             if _task_is_finished(task) or update.new_state in (
                 job_pb2.TASK_STATE_UNSPECIFIED,
                 job_pb2.TASK_STATE_PENDING,
             ):
                 # Stranded-attempt finalization: producer transitions
-                # (cancel_job, preempt_task) move the task to a terminal
-                # state but leave the attempt's ``finished_at_ms`` NULL,
-                # expecting the worker's next terminal status update to
-                # stamp it. If that push was dropped, the poll loop re-asks
-                # via ``expected_tasks`` and we land here with the task
-                # already finished. Stamp ``finished_at_ms`` on the attempt
-                # so the scheduler releases capacity; leave task state alone.
+                # (cancel_job, preempt_task) move the task to a terminal state
+                # but leave the attempt's ``finished_at_ms`` NULL, expecting
+                # the worker's next terminal status update to stamp it. If
+                # that push was dropped, the poll loop re-asks via
+                # ``expected_tasks`` and we land here with the task already
+                # finished. Stamp ``finished_at_ms`` on the attempt so the
+                # scheduler releases capacity; leave task state alone.
                 if (
                     _task_is_finished(task)
                     and update.new_state in TERMINAL_TASK_STATES
@@ -1749,13 +1905,12 @@ class ControllerTransitions:
                 ):
                     attempt = attempt_map.get((update.task_id, update.attempt_id))
                     if attempt is not None and attempt.worker_id is not None and attempt.finished_at_ms is None:
-                        cur.execute(
-                            sa_update(task_attempts_table)
-                            .where(
-                                task_attempts_table.c.task_id == update.task_id,
-                                task_attempts_table.c.attempt_id == update.attempt_id,
-                            )
-                            .values(finished_at_ms=now_ms)
+                        plan.stranded_attempt_finalizations.append(
+                            {
+                                "b_task_id": update.task_id,
+                                "b_attempt_id": update.attempt_id,
+                                "v_finished_at_ms": now_ms,
+                            }
                         )
                 continue
             if update.attempt_id != task.current_attempt_id:
@@ -1794,192 +1949,173 @@ class ControllerTransitions:
                     int(update.new_state),
                 )
                 continue
-            worker_id = attempt.worker_id
-            terminal_ms: int | None = None
-            started_ms: int | None = None
-            task_state = prior_state
-            task_error = update.error
-            task_exit = update.exit_code
-            failure_count = task.failure_count
-            preemption_count = task.preemption_count
+            decision = _compute_transition(update, task, attempt, now_ms, emit_build_failed=True)
+            if decision.build_failed_worker is not None:
+                plan.build_failed_workers.append(decision.build_failed_worker)
 
-            if update.new_state == job_pb2.TASK_STATE_RUNNING:
-                started_ms = now_ms
-                task_state = job_pb2.TASK_STATE_RUNNING
-            elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-                task_state = job_pb2.TASK_STATE_BUILDING
-            elif update.new_state in (
-                job_pb2.TASK_STATE_FAILED,
-                job_pb2.TASK_STATE_WORKER_FAILED,
-                job_pb2.TASK_STATE_KILLED,
-                job_pb2.TASK_STATE_UNSCHEDULABLE,
-                job_pb2.TASK_STATE_SUCCEEDED,
-            ):
-                terminal_ms = now_ms
-                task_state = int(update.new_state)
-                if update.new_state == job_pb2.TASK_STATE_SUCCEEDED and task_exit is None:
-                    task_exit = 0
-                if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
-                    task_error = "Scheduling timeout exceeded"
-                if update.new_state == job_pb2.TASK_STATE_FAILED:
-                    failure_count += 1
-                    # A FAILED originating while the task was still BUILDING almost
-                    # always means the worker couldn't pull the image or set up the
-                    # runtime (disk full, DNS / registry unreachable, transient
-                    # network hiccup). User-code failures only appear once the task
-                    # has reached RUNNING. Treat the BUILDING -> FAILED transition
-                    if prior_state == job_pb2.TASK_STATE_BUILDING and worker_id is not None:
-                        self._health.build_failed(WorkerId(str(worker_id)))
-                if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state in EXECUTING_TASK_STATES:
-                    # A worker that truly died will also miss its next ping/heartbeat
-                    # RPC, which bumps the tracker on the observer side. We don't
-                    # double-count that signal here.
-                    preemption_count += 1
-                if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and prior_state == job_pb2.TASK_STATE_ASSIGNED:
-                    task_state = job_pb2.TASK_STATE_PENDING
-                    terminal_ms = None
-                    # ASSIGNED -> WORKER_FAILED means the worker accepted the task but
-                    # couldn't bring it up (e.g. TPU iommu/vfio already held by another
-                    # process on the VM). Attribute the failure to the worker so a host
-                    # that keeps failing launches gets reaped; otherwise the task loops
-                    # forever without draining preemption budget.
-                    if worker_id is not None:
-                        self._health.build_failed(WorkerId(str(worker_id)))
-                if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
-                    task_state = job_pb2.TASK_STATE_PENDING
-                    terminal_ms = None
-                if (
-                    update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-                    and preemption_count <= task.max_retries_preemption
-                    and prior_state in EXECUTING_TASK_STATES
-                ):
-                    task_state = job_pb2.TASK_STATE_PENDING
-                    terminal_ms = None
-
-            # An attempt is terminal whenever the update itself is terminal, even
-            # if the TASK rolls back to PENDING for a retry. terminal_ms above
-            # tracks the task's finished_at_ms; the attempt needs its own stamp.
-            attempt_terminal_ms = now_ms if int(update.new_state) in TERMINAL_TASK_STATES else None
-
-            writes.apply_attempt_update(
-                cur,
-                task_id=update.task_id,
-                attempt_id=update.attempt_id,
-                state=int(update.new_state),
-                started_at_ms=started_ms,
-                finished_at_ms=attempt_terminal_ms,
-                exit_code=task_exit,
-                error=update.error,
+            plan.attempt_writes.append(
+                {
+                    "b_task_id": update.task_id,
+                    "b_attempt_id": update.attempt_id,
+                    "v_state": int(update.new_state),
+                    "v_started_at_ms": decision.started_ms,
+                    "v_finished_at_ms": decision.attempt_terminal_ms,
+                    "v_exit_code": decision.task_exit,
+                    "v_error": update.error,
+                }
             )
-            writes.apply_task_state_update(
-                cur,
-                task_id=update.task_id,
-                state=task_state,
-                error=task_error,
-                exit_code=task_exit,
-                started_at_ms=started_ms,
-                finished_at_ms=terminal_ms,
-                failure_count=failure_count,
-                preemption_count=preemption_count,
+            plan.task_writes.append(
+                {
+                    "b_task_id": update.task_id,
+                    "v_state": decision.task_state,
+                    "v_error": decision.task_error,
+                    "v_exit_code": decision.task_exit,
+                    "v_started_at_ms": decision.started_ms,
+                    "v_finished_at_ms": decision.terminal_ms,
+                    "v_failure_count": decision.failure_count,
+                    "v_preemption_count": decision.preemption_count,
+                }
             )
-
-            # Fetch and cache job_config row (avoids re-querying per task in same job).
-            job_id_wire = task.job_id.to_wire()
-            if job_id_wire not in job_config_cache:
-                job_config_cache[job_id_wire] = reads.get_job_config(cur, task.job_id)
-            jc = job_config_cache[job_id_wire]
 
             # On terminal heartbeats the attempt's finished_at_ms is stamped
-            # by ``apply_update`` above; that release is now the canonical
-            # capacity-return signal (no separate decommit write).
-
+            # by the bulk attempt update above; that release is now the
+            # canonical capacity-return signal (no separate decommit write).
             if update.new_state in TERMINAL_TASK_STATES:
-                delete_task_endpoints(cur, self._endpoints, update.task_id.to_wire())
+                plan.endpoints_to_delete.append(update.task_id)
 
-            # Coscheduled jobs: any failure of a sibling must clear the slice so
-            # the job re-coschedules atomically. Branch on whether this task is
-            # going terminal (kill siblings outright) or being downgraded to
-            # PENDING for retry (requeue siblings, preserving their budgets).
+            # Queue coscheduled cascade: siblings need to clear the slice so
+            # the job re-coschedules atomically. The dispatcher branches on
+            # ``final_task_state`` to decide kill-vs-requeue post-flush.
+            jc = job_config_map.get(task.job_id)
             reported_failure = int(update.new_state) in FAILURE_TASK_STATES
             if jc is not None and bool(jc["has_coscheduling"]) and reported_failure:
-                siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, True)
-                if task_state in FAILURE_TASK_STATES:
-                    cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                        cur,
-                        self._endpoints,
-                        siblings,
-                        update.task_id,
-                        now_ms,
+                plan.cascade_actions.append(
+                    _CascadeAction(
+                        req_idx=req_idx,
+                        worker_log_id=str(req.worker_id),
+                        job_id=task.job_id,
+                        failed_task_id=update.task_id,
+                        final_task_state=decision.task_state,
                     )
-                else:
-                    cascade_kill, cascade_workers = _requeue_coscheduled_siblings(
-                        cur,
-                        self._endpoints,
-                        siblings,
-                        update.task_id,
-                        now_ms,
-                    )
-                tasks_to_kill.update(cascade_kill)
-                task_kill_workers.update(cascade_workers)
+                )
 
-            # Mark job for recomputation (deduplicated, done after the task loop).
-            if task_state != prior_state:
+            if decision.task_state != prior_state:
                 jobs_to_recompute.add(task.job_id)
 
-        # Recompute job states once per job (deduplicated above).
-        for job_id in jobs_to_recompute:
-            if job_id in cascaded_jobs:
-                continue
-            new_job_state = self._recompute_job_state(cur, job_id)
-            if new_job_state in TERMINAL_JOB_STATES:
-                final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
-                    cur, self._endpoints, job_id, new_job_state, now_ms
+        if jobs_to_recompute:
+            plan.recompute_actions.append(
+                _RecomputeAction(
+                    req_idx=req_idx,
+                    worker_log_id=str(req.worker_id),
+                    event_name="heartbeat_applied",
+                    jobs=jobs_to_recompute,
                 )
-                tasks_to_kill.update(final_tasks_to_kill)
-                task_kill_workers.update(final_task_kill_workers)
-                cascaded_jobs.add(job_id)
-        if tasks_to_kill or cascaded_jobs:
-            log_event("heartbeat_applied", str(req.worker_id))
-            for job_id in cascaded_jobs:
-                log_event("job_terminated", job_id.to_wire(), trigger="heartbeat_applied")
+            )
 
-        return TxResult(
-            tasks_to_kill=tasks_to_kill,
-            task_kill_workers=task_kill_workers,
-        )
+        return result
+
+    def _apply_transition_plan(
+        self,
+        cur: Tx,
+        plan: _TransitionPlan,
+        now_ms: int,
+        results: list[TxResult],
+    ) -> None:
+        """Flush a built plan: bulk writes, then cascade + recompute work.
+
+        Cascades and per-job recompute read the post-write state, so they run
+        after the bulk attempt / task UPDATEs land. Each cascade and recompute
+        action carries its originating ``req_idx`` so per-worker
+        ``TxResult.tasks_to_kill`` / ``task_kill_workers`` and the
+        ``heartbeat_applied`` / ``direct_provider_updates_applied`` log events
+        stay aligned with the previous per-request semantics.
+        """
+        writes.bulk_apply_attempt_updates(cur, plan.attempt_writes)
+        writes.bulk_apply_task_state_updates(cur, plan.task_writes)
+        if plan.container_id_writes:
+            cur.execute(
+                sa_update(tasks_table)
+                .where(tasks_table.c.task_id == bindparam("b_task_id"))
+                .values(container_id=bindparam("v_container_id")),
+                plan.container_id_writes,
+            )
+        if plan.endpoints_to_delete:
+            seen: set[JobName] = set()
+            unique = [t for t in plan.endpoints_to_delete if not (t in seen or seen.add(t))]
+            self._endpoints.remove_by_tasks(cur, unique)
+        for sa in plan.stranded_attempt_finalizations:
+            cur.execute(
+                sa_update(task_attempts_table)
+                .where(
+                    task_attempts_table.c.task_id == sa["b_task_id"],
+                    task_attempts_table.c.attempt_id == sa["b_attempt_id"],
+                )
+                .values(finished_at_ms=sa["v_finished_at_ms"])
+            )
+        for wid in plan.build_failed_workers:
+            self._health.build_failed(wid)
+
+        # Cascade sibling work per failing task. The cascade helpers issue
+        # per-row writes but only fire on cosched-failure events; the heartbeat
+        # steady-state path stays flat.
+        for cascade in plan.cascade_actions:
+            siblings = _find_coscheduled_siblings(cur, cascade.job_id, cascade.failed_task_id, True)
+            if cascade.final_task_state in FAILURE_TASK_STATES:
+                cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
+                    cur,
+                    self._endpoints,
+                    siblings,
+                    cascade.failed_task_id,
+                    now_ms,
+                )
+            else:
+                cascade_kill, cascade_workers = _requeue_coscheduled_siblings(
+                    cur,
+                    self._endpoints,
+                    siblings,
+                    cascade.failed_task_id,
+                    now_ms,
+                )
+            results[cascade.req_idx].tasks_to_kill.update(cascade_kill)
+            results[cascade.req_idx].task_kill_workers.update(cascade_workers)
+
+        # Per-request recompute + terminal-job finalization. Preserves the
+        # previous per-worker cascaded_jobs dedup boundary so log_event
+        # accounting matches the prior behavior.
+        for recompute in plan.recompute_actions:
+            cascaded: set[JobName] = set()
+            for job_id in recompute.jobs:
+                new_job_state = self._recompute_job_state(cur, job_id)
+                if new_job_state in TERMINAL_JOB_STATES:
+                    final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
+                        cur, self._endpoints, job_id, new_job_state, now_ms
+                    )
+                    results[recompute.req_idx].tasks_to_kill.update(final_tasks_to_kill)
+                    results[recompute.req_idx].task_kill_workers.update(final_task_kill_workers)
+                    cascaded.add(job_id)
+            if results[recompute.req_idx].tasks_to_kill or cascaded:
+                log_event(recompute.event_name, recompute.worker_log_id)
+                for job_id in cascaded:
+                    log_event("job_terminated", job_id.to_wire(), trigger=recompute.event_name)
 
     def apply_task_updates(self, cur: Tx, req: HeartbeatApplyRequest) -> TxResult:
         """Apply a batch of worker task updates within the caller's transaction."""
         now_ms = Timestamp.now().epoch_ms()
         if not self._update_worker_health(cur, req, now_ms):
             return TxResult()
-        task_ids = [
-            update.task_id
-            for update in req.updates
-            if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
-        ]
-        task_map: dict[JobName, TaskDetailRow] = reads.bulk_get_task_detail(cur, task_ids)
-        attempt_keys: list[tuple[JobName, int]] = []
-        for update in req.updates:
-            attempt_keys.append((update.task_id, update.attempt_id))
-            task = task_map.get(update.task_id)
-            if task is not None and task.current_attempt_id != update.attempt_id:
-                attempt_keys.append((update.task_id, task.current_attempt_id))
-        attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
-        return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+        results = self._plan_and_apply([req], now_ms, cur)
+        return results[0]
 
     def apply_heartbeats_batch(self, cur: Tx, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
 
-        Bulk-fetch all referenced task rows, drop steady-state updates whose
-        only payload would have been (now-vestigial) resource samples, and feed
-        the remaining state-changing or terminal updates through
-        ``_apply_task_transitions``. Worker health updates are batched via
-        ``executemany``.
+        Filter out unknown workers, mark the rest healthy, then bulk-fetch
+        every task / attempt / job_config row referenced by the surviving
+        updates. The planner runs against those maps with zero per-update
+        SQL; the dispatcher flushes the bulk writes (attempt + task UPDATEs,
+        endpoint deletes) before running cascade and recompute work so the
+        reads they depend on observe the new state.
         """
-        _empty = TxResult(tasks_to_kill=set())
-        results: list[TxResult] = [_empty] * len(requests)
-
         now_ms = Timestamp.now().epoch_ms()
 
         existing_workers = reads.filter_existing_workers(cur, [req.worker_id for req in requests])
@@ -1987,10 +2123,26 @@ class ControllerTransitions:
             [req.worker_id for req in requests if str(req.worker_id) in existing_workers],
             now_ms,
         )
+        live = [req if str(req.worker_id) in existing_workers else None for req in requests]
+        return self._plan_and_apply(live, now_ms, cur)
+
+    def _plan_and_apply(
+        self,
+        requests: list[HeartbeatApplyRequest | None],
+        now_ms: int,
+        cur: Tx,
+    ) -> list[TxResult]:
+        """Plan and dispatch a set of heartbeat-shaped requests in one pass.
+
+        ``None`` entries are honored as "request rejected upstream" and stay
+        as the empty ``TxResult`` placeholder in the result list, so the
+        caller's per-index alignment is preserved.
+        """
+        results: list[TxResult] = [TxResult(tasks_to_kill=set(), task_kill_workers={}) for _ in requests]
 
         all_task_ids: list[JobName] = []
         for req in requests:
-            if str(req.worker_id) not in existing_workers:
+            if req is None:
                 continue
             for update in req.updates:
                 if update.new_state not in (
@@ -2001,52 +2153,53 @@ class ControllerTransitions:
 
         task_map: dict[JobName, TaskDetailRow] = reads.bulk_get_task_detail(cur, all_task_ids)
 
-        # (request_index, transition_request) pairs so results stay aligned.
         transition_entries: list[tuple[int, HeartbeatApplyRequest]] = []
-
         for req_idx, req in enumerate(requests):
-            if str(req.worker_id) not in existing_workers:
+            if req is None:
                 continue
-
             transition_updates: list[TaskUpdate] = []
             for update in req.updates:
                 task = task_map.get(update.task_id)
                 if task is None:
                     continue
-
-                prior_state = task.state
-                is_state_change = update.new_state != prior_state
+                is_state_change = update.new_state != task.state
                 has_terminal_data = update.error is not None or update.exit_code is not None
-
                 if is_state_change or has_terminal_data:
                     transition_updates.append(update)
-
             if transition_updates:
                 transition_entries.append(
                     (
                         req_idx,
-                        HeartbeatApplyRequest(
-                            worker_id=req.worker_id,
-                            updates=transition_updates,
-                        ),
+                        HeartbeatApplyRequest(worker_id=req.worker_id, updates=transition_updates),
                     )
                 )
 
-        # The state machine consults two attempt rows per update: the reported
-        # attempt and (when stale) the current one. Pre-fetch both up front so
-        # the inner loop is map lookups only.
-        attempt_keys: list[tuple[JobName, int]] = []
+        # The state machine consults the reported attempt and (when stale) the
+        # current attempt; prefetch both as a deduped set so executemany sees
+        # each key once.
+        attempt_keys: set[tuple[JobName, int]] = set()
         for _, treq in transition_entries:
             for update in treq.updates:
-                attempt_keys.append((update.task_id, update.attempt_id))
+                attempt_keys.add((update.task_id, update.attempt_id))
                 task = task_map.get(update.task_id)
                 if task is not None and task.current_attempt_id != update.attempt_id:
-                    attempt_keys.append((update.task_id, task.current_attempt_id))
-        attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+                    attempt_keys.add((update.task_id, task.current_attempt_id))
+        attempt_map = reads.bulk_get_attempts(cur, list(attempt_keys))
 
+        job_ids: set[JobName] = set()
+        for _, treq in transition_entries:
+            for update in treq.updates:
+                task = task_map.get(update.task_id)
+                if task is not None:
+                    job_ids.add(task.job_id)
+        job_config_map = reads.bulk_get_job_configs(cur, job_ids)
+
+        plan = _TransitionPlan()
         for req_idx, treq in transition_entries:
-            results[req_idx] = self._apply_task_transitions(cur, treq, now_ms, task_map, attempt_map)
-
+            results[req_idx] = self._plan_task_transitions(
+                req_idx, treq, now_ms, task_map, attempt_map, job_config_map, plan
+            )
+        self._apply_transition_plan(cur, plan, now_ms, results)
         return results
 
     def _remove_failed_worker(
@@ -2893,14 +3046,12 @@ class ControllerTransitions:
     def apply_direct_provider_updates(self, cur: Tx, updates: list[TaskUpdate]) -> TxResult:
         """Apply a batch of task state updates from a KubernetesProvider.
 
-        Same state machine as apply_task_updates but without worker lookup,
+        Same state machine as ``apply_task_updates`` but without worker lookup,
         health updates, or resource decommit (no committed resources tracked).
+        Writes go through the shared planner/dispatcher so the per-update SQL
+        collapses to one executemany per table.
         """
-        tasks_to_kill: set[JobName] = set()
-        task_kill_workers: dict[JobName, WorkerId] = {}
-
         now_ms = Timestamp.now().epoch_ms()
-        cascaded_jobs: set[JobName] = set()
 
         relevant_task_ids = [
             update.task_id
@@ -2908,13 +3059,41 @@ class ControllerTransitions:
             if update.new_state not in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING)
         ]
         task_map: dict[JobName, TaskDetailRow] = reads.bulk_get_task_detail(cur, relevant_task_ids)
-        attempt_keys: list[tuple[JobName, int]] = []
+        attempt_keys: set[tuple[JobName, int]] = set()
         for update in updates:
-            attempt_keys.append((update.task_id, update.attempt_id))
+            attempt_keys.add((update.task_id, update.attempt_id))
             task_row = task_map.get(update.task_id)
             if task_row is not None and task_row.current_attempt_id != update.attempt_id:
-                attempt_keys.append((update.task_id, task_row.current_attempt_id))
-        attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+                attempt_keys.add((update.task_id, task_row.current_attempt_id))
+        attempt_map = reads.bulk_get_attempts(cur, list(attempt_keys))
+
+        job_ids: set[JobName] = {task.job_id for task in task_map.values()}
+        job_config_map = reads.bulk_get_job_configs(cur, job_ids)
+
+        results: list[TxResult] = [TxResult(tasks_to_kill=set(), task_kill_workers={})]
+        plan = _TransitionPlan()
+        self._plan_direct_provider_transitions(updates, now_ms, task_map, attempt_map, job_config_map, plan)
+        self._apply_transition_plan(cur, plan, now_ms, results)
+        return results[0]
+
+    def _plan_direct_provider_transitions(
+        self,
+        updates: list[TaskUpdate],
+        now_ms: int,
+        task_map: dict[JobName, Any],
+        attempt_map: dict[tuple[JobName, int], Any],
+        job_config_map: dict[JobName, dict],
+        plan: _TransitionPlan,
+    ) -> None:
+        """Plan k8s direct-provider transitions into the shared ``plan``.
+
+        Differs from the heartbeat planner in three ways: no stranded-attempt
+        finalization (direct k8s polling reconciles attempts differently), no
+        ``build_failed`` worker attribution, and an optional ``container_id``
+        write per update. Cascade and recompute work flow through the same
+        dispatcher path.
+        """
+        jobs_to_recompute: set[JobName] = set()
 
         for update in updates:
             task = task_map.get(update.task_id)
@@ -2940,9 +3119,8 @@ class ControllerTransitions:
             attempt = attempt_map.get((update.task_id, update.attempt_id))
             if attempt is None:
                 continue
-            # See _apply_task_transitions for rationale: the current attempt may
-            # be terminal while the task is retrying in PENDING; late reports
-            # must not revive it.
+            # The current attempt may be terminal while the task is retrying in
+            # PENDING; late reports must not revive it.
             if attempt.state in TERMINAL_TASK_STATES:
                 logger.debug(
                     "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
@@ -2954,124 +3132,60 @@ class ControllerTransitions:
                 continue
 
             if update.container_id is not None:
-                cur.execute(
-                    sa_update(tasks_table)
-                    .where(tasks_table.c.task_id == update.task_id)
-                    .values(container_id=update.container_id)
-                )
+                plan.container_id_writes.append({"b_task_id": update.task_id, "v_container_id": update.container_id})
 
-            terminal_ms: int | None = None
-            started_ms: int | None = None
-            task_state = task.state
-            task_error = update.error
-            task_exit = update.exit_code
-            failure_count = task.failure_count
-            preemption_count = task.preemption_count
+            prior_state = task.state
+            decision = _compute_transition(update, task, attempt, now_ms, emit_build_failed=False)
 
-            if update.new_state == job_pb2.TASK_STATE_RUNNING:
-                started_ms = now_ms
-                task_state = job_pb2.TASK_STATE_RUNNING
-            elif update.new_state == job_pb2.TASK_STATE_BUILDING:
-                task_state = job_pb2.TASK_STATE_BUILDING
-            elif update.new_state in (
-                job_pb2.TASK_STATE_FAILED,
-                job_pb2.TASK_STATE_WORKER_FAILED,
-                job_pb2.TASK_STATE_KILLED,
-                job_pb2.TASK_STATE_UNSCHEDULABLE,
-                job_pb2.TASK_STATE_SUCCEEDED,
-            ):
-                terminal_ms = now_ms
-                task_state = int(update.new_state)
-                if update.new_state == job_pb2.TASK_STATE_SUCCEEDED and task_exit is None:
-                    task_exit = 0
-                if update.new_state == job_pb2.TASK_STATE_UNSCHEDULABLE and task_error is None:
-                    task_error = "Scheduling timeout exceeded"
-                if update.new_state == job_pb2.TASK_STATE_FAILED:
-                    failure_count += 1
-                if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and task.state in EXECUTING_TASK_STATES:
-                    preemption_count += 1
-                # WORKER_FAILED while still ASSIGNED -> retry immediately as PENDING
-                if update.new_state == job_pb2.TASK_STATE_WORKER_FAILED and task.state == job_pb2.TASK_STATE_ASSIGNED:
-                    task_state = job_pb2.TASK_STATE_PENDING
-                    terminal_ms = None
-                if update.new_state == job_pb2.TASK_STATE_FAILED and failure_count <= task.max_retries_failure:
-                    task_state = job_pb2.TASK_STATE_PENDING
-                    terminal_ms = None
-                if (
-                    update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
-                    and preemption_count <= task.max_retries_preemption
-                    and task.state in EXECUTING_TASK_STATES
-                ):
-                    task_state = job_pb2.TASK_STATE_PENDING
-                    terminal_ms = None
-
-            # An attempt is terminal whenever the update itself is terminal, even
-            # if the TASK rolls back to PENDING for a retry.
-            attempt_terminal_ms = now_ms if int(update.new_state) in TERMINAL_TASK_STATES else None
-
-            writes.apply_attempt_update(
-                cur,
-                task_id=update.task_id,
-                attempt_id=update.attempt_id,
-                state=int(update.new_state),
-                started_at_ms=started_ms,
-                finished_at_ms=attempt_terminal_ms,
-                exit_code=task_exit,
-                error=update.error,
+            plan.attempt_writes.append(
+                {
+                    "b_task_id": update.task_id,
+                    "b_attempt_id": update.attempt_id,
+                    "v_state": int(update.new_state),
+                    "v_started_at_ms": decision.started_ms,
+                    "v_finished_at_ms": decision.attempt_terminal_ms,
+                    "v_exit_code": decision.task_exit,
+                    "v_error": update.error,
+                }
             )
-            writes.apply_task_state_update(
-                cur,
-                task_id=update.task_id,
-                state=task_state,
-                error=task_error,
-                exit_code=task_exit,
-                started_at_ms=started_ms,
-                finished_at_ms=terminal_ms,
-                failure_count=failure_count,
-                preemption_count=preemption_count,
+            plan.task_writes.append(
+                {
+                    "b_task_id": update.task_id,
+                    "v_state": decision.task_state,
+                    "v_error": decision.task_error,
+                    "v_exit_code": decision.task_exit,
+                    "v_started_at_ms": decision.started_ms,
+                    "v_finished_at_ms": decision.terminal_ms,
+                    "v_failure_count": decision.failure_count,
+                    "v_preemption_count": decision.preemption_count,
+                }
             )
-            jc_row = reads.get_job_config(cur, task.job_id)
 
             if update.new_state in TERMINAL_TASK_STATES:
-                delete_task_endpoints(cur, self._endpoints, update.task_id.to_wire())
+                plan.endpoints_to_delete.append(update.task_id)
 
-            # Coscheduled sibling cascade. Branch on terminal vs transient (see
-            # apply_state_updates above for the full rationale).
+            jc = job_config_map.get(task.job_id)
             reported_failure = int(update.new_state) in FAILURE_TASK_STATES
-            if jc_row is not None and bool(jc_row["has_coscheduling"]) and reported_failure:
-                siblings = _find_coscheduled_siblings(cur, task.job_id, update.task_id, True)
-                if task_state in FAILURE_TASK_STATES:
-                    cascade_kill, cascade_workers = _terminate_coscheduled_siblings(
-                        cur,
-                        self._endpoints,
-                        siblings,
-                        update.task_id,
-                        now_ms,
+            if jc is not None and bool(jc["has_coscheduling"]) and reported_failure:
+                plan.cascade_actions.append(
+                    _CascadeAction(
+                        req_idx=0,
+                        worker_log_id="direct",
+                        job_id=task.job_id,
+                        failed_task_id=update.task_id,
+                        final_task_state=decision.task_state,
                     )
-                else:
-                    cascade_kill, cascade_workers = _requeue_coscheduled_siblings(
-                        cur,
-                        self._endpoints,
-                        siblings,
-                        update.task_id,
-                        now_ms,
-                    )
-                tasks_to_kill.update(cascade_kill)
-                task_kill_workers.update(cascade_workers)
+                )
 
-            if task.job_id not in cascaded_jobs:
-                new_job_state = self._recompute_job_state(cur, task.job_id)
-                if new_job_state in TERMINAL_JOB_STATES:
-                    final_tasks_to_kill, final_task_kill_workers = _finalize_terminal_job(
-                        cur, self._endpoints, task.job_id, new_job_state, now_ms
-                    )
-                    tasks_to_kill.update(final_tasks_to_kill)
-                    task_kill_workers.update(final_task_kill_workers)
-                    cascaded_jobs.add(task.job_id)
+            if decision.task_state != prior_state:
+                jobs_to_recompute.add(task.job_id)
 
-        if tasks_to_kill or cascaded_jobs:
-            log_event("direct_provider_updates_applied", "direct")
-            for job_id in cascaded_jobs:
-                log_event("job_terminated", job_id.to_wire(), trigger="direct_provider_updates_applied")
-
-        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
+        if jobs_to_recompute:
+            plan.recompute_actions.append(
+                _RecomputeAction(
+                    req_idx=0,
+                    worker_log_id="direct",
+                    event_name="direct_provider_updates_applied",
+                    jobs=jobs_to_recompute,
+                )
+            )

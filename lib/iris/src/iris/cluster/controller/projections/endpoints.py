@@ -292,6 +292,31 @@ class EndpointsProjection:
         cur.register(apply)
         return ids
 
+    def remove_by_tasks(self, cur: db.Tx, task_ids: Sequence[JobName]) -> list[str]:
+        """Remove all endpoints owned by any of ``task_ids`` in one DELETE.
+
+        Caller is responsible for deduplicating ``task_ids`` if needed.
+        Returns the union of removed endpoint_ids.
+        """
+        if not task_ids:
+            return []
+        with self._lock:
+            ids: list[str] = []
+            for tid in task_ids:
+                ids.extend(self._by_task.get(tid, ()))
+        # Belt-and-suspenders: issue the DELETE even if ids is empty (see remove_by_task).
+        cur.execute(delete(endpoints_table).where(endpoints_table.c.task_id.in_(list(task_ids))))
+        if not ids:
+            return []
+
+        def apply() -> None:
+            with self._lock:
+                for eid in ids:
+                    self._unindex(eid)
+
+        cur.register(apply)
+        return ids
+
     def remove_by_job_ids(self, cur: db.Tx, job_ids: Sequence[JobName]) -> list[str]:
         """Remove all endpoints owned by any of ``job_ids``. Used by cancel_job and prune."""
         if not job_ids:

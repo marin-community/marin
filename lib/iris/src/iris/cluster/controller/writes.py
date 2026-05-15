@@ -20,7 +20,7 @@ Areas covered (previously split across writes/<entity>.py):
 from collections.abc import Callable
 
 from rigging.timing import Timestamp
-from sqlalchemy import Table, delete, func, insert, select, update
+from sqlalchemy import Table, bindparam, delete, func, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from iris.cluster.controller.db import Tx
@@ -254,32 +254,31 @@ def insert_attempt(
 
 
 @writes_to(task_attempts_table)
-def apply_attempt_update(
-    tx: Tx,
-    *,
-    task_id: JobName,
-    attempt_id: int,
-    state: int,
-    started_at_ms: int | None,
-    finished_at_ms: int | None,
-    exit_code: int | None,
-    error: str | None,
-) -> None:
-    """Apply a worker/direct-provider attempt update."""
-    tx.execute(
+def bulk_apply_attempt_updates(tx: Tx, rows: list[dict]) -> None:
+    """Apply many worker/direct-provider attempt updates in a single executemany.
+
+    Each ``rows`` entry must provide every key referenced below. Sticky-coalesce
+    semantics: ``started_at_ms`` / ``finished_at_ms`` keep the existing column
+    value if it is non-null, otherwise take the provided value;
+    ``exit_code`` / ``error`` overwrite when the provided value is non-null.
+    """
+    if not rows:
+        return
+    stmt = (
         update(task_attempts_table)
         .where(
-            task_attempts_table.c.task_id == task_id,
-            task_attempts_table.c.attempt_id == attempt_id,
+            task_attempts_table.c.task_id == bindparam("b_task_id"),
+            task_attempts_table.c.attempt_id == bindparam("b_attempt_id"),
         )
         .values(
-            state=state,
-            started_at_ms=func.coalesce(task_attempts_table.c.started_at_ms, started_at_ms),
-            finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, finished_at_ms),
-            exit_code=func.coalesce(exit_code, task_attempts_table.c.exit_code),
-            error=func.coalesce(error, task_attempts_table.c.error),
+            state=bindparam("v_state"),
+            started_at_ms=func.coalesce(task_attempts_table.c.started_at_ms, bindparam("v_started_at_ms")),
+            finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, bindparam("v_finished_at_ms")),
+            exit_code=func.coalesce(bindparam("v_exit_code"), task_attempts_table.c.exit_code),
+            error=func.coalesce(bindparam("v_error"), task_attempts_table.c.error),
         )
     )
+    tx.execute(stmt, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -404,37 +403,56 @@ def promote_to_direct_provider(
 
 
 @writes_to(tasks_table)
-def apply_task_state_update(
-    tx: Tx,
-    *,
-    task_id: JobName,
-    state: int,
-    error: str | None,
-    exit_code: int | None,
-    started_at_ms: int | None,
-    finished_at_ms: int | None,
-    failure_count: int,
-    preemption_count: int,
-) -> None:
-    """Apply a computed task state update.
+def bulk_apply_task_state_updates(tx: Tx, rows: list[dict]) -> None:
+    """Apply many computed task state updates in two executemany calls.
 
-    Active target states preserve ``current_worker_id`` /
-    ``current_worker_address``; non-active states clear them so the row
-    is consistent with terminal-transition writes.
+    Each row provides: task_id, state, error, exit_code, started_at_ms,
+    finished_at_ms, failure_count, preemption_count. Sticky-coalesce semantics
+    match the previous single-row helper (started_at_ms pins once set; error /
+    exit_code overwrite only when the new value is non-null;
+    finished_at_ms is overwritten unconditionally).
+
+    Rows are partitioned by whether their target state is ACTIVE so we can
+    issue a uniform UPDATE per partition: active rows preserve
+    ``current_worker_id`` / ``current_worker_address``; non-active rows clear
+    them. Within each partition the SQL shape is identical, enabling
+    executemany.
     """
-    values: dict = {
-        "state": state,
-        "error": func.coalesce(error, tasks_table.c.error),
-        "exit_code": func.coalesce(exit_code, tasks_table.c.exit_code),
-        "started_at_ms": func.coalesce(tasks_table.c.started_at_ms, started_at_ms),
-        "finished_at_ms": finished_at_ms,
-        "failure_count": failure_count,
-        "preemption_count": preemption_count,
-    }
-    if state not in ACTIVE_TASK_STATES:
-        values["current_worker_id"] = None
-        values["current_worker_address"] = None
-    tx.execute(update(tasks_table).where(tasks_table.c.task_id == task_id).values(**values))
+    if not rows:
+        return
+    active_rows: list[dict] = []
+    non_active_rows: list[dict] = []
+    for row in rows:
+        if row["v_state"] in ACTIVE_TASK_STATES:
+            active_rows.append(row)
+        else:
+            non_active_rows.append(row)
+
+    base_values = dict(
+        state=bindparam("v_state"),
+        error=func.coalesce(bindparam("v_error"), tasks_table.c.error),
+        exit_code=func.coalesce(bindparam("v_exit_code"), tasks_table.c.exit_code),
+        started_at_ms=func.coalesce(tasks_table.c.started_at_ms, bindparam("v_started_at_ms")),
+        finished_at_ms=bindparam("v_finished_at_ms"),
+        failure_count=bindparam("v_failure_count"),
+        preemption_count=bindparam("v_preemption_count"),
+    )
+
+    if active_rows:
+        active_stmt = update(tasks_table).where(tasks_table.c.task_id == bindparam("b_task_id")).values(**base_values)
+        tx.execute(active_stmt, active_rows)
+
+    if non_active_rows:
+        non_active_stmt = (
+            update(tasks_table)
+            .where(tasks_table.c.task_id == bindparam("b_task_id"))
+            .values(
+                current_worker_id=None,
+                current_worker_address=None,
+                **base_values,
+            )
+        )
+        tx.execute(non_active_stmt, non_active_rows)
 
 
 # ---------------------------------------------------------------------------
