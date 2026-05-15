@@ -61,10 +61,20 @@ export interface BuildsResponse {
   error?: string;
 }
 
+export interface PingPercentiles {
+  p50: number;
+  p90: number;
+  p95: number;
+  p98: number;
+}
+
 export interface IrisStatus {
   cluster: string;
   reachable: boolean;
   latencyMs: number | null;
+  pingPercentiles: PingPercentiles | null;
+  pingSampleCount: number;
+  pingWindowMs: number;
   controllerUrl: string | null;
   fetchedAt: string;
   error?: string;
