@@ -19,7 +19,7 @@ from typing import Any, Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
-from finelog.client import LogClient
+from finelog.client import LogClient, Table
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import func, select, text, tuple_
 
@@ -76,8 +76,6 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiv
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.runtime.profile import (
-    PROFILE_NAMESPACE,
-    IrisProfile,
     build_profile_row,
     parse_profile_target,
     profile_local_process,
@@ -962,7 +960,20 @@ class ControllerServiceImpl:
         self._auth = auth or ControllerAuth()
         self._system_endpoints: dict[str, str] = system_endpoints or {}
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
-        self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+        # Installed by the controller after construction via ``set_profile_table``.
+        # Left as None when Finelog is unreachable at startup; the controller's
+        # background registration retry installs it once Finelog comes up.
+        # Runtime writers (e.g. ProfileTask) guard with ``is not None``.
+        self._profile_table: Table | None = None
+
+    def set_profile_table(self, table: Table | None) -> None:
+        """Install (or clear) the iris.profile Table handle.
+
+        Called by the controller after constructing the service. Safe to call
+        multiple times — a late install from the background finelog retry
+        thread replaces the initial ``None``.
+        """
+        self._profile_table = table
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get_zip(bundle_id)

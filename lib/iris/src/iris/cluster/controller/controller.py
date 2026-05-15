@@ -12,14 +12,14 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import uvicorn
-from finelog.client import LogClient, RemoteLogHandler
+from finelog.client import LogClient, RemoteLogHandler, Table
 from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.server import LogServiceImpl
 from finelog.server.asgi import build_log_server_asgi
@@ -1273,10 +1273,21 @@ class Controller:
         # provider also writes per-pod resource samples to iris.task itself —
         # mirroring what the worker daemon does on the GCE/TPU path.
         if isinstance(self._provider, K8sTaskProvider):
+            k8s_provider = self._provider
             k8s_log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
-            self._provider.log_client = k8s_log_client
-            self._provider.task_stats_table = k8s_log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
-            self._provider.profile_table = k8s_log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+            k8s_provider.log_client = k8s_log_client
+            k8s_provider.task_stats_table = self._register_finelog_table(
+                k8s_log_client,
+                TASK_STATS_NAMESPACE,
+                IrisTaskStat,
+                on_late_success=lambda t: setattr(k8s_provider, "task_stats_table", t),
+            )
+            k8s_provider.profile_table = self._register_finelog_table(
+                k8s_log_client,
+                PROFILE_NAMESPACE,
+                IrisProfile,
+                on_late_success=lambda t: setattr(k8s_provider, "profile_table", t),
+            )
 
         # Controller process logs ship to the log server via RemoteLogHandler.
         self._log_client = LogClient.connect(self._log_service_address, interceptors=log_client_interceptors)
@@ -1308,6 +1319,17 @@ class Controller:
             auth=config.auth,
             system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
+        )
+        # Register the controller-process iris.profile table for /system/controller
+        # on-demand profiling. Failure here doesn't block startup; runtime writers
+        # in ControllerServiceImpl null-check ``_profile_table``.
+        self._service.set_profile_table(
+            self._register_finelog_table(
+                self._log_client,
+                PROFILE_NAMESPACE,
+                IrisProfile,
+                on_late_success=self._service.set_profile_table,
+            )
         )
         self._dashboard = ControllerDashboard(
             self._service,
@@ -1399,6 +1421,58 @@ class Controller:
     def started(self) -> bool:
         """Whether the controller loops have been started."""
         return self._started
+
+    def _register_finelog_table(
+        self,
+        log_client: LogClient,
+        namespace: str,
+        schema: type,
+        *,
+        on_late_success: Callable[[Table], None],
+    ) -> Table | None:
+        """Register a finelog namespace and return its Table handle.
+
+        Decouples controller startup from finelog availability. ``LogClient.get_table``
+        issues a synchronous ``RegisterTable`` RPC; if finelog is unreachable
+        at startup we don't want that to crash the controller, since runtime
+        writers already null-check the resulting Table. Instead, log a warning,
+        return None, and spawn a background ``ManagedThread`` that retries
+        registration with exponential backoff. When the retry eventually
+        succeeds, ``on_late_success`` is invoked with the registered Table so
+        the caller can install it where runtime writes look for it.
+
+        The retry thread joins the controller's ``ThreadContainer`` and exits
+        when the controller stops.
+        """
+        try:
+            return log_client.get_table(namespace, schema)
+        except Exception as exc:
+            logger.warning(
+                "Finelog table %r registration failed at startup; controller will run "
+                "with this table disabled and retry in the background: %s",
+                namespace,
+                exc,
+            )
+
+        def _retry(stop_event: threading.Event) -> None:
+            backoff = ExponentialBackoff(initial=1.0, maximum=60.0, factor=2.0)
+            while not stop_event.is_set():
+                if stop_event.wait(timeout=backoff.next_interval()):
+                    return
+                try:
+                    table = log_client.get_table(namespace, schema)
+                except Exception as exc:
+                    logger.debug("Finelog table %r background registration retry failed: %s", namespace, exc)
+                    continue
+                logger.info("Finelog table %r registered after background retry", namespace)
+                try:
+                    on_late_success(table)
+                except Exception:
+                    logger.exception("Finelog table %r install callback raised", namespace)
+                return
+
+        self._threads.spawn(_retry, name=f"finelog-register-{namespace}")
+        return None
 
     def _start_local_log_server(self) -> str:
         """Start a bundled in-process log + stats server and return its address.
