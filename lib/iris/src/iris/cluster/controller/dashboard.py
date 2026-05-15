@@ -426,6 +426,8 @@ class ControllerDashboard:
             # when present but treat everything as anonymous/admin.
             auth_interceptor = NullAuthInterceptor(verifier=self._auth_verifier)
         controller_interceptors = [auth_interceptor, controller_timing]
+        # @on_loop handlers run inline on the event loop; everything else
+        # is dispatched to a thread by AsyncServiceAdapter.
         rpc_asgi_app = ControllerServiceASGIApplication(
             service=AsyncServiceAdapter(self._service),
             interceptors=controller_interceptors,
