@@ -629,7 +629,7 @@ def record_transfer(size: int, url: str, *, budget: TransferBudget | None = None
     (budget if budget is not None else _global_transfer_budget).record(size, url)
 
 
-class CrossRegionGuardedFS(fsspec.AbstractFileSystem):
+class CrossRegionGuardedFS:
     """Wrapper around a GCS fsspec filesystem that enforces a cross-region transfer budget.
 
     Intercepts read operations (``open``, ``cat``, ``cat_file``, ``get_file``,
@@ -640,13 +640,6 @@ class CrossRegionGuardedFS(fsspec.AbstractFileSystem):
     Only constructed for GCS filesystems — the entry points (``url_to_fs``,
     ``open_url``, ``filesystem``) decide whether to wrap.
 
-    Inherits from ``fsspec.AbstractFileSystem`` so callers that strict-check the
-    type (e.g. ``duckdb.DuckDBPyConnection.register_filesystem``) accept the
-    wrapped instance. Methods we don't explicitly guard are delegated to the
-    inner filesystem via ``__getattribute__`` — the inner ``GCSFileSystem`` is
-    itself an ``AbstractFileSystem``, so all the parent-class state and methods
-    resolve through it without us having to forward them one by one.
-
     Args:
         fs: The GCS fsspec filesystem to wrap.
         cross_region_checker: Optional callback ``(bucket_name) -> bool``
@@ -656,47 +649,7 @@ class CrossRegionGuardedFS(fsspec.AbstractFileSystem):
             process-global singleton.
     """
 
-    # Don't go through fsspec's instance cache — we want a fresh wrapper per
-    # underlying fs, and the cache key (which tokenizes our args) doesn't know
-    # about ``budget`` / ``cross_region_checker`` overrides.
-    cachable = False
-
-    # Attributes that must resolve on this wrapper instead of being delegated
-    # to ``self._fs``. Anything not in this set (and not a dunder) routes to the
-    # wrapped filesystem via __getattribute__ below.
-    #
-    # Includes the AbstractFileSystem class-level config attributes
-    # (``async_impl``, ``mirror_sync_methods``, ``blocksize``, ``protocol``,
-    # ``sep``, ``root_marker``, ``fsid``, ``transaction``) — fsspec's ``_Cached``
-    # metaclass reads ``async_impl`` and ``mirror_sync_methods`` immediately
-    # after ``__init__``, so they must resolve via the wrapper's own class
-    # hierarchy rather than the wrapped fs (which in tests may be a duck-typed
-    # fake that doesn't carry those attributes).
-    _OWN_ATTRS = frozenset(
-        {
-            "_budget",
-            "_cross_region_checker",
-            "_current_region",
-            "_fs",
-            "_guard_read",
-            "_is_cross_region",
-            "_OWN_ATTRS",
-            "async_impl",
-            "blocksize",
-            "cachable",
-            "cat",
-            "cat_file",
-            "fsid",
-            "get",
-            "get_file",
-            "mirror_sync_methods",
-            "open",
-            "protocol",
-            "root_marker",
-            "sep",
-            "transaction",
-        }
-    )
+    __slots__ = ("_budget", "_cross_region_checker", "_current_region", "_fs")
 
     def __init__(
         self,
@@ -705,10 +658,6 @@ class CrossRegionGuardedFS(fsspec.AbstractFileSystem):
         cross_region_checker: Callable[[str], bool] | None = None,
         budget: TransferBudget | None = None,
     ):
-        # Don't invoke ``AbstractFileSystem.__init__`` — its bookkeeping fields
-        # (``_cached``, ``_intrans``, ``_transaction``, etc.) live on the inner
-        # ``self._fs``, and ``__getattribute__`` below routes lookups through
-        # there. Initializing them on the wrapper would shadow the inner state.
         self._fs = fs
         self._cross_region_checker = cross_region_checker
         self._current_region = None if cross_region_checker else _cached_marin_region()
@@ -779,16 +728,9 @@ class CrossRegionGuardedFS(fsspec.AbstractFileSystem):
             self._budget.record(size, f"gs://{path}")
 
     # -- transparent delegation ----------------------------------------------
-    #
-    # ``__getattribute__`` (not ``__getattr__``) so AbstractFileSystem methods
-    # inherited via the new base class don't shadow the wrapped fs. The
-    # explicit guard methods + private state on this wrapper are listed in
-    # ``_OWN_ATTRS``; everything else delegates.
 
-    def __getattribute__(self, name: str) -> Any:
-        if name.startswith("__") or name in CrossRegionGuardedFS._OWN_ATTRS:
-            return object.__getattribute__(self, name)
-        return getattr(object.__getattribute__(self, "_fs"), name)
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._fs, name)
 
 
 # ---------------------------------------------------------------------------
