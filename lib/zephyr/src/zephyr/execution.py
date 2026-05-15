@@ -42,7 +42,7 @@ from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
-from rigging.timing import ExponentialBackoff, log_time
+from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
@@ -456,6 +456,10 @@ class ZephyrCoordinator:
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
 
+        # Throttle Iris task-status pushes; the coordinator loop ticks more
+        # frequently than the UI needs to refresh.
+        self._task_stats_limiter = RateLimiter(interval_seconds=10.0)
+
         actor_ctx = current_actor()
         self._name = f"{actor_ctx.group_name}"
 
@@ -570,6 +574,9 @@ class ZephyrCoordinator:
 
         job_info = get_job_info()
         if job_info is None:
+            return
+
+        if not self._task_stats_limiter.should_run():
             return
 
         with self._lock:
@@ -1224,6 +1231,10 @@ class ZephyrWorker:
         self._current_task: ShardTask | None = None  # set while executing a shard
         self._task_monotonic_start: float = 0.0
 
+        # Throttle Iris status pushes; the heartbeat loop ticks faster than
+        # the UI needs to refresh.
+        self._iris_status_limiter = RateLimiter(interval_seconds=10.0)
+
         # Capture shutdown_event from the actor context while the ContextVar
         # is still set (child threads in Python <3.12 don't inherit it).
         actor_ctx = current_actor()
@@ -1249,6 +1260,9 @@ class ZephyrWorker:
             return
         job_info = get_job_info()
         if job_info is None:
+            return
+
+        if not self._iris_status_limiter.should_run():
             return
 
         task = self._current_task
@@ -1653,13 +1667,22 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
-        # pull_task and self-terminate via shutdown_event → exit_actor()
-        # before worker_group.shutdown() tears down any remaining actors.
+        # pull_task and self-terminate via shutdown_event → exit_actor(). Then
+        # give the worker job a brief window to land in a terminal state on
+        # its own so its Iris tasks record SUCCEEDED instead of KILLED
+        # (#5484); fall back to forcibly terminating if they don't.
         with suppress(Exception):
             coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
             with suppress(Exception):
-                worker_group.shutdown()
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if worker_group.is_done():
+                        break
+                    time.sleep(0.5)
+                else:
+                    logger.warning("Workers did not exit naturally, terminating")
+                    worker_group.shutdown()
         with suppress(Exception):
             hosted.shutdown()
 

@@ -17,14 +17,14 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { TTLCache } from "./cache.js";
-import { WorkerHistory } from "./history.js";
+import { IrisPingHistory, WorkerHistory } from "./history.js";
 import {
   FERRY_WORKFLOWS,
   fetchWorkflowStatus,
   type FerryWorkflowStatus,
 } from "./sources/githubActions.js";
 import { fetchBuildsOnMain, type BuildsResponse } from "./sources/githubCommits.js";
-import { irisStatus, type IrisStatus } from "./sources/iris.js";
+import { irisStatus, pingIris, type IrisPingResult } from "./sources/iris.js";
 import { jobsSnapshot, type JobsSnapshot } from "./sources/jobs.js";
 import { workerSnapshot, type WorkersSnapshot } from "./sources/workers.js";
 
@@ -33,9 +33,19 @@ const BUILD_HISTORY = 100;
 
 const ferryCache = new TTLCache<FerryWorkflowStatus>(60_000);
 const buildCache = new TTLCache<BuildsResponse>(60_000);
-const irisCache = new TTLCache<IrisStatus>(15_000);
 const workersCache = new TTLCache<WorkersSnapshot>(15_000);
 const jobsCache = new TTLCache<JobsSnapshot>(60_000);
+
+// Iris controller ping sampler. We probe /health on a fixed cadence and
+// keep a rolling 1h window of successful samples so /api/iris can report
+// p50/p90/p95/p98 alongside the most recent latency. Failed pings are
+// recorded as the latest result (so the dot can flip red) but excluded
+// from the percentile window.
+const IRIS_PING_INTERVAL_MS = 2_000;
+const IRIS_PING_WINDOW_MS = 60 * 60 * 1000;
+const IRIS_PING_CAPACITY = Math.ceil(IRIS_PING_WINDOW_MS / IRIS_PING_INTERVAL_MS);
+const irisPingHistory = new IrisPingHistory(IRIS_PING_CAPACITY);
+let lastIrisPing: IrisPingResult | null = null;
 
 // Ring buffer for worker-count history. Sized so the buffer holds 24h of
 // samples at the configured cadence. The sampler runs on a fixed interval
@@ -62,6 +72,19 @@ async function sampleWorkers(): Promise<void> {
   });
 }
 
+async function sampleIrisPing(): Promise<void> {
+  const result = await pingIris();
+  lastIrisPing = result;
+  if (result.reachable && result.latencyMs !== null) {
+    irisPingHistory.push({
+      t: Date.parse(result.fetchedAt),
+      latencyMs: result.latencyMs,
+    });
+  } else if (result.error) {
+    console.error("iris ping sampler:", result.error);
+  }
+}
+
 // Kick off immediately, then on a fixed cadence. unref() lets the process
 // exit cleanly during tests without waiting on the timer.
 void sampleWorkers().catch((err) => {
@@ -72,6 +95,15 @@ setInterval(() => {
     console.error("worker sampler error", err);
   });
 }, SAMPLE_INTERVAL_MS).unref();
+
+void sampleIrisPing().catch((err) => {
+  console.error("iris ping sampler error", err);
+});
+setInterval(() => {
+  void sampleIrisPing().catch((err) => {
+    console.error("iris ping sampler error", err);
+  });
+}, IRIS_PING_INTERVAL_MS).unref();
 
 const app = new Hono();
 
@@ -91,9 +123,8 @@ app.get("/api/builds", async (c) => {
   return c.json(snapshot);
 });
 
-app.get("/api/iris", async (c) => {
-  const status = await irisCache.get("marin", () => irisStatus());
-  return c.json(status);
+app.get("/api/iris", (c) => {
+  return c.json(irisStatus(lastIrisPing, irisPingHistory.samples(), IRIS_PING_WINDOW_MS));
 });
 
 app.get("/api/workers", async (c) => {

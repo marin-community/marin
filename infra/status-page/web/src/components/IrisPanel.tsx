@@ -28,7 +28,20 @@ export function IrisPanel() {
               {data.reachable ? "reachable" : "unreachable"}
             </span>
             {data.latencyMs !== null && (
-              <span className="text-sm text-slate-500">· {data.latencyMs}ms</span>
+              <span
+                className={`text-sm ${data.latencyMs > 20 ? "text-rose-400" : "text-slate-500"}`}
+              >
+                · {data.latencyMs}ms
+              </span>
+            )}
+            {data.pingPercentiles && (
+              <span
+                className="text-xs text-slate-500"
+                title={`over last ${Math.round(data.pingWindowMs / 60_000)}m, n=${data.pingSampleCount}`}
+              >
+                · p50 {data.pingPercentiles.p50}ms · p90 {data.pingPercentiles.p90}ms · p95{" "}
+                {data.pingPercentiles.p95}ms · p98 {data.pingPercentiles.p98}ms
+              </span>
             )}
             {data.controllerUrl && (
               <span className="font-mono text-xs text-slate-500">· {data.controllerUrl}</span>
