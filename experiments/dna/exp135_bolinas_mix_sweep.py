@@ -294,6 +294,18 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         ),
         data_seed=2,
     ),
+    # Chained continuation from cont_upstream_to_cds_2's final HF checkpoint;
+    # continues training with an 80/10/10 downstream/upstream/cds mixture for
+    # another downstream-sized token budget.
+    MixConfig(
+        name="cont_upstream_to_cds_2.2",
+        weights={"downstream": 0.8, "upstream": 0.1, "cds": 0.1},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i4-cont_upstream_to_cds_2-f50b9d/hf/step-2501/"
+        ),
+        data_seed=4,
+    ),
     # Same warm-start as cont_upstream_to_cds_2 (downstream-sized token budget)
     # but with a 50/30/20 upstream/downstream/cds mixture instead of 50/50.
     MixConfig(
@@ -316,6 +328,66 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
             "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i2-upstream_only-68544e/hf/step-8334/"
         ),
         data_seed=1,
+    ),
+    # Continuation warm-started from the parameter-scaling-sweep checkpoint
+    # (h1920 / p1B, dna-bolinas-scaling-v0.5) with an 80/20 upstream/downstream
+    # mixture. Same downstream-sized token budget as the other continuation
+    # runs.
+    MixConfig(
+        name="cont_ps_up_down_1",
+        weights={"upstream": 0.8, "downstream": 0.2},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=("gs://marin-us-east5/checkpoints/dna-bolinas-scaling-v0.5-h1920-p1B-0dc6f4/hf/step-215573/"),
+        data_seed=3,
+    ),
+    # Continuations warm-started from the uniform-mix run at step 20000.
+    # Sweep upstream/cds/downstream weights from upstream-heavy (90/5/5) toward
+    # cds+downstream-heavy (0/50/50). Each uses the downstream-sized token
+    # budget and a distinct data_seed.
+    MixConfig(
+        name="uniform_to_upstream_1",
+        weights={"upstream": 0.9, "cds": 0.05, "downstream": 0.05},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-20000/"
+        ),
+        data_seed=5,
+    ),
+    MixConfig(
+        name="uniform_to_upstream_2",
+        weights={"upstream": 0.8, "cds": 0.1, "downstream": 0.1},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-20000/"
+        ),
+        data_seed=6,
+    ),
+    MixConfig(
+        name="uniform_to_upstream_3",
+        weights={"upstream": 0.6, "cds": 0.2, "downstream": 0.2},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-20000/"
+        ),
+        data_seed=7,
+    ),
+    MixConfig(
+        name="uniform_to_upstream_4",
+        weights={"upstream": 0.3, "cds": 0.35, "downstream": 0.35},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-20000/"
+        ),
+        data_seed=8,
+    ),
+    MixConfig(
+        name="uniform_to_upstream_5",
+        weights={"upstream": 0.0, "cds": 0.5, "downstream": 0.5},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["downstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-20000/"
+        ),
+        data_seed=9,
     ),
 )
 
