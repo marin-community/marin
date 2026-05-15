@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 
+from marin.datakit.download.agenttrove import agenttrove_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
@@ -141,6 +142,9 @@ def all_sources() -> dict[str, DatakitSource]:
     # returning ``tuple[StepSpec, ...]``; the registry pairs the chain with
     # a rough token count.
     single_sources: tuple[_SourceRow, ...] = (
+        # Placeholder token count — refine after running the surviving
+        # rows through the Llama-3 tokenizer.
+        ("agenttrove", agenttrove_normalize_steps, 1.0),
         # cp/biodiversity is carved out of common_pile (see common_pile.py)
         # because it needs page-stitching before normalize.
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
