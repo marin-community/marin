@@ -26,7 +26,6 @@ import math
 import os
 import shutil
 import signal
-import socket
 import sqlite3
 import subprocess
 import sys
@@ -168,115 +167,34 @@ class _FakeProvider:
         pass
 
 
-def _find_free_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 class RpcHarness:
-    """In-process Controller(dry_run=True) + pooled sync Connect client.
-
-    A real Controller drives the dashboard ASGI mount (so RPCs go through the
-    production stack: HTTP, Connect, AsyncServiceAdapter, every interceptor).
-    ``dry_run=True`` gates every side-effecting write the scheduler/polling/
-    autoscaler loops would otherwise emit — so the cloned snapshot stays
-    stable across benchmark iterations, but RPCs still contend with the
-    scheduler's reads and the loop's CPU cost, matching production shape.
-
-    The harness reuses the caller's ``ControllerDB`` directly (no clone here).
-    Caller still owns the DB and is responsible for closing it.
-    """
-
-    def __init__(self, db: ControllerDB, tmp: Path) -> None:
-        """Boot the harness.
-
-        The scheduler / polling / ping / heartbeat loops run at their natural
-        ControllerConfig defaults (10s scheduler, 1s poll, 5s heartbeat) so
-        RPC numbers include the same background DB-read pressure prod sees.
-        Checkpoint writes are gated by ``dry_run=True``.
-        """
-        self.db = db
-        tmp.mkdir(parents=True, exist_ok=True)
-
-        # ``remote_state_dir`` is required by ControllerConfig even in dry_run
-        # (validated up front). file:// keeps the controller off the network.
-        port = _find_free_port()
-        config = ControllerConfig(
-            host="127.0.0.1",
-            port=port,
-            remote_state_dir=f"file://{tmp / 'remote'}",
-            local_state_dir=tmp / "local",
-            dry_run=True,
-            checkpoint_interval=None,
-        )
-
-        self._threads = ThreadContainer("bench-harness")
-        self.controller = Controller(
-            config=config,
-            provider=_FakeProvider(),
-            db=db,
-            threads=self._threads,
-        )
-        self.controller.start()
-        # Block until uvicorn has bound the listening socket.
-        deadline = time.time() + 10.0
-        while time.time() < deadline:
-            srv = self.controller._server
-            if srv is not None and srv.started:
-                break
-            time.sleep(0.02)
-        else:
-            raise RuntimeError("Controller server did not start within 10s")
-
-        self.url = self.controller.url
-        # ControllerServiceClientSync uses pyqwest's SyncClient under the hood,
-        # which already keeps connections alive per-instance. One client per
-        # caller thread is enough — no httpx pool needed.
-        self.client = ControllerServiceClientSync(address=self.url, timeout_ms=30000)
-
-        # Expose the live projections so benchmarks needing direct DB writes
-        # (reset() between iterations, sample inspection) reuse the same
-        # in-memory state as the running service.
-        self.transitions = self.controller._transitions
-        self.health = self.controller._health
-        self.endpoints = self.controller._endpoints
-        self.worker_attrs = self.controller._worker_attrs
-
-    def make_client(self) -> ControllerServiceClientSync:
-        """Build an additional client (for multi-threaded throughput probes)."""
-        return ControllerServiceClientSync(address=self.url, timeout_ms=30000)
-
-    def close(self) -> None:
-        try:
-            self.client.close()
-        except Exception:
-            pass
-        try:
-            self.controller.stop()
-        except Exception:
-            pass
-
-
-class SubprocessRpcHarness:
     """Out-of-process Controller(dry_run=True) + sync Connect clients.
 
     Spawns ``benchmark_controller.py serve --db-path X --state-dir Y`` as a
-    child process. The child reads ``READY port=N`` to stdout once the HTTP
+    child process. The child prints ``READY port=N`` to stdout once the HTTP
     server is up. Benchmark threads in the parent then hit the child over
     real TCP — no shared GIL, no shared event loop. Mirrors production
-    where each task process is its own client connection to the controller.
+    where each task pushes from its own interpreter.
 
-    API matches the in-process ``RpcHarness`` for ``url``, ``make_client``,
-    and ``close`` so callers that don't reach into ``transitions`` /
-    ``endpoints`` etc. swap in transparently. Callers that DO need access
-    to the controller's in-memory projections (the rehydrate-after-DELETE
-    pattern in ``benchmark_rpcs``) must use ``RpcHarness`` instead.
+    ``dry_run=True`` in the child gates every side-effecting write the
+    scheduler/polling/autoscaler loops would otherwise emit — so the cloned
+    snapshot stays stable across benchmark iterations, but RPCs still
+    contend with the scheduler's reads and the loop's CPU cost, matching
+    production shape.
+
+    ``on_loop`` toggles the SetTaskStatusText ``@on_loop`` attribute inside
+    the child before the controller is built so the dispatch mode is locked
+    in for the lifetime of the harness.
     """
 
-    def __init__(self, db_path: Path, tmp: Path, *, startup_timeout_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        tmp: Path,
+        *,
+        startup_timeout_s: float = 30.0,
+        on_loop: bool = False,
+    ) -> None:
         tmp.mkdir(parents=True, exist_ok=True)
         cmd = [
             sys.executable,
@@ -288,6 +206,8 @@ class SubprocessRpcHarness:
             "--state-dir",
             str(tmp / "server-state"),
         ]
+        if on_loop:
+            cmd.append("--on-loop")
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -381,7 +301,7 @@ class Scenario:
 
 
 class ScenarioRunner:
-    def __init__(self, harness: "RpcHarness | SubprocessRpcHarness", scenario: Scenario) -> None:
+    def __init__(self, harness: "RpcHarness", scenario: Scenario) -> None:
         self.harness = harness
         self.scenario = scenario
 
@@ -1048,7 +968,13 @@ def benchmark_rpcs(db: ControllerDB) -> None:
     """
     write_db = clone_db(db)
     harness_dir = Path(tempfile.mkdtemp(prefix="iris_bench_harness_"))
-    harness = RpcHarness(write_db, harness_dir)
+    db_dir = write_db._db_dir
+    db_path = db_dir / ControllerDB.DB_FILENAME
+    # Hand the DB to the subprocess controller; reopen a read-only handle
+    # in the parent for sample queries (WAL allows concurrent readers).
+    write_db.close()
+    harness = RpcHarness(db_path, harness_dir)
+    write_db = ControllerDB(db_dir=db_dir)
     try:
         # ---- GetJobState (172k/day) — batched job-state lookup. ----
         with write_db.read_snapshot() as tx:
@@ -1096,16 +1022,13 @@ def benchmark_rpcs(db: ControllerDB) -> None:
                     )
 
         # ---- RegisterEndpoint (128/day, p95=245ms). ----
+        # The factory mints a unique endpoint name per call, so the endpoints
+        # table grows during the bench (a few hundred rows for a short run —
+        # not material to the measurement).
         sample = _active_task_sample(write_db, limit=300)
         if sample:
             ep_load = load_register_endpoint(harness, write_db, rps=0)
-
-            def _reset_endpoint():
-                with write_db.transaction() as _tx:
-                    _tx.execute(text("DELETE FROM endpoints WHERE name LIKE '/bench/endpoint/%'"))
-                harness.endpoints.rehydrate()
-
-            _bench_load("RPC: RegisterEndpoint (1 write)", harness, ep_load, reset=_reset_endpoint)
+            _bench_load("RPC: RegisterEndpoint (1 write)", harness, ep_load)
 
         # ---- Register (192/day, p95=340ms) — fresh worker UPSERT. ----
         _bench_load("RPC: Register (1 fresh worker, WRITE)", harness, load_register(harness, write_db, rps=0))
@@ -1225,7 +1148,7 @@ def benchmark_rpcs(db: ControllerDB) -> None:
     finally:
         harness.close()
         write_db.close()
-        shutil.rmtree(write_db._db_dir, ignore_errors=True)
+        shutil.rmtree(db_dir, ignore_errors=True)
         shutil.rmtree(harness_dir, ignore_errors=True)
 
 
@@ -1957,27 +1880,6 @@ def benchmark_apply_contention(db: ControllerDB) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _toggle_set_task_status_text_on_loop(enabled: bool) -> None:
-    """Flip the @on_loop attribute on ControllerServiceImpl.set_task_status_text.
-
-    AsyncServiceAdapter reads this attribute once when the ASGI endpoint table
-    is built, so the toggle MUST happen before a harness boots and stays put
-    for that controller's lifetime. We patch the attribute directly instead of
-    editing source so both variants can run in one process.
-    """
-    from iris.cluster.controller.service import ControllerServiceImpl
-    from iris.rpc.async_adapter import _ON_LOOP_ATTR
-
-    fn = ControllerServiceImpl.set_task_status_text
-    if enabled:
-        setattr(fn, _ON_LOOP_ATTR, True)
-    else:
-        try:
-            delattr(fn, _ON_LOOP_ATTR)
-        except AttributeError:
-            pass
-
-
 def _percentiles_ms(latencies: list[float]) -> tuple[float, float, float, float, float]:
     latencies.sort()
     n = len(latencies)
@@ -2100,10 +2002,13 @@ def _run_set_status_text_variant(
     duration_s: float,
 ) -> dict:
     """Boot a fresh harness with the requested dispatch mode and run the probe."""
-    _toggle_set_task_status_text_on_loop(on_loop)
     label = "on_loop=True" if on_loop else "on_loop=False (threadpool)"
+    write_db = clone_db(db)
+    db_dir = write_db._db_dir
+    db_path = db_dir / ControllerDB.DB_FILENAME
+    write_db.close()
     harness_dir = Path(tempfile.mkdtemp(prefix="iris_sts_probe_"))
-    harness = RpcHarness(db, harness_dir)
+    harness = RpcHarness(db_path, harness_dir, on_loop=on_loop)
     try:
         # Warmup: prime the connection / event loop with a single call.
         warmup = harness.make_client()
@@ -2145,6 +2050,7 @@ def _run_set_status_text_variant(
         return _set_status_text_probe(harness, n_threads=n_threads, duration_s=duration_s)
     finally:
         harness.close()
+        shutil.rmtree(db_dir, ignore_errors=True)
         shutil.rmtree(harness_dir, ignore_errors=True)
 
 
@@ -2167,10 +2073,13 @@ def _measure_update_task_status_under_storm(
     live worker→task attribution. Sample a worker that actually has updates
     to push so we measure a write-touching call, not a no-op early-return.
     """
-    _toggle_set_task_status_text_on_loop(on_loop)
     label = "on_loop=True" if on_loop else "on_loop=False (threadpool)"
+    write_db = clone_db(db)
+    db_dir = write_db._db_dir
+    db_path = db_dir / ControllerDB.DB_FILENAME
+    write_db.close()
     harness_dir = Path(tempfile.mkdtemp(prefix="iris_sts_contend_"))
-    harness = RpcHarness(db, harness_dir)
+    harness = RpcHarness(db_path, harness_dir, on_loop=on_loop)
     try:
         # Build the victim request. Bias toward a worker with non-empty updates.
         hb_requests = _build_heartbeat_requests(db)
@@ -2294,6 +2203,7 @@ def _measure_update_task_status_under_storm(
         return baseline, under_storm
     finally:
         harness.close()
+        shutil.rmtree(db_dir, ignore_errors=True)
         shutil.rmtree(harness_dir, ignore_errors=True)
 
 
@@ -2305,22 +2215,22 @@ def _measure_update_task_status_under_storm(
 def benchmark_scenario(db: ControllerDB) -> None:
     """Drive a production-mix RPC scenario against an out-of-process controller.
 
-    The controller runs in a separate Python process (``SubprocessRpcHarness``)
-    so the benchmark process's client threads don't share a GIL with the
-    server. Mirrors production where each task pushes from its own
-    interpreter.
+    The controller runs in a separate Python process so the benchmark
+    process's client threads don't share a GIL with the server. Mirrors
+    production where each task pushes from its own interpreter.
     """
     write_db = clone_db(db)
     harness_dir = Path(tempfile.mkdtemp(prefix="iris_scenario_"))
-    db_path = write_db._db_dir / ControllerDB.DB_FILENAME
+    db_dir = write_db._db_dir
+    db_path = db_dir / ControllerDB.DB_FILENAME
     # Close the parent's writer connection so the subprocess owns the DB:
-    # we still read samples through ``write_db.read_snapshot()`` (WAL handles
+    # we still read samples through ``sample_db.read_snapshot()`` (WAL handles
     # concurrent readers), but the parent doesn't need a writer.
     write_db.close()
-    harness = SubprocessRpcHarness(db_path, harness_dir)
+    harness = RpcHarness(db_path, harness_dir)
     # Re-open for read-only sampling by the factories. Safe under WAL because
     # the subprocess controller has already migrated and opened the file.
-    sample_db = ControllerDB(db_dir=write_db._db_dir)
+    sample_db = ControllerDB(db_dir=db_dir)
     try:
         scenario = build_production_scenario(harness, sample_db, scale=_SCENARIO_SCALE, duration_s=_SCENARIO_DURATION)
         results = ScenarioRunner(harness, scenario).run()
@@ -2328,7 +2238,7 @@ def benchmark_scenario(db: ControllerDB) -> None:
     finally:
         harness.close()
         sample_db.close()
-        shutil.rmtree(write_db._db_dir, ignore_errors=True)
+        shutil.rmtree(db_dir, ignore_errors=True)
         shutil.rmtree(harness_dir, ignore_errors=True)
 
 
@@ -2412,10 +2322,6 @@ def benchmark_set_task_status_text(db: ControllerDB) -> None:
         f"p99 {_ratio(ol_under, ol_baseline, 'p99')}  "
         f"max {_ratio(ol_under, ol_baseline, 'max')}"
     )
-
-    # Restore the function attribute to whatever the source file declares so
-    # subsequent groups in the same run aren't observably mutated.
-    _toggle_set_task_status_text_on_loop(False)
 
 
 # ---------------------------------------------------------------------------
@@ -2611,13 +2517,31 @@ def run_cmd(db_path: Path | None, only_group: str | None, scenario_scale: float,
     required=True,
     help="Scratch directory for the controller's local state / remote-state-dir.",
 )
-def serve_cmd(db_path: Path, state_dir: Path) -> None:
+@click.option(
+    "--on-loop/--no-on-loop",
+    "on_loop",
+    default=False,
+    help="Run SetTaskStatusText inline on the event loop (vs the default threadpool dispatch).",
+)
+def serve_cmd(db_path: Path, state_dir: Path, on_loop: bool) -> None:
     """Boot a Controller(dry_run=True) bound to ``db_path`` and serve over RPC.
 
     Prints ``READY port=N`` to stdout once the HTTP server is accepting
-    connections, then blocks until SIGTERM. Used by ``SubprocessRpcHarness``
-    so the benchmark process and the controller have independent GILs.
+    connections, then blocks until SIGTERM. Used by ``RpcHarness`` so the
+    benchmark process and the controller have independent GILs.
+
+    ``--on-loop`` flips the ``@on_loop`` attribute on
+    ``ControllerServiceImpl.set_task_status_text`` before the controller is
+    built. ``AsyncServiceAdapter`` reads the attribute when it walks the
+    service's methods, so the toggle is locked in for this process's
+    lifetime.
     """
+    if on_loop:
+        from iris.cluster.controller.service import ControllerServiceImpl
+        from iris.rpc.async_adapter import _ON_LOOP_ATTR
+
+        setattr(ControllerServiceImpl.set_task_status_text, _ON_LOOP_ATTR, True)
+
     state_dir.mkdir(parents=True, exist_ok=True)
     db = ControllerDB(db_dir=db_path.parent)
     db.apply_migrations()
