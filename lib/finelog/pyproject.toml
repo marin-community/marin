@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "marin-finelog"
 version = "0.99"
 description = "Standalone log store + log service: structured-log ingest, query, and persistence."
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "marin-rigging",
     "click>=8.3.1",

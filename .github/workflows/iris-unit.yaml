@@ -36,14 +36,19 @@ jobs:
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14t"]
+    continue-on-error: ${{ matrix.python-version == '3.14t' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -55,6 +60,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "lib/iris/pyproject.toml"
+          python-version: ${{ matrix.python-version }}
 
       - name: Test iris
         env:
@@ -67,14 +73,19 @@ jobs:
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14t"]
+    continue-on-error: ${{ matrix.python-version == '3.14t' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Set up Python 3.12
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -86,6 +97,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "lib/iris/pyproject.toml"
+          python-version: ${{ matrix.python-version }}
 
       - name: Cache Playwright browsers
         id: playwright-cache
