@@ -11,11 +11,12 @@ on how they were tokenized:
    caches under `tokenized/merged/dolma3_dolmino_top_level/...`.
 2. 3 singletons (arxiv, finemath_3plus, wikipedia) — `DatasetComponent`s
    pointing at their single-partition tokenized caches directly.
-3. 8 hierarchical Dolmino groups (common_crawl_hq, olmocr_pdfs_hq,
-   stack_edu_fim, synth_*) that aren't pre-merged on disk. Each group is a
-   `ConcatDatasetComponent` whose children are per-partition cache-backed
-   components; Levanter concatenates them at training time via
-   `ConcatDataset` and the parent mixture shuffles globally.
+3. 8 multi-partition Dolmino groups (common_crawl_hq, olmocr_pdfs_hq,
+   stack_edu_fim, synth_*) tokenized as one cache per partition. Each
+   group is a `ConcatDatasetComponent` whose children are the
+   per-partition `DatasetComponent`s; Levanter concatenates them at
+   training time via `ConcatDataset` and the parent mixture shuffles
+   globally.
 
 All caches live under `gs://marin-us-east5/...`; every path is region-
 relative via `InputName.hardcoded`, so launches outside us-east5 hard-fail
@@ -103,9 +104,9 @@ DOMAIN_CACHE_PATHS: dict[str, str] = {
     "dolma3_wikipedia": "tokenized/dolma/wiki-212315",
 }
 
-# Per-partition cache paths for the 8 multi-partition Dolmino groups that
-# aren't pre-merged. Each entry maps a domain to a list of
-# (partition_name, relative_cache_path) pairs; paths live under
+# Per-partition cache paths for the 8 multi-partition Dolmino groups. Each
+# entry maps a domain to a list of (partition_name, relative_cache_path)
+# pairs; paths live under
 # `gs://marin-{region}/tokenized/dolma3_dolmino_pool/...`. Each group is
 # materialized at runtime as a `ConcatDatasetComponent` whose children are
 # the per-partition cache-backed `DatasetComponent`s.

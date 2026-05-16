@@ -5,11 +5,10 @@
 
 Loads a grug `Transformer` from a Levanter-native checkpoint and runs
 lm-eval's `evaluate()` once with a `GrugLM` whose `loglikelihood` tokenizes
-the requests, runs the JIT'd forward pass loop, and returns real logprobs
-in a single call. Doing the forward pass inside `loglikelihood` (rather
-than collecting requests first and replaying through a second `evaluate()`
-call) keeps the request set deterministic on tasks whose few-shot sampler
-isn't reseeded between calls.
+the requests, runs the JIT'd forward pass loop, and returns real logprobs.
+Request generation and scoring share a single `evaluate()` call; some
+lm-eval few-shot samplers advance RNG state mid-call, so splitting them
+across two `evaluate()` calls would produce different request sets.
 
 Eval-mode bumps `GrugModelConfig.capacity_factor` so the routed MoE doesn't
 silently drop tokens at inference (training runs with capacity_factor=1.0;
@@ -95,16 +94,17 @@ def _batch_logprobs(transformer, tokens, loss_weight):
 
 
 def _lm_eval_spec(task: EvalTaskConfig) -> str | dict:
-    """Spec for `get_task_dict`.
+    """Build the spec entry passed to `get_task_dict`.
 
-    A registered task with no `task_kwargs` is passed as a bare string so
-    lm-eval uses its cached config directly. Passing a dict triggers the
-    registered-task override path, which silently drops fields the task
-    inherits via ``include:`` chains (e.g., ``arc_challenge`` inherits
-    ``dataset_path`` / ``*_split`` from arc_easy). Inlined tasks (where
-    ``task_kwargs`` carries the full config) need the dict form by
-    definition; ``num_fewshot`` and ``task_alias`` are applied post-build
-    via ``set_config`` so they don't re-trigger the drop.
+    Registered tasks with no `task_kwargs` are returned as bare strings;
+    lm-eval then loads the cached config directly. The dict form triggers
+    a separate override path that silently drops fields inherited via
+    ``include:`` chains (e.g., ``arc_challenge``'s ``dataset_path`` /
+    ``*_split`` come from arc_easy and would be lost). Inlined tasks need
+    the dict form because the full config lives in ``task_kwargs``;
+    ``num_fewshot`` and ``task_alias`` are deliberately omitted here and
+    applied post-build via `_apply_num_fewshot` to keep the override path
+    cold.
     """
     if not task.task_kwargs:
         return task.name
@@ -118,9 +118,10 @@ def _lm_eval_spec(task: EvalTaskConfig) -> str | dict:
 def _apply_num_fewshot(task_dict: dict, num_fewshot: int) -> None:
     """Walk ``task_dict`` and set ``num_fewshot`` on each leaf Task.
 
-    Mirrors lm-eval's `simple_evaluate`, which sets fewshot after task
-    construction; doing it post-build avoids the registered-task override
-    path that drops inherited config fields (see `_lm_eval_spec`).
+    Mirrors lm-eval's `simple_evaluate`, which sets `num_fewshot` after
+    task construction. Setting it post-build keeps the construction-time
+    override path (which drops include-chain fields — see `_lm_eval_spec`)
+    out of play.
     """
     for v in task_dict.values():
         if hasattr(v, "set_config"):
