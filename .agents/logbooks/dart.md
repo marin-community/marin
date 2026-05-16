@@ -2602,24 +2602,25 @@ For all other 12 statements: Run 10 is ≥ Run 9, or both runs agree on disposit
 
 ---
 
-## 6. Project synopsis — extremely thorough recall (updated 2026-05-14 after metric-conditioned T=2)
+## 6. Project synopsis — extremely thorough recall (updated 2026-05-16 after Bucket C + caching + metric verification)
 
 A single consolidating narrative for someone reading dart.md fresh. Everything load-bearing in one place.
 
 ### TL;DR (one paragraph)
 
-DART is a methodology for diagnosing why an LLM-as-judge ensemble disagrees on Model Spec statements and proposing fixes. Across **10 historical DART runs** spanning **2026-05-08 → 2026-05-11** at total cost **~$263 through Run 10**, we built the diagnostic machinery (bucket → poison-rank → 3-compiler vote → re-judge → iterate), corrected methodological errors (2-judge bucketing → 3-judge canonical; grok-only evidence → full 4-generator universe; Flash judge → Pro judge), and validated that **DisagreeMine evidence + concrete rubric/examples can raise 3-judge interval α**. **Run 10 introduced DisagreeMine (Gotcha 18), take-all-examples, LM-author-proxy, dynamic K, and per-statement stopping rules.** The 2026-05-13/14 frozen-spec rubric-only pilot then removed the spec-edit path entirely: LM compilers could only propose rubric candidates, every candidate branch was re-judged, and the schema-fix resubmission converted **5 of 5 tested formerly-STUCK statements**. The later T=0 remaining-10 pass plus targeted metric-conditioned T=1/T=2 continuation for `comply_with_laws` converted the parallel-only frame to **15/15 adopted rubric branches** (§10.2-§10.4). Caveat: §10.2-§10.4 still show Gemini/Claude operational brittleness on some safety-heavy judge rows, so residual inspection and policy review remain required before deployment.
+DART is a methodology for diagnosing why an LLM-as-judge ensemble disagrees on Model Spec statements and proposing fixes. Across **10 historical DART runs** spanning **2026-05-08 → 2026-05-11** at total cost **~$263 through Run 10**, we built the diagnostic machinery (bucket → poison-rank → 3-compiler vote → re-judge → iterate), corrected methodological errors (2-judge bucketing → 3-judge canonical; grok-only evidence → full 4-generator universe; Flash judge → Pro judge), and validated that **DisagreeMine evidence + concrete rubric/examples can raise 3-judge interval α**. **Run 10 introduced DisagreeMine (Gotcha 18), take-all-examples, LM-author-proxy, dynamic K, and per-statement stopping rules.** The 2026-05-13/14 frozen-spec rubric-only pilot then removed the spec-edit path entirely: LM compilers could only propose rubric candidates, every candidate branch was re-judged, and the schema-fix resubmission converted **5 of 5 tested formerly-STUCK statements**. The later T=0 remaining-10 pass plus targeted metric-conditioned T=1/T=2 continuation for `comply_with_laws` converted the parallel-only frame to **15/15 adopted rubric branches in Bucket D** (§10.2-§10.4). **2026-05-14 also extended the method to both canonical Bucket C statements** (§10.5): `be_engaging` adopted via metric-conditioned T=2 at α=0.728, `refusal_style` via T=0 at α=0.770 — total adoption is **17/17 problem statements** under frozen-spec rubric-only. **2026-05-15** patched Anthropic prompt caching into the runner (§10.6, ~40% Claude batch savings) and audited the two Bucket C winners against their v1 forensic diagnoses. **2026-05-16** verified the `refusal_style` win is real, not paradoxical α inflation, via quadratic-weighted κ (§10.7); follow-up within-universe alt-distribution check showed the rubric does genuine graded work on the 18 grok-opposite cells but anchors 4-5 specifically remain untested at meaningful sample size. Caveat: residual inspection and policy review remain required before deployment for every adopted branch.
 
 ### Section roadmap
 
 - §6.1: chronological run-by-run with the *single* most important finding from each.
 - §6.2: methodology that's now canonical (vs deprecated).
 - §6.3: empirical validations of the §1.8 / §1.9 additions.
-- §6.4: canonical Bucket D status (per statement, current).
+- §6.4: canonical status — all DART-touched statements (15 Bucket D + 2 Bucket C).
 - §6.5: cost and effort accounting.
 - §6.6: limitations + what we did NOT do.
 - §6.7: Codex edits made after Run 10.
-- §6.8: directly-actionable next steps after metric-conditioned T=2.
+- §6.8: directly-actionable next steps (with completed items checked off).
+- §6.9: the five load-bearing claims worth preserving from the project arc.
 
 ### 6.1 Run-by-run chronology
 
@@ -2637,6 +2638,10 @@ DART is a methodology for diagnosing why an LLM-as-judge ensemble disagrees on M
 | **Run 9** | 2026-05-10 | re-derive rubrics on canonical evidence | **Diagnostic distribution shifted dramatically with canonical evidence**: Pro+Claude diagnose `response_interpretation_disagreement` on 9-7 of 15 statements, GPT diagnoses `spec_ambiguity` on 7 (very different from Run 4's rubric_drift bias). **§1.9 example_additions cracked `comply_with_laws`** (Δ +0.607), `avoid_hateful_content` (+0.335), `assume_best_intentions` (+0.269). 4/15 CONVERGED, 2/15 self-corrected to IRREDUCIBLE in R2 (correct §1.8.4 behavior, opposite of Run-4 doubling-down), 9/15 escalated. | ~$22 |
 | **Run 10** | 2026-05-11 | DisagreeMine (K=20, scenario dedup, pwv>0 filter) + take-all-examples + LM-author-proxy + per-statement stopping rules on all 15 Bucket D | **+1 CONVERGED vs Run 9** (5 vs 4 in clean+caveat band). 3 statements that were IRREDUCIBLE/unfixable in Run 9 cracked under DisagreeMine top-20 + take-all-examples: `highlight_misalignments` (α=0.848), `formatting` (α=0.636), `sexual_content_involving_minors` (α=0.585 via 2-judge GPT+Cla when Gemini-Pro safety-refuses all CSAM cells). `no_erotica_or_gore` REGRESSED with rubric edits (α 0.301 → 0.143) — reverted to v1. LM-author-proxy correctly skeptical: 0/6 spec_edit accepts, 2 well-reasoned rejects, 4 borderlines. R2 §1.8.4 self-correction reliably produced IRREDUCIBLE plurality on `no_topic_off_limits` and `prevent_imminent_harm`. **Operational lesson (Gotcha 20)**: OpenAI GPT batch stalled at 1261/1276 for 30+ min with cancellation taking 15+ min more; resubmit-in-parallel was 6.4 min wall but doubled GPT cost (~$22 instead of $11). | ~$26 |
 | **Rubric-only pilot + schema fix** | 2026-05-13/14 | 5 formerly-STUCK statements × T=0/T=1 rubric candidates under frozen-spec constraint | Strict schema resubmission recovered all failed compiler calls (Gemini 10/10, GPT 4/4, Claude 2/2 valid), judged 14 newly valid non-duplicate branches, and converted 5/5 tested statements: `no_agenda` α=0.982, `avoid_abuse` α=0.935, `protect_privileged_messages` α=0.790, `do_not_lie` α=0.756, `be_clear` α=0.595. Deliberation did not dominate: 4 selected branches were T=0; only `do_not_lie` selected T=1. | TBD; not yet reconciled in `api_costs.md` |
+| **T=0 remaining-10 + metric-conditioned comply_with_laws** | 2026-05-14 | remaining 10 Bucket D statements via T=0 parallel apply + targeted T=1/T=2 for `comply_with_laws` | T=0 converted 9/10 (§10.3); metric-conditioned T=2 cracked the last holdout (`comply_with_laws__t2__claude` α=0.610). **Bucket D now 15/15 adopted.** Two former IRREDUCIBLE-via-R2 statements (`no_topic_off_limits`, `prevent_imminent_harm`) reversed under branch-apply rule. | $79 Claude + $25 GPT (§10.3+§10.4 combined; see `api_costs.md`) |
+| **Bucket C T=0/T=1/T=2** | 2026-05-14 | both canonical Bucket C statements (`be_engaging`, `refusal_style`) | `be_engaging__t2__gpt` α=0.728 (metric-conditioned deliberation helped); `refusal_style__t0__gpt` α=0.770 (T=0 won; T=1/T=2 did NOT improve). **Total adoption now 17/17 problem statements.** Bucket C was previously assumed to mean "irreducible spec ambiguity"; the wins show it's better diagnosed as "rubric under-concretization" — replacing the rubric while keeping the spec fixed raises α substantially. New diagnostic finding: deliberation helps when T=0 misses an edge case, hurts when T=0 is already saturated. | $41 (§10.5) |
+| **Anthropic prompt caching + residual audits** | 2026-05-15 | runner patch + 2-request probe + subagent audits of both Bucket C winners | Within-batch caching verified (1 cache_creation + 1 cache_read on 1821-token static prefix); patched `batch_anthropic.py` for ~40% Claude batch savings going forward. Audits found: `be_engaging__t2__gpt` MIXED-leaning-fix (6/8 top-Δpwv cells converged; one max-spread remains); `refusal_style__t0__gpt` MIXED-concerning (88% mode-collapse at score 1 — flagged metric question). | $0.005 probe + free Opus audits |
+| **Metric + alt-distribution verification** | 2026-05-16 | quadratic κ on `refusal_style__t0__gpt` + per-generator partition | Quadratic κ on the winner: 0.704 / 0.818 / 0.826 across pairs — α=0.770 is NOT paradoxical. Within-universe partition: 60/78 cells unanimous-1 from compliant generators; the actual graded-test signal is the 18 grok-opposite cells where α=0.669 and quad-κ 0.58-0.76. Rubric does real graded work on graded data, but anchors 4-5 specifically have ≤1 cell of validation. | $0 (analysis on existing logs) |
 
 ### 6.2 Canonical methodology (current state)
 
@@ -2703,7 +2708,7 @@ What we claimed methodologically vs what Run 9 measured:
 
 **All methodology additions validated by Run 9 or by retroactive analysis on Run 4 data.** No claimed mechanism failed empirical test.
 
-### 6.4 Canonical Bucket D status (per statement, current — after metric-conditioned T=2)
+### 6.4 Canonical status — all DART-touched statements (Bucket D + Bucket C)
 
 15 statements are in Bucket D under canonical 80-cell 3-judge α at T₁=0.5. "Best through Run 10" is the historical oracle/max-α adoption from the Run 9+10 postmortem. "Parallel-only selected α" ignores Run 9/10 repaired artifacts and uses only the frozen-spec rubric-only path in §10.2-§10.4. The `v0 α_p4` column is the original Run-8 baseline.
 
@@ -2725,14 +2730,22 @@ What we claimed methodologically vs what Run 9 measured:
 | 14 | `no_agenda` | +0.025 | +0.025 | **+0.982** | CONVERGED | §10.2 `no_agenda__t0__claude` |
 | 15 | `protect_privileged_messages` | +0.378 | +0.378 | **+0.790** | CONVERGED | §10.2 `protect_privileged_messages__t0__gpt` |
 
+**Canonical Bucket C (statements where v1 rubric made agreement WORSE than statement-only — added 2026-05-14, §10.5):**
+
+| # | statement | v0 α_bare | v0 α_p4 | Δα v1 | parallel-only selected α | current disposition | current source |
+|---|---|--:|--:|--:|--:|---|---|
+| C1 | `be_engaging` | +0.588 | +0.445 | −0.143 | **+0.728** | CONVERGED-WITH-CAVEAT | §10.5 `be_engaging__t2__gpt`; metric-conditioned T=2; scen 16 grok-opposite still max-spread (residual audit) |
+| C2 | `refusal_style` | +0.539 | +0.300 | −0.239 | **+0.770** | CONVERGED-WITH-CAVEAT | §10.5 `refusal_style__t0__gpt`; T=0 won; α real per §10.7 quad-κ verification; anchors 4-5 untested at meaningful sample size |
+
 **Quick read current state**:
-- **15/15 statements now have an adopted frozen-spec rubric branch** under the parallel-only frame (§10.2-§10.4).
+- **17/17 problem statements now have an adopted frozen-spec rubric branch** (15 Bucket D + 2 Bucket C).
 - **No Model Spec statement text changed.** Every new win came from whole-rubric branch testing with the spec frozen.
-- **Caveats remain operational and substantive**: §10.2 still has 84 unscored Gemini rows on non-winning branches; §10.3 had safety-heavy Gemini brittleness; §10.4 has one non-winning Claude no-tool row. Winning branch metrics are usable, but residual inspection and policy review are still required before deployment.
+- **Caveats remain operational and substantive**: §10.2 still has 84 unscored Gemini rows on non-winning branches; §10.3 had safety-heavy Gemini brittleness; §10.4 has one non-winning Claude no-tool row; §10.5 `refusal_style` had 2 OpenAI safety-filter rejections (scenario 11 grok-opposite). Winning branch metrics are usable, but residual inspection and policy review are still required before deployment.
+- **Residual audits done for both Bucket C winners** (2026-05-15); see `claude_subagents/bucket_c_residual_audit/`. Bucket D winners' residual audits are not yet done; remains the load-bearing §6.8 item.
 
-**Net change vs Run 9+10 oracle**: current parallel-only adoption improves from **9/15 defensible dispositions** (7 CONVERGED + 2 IRREDUCIBLE) to **15/15 adopted rubric branches**. The gain comes from frozen-spec rubric-only branch testing in §10.2-§10.4, not from changing the Model Spec.
+**Net change vs Run 9+10 oracle**: current parallel-only adoption improves from **9/15 defensible dispositions** in Bucket D (7 CONVERGED + 2 IRREDUCIBLE) to **15/15 adopted rubric branches**, plus a fresh **2/2 adopted** in Bucket C (Bucket C was uninvestigated through Run 10). Total 17/17 across both buckets. The gain comes from frozen-spec rubric-only branch testing in §10.2-§10.5, not from changing the Model Spec.
 
-**2026-05-14 parallel-only update**: if we ignore Run 9/10 repaired artifacts entirely and count only the new frozen-spec parallel-apply runs (§10.2 five-statement pilot + §10.3 T=0 remaining-10 run + §10.4 targeted `comply_with_laws` T=1/T=2 continuation), the result is **15/15 with an adopted rubric branch**. §10.3 converted `assume_objective_pov` with `assume_objective_pov__t0__gemini` at α=0.514. §10.4 then converted `comply_with_laws` with `comply_with_laws__t2__claude` at α=0.610 after metric-conditioned deliberation.
+**2026-05-16 metric trustworthiness verification (§10.7)**: confirmed `refusal_style__t0__gpt`'s α=0.770 is genuine convergence, not paradoxical inflation from mode collapse. Quadratic-weighted Cohen's κ lands at 0.70-0.83 on all three judge pairs (would be near-flat if α were collapse-driven). Within-universe per-generator partition shows the rubric exhibits real graded agreement on the 18 cells where responses are graded (grok-opposite generator); anchors 4-5 specifically remain untested at meaningful sample size. Generalization rule: α is the right default headline metric for DART; only check alt metrics when score distribution is heavily skewed (≥80% pooled at one anchor).
 
 ### 6.5 Cost and effort accounting
 
@@ -2770,7 +2783,7 @@ Human attention: ~4 sessions over 4 days, mostly directional decisions and revie
 6. **Claude on Bucket A/B not all checked**. Claude's role: judging the responses, not as a compiler in those buckets. We have Claude judgments now on all 46.
 7. **DEFAULT_BUCKET_D constant in `e9_dart_compiler.py` is stale.** Still says 14 statements; canonical is 15 (different list).
 8. **Run-4 v2 rubrics for the 9 escalated D statements are not invalidated**, just superseded by later Run-9/10/§10.2 evidence. If a downstream user adopts Run-4 v2 rubrics, they should re-judge under canonical 3-judge ensemble first to verify.
-9. **Bucket B and C statements not re-investigated** — `be_thorough_but_efficient`, `letter_and_spirit`, `support_mental_health` (B) and `be_engaging`, `refusal_style` (C) probably need their own DART pass, but cost-bounded.
+9. **Bucket B statements not re-investigated** — `be_thorough_but_efficient`, `letter_and_spirit`, `support_mental_health` (B) probably need their own DART pass, but cost-bounded. Bucket C (`be_engaging`, `refusal_style`) DONE as of §10.5 (2026-05-14) — both adopted under frozen-spec rubric-only at α=0.728 and 0.770 respectively. Bucket C results suggest the "rubric paradox" framing was incomplete: it's better diagnosed as rubric under-concretization than as an inherent property of certain spec statements.
 10. **Temp=0 non-determinism on Pro 3.1**: documented in Gotcha 17 but never quantified beyond "two identical calls produced different thoughts_token_count." Score-level reproducibility is what we rely on, but a formal repro test (run all of Run 9 twice) was never done.
 
 ### 6.7 Codex edits
@@ -2833,29 +2846,47 @@ So the guard changes future behavior but does **not** change the Run 10 synthesi
 
 **Explainer added**: `.agents/projects/dart_explained.md` now documents the current DART pipeline, including judge/compiler/analyzer roles, residual inspection, synthesis, spec-edit validation, and final disposition definitions.
 
-### 6.8 Directly-actionable next steps — UPDATED after metric-conditioned T=2
+### 6.8 Directly-actionable next steps — UPDATED 2026-05-16 after Bucket C + caching + metric verification
 
-0. **DONE 2026-05-15: Anthropic prompt caching wired into Claude judge call site** (§10.6). Future Claude batches should show non-zero `cache_read_input_tokens` and ~40% lower per-call cost than the §10.3-§10.5 baseline.
+**Completed this session (status: DONE):**
 
-1. **Update `DEFAULT_BUCKET_D`** in `e9_dart_compiler.py` from the 14-statement Run-1-era list to the canonical 15-statement Run-8 list. (Still owed.)
-2. **Promote the 15 adopted frozen-spec rubric branches to an explicit deploy/review list**: 5 come from §10.2, 9 from §10.3, and 1 from §10.4. Keep residual-inspection notes attached, especially for `highlight_misalignments`, `sexual_content_involving_minors`, `comply_with_laws`, and the close-threshold branches.
-3. **For the parallel-only frame, residual-inspect the 15 adopted branches before deployment**: §10.4 converted the last unresolved statement (`comply_with_laws`) with a T=2 metric-conditioned rubric. Next work is not another broad repair loop; it is residual inspection, rubric review, and deciding which adopted branches are deployable.
-4. **Reconcile old and new dispositions for the former IRREDUCIBLE-via-R2 statements** (`no_topic_off_limits`, `prevent_imminent_harm`): the newer branch-apply rule found deployable rubric branches, but this should be reviewed explicitly because it reverses Run 10's irreducible labels.
-5. **Fix Gemini judge reliability before scaling**: §10.2 left 84 Gemini rows unscored. The next runner should use score-only JSON from the start, raise visible output budgets enough for Gemini thinking, or move Gemini judging to a more reliable structured-output path.
-6. **Reconcile pilot costs** by rerunning `.agents/logbooks/api_costs.md` / `compute_api_costs.py` against the §10.1-§10.4 raw logs.
-7. **Treat historical spec-edit queues as audit evidence, not deployment paths.** Under the advisor-approved frozen-spec constraint, Model Spec text stays fixed; only rubrics are edited.
+- ✓ **Anthropic prompt caching wired into Claude judge call site** (2026-05-15, §10.6). Future Claude batches show non-zero `cache_read_input_tokens` and ~40% lower per-call cost than the §10.3-§10.5 baseline. Code in `experiments/posttrain/disagreement_primitive/batch_anthropic.py` + `e9_dart_deliberative_rubric.py`. Verified by probe `msgbatch_015GeQ4BoWe2cAsbx7kjEf3Z`.
+- ✓ **Both canonical Bucket C statements adopted** (2026-05-14, §10.5). `be_engaging__t2__gpt` α=0.728; `refusal_style__t0__gpt` α=0.770. Logged in §6.4 second table.
+- ✓ **Residual audits for both Bucket C winners against v1 forensics** (2026-05-15). Reports at `claude_subagents/bucket_c_residual_audit/{be_engaging,refusal_style}.md`. Both came back MIXED — neither is a clean genuine fix, but neither falls into the v1 pathologies either.
+- ✓ **Metric trustworthiness verified for `refusal_style`** (2026-05-16, §10.7). Quadratic-weighted κ confirms α=0.770 is real, not paradoxical. Within-universe alt-distribution check shows the rubric does graded work where graded data exists; anchors 4-5 specifically remain untested at meaningful sample size.
 
-### 6.9 The single most important load-bearing claim — UPDATED after metric-conditioned T=2
+**Still owed (in rough priority order):**
 
-**Three claims, all validated or strongly supported:**
+1. **Residual inspection on all 15 Bucket D winners per §8.6** — load-bearing remaining gate. Bucket C is done; Bucket D is not. The 3 marginal adoptions (`no_erotica_or_gore` 0.509, `assume_objective_pov` 0.514, `no_topic_off_limits` 0.549) and the 3 IRREDUCIBLE-via-R2 cracks (`no_topic_off_limits`, `prevent_imminent_harm`, `comply_with_laws`) most need scrutiny. Same residual-audit recipe used for Bucket C will work.
+2. **Out-of-ensemble judge audit on all 17 winners** — §6.6 limitation #1 (compiler-judge circularity). Re-judge with a 4th judge that's NOT in the compiler ensemble (e.g., DeepSeek-V3.2 or GLM-5.1 via Together AI). With caching now wired, this is materially cheaper than it would have been.
+3. **For `refusal_style`'s graded-deployment claim, generate ~50-100 new cells designed to elicit anchors 3-5** (legitimate non-refusals, partially-styled refusals, borderline-policy cases). Without these, the rubric is deployment-safe only as a violation detector, not as a full graded scorer. ~$15-30 batch run.
+4. **Update `DEFAULT_BUCKET_D`** in `e9_dart_compiler.py` from the 14-statement Run-1-era list to the canonical 15-statement Run-8 list. (Still owed; small but stale.)
+5. **Promote the 17 adopted frozen-spec rubric branches to an explicit deploy/review list**: 5 from §10.2, 9 from §10.3, 1 from §10.4, 2 from §10.5. Keep residual-inspection notes attached, especially for `highlight_misalignments`, `sexual_content_involving_minors`, `comply_with_laws`, `refusal_style`, and the close-threshold branches.
+6. **Reconcile old and new dispositions for the former IRREDUCIBLE-via-R2 statements** (`no_topic_off_limits`, `prevent_imminent_harm`): the newer branch-apply rule found deployable rubric branches, but this should be reviewed explicitly because it reverses Run 10's irreducible labels.
+7. **Fix Gemini judge reliability before scaling**: §10.2 left 84 Gemini rows unscored. The next runner should use score-only JSON from the start, raise visible output budgets enough for Gemini thinking, or move Gemini judging to a more reliable structured-output path.
+8. **Reconcile pilot costs** by rerunning `.agents/logbooks/api_costs.md` / `compute_api_costs.py` against the §10.3-§10.5 raw logs (the 2026-05-13/14 §10.1+§10.2 work is reconciled; the later work is not yet folded in).
+9. **Bucket B investigation** (`be_thorough_but_efficient`, `letter_and_spirit`, `support_mental_health`) — same methodology as Bucket C; cost-bounded.
+10. **Treat historical spec-edit queues as audit evidence, not deployment paths.** Under the advisor-approved frozen-spec constraint, Model Spec text stays fixed; only rubrics are edited.
+
+### 6.9 The single most important load-bearing claim — UPDATED 2026-05-16 after Bucket C + metric verification
+
+**Five claims, all validated or strongly supported:**
 
 1. **Canonical evidence beats grok-only evidence.** The compiler diagnostic distribution shifted from "rubric_drift heavy" (Run 4 with grok cells) to "RID heavy" (Run 9 with canonical 80-cell evidence). The corresponding edit type shifted from "rubric edits" to "spec example additions." The corresponding α improvements are dramatically larger and more durable.
 
 2. **DisagreeMine (K=20 + scenario dedup + pwv>0 filter) + take-all-examples is load-bearing on top of canonical evidence.** Run 10 produced 3 fresh CONVERGED statements that Run 9 left as IRREDUCIBLE or escalated (`formatting`, `highlight_misalignments`, `sexual_content_involving_minors`). The mechanism: K=20 surfaced different scenarios than K=10 (changing compiler diagnoses on 4/15 statements), and take-all-examples adopted 8/6/5 examples on statements that Run 9 adopted 0/0/2 because of singleton-rejection. **Cost of these two changes combined: ~$26.** **Benefit: +1 CONVERGED in the headline count, +3 in the high-α band (0.585, 0.636, 0.848).**
 
-3. **Frozen-spec rubric-only branch apply is load-bearing.** The §10.2 schema-fix pilot converted 5 of 5 tested formerly-STUCK statements without changing Model Spec text; §10.3 converted 9 of the remaining 10 at T=0; §10.4 converted the last holdout (`comply_with_laws`) with metric-conditioned T=2. This is the clearest evidence that many apparent "spec ambiguity" failures can be turned into concrete rubric edge cases and then empirically validated. Most selected winners were independent T=0 branches, but `comply_with_laws` is direct evidence that deliberation can help when T=0 nearly works but damages one judge pair.
+3. **Frozen-spec rubric-only branch apply is load-bearing — extends to both Bucket D AND Bucket C.** The §10.2 schema-fix pilot converted 5 of 5 tested formerly-STUCK Bucket D statements without changing Model Spec text; §10.3 converted 9 of the remaining 10 at T=0; §10.4 converted the last Bucket D holdout (`comply_with_laws`) with metric-conditioned T=2. **§10.5 then extended the method to Bucket C**: both `be_engaging` (α=0.728 via T=2 GPT) and `refusal_style` (α=0.770 via T=0 GPT) adopted under the same frozen-spec recipe. Bucket C had been theorized as "irreducible spec ambiguity"; the data instead supports "rubric under-concretization." Total adoption is now **17/17 problem statements across both buckets**.
 
-**If anyone in the future re-runs DART, they must:** use the canonical 4-generator 80-cell universe; rank cells via DisagreeMine (K=20 minimum, with pwv>0 filter and scenario dedup); keep the Model Spec frozen unless a human spec owner explicitly changes it; test whole rubric branches empirically instead of relying on same-text synthesis; apply Gotcha 19 residual-inspection gates to distinguish CONVERGED-clean from CONVERGED-with-caveat; and respect non-regression / pairwise sanity gates before adopting a high-α branch.
+4. **Deliberation helps when T=0 misses an edge case; it hurts when T=0 is already saturated.** Concrete evidence across three statements:
+   - `comply_with_laws` (§10.4): T=0 α=0.485 → T=2 α=0.610. T=0 had a weak Cla/Gem pair; T=2 rebalanced. Deliberation found edge cases T=0 missed. **Deliberation helped.**
+   - `be_engaging` (§10.5): T=0 best α=0.629 (Gemini) → T=2 best α=0.728 (GPT). Metric-conditioned T=2 found the human-pretending disqualifier T=0 was structurally vague on. **Deliberation helped.**
+   - `refusal_style` (§10.5): T=0 GPT α=0.770 > T=1 GPT 0.714 > T=2 GPT 0.665. T=0 had already covered every edge case in the 80-cell universe; T=1/T=2 added rules that traded GPT/Cla agreement for GPT/Gem at the margin. **Deliberation hurt.**
+   - **Operational rule**: default to T=0 parallel apply; reach for metric-conditioned T=2 only when T=0 lands close (α 0.45-0.55) with one weak judge pair. Don't deliberate when T=0 is already comfortable.
+
+5. **Interval Krippendorff α is the right default headline metric and is trustworthy under DART conditions.** Verified empirically on `refusal_style` (§10.7) — the case most at risk of paradoxical α inflation due to mode collapse (88% pooled at score 1). Quadratic-weighted Cohen's κ — which is *less* sensitive to range restriction than interval α — lands at 0.70-0.83 on all three pairs (would be near-flat if α were collapse-driven). Mean abs pair-diff per cell drops 3.4× from null. **Generalization rule**: report α as the default; only compute alt metrics (quadratic κ, mean abs diff) when the score distribution is heavily skewed (≥80% pooled at one anchor). For graded-construct statements where judge means are in the 2.5-4.0 range — most of Bucket D — α alone is sufficient.
+
+**If anyone in the future re-runs DART, they must:** use the canonical 4-generator 80-cell universe; rank cells via DisagreeMine (K=20 minimum, with pwv>0 filter and scenario dedup); keep the Model Spec frozen unless a human spec owner explicitly changes it; test whole rubric branches empirically instead of relying on same-text synthesis; apply Gotcha 19 residual-inspection gates to distinguish CONVERGED-clean from CONVERGED-with-caveat; respect non-regression / pairwise sanity gates before adopting a high-α branch; default to T=0 parallel apply and only deliberate when T=0 lands close-but-lopsided; trust α unless the distribution is heavily skewed, in which case also report quadratic κ.
 
 This is the lesson worth preserving from the entire project arc.
 
