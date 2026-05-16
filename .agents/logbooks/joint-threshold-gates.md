@@ -78,3 +78,98 @@
   - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/domain_aware_synergy_joint_law_20260510/REPORT.md`
   - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/domain_aware_synergy_joint_law_20260510/csv/canonical_residual_synergy_summary.csv`
   - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/domain_aware_synergy_joint_law_20260510/plots/canonical_residual_domain_aware_synergy_pred_actual.html`
+
+### 2026-05-14 - Repetition-Aware Variable-Size Law Sprint
+
+- Hypothesis: The repetition-aware mixture scaling law from arXiv:2605.12715 can be adapted to Marin's ND scaling panel by treating each domain as a target-like component and replacing the paper's scalar target fraction with domain-level exposure and repetition estimates.
+- Paper form evaluated:
+  `L = E + C/N^beta + B N^delta / D_eff^alpha + gamma h`,
+  with `D_eff` built from domain exposure and an exponential repetition discount.
+- Marin adaptation:
+  - Domain exposure: `h_i = 0.8 w_0i + 0.2 w_1i`.
+  - Domain repeat estimate: `r_i = w_0i c_0i + w_1i c_1i`, using simulated-epoch multipliers from the ND packet.
+  - Effective domain data: `D_i,eff = h_i D r_i,eff / r_i`.
+  - Variants: scale-only, equal domain value, positive per-domain value weights, signed linear mixture head, and per-domain `r_1`.
+- Command:
+  ```bash
+  uv run --with numpy --with pandas --with plotly --with scipy --with scikit-learn --with kaleido python -m experiments.domain_phase_mix.exploratory.two_phase_many.fit_repetition_aware_variable_size_law_nd
+  ```
+- Data:
+  - Source: `experiments/domain_phase_mix/exploratory/two_phase_many/analysis_dataset/nd_scale_runs.csv`.
+  - Metric: `eval/uncheatable_eval/bpb`.
+  - Rows: 641 labeled ND rows.
+- Result:
+  - Scale-only Chinchilla-size baseline: grouped OOF RMSE `0.0330`, Spearman `0.8080`.
+  - Equal-domain repetition-aware law: RMSE `0.0288`, Spearman `0.8635`.
+  - Positive per-domain value weights with shared `r_1`: RMSE `0.0262`, Spearman `0.8920`.
+  - Signed linear head with shared `r_1`: Spearman remained high (`0.8873`) but RMSE was poor (`0.0850`) from severe calibration instability.
+  - Signed linear head with per-domain `r_1`: best grouped OOF RMSE `0.0257`, Spearman `0.8957`, but optimizer stopped at the function-evaluation budget.
+- Interpretation:
+  - Repetition-aware effective data is real signal on this panel; even the 7-parameter equal-domain version improves materially over scale-only.
+  - Positive per-domain value weights are the most stable multi-domain extension.
+  - The most flexible 123-parameter variant is a useful diagnostic baseline, but it is not a canonical replacement for DSP without optimum and perturbation-geometry validation.
+  - Leave-one-scale-out remains uneven, especially for held-out `300m_6b` and `60m_1p2b`, so this form does not solve cross-scale transfer by itself.
+- Artifacts:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/fit_repetition_aware_variable_size_law_nd.py`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/repetition_aware_variable_size_law_nd_20260514/report.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/repetition_aware_variable_size_law_nd_20260514/grouped_oof_summary.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/repetition_aware_variable_size_law_nd_20260514/leave_scale_summary.csv`
+
+### 2026-05-15 - Variable-Scale DSP Screen
+
+- Hypothesis: The best path to a variable-size DSP is not to collapse DSP into one scalar `D_eff`, but to add an `(N,D)` scale head and center DSP mixture features against proportional at the same exact `(N,D)`.
+- Form:
+  - Baseline scale head: `g(N,D)=E+C(N/N0)^(-beta)+B(N/N0)^delta(D/D0)^(-alpha)`.
+  - Centered DSP features: `Delta S_i = S_i(w)-S_i(w_prop)`, `Delta P_i = P_i(w)-P_i(w_prop)`.
+  - Variable-scale DSP: `y_hat = g(N,D)-n^kappa_b sum_i a_i Delta S_i+n^kappa_p sum_i p_i Delta P_i`.
+  - Exposure-scaled diagnostic additionally uses `(D/D0)^omega z_i` inside DSP exposure.
+- Practical note:
+  - A full finite-difference retune over 80+ domain nonlinear parameters was too slow for interactive iteration.
+  - This screen freezes the effective-exposure DSP geometry from the existing 300M fit and retunes only global scale/amplitude nonlinear parameters plus the profiled linear head.
+- Command:
+  ```bash
+  uv run --with numpy --with pandas --with plotly --with scipy --with scikit-learn --with kaleido python -m experiments.domain_phase_mix.exploratory.two_phase_many.fit_variable_scale_dsp_nd
+  ```
+- Result:
+  - `dsp_vs_centered_no_amp`: grouped OOF RMSE `0.02680`, Spearman `0.92853`.
+  - `dsp_vs_centered_shared_amp`: grouped OOF RMSE `0.02712`, Spearman `0.92334`.
+  - `dsp_vs_centered_split_amp`: grouped OOF RMSE `0.02633`, Spearman `0.92739`, regret-at-1 `0.02324`.
+  - `dsp_vs_centered_exposure_scaled`: grouped OOF RMSE `0.02658`, Spearman `0.93039`.
+- Interpretation:
+  - Centered variable-scale DSP is a strong improvement over the standalone repetition-aware mixture scaling-law adaptations in rank.
+  - Split amplitude is best by grouped OOF RMSE/regret, but it has worse leave-130M and leave-60M behavior.
+  - The no-amplitude centered form is the most stable leave-one-scale-out candidate in this screen.
+  - Next step, if promoting this direction: implement analytic/autodiff gradients and retune full DSP geometry across ND, then run optimum and perturbation-gradient diagnostics.
+- Artifacts:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/fit_variable_scale_dsp_nd.py`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/variable_scale_dsp_nd_20260515/report.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/variable_scale_dsp_nd_20260515/grouped_oof_summary.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/variable_scale_dsp_nd_20260515/leave_scale_summary.csv`
+
+### 2026-05-15 - MCT-DSP Hybrid Screen
+
+- Hypothesis: MCT can be improved by keeping its centered `(N,D)` scale scaffold while replacing the LRQ mixture anchor with the stronger effective-exposure DSP domain geometry.
+- Forms tested:
+  - `mct_dsp_anchor`: centered MCT scale scaffold plus frozen effective-exposure DSP anchor.
+  - `mct_dsp_split_amp`: centered DSP benefit/penalty interactions with fitted N-dependent amplitudes.
+  - `mct_dsp_tau_shift`: global `eta_N log(N/N0)+eta_D log(D/D0)` shifts to DSP penalty thresholds.
+  - `mct_dsp_apple_sat`: Apple-style shared-`r_1` repetition discount on saturation exposure only.
+- Command:
+  ```bash
+  uv run --with numpy --with pandas --with plotly --with scipy --with kaleido python -m experiments.domain_phase_mix.exploratory.two_phase_many.fit_mct_dsp_hybrid_nd
+  ```
+- Result against canonical `mct_lrq69_drop_no_barrier`:
+  - MCT reference: seed7 holdout RMSE `0.01008`, fixed-340M RMSE `0.00614`, random supplement RMSE `0.01233`, leave-900M RMSE `0.01018`.
+  - Best hybrid on seed7-family splits was `mct_dsp_tau_shift`: seed7 holdout RMSE `0.01282`, fixed-340M RMSE `0.01299`, random supplement RMSE `0.01267`.
+  - Best leave-900M hybrids were anchor/Apple saturation at RMSE `0.01596`; `mct_dsp_tau_shift` worsened to RMSE `0.02311`.
+  - `mct_dsp_split_amp` improved train fit but collapsed out of sample: seed7 holdout RMSE `0.03899`, random supplement RMSE `0.04377`, leave-900M RMSE `0.14059`.
+- Interpretation:
+  - This first hybrid does not beat canonical MCT on the established validation protocol.
+  - A penalty-threshold scale shift is the only useful additive idea from this screen, but it trades off badly against leave-scale transfer.
+  - The split-amplitude variant is a clear overfit warning: adding expressive DSP-scale interactions without stronger regularization or full geometry retuning is unsafe.
+  - Next plausible step is not to promote this hybrid; it is to implement full ND DSP retuning with analytic/autodiff gradients, then re-run optimum and perturbation-gradient diagnostics.
+- Artifacts:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/fit_mct_dsp_hybrid_nd.py`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/mct_dsp_hybrid_nd_20260515/report.md`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/mct_dsp_hybrid_nd_20260515/metric_summary.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/mct_dsp_hybrid_nd_20260515/img/mct_dsp_hybrid_metric_comparison.html`

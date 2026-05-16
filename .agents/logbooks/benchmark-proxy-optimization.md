@@ -112,3 +112,57 @@
 | hybrid_irt_variable_theta_2                   |          0.931230 |                      0.222006 |                  0.848661 |                        0.347952 |                              0.059986 |
 | hybrid_irt_fixed_theta_2                      |          0.929362 |                      0.328594 |                  0.888173 |                        0.339675 |                              0.040629 |
 - Artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/grp_300m_irt_targets_20260501/`.
+
+### 2026-05-10 - DSP fits to issue #5416 aggregate
+- Hypothesis: the newer DSP family should be tested directly on the issue #5416 signed factor/IRT aggregate rather than only on the earlier task-proxy IRT targets.
+- Command: `uv run --no-project --with matplotlib --with numpy --with pandas --with scipy --with scikit-learn --with tabulate python experiments/domain_phase_mix/exploratory/two_phase_many/fit_dsp_issue5416_aggregate_300m.py`
+- Target construction: current 242-row 300M raw metric matrix, run_00097 variable-subset noise baseline, 26 selected signed columns, Horn-selected factor count `5`; fit target is `-issue5416_aggregate` so DSP remains a minimization model.
+- Result summary:
+| variant | params | score CV RMSE | score CV R2 | score OOF Spearman | raw nearest TV |
+|:--|--:|--:|--:|--:|--:|
+| `dsp_phase_benefit_saturation_penalty_nnls` | 160 | 0.148561 | 0.859189 | 0.918927 | 0.715133 |
+| `dsp_saturation_penalty_split_nnls` | 159 | 0.153063 | 0.850526 | 0.903048 | 0.809242 |
+| `dsp_effective_exposure_penalty_nnls` | 158 | 0.174260 | 0.806258 | 0.880500 | 0.734133 |
+| `dsp_phase_benefit_penalty_nnls` | 158 | 0.179998 | 0.793290 | 0.884568 | 0.740535 |
+| `dsp_no_phase_penalty_nnls` | 157 | 0.411557 | -0.080658 | 0.329355 | 0.598074 |
+- Interpretation: DSP fits the issue #5416 aggregate substantially better than the earlier selected-proxy GRP targets. All fitted variants select observed best `run_00125` as the best observed point, but raw optima remain off-manifold and should not be deployed without constraints or validation.
+- Artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/dsp_issue5416_aggregate_300m_20260510/`.
+
+### 2026-05-11 - Pareto-aware effective-exposure validation launch
+- Goal: train all seven Pareto-aware effective-exposure DSP optima from `experiments/domain_phase_mix/exploratory/two_phase_many/pareto_aware_effective_exposure_issue5416.py` at historical `300m_6b` (displayed `100M/6B`) before deciding which candidates deserve downstream eval completion.
+- Candidate source artifacts:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/pareto_aware_effective_exposure_issue5416_20260511/candidate_summary.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/pareto_aware_effective_exposure_issue5416_20260511/candidate_weights_long.csv`
+- Launcher: `experiments/domain_phase_mix/launch_pareto_effective_exposure_issue5416_validation.py`.
+- Local launch artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/pareto_effective_exposure_issue5416_validation_20260511/`.
+- GCS candidate copies:
+  - `gs://marin-us-east5/experiments/domain_phase_mix/pareto_effective_exposure_issue5416_validation_20260511/candidate_summary.csv`
+  - `gs://marin-us-east5/experiments/domain_phase_mix/pareto_effective_exposure_issue5416_validation_20260511/candidate_weights_long.csv`
+- Launch fixes required before a live run could dispatch correctly:
+  - `uv.lock` had ambiguous `torch==2.10.0+cu128` CUDA dependency entries, causing remote `uv` parse failure. Fixed by pinning `nvidia-cudnn-cu12==9.10.2.21` and `nvidia-nccl-cu12==2.27.5` with the PyPI source; `uv lock --check` passed afterward.
+  - `resolve_executor_step` dropped `ExecutorStep.resources` when building the `StepSpec`, so resourceful training steps executed in the parent and collided in JAX distributed initialization. Fixed by propagating `resources=step.resources`; verified with a direct `ResourceConfig.with_tpu("v5p-8", regions=["us-east5"], zone="us-east5-a")` smoke test and `py_compile`.
+- Failed attempt: `/calvinxu/dm-pareto-dsp-issue5416-validation-20260511-105708`.
+  - This attempt was stopped after child jobs repeatedly failed with `No accelerator found` / missing `libtpu.so`.
+  - Root cause: `StepRunner._run_iris_job` unwrapped `RemoteCallable` when an explicit `StepSpec.resources` override was present, but did not preserve `RemoteCallable.env_vars` or `RemoteCallable.pip_dependency_groups`. The child jobs therefore had TPU resources but installed a non-TPU environment.
+  - Fix: preserve the remote callable environment and dependency groups in the explicit-resource path. Verified with a local monkeypatch smoke test that `_run_iris_job` passes `env_vars` and `pip_dependency_groups` through while still overriding resources.
+- Additional launch fix:
+  - Plain `ExecutorStep(fn=run_levanter_train_lm, resources=v5p-8)` steps were not `RemoteCallable`s, so the previous fix was insufficient: explicit TPU resources still did not imply TPU dependency groups. Fixed `StepRunner._run_iris_job` to infer `tpu` / `gpu` dependency groups from explicit `StepSpec.resources`, and to merge them with any remote callable groups.
+  - Added `--candidate-id` filtering to the launcher so transient failed candidates can be retried without regenerating all seven validation runs.
+- Failed/stopped attempts:
+  - `/calvinxu/dm-pareto-dsp-issue5416-validation-20260511-111210`: stopped after old-style training steps still launched without TPU extras and failed with `No accelerator found`.
+  - `/calvinxu/dm-pareto-dsp-issue5416-validation-20260511-112211`: launched all seven after the TPU-extra fix. Six children were killed quickly by TPU runtime `/dev/vfio` device-busy errors. The surviving `hard_item_guardrail` child passed TPU setup, started from scratch, skipped lm-eval harness, and reached validation/data loading; continue tracking that child even though the parent will likely be marked failed because the other six children were killed.
+- Retry job: `/calvinxu/dm-pareto-dsp-issue5416-validation-retry6-20260511-113855`.
+  - Candidate subset: `aggregate_only`, `hard_group_guardrail`, `group_dro`, `item_cvar25`, `item_maximin`, `mean_plus_tail_penalty`.
+  - Concurrency reduced to `max_concurrent=2` because the 7-way launch produced six TPU device-busy kills. This is a concrete scheduler/runtime reason to avoid full parallelism for this retry.
+  - Startup status: `aggregate_only` passed TPU autodiscovery, started from scratch, skipped lm-eval harness, and entered data loading; `hard_group_guardrail` is pending on v5p-8 capacity in `us-east5-a`.
+- Intended validated candidates: `aggregate_only`, `hard_item_guardrail`, `hard_group_guardrail`, `group_dro`, `item_cvar25`, `item_maximin`, and `mean_plus_tail_penalty`.
+
+### 2026-05-11 - DSP canonical-form naming update
+- Decision: use `dsp_effective_exposure_penalty_nnls` as the canonical DSP form going forward.
+- Formula:
+  `z_i(w) = c_{0i} w_{0i} + gamma c_{1i} w_{1i}` and
+  `y_hat(w) = beta_0 - sum_i a_i (1 - exp(-rho_i z_i(w))) + sum_i p_i softplus(log(1 + z_i(w)) - tau_i)^2`.
+- Parameter count with 39 domains: per-domain `(rho_i, tau_i, a_i, p_i)` plus global `(beta_0, gamma)`, for `4M + 2 = 158`.
+- Code/documentation updates:
+  - Added the canonical DSP formulation to the top of `experiments/domain_phase_mix/exploratory/two_phase_many/pareto_aware_effective_exposure_issue5416.py`.
+  - Updated the self-contained collaborator implementation `experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/standalone_code/dsp_exact.py` so `--variant canonical` maps to `dsp_effective_exposure_penalty_nnls`; the old `dsp_phase_benefit_penalty_nnls` form remains available as `--variant benefit_gain`.

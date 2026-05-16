@@ -32,6 +32,9 @@ def _():
     import pandas as pd
     import plotly.express as px
 
+    from experiments.domain_phase_mix.exploratory.two_phase_many.fit_dsp_canonical_variants_60m import (
+        _load_packet as load_60m_dsp_packet,
+    )
     from experiments.domain_phase_mix.exploratory.two_phase_many.fit_dsp_canonical_variants_300m import (
         VARIANTS as DSP_VARIANTS,
     )
@@ -56,6 +59,7 @@ def _():
         Path,
         fit_issue5416_projection,
         json,
+        load_60m_dsp_packet,
         load_dsp_packet,
         mo,
         np,
@@ -79,7 +83,10 @@ def _(Path):
     VARIABLE_NOISE_CSV = RAW_MATRIX_DIR / "noise_baseline_run00097_variable_subset_300m.csv"
     DSP_OUTPUT_DIR = TWO_PHASE_ROOT / "reference_outputs" / "dsp_canonical_variants_300m_20260510"
     DSP_OUTPUT_60M_DIR = TWO_PHASE_ROOT / "reference_outputs" / "dsp_canonical_variants_60m_20260510"
-    DSP_MODEL_VARIANTS = ["dsp_phase_benefit_penalty_nnls", "dsp_effective_exposure_penalty_nnls"]
+    DSP_MODEL_VARIANTS = [
+        "dsp_effective_exposure_penalty_nnls",
+        "dsp_phase_benefit_saturation_penalty_nnls",
+    ]
     DSP_SCALE_MODEL_DIRS = {
         "60m_1p2b": DSP_OUTPUT_60M_DIR,
         "300m_6b": DSP_OUTPUT_DIR,
@@ -375,7 +382,7 @@ def _(mo):
         """
     ## DSP agreement with domain perturbations
 
-    The next diagnostics test whether the canonical DSP surrogate agrees with the actual
+    The next diagnostics test whether the effective-exposure DSP surrogate agrees with the actual
     one-at-a-time domain perturbation experiment around proportional. We use only the
     39 domain bumps here, because family bumps and quality swaps are composed directions.
 
@@ -399,6 +406,7 @@ def _(
     INTERVENTION_MANIFEST_CSV,
     OUTPUT_DIR,
     json,
+    load_60m_dsp_packet,
     load_dsp_packet,
     np,
     paired,
@@ -408,15 +416,15 @@ def _(
     dsp_packet = load_dsp_packet()
     dsp_agreement_variant_by_name = {variant.name: variant for variant in DSP_VARIANTS}
 
-    def _load_dsp_model(variant_name: str) -> FittedDSPModel:
-        model_path = DSP_OUTPUT_DIR / variant_name / "model.json"
+    def _load_dsp_model(dsp_variant_name: str) -> FittedDSPModel:
+        model_path = DSP_OUTPUT_DIR / dsp_variant_name / "model.json"
         model_payload = json.loads(model_path.read_text())
         params = {
             key: np.asarray(value, dtype=float) if isinstance(value, list) else value
             for key, value in model_payload["params"].items()
         }
         return FittedDSPModel(
-            variant=dsp_agreement_variant_by_name[variant_name],
+            variant=dsp_agreement_variant_by_name[dsp_variant_name],
             params=params,
             intercept=float(model_payload["intercept"]),
             benefit_coef=np.asarray(model_payload["benefit_coef"], dtype=float),
@@ -452,8 +460,8 @@ def _(
 
     agreement_rows = []
     derivative_step = 1e-4
-    for variant_name in DSP_MODEL_VARIANTS:
-        model = _load_dsp_model(variant_name)
+    for dsp_agreement_variant_name in DSP_MODEL_VARIANTS:
+        model = _load_dsp_model(dsp_agreement_variant_name)
         base_pred = float(predict_dsp(model, proportional_weights[None, :, :], dsp_packet)[0])
         for _, dsp_manifest_row in domain_manifest.iterrows():
             bumped_weights = _weights_from_manifest_row(dsp_manifest_row)
@@ -462,7 +470,7 @@ def _(
             local_pred = float(predict_dsp(model, local_weights[None, :, :], dsp_packet)[0])
             agreement_rows.append(
                 {
-                    "model_variant": variant_name,
+                    "model_variant": dsp_agreement_variant_name,
                     "intervention_id": dsp_manifest_row["intervention_id"],
                     "target_domain": dsp_manifest_row["target_domain"],
                     "tv_distance": float(dsp_manifest_row["tv_distance"]),
@@ -504,7 +512,7 @@ def _(
     ) == np.sign(dsp_domain_agreement["effect_100_bpb"])
 
     summary_rows = []
-    for variant_name, group in dsp_domain_agreement.groupby("model_variant", sort=False):
+    for dsp_summary_variant_name, group in dsp_domain_agreement.groupby("model_variant", sort=False):
         observed_helpful = set(group.nsmallest(8, "effect_100_bpb")["intervention_id"])
         observed_harmful = set(group.nlargest(8, "effect_100_bpb")["intervention_id"])
         finite_helpful = set(group.nsmallest(8, "dsp_finite_effect_bpb")["intervention_id"])
@@ -521,7 +529,7 @@ def _(
         )
         summary_rows.append(
             {
-                "model_variant": variant_name,
+                "model_variant": dsp_summary_variant_name,
                 "n_domain_bumps": len(group),
                 "finite_pearson_100": _safe_corr(group, "dsp_finite_effect_bpb", "effect_100_bpb", "pearson"),
                 "finite_spearman_100": _safe_corr(group, "dsp_finite_effect_bpb", "effect_100_bpb", "spearman"),
@@ -660,34 +668,38 @@ def _(dsp_domain_agreement_summary, finite_fig, local_fig, mo):
 @app.cell
 def _(
     DSP_OUTPUT_DIR,
+    DSP_MODEL_VARIANTS,
     DSP_SCALE_MODEL_DIRS,
     DSP_VARIANTS,
     FittedDSPModel,
     INTERVENTION_MANIFEST_CSV,
     OUTPUT_DIR,
     json,
+    load_60m_dsp_packet,
     load_dsp_packet,
     np,
     paired,
     pd,
     predict_dsp,
 ):
-    canonical_dsp_variant_name = "dsp_phase_benefit_penalty_nnls"
     scale_label_by_key = {"60m_1p2b": "60M/1.2B", "300m_6b": "100M/6B"}
     actual_effect_column_by_scale = {"60m_1p2b": "effect_60_bpb", "300m_6b": "effect_100_bpb"}
     scale_plot_dsp_variant_by_name = {variant.name: variant for variant in DSP_VARIANTS}
-    dsp_packet_for_scale_plot = load_dsp_packet()
+    dsp_packet_by_scale = {
+        "60m_1p2b": load_60m_dsp_packet(),
+        "300m_6b": load_dsp_packet(),
+    }
 
-    def _load_scale_specific_dsp_model(scale_key: str) -> FittedDSPModel:
+    def _load_scale_specific_dsp_model(scale_key: str, scale_variant_name: str) -> FittedDSPModel:
         scale_model_dir = DSP_SCALE_MODEL_DIRS.get(scale_key, DSP_OUTPUT_DIR)
-        model_path = scale_model_dir / canonical_dsp_variant_name / "model.json"
+        model_path = scale_model_dir / scale_variant_name / "model.json"
         model_payload = json.loads(model_path.read_text())
         params = {
             key: np.asarray(value, dtype=float) if isinstance(value, list) else value
             for key, value in model_payload["params"].items()
         }
         return FittedDSPModel(
-            variant=scale_plot_dsp_variant_by_name[canonical_dsp_variant_name],
+            variant=scale_plot_dsp_variant_by_name[scale_variant_name],
             params=params,
             intercept=float(model_payload["intercept"]),
             benefit_coef=np.asarray(model_payload["benefit_coef"], dtype=float),
@@ -698,57 +710,55 @@ def _(
     scale_plot_domain_manifest = scale_plot_manifest.loc[
         scale_plot_manifest["intervention_type"].eq("domain_bump")
     ].copy()
-    scale_plot_base_weights = (
-        scale_plot_domain_manifest.set_index("target_domain")["target_mass_before"]
-        .reindex(dsp_packet_for_scale_plot.domain_names)
-        .to_numpy()
-    )
-    scale_plot_base_weights = scale_plot_base_weights / scale_plot_base_weights.sum()
-    scale_plot_proportional_weights = np.stack([scale_plot_base_weights, scale_plot_base_weights], axis=0)
-    scale_plot_phase_columns = [
-        [f"phase_{phase_idx}_{domain_name}" for domain_name in dsp_packet_for_scale_plot.domain_names]
-        for phase_idx in range(2)
-    ]
-
-    def _scale_plot_weights(row: pd.Series) -> np.ndarray:
-        return np.stack(
-            [
-                row[scale_plot_phase_columns[0]].to_numpy(dtype=float),
-                row[scale_plot_phase_columns[1]].to_numpy(dtype=float),
-            ]
-        )
 
     scale_specific_rows = []
     domain_effects_for_scale_plot = paired.loc[paired["intervention_type"].eq("domain_bump")].copy()
     for scale_key, actual_effect_column in actual_effect_column_by_scale.items():
-        scale_model = _load_scale_specific_dsp_model(scale_key)
-        scale_base_pred = float(
-            predict_dsp(scale_model, scale_plot_proportional_weights[None, :, :], dsp_packet_for_scale_plot)[0]
+        scale_packet = dsp_packet_by_scale[scale_key]
+        scale_plot_base_weights = (
+            scale_plot_domain_manifest.set_index("target_domain")["target_mass_before"]
+            .reindex(scale_packet.domain_names)
+            .to_numpy()
         )
-        for _, scale_plot_row in scale_plot_domain_manifest.iterrows():
-            scale_weights = _scale_plot_weights(scale_plot_row)
-            scale_pred = float(predict_dsp(scale_model, scale_weights[None, :, :], dsp_packet_for_scale_plot)[0])
-            observed_row = domain_effects_for_scale_plot.loc[
-                domain_effects_for_scale_plot["intervention_id"].eq(scale_plot_row["intervention_id"])
-            ].iloc[0]
-            actual_effect = float(observed_row[actual_effect_column])
-            predicted_effect = scale_pred - scale_base_pred
-            sign_agrees = bool(np.sign(actual_effect) == np.sign(predicted_effect))
-            scale_specific_rows.append(
-                {
-                    "scale": scale_key,
-                    "scale_label": scale_label_by_key[scale_key],
-                    "model_variant": canonical_dsp_variant_name,
-                    "model_fit_scale": scale_key,
-                    "intervention_id": scale_plot_row["intervention_id"],
-                    "target_domain": scale_plot_row["target_domain"],
-                    "actual_effect_bpb": actual_effect,
-                    "dsp_predicted_effect_bpb": predicted_effect,
-                    "prediction_residual_bpb": actual_effect - predicted_effect,
-                    "sign_agrees": sign_agrees,
-                    "sign_status": "agree" if sign_agrees else "SIGN DISAGREE",
-                }
+        scale_plot_base_weights = scale_plot_base_weights / scale_plot_base_weights.sum()
+        scale_plot_proportional_weights = np.stack([scale_plot_base_weights, scale_plot_base_weights], axis=0)
+        scale_plot_phase_columns = [
+            [f"phase_{phase_idx}_{domain_name}" for domain_name in scale_packet.domain_names] for phase_idx in range(2)
+        ]
+        for scale_dsp_variant_name in DSP_MODEL_VARIANTS:
+            scale_model = _load_scale_specific_dsp_model(scale_key, scale_dsp_variant_name)
+            scale_base_pred = float(
+                predict_dsp(scale_model, scale_plot_proportional_weights[None, :, :], scale_packet)[0]
             )
+            for _, scale_plot_row in scale_plot_domain_manifest.iterrows():
+                scale_weights = np.stack(
+                    [
+                        scale_plot_row[scale_plot_phase_columns[0]].to_numpy(dtype=float),
+                        scale_plot_row[scale_plot_phase_columns[1]].to_numpy(dtype=float),
+                    ]
+                )
+                scale_pred = float(predict_dsp(scale_model, scale_weights[None, :, :], scale_packet)[0])
+                observed_row = domain_effects_for_scale_plot.loc[
+                    domain_effects_for_scale_plot["intervention_id"].eq(scale_plot_row["intervention_id"])
+                ].iloc[0]
+                actual_effect = float(observed_row[actual_effect_column])
+                predicted_effect = scale_pred - scale_base_pred
+                sign_agrees = bool(np.sign(actual_effect) == np.sign(predicted_effect))
+                scale_specific_rows.append(
+                    {
+                        "scale": scale_key,
+                        "scale_label": scale_label_by_key[scale_key],
+                        "model_variant": scale_dsp_variant_name,
+                        "model_fit_scale": scale_key,
+                        "intervention_id": scale_plot_row["intervention_id"],
+                        "target_domain": scale_plot_row["target_domain"],
+                        "actual_effect_bpb": actual_effect,
+                        "dsp_predicted_effect_bpb": predicted_effect,
+                        "prediction_residual_bpb": actual_effect - predicted_effect,
+                        "sign_agrees": sign_agrees,
+                        "sign_status": "agree" if sign_agrees else "SIGN DISAGREE",
+                    }
+                )
 
     dsp_scale_specific_perturbation_predictions = pd.DataFrame.from_records(scale_specific_rows)
     dsp_scale_specific_perturbation_predictions.to_csv(
@@ -778,7 +788,7 @@ def _(IMG_DIR, dsp_scale_specific_perturbation_predictions, px):
             "dsp_predicted_effect_bpb",
             "prediction_residual_bpb",
         ],
-        title="Scale-specific DSP predictions vs actual domain perturbation effects",
+        title="Scale-specific effective-exposure DSP predictions vs actual domain perturbation effects",
         labels={
             "actual_effect_bpb": "Actual BPB effect vs proportional; negative helps",
             "dsp_predicted_effect_bpb": "DSP predicted BPB effect vs proportional",

@@ -471,3 +471,47 @@
   - It is healthy and running with `--max-concurrent 16`.
   - The active children are long-running loglikelihood jobs of about `219M` tokens each, with roughly
     `45` minutes remaining on the first wave at the last check.
+
+### 2026-05-11 - downstream collection and maximin diagnostic
+- Collected ppert downstream result CSVs after retry completion.
+  - GSM8K/HumanEval, English-lite, generative smooth proxies, MCQ smooth proxies, and agentic BPB are
+    complete at `112/112` local rows.
+  - Noise/parity was recollected from both original and retry prefixes:
+    `ngd3dm2_ppert3_noise_parity_20260509` and `ngd3dm2_ppert3_retry_noise_parity_20260509`.
+  - Recollection improved noise/parity coverage from `55/112` successful rows to `97/112`; `15` rows
+    remain `executor_not_success` and need one more failure-only retry before aggregate scoring is fully
+    complete for all perturbations.
+  - Wrote the remaining failure-only local retry state:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/ppert_noise_parity_retry4_state.csv`.
+- Proportional variable-subset noise training finished at both scales.
+  - `20/20` rows succeeded, all with final HF checkpoints.
+  - Local training-metric collection wrote:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/proportional_variable_subset_noise_collected_20260511.csv`.
+  - `eval/uncheatable_eval/bpb` variable-subset standard deviation:
+    `0.001140` at `60m_1p2b`, `0.001188` at `300m_6b`.
+- Added maximin/Pareto diagnostic:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/analyze_issue5416_maximin_300m.py`.
+  - Output directory:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/issue5416_maximin_300m_20260511/`.
+  - On the `242` signal rows and `26` issue #5416 selected items, no non-proportional observed mixture
+    strictly or weakly improves over proportional on all items.
+  - Best non-proportional row by number of improved items is `baseline_stratified`: improves `13/26`
+    items, worsens `13/26`, and improves the issue #5416 aggregate by `+0.2193`.
+  - Best non-proportional row by worst signal-scaled item delta is `run_00075`, but it still worsens
+    `17/26` items and has lower aggregate than proportional.
+  - Convex-hull diagnostic over observed non-proportional metric vectors still has negative maximin
+    margin, so the observed cloud does not contain an all-item Pareto-improving direction over
+    proportional under this item set.
+
+### 2026-05-11 - effective-exposure DSP perturbation agreement
+- Updated `experiments/domain_phase_mix/exploratory/two_phase_many/proportional_perturbation_scale_transfer_analysis.py`
+  so the perturbation-agreement diagnostics use `dsp_effective_exposure_penalty_nnls` as the primary DSP
+  model.
+- Regenerated:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/proportional_perturbation_scale_transfer_20260507/proportional_perturbation_scale_transfer_analysis.html`.
+- Effective-exposure DSP agreement with observed 100M domain-bump BPB effects:
+  - finite perturbation Pearson `0.9069`, Spearman `0.6435`, sign agreement `36/39`.
+  - local directional Pearson `0.6779`, Spearman `0.4933`, sign agreement `29/39`.
+- Scale-specific finite perturbation predictions:
+  - `60m_1p2b`: `37/39` signs agree.
+  - `300m_6b`: `36/39` signs agree.

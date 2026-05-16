@@ -1,7 +1,5 @@
 {
   "variant": "dsp_phase_benefit_penalty_nnls",
-  "fit_scale": "60m_1p2b",
-  "fit_run_set": "fit_swarm_60m_default",
   "params": {
     "rho": [
       0.009100446598979786,
@@ -174,10 +172,16 @@
     "variant": "dsp_phase_benefit_penalty_nnls",
     "description": "Canonical reduced-bias DSP: phase-1 premium only multiplies the benefit signal.",
     "phase_mode": "benefit_gain",
+    "retention_mode": "none",
     "penalty_mode": "log_softplus_squared",
     "linear_mode": "nnls",
     "m_dependent_params_per_domain": 4,
     "total_param_count": 158,
+    "fitted_gamma": 3.6038708986517705,
+    "fitted_gamma_benefit": 3.6038708986517705,
+    "fitted_gamma_saturation": 1.0,
+    "fitted_gamma_penalty": 1.0,
+    "fitted_lam": NaN,
     "train_rmse": 0.006555406839322407,
     "train_spearman": 0.9347064678386194,
     "train_pearson": 0.9404140426147096,
@@ -189,16 +193,14 @@
     "cv_regret_at_1": 0.0,
     "lower_tail_optimism": 0.004607081203328978,
     "raw_predicted_optimum_value": 0.7815854323609981,
-    "raw_nearest_observed_tv": 0.8261673208921225,
+    "raw_nearest_observed_tv": 0.826167320892123,
     "raw_nearest_observed_run_name": "run_00200",
     "raw_nearest_observed_value": 1.0687605142593384,
     "raw_phase0_support_gt_1e3": 1,
     "raw_phase1_support_gt_1e3": 5,
     "phase0_max_weight": 0.9999876720803688,
-    "phase1_max_weight": 0.3905434300791664,
+    "phase1_max_weight": 0.3905434300799574,
     "optimum_success": true,
-    "optimum_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL",
-    "fit_scale": "60m_1p2b",
-    "fit_run_set": "fit_swarm_60m_default"
+    "optimum_message": "CONVERGENCE: NORM OF PROJECTED GRADIENT <= PGTOL"
   }
 }

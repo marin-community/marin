@@ -27,7 +27,7 @@ import levanter.utils.fsspec_utils as fsspec_utils
 from fray import client as fray_client
 from fray.client import JobHandle, JobStatus
 from fray.local_backend import LocalJobHandle
-from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray.types import Entrypoint, GpuConfig, JobRequest, ResourceConfig, TpuConfig, create_environment
 from rigging.filesystem import open_url, url_to_fs
 
 from marin.execution.artifact import Artifact
@@ -53,6 +53,28 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _dependency_groups_for_resources(resources: ResourceConfig) -> list[str]:
+    """Return dependency groups required by the requested accelerator."""
+    device = resources.device
+    if isinstance(device, TpuConfig):
+        return ["tpu"]
+    if isinstance(device, GpuConfig):
+        return ["gpu"]
+    return []
+
+
+def _merge_dependency_groups(*groups: Iterable[str] | None) -> list[str]:
+    """Merge dependency groups while preserving order."""
+    merged: list[str] = []
+    for group in groups:
+        if group is None:
+            continue
+        for item in group:
+            if item not in merged:
+                merged.append(item)
+    return merged
 
 
 def _write_executor_info(step: StepSpec) -> None:
@@ -394,13 +416,30 @@ def _run_iris_job(step: StepSpec, output_path: str) -> None:
     """Dispatch a step with explicit ``resources`` as a Fray job.
 
     When ``step.fn`` is a :class:`RemoteCallable`, its inner callable is
-    unwrapped — ``step.resources`` takes precedence over any resources
-    carried by the wrapper.
+    unwrapped, but its environment is preserved. ``step.resources`` takes
+    precedence over any resources carried by the wrapper. Accelerator
+    dependency groups are inferred from ``step.resources`` so old-style
+    ``ExecutorStep(..., resources=...)`` training jobs install TPU/GPU deps
+    even when their callable is not decorated with ``@remote``.
     """
     assert step.resources is not None
-    raw_fn = step.fn.fn if isinstance(step.fn, RemoteCallable) else step.fn
+    env_vars = None
+    pip_dependency_groups = _dependency_groups_for_resources(step.resources)
+    if isinstance(step.fn, RemoteCallable):
+        raw_fn = step.fn.fn
+        env_vars = step.fn.env_vars
+        pip_dependency_groups = _merge_dependency_groups(step.fn.pip_dependency_groups, pip_dependency_groups)
+    else:
+        raw_fn = step.fn
     assert raw_fn is not None, f"Step {step.name} has no callable"
-    _submit_iris_job(step, output_path, raw_fn, step.resources)
+    _submit_iris_job(
+        step,
+        output_path,
+        raw_fn,
+        step.resources,
+        env_vars=env_vars,
+        pip_dependency_groups=pip_dependency_groups,
+    )
 
 
 def _run_remote_step(step: StepSpec, output_path: str) -> None:

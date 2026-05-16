@@ -690,6 +690,7 @@ def resolve_executor_step(
         deps=deps or [],
         override_output_path=output_path,
         fn=final_fn,
+        resources=step.resources,
     )
 
 
