@@ -51,24 +51,29 @@ def _label(scale: float) -> str:
     return str(scale).replace(".", "p")
 
 
-# Build perturbations: (label, override-dict). After the second-round
-# extension, lm_head adds 1.2x (the lone scale-up direction missing from
-# the initial down-only lm_head sweep).
+# Second-round extension: only ``lmhead-1.2x`` enqueued. The original
+# 15 trials below (down-only lm_head + bidirectional embed/adam/muonh)
+# are kept commented out so the historical recipe is visible but no
+# longer enumerated for new submissions. Cached outputs are unchanged.
 def _make_trials() -> list[tuple[str, dict]]:
     trials = []
-    for s in [0.9, 0.8, 0.7, 0.5, 0.3, 1.2]:
+    # Original sweep (commented out — outputs are content-hash cached):
+    # for s in [0.9, 0.8, 0.7, 0.5, 0.3]:
+    #     trials.append((f"lmhead-{_label(s)}", {"adamh_lmhead_lr_scale": s}))
+    # for s in [0.6, 0.8, 1.0, 1.2, 1.4]:
+    #     trials.append((f"embed-{_label(s)}", {"adamh_embed_lr_scale": s}))
+    # for s in [1.1, 1.3, 1.5]:
+    #     trials.append((f"adam-{_label(s)}", {"adam_lr_scale": s}))
+    # for s in [0.7, 1.3]:
+    #     trials.append((f"muonh-{_label(s)}", {"muonh_lr_scale": s}))
+    # Second-round addition only:
+    for s in [1.2]:
         trials.append((f"lmhead-{_label(s)}", {"adamh_lmhead_lr_scale": s}))
-    for s in [0.6, 0.8, 1.0, 1.2, 1.4]:
-        trials.append((f"embed-{_label(s)}", {"adamh_embed_lr_scale": s}))
-    for s in [1.1, 1.3, 1.5]:
-        trials.append((f"adam-{_label(s)}", {"adam_lr_scale": s}))
-    for s in [0.7, 1.3]:
-        trials.append((f"muonh-{_label(s)}", {"muonh_lr_scale": s}))
     return trials
 
 
 _TRIALS = tuple(_make_trials())
-assert len(_TRIALS) == 16, f"expected 16 trials, got {len(_TRIALS)}"
+assert len(_TRIALS) == 1, f"expected 1 trial, got {len(_TRIALS)}"
 
 _WARMUP_FRACTION: float = 0.01
 _NUM_EXPERTS: int = 256
