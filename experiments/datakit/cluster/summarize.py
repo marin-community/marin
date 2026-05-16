@@ -35,7 +35,6 @@ from collections import defaultdict
 
 import numpy as np
 import pyarrow.parquet as pq
-from marin.execution.artifact import Artifact
 from rigging.filesystem import open_url
 
 from experiments.datakit.cluster.assign import AssignmentAttrData
@@ -49,7 +48,7 @@ CTFIDF_MAX_FEATURES = 50_000
 
 
 def _scan_assignments(
-    assignment_step_outputs: dict[str, str],
+    assignments: dict[str, AssignmentAttrData],
     cluster_col: str,
     dist_col: str,
     n_sample_per_cluster: int,
@@ -76,8 +75,7 @@ def _scan_assignments(
     reps_heap: dict[int, list[tuple[float, str, str, int]]] = defaultdict(list)
     source_main_dirs: dict[str, str] = {}
 
-    for source_name, step_output in sorted(assignment_step_outputs.items()):
-        attr = Artifact.from_path(step_output, AssignmentAttrData)
+    for source_name, attr in sorted(assignments.items()):
         source_main_dirs[source_name] = attr.source_main_dir
         for shard_uri in attr.shard_paths():
             basename = os.path.basename(shard_uri)
@@ -159,7 +157,7 @@ def summarize_at_k(
     output_path: str,
     k_train: int,
     k_view: int,
-    assignment_step_outputs: dict[str, str],
+    assignments: dict[str, AssignmentAttrData],
     n_sample_per_cluster: int,
     n_reps: int = DEFAULT_N_REPS,
     n_terms: int = DEFAULT_N_TERMS,
@@ -169,7 +167,7 @@ def summarize_at_k(
     cluster_col = f"cluster_{k_view}"
     dist_col = f"dist_{k_train}"
     samples, reps, source_main_dirs = _scan_assignments(
-        assignment_step_outputs,
+        assignments,
         cluster_col=cluster_col,
         dist_col=dist_col,
         n_sample_per_cluster=n_sample_per_cluster,

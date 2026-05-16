@@ -156,7 +156,7 @@ def _output_schema(k_train: int, k_views: list[int]) -> pa.Schema:
 
 def assign_source(
     output_path: str,
-    embedding_step_output: str,
+    embedding: EmbeddingAttrData,
     centroids_uri: str,
     lookup_uris: dict[int, str],
     *,
@@ -165,17 +165,16 @@ def assign_source(
     max_workers: int = 128,
 ) -> AssignmentAttrData:
     """Map-only Zephyr cluster of every shard in one source's EmbeddingAttrData."""
-    embed_attr = Artifact.from_path(embedding_step_output, EmbeddingAttrData)
-    embedding_shards = embed_attr.shard_paths()
+    embedding_shards = embedding.shard_paths()
     if not embedding_shards:
-        raise RuntimeError(f"No embedding shards under {embed_attr.output_dir}")
+        raise RuntimeError(f"No embedding shards under {embedding.output_dir}")
 
     # Load centroids on the driver just to discover (k_train, dim) for the schema.
     # Workers do their own loads (cached) — this driver read is small (~MB).
     centroids = _read_npy(centroids_uri)
     k_train, d = int(centroids.shape[0]), int(centroids.shape[1])
-    if d != embed_attr.embedding_dim:
-        raise ValueError(f"centroid dim {d} != embedding dim {embed_attr.embedding_dim}")
+    if d != embedding.embedding_dim:
+        raise ValueError(f"centroid dim {d} != embedding dim {embedding.embedding_dim}")
     k_views = sorted(int(k) for k in lookup_uris)
     schema = _output_schema(k_train, k_views)
 
@@ -187,14 +186,14 @@ def assign_source(
     logger.info(
         "Assigning %d shards from %s against K=%d centroids (views: %s)",
         len(embedding_shards),
-        embed_attr.output_dir,
+        embedding.output_dir,
         k_train,
         k_views,
     )
 
     source_specs = [InputFileSpec(path=p, columns=["id", "embedding"]) for p in embedding_shards]
 
-    quant_scale = embed_attr.quantization_scale
+    quant_scale = embedding.quantization_scale
 
     ds = (
         Dataset.from_list(source_specs)
@@ -214,15 +213,15 @@ def assign_source(
     ctx_z = ZephyrContext(
         resources=worker_resources,
         max_workers=min(max_workers, len(embedding_shards)),
-        name=f"assign-k{k_train}-{os.path.basename(embed_attr.output_dir)[:8]}",
+        name=f"assign-k{k_train}-{os.path.basename(embedding.output_dir)[:8]}",
         stage_runner_factory=InlineRunner,
     )
     outcome = ctx_z.execute(ds, verbose=True)
 
     artifact = AssignmentAttrData(
         output_dir=output_path,
-        source_main_dir=embed_attr.source_main_dir,
-        embedding_output_dir=embed_attr.output_dir,
+        source_main_dir=embedding.source_main_dir,
+        embedding_output_dir=embedding.output_dir,
         k_train=k_train,
         k_views=k_views,
         counters=dict(outcome.counters),

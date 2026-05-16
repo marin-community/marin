@@ -18,7 +18,6 @@ import tempfile
 
 import numpy as np
 import pyarrow.parquet as pq
-from marin.execution.artifact import Artifact
 from rigging.filesystem import open_url
 
 from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
@@ -47,7 +46,7 @@ def _sample_from_shard(
 
 def sample_centroid_inputs(
     output_path: str,
-    embed_step_outputs: dict[str, str],
+    embeddings: dict[str, EmbeddingAttrData],
     n_per_source: int,
     seed: int = 42,
 ) -> None:
@@ -57,8 +56,7 @@ def sample_centroid_inputs(
     all_src: list[np.ndarray] = []
     total = 0
 
-    for source_name, step_output in sorted(embed_step_outputs.items()):
-        attr = Artifact.from_path(step_output, EmbeddingAttrData)
+    for source_name, attr in sorted(embeddings.items()):
         shards = attr.shard_paths()
         if not shards:
             logger.warning("No embedding shards for %s under %s", source_name, attr.output_dir)

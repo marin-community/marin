@@ -41,17 +41,19 @@ os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 
 from fray import ResourceConfig  # noqa: E402
 from marin.datakit.sources import all_sources  # noqa: E402
+from marin.execution.artifact import Artifact  # noqa: E402
 from marin.execution.remote import remote  # noqa: E402
 from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
 
-from experiments.datakit.cluster.assign import assign_source  # noqa: E402
+from experiments.datakit.cluster.assign import AssignmentAttrData, assign_source  # noqa: E402
 from experiments.datakit.cluster.sample import sample_centroid_inputs  # noqa: E402
 from experiments.datakit.cluster.summarize import summarize_at_k  # noqa: E402
 from experiments.datakit.cluster.train import train_centroids  # noqa: E402
 from experiments.datakit.embeddings.luxical.pipeline import (  # noqa: E402
     LUXICAL_REPO,
     LUXICAL_WEIGHTS_FILE,
+    EmbeddingAttrData,
     embed_source,
 )
 
@@ -146,9 +148,9 @@ def _build_steps() -> list[StepSpec]:
         deps=list(embed_steps.values()),
         hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "v": 1},
         fn=remote(
-            lambda output_path: sample_centroid_inputs(
+            lambda output_path, eso=embed_step_outputs: sample_centroid_inputs(
                 output_path=output_path,
-                embed_step_outputs=embed_step_outputs,
+                embeddings={n: Artifact.from_path(p, EmbeddingAttrData) for n, p in eso.items()},
                 n_per_source=N_PER_SOURCE_FOR_SAMPLE,
             ),
             resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=4, ram="32g"),
@@ -188,7 +190,7 @@ def _build_steps() -> list[StepSpec]:
             fn=remote(
                 lambda output_path, embed_step_output=embed_step.output_path: assign_source(
                     output_path=output_path,
-                    embedding_step_output=embed_step_output,
+                    embedding=Artifact.from_path(embed_step_output, EmbeddingAttrData),
                     centroids_uri=centroids_uri,
                     lookup_uris=lookup_uris,
                     window_size=ASSIGN_WINDOW,
@@ -213,11 +215,11 @@ def _build_steps() -> list[StepSpec]:
                 deps=[train_step, *assign_steps.values()],
                 hash_attrs={"k_train": K_TRAIN, "k_view": k_view, "n_sample": n_sample, "v": 1},
                 fn=remote(
-                    lambda output_path, k=k_view, n=n_sample: summarize_at_k(
+                    lambda output_path, k=k_view, n=n_sample, aso=assign_step_outputs: summarize_at_k(
                         output_path=output_path,
                         k_train=K_TRAIN,
                         k_view=k,
-                        assignment_step_outputs=assign_step_outputs,
+                        assignments={n_: Artifact.from_path(p, AssignmentAttrData) for n_, p in aso.items()},
                         n_sample_per_cluster=n,
                     ),
                     resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=8, ram="32g"),
