@@ -648,6 +648,118 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+@OptimizerConfig.register_subclass("grug_moe_muonh_may_arch_1pct_routed_lr_v1")
+@dataclass(frozen=True)
+class GrugMoeMuonHMayArch1pctRoutedLrConfig(OptimizerConfig):
+    """1pct-noclip with a separate MuonH LR scale for the routed-expert weights.
+
+    Same routing as :class:`GrugMoeMuonHMayArchGNMuonHConfig` (the
+    1pct-noclip baseline) except the routed-expert matrices
+    (``.mlp.w_gate_up`` and ``.mlp.w_down``) move out of the shared
+    ``muonh`` group into a dedicated ``muonh_routed`` group whose LR is
+    ``learning_rate * routed_muonh_lr_scale``. The shared expert,
+    attention, and GatedNorm matrices stay on plain MuonH at full LR.
+
+    ``routed_muonh_lr_scale = 1.0`` reduces to the 1pct-noclip baseline
+    (modulo numeric ordering from the extra ``inject_hyperparams`` arm).
+    """
+
+    adam_lr: float = 6e-4
+    momentum: float = 0.95
+    nesterov: bool = True
+    backend_steps: int = 5
+    beta1: float = 0.9
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    muon_epsilon: float = 1e-8
+    max_grad_norm: float | None = None
+    coefficient_type: CoefficientType = "quintic"
+    routed_muonh_lr_scale: float = 1.0
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        routed_muonh_lr_schedule = self.lr_scheduler(
+            num_train_steps, override_lr=self.learning_rate * self.routed_muonh_lr_scale
+        )
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, routed_muonh_lr, adam_lr):
+            def muonh_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_muonh(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=lr,
+                        coefficient_type=self.coefficient_type,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "muonh": muonh_transform_at(learning_rate),
+                    "muonh_routed": muonh_transform_at(routed_muonh_lr),
+                    "adamh_embed": adamh_transform_at(learning_rate),
+                    "adamh": adamh_transform_at(learning_rate),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            routed_muonh_lr=routed_muonh_lr_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if "token_embed" in path_lower:
+                return "adamh_embed"
+            if "router_bias" in path_lower or path_lower.endswith(".attn_gate") or ".router" in path_lower:
+                return "adam"
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh"
+            # Routed-expert weights: w_gate_up (3-D concat) and w_down (3-D).
+            # Matched before the generic 2-D/3-D fallback so they get the
+            # scaled MuonH LR instead of the shared one.
+            if path_lower.endswith(".mlp.w_gate_up") or path_lower.endswith(".mlp.w_down"):
+                return "muonh_routed"
+            # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
+            if "gated_norm" in path_lower:
+                return "muonh"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "muonh"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
 @OptimizerConfig.register_subclass("grug_moe_normuonh_v1")
 @dataclass(frozen=True)
 class GrugMoeNorMuonHConfig(OptimizerConfig):
