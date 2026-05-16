@@ -1,0 +1,25 @@
+{
+  "run_id": "20260516T220514Z_v25a_cap2",
+  "mode": "single_pass",
+  "model": "gpt-5.1",
+  "temperature": 1.0,
+  "max_retries": 3,
+  "max_completion_tokens": 30000,
+  "max_per_surface_value": 2,
+  "source_set_b_dir": "/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage2_scenarios/20260516T174023Z",
+  "stage1_dir": "/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage1_understanding/20260516T172804Z",
+  "spec_path": "/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/specs/openai_model_spec.jsonl",
+  "statements": [
+    "no_topic_off_limits",
+    "avoid_hateful_content"
+  ],
+  "scenario_counts": {
+    "no_topic_off_limits": 25,
+    "avoid_hateful_content": 19
+  },
+  "git_commit": "af5881aee",
+  "started_utc": "2026-05-16T22:05:14.582269+00:00",
+  "finished_utc": "2026-05-16T22:06:58.611641+00:00",
+  "n_admitted": 44,
+  "n_failed_statements": 0
+}

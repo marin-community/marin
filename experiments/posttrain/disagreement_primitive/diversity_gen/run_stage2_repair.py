@@ -252,12 +252,14 @@ def process_statement_sync(
     max_retries: int,
     max_completion_tokens: int,
     attempts_dir: Path,
+    max_per_surface_value: int | None = None,
 ) -> RepairResult:
     sid = statement["id"]
     user_content = make_stage2_repair_singlepass_prompt(
         statement_record=statement,
         understanding_record=understanding,
         scenarios=source_scenarios,
+        max_per_surface_value=max_per_surface_value,
     )
 
     last_err: str | None = None
@@ -340,6 +342,13 @@ def main() -> None:
     ap.add_argument("--output-base-dir", type=Path, default=DEFAULT_OUTPUT_ROOT)
     ap.add_argument("--max-workers", type=int, default=8,
                     help="across-statement parallelism. Within a statement, iterative mode is sequential.")
+    ap.add_argument("--max-per-surface-value", type=int, default=None,
+                    help="single_pass only: hard cap on how many scenarios may share the same "
+                         "surface-dimension value (target referent / persona / country / domain). "
+                         "Default None = use ⌈N/5⌉ (V2 pilot). Set 2 for V2.5a; set 1 for V2.5b.")
+    ap.add_argument("--run-tag", type=str, default=None,
+                    help="optional short tag appended to the output run_id (e.g., 'v25a_cap2'). "
+                         "Helps name parallel pilot runs without collisions.")
     ap.add_argument("--dry-run", action="store_true",
                     help="print plan + first ~500 chars of one prompt, then exit (no API calls)")
     args = ap.parse_args()
@@ -365,6 +374,8 @@ def main() -> None:
         )
 
     run_id = _now_stamp()
+    if args.run_tag:
+        run_id = f"{run_id}_{re.sub(r'[^A-Za-z0-9_]+', '_', args.run_tag).strip('_')}"
     model_slug = _model_slug(args.model)
     mode_slug = "repaired" if args.mode == "single_pass" else "repaired_iterative"
     out_root = args.output_base_dir / model_slug / "stage2_scenarios" / mode_slug / run_id
@@ -379,6 +390,7 @@ def main() -> None:
         "temperature": args.temperature,
         "max_retries": args.max_retries,
         "max_completion_tokens": args.max_completion_tokens,
+        "max_per_surface_value": args.max_per_surface_value,
         "source_set_b_dir": str(args.source_set_b_dir.resolve()),
         "stage1_dir": str(args.stage1_dir.resolve()),
         "spec_path": str(args.spec_path.resolve()),
@@ -417,10 +429,8 @@ def main() -> None:
         out_failures_path.open("w") as ferr,
         ThreadPoolExecutor(max_workers=args.max_workers) as ex,
     ):
-        processor = process_statement_sync if args.mode == "single_pass" else process_statement_iterative
-        futs = {
-            ex.submit(
-                processor,
+        def _submit(sid: str):
+            common = dict(
                 client=client,
                 log=log,
                 statement=spec[sid],
@@ -431,9 +441,12 @@ def main() -> None:
                 max_retries=args.max_retries,
                 max_completion_tokens=args.max_completion_tokens,
                 attempts_dir=attempts_dir,
-            ): sid
-            for sid in statement_ids
-        }
+            )
+            if args.mode == "single_pass":
+                return ex.submit(process_statement_sync, max_per_surface_value=args.max_per_surface_value, **common)
+            return ex.submit(process_statement_iterative, **common)
+
+        futs = {_submit(sid): sid for sid in statement_ids}
         for fut in as_completed(futs):
             sid = futs[fut]
             res = fut.result()

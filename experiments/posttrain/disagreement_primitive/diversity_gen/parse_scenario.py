@@ -307,15 +307,16 @@ def parse_repair_response(
         if not isinstance(rubric["key_tension"], str) or not rubric["key_tension"].strip():
             raise ValueError(f"scenarios[{i}].rubric.key_tension must be non-empty string")
 
-        if rew["scenario_text"].strip() == (src.get("scenario_text") or "").strip():
+        # Anti-echo: at least one of scenario_text OR user_query must differ from
+        # source. Some rewrites legitimately keep the original user_query (which
+        # is already a good prompt) while rewriting scenario_text. We require a
+        # non-trivial change on AT LEAST ONE field, not both.
+        text_echo = rew["scenario_text"].strip() == (src.get("scenario_text") or "").strip()
+        query_echo = rew["user_query"].strip() == (src.get("user_query") or "").strip()
+        if text_echo and query_echo:
             raise ValueError(
-                f"scenarios[{i}] scenario_text is byte-identical to source — "
-                f"the LM echoed instead of rewriting"
-            )
-        if rew["user_query"].strip() == (src.get("user_query") or "").strip():
-            raise ValueError(
-                f"scenarios[{i}] user_query is byte-identical to source — "
-                f"the LM echoed instead of rewriting"
+                f"scenarios[{i}] BOTH scenario_text AND user_query are byte-identical "
+                f"to source — the LM echoed instead of rewriting"
             )
 
     return items

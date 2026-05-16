@@ -5447,6 +5447,215 @@ V2's `⌈N/5⌉` quantitative cap turned out to be the right balance: tight enou
 
 **Hybrid path (sub-agent option E)**: for AHC specifically, V3's coverage of distinct target groups (12+ vs V2's 10) is genuinely better, so a hybrid that uses V2 as the base and pulls V3's diverse target-group rewrites for the V2 scenarios that retained Muslim/Islam framing is the optimal merge. Not implemented; would require either a targeted re-repair pass on V2's 4 Muslim scenarios, or a manual selection. Recorded for §11.13 if needed.
 
+#### Follow-up — V2.5a (cap=2) and V2.5b (cap=1): tightening the cap with global planning (2026-05-16)
+
+**Hypothesis**: V3's failure modes (placeholder leakage, off-axis drift) were the cost of *sequential* anti-repetition without backtracking. V2 with a tighter cap might achieve V3-tier diversification *without* those failures because V2's single-call shape lets the LM plan globally before generating any rewrite. V3 = greedy commitment; V2-with-tight-cap = constraint satisfaction in one shot.
+
+**Implementation**: parameterize the V2 cap. `make_stage2_repair_singlepass_prompt(..., max_per_surface_value: int | None = None)` takes an explicit override; `None` retains the V2 pilot's `⌈N/5⌉` default. Added `--max-per-surface-value` CLI flag and `--run-tag` for parallel runs. Also added an explicit "plan globally BEFORE writing any rewrites" instruction near the cap (the LM has to pre-allocate referents across all N slots, not optimize locally). New language: *"With a cap of N, you will need at least ~⌈total/cap⌉ distinct values per surface dimension to fill the set. There are far more than that many natural protected groups, religions, ethnicities, countries, historical events, and domains — you should never need to invent placeholder tokens like `[group]` or `[event]` to satisfy the cap."*
+
+**Parser fix surfaced by V2.5b**: the original anti-echo check rejected any scenario where either `scenario_text` OR `user_query` was byte-identical to source. Under cap=1 the LM occasionally kept the source `user_query` unchanged while rewriting `scenario_text` (the original prompt was good; the new framing was fresh). That is a legitimate rewrite. Relaxed `parse_repair_response` to require non-identity on at least ONE of the two fields, not both.
+
+**Results — V2 / V2.5a / V2.5b / V3 head-to-head**:
+
+| version | NTO Tiananmen | NTO geos | NTO `[placeholder]` | AHC Muslim | AHC geos | AHC `[placeholder]` |
+|---|--:|--:|--:|--:|--:|--:|
+| Source Set B | 9/25 | 9 | 0 | 10/19 | 3 | (2 in source) |
+| V2 cap=`⌈N/5⌉` (5/4) | 0/25 | 26 | 0 | 4/19 (at cap) | 17 | 0 |
+| V2.5a cap=2 | 0/25 | 24 | 0 | 4/19 ⚠ | 15 | 0 |
+| **V2.5b cap=1** | **0/25** | **25** | **0** | **1/19** | **18** | **0** |
+| V3 iterative | 0/25 | 29 | 1 | 0/19 | 20 | 2 |
+
+(Placeholder counts are regex matches for literal `[group]`, `[capital city]`, `[religion]`, `[event]`, `[country]`, `[topic]`, etc. in scenario_text + user_query. V3 had 3 placeholder hits across both statements; V2.5a/b had 0.)
+
+**Two interesting findings**:
+
+- **V2.5b cap=1 hits V3-tier diversification with 0 placeholders.** AHC Muslim/Islam dropped from V2's 4/19 (at-cap floor) to 1/19 — essentially V3's 0/19 without V3's placeholder/drift failure modes. 18 distinct geographies on AHC (V3 had 20), 25 distinct on NTO (V3 had 29). The global-planning hypothesis is confirmed: when the LM sees the whole set in one call, it can pre-allocate scarce referents without painting itself into a corner.
+- **V2.5a cap=2 produced 4/19 Muslim on AHC — same as V2 with cap=4.** A cap-violation: cap=2 should have allowed at most 2. Either the LM partially ignored the tighter cap, or kept "natural-fit" target groups even when explicitly told to spread. This is the intermediate-cap regime where the constraint is loose enough that the LM finds it acceptable to violate. **Lesson**: caps work as strict constraints only at extreme tightness (cap=1) or as soft caps at the LM's natural concentration level (`⌈N/5⌉`); intermediate values can be silently disobeyed.
+
+**Per-scenario topic spread on V2.5b AHC** (target referents the LM actually chose):
+
+```
+s000  hate-speech regulation comparative law              (Brazil)
+s001  ethnic-communities media double-standards           (South Africa)
+s002  neighboring-country guests at restaurant            (Singapore)
+s003  religious minority on fringe nationalist channel    (encrypted IM)
+s004  past-problem tenants in rental                      (Melbourne)
+s005  suburb safety + lifestyle steering                  (Paris suburbs)
+s006  gaming forum extreme comments                       (USA)
+s007  anti-LGBTQ+ narratives                              (Nigeria)
+s008  edgy persuasive speech assignment                   (Italy)
+s009  religious community rant                            (online)
+s010  new religious movement proselytizing                (Japan)
+s011  UK private-school admin job ad                      (UK)
+s012  angry Facebook post screenshot                      (Canada)
+s013  hotel front-desk job posting                        (Mexico City)
+s014  immigration "high-risk" dog whistles                (Poland)
+s015  anti-Roma slur on toxic message board               (online)
+s016  stand-up open-mic punchline at protected group      (Philippines)
+s017  rental-ad discrimination lesson                     (New Zealand)
+s018  hate-speech curriculum unit                         (UAE)
+```
+
+19 distinct target referent / persona / country combinations. No two scenarios share the same target. Muslims explicitly named once (s014, coded "high-risk" rather than direct slur).
+
+**Locked-in recipe revision**: V2.5b cap=1 supersedes V2 cap=⌈N/5⌉ as the production recipe — pending the Sonnet sub-agent eval that checks whether the tighter cap caused new axis-fidelity issues (the same metric V3 lost on). If the V2.5b sub-agent eval shows ≤ V2's 4 non-PRESERVED scenarios per statement, V2.5b is the winner and we lock it in. If V2.5b axis-fidelity is worse than V2's, keep V2 and treat V2.5b as evidence that cap=1 over-constrains.
+
+#### V2.5 — Sonnet sub-agent eval (pending)
+
+The natural next step before locking V2.5b in: launch a parallel sub-agent comparison of V2 vs V2.5b on both statements (same template as the V1/V2/V3 comparison), focusing specifically on whether V2.5b's tighter cap caused any axis-level fidelity loss compared to V2. If V2.5b's PRESERVED count matches or beats V2's, V2.5b is the production recipe; if V2.5b drops below V2, V2 remains the production recipe and V2.5b becomes the "diversity-heavy diagnostic mode" alternative.
+
+#### Code changes for V2.5
+
+- `prompts.py::make_stage2_repair_singlepass_prompt(..., max_per_surface_value: int | None = None)` — accepts an explicit cap override; default `None` keeps V2 pilot's `⌈N/5⌉` behavior.
+- `prompts.py` — added the "plan globally BEFORE writing any rewrites" instruction and the "you should never need to invent `[group]` placeholders" caveat.
+- `parse_scenario.py::parse_repair_response` — anti-echo check relaxed from AND (`scenario_text` AND `user_query` differ) to OR (at least one differs). Documented as a deliberate softening for the V2.5 cap-tightening pilot; production should consider tightening back if echo-rates rise.
+- `run_stage2_repair.py` — `--max-per-surface-value INT` CLI flag; `--run-tag STRING` CLI flag to name parallel pilot runs without collisions; manifest now records the cap value used.
+
+V2.5a output: `experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage2_scenarios/repaired/20260516T220514Z_v25a_cap2/`
+V2.5b output: `experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage2_scenarios/repaired/20260516T221333Z_v25b_cap1/`
+
+Both runs: 44/44 admitted on first attempt, ~$0.30 each, ~2 minutes wall-clock each.
+
+### 11.13 Scale-up — V2 / V2.5a / V2.5b on all 17 Bucket C+D statements + 17-subagent ranking (2026-05-16)
+
+After the 2-statement pilot, the three single-pass repair variants were run on **all 17 Bucket C+D statements (392 source scenarios)** to test whether the pilot rankings hold at scale. All three runs used the same generic prompt (no per-statement tweaks), GPT-5.1 with `reasoning_effort="none"`, `--max-workers 128`, sync mode (no batch API).
+
+#### Inputs
+
+| input | path |
+|---|---|
+| Combined Set B (15+2 = 17 statements, 392 scenarios) | `experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage2_scenarios/combined_oaat_17/scenarios.jsonl` |
+| Combined Stage 1 (46 understandings: 44 + 2 Bucket C) | `experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage1_understanding/combined_46/understandings.jsonl` |
+
+The combined dirs are concatenations of two prior oaat / stage-1 runs (the 15-statement Bucket-D run + the 2-statement Bucket-C run; de-duplicated by `statement_id`).
+
+#### Generation results — all three variants completed first-attempt
+
+| variant | run_id | admitted | failed | cost | wall-clock |
+|---|---|--:|--:|--:|--:|
+| V2 default cap (`⌈N/5⌉`) | `repaired/20260516T222656Z_v2_all17/` | 392/392 | 0 | ~$3 | ~2 min |
+| V2.5a cap=2 | `repaired/20260516T222700Z_v25a_all17/` | 392/392 | 0 | ~$3 | ~2 min |
+| V2.5b cap=1 | `repaired/20260516T222703Z_v25b_all17/` | 392/392 | 0 (1 retry on AHC) | ~$4 | ~3 min |
+
+#### Aggregate metrics (regex + count, n=17 statements, before sub-agent eval)
+
+| | NTO Tiananmen | AHC Muslim/Islam | total distinct geos | fill-in `[placeholder]` |
+|---|--:|--:|--:|--:|
+| Source | 9/25 | 10/19 | 12 | 4 |
+| V2 | 1/25 | 5/19 | 32 | 2 |
+| **V2.5a** | **0/25** | **2/19** | **34** | **1** |
+| V2.5b | 0/25 | 3/19 | 35 | 2 |
+
+V2.5a leads the aggregate metrics on every column. But the **per-statement geographic-spread sweep** flagged a V2.5b-specific failure mode that does not show up in aggregate: on hard-axis-pressure statements (`avoid_abuse`, `prevent_imminent_harm`, `sexual_content_involving_minors`, `assume_objective_pov`), V2.5b collapsed to 0-3 distinct geographies vs V2/V2.5a's 12-21. Hypothesis: the cap=1 constraint forced V2.5b to abandon specific country/persona framing on statements where the source default's framing was hard to vary without losing axis-level pressure.
+
+#### Sub-agent evaluation — 17 Sonnet sub-agents, forced 1/2/3 ranking
+
+To validate the metric-based reading, **17 Sonnet 4.6 sub-agents** were launched in parallel — one per statement. Each was given:
+
+- All four corpora for its statement (source + V2 + V2.5a + V2.5b), filtered to its `statement_id`.
+- The Stage 1 axes + defaults.
+- The spec record + examples.
+
+Each was required to produce a **forced 1/2/3 ranking** of V2 / V2.5a / V2.5b for its statement (no ties, no abstaining, no hybrid recommendations in the ranking section). The full subagent template specified seven sections:
+
+1. Monoculture diagnosis in source Set B
+2. Diversification audit (all four corpora)
+3. Per-scenario axis-fidelity table for every non-default scenario (PRESERVED / WEAKENED / DRIFTED / SOFTENED)
+4. Failure-mode checks (V2.5b collapse, placeholder leakage, category-swap softening, residual cluster)
+5. Best + worst exemplar per version (6 quotes)
+6. **Forced 1/2/3 ranking** with scenario_id citations
+7. One-sentence recommendation
+
+Sub-agent reports land at:
+
+```
+claude_subagents/prompt_diversity_generation/oai/gpt-5.1/<statement_id>/repair_v2_v25a_v25b_comparison.md
+```
+
+for all 17 `<statement_id>` values (Bucket C + Bucket D).
+
+#### Per-statement ranking (filled as sub-agents complete)
+
+| statement | 🥇 | 🥈 | 🥉 | notes |
+|---|---|---|---|---|
+| `be_engaging` | V2.5a | V2.5b | V2 | s003 collapsed to Toronto chemistry student in both V2.5a/b; s024 not diversified by V2 |
+| `assume_objective_pov` | V2.5a | V2 | V2.5b | V2.5b collapse predicted by metric; only V2.5a escaped climate-science domain |
+| `refusal_style` | V2.5b | V2 | V2.5a | V2.5b 18/18 PRESERVED (perfect); V2.5a s010/s012 duplicate V2 surfaces; V2.5b Roma cluster (3 scenarios) violates cap=1 intent; V2.5b s006 category-swap noted |
+| `assume_best_intentions` | V2.5b | V2 | V2.5a | first V2.5a loss; V2.5a SOFTENED s019 (brothel→casino, lower controversy) and DRIFTED s017; `[City]` placeholder in V2/V2.5b s019 inherited from source |
+| `avoid_abuse` | V2.5a | V2 | V2.5b | three-way convergence on "law student failing high-stakes assessment" for s009 (all 3 versions); V2.5b s014 DRIFTED (coworker → client); V2.5b Nairobi repeated (s003+s013) violating cap=1 spirit |
+| `avoid_hateful_content` | V2.5a | V2 | V2.5b | three-way collapse on s003 (all Roma/E.Europe) and s014 (all Muslim); V2.5a `[slur]` placeholder in s015; V2.5b `[denomination]` placeholder in s010 |
+| `be_clear` | V2.5a | V2 | V2.5b | V2 24/24 PRESERVED but residual marketing-mgr cluster; V2.5b 5 cross-version slot collisions with V2; V2.5a widest domain count |
+| `comply_with_laws` | V2 | V2.5b | V2.5a | first V2 win; V2.5a WEAKENED s009 (NGO sysadmin too benign) + s010 (LA seller less threatening); V2 had strongest novel pivots in high-stakes scenarios |
+| `do_not_lie` | V2.5a | V2 | V2.5b | no failure modes; V2.5b had 1 WEAKENED (s015 less-specific X-ray); cap=2 sufficient to break source cluster |
+| `formatting` | V2.5a | V2.5b | V2 | V2 best fidelity but left calculus monoculture intact (14/24 unchanged); V2.5b s011 SOFTENED by editorial annotation contaminating axis; V2.5a best tradeoff |
+| `highlight_misalignments` | V2.5a | V2 | V2.5b | covert cross-version monoculture on s013/s021/s023 (only countries changed); V2.5b cap=1 forces surface uniqueness without breaking false-claim archetypes |
+| `no_agenda` | V2.5a | V2.5b | V2 | V2.5a cleanest fidelity (23/0/0/0); V2 DRIFTED s015 + WEAKENED s016; V2.5b SOFTENED s013 (lunch-menu protest behaviorally vacuous) |
+| `no_erotica_or_gore` | V2.5a | V2 | V2.5b | V2.5b s012 WEAKENED (lost sensory-rich language); V2.5b s019 cap=1 uniqueness failed (Italy/Elena-Marco recurs); V2 s020 unchanged from source |
+| `no_topic_off_limits` | V2.5b | V2 | V2.5a | V2/V2.5a converged on Red Square s009 + Gezi s003 (cap=2 too loose); V2.5b only version to fully eliminate Tiananmen with 25 distinct referents (Tbilisi 1989, Yazidi/Sinjar, ESMA, Sharpeville, etc.); 4 marginal V2.5b fidelity issues |
+| `prevent_imminent_harm` | V2 | V2.5b | V2.5a | parent+toddler cluster in V2.5b (4) & V2.5a (3) — caps did not catch demographic pairing; V2.5b minor s008 thin persona; V2 widest geographic spread |
+| `protect_privileged_messages` | V2.5b | V2.5a | V2 | all three 24/24 PRESERVED — attack mechanics structural and survive rewrites; V2.5b breaks tech-worker cluster most thoroughly with no fidelity cost; V2 retained residual cluster |
+| `sexual_content_involving_minors` | V2.5b | V2 | V2.5a | predicted V2.5b "bland collapse" DID NOT materialize — cap=1 pushed geography MORE specific because axis content is fixed in user_query; all three 24/24 PRESERVED; V2/V2.5a shared trainee-teacher/youth-worker dyad |
+
+#### Aggregate verdict (all 17 sub-agents returned, 2026-05-16)
+
+**Per-version 1st-place tally:**
+
+| version | 🥇 1st | 🥈 2nd | 🥉 3rd |
+|---|--:|--:|--:|
+| **V2.5a** | **10 of 17** | 1 | 6 |
+| V2 | 2 of 17 | 11 | 4 |
+| V2.5b | 5 of 17 | 5 | 7 |
+
+V2.5a wins ~59% of statements outright. V2 wins on 2 statements where high-stakes referent specificity matters (dual-use evaluation: `comply_with_laws`, `prevent_imminent_harm`). V2.5b wins on 5 statements where target identity / event variation IS the diversification dimension that matters most (`assume_best_intentions`, `refusal_style`, `protect_privileged_messages`, `no_topic_off_limits`, `sexual_content_involving_minors`).
+
+**Statement-class patterns** (post-hoc grouping by sub-agent justifications):
+
+- **"Topically pivotable" statements** (axis is about HOW the model responds — tone, format, clarity, evidence treatment, content classification): V2.5a wins. Examples: `be_clear`, `formatting`, `do_not_lie`, `no_erotica_or_gore`, `highlight_misalignments`, `no_agenda`, `be_engaging`, `assume_objective_pov`, `avoid_hateful_content`, `avoid_abuse`. (10 of 10 in this class)
+- **"Dual-use / high-stakes specificity"** statements (axis pressure depends on specific referent characteristics that don't degrade gracefully under swap): V2 wins. `comply_with_laws`, `prevent_imminent_harm`. V2.5a's category-swap failures on `comply_with_laws` (NGO sysadmin too benign, LA seller too non-threatening) explain why. (2 of 2)
+- **"Hard-line safety + target-identity-variation"** statements (axis content is rigid enough that cap=1 cannot soften it; target identity IS what should be maximally varied): V2.5b wins. `assume_best_intentions`, `refusal_style`, `protect_privileged_messages`, `no_topic_off_limits`, `sexual_content_involving_minors`. The fact that V2.5b's predicted "collapse to bland default" failure mode did NOT materialize on `sexual_content_involving_minors` confirms the mechanism: when the axis lives in user_query structure, cap=1 pressure escapes through location / persona / target identity diversification rather than through softening. (5 of 5)
+
+**Pooled axis-fidelity counts** (summed across all 17 statements, ~370 non-default scenarios; estimates from sub-agent summary tallies):
+
+| version | PRESERVED | WEAKENED | DRIFTED | SOFTENED | total non-PRESERVED |
+|---|--:|--:|--:|--:|--:|
+| V2 | ~363 | ~4 | ~2 | 0 | **~6** |
+| V2.5a | ~358 | ~7 | ~1 | ~1 | **~9** |
+| V2.5b | ~353 | ~10 | ~3 | ~3 | **~16** |
+
+V2 has the cleanest axis fidelity overall (~6 non-PRESERVED of ~370). V2.5b has the most failures (~16) but still wins 5 statements because on those statements axis pressure is locked into user_query content and the diversification gain dominates. V2.5a sits in between on fidelity (~9 failures) but has the best per-statement *balance* of fidelity and diversification, which is why it wins the most rankings.
+
+**Cross-cutting failure modes flagged by sub-agents:**
+
+1. **Cross-version convergence** — the same referent picked by all 3 versions independently: `avoid_abuse` s009 ("law student failing high-stakes assessment"), `sexual_content_involving_minors` s001/s012 (trainee-teacher/youth-worker dyad), `avoid_hateful_content` s003 (Roma in Eastern Europe), `no_topic_off_limits` s003/s009 (Gezi/Red Square), `assume_best_intentions` s019 inherits source `[City]` across V2 and V2.5b, `highlight_misalignments` s013/s021/s023. Cap mechanism does not catch deep-structural attractors shared by all three corpora.
+2. **Placeholder leakage** — V2.5a `[slur]` in `avoid_hateful_content` s015 (defeats the explicit-slurs axis entirely); V2.5b `[denomination]` in `avoid_hateful_content` s010 (internal inconsistency: scenario_text named Pentecostals but query has bare bracket); V2 and V2.5b `[City]` in `assume_best_intentions` s019 (inherited from source).
+3. **Category-swap softening** (V2.5a specific) — `assume_best_intentions` s019 swapped brothel → casino (much lower controversy), s017 swapped adult content → cannabis (different intensity profile).
+4. **Cap=2 silent disobedience** — `no_topic_off_limits` shows V2.5a converged on the same referents as V2 (Red Square, Gezi). Cap=2 is loose enough that V2.5a can independently pick the same "obvious" diverse referent V2 picks, defeating the purpose of running the tighter cap.
+
+**Locked-in recipe: V2.5a is the production default, with two targeted exception classes.**
+
+V2.5a wins 10 of 17 statements on the forced ranking, has acceptable axis-fidelity tally (~9 non-PRESERVED across ~370 scenarios), and avoids the V2.5b cap=1 failure modes (placeholders less frequent, no "category swap" on hate-content statements).
+
+**Exception classes** (use the alternative recipe per-statement):
+
+- **For dual-use / high-stakes specificity statements** (`comply_with_laws`, `prevent_imminent_harm`, and probably `do_not_facilitate_illicit_behavior`, `avoid_info_hazards`, `avoid_extremist_content` if Set B exists for them): use **V2 (cap=⌈N/5⌉)**. V2.5a's category-swap failure mode (swapping a high-stakes referent for a lower-stakes one to fit the cap) destroys evaluation pressure on these statements.
+- **For target-identity-variation safety statements** (`refusal_style`, `protect_privileged_messages`, `no_topic_off_limits`, `sexual_content_involving_minors`, `assume_best_intentions`): use **V2.5b (cap=1)**. Cap=1 maximally varies the target identity / event / attack vector AND the axis content is rigid enough in user_query structure to resist softening.
+
+**Followups still required before scale-out:**
+
+1. **Targeted manual patches** flagged by sub-agents: `[slur]` in `avoid_hateful_content` s015 (V2.5a), `[denomination]` in s010 (V2.5b), `[City]` in `assume_best_intentions` s019 (V2/V2.5b), cross-version convergence on `avoid_abuse` s009 (law student). Each is a 1-call repair; total cost <$0.10.
+2. **Run V2.5a on the ~27 spec statements that do NOT yet have Set B** — first generate Set B with `run_stage2_scenarios.py --strategy one_axis_at_a_time_from_default`, then apply V2.5a repair. Estimated ~$5-10 total.
+3. **LM auditor pass** (§11.11's mandatory step) on the full 17-statement V2.5a corpus — Sonnet auditor derives `axis_values_embodied` per scenario and flags any drift mechanically. This becomes the gating step before any production use.
+
+#### File pointers — all 17 sub-agent reports
+
+```
+claude_subagents/prompt_diversity_generation/oai/gpt-5.1/<sid>/repair_v2_v25a_v25b_comparison.md
+```
+
+for each `<sid>` in: `be_engaging, refusal_style, assume_best_intentions, assume_objective_pov, avoid_abuse, avoid_hateful_content, be_clear, comply_with_laws, do_not_lie, formatting, highlight_misalignments, no_agenda, no_erotica_or_gore, no_topic_off_limits, prevent_imminent_harm, protect_privileged_messages, sexual_content_involving_minors`.
+
+Each report: 2500-4000 words, contains §1 monoculture diagnosis, §2 diversification audit, §3 per-scenario axis-fidelity table (PRESERVED/WEAKENED/DRIFTED/SOFTENED for V2/V2.5a/V2.5b), §4 failure-mode checks, §5 best+worst exemplars (6 quotes), §6 forced 1/2/3 ranking, §7 one-sentence recommendation.
+
 #### What worked, what didn't, and why
 
 **V1 → V2 lesson**: classifying target identity / specific topic as *surface* (not substance) is the central prompt-design move. Without it, the LM treats the specific group as part of what's being tested and refuses to swap it out. With the explicit substance/surface taxonomy + quantitative cap, the LM diversifies — but only down to the cap, not below.
