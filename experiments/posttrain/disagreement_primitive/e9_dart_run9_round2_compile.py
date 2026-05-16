@@ -1,8 +1,16 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501, RUF001, RUF003  -- long LM-prompt strings + intentional unicode (α, ×, −, –) used in DART notation
+
 """Run 9 Round 2 — re-compile on IMPROVING-but-not-CONVERGED statements with
 cumulative-history block (per §1.8.4). Fresh poison cells from R1 v9 judgments.
 """
+
 from __future__ import annotations
-import argparse, hashlib, json, os, sys, time
+import hashlib
+import json
+import os
+import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -35,7 +43,8 @@ def load_v9_r1_judgments():
     """Per-cell scores from R1 judging."""
     by_cell = defaultdict(dict)
     for r in load_jsonl(OUT_DIR / "per_judgment_run9_r1.jsonl"):
-        if r.get("score") is None: continue
+        if r.get("score") is None:
+            continue
         j = r["judge"]
         ck = (r["statement_id"], r["scenario_idx"], r["generator"], r["condition"])
         by_cell[ck][j] = r["score"]
@@ -46,23 +55,37 @@ def rank_poison_v9(by_cell, sid, condition, top_k=10):
     rows = []
     for ck, scores in by_cell.items():
         s, scen, gen, cond = ck
-        if s != sid or cond != condition: continue
+        if s != sid or cond != condition:
+            continue
         ss = list(scores.values())
-        if len(ss) < 2: continue
+        if len(ss) < 2:
+            continue
         pwv = sum((ss[i] - ss[j]) ** 2 for i in range(len(ss)) for j in range(i + 1, len(ss)))
         rows.append({"scen": scen, "generator": gen, "scores": dict(scores), "pwv": pwv})
     rows.sort(key=lambda r: -r["pwv"])
-    return rows[:top_k], sum(r["pwv"] for r in rows)
+    # Run 10 (Decision #4): drop unanimous cells (pwv=0) before dedup.
+    rows = [r for r in rows if r["pwv"] > 0]
+    # Dedupe to one cell per scenario_idx — keeps highest-pwv generator per scenario.
+    seen, deduped = set(), []
+    for r in rows:
+        if r["scen"] in seen:
+            continue
+        seen.add(r["scen"])
+        deduped.append(r)
+    return deduped[:top_k], sum(r["pwv"] for r in rows)
 
 
 def fetch_judge_reasoning_for_v9_cells(cells, sid, condition):
     keys_wanted = {(c["scen"], c["generator"]) for c in cells}
     reasoning = defaultdict(dict)
     for r in load_jsonl(OUT_DIR / "per_judgment_run9_r1.jsonl"):
-        if r.get("statement_id") != sid: continue
-        if r.get("condition") != condition: continue
+        if r.get("statement_id") != sid:
+            continue
+        if r.get("condition") != condition:
+            continue
         k = (r["scenario_idx"], r["generator"])
-        if k not in keys_wanted: continue
+        if k not in keys_wanted:
+            continue
         rs = (r.get("reasoning") or "")[:600]
         if rs:
             reasoning[k][r["judge"]] = rs
@@ -71,13 +94,15 @@ def fetch_judge_reasoning_for_v9_cells(cells, sid, condition):
 
 def render_history_block(sid, r1_alpha_after, r1_diagnosis, r1_adopted, r1_delta):
     parts = ["=== EDIT HISTORY FOR THIS STATEMENT ===", ""]
-    parts.append("The rubric and spec text shown below already incorporate Round 1's adopted edits. "
-                 "The poison cells shown after this section are computed under the CURRENT (post-R1) state.\n")
+    parts.append(
+        "The rubric and spec text shown below already incorporate Round 1's adopted edits. "
+        "The poison cells shown after this section are computed under the CURRENT (post-R1) state.\n"
+    )
     parts.append("Round 1:")
     parts.append(f"  Operative diagnosis: {r1_diagnosis}")
     parts.append(f"  Adopted edits: {r1_adopted}")
     parts.append(f"  Empirical: α_p4 changed by Δ={r1_delta:+.3f} → α_p4_after = {r1_alpha_after:+.3f}")
-    parts.append(f"  Status: IMPROVING but α below T₁=0.5 — needs more work\n")
+    parts.append("  Status: IMPROVING but α below T₁=0.5 — needs more work\n")
     parts.append(
         "Given this history:\n"
         "- If α gain is decelerating, propose a different KIND of edit (switch from rubric to examples, or vice versa).\n"
@@ -111,16 +136,21 @@ def load_response_index():
     out = {}
     for r in load_jsonl(DIR / "e8_responses.jsonl"):
         sid = r.get("statement_id")
-        if not sid: continue
-        for col, label in [("response_gpt", "gpt-5.1"),
-                           ("response_weak", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
-                           ("response_gemini", "gemini-3-flash-preview")]:
+        if not sid:
+            continue
+        for col, label in [
+            ("response_gpt", "gpt-5.1"),
+            ("response_weak", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
+            ("response_gemini", "gemini-3-flash-preview"),
+        ]:
             if r.get(col):
                 out[(sid, r["scenario_idx"], label)] = (r["user_query"], r[col])
     for r in load_jsonl(DIR / "e9_opposite_mode_responses.jsonl"):
-        if "error" in r: continue
+        if "error" in r:
+            continue
         sid = r.get("statement_id")
-        if not sid: continue
+        if not sid:
+            continue
         out[(sid, r["scenario_idx"], r["generator"])] = (r["user_query"], r["response"])
     return out
 
@@ -128,8 +158,7 @@ def load_response_index():
 def main():
     summary_r1 = json.loads((OUT_DIR / "run9_synthesis_summary.json").read_text())
     spec = {r["id"]: r for r in load_jsonl(SPEC_PATH)}
-    rubrics_v1 = {r["statement_id"]: r["rubric"]
-                  for r in load_jsonl(DIR / "e8_rubrics_v1.jsonl") if "error" not in r}
+    rubrics_v1 = {r["statement_id"]: r["rubric"] for r in load_jsonl(DIR / "e8_rubrics_v1.jsonl") if "error" not in r}
 
     by_cell_v9 = load_v9_r1_judgments()
     response_idx = load_response_index()
@@ -149,11 +178,14 @@ def main():
         # (rough — load both v1 and v9 α from prior analysis)
         # For prompt purposes, hard-code from earlier analysis output
         if sid == "formatting":
-            r1_alpha = 0.450; r1_delta = 0.090
+            r1_alpha = 0.450
+            r1_delta = 0.090
         elif sid == "no_topic_off_limits":
-            r1_alpha = 0.309; r1_delta = -0.013
+            r1_alpha = 0.309
+            r1_delta = -0.013
         else:
-            r1_alpha = 0.0; r1_delta = 0.0
+            r1_alpha = 0.0
+            r1_delta = 0.0
 
         # Determine current rubric / spec (v9 state if rubric_drift; v1 + examples if RID)
         if r1_diag == "rubric_drift":
@@ -192,7 +224,7 @@ def main():
         prompt_path.write_text(prompt)
         print(f"  built R2 prompt for {sid}: {len(prompt):,} chars")
 
-    print(f"\n=== Submitting R2 batches ===")
+    print("\n=== Submitting R2 batches ===")
 
     api_key_oai = os.environ["OPENAI_API_KEY"]
     api_key_anth = os.environ["ANTHROPIC_API_KEY"]
@@ -200,8 +232,12 @@ def main():
 
     job_dir = Path(f"results/raw/e9_dart_run9_compile_r2/{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}")
     job_dir.mkdir(parents=True, exist_ok=True)
-    state = {"submitted_at_iso": datetime.now(timezone.utc).isoformat(),
-             "job_dir": str(job_dir), "statements": R2_TARGETS, "batches": {}}
+    state = {
+        "submitted_at_iso": datetime.now(timezone.utc).isoformat(),
+        "job_dir": str(job_dir),
+        "statements": R2_TARGETS,
+        "batches": {},
+    }
 
     # GPT batch
     oai = OpenAI(api_key=api_key_oai)
@@ -211,24 +247,36 @@ def main():
         for sid in R2_TARGETS:
             cid = "c2_" + hashlib.md5(f"r2gpt::{sid}".encode()).hexdigest()[:32]
             cmap_g[cid] = sid
-            f.write(json.dumps({
-                "custom_id": cid, "method": "POST", "url": "/v1/chat/completions",
-                "body": {
-                    "model": "gpt-5.1",
-                    "messages": [{"role": "system", "content": COMPILER_SYSTEM_V5},
-                                 {"role": "user", "content": prompts[sid]}],
-                    "temperature": 0, "max_completion_tokens": 8000,
-                    "reasoning_effort": "none",
-                    "response_format": {"type": "json_object"},
-                }
-            }) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "custom_id": cid,
+                        "method": "POST",
+                        "url": "/v1/chat/completions",
+                        "body": {
+                            "model": "gpt-5.1",
+                            "messages": [
+                                {"role": "system", "content": COMPILER_SYSTEM_V5},
+                                {"role": "user", "content": prompts[sid]},
+                            ],
+                            "temperature": 0,
+                            "max_completion_tokens": 8000,
+                            "reasoning_effort": "none",
+                            "response_format": {"type": "json_object"},
+                        },
+                    }
+                )
+                + "\n"
+            )
     with gpt_input_path.open("rb") as fh:
         up = oai.files.create(file=fh, purpose="batch")
-    gpt_batch = oai.batches.create(input_file_id=up.id, endpoint="/v1/chat/completions",
-                                    completion_window="24h",
-                                    metadata={"description": "DART Run 9 R2 compile GPT"})
-    state["batches"]["gpt"] = {"batch_id": gpt_batch.id, "n_requests": len(R2_TARGETS),
-                                "custom_id_map": cmap_g}
+    gpt_batch = oai.batches.create(
+        input_file_id=up.id,
+        endpoint="/v1/chat/completions",
+        completion_window="24h",
+        metadata={"description": "DART Run 9 R2 compile GPT"},
+    )
+    state["batches"]["gpt"] = {"batch_id": gpt_batch.id, "n_requests": len(R2_TARGETS), "custom_id_map": cmap_g}
     print(f"  GPT: {gpt_batch.id}")
 
     # Claude batch
@@ -237,16 +285,26 @@ def main():
     for sid in R2_TARGETS:
         cid = "c2_" + hashlib.md5(f"r2cla::{sid}".encode()).hexdigest()[:32]
         cmap_c[cid] = sid
-        cla_reqs.append(ba.build_request(
-            custom_id=cid, model=ANTHROPIC_MODEL, system=COMPILER_SYSTEM_V5,
-            messages=[{"role": "user", "content": prompts[sid]}],
-            max_tokens=8000, tools=[DART_COMPILER_TOOL_V9],
-            tool_choice={"type": "tool", "name": "submit_dart_diagnosis"},
-            thinking={"type": "disabled"}, temperature=0,
-        ))
+        cla_reqs.append(
+            ba.build_request(
+                custom_id=cid,
+                model=ANTHROPIC_MODEL,
+                system=COMPILER_SYSTEM_V5,
+                messages=[{"role": "user", "content": prompts[sid]}],
+                max_tokens=8000,
+                tools=[DART_COMPILER_TOOL_V9],
+                tool_choice={"type": "tool", "name": "submit_dart_diagnosis"},
+                thinking={"type": "disabled"},
+                temperature=0,
+            )
+        )
     cla_result = ba.submit(api_key_anth, cla_reqs, job_dir=job_dir, name="run9_r2_compile_cla")
-    state["batches"]["claude"] = {"batch_id": cla_result["batch_id"], "name": "run9_r2_compile_cla",
-                                   "n_requests": len(R2_TARGETS), "custom_id_map": cmap_c}
+    state["batches"]["claude"] = {
+        "batch_id": cla_result["batch_id"],
+        "name": "run9_r2_compile_cla",
+        "n_requests": len(R2_TARGETS),
+        "custom_id_map": cmap_c,
+    }
     print(f"  Claude: {cla_result['batch_id']}")
 
     # Gemini sync
@@ -256,14 +314,20 @@ def main():
 
     def call_gem(sid):
         cfg = types.GenerateContentConfig(
-            system_instruction=COMPILER_SYSTEM_V5, max_output_tokens=8000,
+            system_instruction=COMPILER_SYSTEM_V5,
+            max_output_tokens=8000,
             temperature=0,
             thinking_config=types.ThinkingConfig(thinking_level="low"),
-            response_mime_type="application/json")
+            response_mime_type="application/json",
+        )
         try:
-            raw = log.call(role="run9_r2_compile_gem", key={"sid": sid},
-                           fn=lambda: gem.models.generate_content(
-                               model="gemini-3.1-pro-preview", contents=prompts[sid], config=cfg))
+            raw = log.call(
+                role="run9_r2_compile_gem",
+                key={"sid": sid},
+                fn=lambda: gem.models.generate_content(
+                    model="gemini-3.1-pro-preview", contents=prompts[sid], config=cfg
+                ),
+            )
             text = raw.text or ""
             if text.startswith("```"):
                 text = text.split("```")[1].lstrip("json\n").strip()

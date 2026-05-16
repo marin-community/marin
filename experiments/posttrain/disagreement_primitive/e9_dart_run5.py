@@ -1,3 +1,7 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501, RUF001, RUF003  -- long LM-prompt strings + intentional unicode (α, ×, −, –) used in DART notation
+
 """DART Run 5 — example-additions experiment on no_topic_off_limits.
 
 Tests §1.9: extends the compiler output schema with `spec_example_additions`
@@ -30,15 +34,17 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
-import httpx
 from google import genai
 from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent))
 from e8_paired_indirection import (
-    SPEC_PATH, get_examples, render_anchors, render_examples, call_gpt_json,
+    SPEC_PATH,
+    get_examples,
+    render_anchors,
+    render_examples,
+    call_gpt_json,
 )
 from e9_dart_compiler_claude import call_claude_compiler, extract_tool_args
 from e9_dart_compiler_gemini import call_gemini_json
@@ -177,10 +183,16 @@ def rank_poison_cells(rows: list[dict], top_k: int = 10) -> tuple[list[dict], in
     for ck, scores in by_cell.items():
         ss = list(scores.values())
         pwv = sum((ss[i] - ss[j]) ** 2 for i in range(len(ss)) for j in range(i + 1, len(ss)))
-        out.append({
-            "sid": ck[0], "scenario_idx": ck[1], "generator": ck[2],
-            "scores": scores, "reasoning": by_cell_extra[ck], "pwv": pwv,
-        })
+        out.append(
+            {
+                "sid": ck[0],
+                "scenario_idx": ck[1],
+                "generator": ck[2],
+                "scores": scores,
+                "reasoning": by_cell_extra[ck],
+                "pwv": pwv,
+            }
+        )
     out.sort(key=lambda x: -x["pwv"])
     pwv_total = sum(c["pwv"] for c in out)
     return out[:top_k], pwv_total
@@ -202,25 +214,36 @@ def load_response_index(sid: str) -> dict:
     out = {}
     for f in ["e8_responses.jsonl", "e9_opposite_mode_responses.jsonl"]:
         for r in load_jsonl(DIR / f):
-            if "error" in r: continue
-            if r.get("statement_id") != sid: continue
+            if "error" in r:
+                continue
+            if r.get("statement_id") != sid:
+                continue
             scen = r["scenario_idx"]
             uq = r.get("user_query", "?")
             if "response" in r:
                 out[(scen, r["generator"])] = (uq, r["response"])
             else:
-                for col, label in [("response_gpt", "gpt-5.1"),
-                                   ("response_weak", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
-                                   ("response_gemini", "gemini-3-flash-preview")]:
+                for col, label in [
+                    ("response_gpt", "gpt-5.1"),
+                    ("response_weak", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
+                    ("response_gemini", "gemini-3-flash-preview"),
+                ]:
                     if r.get(col):
                         out[(scen, label)] = (uq, r[col])
     return out
 
 
-def build_compile_prompt(round_n: int, spec_record: dict, rubric: dict,
-                         bare_cells: list[dict], rub_cells: list[dict],
-                         bare_pwv_total: int, rub_pwv_total: int,
-                         response_idx: dict, history_text: str | None = None) -> str:
+def build_compile_prompt(
+    round_n: int,
+    spec_record: dict,
+    rubric: dict,
+    bare_cells: list[dict],
+    rub_cells: list[dict],
+    bare_pwv_total: int,
+    rub_pwv_total: int,
+    response_idx: dict,
+    history_text: str | None = None,
+) -> str:
     examples = get_examples(spec_record)
 
     parts = [
@@ -247,6 +270,7 @@ def build_compile_prompt(round_n: int, spec_record: dict, rubric: dict,
 
 # ================= Compile phase =================
 
+
 def call_all_three(round_n: int, prompt: str, log: RawAPILogger) -> dict:
     oai = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     gem = genai.Client(api_key=(os.environ.get("GEMINI_API_KEY") or os.environ["GOOGLE_API_KEY"]))
@@ -255,22 +279,34 @@ def call_all_three(round_n: int, prompt: str, log: RawAPILogger) -> dict:
     out = {}
 
     def gpt_call():
-        return call_gpt_json(log, oai, role=f"run5_round_{round_n}_compile_gpt",
-                             key={"sid": SID, "round": round_n},
-                             system=COMPILER_SYSTEM_V5, user=prompt, max_tokens=10000)
+        return call_gpt_json(
+            log,
+            oai,
+            role=f"run5_round_{round_n}_compile_gpt",
+            key={"sid": SID, "round": round_n},
+            system=COMPILER_SYSTEM_V5,
+            user=prompt,
+            max_tokens=10000,
+        )
 
     def gem_call():
-        return call_gemini_json(log, gem, role=f"run5_round_{round_n}_compile_gem",
-                                key={"sid": SID, "round": round_n},
-                                system=COMPILER_SYSTEM_V5, user=prompt,
-                                thinking_level="low", max_tokens=10000)
+        return call_gemini_json(
+            log,
+            gem,
+            role=f"run5_round_{round_n}_compile_gem",
+            key={"sid": SID, "round": round_n},
+            system=COMPILER_SYSTEM_V5,
+            user=prompt,
+            thinking_level="low",
+            max_tokens=10000,
+        )
 
     def cla_call():
-        api_resp = log.call(role=f"run5_round_{round_n}_compile_cla",
-                            key={"sid": SID, "round": round_n},
-                            fn=lambda: call_claude_compiler(anthropic_key,
-                                                            system=COMPILER_SYSTEM_V5,
-                                                            user=prompt))
+        api_resp = log.call(
+            role=f"run5_round_{round_n}_compile_cla",
+            key={"sid": SID, "round": round_n},
+            fn=lambda: call_claude_compiler(anthropic_key, system=COMPILER_SYSTEM_V5, user=prompt),
+        )
         return extract_tool_args(api_resp) or {}
 
     print("Calling all 3 compilers in parallel...")
@@ -322,8 +358,15 @@ def phase_compile(round_n: int):
             spec_record = json.loads(spec_path.read_text())
 
     prompt = build_compile_prompt(
-        round_n, spec_record, rubric, bare_top, rub_top, bare_total, rub_total,
-        response_idx, history_text=history_text,
+        round_n,
+        spec_record,
+        rubric,
+        bare_top,
+        rub_top,
+        bare_total,
+        rub_total,
+        response_idx,
+        history_text=history_text,
     )
 
     log = RawAPILogger(f"e9_dart_run5_round_{round_n}_compile")
@@ -354,16 +397,22 @@ def render_history_block(round_n: int) -> str:
         return ""
     history = json.loads(history_path.read_text())
     parts = ["=== EDIT HISTORY ===", ""]
-    parts.append("The rubric and spec text shown above already incorporate the edits below. "
-                 "The poison cells shown after this section are computed under the CURRENT state, not the baseline.\n")
+    parts.append(
+        "The rubric and spec text shown above already incorporate the edits below. "
+        "The poison cells shown after this section are computed under the CURRENT state, not the baseline.\n"
+    )
     for entry in history:
         rn = entry["round"]
         parts.append(f"Round {rn}:")
-        parts.append(f"  Majority diagnosis: {entry.get('round_diagnosis_majority', '?')} ({entry.get('round_diagnosis_tier', '?')})")
-        parts.append(f"  Adopted edits (Level 2 admissible per §1.9.4): "
-                     f"rubric={len(entry.get('rubric_edits_adopted') or [])}, "
-                     f"spec={len(entry.get('spec_edits_adopted') or [])}, "
-                     f"examples={len(entry.get('example_additions_adopted') or [])}")
+        parts.append(
+            f"  Majority diagnosis: {entry.get('round_diagnosis_majority', '?')} ({entry.get('round_diagnosis_tier', '?')})"
+        )
+        parts.append(
+            f"  Adopted edits (Level 2 admissible per §1.9.4): "
+            f"rubric={len(entry.get('rubric_edits_adopted') or [])}, "
+            f"spec={len(entry.get('spec_edits_adopted') or [])}, "
+            f"examples={len(entry.get('example_additions_adopted') or [])}"
+        )
         ab = entry.get("alpha_before_round")
         aa = entry.get("alpha_after_round")
         da = entry.get("delta_alpha")
@@ -385,6 +434,7 @@ def render_history_block(round_n: int) -> str:
 
 
 # ================= Synthesize phase =================
+
 
 def majority_diagnosis(diags: dict) -> tuple[str, str, dict]:
     votes = {nm: d.get("diagnosis", "?") for nm, d in diags.items() if d}
@@ -415,7 +465,8 @@ def cluster_rubric_edits(diags: dict) -> tuple[list[dict], list[dict]]:
     """L3 per-instance vote on rubric_edits. Returns (adopted, rejected)."""
     by_anchor: dict[str, dict[str, dict]] = defaultdict(dict)
     for nm, d in diags.items():
-        if not d: continue
+        if not d:
+            continue
         for e in d.get("rubric_edits") or []:
             anc = str(e.get("anchor", ""))
             if anc:
@@ -429,14 +480,16 @@ def cluster_rubric_edits(diags: dict) -> tuple[list[dict], list[dict]]:
             continue
         best = max(by_cmp.keys(), key=lambda c: priority.get(c, 0))
         edit = by_cmp[best]
-        adopted.append({
-            "anchor": anc,
-            "old": edit.get("old_criterion") or edit.get("old", ""),
-            "new": edit.get("new_criterion") or edit.get("new", ""),
-            "rationale": edit.get("rationale", ""),
-            "source_compiler": best,
-            "supporting_compilers": sorted(by_cmp.keys()),
-        })
+        adopted.append(
+            {
+                "anchor": anc,
+                "old": edit.get("old_criterion") or edit.get("old", ""),
+                "new": edit.get("new_criterion") or edit.get("new", ""),
+                "rationale": edit.get("rationale", ""),
+                "source_compiler": best,
+                "supporting_compilers": sorted(by_cmp.keys()),
+            }
+        )
     return adopted, rejected
 
 
@@ -444,7 +497,8 @@ def cluster_example_additions(diags: dict) -> tuple[list[dict], list[dict]]:
     """L3 per-instance vote on spec_example_additions. Cluster by user_query overlap."""
     all_props = []
     for nm, d in diags.items():
-        if not d: continue
+        if not d:
+            continue
         for e in d.get("spec_example_additions") or []:
             uq = (e.get("user_query") or "").strip()
             if uq:
@@ -456,7 +510,8 @@ def cluster_example_additions(diags: dict) -> tuple[list[dict], list[dict]]:
     # Cluster by 60% overlap (length-normalized prefix match)
     def overlap_pct(a: str, b: str) -> float:
         n = min(len(a), len(b))
-        if n == 0: return 0.0
+        if n == 0:
+            return 0.0
         same = sum(1 for i in range(n) if a[i] == b[i])
         return same / max(len(a), len(b))
 
@@ -475,27 +530,26 @@ def cluster_example_additions(diags: dict) -> tuple[list[dict], list[dict]]:
 
     adopted, rejected = [], []
     priority = {"gem": 3, "cla": 2, "gpt": 1}
+    # Run 10 change (per dart.md §5 Run 10 plan, Decision #2): take ALL example
+    # proposals from compilers whose operative diagnosis admits examples (caller
+    # passes only RID/both-admitted compilers). Clusters dedupe same-user_query
+    # proposals; singletons are NO LONGER rejected.
     for cluster in clusters:
         cmps_in_cluster = {nm for (nm, _, _) in cluster}
-        if len(cmps_in_cluster) < 2:
-            for nm, uq, edit in cluster:
-                rejected.append({
-                    "user_query_prefix": uq[:80], "compiler": nm, "reason": "singleton"
-                })
-            continue
-        # Adopt: pick the highest-priority compiler's version
         best_nm = max(cmps_in_cluster, key=lambda c: priority.get(c, 0))
         edit = next(e for (n, _, e) in cluster if n == best_nm)
-        adopted.append({
-            "user_query": edit.get("user_query", ""),
-            "good_response": edit.get("good_response", ""),
-            "bad_response": edit.get("bad_response", ""),
-            "description": edit.get("description", ""),
-            "target_anchor": edit.get("target_anchor"),
-            "rationale": edit.get("rationale", ""),
-            "source_compiler": best_nm,
-            "supporting_compilers": sorted(cmps_in_cluster),
-        })
+        adopted.append(
+            {
+                "user_query": edit.get("user_query", ""),
+                "good_response": edit.get("good_response", ""),
+                "bad_response": edit.get("bad_response", ""),
+                "description": edit.get("description", ""),
+                "target_anchor": edit.get("target_anchor"),
+                "rationale": edit.get("rationale", ""),
+                "source_compiler": best_nm,
+                "supporting_compilers": sorted(cmps_in_cluster),
+            }
+        )
     return adopted, rejected
 
 
@@ -508,8 +562,9 @@ def apply_rubric_edits_to_v1(rubric: dict, adopted: list[dict]) -> dict:
     return new
 
 
-def apply_example_additions_to_spec(spec_record: dict, adopted: list[dict],
-                                     v1_rubric: dict | None = None) -> tuple[dict, dict | None]:
+def apply_example_additions_to_spec(
+    spec_record: dict, adopted: list[dict], v1_rubric: dict | None = None
+) -> tuple[dict, dict | None]:
     """Append adopted examples to spec.metadata.examples. Optionally update rubric example_refs."""
     new_spec = json.loads(json.dumps(spec_record))
     new_spec.setdefault("metadata", {}).setdefault("examples", [])
@@ -518,12 +573,14 @@ def apply_example_additions_to_spec(spec_record: dict, adopted: list[dict],
     if v1_rubric is not None:
         new_rubric = json.loads(json.dumps(v1_rubric))
     for i, e in enumerate(adopted):
-        new_spec["metadata"]["examples"].append({
-            "user_query": e["user_query"],
-            "good_response": e["good_response"],
-            "bad_response": e["bad_response"],
-            "description": e.get("description", ""),
-        })
+        new_spec["metadata"]["examples"].append(
+            {
+                "user_query": e["user_query"],
+                "good_response": e["good_response"],
+                "bad_response": e["bad_response"],
+                "description": e.get("description", ""),
+            }
+        )
         # If target_anchor specified, append to that anchor's example_refs
         if new_rubric is not None and e.get("target_anchor"):
             tgt = str(e["target_anchor"])
@@ -546,7 +603,7 @@ def phase_synthesize(round_n: int):
 
     # Level 1 — diagnosis vote
     operative_diag, diag_tier, votes = majority_diagnosis(diags)
-    print(f"§1.9.4 Level 1 — Diagnosis vote:")
+    print("§1.9.4 Level 1 — Diagnosis vote:")
     for nm, d in votes.items():
         print(f"  {nm}: {d}")
     print(f"  → operative: {operative_diag} ({diag_tier})\n")
@@ -565,25 +622,30 @@ def phase_synthesize(round_n: int):
         # All rubric_edits proposals go to escalation
         for nm, d in diags.items():
             for e in d.get("rubric_edits") or []:
-                rubric_rejected.append({
-                    "compiler": nm, "anchor": e.get("anchor"),
-                    "reason": "edit_type_not_admissible_under_majority_diagnosis",
-                    "operative_diagnosis": operative_diag,
-                })
+                rubric_rejected.append(
+                    {
+                        "compiler": nm,
+                        "anchor": e.get("anchor"),
+                        "reason": "edit_type_not_admissible_under_majority_diagnosis",
+                        "operative_diagnosis": operative_diag,
+                    }
+                )
 
     if "example_additions" in admissible:
         examples_adopted, examples_rejected = cluster_example_additions(diags)
     else:
         for nm, d in diags.items():
             for e in d.get("spec_example_additions") or []:
-                examples_rejected.append({
-                    "compiler": nm,
-                    "user_query_prefix": (e.get("user_query") or "")[:80],
-                    "reason": "edit_type_not_admissible_under_majority_diagnosis",
-                    "operative_diagnosis": operative_diag,
-                })
+                examples_rejected.append(
+                    {
+                        "compiler": nm,
+                        "user_query_prefix": (e.get("user_query") or "")[:80],
+                        "reason": "edit_type_not_admissible_under_majority_diagnosis",
+                        "operative_diagnosis": operative_diag,
+                    }
+                )
 
-    print(f"§1.9.4 Level 3 — Per-instance vote:")
+    print("§1.9.4 Level 3 — Per-instance vote:")
     print(f"  rubric_edits:        {len(rubric_adopted)} adopted, {len(rubric_rejected)} rejected")
     print(f"  example_additions:   {len(examples_adopted)} adopted, {len(examples_rejected)} rejected\n")
 
@@ -641,7 +703,9 @@ def phase_synthesize(round_n: int):
     }
     (sid_dir / f"run5_escalation_log_round_{round_n}.json").write_text(json.dumps(escalation, indent=2))
 
-    print(f"Wrote run5_rubric_v{next_n}.json, run5_spec_v{next_n}.jsonl, run5_history.json, run5_escalation_log_round_{round_n}.json")
+    print(
+        f"Wrote run5_rubric_v{next_n}.json, run5_spec_v{next_n}.jsonl, run5_history.json, run5_escalation_log_round_{round_n}.json"
+    )
     return operative_diag
 
 

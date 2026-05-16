@@ -1,3 +1,7 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501, RUF001, RUF003  -- long LM-prompt strings + intentional unicode (α, ×, −, –) used in DART notation
+
 """DART Step 3 — bidirectional compiler diagnostic.
 
 Sends both rankings (bare-poison + rubric-poison) to GPT-5.1 with the
@@ -21,7 +25,6 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from openai import OpenAI
 
@@ -144,37 +147,62 @@ def render_anchor(k, anc):
 
 
 def rank_bare_poison(by_cell, sid: str) -> list[dict]:
-    """Cells in this statement, ranked by bare_pwv descending."""
+    """Cells in this statement, ranked by bare_pwv descending.
+
+    Deduplicated to one cell per scenario_idx (keeps highest-pwv generator). The
+    same disagreement axis repeated across 4 generators on the same scenario is
+    redundant to the compiler — one well-scored cell suffices.
+    """
     rows = []
     for (s, c, scen, gen), jd in by_cell.items():
-        if s != sid or c != "variant_A": continue
-        if not all(j in jd for j in JUDGES): continue
+        if s != sid or c != "variant_A":
+            continue
+        if not all(j in jd for j in JUDGES):
+            continue
         scores = [jd[j]["score"] for j in JUDGES]
         rub_jd = by_cell.get((s, "rubric_plus_spec", scen, gen))
         rub_scores = None
         if rub_jd and all(j in rub_jd for j in JUDGES):
             rub_scores = [rub_jd[j]["score"] for j in JUDGES]
-        rows.append({
-            "scen": scen, "gen": gen,
-            "bare_scores": scores,
-            "rubric_scores": rub_scores,
-            "bare_pwv": pairwise_variance(scores),
-            "rubric_pwv": pairwise_variance(rub_scores) if rub_scores else None,
-            "bare_jd": jd,
-            "rub_jd": rub_jd,
-        })
+        rows.append(
+            {
+                "scen": scen,
+                "gen": gen,
+                "bare_scores": scores,
+                "rubric_scores": rub_scores,
+                "bare_pwv": pairwise_variance(scores),
+                "rubric_pwv": pairwise_variance(rub_scores) if rub_scores else None,
+                "bare_jd": jd,
+                "rub_jd": rub_jd,
+            }
+        )
     rows.sort(key=lambda r: -r["bare_pwv"])
-    return rows
+    # Run 10 change (per dart.md §5 Run 10 plan, Decision #4): drop unanimous
+    # cells (bare_pwv == 0) before dedup. They are uninformative for compiler
+    # diagnosis and only displace real disagreement cells from the top-K window.
+    rows = [r for r in rows if r["bare_pwv"] > 0]
+    return _dedupe_by_scenario(rows)
 
 
-def build_user_prompt(sid, stmt, examples, current_anchors,
-                      bare_top_k, rubric_top_k, response_idx,
-                      bare_pwv_total, rub_pwv_total) -> str:
+def _dedupe_by_scenario(rows: list[dict]) -> list[dict]:
+    """Keep first row per `scen` field (assumes rows already sorted by desired metric desc)."""
+    seen, out = set(), []
+    for r in rows:
+        if r["scen"] in seen:
+            continue
+        seen.add(r["scen"])
+        out.append(r)
+    return out
+
+
+def build_user_prompt(
+    sid, stmt, examples, current_anchors, bare_top_k, rubric_top_k, response_idx, bare_pwv_total, rub_pwv_total
+) -> str:
     parts = []
     parts.append(f"STATEMENT_ID: {sid}\n")
     parts.append(f"=== SPEC STATEMENT TEXT ===\n{stmt['text']}\n")
     parts.append(f"=== SPEC EXAMPLES ===\n{render_examples(examples)}\n")
-    parts.append(f"=== CURRENT RUBRIC (v1, may be the source of drift) ===")
+    parts.append("=== CURRENT RUBRIC (v1, may be the source of drift) ===")
     for k in ("1", "2", "3", "4", "5"):
         anc = current_anchors.get(k, {}) or {}
         parts.append(f"\nAnchor {k}:")
@@ -183,7 +211,7 @@ def build_user_prompt(sid, stmt, examples, current_anchors,
             parts.append(f"  spec_quotes: {anc.get('spec_quotes', [])[:3]}")
     parts.append("")
 
-    parts.append(f"=== DIAGNOSTIC TOTALS ===")
+    parts.append("=== DIAGNOSTIC TOTALS ===")
     parts.append(f"  Σ bare_pwv across all cells: {bare_pwv_total}")
     parts.append(f"  Σ rubric_pwv across all cells: {rub_pwv_total}")
     parts.append(f"  Δ (rubric − bare): {rub_pwv_total - bare_pwv_total:+d}")
@@ -195,7 +223,7 @@ def build_user_prompt(sid, stmt, examples, current_anchors,
         parts.append("  → totals comparable: BOTH may apply")
     parts.append("")
 
-    parts.append(f"=== TOP BARE-POISON CELLS (judges disagree under bare; spec under-specified) ===\n")
+    parts.append("=== TOP BARE-POISON CELLS (judges disagree under bare; spec under-specified) ===\n")
     for i, r in enumerate(bare_top_k):
         rm = response_idx.get((sid, r["scen"], r["gen"]), {})
         parts.append(f"### Bare-poison cell {i+1} | scen={r['scen']} | gen={r['gen']}")
@@ -210,12 +238,14 @@ def build_user_prompt(sid, stmt, examples, current_anchors,
             parts.append(f"  {j} (score={jr['score']}): {trunc(jr.get('reasoning'), 280)}")
         parts.append("")
 
-    parts.append(f"=== TOP RUBRIC-POISON CELLS (rubric introduces NEW disagreement) ===\n")
+    parts.append("=== TOP RUBRIC-POISON CELLS (rubric introduces NEW disagreement) ===\n")
     for i, r in enumerate(rubric_top_k):
         rm = response_idx.get((sid, r["scen"], r["gen"]), {})
         parts.append(f"### Rubric-poison cell {i+1} | scen={r['scen']} | gen={r['gen']}")
         parts.append(f"bare scores: {tuple(r['bare_scores'])}  bare_pwv={r['bare_pwv']}")
-        parts.append(f"rubric scores: {tuple(r['rubric_scores'])}  rubric_pwv={r['rubric_pwv']}  Δpwv={r['delta_pwv']:+d}")
+        parts.append(
+            f"rubric scores: {tuple(r['rubric_scores'])}  rubric_pwv={r['rubric_pwv']}  Δpwv={r['delta_pwv']:+d}"
+        )
         parts.append(f"User query: {trunc(rm.get('user_query'), 280)}")
         parts.append(f"Assistant response: {trunc(rm.get('response'), 320)}")
         parts.append("Bare reasonings:")
@@ -259,7 +289,7 @@ def validate_diagnosis(data: dict, stmt_text: str, current_anchors: dict) -> tup
             problems.append(f"rubric_edits[{i}] not a dict")
             continue
         anchor = re_.get("anchor")
-        if anchor not in {"0","1","2","3","4","5","6"}:
+        if anchor not in {"0", "1", "2", "3", "4", "5", "6"}:
             problems.append(f"rubric_edits[{i}].anchor invalid: {anchor!r}")
             continue
         crit = re_.get("old_criterion") or ""
@@ -282,7 +312,7 @@ def main() -> int:
 
     oai = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     log = RawAPILogger("e9_dart_compiler")
-    print(f"DART Step 3 — bidirectional compiler diagnostic")
+    print("DART Step 3 — bidirectional compiler diagnostic")
     print(f"  statements: {len(args.statement_ids)}")
     print(f"  raw log dir: {log.run_dir}\n")
 
@@ -301,16 +331,30 @@ def main() -> int:
         v1_anchors = (rubrics.get(sid, {}) or {}).get("anchors", {})
         examples = get_examples(spec[sid])
 
-        user = build_user_prompt(sid, spec[sid], examples, v1_anchors,
-                                 bare_rows[:args.top_k], rub_rows[:args.top_k],
-                                 response_idx, bare_pwv_total, rub_pwv_total)
+        user = build_user_prompt(
+            sid,
+            spec[sid],
+            examples,
+            v1_anchors,
+            bare_rows[: args.top_k],
+            rub_rows[: args.top_k],
+            response_idx,
+            bare_pwv_total,
+            rub_pwv_total,
+        )
 
         print(f"=== {sid} ===")
         print(f"  Σ bare_pwv: {bare_pwv_total}, Σ rubric_pwv: {rub_pwv_total}, Δ: {rub_pwv_total-bare_pwv_total:+d}")
         try:
-            data = call_gpt_json(log, oai, role="dart_compiler",
-                                 key={"statement_id": sid},
-                                 system=COMPILER_SYSTEM, user=user, max_tokens=8000)
+            data = call_gpt_json(
+                log,
+                oai,
+                role="dart_compiler",
+                key={"statement_id": sid},
+                system=COMPILER_SYSTEM,
+                user=user,
+                max_tokens=8000,
+            )
         except Exception as e:
             print(f"  ERROR: {e}")
             out_rows.append({"statement_id": sid, "error": str(e)[:300]})
@@ -326,18 +370,20 @@ def main() -> int:
         for p in problems[:3]:
             print(f"    - {p}")
 
-        out_rows.append({
-            "statement_id": sid,
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "bare_pwv_total": bare_pwv_total,
-            "rubric_pwv_total": rub_pwv_total,
-            "diagnosis": data.get("diagnosis"),
-            "evidence_summary": data.get("evidence_summary"),
-            "rubric_edits": data.get("rubric_edits") or [],
-            "spec_edits_for_author_review": data.get("spec_edits_for_author_review") or [],
-            "recommendation": data.get("recommendation"),
-            "validation_problems": problems,
-        })
+        out_rows.append(
+            {
+                "statement_id": sid,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "bare_pwv_total": bare_pwv_total,
+                "rubric_pwv_total": rub_pwv_total,
+                "diagnosis": data.get("diagnosis"),
+                "evidence_summary": data.get("evidence_summary"),
+                "rubric_edits": data.get("rubric_edits") or [],
+                "spec_edits_for_author_review": data.get("spec_edits_for_author_review") or [],
+                "recommendation": data.get("recommendation"),
+                "validation_problems": problems,
+            }
+        )
 
     write_jsonl(out_rows, DIAGNOSES_OUT)
     print(f"\nwrote {DIAGNOSES_OUT}")
@@ -345,17 +391,21 @@ def main() -> int:
     # Render markdown report
     parts = ["# DART Run 001 — bidirectional compiler diagnoses\n"]
     parts.append(f"Run date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}")
-    parts.append(f"Compiler: GPT-5.1 (reasoning_effort=none)")
+    parts.append("Compiler: GPT-5.1 (reasoning_effort=none)")
     parts.append(f"Statements: {len(out_rows)} Bucket D statements at T₁=0.5\n")
 
     parts.append("## Summary table\n")
-    parts.append("| statement | Σ bare_pwv | Σ rubric_pwv | diagnosis | recommendation | n rubric edits | n spec edits |")
+    parts.append(
+        "| statement | Σ bare_pwv | Σ rubric_pwv | diagnosis | recommendation | n rubric edits | n spec edits |"
+    )
     parts.append("|---|--:|--:|---|---|--:|--:|")
     for r in out_rows:
         if "error" in r:
             parts.append(f"| {r['statement_id']} | — | — | ERROR | {r['error'][:60]} | — | — |")
             continue
-        parts.append(f"| {r['statement_id']} | {r['bare_pwv_total']} | {r['rubric_pwv_total']} | {r['diagnosis']} | {r['recommendation']} | {len(r['rubric_edits'])} | {len(r['spec_edits_for_author_review'])} |")
+        parts.append(
+            f"| {r['statement_id']} | {r['bare_pwv_total']} | {r['rubric_pwv_total']} | {r['diagnosis']} | {r['recommendation']} | {len(r['rubric_edits'])} | {len(r['spec_edits_for_author_review'])} |"
+        )
     parts.append("")
 
     for r in out_rows:
@@ -366,13 +416,15 @@ def main() -> int:
         parts.append(f"**Evidence summary**: {r['evidence_summary']}\n")
         if r["rubric_edits"]:
             parts.append(f"### Proposed rubric edits ({len(r['rubric_edits'])})\n")
-            for i, e in enumerate(r["rubric_edits"]):
+            for _i, e in enumerate(r["rubric_edits"]):
                 parts.append(f"#### Anchor {e.get('anchor')}  (confidence: {e.get('confidence')})")
                 parts.append(f"**Old criterion**: {trunc(e.get('old_criterion'), 600)}")
                 parts.append(f"**New criterion**: {trunc(e.get('new_criterion'), 800)}")
                 parts.append(f"**Rationale**: {e.get('rationale')}\n")
         if r["spec_edits_for_author_review"]:
-            parts.append(f"### Proposed spec edits — for spec-author review ({len(r['spec_edits_for_author_review'])})\n")
+            parts.append(
+                f"### Proposed spec edits — for spec-author review ({len(r['spec_edits_for_author_review'])})\n"
+            )
             parts.append("⚠️ These are PROPOSALS, not changes. Spec edits never auto-deploy.\n")
             for i, e in enumerate(r["spec_edits_for_author_review"]):
                 parts.append(f"#### Spec edit {i+1}  (confidence: {e.get('confidence')})")
@@ -380,7 +432,7 @@ def main() -> int:
                 parts.append(f"**Proposed**: `{e.get('new_phrase')}`")
                 parts.append(f"**Rationale**: {e.get('rationale')}\n")
         if r["validation_problems"]:
-            parts.append(f"### Validation problems\n")
+            parts.append("### Validation problems\n")
             for p in r["validation_problems"]:
                 parts.append(f"- {p}")
 

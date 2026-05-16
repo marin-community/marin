@@ -1,3 +1,7 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501, RUF001, RUF002, RUF003  -- long LM-prompt strings + intentional unicode (α, ×, −, –) used in DART notation
+
 """Rubric-poison cell ranking via Δpwv (per-cell pairwise variance contribution to Δα).
 
 For each cell c (statement × scenario × generator):
@@ -44,9 +48,7 @@ JUDGES = ("gpt", "gemini", "claude")
 
 
 def pairwise_variance(scores: list[int]) -> int:
-    return sum((scores[i] - scores[j]) ** 2
-               for i in range(len(scores))
-               for j in range(i + 1, len(scores)))
+    return sum((scores[i] - scores[j]) ** 2 for i in range(len(scores)) for j in range(i + 1, len(scores)))
 
 
 def outlier_judge(scores_by_judge: dict[str, int]) -> tuple[str, int] | None:
@@ -55,7 +57,8 @@ def outlier_judge(scores_by_judge: dict[str, int]) -> tuple[str, int] | None:
         return None
     best_judge, best_dev = None, -1
     for j in JUDGES:
-        if j not in scores_by_judge: continue
+        if j not in scores_by_judge:
+            continue
         others = [scores_by_judge[other] for other in JUDGES if other != j]
         dev = max(abs(scores_by_judge[j] - o) for o in others)
         if dev > best_dev:
@@ -67,10 +70,10 @@ def outlier_judge(scores_by_judge: dict[str, int]) -> tuple[str, int] | None:
 
 
 def rank_rubric_poison(by_cell: dict, sid: str) -> list[dict]:
-    bare_cells = {(c[2], c[3]): jd for c, jd in by_cell.items()
-                  if c[0] == sid and c[1] == "variant_A" and len(jd) == 3}
-    rub_cells = {(c[2], c[3]): jd for c, jd in by_cell.items()
-                 if c[0] == sid and c[1] == "rubric_plus_spec" and len(jd) == 3}
+    bare_cells = {(c[2], c[3]): jd for c, jd in by_cell.items() if c[0] == sid and c[1] == "variant_A" and len(jd) == 3}
+    rub_cells = {
+        (c[2], c[3]): jd for c, jd in by_cell.items() if c[0] == sid and c[1] == "rubric_plus_spec" and len(jd) == 3
+    }
 
     rows = []
     for key in set(bare_cells) & set(rub_cells):
@@ -80,19 +83,37 @@ def rank_rubric_poison(by_cell: dict, sid: str) -> list[dict]:
         rub_dict = {j: rub_jd[j]["score"] for j in JUDGES}
         bs = [bare_dict[j] for j in JUDGES]
         rs = [rub_dict[j] for j in JUDGES]
-        rows.append({
-            "scen": key[0], "gen": key[1],
-            "bare_scores": bs, "rubric_scores": rs,
-            "bare_pwv": pairwise_variance(bs),
-            "rubric_pwv": pairwise_variance(rs),
-            "delta_pwv": pairwise_variance(rs) - pairwise_variance(bs),
-            "bare_judgments": {j: bare_jd[j] for j in JUDGES},
-            "rubric_judgments": {j: rub_jd[j] for j in JUDGES},
-            "outlier_bare": outlier_judge(bare_dict),
-            "outlier_rubric": outlier_judge(rub_dict),
-        })
+        rows.append(
+            {
+                "scen": key[0],
+                "gen": key[1],
+                "bare_scores": bs,
+                "rubric_scores": rs,
+                "bare_pwv": pairwise_variance(bs),
+                "rubric_pwv": pairwise_variance(rs),
+                "delta_pwv": pairwise_variance(rs) - pairwise_variance(bs),
+                "bare_judgments": {j: bare_jd[j] for j in JUDGES},
+                "rubric_judgments": {j: rub_jd[j] for j in JUDGES},
+                "outlier_bare": outlier_judge(bare_dict),
+                "outlier_rubric": outlier_judge(rub_dict),
+            }
+        )
     rows.sort(key=lambda r: -r["delta_pwv"])
-    return rows
+    # Run 10 change (Decision #4): drop cells where rubric didn't introduce
+    # disagreement (delta_pwv <= 0). Those are non-poison cells — either neutral
+    # or actively helped by the rubric — and shouldn't be in the rubric-poison
+    # ranking shown to the compiler.
+    rows = [r for r in rows if r["delta_pwv"] > 0]
+    # Dedupe to one cell per scenario_idx — keeps highest-Δpwv generator per scenario.
+    # The same disagreement axis repeated across generators on a single scenario is
+    # redundant to the compiler.
+    seen, deduped = set(), []
+    for r in rows:
+        if r["scen"] in seen:
+            continue
+        seen.add(r["scen"])
+        deduped.append(r)
+    return deduped
 
 
 def per_anchor_frequency(rows: list[dict], top_k: int = 12) -> dict[str, Any]:
@@ -114,8 +135,11 @@ def per_anchor_frequency(rows: list[dict], top_k: int = 12) -> dict[str, Any]:
         if r["outlier_rubric"]:
             outlier_counts[r["outlier_rubric"][0]] += 1
     return {
-        "modal_anchor": modal, "low_anchor": low, "high_anchor": high,
-        "divergence_pairs": pairs, "outlier_judge_counts": outlier_counts,
+        "modal_anchor": modal,
+        "low_anchor": low,
+        "high_anchor": high,
+        "divergence_pairs": pairs,
+        "outlier_judge_counts": outlier_counts,
         "n_top_k": len(top),
     }
 
@@ -140,17 +164,21 @@ def render_report(sid, rows, anchor_freq, response_idx, spec_text, rubric_anchor
     top_d_total = sum(r["delta_pwv"] for r in rows[:top_k])
     pct = 100 * top_d_total / max(1, rub_total - bare_total) if rub_total != bare_total else 0
     parts.append(f"**Top-{top_k} Δpwv share of total**: {top_d_total:+d} ({pct:.1f}%)\n")
-    parts.append("> If top-K accounts for >70% of total Δpwv, fixing those cells closes the rubric paradox on this statement.\n")
+    parts.append(
+        "> If top-K accounts for >70% of total Δpwv, fixing those cells closes the rubric paradox on this statement.\n"
+    )
 
     parts.append(f"## Per-anchor frequency in top-{top_k} poison cells\n")
     parts.append("| anchor | n cells where MODAL | n cells where LOW | n cells where HIGH |")
     parts.append("|---|--:|--:|--:|")
     for a in (1, 2, 3, 4, 5):
-        parts.append(f"| {a} | {anchor_freq['modal_anchor'].get(a, 0)} | "
-                     f"{anchor_freq['low_anchor'].get(a, 0)} | "
-                     f"{anchor_freq['high_anchor'].get(a, 0)} |")
+        parts.append(
+            f"| {a} | {anchor_freq['modal_anchor'].get(a, 0)} | "
+            f"{anchor_freq['low_anchor'].get(a, 0)} | "
+            f"{anchor_freq['high_anchor'].get(a, 0)} |"
+        )
     parts.append("")
-    parts.append(f"### Top divergence pairs\n")
+    parts.append("### Top divergence pairs\n")
     parts.append("| (low, high) | count |")
     parts.append("|---|--:|")
     for (lo, hi), n in anchor_freq["divergence_pairs"].most_common(8):
@@ -166,9 +194,13 @@ def render_report(sid, rows, anchor_freq, response_idx, spec_text, rubric_anchor
     if n_o > 0:
         max_j, max_n = anchor_freq["outlier_judge_counts"].most_common(1)[0]
         conc = 100 * max_n / n_o
-        parts.append(f"\n**Outlier concentration**: `{max_j}` is the outlier in {conc:.0f}% of cells with a clear outlier (n={n_o}).")
+        parts.append(
+            f"\n**Outlier concentration**: `{max_j}` is the outlier in {conc:.0f}% of cells with a clear outlier (n={n_o})."
+        )
         if conc > 70:
-            parts.append(f"\n⚠️ **CONCENTRATION > 70%** — judge-prior leakage. Anchor language must be EMPHATIC enough to override `{max_j}`'s prior; tightening alone won't suffice.")
+            parts.append(
+                f"\n⚠️ **CONCENTRATION > 70%** — judge-prior leakage. Anchor language must be EMPHATIC enough to override `{max_j}`'s prior; tightening alone won't suffice."
+            )
     parts.append("")
 
     parts.append("## Spec statement\n")
@@ -183,7 +215,9 @@ def render_report(sid, rows, anchor_freq, response_idx, spec_text, rubric_anchor
         rm = response_idx.get((sid, r["scen"], r["gen"]), {})
         bs_pretty = ",".join(str(s) for s in r["bare_scores"])
         rs_pretty = ",".join(str(s) for s in r["rubric_scores"])
-        parts.append(f"### Rank {i+1} — Δpwv = {r['delta_pwv']:+d}  (bare_pwv={r['bare_pwv']}, rubric_pwv={r['rubric_pwv']})\n")
+        parts.append(
+            f"### Rank {i+1} — Δpwv = {r['delta_pwv']:+d}  (bare_pwv={r['bare_pwv']}, rubric_pwv={r['rubric_pwv']})\n"
+        )
         parts.append(f"**scen={r['scen']}, generator={r['gen']}**")
         parts.append(f"  - bare scores (gpt,gemini,claude) = ({bs_pretty})")
         parts.append(f"  - rubric scores (gpt,gemini,claude) = ({rs_pretty})")
@@ -210,8 +244,10 @@ def render_summary(reports):
     parts.append("| statement | n cells | total Δpwv | top-K share | dominant outlier | top divergence pair |")
     parts.append("|---|--:|--:|--:|---|---|")
     for r in reports:
-        parts.append(f"| {r['sid']} | {r['n']} | {r['total_delta_pwv']:+d} | {r['topk_share_pct']:.0f}% | "
-                     f"{r['dominant_outlier_judge']} | {r['dominant_divergence_pair']} |")
+        parts.append(
+            f"| {r['sid']} | {r['n']} | {r['total_delta_pwv']:+d} | {r['topk_share_pct']:.0f}% | "
+            f"{r['dominant_outlier_judge']} | {r['dominant_divergence_pair']} |"
+        )
     parts.append("")
     return "\n".join(parts)
 
@@ -240,23 +276,36 @@ def main():
             continue
         anchor_freq = per_anchor_frequency(rows, top_k=args.top_k)
         rubric_anchors = (rubrics.get(sid, {}) or {}).get("anchors", {})
-        report = render_report(sid, rows, anchor_freq, response_idx,
-                               spec[sid]["text"], rubric_anchors, top_k=args.top_k)
+        report = render_report(sid, rows, anchor_freq, response_idx, spec[sid]["text"], rubric_anchors, top_k=args.top_k)
         out = OUT_DIR / f"rubric_poison_{sid}.md"
         out.write_text(report)
         total_d = sum(r["delta_pwv"] for r in rows)
-        topk_d = sum(r["delta_pwv"] for r in rows[:args.top_k])
+        topk_d = sum(r["delta_pwv"] for r in rows[: args.top_k])
         topk_pct = 100 * topk_d / max(1, total_d) if total_d != 0 else 0
         oj_c = anchor_freq["outlier_judge_counts"]
-        oj_str = f"{oj_c.most_common(1)[0][0]} ({100*oj_c.most_common(1)[0][1]/max(1,sum(oj_c.values())):.0f}%)" if oj_c else "none"
-        pair_str = (f"({anchor_freq['divergence_pairs'].most_common(1)[0][0][0]},{anchor_freq['divergence_pairs'].most_common(1)[0][0][1]}) "
-                    f"×{anchor_freq['divergence_pairs'].most_common(1)[0][1]}") if anchor_freq['divergence_pairs'] else "n/a"
-        summary_rows.append({
-            "sid": sid, "n": len(rows), "total_delta_pwv": total_d,
-            "topk_share_pct": topk_pct,
-            "dominant_outlier_judge": oj_str,
-            "dominant_divergence_pair": pair_str,
-        })
+        oj_str = (
+            f"{oj_c.most_common(1)[0][0]} ({100*oj_c.most_common(1)[0][1]/max(1,sum(oj_c.values())):.0f}%)"
+            if oj_c
+            else "none"
+        )
+        pair_str = (
+            (
+                f"({anchor_freq['divergence_pairs'].most_common(1)[0][0][0]},{anchor_freq['divergence_pairs'].most_common(1)[0][0][1]}) "
+                f"×{anchor_freq['divergence_pairs'].most_common(1)[0][1]}"
+            )
+            if anchor_freq["divergence_pairs"]
+            else "n/a"
+        )
+        summary_rows.append(
+            {
+                "sid": sid,
+                "n": len(rows),
+                "total_delta_pwv": total_d,
+                "topk_share_pct": topk_pct,
+                "dominant_outlier_judge": oj_str,
+                "dominant_divergence_pair": pair_str,
+            }
+        )
         print(f"  {sid}: n={len(rows)}, total Δpwv={total_d:+d}, top-{args.top_k} share={topk_pct:.0f}%")
 
     if summary_rows:

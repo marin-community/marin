@@ -1,3 +1,7 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501, RUF003  -- long LM-prompt strings + intentional unicode (α, ×, −, –) used in DART notation
+
 """DART Run 9 — Phase 0 + Phase 1: poison-rank from canonical 80-cell ensemble,
 then submit compiler diagnostic batches (GPT + Claude via batch, Gemini sync).
 
@@ -12,14 +16,18 @@ Outputs:
     run9_batches.json                   — batch IDs (GPT batch + Claude batch)
     diagnoses_gem.jsonl                 — Gemini sync (immediate)
 """
+
 from __future__ import annotations
-import argparse, hashlib, json, os, sys, time
+import argparse
+import hashlib
+import json
+import os
+import sys
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
 from google import genai
 from google.genai import types
 from openai import OpenAI
@@ -39,11 +47,21 @@ PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Canonical Bucket D at T₁=0.5 (from Run 8 analysis)
 CANONICAL_D_T05 = [
-    "avoid_abuse", "comply_with_laws", "do_not_lie", "no_agenda",
-    "be_clear", "sexual_content_involving_minors", "no_erotica_or_gore",
-    "assume_objective_pov", "no_topic_off_limits", "formatting",
-    "protect_privileged_messages", "prevent_imminent_harm",
-    "avoid_hateful_content", "assume_best_intentions", "highlight_misalignments",
+    "avoid_abuse",
+    "comply_with_laws",
+    "do_not_lie",
+    "no_agenda",
+    "be_clear",
+    "sexual_content_involving_minors",
+    "no_erotica_or_gore",
+    "assume_objective_pov",
+    "no_topic_off_limits",
+    "formatting",
+    "protect_privileged_messages",
+    "prevent_imminent_harm",
+    "avoid_hateful_content",
+    "assume_best_intentions",
+    "highlight_misalignments",
 ]
 
 GPT_MODEL = "gpt-5.1"
@@ -58,8 +76,13 @@ DART_COMPILER_TOOL_V9 = {
         "properties": {
             "diagnosis": {
                 "type": "string",
-                "enum": ["rubric_drift", "spec_ambiguity", "both",
-                         "response_interpretation_disagreement", "irreducible"],
+                "enum": [
+                    "rubric_drift",
+                    "spec_ambiguity",
+                    "both",
+                    "response_interpretation_disagreement",
+                    "irreducible",
+                ],
             },
             "evidence_summary": {"type": "string"},
             "rubric_edits": {
@@ -102,19 +125,29 @@ DART_COMPILER_TOOL_V9 = {
                         "rationale": {"type": "string"},
                         "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                     },
-                    "required": ["user_query", "good_response", "bad_response",
-                                 "description", "rationale", "confidence"],
+                    "required": [
+                        "user_query",
+                        "good_response",
+                        "bad_response",
+                        "description",
+                        "rationale",
+                        "confidence",
+                    ],
                 },
             },
             "recommendation": {
                 "type": "string",
-                "enum": ["adopt_rubric_edit", "drop_rubric", "escalate_spec",
-                         "both", "add_examples", "irreducible"],
+                "enum": ["adopt_rubric_edit", "drop_rubric", "escalate_spec", "both", "add_examples", "irreducible"],
             },
         },
-        "required": ["diagnosis", "evidence_summary", "rubric_edits",
-                     "spec_edits_for_author_review", "spec_example_additions",
-                     "recommendation"],
+        "required": [
+            "diagnosis",
+            "evidence_summary",
+            "rubric_edits",
+            "spec_edits_for_author_review",
+            "spec_example_additions",
+            "recommendation",
+        ],
     },
 }
 
@@ -127,13 +160,15 @@ def load_canonical_judgments():
     """Build by_cell[(sid, scen, gen, condition)][judge] = score from canonical sources."""
     by_cell = defaultdict(dict)
     for r in load_jsonl(DIR / "per_judgment_opposite.jsonl"):
-        if r.get("score") is None: continue
+        if r.get("score") is None:
+            continue
         j = r.get("judge")
         if j in ("gpt", "claude") and r.get("condition") in ("variant_A", "rubric_plus_spec"):
             ck = (r["statement_id"], r["scenario_idx"], r["generator"], r["condition"])
             by_cell[ck][j] = r["score"]
     for r in load_jsonl(DIR / "per_judgment_pro_audit.jsonl"):
-        if r.get("score") is None: continue
+        if r.get("score") is None:
+            continue
         ck = (r["statement_id"], r["scenario_idx"], r["generator"], r["condition"])
         by_cell[ck]["gemini-pro"] = r["score"]
     return by_cell
@@ -143,16 +178,21 @@ def load_response_index():
     out = {}
     for r in load_jsonl(DIR / "e8_responses.jsonl"):
         sid = r.get("statement_id")
-        if not sid: continue
-        for col, label in [("response_gpt", "gpt-5.1"),
-                           ("response_weak", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
-                           ("response_gemini", "gemini-3-flash-preview")]:
+        if not sid:
+            continue
+        for col, label in [
+            ("response_gpt", "gpt-5.1"),
+            ("response_weak", "Qwen/Qwen2.5-7B-Instruct-Turbo"),
+            ("response_gemini", "gemini-3-flash-preview"),
+        ]:
             if r.get(col):
                 out[(sid, r["scenario_idx"], label)] = (r["user_query"], r[col])
     for r in load_jsonl(DIR / "e9_opposite_mode_responses.jsonl"):
-        if "error" in r: continue
+        if "error" in r:
+            continue
         sid = r.get("statement_id")
-        if not sid: continue
+        if not sid:
+            continue
         out[(sid, r["scenario_idx"], r["generator"])] = (r["user_query"], r["response"])
     return out
 
@@ -162,16 +202,32 @@ def rank_poison(by_cell, sid, condition, top_k=10):
     rows = []
     for ck, scores in by_cell.items():
         s, scen, gen, cond = ck
-        if s != sid or cond != condition: continue
+        if s != sid or cond != condition:
+            continue
         ss = list(scores.values())
-        if len(ss) < 2: continue
+        if len(ss) < 2:
+            continue
         pwv = sum((ss[i] - ss[j]) ** 2 for i in range(len(ss)) for j in range(i + 1, len(ss)))
-        rows.append({
-            "scen": scen, "generator": gen, "scores": dict(scores), "pwv": pwv,
-        })
+        rows.append(
+            {
+                "scen": scen,
+                "generator": gen,
+                "scores": dict(scores),
+                "pwv": pwv,
+            }
+        )
     rows.sort(key=lambda r: -r["pwv"])
     pwv_total = sum(r["pwv"] for r in rows)
-    return rows[:top_k], pwv_total
+    # Run 10 (Decision #4): drop unanimous cells (pwv=0) before dedup.
+    rows = [r for r in rows if r["pwv"] > 0]
+    # Dedupe to one cell per scenario_idx — keeps highest-pwv generator per scenario.
+    seen, deduped = set(), []
+    for r in rows:
+        if r["scen"] in seen:
+            continue
+        seen.add(r["scen"])
+        deduped.append(r)
+    return deduped[:top_k], pwv_total
 
 
 def fetch_judge_reasoning_for_cells(cells, sid, condition):
@@ -180,10 +236,13 @@ def fetch_judge_reasoning_for_cells(cells, sid, condition):
     reasoning_by_key = defaultdict(dict)  # (scen, gen) -> {judge: reasoning}
     for path in [DIR / "per_judgment_opposite.jsonl", DIR / "per_judgment_pro_audit.jsonl"]:
         for r in load_jsonl(path):
-            if r.get("statement_id") != sid: continue
-            if r.get("condition") != condition: continue
+            if r.get("statement_id") != sid:
+                continue
+            if r.get("condition") != condition:
+                continue
             k = (r["scenario_idx"], r["generator"])
-            if k not in keys_wanted: continue
+            if k not in keys_wanted:
+                continue
             judge = r.get("judge", "?")
             reas = (r.get("reasoning") or "")[:600]
             if reas:
@@ -212,9 +271,18 @@ def format_poison_cells(cells, response_idx, reasoning_by_key, sid):
     return "\n".join(parts)
 
 
-def build_compiler_prompt(sid, spec_record, rubric, bare_cells, rub_cells,
-                          bare_pwv_total, rub_pwv_total, response_idx,
-                          bare_reasoning, rub_reasoning):
+def build_compiler_prompt(
+    sid,
+    spec_record,
+    rubric,
+    bare_cells,
+    rub_cells,
+    bare_pwv_total,
+    rub_pwv_total,
+    response_idx,
+    bare_reasoning,
+    rub_reasoning,
+):
     examples = get_examples(spec_record)
     parts = [
         f"=== SPEC STATEMENT TEXT (authoritative) ===\n{spec_record['text']}\n",
@@ -240,8 +308,7 @@ def main():
     args = ap.parse_args()
 
     spec = {r["id"]: r for r in load_jsonl(SPEC_PATH)}
-    rubrics = {r["statement_id"]: r["rubric"]
-               for r in load_jsonl(DIR / "e8_rubrics_v1.jsonl") if "error" not in r}
+    rubrics = {r["statement_id"]: r["rubric"] for r in load_jsonl(DIR / "e8_rubrics_v1.jsonl") if "error" not in r}
 
     target_sids = CANONICAL_D_T05 if args.statements == "all" else args.statements.split(",")
     print(f"Run 9 Phase 0+1 — {len(target_sids)} canonical Bucket D statements\n")
@@ -257,8 +324,13 @@ def main():
         for sid in target_sids:
             bare, bare_total = rank_poison(by_cell, sid, "variant_A", top_k=args.top_k)
             rub, rub_total = rank_poison(by_cell, sid, "rubric_plus_spec", top_k=args.top_k)
-            row = {"sid": sid, "bare_pwv_total": bare_total, "rubric_pwv_total": rub_total,
-                   "bare_top": bare, "rubric_top": rub}
+            row = {
+                "sid": sid,
+                "bare_pwv_total": bare_total,
+                "rubric_pwv_total": rub_total,
+                "bare_top": bare,
+                "rubric_top": rub,
+            }
             poison_data[sid] = row
             f.write(json.dumps(row) + "\n")
             print(f"  {sid:38s}  bare Σpwv={bare_total:5d}  rubric Σpwv={rub_total:5d}  Δ={rub_total-bare_total:+5d}")
@@ -270,10 +342,16 @@ def main():
         bare_reasoning = fetch_judge_reasoning_for_cells(poison_data[sid]["bare_top"], sid, "variant_A")
         rub_reasoning = fetch_judge_reasoning_for_cells(poison_data[sid]["rubric_top"], sid, "rubric_plus_spec")
         prompt = build_compiler_prompt(
-            sid, spec[sid], rubrics.get(sid, {}),
-            poison_data[sid]["bare_top"], poison_data[sid]["rubric_top"],
-            poison_data[sid]["bare_pwv_total"], poison_data[sid]["rubric_pwv_total"],
-            response_idx, bare_reasoning, rub_reasoning,
+            sid,
+            spec[sid],
+            rubrics.get(sid, {}),
+            poison_data[sid]["bare_top"],
+            poison_data[sid]["rubric_top"],
+            poison_data[sid]["bare_pwv_total"],
+            poison_data[sid]["rubric_pwv_total"],
+            response_idx,
+            bare_reasoning,
+            rub_reasoning,
         )
         prompts[sid] = prompt
         (PROMPTS_DIR / f"{sid}.txt").write_text(prompt)
@@ -292,9 +370,13 @@ def main():
     job_dir = Path(f"results/raw/e9_dart_run9_compile/{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}")
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    state = {"submitted_at_iso": datetime.now(timezone.utc).isoformat(),
-             "job_dir": str(job_dir), "n_statements": len(target_sids),
-             "statements": target_sids, "batches": {}}
+    state = {
+        "submitted_at_iso": datetime.now(timezone.utc).isoformat(),
+        "job_dir": str(job_dir),
+        "n_statements": len(target_sids),
+        "statements": target_sids,
+        "batches": {},
+    }
 
     # GPT batch (OpenAI)
     print("\n  GPT-5.1 batch (OpenAI)...")
@@ -325,12 +407,16 @@ def main():
     with gpt_input_path.open("rb") as fh:
         up = oai.files.create(file=fh, purpose="batch")
     gpt_batch = oai.batches.create(
-        input_file_id=up.id, endpoint="/v1/chat/completions", completion_window="24h",
+        input_file_id=up.id,
+        endpoint="/v1/chat/completions",
+        completion_window="24h",
         metadata={"description": "DART Run 9 compile GPT-5.1"},
     )
     state["batches"]["gpt"] = {
-        "batch_id": gpt_batch.id, "input_file_id": up.id,
-        "input_file": str(gpt_input_path), "n_requests": len(target_sids),
+        "batch_id": gpt_batch.id,
+        "input_file_id": up.id,
+        "input_file": str(gpt_input_path),
+        "n_requests": len(target_sids),
         "custom_id_map": gpt_cmap,
     }
     print(f"    submitted batch {gpt_batch.id}")
@@ -356,8 +442,10 @@ def main():
         cla_reqs.append(req)
     cla_result = ba.submit(api_key_anth, cla_reqs, job_dir=job_dir, name="run9_compile_cla")
     state["batches"]["claude"] = {
-        "batch_id": cla_result["batch_id"], "name": "run9_compile_cla",
-        "n_requests": len(target_sids), "custom_id_map": cla_cmap,
+        "batch_id": cla_result["batch_id"],
+        "name": "run9_compile_cla",
+        "n_requests": len(target_sids),
+        "custom_id_map": cla_cmap,
     }
     print(f"    submitted batch {cla_result['batch_id']}")
 
@@ -376,10 +464,13 @@ def main():
             response_mime_type="application/json",
         )
         try:
-            raw = log.call(role="run9_compile_gem", key={"sid": sid},
-                           fn=lambda: gem.models.generate_content(
-                               model="gemini-3.1-pro-preview",
-                               contents=prompts[sid], config=cfg))
+            raw = log.call(
+                role="run9_compile_gem",
+                key={"sid": sid},
+                fn=lambda: gem.models.generate_content(
+                    model="gemini-3.1-pro-preview", contents=prompts[sid], config=cfg
+                ),
+            )
             text = raw.text or ""
             if text.startswith("```"):
                 text = text.split("```")[1].lstrip("json\n").strip()
@@ -403,7 +494,7 @@ def main():
     state_path.write_text(json.dumps(state, indent=2))
     print(f"\nWrote {state_path}")
     print(f"Gemini sync done: diagnoses_gem.jsonl ({len(gem_results)} entries)")
-    print(f"\nNext: poll batches with `python -c \"...\"` then run e9_dart_run9_synthesize.py")
+    print('\nNext: poll batches with `python -c "..."` then run e9_dart_run9_synthesize.py')
     return 0
 
 

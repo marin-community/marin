@@ -1,3 +1,7 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: RUF001, RUF002, RUF003  -- long LM-prompt strings + intentional unicode (α, ×, −, –) used in DART notation
+
 """DART iterative validation — Phase 4 analysis.
 
 Reads new judgment data for a round (per_judgment_iter_round_{N}.jsonl) plus
@@ -53,7 +57,7 @@ def build_rater_tuples(per_judgment_rows: list[dict]) -> list[tuple]:
             continue
         by_cell[cell_key(r)][r["judge"]] = r["score"]
     tuples = []
-    for ck, scores in by_cell.items():
+    for _ck, scores in by_cell.items():
         # canonical order: gpt, gemini, claude — pad missing with None and skip if all missing
         triple = (scores.get("gpt"), scores.get("gemini"), scores.get("claude"))
         if all(t is None for t in triple):
@@ -62,9 +66,7 @@ def build_rater_tuples(per_judgment_rows: list[dict]) -> list[tuple]:
     return tuples
 
 
-def alpha_for_subset(
-    per_judgment_rows: list[dict], statement_id: str, condition: str | None
-) -> float | None:
+def alpha_for_subset(per_judgment_rows: list[dict], statement_id: str, condition: str | None) -> float | None:
     rows = [r for r in per_judgment_rows if r["statement_id"] == statement_id]
     if condition is not None:
         rows = [r for r in rows if r.get("condition") == condition]
@@ -73,8 +75,12 @@ def alpha_for_subset(
 
 
 def bootstrap_alpha_ci(
-    per_judgment_rows: list[dict], statement_id: str, condition: str | None,
-    n_boot: int = 500, alpha: float = 0.05, seed: int = 0,
+    per_judgment_rows: list[dict],
+    statement_id: str,
+    condition: str | None,
+    n_boot: int = 500,
+    alpha: float = 0.05,
+    seed: int = 0,
 ) -> tuple[float | None, float | None] | None:
     rows = [r for r in per_judgment_rows if r["statement_id"] == statement_id]
     if condition is not None:
@@ -113,7 +119,7 @@ def pwv_top_k(per_judgment_rows: list[dict], statement_id: str, condition: str |
         by_cell[cell_key(r)][r["judge"]] = r["score"]
 
     pwvs = []
-    for ck, scores in by_cell.items():
+    for _ck, scores in by_cell.items():
         ss = [s for s in scores.values() if s is not None]
         v = 0.0
         for i in range(len(ss)):
@@ -124,9 +130,9 @@ def pwv_top_k(per_judgment_rows: list[dict], statement_id: str, condition: str |
     return sum(pwvs[:k])
 
 
-def classify_verdict(alpha_after: float | None, delta_alpha: float | None,
-                     prior_round_alpha: float | None = None,
-                     round_n: int = 1) -> str:
+def classify_verdict(
+    alpha_after: float | None, delta_alpha: float | None, prior_round_alpha: float | None = None, round_n: int = 1
+) -> str:
     if alpha_after is None or delta_alpha is None:
         return "stuck"
     if alpha_after >= T1:
@@ -176,6 +182,10 @@ def analyze_round(round_n: int, conditions: list[str]) -> dict:
         sid_dir = ITER_DIR / sid
         history_path = sid_dir / "history.json"
         history = json.loads(history_path.read_text())
+        # Skip statements that don't have an entry for this round
+        # (e.g. CONVERGED in a prior round, no need to re-analyze)
+        if len(history) < round_n or history[round_n - 1].get("verdict") in ("converged", "stuck", "skipped"):
+            continue
         baseline_rows = baseline_per_judgment_for_statement(sid)
         # Combine baseline + iter rows for this statement
         stmt_iter_rows = [r for r in iter_rows if r.get("statement_id") == sid]
@@ -183,7 +193,7 @@ def analyze_round(round_n: int, conditions: list[str]) -> dict:
 
         # Compute per-condition α
         alpha_by_cond = {}
-        for c in ["C0"] + conditions:
+        for c in ["C0", *conditions]:
             a = alpha_for_subset(combined, sid, c)
             alpha_by_cond[c] = a
 
@@ -192,7 +202,7 @@ def analyze_round(round_n: int, conditions: list[str]) -> dict:
         ci = bootstrap_alpha_ci(combined, sid, operative)
 
         # Top-10 pwv per condition
-        pwv_top10_by_cond = {c: pwv_top_k(combined, sid, c, k=10) for c in ["C0"] + conditions}
+        pwv_top10_by_cond = {c: pwv_top_k(combined, sid, c, k=10) for c in ["C0", *conditions]}
 
         # Determine alpha_before (round_n-1's after, or C0 baseline if round 1)
         if round_n == 1:
@@ -214,18 +224,20 @@ def analyze_round(round_n: int, conditions: list[str]) -> dict:
 
         # Update history entry
         entry = history[round_n - 1]
-        entry.update({
-            "alpha_before_round": alpha_before,
-            "alpha_after_round": alpha_after,
-            "alpha_by_condition": alpha_by_cond,
-            "alpha_ci_95_operative_condition": ci,
-            "operative_condition": operative,
-            "delta_alpha": delta_alpha,
-            "delta_pwv_top10_pct_drop": pwv_pct_drop,
-            "pwv_top10_by_condition": pwv_top10_by_cond,
-            "verdict": verdict,
-            "analyzed_timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        })
+        entry.update(
+            {
+                "alpha_before_round": alpha_before,
+                "alpha_after_round": alpha_after,
+                "alpha_by_condition": alpha_by_cond,
+                "alpha_ci_95_operative_condition": ci,
+                "operative_condition": operative,
+                "delta_alpha": delta_alpha,
+                "delta_pwv_top10_pct_drop": pwv_pct_drop,
+                "pwv_top10_by_condition": pwv_top10_by_cond,
+                "verdict": verdict,
+                "analyzed_timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         history_path.write_text(json.dumps(history, indent=2))
 
         summary["per_statement"][sid] = {
@@ -242,6 +254,7 @@ def analyze_round(round_n: int, conditions: list[str]) -> dict:
 
     # Tally verdicts
     from collections import Counter
+
     verdict_counts = Counter(s["verdict"] for s in summary["per_statement"].values())
     summary["verdict_counts"] = dict(verdict_counts)
 

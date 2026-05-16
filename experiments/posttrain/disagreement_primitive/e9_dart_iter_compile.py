@@ -1,3 +1,7 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: RUF001, RUF003  -- long LM-prompt strings + intentional unicode (α, ×, −, –) used in DART notation
+
 """DART iterative validation — Phase 5 compile-with-history.
 
 For Round N>1: re-call all 3 compilers (GPT, Gemini, Claude) with the original
@@ -27,15 +31,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from e8_paired_indirection import SPEC_PATH, get_examples, render_anchors, render_examples
-from e9_dart_compiler import COMPILER_SYSTEM
 
 DIR = Path("experiments/posttrain/disagreement_primitive")
 ITER_DIR = DIR / "dart_iteration"
@@ -55,8 +56,10 @@ def render_history_block(history: list[dict], current_round: int) -> str:
     for entry in history:
         rn = entry["round"]
         parts.append(f"Round {rn}:")
-        parts.append(f"  Majority diagnosis: {entry.get('round_diagnosis_majority', '?')} "
-                     f"(tier: {entry.get('round_diagnosis_tier', '?')})")
+        parts.append(
+            f"  Majority diagnosis: {entry.get('round_diagnosis_majority', '?')} "
+            f"(tier: {entry.get('round_diagnosis_tier', '?')})"
+        )
         ru = entry.get("rubric_edits_adopted") or []
         sp = entry.get("spec_edits_adopted") or []
         parts.append(f"  Rubric edits adopted: {len(ru)}")
@@ -98,8 +101,7 @@ def compute_poison_cells_under_current_state(sid: str, round_n: int) -> tuple[li
     if not iter_path.exists():
         raise SystemExit(f"missing {iter_path}")
     iter_rows = load_jsonl(iter_path)
-    baseline = [r for r in load_jsonl(DIR / "per_judgment_opposite.jsonl")
-                if r.get("statement_id") == sid]
+    baseline = [r for r in load_jsonl(DIR / "per_judgment_opposite.jsonl") if r.get("statement_id") == sid]
     iter_rows = [r for r in iter_rows if r.get("statement_id") == sid]
 
     # bare condition — always from baseline variant_A
@@ -123,7 +125,19 @@ def compute_poison_cells_under_current_state(sid: str, round_n: int) -> tuple[li
                     v += (ss[i] - ss[j]) ** 2
             out.append((ck, v, scores))
         out.sort(key=lambda x: x[1], reverse=True)
-        return out
+        # Run 10 (Decision #4): drop unanimous cells (pwv=0) before dedup.
+        out = [(ck, v, sc) for (ck, v, sc) in out if v > 0]
+        # Dedupe to one cell per scenario_idx (ck[1]) — keeps highest-pwv generator
+        # per scenario; the same disagreement axis repeated across generators is
+        # redundant to the compiler.
+        seen, deduped = set(), []
+        for ck, v, scores in out:
+            scen = ck[1]
+            if scen in seen:
+                continue
+            seen.add(scen)
+            deduped.append((ck, v, scores))
+        return deduped
 
     bare_ranked = cell_pwv(bare)
     rubric_ranked = cell_pwv(rubric)
@@ -170,7 +184,7 @@ def compile_for_statement(sid: str, round_n: int):
 def format_cells(ranked: list) -> str:
     parts = []
     for i, (ck, pwv, scores) in enumerate(ranked):
-        sid, scen, gen = ck
+        _sid, scen, gen = ck
         s = ", ".join(f"{k}={v}" for k, v in scores.items())
         parts.append(f"  #{i+1} scen={scen} gen={gen} pwv={pwv:.1f} scores=[{s}]")
     return "\n".join(parts)
