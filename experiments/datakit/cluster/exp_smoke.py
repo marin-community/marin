@@ -21,7 +21,7 @@ Submit:
     uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G \\
         --extra=cpu \\
         --job-name "embed-clusters-smoke-$(date +%Y%m%d-%H%M%S)" \\
-        -- python -m experiments.embed_clusters_full.exp_smoke
+        -- python -m experiments.datakit.cluster.exp_smoke
 """
 
 import logging
@@ -37,11 +37,11 @@ from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
 from rigging.filesystem import marin_temp_bucket  # noqa: E402
 
-from experiments.embed_clusters_full.assign import assign_source  # noqa: E402
-from experiments.embed_clusters_full.embed_source import LUXICAL_REPO, LUXICAL_WEIGHTS_FILE, embed_source  # noqa: E402
-from experiments.embed_clusters_full.sample import sample_centroid_inputs  # noqa: E402
-from experiments.embed_clusters_full.summarize import summarize_at_k  # noqa: E402
-from experiments.embed_clusters_full.train import train_centroids  # noqa: E402
+from experiments.datakit.cluster.assign import assign_source  # noqa: E402
+from experiments.datakit.cluster.embed_source import LUXICAL_REPO, LUXICAL_WEIGHTS_FILE, embed_source  # noqa: E402
+from experiments.datakit.cluster.sample import sample_centroid_inputs  # noqa: E402
+from experiments.datakit.cluster.summarize import summarize_at_k  # noqa: E402
+from experiments.datakit.cluster.train import train_centroids  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

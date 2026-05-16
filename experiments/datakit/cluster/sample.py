@@ -21,7 +21,7 @@ import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from rigging.filesystem import open_url
 
-from experiments.embed_clusters_full.embed_source import EmbeddingAttrData, dequantize_to_fp32
+from experiments.datakit.cluster.embed_source import EmbeddingAttrData, dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
 

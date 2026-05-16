@@ -38,7 +38,7 @@ import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from rigging.filesystem import open_url
 
-from experiments.embed_clusters_full.assign import AssignmentAttrData
+from experiments.datakit.cluster.assign import AssignmentAttrData
 
 logger = logging.getLogger(__name__)
 

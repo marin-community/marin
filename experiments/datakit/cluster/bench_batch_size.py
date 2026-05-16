@@ -18,7 +18,7 @@ Submit:
         --cpu=8 --memory=16G --extra=cpu --extra=embed \\
         --enable-extra-resources \\
         --job-name "bench-batch-size-$(date +%Y%m%d-%H%M%S)" \\
-        -- python -m experiments.embed_clusters_full.bench_batch_size
+        -- python -m experiments.datakit.cluster.bench_batch_size
 """
 
 import json
