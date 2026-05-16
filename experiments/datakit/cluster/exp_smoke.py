@@ -25,29 +25,27 @@ Submit:
 """
 
 import logging
-import os
 
-DATA_REGION = "europe-west4"
-os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
+from fray import ResourceConfig
+from marin.datakit.sources import all_sources
+from marin.execution.artifact import Artifact
+from marin.execution.remote import remote
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
+from rigging.filesystem import marin_temp_bucket
 
-from fray import ResourceConfig  # noqa: E402
-from marin.datakit.sources import all_sources  # noqa: E402
-from marin.execution.artifact import Artifact  # noqa: E402
-from marin.execution.remote import remote  # noqa: E402
-from marin.execution.step_runner import StepRunner  # noqa: E402
-from marin.execution.step_spec import StepSpec  # noqa: E402
-from rigging.filesystem import marin_temp_bucket  # noqa: E402
-
-from experiments.datakit.cluster.assign import AssignmentAttrData, assign_source  # noqa: E402
-from experiments.datakit.cluster.sample import sample_centroid_inputs  # noqa: E402
-from experiments.datakit.cluster.summarize import summarize_at_k  # noqa: E402
-from experiments.datakit.cluster.train import train_centroids  # noqa: E402
-from experiments.datakit.embeddings.luxical.pipeline import (  # noqa: E402
+from experiments.datakit.cluster.assign import AssignmentAttrData, assign_source
+from experiments.datakit.cluster.sample import sample_centroid_inputs
+from experiments.datakit.cluster.summarize import summarize_at_k
+from experiments.datakit.cluster.train import train_centroids
+from experiments.datakit.embeddings.luxical.pipeline import (
     LUXICAL_REPO,
     LUXICAL_WEIGHTS_FILE,
     EmbeddingAttrData,
     embed_source,
 )
+
+DATA_REGION = "europe-west4"
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +83,11 @@ _THREAD_ENV = {
 }
 
 # Pin to eu-west4 explicitly via ``source_prefix`` so the output path doesn't drift
-# with the driver's worker region (previous smoke landed in us-central1 because
-# marin_temp_bucket resolves against the runtime MARIN_PREFIX, which is set per-
-# worker, not from the os.environ we set at module-load time).
-_OUTPUT_PREFIX = marin_temp_bucket(ttl_days=7, prefix="rav/clustering-full-smoke", source_prefix="gs://marin-eu-west4")
+# with the driver's worker region — marin_temp_bucket would otherwise resolve
+# against the per-worker runtime MARIN_PREFIX.
+_OUTPUT_PREFIX = marin_temp_bucket(
+    ttl_days=7, prefix="rav/clustering-full-smoke", source_prefix=f"gs://marin-{DATA_REGION}"
+)
 
 
 def _build_steps() -> list[StepSpec]:
