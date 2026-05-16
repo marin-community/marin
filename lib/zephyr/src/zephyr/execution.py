@@ -1675,14 +1675,22 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
             with suppress(Exception):
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline:
-                    if worker_group.is_done():
-                        break
-                    time.sleep(0.5)
-                else:
-                    logger.warning("Workers did not exit naturally, terminating")
+                # LocalActorGroup has no Iris task state to wait on — its
+                # synthetic job handles are marked succeeded at registration
+                # and is_done() is permanently False — so the graceful-exit
+                # wait would always exhaust its full 5s budget without
+                # observing any change. Skip it for LocalClient.
+                if isinstance(client, LocalClient):
                     worker_group.shutdown()
+                else:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        if worker_group.is_done():
+                            break
+                        time.sleep(0.5)
+                    else:
+                        logger.warning("Workers did not exit naturally, terminating")
+                        worker_group.shutdown()
         with suppress(Exception):
             hosted.shutdown()
 
