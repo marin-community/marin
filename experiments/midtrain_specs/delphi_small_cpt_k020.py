@@ -238,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     cells = list(_expand(selected_bases, selected_mixes, selected_lrs))
     print(f"{len(cells)} cells selected (bases={selected_bases}, mixes={selected_mixes}, lrs={selected_lrs})")
 
+    results = []
     for idx, (base_key, mix, lr) in enumerate(cells):
         spec = build_spec(base_key=base_key, mix=mix, lr_factor=lr, tpu_type=args.tpu, attempt=args.attempt)
         resolved = resolve_midtrain_spec(spec)
@@ -258,11 +259,27 @@ def main(argv: list[str] | None = None) -> int:
         write_manifest(row, output_path=spec.run.output_path)
         write_train_config(resolved)
         append_to_attempt_group(row, region=spec.run.output_region)
-        submit_launch(build_launch_request(resolved))
+        result = submit_launch(build_launch_request(resolved))
+        results.append((spec.run.run_id, result))
         print(f"submitted {cell_label}  (steps={resolved.num_train_steps})")
         if idx + 1 < len(cells):
             time.sleep(args.launch_spacing_seconds)
 
+    if args.dry_run or not results:
+        return 0
+
+    # CRITICAL: iris cascade-kills children when their parent SUCCEEDS
+    # (lib/iris/.../transitions.py:685 — "Succeeded jobs always cascade").
+    # The coordinator MUST stay alive until every child terminates; otherwise
+    # the cascade reaps them mid-training. Block here on every child.
+    print(f"All {len(results)} cells submitted; waiting for terminals to keep parent alive (~30-40 min).")
+    for run_id, result in results:
+        try:
+            result.wait(raise_on_failure=False)
+            print(f"  {run_id}: terminal")
+        except Exception as exc:
+            print(f"  {run_id}: wait raised {exc!r} (children should still be intact)")
+    print("All children terminal; coordinator exiting.")
     return 0
 
 
