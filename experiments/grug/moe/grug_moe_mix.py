@@ -1,35 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grug-MoE on the Dolma 3 + Dolmino top-level mixture, all four scales.
+"""Grug-MoE on the Dolma 3 + Dolmino top-level mixture, five compute scales.
 
-Mirrors `launch.py` but swaps `nemotron_mix` for the 39-domain proportional
-mixture from Calvin's swarm (`calvin/swarm-olmo3-regmix-test`,
-`experiments/domain_phase_mix/two_phase_dolma3_dolmino_top_level.py`).
+The mixture has 39 top-level domains that resolve in three ways depending
+on how they were tokenized:
 
-Domains resolve in three ways, depending on whether Calvin's runs materialized
-a merged cache:
-
-1. 28 cache-backed domains (26 CC quality splits + 2 prebuilt) — point at the
-   merged caches at `tokenized/merged/dolma3_dolmino_top_level/...`.
-2. 3 singletons (arxiv, finemath_3plus, wikipedia) — point at their upstream
-   per-partition caches, since the merged stubs are empty.
+1. 28 cache-backed domains (26 Dolma 3 CC quality splits + Dolma 3 stack-edu
+   + Dolmino stem-heavy-crawl) — `DatasetComponent`s pointing at merged
+   caches under `tokenized/merged/dolma3_dolmino_top_level/...`.
+2. 3 singletons (arxiv, finemath_3plus, wikipedia) — `DatasetComponent`s
+   pointing at their single-partition tokenized caches directly.
 3. 8 hierarchical Dolmino groups (common_crawl_hq, olmocr_pdfs_hq,
-   stack_edu_fim, synth_*) — never merged on disk. Each group is a
+   stack_edu_fim, synth_*) that aren't pre-merged on disk. Each group is a
    `ConcatDatasetComponent` whose children are per-partition cache-backed
-   components; Levanter concatenates them at training time via `ConcatDataset`
-   (PR #4133) and the parent `LmDataConfig.shuffle` permutes globally.
+   components; Levanter concatenates them at training time via
+   `ConcatDataset` and the parent mixture shuffles globally.
 
-All caches live under `gs://marin-us-east5/...`; every path is region-relative
-via `InputName.hardcoded`, so launches outside us-east5 hard-fail on
-missing-cache.
+All caches live under `gs://marin-us-east5/...`; every path is region-
+relative via `InputName.hardcoded`, so launches outside us-east5 hard-fail
+on missing-cache rather than triggering a cross-region copy.
 
-Emits four `ExecutorStep`s — one per compute-optimal scale from `README.md`
-(d512 / 2.19e17, d768 / 1.70e18, d1024 / 9.00e18, d1280 / 2.83e19) — feeding
-gates 1 and 2 from `agent.md`.
-
-Simulated epoching is enabled by anchoring `target_budget` to the natural
-dolma3 CC pool (~6.33T) and filling in
+Emits one `ExecutorStep` per compute-optimal scale in `_SCALES` (d512 -
+d1536). Simulated epoching is enabled by anchoring `target_budget` to the
+natural Dolma 3 common-crawl pool (~6.33T tokens) and filling in
 `experiment_budget = batch * steps * seq_len` per scale.
 """
 
@@ -98,24 +92,23 @@ DOMAIN_CACHE_PATHS: dict[str, str] = {
     "dolma3_cc/literature_low": f"{_MERGED_PREFIX}/dolma3_cc/literature_low-a7a06c",
     "dolma3_cc/science_math_and_technology_high": f"{_MERGED_PREFIX}/dolma3_cc/science_math_and_technology_high-8c6157",
     "dolma3_cc/science_math_and_technology_low": f"{_MERGED_PREFIX}/dolma3_cc/science_math_and_technology_low-f3e030",
-    # Dolma 3 stack-edu (prebuilt merged cache from Calvin's runs).
+    # Dolma 3 stack-edu (prebuilt merged cache).
     "dolma3_stack_edu": f"{_MERGED_PREFIX}/dolma3_stack_edu-a7297b",
-    # Dolmino stem-heavy-crawl (prebuilt merged cache from Calvin's runs).
+    # Dolmino stem-heavy-crawl (prebuilt merged cache).
     "dolmino_stem_heavy_crawl": f"{_MERGED_PREFIX}/dolmino_stem_heavy_crawl-e1ec3b",
-    # Singletons: the merged stubs are empty `.executor_info` markers, so we
-    # point at the underlying single-partition tokenized caches directly.
+    # Singletons: no merged cache under the `dolma3_dolmino_top_level` prefix,
+    # so point at the underlying single-partition tokenized caches directly.
     "dolma3_arxiv": "tokenized/dolma/arxiv-07a51f",
     "dolma3_finemath_3plus": "tokenized/finemath_3_plus-a26b0f",
     "dolma3_wikipedia": "tokenized/dolma/wiki-212315",
 }
 
-# Per-partition cache paths for the 8 multi-partition Dolmino groups Calvin
-# never merged on disk (he loaded them hierarchically at runtime). Each entry
-# maps a domain name to a list of (partition_name, relative_cache_path)
-# pairs; the paths live under `gs://marin-{region}/tokenized/dolma3_dolmino_pool/...`.
-# Each group is materialized at runtime as
-# `PermutationDataset(ConcatDataset({partition: ds for partition, ds in ...}))`
-# wrapped in a `DirectDatasetComponent`.
+# Per-partition cache paths for the 8 multi-partition Dolmino groups that
+# aren't pre-merged. Each entry maps a domain to a list of
+# (partition_name, relative_cache_path) pairs; paths live under
+# `gs://marin-{region}/tokenized/dolma3_dolmino_pool/...`. Each group is
+# materialized at runtime as a `ConcatDatasetComponent` whose children are
+# the per-partition cache-backed `DatasetComponent`s.
 HIERARCHICAL_PARTITION_PATHS: dict[str, list[tuple[str, str]]] = {
     "dolmino_common_crawl_hq": [
         ("19_adult_content", "tokenized/dolma3_dolmino_pool/common_crawl_hq_19_adult_content-986941"),
@@ -259,8 +252,8 @@ HIERARCHICAL_PARTITION_PATHS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
-# Per-domain token counts (sum of underlying partition counts) lifted from
-# Calvin's `TOP_LEVEL_DOMAIN_TOKEN_COUNTS`.
+# Per-domain token counts (sum of underlying partition counts). Used to
+# derive `PROPORTIONAL_WEIGHTS` and `TARGET_BUDGET` below.
 DOMAIN_TOKEN_COUNTS: dict[str, int] = {
     "dolma3_cc/art_and_design_high": 114170169532,
     "dolma3_cc/art_and_design_low": 46340373707,
@@ -315,9 +308,10 @@ assert len(DOMAIN_CACHE_PATHS) == 31
 
 TOTAL_TOKENS: int = sum(DOMAIN_TOKEN_COUNTS.values())
 
-# Natural target budget for simulated epoching. Matches Calvin's
-# `TARGET_BUDGET_DOLMA3_COMMON_CRAWL` — sum of Dolma 3 `common_crawl/*`
-# partition tokens, anchoring the simulation to the dolma3 CC share of the pool.
+# Target budget for simulated epoching: the sum of Dolma 3 `common_crawl/*`
+# partition tokens, anchoring the simulation to the Dolma 3 CC share of the
+# pool so domains can be revisited proportionally when an experiment's
+# token budget exceeds the natural mixture size.
 TARGET_BUDGET: int = 6_325_183_647_689
 
 PROPORTIONAL_WEIGHTS: dict[str, float] = {name: count / TOTAL_TOKENS for name, count in DOMAIN_TOKEN_COUNTS.items()}
@@ -415,9 +409,9 @@ def run_grug_moe_mix(config: GrugMoeLaunchConfig) -> None:
 
 _TARGET_STEPS: int = 2**14
 
-# Compute-optimal scales from `README.md`: each (budget, hidden_dim) pair maps
-# to a v5p-8 baseline run. The four points feed gate 1 (d512, d768) and gate 2
-# (d1024, d1280) per `agent.md`.
+# Compute-optimal (budget, hidden_dim) points for the scaling sweep. Each
+# scale produces one v5p-8 training run; `build_from_heuristic` sizes the
+# model, optimizer, batch, and step count from the pair.
 _SCALES: tuple[tuple[float, int], ...] = (
     (2.19e17, 512),
     (1.70e18, 768),
@@ -505,5 +499,5 @@ grug_moe_mix_steps: list[ExecutorStep] = [_build_scale_step(budget, dim) for bud
 if __name__ == "__main__":
     executor_main(
         steps=grug_moe_mix_steps,
-        description="Grug MoE on Dolma 3 + Dolmino top-level mixture, scales d512/d768/d1024/d1280.",
+        description="Grug MoE on Dolma 3 + Dolmino top-level mixture, scales d512/d768/d1024/d1280/d1536.",
     )
