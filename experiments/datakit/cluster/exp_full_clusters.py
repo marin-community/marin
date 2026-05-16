@@ -82,6 +82,26 @@ COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g", regions=[DATA_R
 EMBED_MAX_WORKERS_PER_SOURCE = 128  # cap per-source worker fan-out; tune to cluster headroom
 ASSIGN_MAX_WORKERS_PER_SOURCE = 128
 
+# Sources with very long individual docs that blew the 16 GB worker on prior runs.
+# OOMs (exit 137) and worker-ping timeouts both trace back to a single row group
+# of MB-sized docs exceeding the cgroup limit at parquet load. Give them 2x RAM.
+# Determined empirically from the 20260515-150702 run.
+HIGH_RAM_EMBED_SOURCES: frozenset[str] = frozenset(
+    {
+        "ghalogs/public",
+        "starcoder2/documentation",
+        "finepdfs",
+        "finepdfs/fra_Latn",
+        "finepdfs/rus_Cyrl",
+        "finepdfs/cmn_Hani",
+        "finepdfs/jpn_Jpan",
+        "finepdfs/por_Latn",
+        "finepdfs/spa_Latn",
+        "cp/regulations",
+    }
+)
+HIGH_RAM_EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="32g", regions=[DATA_REGION])
+
 _THREAD_ENV = {
     var: "8"
     for var in (
@@ -112,6 +132,12 @@ def _build_steps() -> list[StepSpec]:
     embed_steps: dict[str, StepSpec] = {}
     for source_name, source in sources.items():
         normalize_step = source.normalized
+        worker_resources = (
+            HIGH_RAM_EMBED_WORKER_RESOURCES if source_name in HIGH_RAM_EMBED_SOURCES else EMBED_WORKER_RESOURCES
+        )
+        # worker_resources is intentionally excluded from hash_attrs — bumping
+        # RAM is a recovery knob, not a content-changing parameter, so previously
+        # cached outputs from runs at lower RAM stay valid (same hash, same path).
         embed_steps[source_name] = StepSpec(
             name=f"embed/luxical/{source_name}",
             output_path_prefix=_OUTPUT_PREFIX,
@@ -125,11 +151,11 @@ def _build_steps() -> list[StepSpec]:
                 "v": 2,
             },
             fn=remote(
-                lambda output_path, np=normalize_step.output_path: embed_source(
+                lambda output_path, np=normalize_step.output_path, wr=worker_resources: embed_source(
                     output_path=output_path,
                     normalized=Artifact.from_path(np, NormalizedData),
                     window_size=EMBED_WINDOW,
-                    worker_resources=EMBED_WORKER_RESOURCES,
+                    worker_resources=wr,
                     max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
                 ),
                 # Just the coordinator: builds the dataset, submits to Zephyr,
