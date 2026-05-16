@@ -446,10 +446,8 @@ class ZephyrCoordinator:
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
-        # Signaled whenever a state change matters to ``_wait_for_stage`` —
-        # result completion, error, abort, or a worker (re)registering after
-        # all workers had died. Replaces a 1s polling backoff so stage waits
-        # are bounded by RPC time, not the poll interval.
+        # Set when a stage may have completed (result, failure, or abort) so
+        # ``_wait_for_stage`` wakes immediately instead of sleeping out its backoff.
         self._stage_done = threading.Event()
         self._is_last_stage: bool = False
         self._initialized: bool = False
@@ -518,9 +516,6 @@ class ZephyrCoordinator:
             self._worker_handles[worker_id] = worker_handle
             self._worker_states[worker_id] = WorkerState.READY
             self._last_seen[worker_id] = time.monotonic()
-            # Wake _wait_for_stage in case it was parked on the "no alive
-            # workers" timer; a freshly registered worker resets that timer.
-            self._stage_done.set()
 
             logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
 
@@ -1026,10 +1021,8 @@ class ZephyrCoordinator:
                 last_log_completed = completed
                 backoff.reset()
 
-            # State-change signal wakes us promptly on completions, errors,
-            # aborts, and worker re-registration. The timeout still bounds
-            # how long we can sleep so the no-alive-workers timer fires even
-            # if no signal ever arrives.
+            # Wake promptly on completions / errors / aborts; the timeout still
+            # bounds the sleep so the no-alive-workers timer fires regardless.
             if self._stage_done.wait(timeout=backoff.next_interval()):
                 self._stage_done.clear()
 
