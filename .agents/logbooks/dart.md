@@ -5111,6 +5111,130 @@ This preserves the per-axis-effect-isolation cleanliness of `rubric-default-styl
 - `experiments/posttrain/disagreement_primitive/diversity_gen/prompts.py::make_stage2_single_call_diverse_suffix(n_axes)` — new prompt builder for the L3 instruction.
 - `experiments/posttrain/disagreement_primitive/diversity_gen/parse_scenario.py::parse_single_call_diverse_response(text, n_total, axes_names)` — new parser for the array-of-scenarios response.
 
+### 11.11 Proposal: post-hoc diversity repair over Set B (2026-05-16, not yet executed)
+
+§11.10 concluded that `single_call_diverse` (Set C) is complementary not replacement, and that the next-version pipeline is multi-default × per-default axis variation. Codex independently proposed a cheaper, more focused alternative: **keep Set B's axis grid intact, then rewrite the scenario surfaces for diversity in a separate post-hoc pass.** This section evaluates that proposal, agrees with its core, and records three specific pushbacks before any code is written.
+
+#### The proposal (Codex, condensed)
+
+For each statement:
+
+1. Run `rubric-default-style` (Set B) as today: 1 default + Σ(spectrum_size − 1) variations.
+2. Batch-API call per statement: input = all ~20-25 Set B scenarios as JSON; instruction = rewrite the scenario surfaces (`scenario_text`, `user_query`, `system_prompt`, `rubric`, `context_summary`) so the set has broad topic / persona / cultural / domain breadth, while preserving the immutable fields (`scenario_id`, `scenario_n`, `is_default_scenario`, `varied_axis`, `varied_value`).
+3. Audit pass: an LM auditor verifies, for each rewritten scenario, that the new surface still instantiates the preserved `varied_axis = X, varied_value = Y` claim, with all non-varied axes at their declared defaults.
+4. Mechanical validation: schema, immutable-field preservation, pairwise-distinct `context_summary`, axis-drift rate from the auditor.
+
+Cost shape: 17 statements × ~25 scenarios per row × ~6k tokens in + ~6k tokens out per row ≈ ~100k input + ~100k output tokens per row × 17 rows ≈ 1.7M + 1.7M tokens total at GPT-5.1 batch rates, plus an equivalent auditor pass. Single-digit dollars end-to-end.
+
+#### Where Codex is right
+
+- **Preserving the axis grid is the only methodologically defensible move.** §11.10's audit showed `single_call_diverse` drifts on labels in 11/17 statements because the LM owns both the labels AND the content in one call. Splitting label-fixing from surface-writing decouples the two responsibilities and is the right factoring.
+- **One batch row per statement is the right granularity.** Whole-corpus rewrite would risk sloppy global edits and lose per-statement parseability; per-scenario rewrite would lose the cross-scenario diversity signal (the LM needs to see the *set* to make it diverse). Per-statement is the natural unit.
+- **Audit pass is non-negotiable.** §11.10's 11/17 self-label drift in Set C is direct evidence that LM-generated structured outputs with declared semantic labels cannot be trusted without verification. The audit step is what makes the difference between "Set B with diverse surfaces" and "Set C with the same axis-drift problem repackaged."
+- **Single batch per statement is batch-API-friendly.** 17 self-contained rows recover gracefully from per-row failures; one mega-call does not. This is the right operational shape.
+
+#### Three specific pushbacks
+
+**(1) Within-family comparability is lost — and that's a real cost to surface, not hand-wave.**
+
+Set B's structural property: scenario 0 is "all axes at default"; scenarios 1..N each flip exactly one axis. Because they share a common context (the default), an axis effect can in principle be attributed to the varied axis alone — context is the held-constant variable. Diversifying surfaces across the whole 25-scenario set breaks this: now scenario 5 ("axis A = value v₁") sits in a Brazilian electoral context while the default sits in a German trans-parenting context, and any measured difference between them confounds the axis flip with the context shift. Codex's proposal preserves the axis *grid* but destroys the axis *isolation* property of Set B.
+
+This is fine for DART's actual use case (per-scenario judge scoring → spec-repair signal — coverage matters, not paired-axis-effect attribution), but the §11.10 next-version proposal of K defaults × per-default axis variation preserves both within-family comparability AND cross-family diversity for the cost of K× more scenarios. The trade-off is:
+
+| approach | scenarios per statement | within-family axis isolation | cross-family diversity | extra LM passes |
+|---|--:|---|---|---|
+| Set B alone (today) | ~25 | yes | no | 0 |
+| Codex post-hoc repair | ~25 | **no** | yes | 1 repair + 1 audit |
+| §11.10 K-default multi-family | K × ~25 | yes | yes | (K-1) extra generation calls |
+
+For DART specifically the post-hoc repair is probably the right first move (cheaper, tests the central question), but the trade-off should be made explicit so we do not later discover we relied on within-family comparability for some downstream analysis we did not yet specify.
+
+**(2) `axis_values_embodied` must be re-derived after rewrite, not preserved.**
+
+Codex's "preserve immutable fields" list names `scenario_id`, `scenario_n`, `is_default_scenario`, `varied_axis`, `varied_value` — but not `axis_values_embodied`. That is correct: the per-scenario dict mapping every axis to a value is *content-derived*, not declarative. If the LM rewrites the scenario text, the dict that says "`format_specificity = high_level_overview`" may no longer match the new content. Two consequences:
+
+- The rewrite prompt should **drop `axis_values_embodied` from the immutable set** and either (a) ask the LM to re-derive it from the new content, or (b) drop the field entirely and let the auditor produce it from the new content. Option (b) is cleaner because the rewrite LM has a conflict of interest (it both wrote the surface and labels it).
+- The audit step's job is then partly: "given the new `scenario_text`, what is the axis_values_embodied dict for this scenario, and does it match the preserved `varied_axis = X, varied_value = Y` claim with non-varied axes at their declared defaults?" If the auditor's derived dict diverges from the preserved claim → the rewrite drifted → the scenario is rejected for regeneration.
+
+This makes the auditor a *first-class derivation step*, not just a validator. Worth designing it that way from the start.
+
+**(3) Two-pass (audit → constrained rewrite) is more principled than single-pass; the marginal cost is one batch round-trip.**
+
+Codex's single-pass version says "rewrite the scenarios so the set has broad topic/persona/cultural/domain diversity, preserve the axis assignment." That works but conflates two LM responsibilities: (a) diagnosing what's wrong with the current set (which clusters, which personas, which domains repeat), and (b) executing a specific repair plan.
+
+The two-pass version (Codex's first proposal, then dropped for simplicity):
+
+- **Pass 1 — Diversity audit** (batch row per statement, output = repair plan JSON): identify context clusters in current Set B; flag which scenarios to keep unchanged, which need light re-skinning, which need full rewrite; propose specific target replacement contexts for the rewrites. Deterministic output: `{clusters: [...], keep: [...], reskin: [...], rewrite: [{scenario_id, new_context_summary}, ...]}`.
+
+- **Pass 2 — Constrained rewrite** (batch row per statement, input = original Set B + repair plan, output = revised Set B): rewrite only the scenarios the audit flagged, anchoring on the target replacement contexts.
+
+The cost difference: one extra batch round-trip per statement (~17 extra rows). The gain: the rewrite becomes targeted execution rather than open-ended "be diverse"; failures isolate (a Pass 1 failure produces no rewrite to Pass 2; a Pass 2 failure has a clear original-and-plan to diff against); the audit-trail is reviewable.
+
+Single-pass is acceptable as a first experimental run to confirm the approach works *at all*; two-pass is the right production shape once the approach is validated.
+
+#### Implementation sketch
+
+```
+diversity_gen/run_stage2_repair.py             new orchestrator
+  --stage1-dir <stage1_run_id>                 understanding source (axes + defaults)
+  --stage2-dir <stage2_oaat_run_id>            Set B source
+  --statements <comma-sep or "all">
+  --mode {single_pass, audit_then_rewrite}
+  --auditor-model {gpt-5.1, claude-sonnet-4-6, gemini-3.1-pro}
+  --model gpt-5.1
+  output: stage2_scenarios/repaired/<run_id>/scenarios.jsonl
+          + audit_reports/<sid>.json
+          + drift_summary.json    (per-scenario axis-drift flags)
+
+prompts.py
+  make_repair_audit_prompt(statement, axes, scenarios) -> str
+  make_repair_rewrite_prompt(statement, axes, scenarios, audit_plan) -> str
+  make_repair_singlepass_prompt(statement, axes, scenarios) -> str
+  make_repair_auditor_prompt(statement, axes, original_scenario, rewritten_scenario) -> str
+    # produces: {axis_values_embodied_derived: {...}, varied_axis_match: bool,
+    #           non_varied_at_defaults: bool, drift_notes: str}
+
+parse_scenario.py
+  parse_repair_response(raw_text, n_expected, immutable_fields_per_sid) -> list[dict]
+    # asserts: for each scenario_id, all immutable fields match the input verbatim
+    # asserts: rubric structure intact, scenario_text/user_query non-empty
+  parse_repair_auditor_response(raw_text, axes_names) -> dict
+```
+
+#### Validation gates
+
+A rewritten scenario is **admitted** for downstream judging only if all of:
+
+1. **Schema valid** (existing `parse_scenario_response` shape).
+2. **Immutable fields verbatim-preserved** against the source Set B record (`statement_id`, `scenario_id`, `scenario_n`, `is_default_scenario`, `varied_axis`, `varied_value`).
+3. **Auditor agreement**: the auditor's derived `axis_values_embodied` has `[varied_axis] == varied_value` AND every non-varied axis at its declared default (from Stage 1).
+4. **Surface change is non-trivial**: edit distance between original and rewritten `scenario_text` exceeds a threshold (otherwise the LM just echoed Set B and the repair was a no-op).
+5. **Pairwise context_summary distinctness** across the statement (existing Set C check, reused).
+
+Rewrites that fail (2), (3), or (4) trigger one retry; second failure → fall back to the original Set B scenario for that slot and log the failure.
+
+#### Open empirical questions before scaling up
+
+- **Does post-hoc repair actually reduce axis-drift relative to single_call_diverse?** Set C's 11/17 baseline is the comparison. If the repair pass also drifts on 11/17, the approach is no better than Set C and we should fall back to the §11.10 K-default proposal. Pilot on 2-3 statements first; measure auditor drift-rate.
+- **Does the rewrite over-correct?** If the LM rewrites scenarios that did not need rewriting (the keep list from Pass 1 should be respected), Set B's good coverage is degraded. Two-pass with explicit keep/rewrite labels mitigates this; single-pass is at risk.
+- **Auditor calibration**: which auditor model? An auditor that uses the same training distribution as the rewriter might silently approve drift. Cross-vendor auditor (e.g., Sonnet auditing GPT-5.1 rewrites, and vice versa) is the conservative default. Pre-register this; do not let the audit-pass call use the same model that did the rewrite.
+- **Within-family comparability**: if downstream analyses ever want paired-axis-effect attribution, this approach blocks it. If they only want per-scenario judge scoring, this approach is fine. Decide which is needed before committing.
+
+#### Recommended sequencing
+
+1. **Pilot** the single-pass repair on `no_topic_off_limits` and `avoid_hateful_content` (the two §11.9 worst-offenders for topic concentration). Use cross-vendor auditor (Sonnet 4.6 auditing GPT-5.1). Compare auditor-derived axis-drift rate against §11.10's 11/17 Set C baseline. Cost: <$1.
+2. **If pilot drift rate < ~20%**: scale to the full 17 Bucket C+D statements; run side-by-side sub-agent comparison against Set B + Set C. This becomes the candidate replacement pipeline for `rubric-default-style`.
+3. **If pilot drift rate ≥ ~50%**: this approach is no better than `single_call_diverse`. Fall back to the §11.10 K-default proposal — the within-family axis isolation it preserves is then the only path to clean axis-effect signal.
+4. **Intermediate case (20-50% drift)**: try the two-pass version. The marginal cost is one extra batch round-trip; the determinism gain may be exactly enough to push drift below the 20% threshold.
+
+#### What is *not* part of this proposal
+
+- **"Give all of it to an LM and tell it to be diverse"** without preserving the axis grid: this is functionally a re-derivation of `single_call_diverse` and would replicate §11.10's 11/17 drift problem. Rejected.
+- **Whole-corpus single-call rewrite** (one mega-prompt covering all 46 statements): too much context, no per-statement recovery, no batch-API friendliness. Rejected in favor of per-statement batch rows.
+- **Replacing the auditor with a programmatic check**: per §11.10, axis-label semantics are not mechanically expressible (axis spectra are short prose phrases, not enums with formal mappings to content). The auditor has to be an LM. The programmatic check is the *outer* layer that verifies the auditor's structured output.
+
+This section records the design before any code is written. The pilot (step 1 above) is the next concrete action; nothing here is committed-to as the final pipeline until pilot data is in.
+
 ---
 
 ## Appendix A. Guaranteeing exact JSON-Schema adoption across compilers
