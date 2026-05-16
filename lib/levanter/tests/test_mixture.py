@@ -203,13 +203,13 @@ async def test_mixture_dataset_remap_indices():
     dses = datasets()
     mixture_ds = MixtureDataset(dses, weights(), block_size=10, key=key())
 
-    remapped_indices = await mixture_ds._remap_indices(dses["ds1"], [0, 1, 2])
+    remapped_indices = await mixture_ds._remap_indices(dses["ds1"], [0, 1, 2], 0)
     assert len(remapped_indices) == 3
     assert remapped_indices == [0, 1, 2]
 
     # check wrap around
     len_ds1 = await dses["ds1"].async_len()
-    remapped_indices = await mixture_ds._remap_indices(dses["ds1"], [len_ds1 - 1, len_ds1, len_ds1 + 1])
+    remapped_indices = await mixture_ds._remap_indices(dses["ds1"], [len_ds1 - 1, len_ds1, len_ds1 + 1], 0)
     assert len(remapped_indices) == 3
 
     assert remapped_indices == [len_ds1 - 1, 0, 1]
@@ -264,6 +264,36 @@ async def test_mixture_dataset_randomizes_blocks():
 
     block_assignment_3 = mixture_ds._get_block(1)
     assert not np.all(block_assignment_1 == block_assignment_3), "Block assignments should be randomized"
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_randomize_epochs_permutes_finite_component():
+    """Each pass through a finite component is its own permutation when randomize_epochs=True."""
+    finite_length = 8
+    finite = ListAsyncDataset(list(range(finite_length)))  # value at index k is k
+    dses = {"finite": finite, "infinite": InfiniteCounterDataset()}
+    bs = 2 * finite_length
+    weights = {"finite": 0.5, "infinite": 0.5}
+
+    # randomize_blocks=False + finite registered first ⇒ positions [0, L) of every block are finite.
+    async def finite_orderings(ds: MixtureDataset, num_epochs: int) -> list[list[int]]:
+        return [list(await ds.get_batch(list(range(e * bs, e * bs + finite_length)))) for e in range(num_epochs)]
+
+    shuffled = MixtureDataset(dses, weights, block_size=bs, key=key(), randomize_blocks=False, randomize_epochs=True)
+    epochs = await finite_orderings(shuffled, num_epochs=3)
+
+    expected = list(range(finite_length))
+    for i, ordering in enumerate(epochs):
+        assert sorted(ordering) == expected, f"Epoch {i} is not a permutation of [0, L): {ordering}"
+
+    distinct = {tuple(o) for o in epochs}
+    assert len(distinct) >= 2, f"Expected per-epoch orderings to differ, got {epochs}"
+    assert epochs[0] != expected, f"Epoch 0 should not be the identity order, got {epochs[0]}"
+
+    baseline = MixtureDataset(dses, weights, block_size=bs, key=key(), randomize_blocks=False, randomize_epochs=False)
+    baseline_epochs = await finite_orderings(baseline, num_epochs=3)
+    for i, ordering in enumerate(baseline_epochs):
+        assert ordering == expected, f"Default (randomize_epochs=False) epoch {i}: {ordering}"
 
 
 @pytest.mark.asyncio

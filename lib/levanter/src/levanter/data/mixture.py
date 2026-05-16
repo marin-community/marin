@@ -15,6 +15,7 @@ from haliax.util import StringHolderEnum
 from levanter.utils.jax_utils import local_cpu_mesh
 
 from levanter.data import AsyncDataset
+from levanter.data._prp import Permutation
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
 from levanter.utils.thread_utils import blocking_wait, future_from_value
@@ -47,6 +48,11 @@ class MixtureDataset(AsyncDataset[T]):
             - FIRST_STOP_STRATEGY: stop when one dataset has been exhausted
             - ALL_STOP_STRATEGY: stop when all datasets have been exhausted
             - RESTART_STRATEGY: restart the dataset when it has been exhausted
+        randomize_epochs: if True, each pass through a finite mixture component uses an
+            independent permutation of its samples; if False, the component is accessed in
+            natural order via ``raw_idx % length``. Takes effect only for finite components
+            under ``RESTART_STRATEGY`` or ``ALL_STOP_STRATEGY``; under ``FIRST_STOP_STRATEGY``
+            no component completes more than one pass, so there is no second epoch to permute.
         key: random key for datasets sampling
     """
 
@@ -57,6 +63,7 @@ class MixtureDataset(AsyncDataset[T]):
         block_size: int,
         *,
         randomize_blocks: bool = True,
+        randomize_epochs: bool = False,
         key: PRNGKeyArray | int,
         stop_strategy: str = StopStrategy.RESTART_STRATEGY,
     ):
@@ -94,6 +101,7 @@ class MixtureDataset(AsyncDataset[T]):
             raise ValueError(f"Block size must be at most 2^16, got {block_size}")
 
         self.randomize_blocks = randomize_blocks
+        self.randomize_epochs = randomize_epochs
 
         # this stupid dance is to ensure that the key is on CPU so we don't end up with weird device placement issues
         # in recent JAX.
@@ -255,7 +263,7 @@ class MixtureDataset(AsyncDataset[T]):
                 batch_futures.append(future_from_value([]))
             else:
                 dataset = self._dataset_of_id(dataset_id)
-                indices_for_dataset = await self._remap_indices(dataset, indices_for_dataset)
+                indices_for_dataset = await self._remap_indices(dataset, indices_for_dataset, dataset_id)
                 batch_futures.append(dataset.get_batch(indices_for_dataset))
 
         batches = await asyncio.gather(*batch_futures)
@@ -279,14 +287,12 @@ class MixtureDataset(AsyncDataset[T]):
         dataset_id, dataset_index = self._index_into_dataset_for_id(permuted_ids[index], block_id)
 
         dataset = self._dataset_of_id(dataset_id)
-        dataset_index = (await self._remap_indices(dataset, [dataset_index]))[0]
+        dataset_index = (await self._remap_indices(dataset, [dataset_index], dataset_id))[0]
 
         return await dataset.getitem_async(dataset_index)
 
-    async def _remap_indices(self, ds, indices_into_ds):
-        """
-        Handles wrap around for datasets that have finite length
-        """
+    async def _remap_indices(self, ds, indices_into_ds, dataset_id: int):
+        """Handles wrap around for datasets that have finite length."""
         if self.stop_strategy in [StopStrategy.RESTART_STRATEGY, StopStrategy.ALL_STOP_STRATEGY]:
             if ds.is_finite():
                 length_of_dataset = await ds.async_len()
@@ -295,7 +301,10 @@ class MixtureDataset(AsyncDataset[T]):
                         "MixtureDataset in RESTART_STRATEGY encountered an empty finite dataset "
                         "(`async_len()` returned 0). Restart strategy does not support empty datasets."
                     )
-                indices_into_ds = [idx % length_of_dataset for idx in indices_into_ds]
+                if self.randomize_epochs:
+                    indices_into_ds = self._apply_epoch_permutation(dataset_id, length_of_dataset, indices_into_ds)
+                else:
+                    indices_into_ds = [idx % length_of_dataset for idx in indices_into_ds]
 
             return indices_into_ds
 
@@ -303,6 +312,22 @@ class MixtureDataset(AsyncDataset[T]):
             return indices_into_ds
 
         raise ValueError(f"Unknown stop strategy: {self.stop_strategy}")
+
+    def _apply_epoch_permutation(self, dataset_id: int, length: int, indices_into_ds: Sequence[int]) -> list[int]:
+        raw = np.asarray(indices_into_ds, dtype=np.int64)
+        epochs = raw // length
+        in_epoch = raw % length
+        out = np.empty_like(in_epoch)
+        # A batch may straddle an epoch boundary; each epoch uses its own permutation.
+        for epoch in np.unique(epochs).tolist():
+            mask = epochs == epoch
+            perm = self._get_epoch_permutation(dataset_id, int(epoch), length)
+            out[mask] = perm(in_epoch[mask])
+        return [int(x) for x in out]
+
+    @functools.lru_cache(maxsize=128)
+    def _get_epoch_permutation(self, dataset_id: int, epoch: int, length: int) -> Permutation:
+        return _compute_epoch_assignment(dataset_id, epoch, length, self.key)
 
     def _set_finiteness_cache(self, finite_length: int | None) -> int | None:
         self._cached_finite_length = finite_length
@@ -501,6 +526,14 @@ def _compute_block_assignment(base_ids, index, key):
     rng = jax.random.fold_in(key, index)
     permuted_ids = jax.random.permutation(rng, base_ids)
     return permuted_ids
+
+
+def _compute_epoch_assignment(dataset_id: int, epoch: int, length: int, key: PRNGKeyArray) -> Permutation:
+    with local_cpu_mesh():
+        sub_key = jax.random.fold_in(key, dataset_id)
+        epoch_key = jax.random.fold_in(sub_key, epoch)
+        epoch_key = jax.device_put(jax.device_get(epoch_key))
+    return Permutation.make("feistel", length, epoch_key)
 
 
 def rescale_mixture_schedule_for_batch_schedule(
