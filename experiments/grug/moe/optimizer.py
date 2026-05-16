@@ -648,6 +648,144 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+@OptimizerConfig.register_subclass("grug_moe_muonh_may_arch_1pct_finer_lr_v1")
+@dataclass(frozen=True)
+class GrugMoeMuonHMayArch1pctFinerLrConfig(OptimizerConfig):
+    """1pct-noclip with per-subgroup MuonH LR scales.
+
+    Splits the single ``muonh`` group of :class:`GrugMoeMuonHMayArchGNMuonHConfig`
+    into four MuonH sub-groups, each with its own LR scale multiplier:
+
+    | sub-group          | matches                                              |
+    |--------------------|------------------------------------------------------|
+    | ``muonh_qk``       | ``.attn.w_q``, ``.attn.w_k``                         |
+    | ``muonh_vo``       | ``.attn.w_v``, ``.attn.w_o``                         |
+    | ``muonh_mlp_out``  | ``.mlp.w_down``, ``.shared.w_down``                  |
+    | ``muonh_mlp_in``   | ``.mlp.w_gate_up``, ``.shared.w_gate``, ``.shared.w_up`` |
+    | ``muonh``          | GatedNorm and anything else 2-D / 3-D                |
+
+    All scales default to 1.0 (= 1pct-noclip baseline). Used by the
+    "finer LR" sweep (#5358 follow-up) that probes ±30% LR perturbations
+    of attention-QK-vs-VO and FFN-out-vs-in.
+    """
+
+    adam_lr: float = 6e-4
+    momentum: float = 0.95
+    nesterov: bool = True
+    backend_steps: int = 5
+    beta1: float = 0.9
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    muon_epsilon: float = 1e-8
+    max_grad_norm: float | None = None
+    coefficient_type: CoefficientType = "quintic"
+    qk_lr_scale: float = 1.0
+    vo_lr_scale: float = 1.0
+    mlp_out_lr_scale: float = 1.0
+    mlp_in_lr_scale: float = 1.0
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        qk_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.learning_rate * self.qk_lr_scale)
+        vo_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.learning_rate * self.vo_lr_scale)
+        mlp_out_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.learning_rate * self.mlp_out_lr_scale)
+        mlp_in_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.learning_rate * self.mlp_in_lr_scale)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, qk_lr, vo_lr, mlp_out_lr, mlp_in_lr, adam_lr):
+            def muonh_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_muonh(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=lr,
+                        coefficient_type=self.coefficient_type,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "muonh": muonh_transform_at(learning_rate),
+                    "muonh_qk": muonh_transform_at(qk_lr),
+                    "muonh_vo": muonh_transform_at(vo_lr),
+                    "muonh_mlp_out": muonh_transform_at(mlp_out_lr),
+                    "muonh_mlp_in": muonh_transform_at(mlp_in_lr),
+                    "adamh_embed": adamh_transform_at(learning_rate),
+                    "adamh": adamh_transform_at(learning_rate),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            qk_lr=qk_lr_schedule,
+            vo_lr=vo_lr_schedule,
+            mlp_out_lr=mlp_out_lr_schedule,
+            mlp_in_lr=mlp_in_lr_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if "token_embed" in path_lower:
+                return "adamh_embed"
+            if "router_bias" in path_lower or path_lower.endswith(".attn_gate") or ".router" in path_lower:
+                return "adam"
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh"
+            # Attention QK vs VO sub-split.
+            if path_lower.endswith(".attn.w_q") or path_lower.endswith(".attn.w_k"):
+                return "muonh_qk"
+            if path_lower.endswith(".attn.w_v") or path_lower.endswith(".attn.w_o"):
+                return "muonh_vo"
+            # FFN output projections (routed and shared).
+            if path_lower.endswith(".mlp.w_down") or path_lower.endswith(".shared.w_down"):
+                return "muonh_mlp_out"
+            # FFN input projections: routed expert (concatenated w_gate_up) and
+            # shared expert (separate w_gate / w_up).
+            if (
+                path_lower.endswith(".mlp.w_gate_up")
+                or path_lower.endswith(".shared.w_gate")
+                or path_lower.endswith(".shared.w_up")
+            ):
+                return "muonh_mlp_in"
+            # GatedNorms route to plain muonh (NS + Frobenius hyperball).
+            if "gated_norm" in path_lower:
+                return "muonh"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "muonh"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
 @OptimizerConfig.register_subclass("grug_moe_normuonh_v1")
 @dataclass(frozen=True)
 class GrugMoeNorMuonHConfig(OptimizerConfig):
