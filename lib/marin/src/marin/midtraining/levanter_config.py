@@ -105,7 +105,13 @@ def _build_trainer_section(resolved: ResolvedMidtrainSpec) -> dict[str, Any]:
         "checkpointer": {
             "base_path": f"{run.output_path}/{PERMANENT_CHECKPOINTS_SUBDIR}",
             "temporary_base_path": _temporary_checkpoint_base_path(run.output_path, run.output_region),
-            "save_interval": _parse_save_interval(spec.temp_save_interval),
+            # Pass the string form ("10m") through verbatim. Levanter registers
+            # a custom draccus decoder (parse_timedelta via pytimeparse) that
+            # parses this at YAML load time. The dict form {seconds: 600} only
+            # appears in `.executor_info` because that's `dataclasses.asdict`
+            # output after the timedelta has been resolved — it is NOT the
+            # input form draccus accepts.
+            "save_interval": spec.temp_save_interval,
             "append_run_id_to_base_path": False,
             "keep": [{"every": _steps_per_export(resolved)}],
         },
@@ -118,18 +124,6 @@ def _build_trainer_section(resolved: ResolvedMidtrainSpec) -> dict[str, Any]:
             "tags": list(_wandb_tags(resolved)),
         },
     }
-
-
-def _parse_save_interval(value: str) -> dict[str, int]:
-    """Parse ``"10m"`` / ``"600s"`` / ``"1h"`` into the dict form draccus expects for ``timedelta``."""
-    value = value.strip().lower()
-    if value.endswith("h"):
-        return {"seconds": int(value[:-1]) * 3600}
-    if value.endswith("m"):
-        return {"seconds": int(value[:-1]) * 60}
-    if value.endswith("s"):
-        return {"seconds": int(value[:-1])}
-    raise ValueError(f"Unrecognized save_interval format {value!r}; use Ns / Nm / Nh")
 
 
 def _build_data_section(spec: MidtrainSpec, manifest: DataCacheManifest) -> dict[str, Any]:

@@ -30,11 +30,13 @@ The script never auto-runs the full grid; you select per invocation.
 """
 
 import argparse
-import dataclasses
 import logging
 import time
 from collections.abc import Iterator
 
+import draccus
+import levanter.config  # noqa: F401 — side effect: registers draccus codecs (timedelta, RepoRef, etc.)
+from levanter.optim import AdamHConfig
 from marin.midtraining import (
     LLAMA3_TOKENIZER,
     BudgetPolicy,
@@ -116,34 +118,39 @@ def _data_section_for_mix(mix: str) -> dict:
 
 
 def _model_config_for_base(base: DelphiModel) -> dict:
-    """Render the Qwen3 architecture dict from the heuristic at base.hidden_dim."""
+    """Render the Qwen3 architecture dict from the heuristic at base.hidden_dim.
+
+    Uses ``draccus.encode`` so nested ChoiceRegistry types (e.g. the rope
+    config) get their ``type:`` discriminator key. Prepends ``type: qwen3``
+    at the top level (draccus.encode emits the body without the registry
+    tag for the top-level instance).
+    """
     cfg = completed_adamh_heuristic._build_model_config(hidden_size=base.hidden_dim)
-    return dataclasses.asdict(cfg)
+    return {"type": "qwen3", **draccus.encode(cfg)}
 
 
 def _optimizer_config_for_base(base: DelphiModel, *, lr_factor: float) -> dict:
     """Build an AdamH config dict from the base's pretrain hparams + CPT lr_factor.
 
-    All non-LR fields are pretrain-verbatim from
-    ``experiments/delphi_models.py`` (which itself reads from
-    ``.executor_info``). Only ``learning_rate`` and ``adam_lr`` are scaled
-    by ``lr_factor``; the rest passes through.
+    All non-LR fields are pretrain-verbatim from ``experiments/delphi_models.py``
+    (which itself reads from ``.executor_info``). Only ``learning_rate`` and
+    ``adam_lr`` are scaled by ``lr_factor``; the rest passes through verbatim.
     """
-    return {
-        "type": "adam_h",
-        "learning_rate": base.peak_lr * lr_factor,
-        "adam_lr": base.peak_adam_lr * lr_factor,
-        "beta1": base.beta1,
-        "beta2": base.beta2,
-        "epsilon": base.epsilon,
-        "max_grad_norm": base.max_grad_norm,
-        "weight_decay": base.weight_decay,
-        "warmup": base.warmup_fraction,
-        "decay": base.decay_fraction,
-        "min_lr_ratio": base.min_lr_ratio,
-        "lr_schedule": base.lr_schedule,
-        "nesterov": base.nesterov,
-    }
+    cfg = AdamHConfig(
+        learning_rate=base.peak_lr * lr_factor,
+        adam_lr=base.peak_adam_lr * lr_factor,
+        beta1=base.beta1,
+        beta2=base.beta2,
+        epsilon=base.epsilon,
+        max_grad_norm=base.max_grad_norm,
+        weight_decay=base.weight_decay,
+        warmup=base.warmup_fraction,
+        decay=base.decay_fraction,
+        min_lr_ratio=base.min_lr_ratio,
+        lr_schedule=base.lr_schedule,
+        nesterov=base.nesterov,
+    )
+    return {"type": "adamH", **draccus.encode(cfg)}
 
 
 def _logical_cell_id(base_key: str, mix: str, lr_factor: float) -> str:
