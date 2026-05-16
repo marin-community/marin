@@ -8,7 +8,7 @@ Applies AllenAI's Dolma3 fasttext WebOrganizer topic classifier
 source in :func:`marin.datakit.sources.all_sources`, producing one
 co-partitioned Parquet attributes dataset per source. The output schema is the
 datakit ``{id, partition_id, attributes}`` convention — see
-:mod:`experiments.datakit.classify.fasttext` for the struct layout.
+:mod:`experiments.datakit.fasttext` for the struct layout.
 
 DAG shape:
 
@@ -30,7 +30,7 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 
     uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
         --priority production \\
-        -- python experiments/datakit/classify/all_sources_topic.py
+        -- python experiments/datakit/cluster/weborganizer/all_sources_topic.py
 """
 
 import logging
@@ -42,7 +42,7 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.classify.fasttext import classify_fasttext_step, prepare_fasttext_model_step
+from experiments.datakit.fasttext import classify_fasttext_step, prepare_fasttext_model_step
 
 logger = logging.getLogger(__name__)
 
