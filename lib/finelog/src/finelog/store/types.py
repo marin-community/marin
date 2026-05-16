@@ -115,6 +115,10 @@ class LogNamespaceProtocol(Protocol):
 
     def max_persisted_seq(self) -> int: ...
 
+    def is_persisted(self, target_seq: int) -> bool: ...
+
+    def request_persistance(self, target_seq: int | None = None, *, timeout: float = 10.0) -> int: ...
+
     def get_logs(
         self,
         key: str,

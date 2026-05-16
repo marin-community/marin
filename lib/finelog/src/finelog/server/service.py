@@ -14,16 +14,40 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Any
+
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 
 from finelog.rpc import logging_pb2
 from finelog.store import LogStore
 from finelog.store.duckdb_store import LOG_NAMESPACE_NAME
 
-from .persistence_wait import DEFAULT_PERSIST_TIMEOUT_SEC, await_persisted
-
 logger = logging.getLogger(__name__)
+
+DEFAULT_PERSIST_TIMEOUT_SEC = 30.0
+PERSIST_POLL_INTERVAL_SEC = 0.05
+
+
+async def await_persisted(
+    log_store: LogStore,
+    namespace: str,
+    target_seq: int,
+    *,
+    timeout: float = DEFAULT_PERSIST_TIMEOUT_SEC,
+) -> None:
+    if target_seq < 0:
+        return
+    deadline = time.monotonic() + timeout
+    while not log_store.is_persisted(namespace, target_seq):
+        if time.monotonic() >= deadline:
+            raise ConnectError(
+                Code.DEADLINE_EXCEEDED,
+                f"timed out after {timeout:.1f}s waiting for namespace {namespace!r} to persist seq>={target_seq}",
+            )
+        await asyncio.sleep(PERSIST_POLL_INTERVAL_SEC)
 
 
 class LogServiceImpl:

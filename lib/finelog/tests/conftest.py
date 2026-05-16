@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import pyarrow as pa
 import pyarrow.ipc as paipc
 import pytest
@@ -60,6 +63,18 @@ def _seal(store: DuckDBLogStore, namespace: str) -> None:
     ns.flush()
     ns.force_compact_l0()
     ns.compact()
+
+
+def _post_and_request_persistance(
+    store: DuckDBLogStore,
+    namespace: str,
+    post: Callable[[], httpx.Response],
+) -> httpx.Response:
+    """Run a persistence-blocking POST while requesting test-side flush."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(post)
+        store.request_persistance(namespace, timeout=5.0)
+        return future.result(timeout=5.0)
 
 
 @pytest.fixture()

@@ -13,8 +13,10 @@ import pytest
 from finelog.server.asgi import build_log_server_asgi
 from finelog.server.service import LogServiceImpl
 from finelog.server.stats_service import StatsServiceImpl
-from finelog.store.duckdb_store import DuckDBLogStore
+from finelog.store.duckdb_store import LOG_NAMESPACE_NAME, DuckDBLogStore
 from starlette.testclient import TestClient
+
+from tests.conftest import _post_and_request_persistance
 
 
 @pytest.fixture
@@ -84,20 +86,25 @@ def test_fetch_logs_concurrency_cap_enforced_by_interceptor(service: LogServiceI
 
 
 def test_push_then_fetch_round_trip(tmp_path: Path):
-    svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
+    store = DuckDBLogStore(log_dir=tmp_path / "data")
+    svc = LogServiceImpl(log_store=store)
     try:
         app = build_log_server_asgi(svc)
         with TestClient(app) as client:
-            push_resp = client.post(
-                "/finelog.logging.LogService/PushLogs",
-                json={
-                    "key": "/job/test/0:0",
-                    "entries": [
-                        {"source": "stdout", "data": "hello", "timestamp": {"epoch_ms": 1}},
-                        {"source": "stdout", "data": "world", "timestamp": {"epoch_ms": 2}},
-                    ],
-                },
-                headers={"Content-Type": "application/json"},
+            push_resp = _post_and_request_persistance(
+                store,
+                LOG_NAMESPACE_NAME,
+                lambda: client.post(
+                    "/finelog.logging.LogService/PushLogs",
+                    json={
+                        "key": "/job/test/0:0",
+                        "entries": [
+                            {"source": "stdout", "data": "hello", "timestamp": {"epoch_ms": 1}},
+                            {"source": "stdout", "data": "world", "timestamp": {"epoch_ms": 2}},
+                        ],
+                    },
+                    headers={"Content-Type": "application/json"},
+                ),
             )
             assert push_resp.status_code == 200
 
@@ -117,18 +124,25 @@ def test_push_then_fetch_round_trip(tmp_path: Path):
 def test_fetch_logs_wire_unspecified_reads_as_regex(tmp_path: Path):
     """Wire-level UNSPECIFIED falls back to REGEX so a regex ``source``
     pattern still matches when ``match_scope`` is unset."""
-    svc = LogServiceImpl(log_store=DuckDBLogStore(log_dir=tmp_path / "data"))
+    store = DuckDBLogStore(log_dir=tmp_path / "data")
+    svc = LogServiceImpl(log_store=store)
     try:
         app = build_log_server_asgi(svc)
         with TestClient(app) as client:
             for attempt in range(2):
-                client.post(
-                    "/finelog.logging.LogService/PushLogs",
-                    json={
-                        "key": f"/job/test/0:{attempt}",
-                        "entries": [{"source": "stdout", "data": f"a{attempt}", "timestamp": {"epoch_ms": attempt + 1}}],
-                    },
-                    headers={"Content-Type": "application/json"},
+                _post_and_request_persistance(
+                    store,
+                    LOG_NAMESPACE_NAME,
+                    lambda attempt=attempt: client.post(
+                        "/finelog.logging.LogService/PushLogs",
+                        json={
+                            "key": f"/job/test/0:{attempt}",
+                            "entries": [
+                                {"source": "stdout", "data": f"a{attempt}", "timestamp": {"epoch_ms": attempt + 1}}
+                            ],
+                        },
+                        headers={"Content-Type": "application/json"},
+                    ),
                 )
             resp = client.post(
                 "/finelog.logging.LogService/FetchLogs",

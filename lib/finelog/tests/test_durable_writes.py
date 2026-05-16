@@ -11,14 +11,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from pathlib import Path
 
 import pytest
-from connectrpc.code import Code
-from connectrpc.errors import ConnectError
-from finelog.server.persistence_wait import await_persisted
 from finelog.store.duckdb_store import DuckDBLogStore
 from finelog.store.log_namespace import DiskLogNamespace
 
@@ -35,9 +31,6 @@ def test_max_persisted_seq_advances_after_flush(store: DuckDBLogStore):
     assert rows == 2
     assert last_seq == 2
 
-    # The bg loop wakes on every append, so polling briefly is enough to
-    # see the cursor catch up. The test exercise the production path used
-    # by the service handlers.
     store._wait_persisted("iris.worker", last_seq, timeout=5.0)
 
     parquet_files = list(_segments_dir(store, "iris.worker").glob("*.parquet"))
@@ -59,23 +52,21 @@ def test_memory_namespace_persisted_seq_is_next_seq_minus_one(tmp_path: Path):
         store.close()
 
 
-def test_await_persisted_returns_immediately_when_already_persisted(store: DuckDBLogStore):
+def test_request_persistance_returns_immediately_when_already_persisted(store: DuckDBLogStore):
     store.register_table("iris.worker", _worker_schema())
     _, last_seq = store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [1], [10])))
     store._wait_persisted("iris.worker", last_seq, timeout=5.0)
 
-    # Now the cursor is past target; the awaitable returns without
-    # touching the loop.
-    asyncio.run(await_persisted(store, "iris.worker", last_seq, timeout=0.01))
+    assert store.request_persistance("iris.worker", last_seq, timeout=0.01) == last_seq
 
 
-def test_await_persisted_returns_immediately_for_empty_append(store: DuckDBLogStore):
+def test_request_persistance_returns_immediately_for_empty_append(store: DuckDBLogStore):
     store.register_table("iris.worker", _worker_schema())
     # Sentinel for "no rows appended" — handler must not block.
-    asyncio.run(await_persisted(store, "iris.worker", -1, timeout=0.01))
+    assert store.request_persistance("iris.worker", -1, timeout=0.01) == -1
 
 
-def test_await_persisted_times_out_when_flush_blocked(store: DuckDBLogStore, monkeypatch):
+def test_request_persistance_times_out_when_flush_blocked(store: DuckDBLogStore, monkeypatch):
     store.register_table("iris.worker", _worker_schema())
     # Stall the flush so persistence never advances inside the timeout.
     stalled = threading.Event()
@@ -92,17 +83,16 @@ def test_await_persisted_times_out_when_flush_blocked(store: DuckDBLogStore, mon
     monkeypatch.setattr(DiskLogNamespace, "_write_new_segment", stalling_write)
     try:
         _, last_seq = store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [1], [10])))
-        assert stalled.wait(timeout=2.0), "bg loop never started the flush"
-        with pytest.raises(ConnectError) as excinfo:
-            asyncio.run(await_persisted(store, "iris.worker", last_seq, timeout=0.1))
-        assert excinfo.value.code == Code.DEADLINE_EXCEEDED
+        with pytest.raises(TimeoutError):
+            store.request_persistance("iris.worker", last_seq, timeout=0.1)
+        assert stalled.is_set(), "bg loop never started the flush"
     finally:
         # Let the bg loop unblock so close() can join cleanly.
         release.set()
 
 
-def test_concurrent_writers_share_one_flush(store: DuckDBLogStore, monkeypatch):
-    """The bg loop coalesces multiple in-flight writers into one L0 segment."""
+def test_request_persistance_flushes_buffered_writers_once(store: DuckDBLogStore, monkeypatch):
+    """A persistence wait drains all buffered writers in one L0 segment."""
     store.register_table("iris.worker", _worker_schema())
 
     flush_count = 0
@@ -115,8 +105,8 @@ def test_concurrent_writers_share_one_flush(store: DuckDBLogStore, monkeypatch):
 
     monkeypatch.setattr(DiskLogNamespace, "_write_new_segment", counting_write)
 
-    # Issue several concurrent writes from worker threads. Each captures
-    # its own last_seq so we can validate the cursor catches all of them.
+    # Issue several concurrent writes from worker threads. One persistence
+    # wait should wake one background flush that drains all buffered rows.
     num_writers = 8
     results: list[int] = []
     results_lock = threading.Lock()
@@ -137,7 +127,4 @@ def test_concurrent_writers_share_one_flush(store: DuckDBLogStore, monkeypatch):
     final_target = max(results)
     store._wait_persisted("iris.worker", final_target, timeout=5.0)
 
-    # With wake-driven flushes, several writers landing inside one bg-loop
-    # turnaround share a flush. The bound is loose (timing-dependent) but
-    # the coalescing should keep us comfortably below one-flush-per-writer.
-    assert flush_count < num_writers, f"expected coalescing, got {flush_count} flushes for {num_writers} writers"
+    assert flush_count == 1

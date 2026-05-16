@@ -37,7 +37,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from rigging.timing import RateLimiter
+from rigging.timing import ExponentialBackoff, RateLimiter
 
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
@@ -92,6 +92,12 @@ _SLOW_APPEND_THRESHOLD_MS = 200
 # Background loop heartbeat cadence — emits a one-line snapshot of buffer
 # and segment state regardless of whether a flush or compaction fires.
 _BG_HEARTBEAT_INTERVAL_SEC = 10.0
+
+# Polling cadence for sync durability waits. Waiters also wake the flush loop
+# whenever they observe buffered rows, so this controls observation latency,
+# not the flush cadence itself.
+_PERSIST_WAIT_BACKOFF_INITIAL_SEC = 0.001
+_PERSIST_WAIT_BACKOFF_MAX_SEC = 0.05
 
 # Hard ceiling on the per-read parquet working set; safety net for body-LIKE
 # queries that cannot be pruned by row-group statistics.
@@ -601,9 +607,8 @@ class DiskLogNamespace:
         self._flush_rl.mark_run()
         self._compaction_rl.mark_run()
         self._stop = threading.Event()
-        # Set by ``append_*`` to nudge the flush loop early instead of waiting
-        # for the next ``flush_interval_sec`` timer fire. Idempotent / coalesced
-        # — many appends collapse to one wake.
+        # Set by explicit callers to nudge the flush loop early instead of
+        # waiting for the next ``flush_interval_sec`` timer fire.
         self._flush_wake = threading.Event()
         # Serializes the maintenance cycle (compaction drain + sync + evict)
         # against ``compact()`` / ``force_compact_l0()`` callers. The flush
@@ -705,12 +710,6 @@ class DiskLogNamespace:
                 added_bytes=non_seq_bytes + 8 * total,
             )
         critical_end = time.monotonic()
-        # Always wake the flush loop: the loop treats an append-driven wake
-        # as a flush request so service handlers blocking on
-        # ``max_persisted_seq`` see L0 within one turnaround instead of the
-        # idle ``flush_interval_sec`` ceiling.
-        self._flush_wake.set()
-
         total_ms = int((critical_end - t_enter) * 1000)
         if total_ms >= _SLOW_APPEND_THRESHOLD_MS:
             logger.warning(
@@ -738,14 +737,64 @@ class DiskLogNamespace:
             stamped = _stamp_seq_and_build(aligned, first_seq, self._arrow_schema)
             # 8 bytes per row for the stamped int64 seq column.
             self._buffers.append_table(stamped, added_bytes=aligned.byte_size + 8 * aligned.num_rows)
-        # Wake the flush loop on every non-empty append: writers blocked on
-        # the persistence cursor get a flush within one turnaround.
-        self._flush_wake.set()
         return first_seq + aligned.num_rows - 1
 
     def max_persisted_seq(self) -> int:
         """Highest ``seq`` durably written to an L0 (or higher) segment."""
         return self._max_persisted_seq
+
+    def is_persisted(self, target_seq: int) -> bool:
+        """Return whether ``target_seq`` has reached durable storage."""
+        return target_seq < 0 or self.max_persisted_seq() >= target_seq
+
+    def request_persistance(self, target_seq: int | None = None, *, timeout: float = 10.0) -> int:
+        """Wait for buffered rows to reach durable storage.
+
+        When ``target_seq`` is provided, wait until that seq is persisted.
+        When omitted, first wait until this namespace has any allocated seq
+        newer than the persisted cursor, then wait for that seq. In both
+        modes the waiter wakes the flush loop after observing unpersisted
+        rows, so tests do not need to reach into ``_flush_wake`` directly.
+
+        Returns the seq that was waited on, or ``-1`` when there is nothing
+        to wait for.
+        """
+        if target_seq is not None and target_seq < 0:
+            return -1
+
+        deadline = time.monotonic() + timeout
+        backoff = ExponentialBackoff(
+            initial=_PERSIST_WAIT_BACKOFF_INITIAL_SEC,
+            maximum=_PERSIST_WAIT_BACKOFF_MAX_SEC,
+            jitter=0.0,
+        )
+        wait_target = target_seq
+        while True:
+            persisted_seq = self.max_persisted_seq()
+            with self._insertion_lock:
+                latest_allocated_seq = self._buffers.next_seq - 1
+
+            if wait_target is None:
+                if latest_allocated_seq <= persisted_seq:
+                    if time.monotonic() >= deadline:
+                        return -1
+                    time.sleep(min(backoff.next_interval(), max(deadline - time.monotonic(), 0.0)))
+                    continue
+                wait_target = latest_allocated_seq
+
+            if self.is_persisted(wait_target):
+                return wait_target
+
+            if latest_allocated_seq > persisted_seq:
+                self._flush_wake.set()
+
+            now = time.monotonic()
+            if now >= deadline:
+                raise TimeoutError(
+                    f"timed out waiting for ns={self.name!r} persisted_seq>={wait_target} "
+                    f"(current={self.max_persisted_seq()})"
+                )
+            time.sleep(min(backoff.next_interval(), max(deadline - now, 0.0)))
 
     def get_logs(
         self,
@@ -805,7 +854,7 @@ class DiskLogNamespace:
         self._arrow_schema = schema_to_arrow(new_schema)
 
     def _flush_loop(self) -> None:
-        """Drain in-RAM chunks to L0 on a timer or in response to appends.
+        """Drain in-RAM chunks to L0 on a timer or explicit wake.
 
         Splitting flush off the maintenance loop is what keeps writers
         unblocked when a long L≥2 merge is running: durable-write waits
@@ -817,7 +866,7 @@ class DiskLogNamespace:
             timeout = min(max(self._flush_rl.time_until_next(), 0.0), 1.0)
             if timeout > 0:
                 self._flush_wake.wait(timeout=timeout)
-            woken_by_append = self._flush_wake.is_set()
+            woken = self._flush_wake.is_set()
             self._flush_wake.clear()
             if self._stop.is_set():
                 break
@@ -832,13 +881,7 @@ class DiskLogNamespace:
                 level_counts = _level_histogram(self._local_segments)
                 level_bytes = _level_bytes_summary(self._local_segments, self._compactor.config.level_targets)
             force_drain = ram_bytes >= self._segment_target_bytes
-            # Appends ``_flush_wake.set()`` on every non-empty batch. We
-            # still gate the wake-driven flush on ``flush_rl`` so a steady
-            # writer can't shred L0 into many sub-second segments — at
-            # multi-flush/s the compaction tick can't keep L0 fanout
-            # bounded. ``force_drain`` remains the unconditional safety
-            # valve for ram pressure.
-            writer_pending = woken_by_append and chunk_count > 0 and self._flush_rl.should_run()
+            manual_flush_requested = woken and chunk_count > 0
 
             now = time.monotonic()
             if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
@@ -855,7 +898,7 @@ class DiskLogNamespace:
                 )
                 last_heartbeat = now
 
-            if force_drain or writer_pending:
+            if force_drain or manual_flush_requested:
                 self.flush()
                 self._flush_rl.mark_run()
                 last_flush_at = time.monotonic()
@@ -1786,6 +1829,14 @@ class MemoryLogNamespace:
         # In-memory mode has no flush boundary: rows are visible immediately,
         # so every allocated seq is treated as persisted.
         return self._next_seq - 1
+
+    def is_persisted(self, target_seq: int) -> bool:
+        return target_seq < 0 or self.max_persisted_seq() >= target_seq
+
+    def request_persistance(self, target_seq: int | None = None, *, timeout: float = 10.0) -> int:
+        if target_seq is not None:
+            return target_seq
+        return self.max_persisted_seq()
 
     def get_logs(
         self,

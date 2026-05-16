@@ -498,11 +498,25 @@ class DuckDBLogStore:
     def max_persisted_seq(self, name: str) -> int:
         """Highest seq durably persisted in namespace ``name``.
 
-        Service handlers poll this on the event loop to gate WriteRows /
-        PushLogs replies until the bg flush thread has written an L0
-        parquet segment covering the caller's rows.
+        Service handlers use this cursor through ``is_persisted`` to gate
+        WriteRows / PushLogs replies until the bg flush thread has written
+        an L0 parquet segment covering the caller's rows.
         """
         return self.catalog.require_live(name).max_persisted_seq()
+
+    def is_persisted(self, name: str, target_seq: int) -> bool:
+        """Return whether ``target_seq`` is durable in namespace ``name``."""
+        return self.catalog.require_live(name).is_persisted(target_seq)
+
+    def request_persistance(self, name: str, target_seq: int | None = None, timeout: float = 10.0) -> int:
+        """Wait until ``name`` has durable rows.
+
+        If ``target_seq`` is supplied, wait for that seq. If omitted, wait
+        for the next unpersisted seq allocated in the namespace, then wait
+        until it is persisted. Disk namespaces wake their flush loop from
+        inside this wait after observing buffered rows.
+        """
+        return self.catalog.require_live(name).request_persistance(target_seq, timeout=timeout)
 
     def query(self, sql: str) -> pa.Table:
         """Execute ``sql`` against a DuckDB view of every registered namespace.
@@ -657,20 +671,8 @@ class DuckDBLogStore:
         self._log_namespace.force_compact_l0()
 
     def _wait_persisted(self, name: str, target_seq: int, timeout: float = 10.0) -> None:
-        """Test helper: spin until ``max_persisted_seq(name) >= target_seq``.
-
-        Mirrors the async polling loop in the service handlers without
-        requiring an event loop in sync tests.
-        """
-        ns = self.catalog.require_live(name)
-        deadline = time.monotonic() + timeout
-        while ns.max_persisted_seq() < target_seq:
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"timed out waiting for ns={name!r} persisted_seq>={target_seq} "
-                    f"(current={ns.max_persisted_seq()})"
-                )
-            time.sleep(0.02)
+        """Test helper: wait until ``max_persisted_seq(name) >= target_seq``."""
+        self.request_persistance(name, target_seq, timeout=timeout)
 
 
 def _decode_single_record_batch(arrow_ipc_bytes: bytes) -> pa.RecordBatch:

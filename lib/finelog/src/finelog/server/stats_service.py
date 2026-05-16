@@ -33,7 +33,7 @@ from finelog.store.schema import (
     schema_to_proto,
 )
 
-from .persistence_wait import DEFAULT_PERSIST_TIMEOUT_SEC, await_persisted
+from .service import DEFAULT_PERSIST_TIMEOUT_SEC, await_persisted
 
 logger = logging.getLogger(__name__)
 
