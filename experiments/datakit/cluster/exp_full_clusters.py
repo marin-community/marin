@@ -28,7 +28,7 @@ artifact. Consumers dequantize on read via
 Submit::
 
     uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G \\
-        --extra=cpu --priority production \\
+        --extra=cpu \\
         --job-name "embed-clusters-full-$(date +%Y%m%d-%H%M%S)" \\
         -- python -m experiments.datakit.cluster.exp_full_clusters
 """
@@ -102,6 +102,16 @@ HIGH_RAM_EMBED_SOURCES: frozenset[str] = frozenset(
 )
 HIGH_RAM_EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="32g", regions=[DATA_REGION])
 
+# Per-source overrides for sources that need both more RAM AND a smaller in-flight
+# window than HIGH_RAM_EMBED_WORKER_RESOURCES. Maps source_name -> (resources, window).
+# Window size feeds into hash_attrs, so changing it for a source invalidates that
+# source's cached output (acceptable when the source has never successfully embedded).
+# Empirically from 20260516-002552: finepdfs (top-level, all-langs union) still OOMs
+# at 32g/window=4096 — bump to 64g and 4x-smaller window.
+PER_SOURCE_EMBED_OVERRIDES: dict[str, tuple[ResourceConfig, int]] = {
+    "finepdfs": (ResourceConfig(cpu=8, ram="64g", regions=[DATA_REGION]), 1024),
+}
+
 _THREAD_ENV = {
     var: "8"
     for var in (
@@ -132,12 +142,17 @@ def _build_steps() -> list[StepSpec]:
     embed_steps: dict[str, StepSpec] = {}
     for source_name, source in sources.items():
         normalize_step = source.normalized
-        worker_resources = (
-            HIGH_RAM_EMBED_WORKER_RESOURCES if source_name in HIGH_RAM_EMBED_SOURCES else EMBED_WORKER_RESOURCES
-        )
+        if source_name in PER_SOURCE_EMBED_OVERRIDES:
+            worker_resources, window = PER_SOURCE_EMBED_OVERRIDES[source_name]
+        elif source_name in HIGH_RAM_EMBED_SOURCES:
+            worker_resources, window = HIGH_RAM_EMBED_WORKER_RESOURCES, EMBED_WINDOW
+        else:
+            worker_resources, window = EMBED_WORKER_RESOURCES, EMBED_WINDOW
         # worker_resources is intentionally excluded from hash_attrs — bumping
         # RAM is a recovery knob, not a content-changing parameter, so previously
         # cached outputs from runs at lower RAM stay valid (same hash, same path).
+        # window IS in hash_attrs, so per-source window overrides shift that
+        # source's output to a new cache slot (expected).
         embed_steps[source_name] = StepSpec(
             name=f"embed/luxical/{source_name}",
             output_path_prefix=_OUTPUT_PREFIX,
@@ -147,14 +162,14 @@ def _build_steps() -> list[StepSpec]:
                 "luxical_weights": LUXICAL_WEIGHTS_FILE,
                 "quant_dtype": "int8",
                 "quant_range": 0.6,
-                "window": EMBED_WINDOW,
+                "window": window,
                 "v": 2,
             },
             fn=remote(
-                lambda output_path, np=normalize_step.output_path, wr=worker_resources: embed_source(
+                lambda output_path, np=normalize_step.output_path, wr=worker_resources, w=window: embed_source(
                     output_path=output_path,
                     normalized=Artifact.from_path(np, NormalizedData),
-                    window_size=EMBED_WINDOW,
+                    window_size=w,
                     worker_resources=wr,
                     max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
                 ),
