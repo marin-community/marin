@@ -204,3 +204,118 @@ def parse_single_call_diverse_response(
         raise ValueError("at least two context_summary fields are identical strings (insufficient diversity)")
 
     return scenarios
+
+
+# For the repair pass (dart.md §11.11): the LM rewrites scenario_text /
+# user_query / system_prompt / rubric, preserving these immutable fields:
+REPAIR_IMMUTABLE_FIELDS = (
+    "scenario_id",
+    "scenario_n",
+    "is_default_scenario",
+    "varied_axis",
+    "varied_value",
+)
+REPAIR_REQUIRED_PER_SCENARIO = set(REPAIR_IMMUTABLE_FIELDS) | {
+    "scenario_text",
+    "user_query",
+    "system_prompt",
+    "rubric",
+}
+
+
+def parse_repair_response(
+    raw_text: str,
+    source_scenarios: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Parse + validate the single-pass repair response (dart.md §11.11).
+
+    Returns the rewritten scenarios as a list, in the same order as
+    `source_scenarios`. Raises ValueError on any deviation.
+
+    Validation rules:
+      - Top-level shape: {"scenarios": [...]} with exactly len(source) items.
+      - Each item has all of `REPAIR_REQUIRED_PER_SCENARIO`.
+      - Each item's immutable fields (`REPAIR_IMMUTABLE_FIELDS`) match the
+        corresponding source scenario verbatim. Order is taken from the source
+        list (matched by position), and `scenario_id` must align.
+      - Rubric has the same shape required by `parse_scenario_response`.
+      - `scenario_text` and `user_query` are non-empty strings AND differ from
+        the source (i.e., a non-trivial edit happened — the LM did not echo).
+        The threshold for "non-trivial" at this pilot stage is just
+        string-inequality; we will tighten if we see paraphrase-only outputs.
+    """
+    if not raw_text or not raw_text.strip():
+        raise ValueError("empty response")
+
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"json parse error: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError(f"top-level value is not a dict: {type(parsed).__name__}")
+    if "scenarios" not in parsed:
+        raise ValueError("missing 'scenarios' key")
+    items = parsed["scenarios"]
+    if not isinstance(items, list):
+        raise ValueError(f"scenarios must be a list, got {type(items).__name__}")
+    if len(items) != len(source_scenarios):
+        raise ValueError(
+            f"expected {len(source_scenarios)} rewritten scenarios, got {len(items)}"
+        )
+
+    for i, (rew, src) in enumerate(zip(items, source_scenarios, strict=True)):
+        if not isinstance(rew, dict):
+            raise ValueError(f"scenarios[{i}] is not a dict")
+        missing = REPAIR_REQUIRED_PER_SCENARIO - set(rew.keys())
+        if missing:
+            raise ValueError(f"scenarios[{i}] missing keys: {sorted(missing)}")
+
+        for k in REPAIR_IMMUTABLE_FIELDS:
+            if rew[k] != src[k]:
+                raise ValueError(
+                    f"scenarios[{i}] immutable field {k!r} drifted: "
+                    f"src={src[k]!r} rewrite={rew[k]!r}"
+                )
+
+        if not isinstance(rew["scenario_text"], str) or not rew["scenario_text"].strip():
+            raise ValueError(f"scenarios[{i}].scenario_text must be non-empty string")
+        if not isinstance(rew["user_query"], str) or not rew["user_query"].strip():
+            raise ValueError(f"scenarios[{i}].user_query must be non-empty string")
+        if not isinstance(rew["system_prompt"], str):
+            raise ValueError(f"scenarios[{i}].system_prompt must be string (may be empty)")
+
+        rubric = rew["rubric"]
+        if not isinstance(rubric, dict):
+            raise ValueError(f"scenarios[{i}].rubric must be a dict")
+        rb_missing = REQUIRED_RUBRIC_KEYS - set(rubric.keys())
+        if rb_missing:
+            raise ValueError(f"scenarios[{i}].rubric missing: {sorted(rb_missing)}")
+        for list_key in ("good_indicators", "bad_indicators"):
+            if not isinstance(rubric[list_key], list) or not rubric[list_key]:
+                raise ValueError(f"scenarios[{i}].rubric.{list_key} must be non-empty list")
+            for j, item in enumerate(rubric[list_key]):
+                if not isinstance(item, str) or not item.strip():
+                    raise ValueError(f"scenarios[{i}].rubric.{list_key}[{j}] must be non-empty string")
+        if not isinstance(rubric["key_tension"], str) or not rubric["key_tension"].strip():
+            raise ValueError(f"scenarios[{i}].rubric.key_tension must be non-empty string")
+
+        if rew["scenario_text"].strip() == (src.get("scenario_text") or "").strip():
+            raise ValueError(
+                f"scenarios[{i}] scenario_text is byte-identical to source — "
+                f"the LM echoed instead of rewriting"
+            )
+        if rew["user_query"].strip() == (src.get("user_query") or "").strip():
+            raise ValueError(
+                f"scenarios[{i}] user_query is byte-identical to source — "
+                f"the LM echoed instead of rewriting"
+            )
+
+    return items
