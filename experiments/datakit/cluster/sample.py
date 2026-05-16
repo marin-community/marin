@@ -3,28 +3,34 @@
 
 """Stratified sample across all per-source EmbeddingAttrData → centroid training input.
 
-Map-only Zephyr pipeline. One task per ``(source, embedding shard)`` reads the
-shard, samples up to ``per_shard`` rows uniformly, and writes those rows to a
-parquet file labeled with the source. Output schema::
+Map-only Zephyr pipeline, one ``ZephyrContext`` per source. Each context
+spawns one task per embedding shard for its source: read the shard, sample
+up to ``per_shard`` rows uniformly, write a parquet file labeled with the
+source. Output schema (per shard)::
 
     source     string
     embedding  list<int8> length 192   (same encoding as EmbeddingAttrData)
 
-Per-source cap: ``per_shard = max(n_per_source // num_shards, 1)`` so every source
-contributes roughly ``n_per_source`` rows (slightly under if not divisible).
-The cap (not strict proportional) keeps long-tail sources audible against the
-giants. At ~100 active sources x n_per_source=100_000 the result is ~10M rows.
+Why one context per source instead of one global context: at ~100 sources x
+~1K shards/source you get ~100K total tasks. A single Zephyr coordinator
+tracking that fan-out OOMs at the default container RAM. Splitting into
+per-source contexts keeps each coordinator's task table bounded.
 
-Train consumes ``*.parquet`` from the output dir; dequantization to fp32 with
-``dequantize_to_fp32`` happens there. Each shard is independent so the pipeline
-is fully parallelizable and resumable across preemptions (``skip_existing=True``
-on the writer means previously-completed sample shards survive a restart).
+Per-source cap: ``per_shard = max(n_per_source // num_shards, 1)`` so every
+source contributes roughly ``n_per_source`` rows. The cap (not strict
+proportional) keeps long-tail sources audible against the giants. At ~100
+active sources x n_per_source=100_000 the result is ~10M rows.
+
+Train consumes ``**/*.parquet`` from the output dir; dequantization to fp32
+with ``dequantize_to_fp32`` happens there. Each per-source output dir is
+independent so the pipeline is fully resumable across preemptions
+(``skip_existing=True`` on the writer means previously-completed shards
+survive a restart).
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterator
 from typing import Any
 
@@ -72,6 +78,58 @@ def _sample_shard(
         yield {"source": source_name, "embedding": r["embedding"]}
 
 
+def _sample_one_source(
+    source_name: str,
+    attr: EmbeddingAttrData,
+    output_path: str,
+    n_per_source: int,
+    seed: int,
+    worker_resources: ResourceConfig,
+    max_workers: int,
+) -> None:
+    """Run one ZephyrContext to sample all of one source's embedding shards."""
+    shards = attr.shard_paths()
+    if not shards:
+        logger.warning("No embedding shards for %s under %s", source_name, attr.output_dir)
+        return
+
+    per_shard = max(n_per_source // len(shards), 1)
+    # Per-source subdirectory so writers can't collide across sources.
+    source_dir = f"{output_path.rstrip('/')}/{source_name.replace('/', '-')}"
+
+    def _out(shard_idx: int, _total: int, dest: str = source_dir) -> str:
+        return f"{dest}/sample-{shard_idx:06d}.parquet"
+
+    source_specs = [InputFileSpec(path=p, columns=["embedding"]) for p in shards]
+
+    ds = (
+        Dataset.from_list(source_specs)
+        .flat_map(load_file)
+        .window(4096)
+        .map_shard(
+            lambda batches, shard, sn=source_name, ps=per_shard, sd=seed: _sample_shard(
+                batches, shard, source_name=sn, per_shard=ps, seed=sd
+            )
+        )
+        .write_parquet(_out, schema=_SAMPLE_SCHEMA, skip_existing=True)
+    )
+
+    ctx = ZephyrContext(
+        resources=worker_resources,
+        max_workers=min(max_workers, len(shards)),
+        name=f"sample-{source_name.replace('/', '-')[:32]}",
+        stage_runner_factory=InlineRunner,
+    )
+    logger.info(
+        "Sampling %s: %d shards, per_shard=%d (~%d rows)",
+        source_name,
+        len(shards),
+        per_shard,
+        per_shard * len(shards),
+    )
+    ctx.execute(ds, verbose=True)
+
+
 def sample_centroid_inputs(
     output_path: str,
     embeddings: dict[str, EmbeddingAttrData],
@@ -80,67 +138,20 @@ def sample_centroid_inputs(
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 128,
 ) -> None:
-    """Map-only Zephyr sample across every (source, shard) pair → parquet shards."""
-    shard_paths: list[str] = []
-    source_by_shard: list[str] = []
-    per_shard_by_shard: list[int] = []
-
-    for source_name, attr in sorted(embeddings.items()):
-        shards = attr.shard_paths()
-        if not shards:
-            logger.warning("No embedding shards for %s under %s", source_name, attr.output_dir)
-            continue
-        per_shard = max(n_per_source // len(shards), 1)
-        for shard_path in shards:
-            shard_paths.append(shard_path)
-            source_by_shard.append(source_name)
-            per_shard_by_shard.append(per_shard)
-
-    if not shard_paths:
-        raise RuntimeError("No embedding shards found across any source")
-
-    logger.info(
-        "Sampling %d shards across %d sources (n_per_source=%d, ~%d total rows)",
-        len(shard_paths),
-        len({s for s in source_by_shard}),
-        n_per_source,
-        sum(per_shard_by_shard),
-    )
-
-    output_basenames = [f"{s.replace('/', '-')}-{i:06d}.parquet" for i, s in enumerate(source_by_shard)]
-
-    def _output_path(shard_idx: int, _total: int, bn: list[str] = output_basenames) -> str:
-        return f"{output_path.rstrip('/')}/{bn[shard_idx]}"
-
-    source_specs = [InputFileSpec(path=p, columns=["embedding"]) for p in shard_paths]
-
-    # .window() chunks records into lists; the lambda below receives an
-    # Iterator[list[dict]] (matches pipeline.py's _embed_shard signature).
-    ds = (
-        Dataset.from_list(source_specs)
-        .flat_map(load_file)
-        .window(4096)
-        .map_shard(
-            lambda batches, shard, sn=source_by_shard, ps=per_shard_by_shard, sd=seed: _sample_shard(
-                batches,
-                shard,
-                source_name=sn[shard.shard_idx],
-                per_shard=ps[shard.shard_idx],
-                seed=sd,
-            )
-        )
-        .write_parquet(_output_path, schema=_SAMPLE_SCHEMA, skip_existing=True)
-    )
-
+    """Stratified sample across every source via per-source Zephyr contexts."""
     if worker_resources is None:
         worker_resources = ResourceConfig(cpu=2, ram="4g")
 
-    ctx = ZephyrContext(
-        resources=worker_resources,
-        max_workers=min(max_workers, len(shard_paths)),
-        name=f"sample-centroid-{os.path.basename(output_path.rstrip('/'))[:12]}",
-        # InlineRunner so workers reuse process-level state across shards
-        # (here mostly numpy/pyarrow warmup; modest win at this fan-out).
-        stage_runner_factory=InlineRunner,
-    )
-    ctx.execute(ds, verbose=True)
+    total_sources = len(embeddings)
+    for i, (source_name, attr) in enumerate(sorted(embeddings.items()), 1):
+        logger.info("Source %d/%d: %s", i, total_sources, source_name)
+        _sample_one_source(
+            source_name=source_name,
+            attr=attr,
+            output_path=output_path,
+            n_per_source=n_per_source,
+            seed=seed,
+            worker_resources=worker_resources,
+            max_workers=max_workers,
+        )
+    logger.info("Sample pipeline complete: %d sources written under %s", total_sources, output_path)

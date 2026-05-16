@@ -133,7 +133,7 @@ def _build_steps() -> list[StepSpec]:
         name="cluster/sample_centroids",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=[embed_step],
-        hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "format": "parquet", "v": 2},
+        hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "format": "parquet", "v": 3},
         fn=remote(
             lambda output_path, eso=embed_step_outputs: sample_centroid_inputs(
                 output_path=output_path,

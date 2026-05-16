@@ -193,7 +193,7 @@ def _build_steps() -> list[StepSpec]:
         # v: 2 -- output format changed from a single sample.npz (fp32) to a
         # directory of parquet shards (int8) via a Zephyr fan-out, one task per
         # (source, embedding shard).
-        hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "format": "parquet", "v": 2},
+        hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "format": "parquet", "v": 3},
         fn=remote(
             lambda output_path, eso=embed_step_outputs: sample_centroid_inputs(
                 output_path=output_path,

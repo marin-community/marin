@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 
 def _load_sample_parquet(sample_path: str) -> np.ndarray:
     """Load all sample parquet shards, dequantize int8 → fp32, return one stacked array."""
-    shard_paths = sorted(fsspec_glob(f"{sample_path.rstrip('/')}/*.parquet"))
+    # Per-source subdirs: {sample_path}/{source_name.replace('/','-')}/sample-NNNNNN.parquet
+    shard_paths = sorted(fsspec_glob(f"{sample_path.rstrip('/')}/**/*.parquet"))
     if not shard_paths:
         raise RuntimeError(f"No sample parquet shards under {sample_path}")
 
