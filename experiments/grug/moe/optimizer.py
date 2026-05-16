@@ -387,6 +387,124 @@ def _expand_output_axis_stat(stat):
     return jnp.expand_dims(stat, axis=-2)
 
 
+def _longer_trailing_axis(param) -> int:
+    """Return the axis (-2 or -1) corresponding to the longer of the last two dims.
+
+    For routed-expert weights stored as ``(num_experts, fan_in, fan_out)``,
+    this picks the *intermediate* axis (the larger of ``fan_in`` / ``fan_out``)
+    -- which is the axis Muon's NS-polar does **not** orthonormalize.
+    Used by :func:`scale_with_grug_normuonh_intermediate` to apply per-channel
+    second-moment normalization on the "uncovered" axis regardless of
+    whether it's the trailing or second-to-trailing dim.
+    """
+    if not hasattr(param, "ndim") or param.ndim < 2:
+        return -1
+    return -2 if param.shape[-2] > param.shape[-1] else -1
+
+
+def _intermediate_axis_second_moment(param):
+    """State init: keep the longer of the last 2 axes, drop the shorter."""
+    if not hasattr(param, "ndim") or param.ndim < 2:
+        return param
+    longer = _longer_trailing_axis(param)
+    if longer == -1:
+        return jnp.zeros(param.shape[:-2] + param.shape[-1:], dtype=param.dtype)
+    # longer == -2: keep axis -2, drop axis -1.
+    return jnp.zeros((*param.shape[:-2], param.shape[-2]), dtype=param.dtype)
+
+
+def _intermediate_axis_mean_square(update):
+    """Mean square over the shorter axis, keeping the longer axis."""
+    if not hasattr(update, "ndim") or update.ndim < 2:
+        return None
+    longer = _longer_trailing_axis(update)
+    shorter = -1 if longer == -2 else -2
+    return jnp.mean(jnp.square(update), axis=shorter)
+
+
+def _expand_intermediate_axis_stat(stat, param):
+    """Broadcast back to match the param shape by re-inserting the shorter axis."""
+    longer = _longer_trailing_axis(param)
+    shorter = -1 if longer == -2 else -2
+    return jnp.expand_dims(stat, axis=shorter)
+
+
+def scale_with_grug_normuonh_intermediate(
+    momentum: float = 0.95,
+    nesterov: bool = True,
+    beta2: float = 0.95,
+    steps: int = 5,
+    muon_eps: float = 1e-8,
+    normuon_eps: float = 1e-8,
+    learning_rate: float = 0.02,
+    coefficient_type: CoefficientType = "quintic",
+) -> optax.GradientTransformation:
+    """NorMuon variant that normalizes on the **longer** trailing axis.
+
+    Standard :func:`scale_with_grug_normuonh` always normalizes per-output
+    (the trailing axis). For routed-expert weights stored as
+    ``(num_experts, fan_in, fan_out)``, that maps to different semantic
+    axes for different tensors:
+
+    | tensor                              | shape (e, m, n) | trailing-axis NorMuon | intermediate-axis NorMuon |
+    |-------------------------------------|-----------------|-----------------------|---------------------------|
+    | ``mlp.w_gate`` / ``mlp.w_up``       | (e, d, 4d)      | per-intermediate (n)  | per-intermediate (n)      |
+    | ``mlp.w_down``                      | (e, 4d, d)      | per-residual (n=d)    | per-intermediate (m=4d)   |
+
+    This variant always picks the **longer** of the last two dims as the
+    "intermediate" axis to normalize per-channel along, regardless of
+    whether it's ``fan_in`` or ``fan_out``. Used by configs that want to
+    equalize the contribution from/to the residual stream via the
+    intermediate-channel statistic.
+    """
+    muon_transform = _grug_scale_with_muon(
+        momentum=momentum,
+        nesterov=nesterov,
+        steps=steps,
+        muon_eps=muon_eps,
+        use_kimi_scaling=False,
+        coefficient_type=coefficient_type,
+    )
+
+    def init_fn(params):
+        row_nu = jax.tree.map(_intermediate_axis_second_moment, params)
+        return ScaleByGrugNorMuonHState(muon_state=muon_transform.init(params), row_nu=row_nu)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_normuonh_intermediate requires params for norm-preserving updates")
+
+        muon_updates, next_muon_state = muon_transform.update(updates, state.muon_state, params)
+
+        def update_second_moment(prev, update):
+            if update is None or not hasattr(update, "ndim") or update.ndim < 2:
+                return prev
+            return beta2 * prev + (1 - beta2) * _intermediate_axis_mean_square(update)
+
+        row_nu = jax.tree.map(
+            update_second_moment,
+            state.row_nu,
+            muon_updates,
+            is_leaf=lambda x: x is None,
+        )
+
+        def normalize_update(update, nu):
+            if update is None or not hasattr(update, "ndim") or update.ndim < 2:
+                return update
+            return update / (jnp.sqrt(_expand_intermediate_axis_stat(nu, update)) + normuon_eps)
+
+        normuon_updates = jax.tree.map(
+            normalize_update,
+            muon_updates,
+            row_nu,
+            is_leaf=lambda x: x is None,
+        )
+        normuonh_updates = _scale_invariant_hyperball_updates(params, normuon_updates, learning_rate)
+        return normuonh_updates, ScaleByGrugNorMuonHState(muon_state=next_muon_state, row_nu=row_nu)
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
 def scale_with_grug_normuonh(
     momentum: float = 0.95,
     nesterov: bool = True,
@@ -1039,8 +1157,13 @@ class GrugMoeMuonHMayArchAuroraTargetConfig(OptimizerConfig):
     * ``expout_aurora``: route expert MLP output projections
       (``.mlp.w_down`` for the routed-expert 3-D weight and
       ``.shared.w_down`` for the shared expert) to AuroraH.
+    * ``expert_io_aurora``: route both expert MLP inputs and outputs to
+      AuroraH (``.mlp.w_gate``, ``.mlp.w_up``, ``.mlp.w_down`` for the
+      routed experts plus ``.shared.w_down`` for the shared expert).
+      Requires the model to store ``w_gate``/``w_up`` as separate fields
+      (see ``MoEMLP`` in ``model.py``).
 
-    When all three flags are False this config is functionally identical
+    When all four flags are False this config is functionally identical
     to :class:`GrugMoeMuonHMayArchGNMuonHConfig` (the 1pct-noclip
     baseline). Exactly one is expected to be True per sweep trial; the
     config does not enforce mutual exclusion in case a future ablation
@@ -1065,6 +1188,7 @@ class GrugMoeMuonHMayArchAuroraTargetConfig(OptimizerConfig):
     kv_aurora: bool = False
     gn_aurora: bool = False
     expout_aurora: bool = False
+    expert_io_aurora: bool = False
     pp_iterations: int = 2
     pp_beta: float = 0.5
 
@@ -1161,7 +1285,147 @@ class GrugMoeMuonHMayArchAuroraTargetConfig(OptimizerConfig):
                 return "aurorah"
             if self.expout_aurora and (path_lower.endswith(".mlp.w_down") or path_lower.endswith(".shared.w_down")):
                 return "aurorah"
+            if self.expert_io_aurora and (
+                path_lower.endswith(".mlp.w_gate")
+                or path_lower.endswith(".mlp.w_up")
+                or path_lower.endswith(".mlp.w_down")
+                or path_lower.endswith(".shared.w_down")
+            ):
+                return "aurorah"
             # Default routing (matches the 1pct-noclip recipe).
+            if "gated_norm" in path_lower:
+                return "muonh"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "muonh"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
+@OptimizerConfig.register_subclass("grug_moe_muonh_may_arch_1pct_normuon_expert_io_v1")
+@dataclass(frozen=True)
+class GrugMoeMuonHMayArch1pctNorMuonExpertIoConfig(OptimizerConfig):
+    """1pct-noclip with NorMuon (intermediate-axis) on routed expert I/O.
+
+    Routes ``mlp.w_gate``, ``mlp.w_up``, ``mlp.w_down`` to a dedicated
+    ``normuonh`` group that uses :func:`scale_with_grug_normuonh_intermediate`
+    -- i.e., NorMuon's per-channel second-moment normalization applied to the
+    *longer* of the last two axes (the intermediate dim). For these tensors
+    this is the axis Muon's NS-polar does NOT orthonormalize, so NorMuon
+    captures the per-intermediate-channel contribution to/from the residual
+    stream that plain MuonH leaves uncontrolled.
+
+    Requires the model to store ``mlp.w_gate`` and ``mlp.w_up`` as separate
+    fields (see ``MoEMLP`` in ``model.py``).
+
+    All other parameters route identically to the 1pct-noclip baseline
+    (``GrugMoeMuonHMayArchGNMuonHConfig``).
+    """
+
+    adam_lr: float = 6e-4
+    momentum: float = 0.95
+    nesterov: bool = True
+    backend_steps: int = 5
+    beta1: float = 0.9
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    muon_epsilon: float = 1e-8
+    normuon_beta2: float = 0.95
+    normuon_eps: float = 1e-8
+    max_grad_norm: float | None = None
+    coefficient_type: CoefficientType = "quintic"
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, adam_lr):
+            def muonh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_muonh(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=learning_rate,
+                        coefficient_type=self.coefficient_type,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def normuonh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_normuonh_intermediate(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        beta2=self.normuon_beta2,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        normuon_eps=self.normuon_eps,
+                        learning_rate=learning_rate,
+                        coefficient_type=self.coefficient_type,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "muonh": muonh_transform(),
+                    "normuonh": normuonh_transform(),
+                    "adamh_embed": adamh_transform_at(learning_rate),
+                    "adamh": adamh_transform_at(learning_rate),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if "token_embed" in path_lower:
+                return "adamh_embed"
+            if "router_bias" in path_lower or path_lower.endswith(".attn_gate") or ".router" in path_lower:
+                return "adam"
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh"
+            # Routed expert I/O: w_gate, w_up, w_down -> NorMuon intermediate-axis.
+            if (
+                path_lower.endswith(".mlp.w_gate")
+                or path_lower.endswith(".mlp.w_up")
+                or path_lower.endswith(".mlp.w_down")
+            ):
+                return "normuonh"
             if "gated_norm" in path_lower:
                 return "muonh"
             if hasattr(param, "ndim") and param.ndim in (2, 3):
