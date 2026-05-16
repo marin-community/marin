@@ -99,14 +99,13 @@ def _build_trainer_section(resolved: ResolvedMidtrainSpec) -> dict[str, Any]:
         "train_batch_size": spec.compute.batch_size,
         "num_train_steps": resolved.num_train_steps,
         "per_device_parallelism": spec.compute.per_device_parallelism,
-        "tensor_parallel_axes": ["mlp", "heads"],
-        "tensor_parallel_size": spec.compute.tensor_parallel_size,
         "steps_per_eval": _steps_per_eval(resolved),
         "require_accelerator": True,
+        "mesh": {"batch_axis_name": "batch"},
         "checkpointer": {
             "base_path": f"{run.output_path}/{PERMANENT_CHECKPOINTS_SUBDIR}",
             "temporary_base_path": _temporary_checkpoint_base_path(run.output_path, run.output_region),
-            "save_interval": spec.temp_save_interval,
+            "save_interval": _parse_save_interval(spec.temp_save_interval),
             "append_run_id_to_base_path": False,
             "keep": [{"every": _steps_per_export(resolved)}],
         },
@@ -119,6 +118,18 @@ def _build_trainer_section(resolved: ResolvedMidtrainSpec) -> dict[str, Any]:
             "tags": list(_wandb_tags(resolved)),
         },
     }
+
+
+def _parse_save_interval(value: str) -> dict[str, int]:
+    """Parse ``"10m"`` / ``"600s"`` / ``"1h"`` into the dict form draccus expects for ``timedelta``."""
+    value = value.strip().lower()
+    if value.endswith("h"):
+        return {"seconds": int(value[:-1]) * 3600}
+    if value.endswith("m"):
+        return {"seconds": int(value[:-1]) * 60}
+    if value.endswith("s"):
+        return {"seconds": int(value[:-1])}
+    raise ValueError(f"Unrecognized save_interval format {value!r}; use Ns / Nm / Nh")
 
 
 def _build_data_section(spec: MidtrainSpec, manifest: DataCacheManifest) -> dict[str, Any]:
