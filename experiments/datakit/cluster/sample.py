@@ -18,11 +18,31 @@ import tempfile
 
 import numpy as np
 import pyarrow.parquet as pq
+from marin.execution.artifact import Artifact
+from pydantic import BaseModel
 from rigging.filesystem import open_url
 
 from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
+
+
+class CentroidSample(BaseModel):
+    """Stratified centroid-training sample over all per-source EmbeddingAttrData.
+
+    Persisted as the step's ``.artifact``; the actual numpy payload lives at
+    ``<output_dir>/sample.npz`` with arrays ``embeddings`` (fp32, [n_rows, dim])
+    and ``sources`` (object array of source names, length n_rows).
+    """
+
+    version: str = "v1"
+    output_dir: str
+    n_rows: int
+    dim: int
+    n_sources: int
+
+    def sample_uri(self) -> str:
+        return f"{self.output_dir.rstrip('/')}/sample.npz"
 
 
 def _sample_from_shard(
@@ -49,7 +69,7 @@ def sample_centroid_inputs(
     embeddings: dict[str, EmbeddingAttrData],
     n_per_source: int,
     seed: int = 42,
-) -> None:
+) -> CentroidSample:
     """Concatenate up to ``n_per_source`` rows from each source's embedding parquet shards."""
     rng = np.random.default_rng(seed)
     all_emb: list[np.ndarray] = []
@@ -93,3 +113,12 @@ def sample_centroid_inputs(
     with open(local, "rb") as src, open_url(os.path.join(output_path, "sample.npz"), "wb") as dst:
         dst.write(src.read())
     os.remove(local)
+
+    artifact = CentroidSample(
+        output_dir=output_path,
+        n_rows=int(sample_embeddings.shape[0]),
+        dim=int(sample_embeddings.shape[1]),
+        n_sources=len(all_emb),
+    )
+    Artifact.save(artifact, output_path)
+    return artifact

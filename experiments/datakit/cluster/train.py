@@ -26,12 +26,14 @@ import time
 import numpy as np
 from rigging.filesystem import open_url
 
+from experiments.datakit.cluster.sample import CentroidSample
+
 logger = logging.getLogger(__name__)
 
 
 def train_centroids(
     output_path: str,
-    sample_path: str,
+    sample: CentroidSample,
     k_train: int = 5000,
     k_views: tuple[int, ...] = (40, 1000),
     n_iter: int = 20,
@@ -44,10 +46,10 @@ def train_centroids(
     from scipy.spatial.distance import squareform
 
     local_sample = os.path.join(tempfile.gettempdir(), "sample.npz")
-    with open_url(os.path.join(sample_path, "sample.npz"), "rb") as src, open(local_sample, "wb") as dst:
+    with open_url(sample.sample_uri(), "rb") as src, open(local_sample, "wb") as dst:
         dst.write(src.read())
-    sample = np.load(local_sample)
-    embeddings = sample["embeddings"].astype(np.float32, copy=False)
+    npz = np.load(local_sample)
+    embeddings = npz["embeddings"].astype(np.float32, copy=False)
     os.remove(local_sample)
     logger.info("Loaded sample (%d x %d) for K-means K=%d", *embeddings.shape, k_train)
 

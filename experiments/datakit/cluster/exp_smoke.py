@@ -39,7 +39,7 @@ from marin.execution.step_spec import StepSpec  # noqa: E402
 from rigging.filesystem import marin_temp_bucket  # noqa: E402
 
 from experiments.datakit.cluster.assign import AssignmentAttrData, assign_source  # noqa: E402
-from experiments.datakit.cluster.sample import sample_centroid_inputs  # noqa: E402
+from experiments.datakit.cluster.sample import CentroidSample, sample_centroid_inputs  # noqa: E402
 from experiments.datakit.cluster.summarize import summarize_at_k  # noqa: E402
 from experiments.datakit.cluster.train import train_centroids  # noqa: E402
 from experiments.datakit.embeddings.luxical.pipeline import (  # noqa: E402
@@ -147,9 +147,9 @@ def _build_steps() -> list[StepSpec]:
         deps=[sample_step],
         hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "v": 1},
         fn=remote(
-            lambda output_path: train_centroids(
+            lambda output_path, sp=sample_step.output_path: train_centroids(
                 output_path=output_path,
-                sample_path=sample_step.output_path,
+                sample=Artifact.from_path(sp, CentroidSample),
                 k_train=K_TRAIN,
                 k_views=K_VIEWS,
             ),
