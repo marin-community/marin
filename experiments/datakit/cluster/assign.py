@@ -36,7 +36,7 @@ from rigging.filesystem import open_url
 from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file
 from zephyr.runners import InlineRunner
 
-from experiments.datakit.embeddings.luxical.embed_source import EmbeddingAttrData, dequantize_to_fp32
+from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
 

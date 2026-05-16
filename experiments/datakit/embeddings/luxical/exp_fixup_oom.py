@@ -39,7 +39,7 @@ from marin.execution.remote import remote  # noqa: E402
 from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
 
-from experiments.datakit.embeddings.luxical.embed_source import (  # noqa: E402
+from experiments.datakit.embeddings.luxical.pipeline import (  # noqa: E402
     LUXICAL_REPO,
     LUXICAL_WEIGHTS_FILE,
     embed_source,
