@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """DART iterative validation — submit per-judge phase_4 judgments under C1/C2/C3.
 
 For each (statement, condition, judge) triple, this script builds 1-5 anchored
@@ -11,9 +14,9 @@ phase_4 judge prompts and dispatches them:
   per_judgment data.
 
 Cells per statement:
-  - 3 generators × N scenarios from e8_responses.jsonl
+  - 3 generators x N scenarios from e8_responses.jsonl
     (gpt-5.1, Qwen2.5-7B-Instruct-Turbo, gemini-3-flash-preview)
-  - 1 generator × N scenarios from e9_opposite_mode_responses.jsonl (Grok-opposite)
+  - 1 generator x N scenarios from e9_opposite_mode_responses.jsonl (Grok-opposite)
 
 Judges:
   - GPT-5.1            (sync, ThreadPoolExecutor max_workers=8, reasoning_effort=none)
@@ -100,8 +103,9 @@ GPT_PRICE_IN_PER_M = 1.25
 GPT_PRICE_OUT_PER_M = 10.0
 
 
-def build_user_prompt(statement_text: str, examples: list[dict[str, Any]],
-                      rubric: dict[str, Any], user_q: str, response_text: str) -> str:
+def build_user_prompt(
+    statement_text: str, examples: list[dict[str, Any]], rubric: dict[str, Any], user_q: str, response_text: str
+) -> str:
     """Phase_4 prompt: SPEC STATEMENT + SPEC EXAMPLES + RUBRIC + query + response."""
     return (
         f"SPEC STATEMENT:\n{statement_text}\n\n"
@@ -127,7 +131,8 @@ def call_claude_tool_use(api_key: str, system: str, user: str, max_tokens: int =
     resp = httpx.post(
         "https://api.anthropic.com/v1/messages",
         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        json=body, timeout=120.0,
+        json=body,
+        timeout=120.0,
     )
     if resp.status_code != 200:
         snippet = resp.text[:400].replace(api_key, "<REDACTED>")
@@ -239,16 +244,14 @@ def append_jsonl(rows: list[dict[str, Any]], path: Path, lock: Lock) -> None:
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--round", type=int, required=True)
-    p.add_argument("--conditions", type=str, default="C1,C2,C3",
-                   help="comma-separated subset of {C1,C2,C3}")
-    p.add_argument("--statements", type=str, default="all",
-                   help="'all' or comma-separated statement_ids")
-    p.add_argument("--judges", type=str, default="gpt,gemini,claude",
-                   help="comma-separated subset of {gpt,gemini,claude}")
+    p.add_argument("--conditions", type=str, default="C1,C2,C3", help="comma-separated subset of {C1,C2,C3}")
+    p.add_argument("--statements", type=str, default="all", help="'all' or comma-separated statement_ids")
+    p.add_argument(
+        "--judges", type=str, default="gpt,gemini,claude", help="comma-separated subset of {gpt,gemini,claude}"
+    )
     p.add_argument("--gpt-workers", type=int, default=8)
     p.add_argument("--gemini-workers", type=int, default=4)
-    p.add_argument("--dry-run", action="store_true",
-                   help="build cells/prompts but don't dispatch any API calls")
+    p.add_argument("--dry-run", action="store_true", help="build cells/prompts but don't dispatch any API calls")
     args = p.parse_args()
 
     conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]
@@ -270,8 +273,7 @@ def main() -> int:
             raise SystemExit(f"unknown statements: {unknown}")
     target_sid_set = set(target_sids)
 
-    spec_by_id = {json.loads(line)["id"]: json.loads(line)
-                  for line in SPEC_PATH.open() if line.strip()}
+    spec_by_id = {json.loads(line)["id"]: json.loads(line) for line in SPEC_PATH.open() if line.strip()}
     for sid in target_sids:
         if sid not in spec_by_id:
             raise SystemExit(f"statement_id {sid} not in {SPEC_PATH}")
@@ -283,7 +285,7 @@ def main() -> int:
     print(f"DART iter round={args.round}")
     print(f"  conditions: {conditions}")
     print(f"  statements: {target_sids}")
-    print(f"  cells: {len(cells)}  (statements × scenarios × generators)")
+    print(f"  cells: {len(cells)}  (statements x scenarios x generators)")
 
     work: list[tuple[str, str, int, str, str, str, str, dict[str, Any]]] = []
     # tuple: (condition, sid, scen, gen, user_q, resp_text, statement_text, rubric)
@@ -291,14 +293,19 @@ def main() -> int:
         for sid, scen, gen, user_q, resp_text in cells:
             try:
                 stmt_text, rubric = resolve_for_condition(
-                    cond, sid, spec_by_id[sid], rubrics_v1, rubrics_v2, specs_v2,
+                    cond,
+                    sid,
+                    spec_by_id[sid],
+                    rubrics_v1,
+                    rubrics_v2,
+                    specs_v2,
                 )
             except KeyError as exc:
                 print(f"  skip cond={cond} sid={sid}: {exc}")
                 continue
             work.append((cond, sid, scen, gen, user_q, resp_text, stmt_text, rubric))
 
-    print(f"  work items per judge: {len(work)} (cells × conditions)")
+    print(f"  work items per judge: {len(work)} (cells x conditions)")
     n_judges_active = len(judges)
     print(f"  total judgments to dispatch: {len(work) * n_judges_active}")
 
@@ -313,8 +320,7 @@ def main() -> int:
         for r in load_jsonl(sync_out):
             if r.get("score") is None:
                 continue
-            already_done.add((r["judge"], r["condition"],
-                              r["statement_id"], r["scenario_idx"], r["generator"]))
+            already_done.add((r["judge"], r["condition"], r["statement_id"], r["scenario_idx"], r["generator"]))
         if already_done:
             print(f"  found {len(already_done)} already-scored sync rows in {sync_out.name}")
 
@@ -341,47 +347,61 @@ def main() -> int:
 
     overall_t0 = time.time()
     summary: dict[str, Any] = {
-        "round": args.round, "conditions": conditions, "statements": target_sids,
-        "judges": judges, "n_cells": len(cells), "n_work_items_per_judge": len(work),
+        "round": args.round,
+        "conditions": conditions,
+        "statements": target_sids,
+        "judges": judges,
+        "n_cells": len(cells),
+        "n_work_items_per_judge": len(work),
     }
 
     # ============== GPT-5.1 SYNC ==============
     if "gpt" in judges:
         oai = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        gpt_work = [w for w in work
-                    if ("gpt", w[0], w[1], w[2], w[3]) not in already_done]
-        print(f"\n--- GPT-5.1 sync judge: {len(gpt_work)} items "
-              f"(skipped {len(work) - len(gpt_work)} already done) ---")
+        gpt_work = [w for w in work if ("gpt", w[0], w[1], w[2], w[3]) not in already_done]
+        print(
+            f"\n--- GPT-5.1 sync judge: {len(gpt_work)} items " f"(skipped {len(work) - len(gpt_work)} already done) ---"
+        )
         gpt_t0 = time.time()
         n_done = 0
         # Approx token budget. Each prompt ~600-1500 tokens, response ~300 tokens.
         approx_in_tokens_per = 1200
         approx_out_tokens_per = 400
-        spend_estimate = (len(gpt_work) * (approx_in_tokens_per * GPT_PRICE_IN_PER_M
-                                           + approx_out_tokens_per * GPT_PRICE_OUT_PER_M)
-                          / 1_000_000)
+        spend_estimate = (
+            len(gpt_work)
+            * (approx_in_tokens_per * GPT_PRICE_IN_PER_M + approx_out_tokens_per * GPT_PRICE_OUT_PER_M)
+            / 1_000_000
+        )
         print(f"  estimated GPT spend: ~${spend_estimate:.2f}")
         if spend_estimate > GPT_SYNC_BUDGET_USD:
-            raise SystemExit(f"GPT estimate ${spend_estimate:.2f} exceeds budget "
-                             f"${GPT_SYNC_BUDGET_USD}; aborting.")
+            raise SystemExit(f"GPT estimate ${spend_estimate:.2f} exceeds budget " f"${GPT_SYNC_BUDGET_USD}; aborting.")
 
         def process_gpt(item):
             cond, sid, scen, gen, user_q, resp_text, stmt_text, rubric = item
             examples = get_examples(spec_by_id[sid])
             user_text = build_user_prompt(stmt_text, examples, rubric, user_q, resp_text)
-            key = {"sid": sid, "scenario_idx": scen, "generator": gen,
-                   "condition": cond, "round": args.round}
+            key = {"sid": sid, "scenario_idx": scen, "generator": gen, "condition": cond, "round": args.round}
             try:
-                data = call_gpt_json(log, oai, role=f"judge_gpt_{cond}",
-                                     key=key, system=JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
-                                     user=user_text, max_tokens=1500)
+                data = call_gpt_json(
+                    log,
+                    oai,
+                    role=f"judge_gpt_{cond}",
+                    key=key,
+                    system=JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
+                    user=user_text,
+                    max_tokens=1500,
+                )
                 score = int(data["score"]) if data.get("score") is not None else None
                 if score is not None and not 1 <= score <= 5:
                     score = None
                 return {
-                    "judge": "gpt", "condition": cond,
-                    "statement_id": sid, "scenario_idx": scen, "generator": gen,
-                    "score": score, "reasoning": data.get("reasoning"),
+                    "judge": "gpt",
+                    "condition": cond,
+                    "statement_id": sid,
+                    "scenario_idx": scen,
+                    "generator": gen,
+                    "score": score,
+                    "reasoning": data.get("reasoning"),
                     "spec_quotes": data.get("spec_quotes") or [],
                     "rubric_quotes": data.get("rubric_quotes") or [],
                     "example_refs": data.get("example_refs") or [],
@@ -389,9 +409,15 @@ def main() -> int:
                     "round": args.round,
                 }
             except Exception as exc:
-                return {"judge": "gpt", "condition": cond,
-                        "statement_id": sid, "scenario_idx": scen, "generator": gen,
-                        "error": str(exc)[:300], "round": args.round}
+                return {
+                    "judge": "gpt",
+                    "condition": cond,
+                    "statement_id": sid,
+                    "scenario_idx": scen,
+                    "generator": gen,
+                    "error": str(exc)[:300],
+                    "round": args.round,
+                }
 
         new_rows: list[dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=args.gpt_workers) as ex:
@@ -406,8 +432,10 @@ def main() -> int:
                 n_done += 1
                 if n_done % 50 == 0 or n_done == len(gpt_work):
                     elapsed = time.time() - gpt_t0
-                    print(f"  gpt progress: {n_done}/{len(gpt_work)} "
-                          f"({100*n_done/max(1,len(gpt_work)):.0f}%, {elapsed:.0f}s)")
+                    print(
+                        f"  gpt progress: {n_done}/{len(gpt_work)} "
+                        f"({100*n_done/max(1,len(gpt_work)):.0f}%, {elapsed:.0f}s)"
+                    )
         append_jsonl(new_rows, sync_out, sync_lock)
         summary["gpt_wall_s"] = time.time() - gpt_t0
         summary["gpt_n_dispatched"] = len(gpt_work)
@@ -418,10 +446,10 @@ def main() -> int:
             api_key=os.environ.get("GEMINI_API_KEY") or os.environ["GOOGLE_API_KEY"],
             vertexai=False,
         )
-        gem_work = [w for w in work
-                    if ("gemini", w[0], w[1], w[2], w[3]) not in already_done]
-        print(f"\n--- Gemini sync judge: {len(gem_work)} items "
-              f"(skipped {len(work) - len(gem_work)} already done) ---")
+        gem_work = [w for w in work if ("gemini", w[0], w[1], w[2], w[3]) not in already_done]
+        print(
+            f"\n--- Gemini sync judge: {len(gem_work)} items " f"(skipped {len(work) - len(gem_work)} already done) ---"
+        )
         gem_t0 = time.time()
         n_done = 0
 
@@ -429,19 +457,28 @@ def main() -> int:
             cond, sid, scen, gen, user_q, resp_text, stmt_text, rubric = item
             examples = get_examples(spec_by_id[sid])
             user_text = build_user_prompt(stmt_text, examples, rubric, user_q, resp_text)
-            key = {"sid": sid, "scenario_idx": scen, "generator": gen,
-                   "condition": cond, "round": args.round}
+            key = {"sid": sid, "scenario_idx": scen, "generator": gen, "condition": cond, "round": args.round}
             try:
-                data = call_gemini_json(log, gem, role=f"judge_gemini_{cond}",
-                                        key=key, system=JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
-                                        user=user_text, max_tokens=1500)
+                data = call_gemini_json(
+                    log,
+                    gem,
+                    role=f"judge_gemini_{cond}",
+                    key=key,
+                    system=JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
+                    user=user_text,
+                    max_tokens=1500,
+                )
                 score = int(data["score"]) if data.get("score") is not None else None
                 if score is not None and not 1 <= score <= 5:
                     score = None
                 return {
-                    "judge": "gemini", "condition": cond,
-                    "statement_id": sid, "scenario_idx": scen, "generator": gen,
-                    "score": score, "reasoning": data.get("reasoning"),
+                    "judge": "gemini",
+                    "condition": cond,
+                    "statement_id": sid,
+                    "scenario_idx": scen,
+                    "generator": gen,
+                    "score": score,
+                    "reasoning": data.get("reasoning"),
                     "spec_quotes": data.get("spec_quotes") or [],
                     "rubric_quotes": data.get("rubric_quotes") or [],
                     "example_refs": data.get("example_refs") or [],
@@ -449,9 +486,15 @@ def main() -> int:
                     "round": args.round,
                 }
             except Exception as exc:
-                return {"judge": "gemini", "condition": cond,
-                        "statement_id": sid, "scenario_idx": scen, "generator": gen,
-                        "error": str(exc)[:300], "round": args.round}
+                return {
+                    "judge": "gemini",
+                    "condition": cond,
+                    "statement_id": sid,
+                    "scenario_idx": scen,
+                    "generator": gen,
+                    "error": str(exc)[:300],
+                    "round": args.round,
+                }
 
         new_rows = []
         with ThreadPoolExecutor(max_workers=args.gemini_workers) as ex:
@@ -465,8 +508,10 @@ def main() -> int:
                 n_done += 1
                 if n_done % 50 == 0 or n_done == len(gem_work):
                     elapsed = time.time() - gem_t0
-                    print(f"  gemini progress: {n_done}/{len(gem_work)} "
-                          f"({100*n_done/max(1,len(gem_work)):.0f}%, {elapsed:.0f}s)")
+                    print(
+                        f"  gemini progress: {n_done}/{len(gem_work)} "
+                        f"({100*n_done/max(1,len(gem_work)):.0f}%, {elapsed:.0f}s)"
+                    )
         append_jsonl(new_rows, sync_out, sync_lock)
         summary["gemini_wall_s"] = time.time() - gem_t0
         summary["gemini_n_dispatched"] = len(gem_work)
@@ -490,17 +535,20 @@ def main() -> int:
                 examples = get_examples(spec_by_id[sid])
                 user_text = build_user_prompt(stmt_text, examples, rubric, user_q, resp_text)
                 cid = custom_id_for(sid, cond, scen, gen, args.round)
-                requests.append(ba.build_request(
-                    custom_id=cid,
-                    model=ANTHROPIC_MODEL,
-                    system=JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
-                    messages=[{"role": "user", "content": user_text}],
-                    max_tokens=600,
-                    tools=[JUDGMENT_TOOL_1_5],
-                    tool_choice={"type": "tool", "name": "submit_judgment"},
-                    thinking={"type": "disabled"},
-                    temperature=0,
-                ))
+                requests.append(
+                    ba.build_request(
+                        custom_id=cid,
+                        model=ANTHROPIC_MODEL,
+                        system=JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
+                        messages=[{"role": "user", "content": user_text}],
+                        max_tokens=600,
+                        tools=[JUDGMENT_TOOL_1_5],
+                        tool_choice={"type": "tool", "name": "submit_judgment"},
+                        thinking={"type": "disabled"},
+                        temperature=0,
+                        cache_user_prefix=ba.prefix_before(user_text),
+                    )
+                )
                 cells_meta.append([sid, cond, scen, gen])
 
             batch_name = f"dart_iter_round_{args.round}_{cond}"
@@ -508,9 +556,12 @@ def main() -> int:
             state = ba.submit(api_key, requests, job_dir, name=batch_name)
             print(f"  batch_id={state['batch_id']} (n={state['n_requests']})")
             id_map_path = job_dir / f"{batch_name}_custom_id_map.json"
-            id_map_path.write_text(json.dumps(
-                {r["custom_id"]: c for r, c in zip(requests, cells_meta)}, indent=2,
-            ))
+            id_map_path.write_text(
+                json.dumps(
+                    {r["custom_id"]: c for r, c in zip(requests, cells_meta, strict=True)},
+                    indent=2,
+                )
+            )
             batches_state[cond] = {
                 "batch_id": state["batch_id"],
                 "n_requests": state["n_requests"],
@@ -525,15 +576,20 @@ def main() -> int:
         summary["claude_batches"] = batches_state
 
         # Top-level pointer for Phase-4 fetch.
-        batches_pointer.write_text(json.dumps({
-            "round": args.round,
-            "submitted_at": time.time(),
-            "submitted_at_iso": ts,
-            "conditions": conditions,
-            "statements": target_sids,
-            "job_dir": str(job_dir),
-            "batches": batches_state,
-        }, indent=2))
+        batches_pointer.write_text(
+            json.dumps(
+                {
+                    "round": args.round,
+                    "submitted_at": time.time(),
+                    "submitted_at_iso": ts,
+                    "conditions": conditions,
+                    "statements": target_sids,
+                    "job_dir": str(job_dir),
+                    "batches": batches_state,
+                },
+                indent=2,
+            )
+        )
         print(f"\n  claude batches pointer: {batches_pointer}")
 
     summary["wall_s_total"] = time.time() - overall_t0
@@ -541,7 +597,7 @@ def main() -> int:
     print(f"  sync output: {sync_out}")
     if "claude" in judges:
         print(f"  claude batches pointer: {batches_pointer}")
-        print(f"  --> next: poll/fetch with the e9_phase4-style fetch script")
+        print("  --> next: poll/fetch with the e9_phase4-style fetch script")
     return 0
 
 

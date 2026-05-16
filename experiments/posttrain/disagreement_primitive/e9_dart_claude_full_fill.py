@@ -1,18 +1,31 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Fill missing Claude baseline judgments on the 3 non-grok generators
-(gpt-5.1, Qwen, gemini-3-flash-preview) × all 46 statements × 2 conditions.
+(gpt-5.1, Qwen, gemini-3-flash-preview) x all 46 statements x 2 conditions.
 
 Mirrors e9_dart_gpt_baseline_fill.py but for Anthropic batch.
 Target volume: 5,516 calls. Forecast cost via cost_estimate.py: ~$48.
 """
+
 from __future__ import annotations
-import argparse, hashlib, json, os, sys, time
+import argparse
+import hashlib
+import json
+import os
+import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import batch_anthropic as ba
 from e8_paired_indirection import (
-    SPEC_PATH, get_examples, render_anchors, render_examples, JUDGE_A_SYSTEM,
+    SPEC_PATH,
+    get_examples,
+    render_anchors,
+    render_examples,
+    JUDGE_A_SYSTEM,
 )
 from e8_phase4_rubric_plus_spec import JUDGE_RUBRIC_PLUS_SPEC_SYSTEM
 from e9_claude_judge import ANTHROPIC_MODEL
@@ -62,19 +75,21 @@ def main():
     args = ap.parse_args()
 
     spec = {r["id"]: r for r in load_jsonl(SPEC_PATH)}
-    rubrics = {r["statement_id"]: r["rubric"]
-               for r in load_jsonl(RUBRICS_V1_PATH) if "error" not in r}
+    rubrics = {r["statement_id"]: r["rubric"] for r in load_jsonl(RUBRICS_V1_PATH) if "error" not in r}
 
     existing = load_jsonl(OUT_PATH)
-    existing_keys = {(r["statement_id"], r["scenario_idx"], r["generator"], r["condition"])
-                     for r in existing
-                     if r.get("judge") == "claude" and r.get("score") is not None}
+    existing_keys = {
+        (r["statement_id"], r["scenario_idx"], r["generator"], r["condition"])
+        for r in existing
+        if r.get("judge") == "claude" and r.get("score") is not None
+    }
 
     # Build cells from non-grok generators
     cells = []
     for r in load_jsonl(EXISTING_RESPONSES):
         sid = r.get("statement_id")
-        if not sid or sid not in spec: continue
+        if not sid or sid not in spec:
+            continue
         for label, col in GEN_KEYS:
             text = r.get(col)
             if text:
@@ -87,14 +102,15 @@ def main():
     job_dir.mkdir(parents=True, exist_ok=True)
 
     custom_id_map = {}
-    state = {"submitted_at_iso": datetime.now(timezone.utc).isoformat(),
-             "job_dir": str(job_dir), "batches": {}}
+    state = {"submitted_at_iso": datetime.now(timezone.utc).isoformat(), "job_dir": str(job_dir), "batches": {}}
 
     for cond, system_prompt, build_fn in [
-        ("variant_A", JUDGE_A_SYSTEM,
-         lambda stmt, ex, rb, uq, resp: build_user_prompt_bare(stmt, ex, uq, resp)),
-        ("rubric_plus_spec", JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
-         lambda stmt, ex, rb, uq, resp: build_user_prompt_phase4(stmt, ex, rb, uq, resp)),
+        ("variant_A", JUDGE_A_SYSTEM, lambda stmt, ex, rb, uq, resp: build_user_prompt_bare(stmt, ex, uq, resp)),
+        (
+            "rubric_plus_spec",
+            JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
+            lambda stmt, ex, rb, uq, resp: build_user_prompt_phase4(stmt, ex, rb, uq, resp),
+        ),
     ]:
         reqs = []
         for sid, scen, gen, uq, resp in cells:
@@ -117,6 +133,7 @@ def main():
                 tool_choice={"type": "tool", "name": "submit_judgment"},
                 thinking={"type": "disabled"},
                 temperature=0,
+                cache_user_prefix=ba.prefix_before(user_text),
             )
             reqs.append(req)
         if not reqs:
@@ -128,7 +145,9 @@ def main():
         name = f"claude_full_fill_{cond}"
         result = ba.submit(api_key, reqs, job_dir=job_dir, name=name)
         state["batches"][cond] = {
-            "batch_id": result["batch_id"], "name": name, "n_requests": len(reqs),
+            "batch_id": result["batch_id"],
+            "name": name,
+            "n_requests": len(reqs),
             "submitted_at": time.time(),
         }
         print(f"  {cond}: submitted {result['batch_id']} ({len(reqs)} reqs)")

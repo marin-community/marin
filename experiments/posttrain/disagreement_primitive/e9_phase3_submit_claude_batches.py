@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Phase 3 — Submit two Claude batches via Anthropic Batch API (50% off).
 
 Batches:
@@ -27,7 +30,6 @@ import json
 import os
 import sys
 import time
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -72,25 +74,36 @@ JUDGMENT_TOOL_1_5 = {
             "rubric_spec_tension": {"type": "boolean"},
             "tension_description": {"type": "string"},
         },
-        "required": ["score", "reasoning", "spec_quotes", "rubric_quotes",
-                     "example_refs", "rubric_spec_tension", "tension_description"],
+        "required": [
+            "score",
+            "reasoning",
+            "spec_quotes",
+            "rubric_quotes",
+            "example_refs",
+            "rubric_spec_tension",
+            "tension_description",
+        ],
     },
 }
 
 
 def build_user_prompt(stmt, examples, rubric, user_q, response_text, condition):
     if condition == "bare":
-        return (f"STATEMENT TEXT:\n{stmt['text']}\n\n"
-                f"SPEC EXAMPLES:\n{render_examples(examples)}\n\n"
-                f"USER QUERY: {user_q}\n\n"
-                f"ASSISTANT RESPONSE: {response_text}\n\n"
-                "Score per the schema.")
-    return (f"SPEC STATEMENT:\n{stmt['text']}\n\n"
+        return (
+            f"STATEMENT TEXT:\n{stmt['text']}\n\n"
             f"SPEC EXAMPLES:\n{render_examples(examples)}\n\n"
-            f"RUBRIC:\n{render_anchors(rubric)}\n\n"
             f"USER QUERY: {user_q}\n\n"
             f"ASSISTANT RESPONSE: {response_text}\n\n"
-            "Score per the schema.")
+            "Score per the schema."
+        )
+    return (
+        f"SPEC STATEMENT:\n{stmt['text']}\n\n"
+        f"SPEC EXAMPLES:\n{render_examples(examples)}\n\n"
+        f"RUBRIC:\n{render_anchors(rubric)}\n\n"
+        f"USER QUERY: {user_q}\n\n"
+        f"ASSISTANT RESPONSE: {response_text}\n\n"
+        "Score per the schema."
+    )
 
 
 def already_done_set_for_dir(claude_dir: Path) -> set[tuple[str, str, int, str]]:
@@ -117,6 +130,7 @@ def custom_id_for(sid: str, cond: str, scen: int, gen: str) -> str:
     next to the requests.jsonl so Phase 4 can reverse it.
     """
     import hashlib
+
     raw = f"{sid}::{cond}::{scen}::{gen}"
     h = hashlib.sha1(raw.encode()).hexdigest()[:32]
     return f"j_{h}"  # 34 chars, well under 64
@@ -140,30 +154,37 @@ def main() -> int:
         sid = r["statement_id"]
         if sid not in spec_by_id:
             continue
-        for cond_short, cond_internal in (("bare", "variant_A"), ("phase_4", "rubric_plus_spec")):
+        for cond_short, _cond_internal in (("bare", "variant_A"), ("phase_4", "rubric_plus_spec")):
             cell_key = (sid, cond_short, r["scenario_idx"], r["generator"])
             if cell_key in done_opposite:
                 continue
             stmt = spec_by_id[sid]
             user_text = build_user_prompt(
-                stmt, get_examples(stmt), rubrics.get(sid),
-                r["user_query"], r["response"], cond_short,
+                stmt,
+                get_examples(stmt),
+                rubrics.get(sid),
+                r["user_query"],
+                r["response"],
+                cond_short,
             )
             sys_text = JUDGE_A_SYSTEM if cond_short == "bare" else JUDGE_RUBRIC_PLUS_SPEC_SYSTEM
-            requests_a.append(ba.build_request(
-                custom_id=custom_id_for(sid, cond_short, r["scenario_idx"], r["generator"]),
-                model=ANTHROPIC_MODEL,
-                system=sys_text,
-                messages=[{"role": "user", "content": user_text}],
-                max_tokens=600,
-                tools=[JUDGMENT_TOOL_1_5],
-                tool_choice={"type": "tool", "name": "submit_judgment"},
-                thinking={"type": "disabled"},
-                temperature=0,
-            ))
+            requests_a.append(
+                ba.build_request(
+                    custom_id=custom_id_for(sid, cond_short, r["scenario_idx"], r["generator"]),
+                    model=ANTHROPIC_MODEL,
+                    system=sys_text,
+                    messages=[{"role": "user", "content": user_text}],
+                    max_tokens=600,
+                    tools=[JUDGMENT_TOOL_1_5],
+                    tool_choice={"type": "tool", "name": "submit_judgment"},
+                    thinking={"type": "disabled"},
+                    temperature=0,
+                    cache_user_prefix=ba.prefix_before(user_text),
+                )
+            )
             cells_a_meta.append((sid, cond_short, r["scenario_idx"], r["generator"]))
 
-    # ---- Build Batch B: Claude on existing 3 generators × 38 statements ----
+    # ---- Build Batch B: Claude on existing 3 generators x 38 statements ----
     done_existing = already_done_set_for_dir(CLAUDE_EXISTING_DIR)
     existing_rows = load_jsonl(EXISTING_RESPONSES)
 
@@ -179,27 +200,34 @@ def main() -> int:
             response_text = r.get(col)
             if not response_text:
                 continue
-            for cond_short, cond_internal in (("bare", "variant_A"), ("phase_4", "rubric_plus_spec")):
+            for cond_short, _cond_internal in (("bare", "variant_A"), ("phase_4", "rubric_plus_spec")):
                 cell_key = (sid, cond_short, scen, gen_label)
                 if cell_key in done_existing:
                     continue
                 stmt = spec_by_id[sid]
                 user_text = build_user_prompt(
-                    stmt, get_examples(stmt), rubrics.get(sid),
-                    user_q, response_text, cond_short,
+                    stmt,
+                    get_examples(stmt),
+                    rubrics.get(sid),
+                    user_q,
+                    response_text,
+                    cond_short,
                 )
                 sys_text = JUDGE_A_SYSTEM if cond_short == "bare" else JUDGE_RUBRIC_PLUS_SPEC_SYSTEM
-                requests_b.append(ba.build_request(
-                    custom_id=custom_id_for(sid, cond_short, scen, gen_label),
-                    model=ANTHROPIC_MODEL,
-                    system=sys_text,
-                    messages=[{"role": "user", "content": user_text}],
-                    max_tokens=600,
-                    tools=[JUDGMENT_TOOL_1_5],
-                    tool_choice={"type": "tool", "name": "submit_judgment"},
-                    thinking={"type": "disabled"},
-                    temperature=0,
-                ))
+                requests_b.append(
+                    ba.build_request(
+                        custom_id=custom_id_for(sid, cond_short, scen, gen_label),
+                        model=ANTHROPIC_MODEL,
+                        system=sys_text,
+                        messages=[{"role": "user", "content": user_text}],
+                        max_tokens=600,
+                        tools=[JUDGMENT_TOOL_1_5],
+                        tool_choice={"type": "tool", "name": "submit_judgment"},
+                        thinking={"type": "disabled"},
+                        temperature=0,
+                        cache_user_prefix=ba.prefix_before(user_text),
+                    )
+                )
                 cells_b_meta.append((sid, cond_short, scen, gen_label))
 
     # ---- Submit ----
@@ -207,7 +235,7 @@ def main() -> int:
     job_dir = Path("results/raw/e9_claude_batches") / ts
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Phase 3 — Anthropic batch submission")
+    print("Phase 3 — Anthropic batch submission")
     print(f"  job_dir: {job_dir}")
     print(f"  Batch A (judge_grok_opposite): {len(requests_a)} requests")
     print(f"  Batch B (judge_existing_3gens): {len(requests_b)} requests")
@@ -217,7 +245,7 @@ def main() -> int:
     # because Anthropic limits custom_id to 64 chars (we hash to fit).
     def build_map(reqs: list[dict[str, Any]], cells: list[tuple[str, str, int, str]]) -> dict[str, list]:
         # cells must be in same order as reqs
-        return {r["custom_id"]: list(c) for r, c in zip(reqs, cells)}
+        return {r["custom_id"]: list(c) for r, c in zip(reqs, cells, strict=True)}
 
     state_a = ba.submit(api_key, requests_a, job_dir, name="judge_grok_opposite") if requests_a else None
     if state_a:
@@ -235,17 +263,26 @@ def main() -> int:
 
     # Write a top-level pointer for Phase 4 to find
     pointer_path = DIR / "e9_claude_batch_pointer.json"
-    pointer_path.write_text(json.dumps({
-        "submitted_at": time.time(),
-        "submitted_at_iso": ts,
-        "job_dir": str(job_dir),
-        "batches": {
-            "judge_grok_opposite": {"batch_id": state_a["batch_id"], "n_requests": len(requests_a)} if state_a else None,
-            "judge_existing_3gens": {"batch_id": state_b["batch_id"], "n_requests": len(requests_b)} if state_b else None,
-        },
-    }, indent=2))
+    pointer_path.write_text(
+        json.dumps(
+            {
+                "submitted_at": time.time(),
+                "submitted_at_iso": ts,
+                "job_dir": str(job_dir),
+                "batches": {
+                    "judge_grok_opposite": (
+                        {"batch_id": state_a["batch_id"], "n_requests": len(requests_a)} if state_a else None
+                    ),
+                    "judge_existing_3gens": (
+                        {"batch_id": state_b["batch_id"], "n_requests": len(requests_b)} if state_b else None
+                    ),
+                },
+            },
+            indent=2,
+        )
+    )
     print(f"\n  pointer: {pointer_path}")
-    print(f"  --> run e9_phase4_fetch_claude_batches.py to poll + collect")
+    print("  --> run e9_phase4_fetch_claude_batches.py to poll + collect")
     return 0
 
 

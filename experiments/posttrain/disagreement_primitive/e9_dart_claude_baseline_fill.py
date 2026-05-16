@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Fill missing Claude baseline judgments — for the 38 of 46 statements where Claude
 never judged. Match the existing baseline cell universe: grok-opposite generator only,
 20 scenarios per statement.
@@ -5,15 +8,25 @@ never judged. Match the existing baseline cell universe: grok-opposite generator
 Output: appends rows to per_judgment_opposite.jsonl with judge="claude" matching the
 existing schema for the 8 statements that already have Claude data.
 """
+
 from __future__ import annotations
-import argparse, hashlib, json, os, sys, time
+import argparse
+import hashlib
+import json
+import os
+import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import batch_anthropic as ba
 from e8_paired_indirection import (
-    SPEC_PATH, get_examples, render_anchors, render_examples, JUDGE_A_SYSTEM,
+    SPEC_PATH,
+    get_examples,
+    render_anchors,
+    render_examples,
+    JUDGE_A_SYSTEM,
 )
 from e8_phase4_rubric_plus_spec import JUDGE_RUBRIC_PLUS_SPEC_SYSTEM
 from e9_claude_judge import ANTHROPIC_MODEL
@@ -53,18 +66,17 @@ def build_user_prompt_phase4(stmt, examples, rubric, user_q, response_text):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--statements", default="auto",
-                    help="'auto' = identify missing-Claude statements; comma-sep list otherwise")
+    ap.add_argument(
+        "--statements", default="auto", help="'auto' = identify missing-Claude statements; comma-sep list otherwise"
+    )
     args = ap.parse_args()
 
     spec = {r["id"]: r for r in load_jsonl(SPEC_PATH)}
-    rubrics = {r["statement_id"]: r["rubric"]
-               for r in load_jsonl(RUBRICS_V1_PATH) if "error" not in r}
+    rubrics = {r["statement_id"]: r["rubric"] for r in load_jsonl(RUBRICS_V1_PATH) if "error" not in r}
 
     # Identify which statements lack Claude data
     existing = load_jsonl(OUT_PATH)
-    has_claude = {r["statement_id"] for r in existing
-                  if r.get("judge") == "claude" and r.get("score") is not None}
+    has_claude = {r["statement_id"] for r in existing if r.get("judge") == "claude" and r.get("score") is not None}
     if args.statements == "auto":
         target_sids = [sid for sid in spec.keys() if sid not in has_claude]
     else:
@@ -74,32 +86,43 @@ def main():
     # Load grok-opposite responses (20 per statement) for the target sids
     cells = []
     for r in load_jsonl(OPPOSITE_RESPONSES):
-        if "error" in r: continue
+        if "error" in r:
+            continue
         sid = r.get("statement_id")
-        if sid not in target_sids: continue
+        if sid not in target_sids:
+            continue
         cells.append((sid, r["scenario_idx"], r["generator"], r["user_query"], r["response"]))
     cells.sort(key=lambda c: (c[0], c[1]))
-    print(f"Cells to judge: {len(cells)} (× 2 conditions = {len(cells)*2} judgments)")
+    print(f"Cells to judge: {len(cells)} (x 2 conditions = {len(cells)*2} judgments)")
 
     # Already-done dedupe (idempotent)
-    existing_keys = {(r["statement_id"], r["scenario_idx"], r["generator"], r["condition"])
-                     for r in existing
-                     if r.get("judge") == "claude" and r.get("score") is not None}
+    existing_keys = {
+        (r["statement_id"], r["scenario_idx"], r["generator"], r["condition"])
+        for r in existing
+        if r.get("judge") == "claude" and r.get("score") is not None
+    }
 
     api_key = os.environ["ANTHROPIC_API_KEY"]
-    job_dir = Path(f"results/raw/e9_dart_claude_baseline_fill/{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}")
+    job_dir = Path(
+        f"results/raw/e9_dart_claude_baseline_fill/{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%S')}"
+    )
     job_dir.mkdir(parents=True, exist_ok=True)
 
     custom_id_map = {}
-    state = {"submitted_at_iso": datetime.now(timezone.utc).isoformat(),
-             "job_dir": str(job_dir), "batches": {},
-             "n_target_statements": len(target_sids)}
+    state = {
+        "submitted_at_iso": datetime.now(timezone.utc).isoformat(),
+        "job_dir": str(job_dir),
+        "batches": {},
+        "n_target_statements": len(target_sids),
+    }
 
     for cond, system_prompt, build_fn in [
-        ("variant_A", JUDGE_A_SYSTEM,
-         lambda stmt, ex, rb, uq, resp: build_user_prompt_bare(stmt, ex, uq, resp)),
-        ("rubric_plus_spec", JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
-         lambda stmt, ex, rb, uq, resp: build_user_prompt_phase4(stmt, ex, rb, uq, resp)),
+        ("variant_A", JUDGE_A_SYSTEM, lambda stmt, ex, rb, uq, resp: build_user_prompt_bare(stmt, ex, uq, resp)),
+        (
+            "rubric_plus_spec",
+            JUDGE_RUBRIC_PLUS_SPEC_SYSTEM,
+            lambda stmt, ex, rb, uq, resp: build_user_prompt_phase4(stmt, ex, rb, uq, resp),
+        ),
     ]:
         reqs = []
         for sid, scen, gen, uq, resp in cells:
@@ -122,6 +145,7 @@ def main():
                 tool_choice={"type": "tool", "name": "submit_judgment"},
                 thinking={"type": "disabled"},
                 temperature=0,
+                cache_user_prefix=ba.prefix_before(user_text),
             )
             reqs.append(req)
         if not reqs:
@@ -130,7 +154,9 @@ def main():
         name = f"claude_baseline_fill_{cond}"
         result = ba.submit(api_key, reqs, job_dir=job_dir, name=name)
         state["batches"][cond] = {
-            "batch_id": result["batch_id"], "name": name, "n_requests": len(reqs),
+            "batch_id": result["batch_id"],
+            "name": name,
+            "n_requests": len(reqs),
             "submitted_at": time.time(),
         }
         print(f"  {cond}: submitted batch {result['batch_id']} ({len(reqs)} reqs)")
