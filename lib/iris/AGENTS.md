@@ -25,7 +25,7 @@ Archived design docs (implemented, read code instead): `.agents/projects/2026*_i
 
 ```bash
 # Unit tests (run from lib/iris/)
-cd lib/iris && uv run --group dev python -m pytest --tb=short -m 'not slow and not docker and not e2e' tests/
+cd lib/iris && uv run --group dev python -m pytest --tb=short -m 'not slow and not docker and not requires_cluster' tests/
 ```
 
 See `TESTING.md` for the complete testing policy, E2E test commands, and markers.
@@ -45,6 +45,24 @@ uv run iris build dashboard
 ```
 
 Always run `build:check` after editing `.vue` or `.ts` files to catch type errors before committing.
+
+## Data Layer
+
+The controller store uses SQLAlchemy Core. Read the code, not historical
+design notes:
+
+- `controller/schema.py` — table definitions and indexes.
+- `controller/migrations/` — on-disk schema changes. Add a migration whenever
+  changing persisted schema.
+- `controller/db.py` — engine setup, transaction wrappers, and `Tx.execute`.
+- `controller/reads.py` / `controller/writes.py` — shared read/write helpers.
+- `controller/projections/` — write-through caches; do not write projection
+  tables from outside their owning projection.
+
+Prefer existing `reads.py`/`writes.py` helpers before adding new query code.
+Use SQLAlchemy result APIs directly (`.first()`, `.all()`, `.scalar()`); do
+not add wrapper methods that duplicate SQLAlchemy. Define row protocols or
+dataclasses at the usage boundary when a caller needs a typed shape.
 
 ## Code Conventions
 

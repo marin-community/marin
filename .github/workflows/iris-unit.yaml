@@ -60,7 +60,7 @@ jobs:
         env:
           PYTHONASYNCIODEBUG: "1"
         run: |
-          cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not e2e' tests/
+          cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/
 
   iris-e2e-smoke:
     needs: changes
@@ -110,7 +110,7 @@ jobs:
           mkdir -p ${{ github.workspace }}/iris-screenshots
           cd lib/iris && uv run --group dev python -m pytest \
             tests/e2e/test_smoke.py \
-            -m e2e -o "addopts=" --tb=short -v
+            -m requires_cluster -o "addopts=" --tb=short -v
 
       - name: Verify screenshots with Claude
         if: always() && hashFiles('iris-screenshots/*.txt') != ''

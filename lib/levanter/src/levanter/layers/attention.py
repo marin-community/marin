@@ -271,8 +271,9 @@ def dot_product_attention(
     if attention_out is not None:
         return attention_out
     else:
-        # local import to avoid circular imports
-        from levanter.models.flash_attention import flash_attention
+        from levanter.models.flash_attention import (
+            flash_attention,
+        )  # circular import: flash_attention imports attention
 
         return flash_attention(
             QPos,

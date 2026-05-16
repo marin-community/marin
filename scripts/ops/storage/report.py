@@ -40,21 +40,29 @@ from scripts.ops.storage.constants import (
 
 
 def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:
-    """Download all *.parquet files from gcs_dir to local_dir using gcloud.
+    """Mirror all *.parquet files from gcs_dir to local_dir using gcloud.
 
-    Skips files already present locally. Returns the local directory.
+    Uses `--delete-unmatched-destination-objects` so files that have been
+    removed at the source (e.g. when `distributed_scan.py` truncates its
+    staging dir before a new run) are also removed from the local cache.
+    Without this, parquet segments from prior scans accumulate locally and
+    the report ends up reading a stale union of every historical scan —
+    paths that have been deleted from GCS still appear in the report.
+
+    Returns the local directory.
     """
     import subprocess
 
     local_dir.mkdir(parents=True, exist_ok=True)
     src = gcs_dir.rstrip("/") + "/*.parquet"
-    print(f"Downloading {src} -> {local_dir} ...")
+    print(f"Mirroring {src} -> {local_dir} ...")
     result = subprocess.run(
         [
             "gcloud",
             "storage",
             "rsync",
             "--recursive",
+            "--delete-unmatched-destination-objects",
             gcs_dir.rstrip("/"),
             str(local_dir),
         ],
@@ -160,6 +168,20 @@ def _build_summaries(
     time_leaves = leaf_root / "time"
     for d in (dir_leaves, time_leaves):
         d.mkdir(parents=True, exist_ok=True)
+
+    # Prune leaves from prior runs whose batch keys are not in the current
+    # batch set. Otherwise stale per-batch aggregates (from objects parquets
+    # that have since been removed) silently fold into the dir_summary view
+    # below and the report shows ghost objects.
+    expected_keys = {_batch_key(batch, DIR_DEPTH) for batch in batches}
+    pruned = 0
+    for leaves_dir in (dir_leaves, time_leaves):
+        for existing in leaves_dir.glob("*.parquet"):
+            if existing.stem not in expected_keys:
+                existing.unlink()
+                pruned += 1
+    if pruned:
+        print(f"pruned {pruned} stale summary leaves from {leaf_root}", file=sys.stderr)
 
     total_objects = 0
     total_bytes = 0

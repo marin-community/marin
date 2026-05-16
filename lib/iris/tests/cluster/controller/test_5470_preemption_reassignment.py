@@ -19,17 +19,26 @@ Production incident timeline (Incident B, v5p-256):
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
+from iris.cluster.controller import reads
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import SchedulingOutcome
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
-from iris.cluster.controller.stores import WorkerResourceUsage
+from iris.cluster.controller.reads import WorkerResourceUsage
+from iris.cluster.controller.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    worker_snapshot_from_row,
+)
+from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.transitions import (
     Assignment,
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
+from sqlalchemy import func, select, update
 
 from .conftest import (
     building_counts as _building_counts,
@@ -85,10 +94,13 @@ def _make_gang_request(name):
 
 
 def _job_requirements_from_job(job):
+    dc = device_counts_from_json(job.res_device_json)
     return JobRequirements(
-        resources=resource_spec_from_scalars(
-            job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
-        ),
+        req_cpu_millicores=job.res_cpu_millicores,
+        req_memory_bytes=job.res_memory_bytes,
+        req_gpu_count=dc.gpu,
+        req_tpu_count=dc.tpu,
+        device_variant=device_variant_from_json(job.res_device_json),
         constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
@@ -98,7 +110,7 @@ def _job_requirements_from_job(job):
 def _read_usage_by_worker(state) -> dict[WorkerId, WorkerResourceUsage]:
     """Snapshot the derived resource-usage map (replaces workers.committed_*)."""
     with state._db.read_snapshot() as snap:
-        return state._store.attempts.resource_usage_by_worker(snap)
+        return reads.resource_usage_by_worker(snap)
 
 
 def _tpu_used(usage_map: dict[WorkerId, WorkerResourceUsage], wid: WorkerId) -> int:
@@ -123,7 +135,21 @@ def _build_context(scheduler, state):
                 jobs[task.job_id] = _job_requirements_from_job(job)
     usage = _read_usage_by_worker(state)
     snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
-    return scheduler.create_scheduling_context(snapshots, building_counts=bc, pending_tasks=task_ids, jobs=jobs)
+    return SchedulingContext(
+        workers=snapshots,
+        building_counts=bc,
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+        pending_tasks=task_ids,
+        jobs=jobs,
+        pending_task_rows=[],
+        user_spend={},
+        user_budget_limits={},
+        requested_bands={},
+        reserved_job_ids=frozenset(),
+        reservation_entry_counts={},
+        user_budget_defaults=UserBudgetDefaults(),
+    )
 
 
 def _schedulable_tasks_for_test(state):
@@ -138,13 +164,13 @@ def _schedule_and_commit(scheduler, state):
     for tid, wid in result.assignments:
         task = _query_task(state, tid)
         if task:
-            with state._store.transaction() as cur:
+            with state._db.transaction() as cur:
                 state.queue_assignments(cur, [Assignment(task_id=tid, worker_id=wid)])
     return result
 
 
 def _transition_to_running(state, task):
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -160,7 +186,7 @@ def _transition_to_running(state, task):
 
 def _heartbeat_killed(state, task):
     """Synthesize a terminal heartbeat for ``task``: that is what releases capacity now."""
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -179,7 +205,7 @@ def _heartbeat_killed(state, task):
 def _worker_fail_one_task(state, task):
     """Send WORKER_FAILED for one task. For coscheduled jobs this triggers
     _requeue_coscheduled_siblings which bounces all siblings to PENDING."""
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         result = state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -208,7 +234,7 @@ def _assigned_workers_by_job(assignments):
 def _mark_slice_unhealthy(state, prefix):
     for i in range(VMS_PER_SLICE):
         wid = WorkerId(f"{prefix}-w{i}")
-        state._store.workers.set_health_for_test(wid, healthy=False)
+        state._health.set_health_for_test(wid, healthy=False)
 
 
 @pytest.fixture
@@ -338,21 +364,29 @@ class TestPreemptionReassignment:
         # rows still reference the old worker. We finalize each unfinished
         # attempt on slice-3 directly.
         with state._db.read_snapshot() as snap:
-            placeholders = ",".join("?" for _ in slice3_workers)
-            unfinished = snap.fetchall(
-                f"SELECT task_id, attempt_id FROM task_attempts "
-                f"WHERE worker_id IN ({placeholders}) AND finished_at_ms IS NULL",
-                tuple(str(w) for w in slice3_workers),
-            )
-        with state._store.transaction() as cur:
+            unfinished = snap.execute(
+                select(
+                    task_attempts_table.c.task_id,
+                    task_attempts_table.c.attempt_id,
+                ).where(
+                    task_attempts_table.c.worker_id.in_([str(w) for w in slice3_workers]),
+                    task_attempts_table.c.finished_at_ms.is_(None),
+                )
+            ).all()
+        with state._db.transaction() as cur:
             for row in unfinished:
-                state._store.attempts.mark_finished(
-                    cur,
-                    JobName.from_wire(row["task_id"]),
-                    int(row["attempt_id"]),
-                    job_pb2.TASK_STATE_KILLED,
-                    finished_at_ms=1,
-                    error="terminal heartbeat (test)",
+                # Heartbeat-equivalent stamp: finalize the attempt row.
+                cur.execute(
+                    update(task_attempts_table)
+                    .where(
+                        task_attempts_table.c.task_id == JobName.from_wire(str(row.task_id)),
+                        task_attempts_table.c.attempt_id == int(row.attempt_id),
+                    )
+                    .values(
+                        state=job_pb2.TASK_STATE_KILLED,
+                        finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, 1),
+                        error="terminal heartbeat (test)",
+                    )
                 )
 
         usage_after_drain = _read_usage_by_worker(state)
@@ -484,19 +518,29 @@ class TestPreemptionReassignment:
             if wid == trigger.current_worker_id:
                 continue
             with state._db.read_snapshot() as snap:
-                rows = snap.fetchall(
-                    "SELECT task_id, attempt_id FROM task_attempts " "WHERE worker_id = ? AND finished_at_ms IS NULL",
-                    (str(wid),),
-                )
-            with state._store.transaction() as cur:
+                rows = snap.execute(
+                    select(
+                        task_attempts_table.c.task_id,
+                        task_attempts_table.c.attempt_id,
+                    ).where(
+                        task_attempts_table.c.worker_id == str(wid),
+                        task_attempts_table.c.finished_at_ms.is_(None),
+                    )
+                ).all()
+            with state._db.transaction() as cur:
                 for row in rows:
-                    state._store.attempts.mark_finished(
-                        cur,
-                        JobName.from_wire(row["task_id"]),
-                        int(row["attempt_id"]),
-                        job_pb2.TASK_STATE_KILLED,
-                        finished_at_ms=1,
-                        error="terminal heartbeat (test)",
+                    # Heartbeat-equivalent stamp: finalize the attempt row.
+                    cur.execute(
+                        update(task_attempts_table)
+                        .where(
+                            task_attempts_table.c.task_id == JobName.from_wire(str(row.task_id)),
+                            task_attempts_table.c.attempt_id == int(row.attempt_id),
+                        )
+                        .values(
+                            state=job_pb2.TASK_STATE_KILLED,
+                            finished_at_ms=func.coalesce(task_attempts_table.c.finished_at_ms, 1),
+                            error="terminal heartbeat (test)",
+                        )
                     )
 
         usage = _read_usage_by_worker(state)

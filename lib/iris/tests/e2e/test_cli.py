@@ -24,7 +24,7 @@ from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 @pytest.fixture(scope="module")

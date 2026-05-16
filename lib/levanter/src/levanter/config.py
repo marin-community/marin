@@ -13,9 +13,12 @@ from functools import wraps
 from typing import List, Optional, Union
 
 import draccus
+import jax.numpy as jnp
 import jmp
 from draccus import parse
+from draccus.parsers.decoding import decode_dataclass
 from fsspec import AbstractFileSystem
+from haliax import ScanCheckpointPolicy
 from rigging.filesystem import url_to_fs
 
 from levanter.utils.datetime_utils import encode_timedelta, parse_timedelta
@@ -30,8 +33,6 @@ def register_codecs():
     # draccus.decode.register(jnp.dtype, lambda dtype_name: jnp.dtype(dtype_name))
 
     # register raw dtypes
-    import jax.numpy as jnp
-
     dtype = jnp.float32
     draccus.encode.register(type(dtype), lambda dtype, decl_type=None: str(dtype))
     draccus.decode.register(type(dtype), lambda dtype_name, decl_type=None: jnp.dtype(dtype_name))
@@ -53,16 +54,12 @@ def register_codecs():
     draccus.decode.register(timedelta, parse_timedelta)
     draccus.encode.register(timedelta, encode_timedelta)
 
-    from haliax import ScanCheckpointPolicy
-
     def scan_checkpoint_policy_encode(policy: ScanCheckpointPolicy):
         return policy
 
     def scan_checkpoint_policy_decode(policy: str | dict | bool):
         if not isinstance(policy, dict):
             return ScanCheckpointPolicy.from_bool_or_str(policy)
-
-        from draccus.parsers.decoding import decode_dataclass
 
         return decode_dataclass(ScanCheckpointPolicy, policy)
 

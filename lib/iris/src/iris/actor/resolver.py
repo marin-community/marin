@@ -6,10 +6,6 @@
 from dataclasses import dataclass, field
 from typing import Protocol
 
-# Header used by ActorProxy to route requests to the correct actor endpoint.
-# Shared constant between ProxyResolver (client-side) and ActorProxy (server-side).
-ACTOR_ENDPOINT_HEADER = "x-iris-actor-endpoint"
-
 
 @dataclass
 class ResolvedEndpoint:
@@ -79,14 +75,19 @@ class FixedResolver:
 
 
 class ProxyResolver:
-    """Resolver that routes actor calls through the controller's actor proxy.
+    """Resolver that routes actor calls through the controller's endpoint proxy.
 
-    Instead of resolving to the actor's direct address, returns the controller
-    URL so all RPCs go through the proxy. The proxy uses the
-    ``X-Iris-Actor-Endpoint`` header to resolve the actual actor endpoint.
+    Instead of resolving to the actor's direct address, builds a per-actor
+    base URL of the form ``<controller>/proxy/<encoded-name>`` where the
+    actor name has its leading slash stripped and remaining slashes replaced
+    with dots. The Connect transport appends the service/method path, so a
+    call to ``iris.actor.ActorService/Call`` reaches:
 
-    The caller passes the full actor name as registered in the endpoint registry
-    (e.g. ``/user/job/coordinator/actor-0``).
+        ``<controller>/proxy/<encoded-name>/iris.actor.ActorService/Call``
+
+    The controller's ``EndpointProxy`` receives ``encoded-name`` as the
+    path parameter and resolves it back to the actor's registered address
+    with dot → slash substitution.
 
     Args:
         controller_url: Controller URL (e.g., ``http://localhost:8080``)
@@ -96,13 +97,13 @@ class ProxyResolver:
         self._controller_url = controller_url.rstrip("/")
 
     def resolve(self, name: str) -> ResolveResult:
+        encoded = name.lstrip("/").replace("/", ".")
         return ResolveResult(
             name=name,
             endpoints=[
                 ResolvedEndpoint(
-                    url=self._controller_url,
+                    url=f"{self._controller_url}/proxy/{encoded}",
                     actor_id=f"proxy-{name}",
-                    metadata={ACTOR_ENDPOINT_HEADER: name},
                 )
             ],
         )

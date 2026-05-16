@@ -21,10 +21,11 @@ import msgspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import vortex
 from rigging.filesystem import open_url, url_to_fs
 
 from zephyr import counters
-from zephyr.expr import Expr
+from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +120,18 @@ def iter_parquet_row_groups(
                 table = table.slice(local_start, local_end - local_start)
 
         if equality_predicates:
+            # Build a single combined AND mask so we filter once instead of
+            # copying the table N times for N predicates. Drop predicate-only
+            # columns before filtering — drop is metadata-only, so doing it
+            # first keeps the filter copy from materializing columns we are
+            # about to discard.
+            mask = None
             for col_name, value in equality_predicates.items():
-                mask = pa.compute.equal(table.column(col_name), value)
-                table = table.filter(mask)
+                col_mask = pa.compute.equal(table.column(col_name), value)
+                mask = col_mask if mask is None else pa.compute.and_(mask, col_mask)
             if drop_columns:
                 table = table.drop(drop_columns)
+            table = table.filter(mask)
 
         if len(table) > 0:
             yield table
@@ -297,8 +305,6 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
 
     pa_filter = None
     if spec.filter_expr is not None:
-        from zephyr.expr import to_pyarrow_expr
-
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
     # Determine columns to read: include any filter-referenced columns
@@ -306,8 +312,6 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     read_columns = spec.columns
     need_project = False
     if spec.columns is not None and spec.filter_expr is not None:
-        from zephyr.expr import referenced_columns
-
         filter_cols = referenced_columns(spec.filter_expr) - set(spec.columns)
         if filter_cols:
             read_columns = list(spec.columns) + sorted(filter_cols)
@@ -349,16 +353,12 @@ def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
         ... )
         >>> output_files = ctx.execute(ds).results
     """
-    import vortex
-
     spec = _as_spec(source)
     columns = spec.columns
 
     # Convert filter to PyArrow expression if provided
     pa_filter = None
     if spec.filter_expr is not None:
-        from zephyr.expr import to_pyarrow_expr
-
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
     # Open vortex file and get PyArrow Dataset interface
@@ -439,7 +439,7 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
             if filter_fn is not None and not filter_fn(record):
                 continue
             if spec.columns is not None:
-                yield {k: v for k, v in record.items() if k in spec.columns}
+                yield {k: record[k] for k in spec.columns if k in record}
             else:
                 yield record
 

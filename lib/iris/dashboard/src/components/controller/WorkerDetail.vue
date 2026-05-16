@@ -47,6 +47,7 @@ async function fetchWorkerLogs() {
   try {
     const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
       source: `/system/worker/${props.workerId}`,
+      matchScope: 'MATCH_SCOPE_EXACT',
       maxLines: 200,
       tail: true,
     })

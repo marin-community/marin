@@ -13,6 +13,7 @@ import jax
 from haliax import Axis
 
 import levanter
+import levanter.utils.logging as logging_utils
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer, HFCompatConfig
 from levanter.models.llama import LlamaConfig
@@ -40,8 +41,6 @@ class ConvertLmConfig:
 
 
 def main(config: ConvertLmConfig):
-    import levanter.utils.logging as logging_utils
-
     logging_utils.init_logging("logs", "export")
     tokenizer_spec = config.tokenizer
     if tokenizer_spec is None:

@@ -16,8 +16,7 @@ from typing import Any
 
 import jmp
 import levanter.main.train_lm as levanter_train_lm
-from fray import ResourceConfig
-from fray import client as fray_client
+from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
@@ -656,7 +655,7 @@ def _submit_train_job(
         environment=create_environment(env_vars=env, extras=extras_for_resources(resources)),
     )
 
-    client = fray_client.current_client()
+    client = current_client()
     handle = client.submit(job_request)
     handle.wait(raise_on_failure=True)
 

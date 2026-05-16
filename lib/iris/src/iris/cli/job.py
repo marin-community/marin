@@ -976,7 +976,12 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 
 @job.command("list")
 @click.option("--state", type=str, default=None, help="Filter by state (e.g., running, pending, failed)")
-@click.option("--prefix", type=str, default=None, help="Filter by job name prefix")
+@click.option(
+    "--prefix",
+    type=str,
+    default=None,
+    help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
+)
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @click.pass_context
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
@@ -992,8 +997,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
         state_value = _STATE_MAP[state_lower]
 
-    prefix_name = JobName.from_wire(prefix) if prefix else None
-    jobs = client.list_jobs(state=state_value, prefix=prefix_name)
+    jobs = client.list_jobs(state=state_value, prefix=prefix)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)

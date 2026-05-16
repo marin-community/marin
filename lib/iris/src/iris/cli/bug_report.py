@@ -166,16 +166,16 @@ def _gather(
     for task in tasks_resp.tasks:
         try:
             # Fetch all attempts for this task, taking only the last `tail` lines.
-            source = build_log_source(JobName.from_wire(task.task_id))
+            source, match_scope = build_log_source(JobName.from_wire(task.task_id))
             log_resp = log_client.fetch_logs(
                 logging_pb2.FetchLogsRequest(
                     source=source,
+                    match_scope=match_scope,
                     max_lines=tail,
                     tail=True,
                 )
             )
-            lines = [entry.data for entry in log_resp.entries]
-            task_logs[task.task_id] = lines[-tail:]
+            task_logs[task.task_id] = [entry.data for entry in log_resp.entries]
         except Exception:
             logger.warning("Failed to fetch logs for task %s", task.task_id, exc_info=True)
             task_logs[task.task_id] = ["(failed to fetch logs)"]

@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,7 +60,7 @@ from finelog.store.schema import (
     Schema,
     schema_to_arrow,
 )
-from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
+from finelog.types import LogReadResult, parse_attempt_id, str_to_log_level
 
 logger = logging.getLogger(__name__)
 
@@ -242,9 +244,21 @@ def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
 
 @dataclass
 class _SealedBuffer:
+    """An immutable, in-flight flush buffer.
+
+    ``nbytes`` and ``num_rows`` are snapshotted at construction so the hot
+    path (``RamBuffers.ram_bytes`` / ``ram_rows``) doesn't re-walk every
+    column buffer on each call — ``pa.Table.nbytes`` is O(chunks * columns)
+    and was the dominant cost under sustained write load.
+    """
+
     table: pa.Table
     min_seq: int
     max_seq: int
+
+    def __post_init__(self) -> None:
+        self.nbytes: int = self.table.nbytes
+        self.num_rows: int = self.table.num_rows
 
 
 @dataclass
@@ -256,8 +270,10 @@ class LocalSegment:
     max_seq: int
     row_count: int
     # ``created_at_ms`` is stamped once at flush/merge time and preserved
-    # across level bumps and catalog reconcile so the planner can age out
-    # quiet L0 segments via ``CompactionConfig.max_l0_age_sec``.
+    # across level bumps and catalog reconcile. Currently informational
+    # only — the planner promotes by byte target or segment count, not
+    # age — but kept as the catalog's canonical birth time for ops
+    # tools / future age-based policies.
     created_at_ms: int = 0
     # Typed key-column bounds (Python int / str / float / bool / bytes
     # depending on schema). Stringified only at the catalog boundary in
@@ -319,6 +335,8 @@ class RamBuffers:
     primitive columns and shares string buffers via Arrow's reference
     counting, so total ``nbytes`` is conserved across merges. We can
     therefore maintain ``_ram_bytes`` incrementally rather than scanning.
+    The sealed in-flight buffer caches its own ``nbytes`` / ``num_rows``
+    (see ``_SealedBuffer``) so ``ram_bytes`` stays O(1) on the hot path.
     """
 
     def __init__(self, *, arrow_schema: pa.Schema, next_seq: int) -> None:
@@ -346,11 +364,11 @@ class RamBuffers:
         self._ram_rows += table.num_rows
 
     def ram_bytes(self) -> int:
-        flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
+        flushing_b = self._flushing.nbytes if self._flushing is not None else 0
         return self._ram_bytes + flushing_b
 
     def ram_rows(self) -> int:
-        flushing_n = self._flushing.table.num_rows if self._flushing is not None else 0
+        flushing_n = self._flushing.num_rows if self._flushing is not None else 0
         return self._ram_rows + flushing_n
 
     def chunk_count(self) -> int:
@@ -415,6 +433,7 @@ class LogNamespaceProtocol(Protocol):
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -510,13 +529,8 @@ class DiskLogNamespace:
         #      local file was evicted before the prior shutdown.
         #   2. Local parquet files — authoritative for unflushed catalog
         #      state (genuine boot from disk, no prior catalog).
-        #   3. Remote bucket — authoritative for wiped-catalog recovery,
-        #      handled below by ``_adopt_remote_segments`` *before* the
-        #      bg loop starts. We can't defer this to the first sync tick:
-        #      that tick's phase-2 orphan-delete would see an empty
-        #      catalog with a populated bucket and ``fs.rm`` everything.
-        #      The cost is a network round-trip per parquet file at boot
-        #      when the bucket is non-empty.
+        #   3. Remote bucket — handled below by
+        #      ``_reconcile_remote_segments``.
         #
         # Each catalog row is reattached to its on-disk file when present;
         # ``REMOTE``-only rows stay in the catalog but never enter the
@@ -600,12 +614,8 @@ class DiskLogNamespace:
         for seg in self._local_segments:
             self._catalog.upsert_segment(self._segment_to_row(seg))
 
-        # Wiped-catalog recovery: if the remote bucket has parquet files
-        # that no row references, adopt them as ``REMOTE``. Without this,
-        # the first ``_sync_step`` after a catalog wipe would treat the
-        # whole bucket as orphan and ``fs.rm`` everything.
         if self._remote_namespace_dir:
-            self._adopt_remote_segments(key_column=key_column)
+            self._reconcile_remote_segments(key_column=key_column)
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_config.check_interval_sec)
@@ -721,6 +731,7 @@ class DiskLogNamespace:
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -729,23 +740,7 @@ class DiskLogNamespace:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level)
-        is_pattern = bool(REGEX_META_RE.search(key))
-
-        if not is_pattern:
-            where_parts = ["key = $key", "seq > $cursor"]
-            params: dict = {"key": key, "cursor": cursor}
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            return self._execute_read(
-                where_parts,
-                params,
-                max_lines,
-                tail,
-                cursor,
-                include_key_in_select=False,
-                exact_key=key,
-            )
-
-        where_parts, params = _regex_query(key, cursor)
+        where_parts, params, include_key_in_select, exact_key = _scope_query(key, cursor, match_scope)
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
         return self._execute_read(
             where_parts,
@@ -753,7 +748,8 @@ class DiskLogNamespace:
             max_lines,
             tail,
             cursor,
-            include_key_in_select=True,
+            include_key_in_select=include_key_in_select,
+            exact_key=exact_key,
         )
 
     def close(self) -> None:
@@ -823,9 +819,18 @@ class DiskLogNamespace:
                 # Drain promotable runs back-to-back on the same tick: a
                 # large flush burst can leave several tiers eligible at once,
                 # and waiting another check_interval per merge needlessly
-                # extends per-read fanout.
+                # extends per-read fanout. Yield to flush between jobs so a
+                # long L>=1 merge (seconds to tens of seconds) doesn't starve
+                # writers — under sustained load the ram buffer would
+                # otherwise grow past ``segment_target_bytes`` while we keep
+                # merging.
                 while self._compaction_step():
-                    pass
+                    with self._insertion_lock:
+                        ram_bytes = self._buffers.ram_bytes()
+                    if ram_bytes >= self._segment_target_bytes:
+                        self._flush_step()
+                        self._flush_rl.mark_run()
+                        last_flush_at = time.monotonic()
                 self._compaction_rl.mark_run()
                 last_compact_at = time.monotonic()
                 self._sync_step()
@@ -918,10 +923,10 @@ class DiskLogNamespace:
         """Build the catalog row that mirrors ``seg``.
 
         ``created_at_ms`` reflects the segment's stamped birth time, never
-        ``now`` — overwriting it would defeat ``max_l0_age_sec`` aging,
-        which the planner reads from the round-trip catalog snapshot every
-        tick. Key bounds are stringified here because the catalog stores
-        them in a generic TEXT column.
+        ``now`` — overwriting it on a tick would defeat any future age-based
+        policy and would mislead ops queries that report segment age. Key
+        bounds are stringified here because the catalog stores them in a
+        generic TEXT column.
         """
         return SegmentRow(
             namespace=self.name,
@@ -1005,7 +1010,7 @@ class DiskLogNamespace:
         """
         with self._insertion_lock:
             segment_rows = [self._segment_to_row(s) for s in self._local_segments]
-        job = self._compactor.plan(segment_rows, now_ms=int(time.time() * 1000))
+        job = self._compactor.plan(segment_rows)
         if job is None:
             return False
         self._run_job(job)
@@ -1184,45 +1189,118 @@ class DiskLogNamespace:
         finally:
             self._query_visibility_lock.write_release()
 
-    def _adopt_remote_segments(self, *, key_column: str | None) -> None:
-        """Insert ``REMOTE`` catalog rows for bucket files with no row.
+    def _reconcile_remote_segments(self, *, key_column: str | None) -> None:
+        """Adopt unknown remote files and drop redundant ones at boot.
 
-        Runs once at boot when ``_remote_namespace_dir`` is configured.
-        After a catalog wipe the bucket is the only durable record of
-        every L>=1 segment; we read each parquet footer remotely to
-        reconstruct row metadata, then insert at ``location=REMOTE``.
-        Files whose basename is already in the catalog are left alone
-        (the local-disk pass already attached them).
+        Runs once from ``__init__`` before the bg thread starts; no
+        compactor or sync activity is concurrent with it.
+
+        Adoption is the wiped-catalog recovery path: the bucket is the
+        only durable record of L>=1 segments after the local catalog is
+        lost, so each parquet footer is fetched to rebuild row metadata.
+
+        The redundancy pass drops any segment whose ``[min_seq, max_seq]``
+        is fully covered by a higher-level segment. Otherwise a crash
+        between a compaction commit and its ``fs.rm`` would leave the
+        input file in the bucket, and adoption on the next boot would
+        give it a permanent ``REMOTE`` row.
         """
         try:
             fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
-            remote_paths = list(fs.find(root))
+            remote_info = fs.find(root, detail=True)
         except Exception:
-            logger.warning("remote adopt list failed for %s", self.name, exc_info=True)
+            logger.warning("remote reconcile list failed for %s", self.name, exc_info=True)
             return
 
-        catalog_basenames = {Path(r.path).name for r in self._catalog.list_segments(self.name)}
-        for fs_path in remote_paths:
+        catalog_by_basename = {Path(r.path).name: r for r in self._catalog.list_segments(self.name, min_level=1)}
+
+        needs_footer: list[tuple[str, str, int, int, int]] = []  # (fs_path, basename, level, min_seq, byte_size)
+        for fs_path, info in remote_info.items():
             basename = Path(fs_path).name
-            if basename in catalog_basenames:
+            if basename in catalog_by_basename:
                 continue
             parsed = parse_seg_filename(basename)
             if parsed is None:
                 logger.warning("ignoring unparseable remote file %s/%s", self.name, basename)
                 continue
             level, min_seq = parsed
+            byte_size = int(info.get("size", 0) or 0)
+            needs_footer.append((fs_path, basename, level, min_seq, byte_size))
+
+        def _fetch_footer(
+            item: tuple[str, str, int, int, int],
+        ) -> tuple[str, str, int, int, int, pq.FileMetaData | None]:
+            fs_path, basename, level, min_seq, byte_size = item
             try:
                 with fs.open(fs_path, "rb") as f:
-                    metadata = pq.read_metadata(f)
+                    return basename, fs_path, level, min_seq, byte_size, pq.read_metadata(f)
             except Exception:
                 logger.warning("failed reading remote parquet footer %s/%s", self.name, basename, exc_info=True)
-                continue
-            num_rows = metadata.num_rows
-            min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
+                return basename, fs_path, level, min_seq, byte_size, None
+
+        # basename -> (fs_path, level, min_seq, max_seq, byte_size, metadata)
+        footer_results: dict[str, tuple[str, int, int, int, int, pq.FileMetaData]] = {}
+        if needs_footer:
+            max_workers = min(32, len(needs_footer))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reconcile-remote") as pool:
+                for basename, fs_path, level, min_seq, byte_size, metadata in pool.map(_fetch_footer, needs_footer):
+                    if metadata is None:
+                        continue
+                    max_seq = min_seq + max(metadata.num_rows - 1, 0)
+                    footer_results[basename] = (fs_path, level, min_seq, max_seq, byte_size, metadata)
+
+        # Union catalog + remote-only seq ranges, then mark any segment
+        # whose [min_seq, max_seq] is fully spanned by a strictly higher
+        # level. Transitivity (Y covers X, Z covers Y ⇒ Z covers X) means
+        # we don't need to filter out redundant Ys before checking X.
+        all_known: dict[str, tuple[int, int, int]] = {}
+        for basename, row in catalog_by_basename.items():
+            all_known[basename] = (row.level, row.min_seq, row.max_seq)
+        for basename, (_fs_path, level, min_seq, max_seq, _byte_size, _meta) in footer_results.items():
+            all_known[basename] = (level, min_seq, max_seq)
+
+        by_level: dict[int, list[tuple[int, int]]] = {}
+        for level, min_seq, max_seq in all_known.values():
+            by_level.setdefault(level, []).append((min_seq, max_seq))
+
+        redundant: set[str] = set()
+        for basename, (level, min_seq, max_seq) in all_known.items():
+            for higher_level, ranges in by_level.items():
+                if higher_level <= level:
+                    continue
+                if any(h_min <= min_seq and h_max >= max_seq for h_min, h_max in ranges):
+                    redundant.add(basename)
+                    break
+
+        for basename in redundant:
+            row = catalog_by_basename.get(basename)
+            if row is not None:
+                self._catalog.remove_segment(self.name, row.path)
+
+        # Batch fs.rm calls 8 at a time and run batches in parallel. The
+        # gcsfs path uses one BatchDelete request per chunk; otherwise a
+        # large first-deploy backlog of compaction orphans adds minutes
+        # to boot.
+        def _delete_chunk(chunk: list[str]) -> None:
+            paths = [f"{self._remote_namespace_dir}/{b}" for b in chunk]
             try:
-                byte_size = fs.info(fs_path).get("size", 0)
+                fs.rm(paths)
             except Exception:
-                byte_size = 0
+                logger.warning("redundant remote delete failed: %s/%s", self.name, chunk, exc_info=True)
+
+        if redundant:
+            ordered = list(redundant)
+            chunks = [ordered[i : i + 8] for i in range(0, len(ordered), 8)]
+            max_workers = min(32, len(chunks))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reconcile-delete") as pool:
+                list(pool.map(_delete_chunk, chunks))
+
+        now_ms = int(time.time() * 1000)
+        adopted = 0
+        for basename, (_fs_path, level, min_seq, max_seq, byte_size, metadata) in footer_results.items():
+            if basename in redundant:
+                continue
+            min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
             local_path = self._data_dir / basename
             self._catalog.upsert_segment(
                 SegmentRow(
@@ -1230,16 +1308,24 @@ class DiskLogNamespace:
                     path=str(local_path),
                     level=level,
                     min_seq=min_seq,
-                    max_seq=min_seq + max(num_rows - 1, 0),
-                    row_count=num_rows,
-                    byte_size=int(byte_size),
-                    created_at_ms=int(time.time() * 1000),
+                    max_seq=max_seq,
+                    row_count=metadata.num_rows,
+                    byte_size=byte_size,
+                    created_at_ms=now_ms,
                     location=SegmentLocation.REMOTE,
                     min_key_value=None if min_key is None else str(min_key),
                     max_key_value=None if max_key is None else str(max_key),
                 )
             )
-            logger.info("Adopted remote segment %s/%s as REMOTE", self.name, basename)
+            adopted += 1
+
+        if adopted or redundant:
+            logger.info(
+                "Reconciled remote for %s: adopted=%d, dropped_redundant=%d",
+                self.name,
+                adopted,
+                len(redundant),
+            )
 
     def _sync_step(self) -> None:
         """Reconcile the remote namespace prefix with the catalog.
@@ -1582,6 +1668,7 @@ class MemoryLogNamespace:
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -1590,19 +1677,8 @@ class MemoryLogNamespace:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level)
-        is_pattern = bool(REGEX_META_RE.search(key))
-
-        if not is_pattern:
-            where_parts = ["key = $key", "seq > $cursor"]
-            params: dict = {"key": key, "cursor": cursor}
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            include_key_in_select = False
-            exact_key: str | None = key
-        else:
-            where_parts, params = _regex_query(key, cursor)
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            include_key_in_select = True
-            exact_key = None
+        where_parts, params, include_key_in_select, exact_key = _scope_query(key, cursor, match_scope)
+        _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
         # Insertion lock alone suffices; rwlock unneeded because there are
         # no files to unlink.
@@ -1748,30 +1824,70 @@ def _cap_segments(segments: list[LocalSegment]) -> list[LocalSegment]:
     return capped
 
 
+# Characters that hint a regex was passed where PREFIX was intended; used
+# only for a friendlier error if a caller forgets to set match_scope=REGEX.
+_REGEX_HINT_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
+
+
 def _regex_literal_prefix(pattern: str) -> str:
-    match = REGEX_META_RE.search(pattern)
+    match = _REGEX_HINT_RE.search(pattern)
     if match is None:
         return pattern
     return pattern[: match.start()]
 
 
-def _regex_query(pattern: str, cursor: int) -> tuple[list[str], dict]:
-    literal_prefix = _regex_literal_prefix(pattern)
-    suffix = pattern[len(literal_prefix) :]
-    is_pure_prefix = suffix in (".*", "")
+def _scope_query(
+    source: str,
+    cursor: int,
+    match_scope: int,
+) -> tuple[list[str], dict, bool, str | None]:
+    """Build the WHERE clause for a FetchLogs query.
 
-    where_parts = ["seq > $cursor"]
-    params: dict = {"cursor": cursor}
+    Returns ``(where_parts, params, include_key_in_select, exact_key)``.
 
-    if literal_prefix:
-        where_parts.append("prefix(key, $prefix_lo)")
-        params["prefix_lo"] = literal_prefix
+    The in-process Python default is ``MATCH_SCOPE_EXACT``; the RPC server
+    maps wire-level ``UNSPECIFIED`` to ``REGEX`` before delegating, so
+    ``UNSPECIFIED`` never reaches this function.
+    """
+    if match_scope == logging_pb2.MATCH_SCOPE_EXACT:
+        where_parts = ["key = $key", "seq > $cursor"]
+        params: dict = {"key": source, "cursor": cursor}
+        return where_parts, params, False, source
 
-    if not is_pure_prefix:
-        where_parts.append("regexp_matches(key, $key_pattern)")
-        params["key_pattern"] = pattern
+    if match_scope == logging_pb2.MATCH_SCOPE_PREFIX:
+        if not source:
+            # Empty prefix would match every key in the store. Reads with no
+            # source are almost always a caller bug (omitted/defaulted field);
+            # fail fast instead of returning the first page of every stream.
+            raise ValueError("FetchLogs source is required for MATCH_SCOPE_PREFIX")
+        # `prefix(key, $p)` is DuckDB's literal-prefix predicate. It's pushed
+        # into Parquet row-group min/max stats the same way an `=` is, so
+        # PREFIX reads keep the pruning of EXACT.
+        where_parts = ["seq > $cursor", "prefix(key, $prefix)"]
+        params = {"cursor": cursor, "prefix": source}
+        return where_parts, params, True, None
 
-    return where_parts, params
+    if match_scope == logging_pb2.MATCH_SCOPE_REGEX:
+        # Pull off any leading literal prefix to keep row-group pruning even
+        # for regex queries. `prefix(key, $p)` is monotone, so it remains
+        # correct as long as the regex requires that prefix to match.
+        literal_prefix = _regex_literal_prefix(source)
+        suffix = source[len(literal_prefix) :]
+        # `^literal$`, `^literal`, `^literal.*` all reduce to the literal prefix
+        # alone; we still need regexp_matches for any other suffix.
+        is_pure_prefix = suffix in (".*", "")
+
+        where_parts = ["seq > $cursor"]
+        params = {"cursor": cursor}
+        if literal_prefix:
+            where_parts.append("prefix(key, $prefix_lo)")
+            params["prefix_lo"] = literal_prefix
+        if not is_pure_prefix:
+            where_parts.append("regexp_matches(key, $key_pattern)")
+            params["key_pattern"] = source
+        return where_parts, params, True, None
+
+    raise ValueError(f"unknown match_scope: {match_scope}")
 
 
 def _add_common_filters(

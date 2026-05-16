@@ -10,6 +10,8 @@ from typing import List, Optional, Union
 
 import jax
 from jax._src import clusters
+from iris.cluster.client.job_info import get_job_info
+from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
 
 logger = logging.getLogger(__name__)
@@ -216,9 +218,6 @@ class DistributedConfig:
         if not self.initialize_jax_distributed:
             logger.info("Skipping jax.distributed.initialize because initialize_jax_distributed=False.")
             return
-
-        from iris.cluster.client.job_info import get_job_info
-        from iris.runtime.jax_init import initialize_jax as initialize_iris_jax
 
         job_info = get_job_info()
         tpu_runtime_managed = os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get(

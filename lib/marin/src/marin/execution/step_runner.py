@@ -24,8 +24,8 @@ from datetime import timedelta
 from typing import Any
 
 import levanter.utils.fsspec_utils as fsspec_utils
-from fray import client as fray_client
 from fray.client import JobHandle, JobStatus
+from fray.current_client import _current_client_var, current_client, set_current_client
 from fray.local_backend import LocalJobHandle
 from fray.types import Entrypoint, GpuConfig, JobRequest, ResourceConfig, TpuConfig, create_environment
 from rigging.filesystem import open_url, url_to_fs
@@ -170,8 +170,6 @@ class StepRunner:
         # Capture the fray client on the calling thread so worker threads can
         # inherit it explicitly. More robust than contextvars.copy_context()
         # alone, which can lose state across thread-pool reuse patterns.
-        from fray.client import _current_client_var
-
         caller_fray_client = _current_client_var.get()
         if caller_fray_client is not None:
             logger.info("StepRunner: captured fray client %s for worker threads", type(caller_fray_client).__name__)
@@ -286,6 +284,11 @@ class StepRunner:
         step_name = step.name_with_hash
         logger.info(f"Step = {step_name}\tParams = {step.hash_attrs}\tOutput_path = {output_path}")
 
+        # Short-circuit before any I/O so dry-run never touches remote status.
+        if dry_run:
+            logger.info(f"[DRY RUN] Would run {step_name}")
+            return None
+
         # Quick read-only status check to avoid submitting unnecessary jobs
         status = StatusFile(output_path, worker_id="check").status
         if status == STATUS_SUCCESS:
@@ -294,10 +297,6 @@ class StepRunner:
 
         if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
             raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-
-        if dry_run:
-            logger.info(f"[DRY RUN] Would run {step_name} (status: {status})")
-            return None
 
         _write_executor_info(step)
 
@@ -308,8 +307,6 @@ class StepRunner:
 
         def worker_fn():
             if captured_client is not None:
-                from fray.client import set_current_client
-
                 with set_current_client(captured_client):
                     run_step(step)
             else:
@@ -408,7 +405,7 @@ def _submit_iris_job(
             env_vars=env_vars or {},
         ),
     )
-    handle = fray_client.current_client().submit(request)
+    handle = current_client().submit(request)
     handle.wait(raise_on_failure=True)
 
 

@@ -41,47 +41,68 @@ def _row(
 
 
 def test_plan_returns_none_when_under_target():
-    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_l0_age_sec=0))
+    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_segments_per_level=1024))
     rows = [_row(level=0, min_seq=1, max_seq=1, byte_size=128)]
-    assert compactor.plan(rows, now_ms=0) is None
+    assert compactor.plan(rows) is None
 
 
 def test_plan_promotes_when_byte_target_reached():
-    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_l0_age_sec=0))
+    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_segments_per_level=1024))
     rows = [
         _row(level=0, min_seq=1, max_seq=1, byte_size=512),
         _row(level=0, min_seq=2, max_seq=2, byte_size=512),
     ]
-    job = compactor.plan(rows, now_ms=0)
+    job = compactor.plan(rows)
     assert job is not None
     assert job.output_level == 1
     assert [r.min_seq for r in job.inputs] == [1, 2]
 
 
-def test_plan_promotes_aged_l0_below_target():
-    """L0 segments past ``max_l0_age_sec`` promote regardless of byte target.
+def test_plan_promotes_at_segment_count_below_byte_target():
+    """Run promotes once it reaches ``max_segments_per_level`` even if bytes are tiny.
 
-    Regression for the bug where ``_segment_to_row`` overwrote
-    ``created_at_ms`` with ``time.time()`` on every tick — under that bug
-    this case would never fire because each plan tick would observe a
-    "freshly created" row.
+    The lever that keeps slow / bursty namespaces from leaking small
+    files at any non-terminal tier (and bounds per-read parquet-open
+    fanout).
     """
-    compactor = Compactor(CompactionConfig(level_targets=(1 << 30,), max_l0_age_sec=300.0))
+    compactor = Compactor(CompactionConfig(level_targets=(1 << 30,), max_segments_per_level=3))
     rows = [
-        _row(level=0, min_seq=1, max_seq=1, byte_size=128, created_at_ms=0),
-        _row(level=0, min_seq=2, max_seq=2, byte_size=128, created_at_ms=0),
+        _row(level=0, min_seq=1, max_seq=1, byte_size=128),
+        _row(level=0, min_seq=2, max_seq=2, byte_size=128),
+        _row(level=0, min_seq=3, max_seq=3, byte_size=128),
     ]
-    # Five minutes after birth — exactly at the threshold.
-    job = compactor.plan(rows, now_ms=300_000)
+    job = compactor.plan(rows)
     assert job is not None
     assert job.output_level == 1
+    assert [r.min_seq for r in job.inputs] == [1, 2, 3]
+
+
+def test_plan_does_not_count_promote_terminal_level():
+    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_segments_per_level=2))
+    rows = [
+        _row(level=1, min_seq=1, max_seq=1, byte_size=128),
+        _row(level=1, min_seq=2, max_seq=2, byte_size=128),
+        _row(level=1, min_seq=3, max_seq=3, byte_size=128),
+    ]
+    assert compactor.plan(rows) is None
+
+
+def test_plan_count_promotes_non_terminal_l1_below_byte_target():
+    """L1 promotes by count when L2 is non-terminal.
+
+    Regression: prior to the count trigger, L1 only promoted on byte
+    target, so namespaces whose L0 flushes were small accumulated
+    hundreds of sub-target L1 files indefinitely.
+    """
+    compactor = Compactor(CompactionConfig(level_targets=(64, 1 << 30), max_segments_per_level=2))
+    rows = [
+        _row(level=1, min_seq=1, max_seq=1, byte_size=8),
+        _row(level=1, min_seq=2, max_seq=2, byte_size=8),
+    ]
+    job = compactor.plan(rows)
+    assert job is not None
+    assert job.output_level == 2
     assert [r.min_seq for r in job.inputs] == [1, 2]
-
-
-def test_plan_does_not_age_terminal_level():
-    compactor = Compactor(CompactionConfig(level_targets=(1024,), max_l0_age_sec=300.0))
-    rows = [_row(level=1, min_seq=1, max_seq=1, byte_size=128, created_at_ms=0)]
-    assert compactor.plan(rows, now_ms=10**12) is None
 
 
 def test_aggregate_key_bounds_preserves_numeric_ordering():

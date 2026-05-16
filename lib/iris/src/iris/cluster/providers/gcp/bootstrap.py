@@ -479,7 +479,7 @@ def build_controller_bootstrap_script_from_config(
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
     """
-    # Local import to avoid circular dependency (config.py imports from bootstrap)
+    # circular import: config → factory → gcp.workers → bootstrap → config
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)

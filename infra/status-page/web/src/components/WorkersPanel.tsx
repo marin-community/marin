@@ -170,6 +170,14 @@ export function WorkersPanel() {
     [data?.byRegion],
   );
   const { rows: chartRows, regions: chartRegions } = useChartData(samples, currentOrder);
+  // Color is keyed by region name (alphabetical), not display index, so a
+  // region keeps the same color even when worker counts reorder the legend.
+  const colorByRegion = useMemo(() => {
+    const sorted = [...chartRegions].sort();
+    const map = new Map<string, string>();
+    sorted.forEach((r, i) => map.set(r, REGION_COLORS[i % REGION_COLORS.length]));
+    return map;
+  }, [chartRegions]);
 
   return (
     <div>
@@ -230,13 +238,13 @@ export function WorkersPanel() {
                     iconType="plainline"
                     wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
                   />
-                  {chartRegions.map((region, i) => (
+                  {chartRegions.map((region) => (
                     <Line
                       key={region}
                       type="monotone"
                       dataKey={region}
                       name={region}
-                      stroke={REGION_COLORS[i % REGION_COLORS.length]}
+                      stroke={colorByRegion.get(region)}
                       strokeWidth={2}
                       dot={false}
                       isAnimationActive={false}

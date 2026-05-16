@@ -9,7 +9,6 @@ import itertools
 import logging
 import os
 import queue
-import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Iterable
@@ -20,7 +19,11 @@ from typing import Any
 import fsspec
 import msgspec
 import pyarrow as pa
+import pyarrow.parquet as pq
+import vortex
+import zstandard as zstd
 from rigging.filesystem import open_url, url_to_fs
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from zephyr import counters
 
@@ -55,41 +58,80 @@ def unique_temp_path(output_path: str) -> str:
     return f"{output_path}.tmp.{uuid.uuid4().hex}"
 
 
+# AWS error codes that are safe to retry on a server-side multipart copy
+# (``s3fs.S3FileSystem.mv``). ``InvalidPart`` is the R2-specific symptom:
+# every ``UploadPartCopy`` returns 200 but ``CompleteMultipartUpload`` then
+# claims one or more parts are missing.
+_TRANSIENT_S3_ERROR_CODES = frozenset(
+    {
+        "InvalidPart",
+        "InternalError",
+        "ServiceUnavailable",
+        "SlowDown",
+        "RequestTimeout",
+        "RequestTimeTooSkewed",
+    }
+)
+
+# Fragments matched against ``str(exc)`` for the case where s3fs has already
+# translated the underlying ``botocore.ClientError`` into an ``OSError`` and
+# the structured error code is no longer reachable.
+_TRANSIENT_S3_MESSAGE_FRAGMENTS = (
+    "specified parts could not be found",
+    "InternalError",
+    "ServiceUnavailable",
+    "SlowDown",
+    "RequestTimeout",
+)
+
+
+def _is_transient_s3_error(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = response.get("Error", {}).get("Code")
+        if code in _TRANSIENT_S3_ERROR_CODES:
+            return True
+    msg = str(exc)
+    return any(frag in msg for frag in _TRANSIENT_S3_MESSAGE_FRAGMENTS)
+
+
+def _mv_with_retry(fs: Any, src: str, dst: str) -> None:
+    def _on_retry(exc: Exception, _attempt: int) -> None:
+        counters.increment("zephyr/atomic_rename_retries")
+
+    retry_with_backoff(
+        lambda: fs.mv(src, dst, recursive=True),
+        retryable=_is_transient_s3_error,
+        max_attempts=4,
+        backoff=ExponentialBackoff(initial=1.0, maximum=8.0, factor=2.0),
+        on_retry=_on_retry,
+        operation=f"atomic_rename fs.mv {src} -> {dst}",
+    )
+
+
 @contextmanager
-def atomic_rename(output_path: str) -> Iterable[str]:
-    """Context manager for atomic write-and-rename with UUID collision avoidance.
+def atomic_rename(output_path: str, fs: Any = None) -> Iterable[str]:
+    """Atomic write-and-rename via a sibling temp key.
 
-    Yields a unique temporary path to write to. On successful exit, atomically
-    renames the temp file to the final path. On failure, cleans up the temp file.
+    Yields ``<output_path>.tmp.<uuid>``; on clean exit, ``fs.mv`` renames the
+    temp into the final path. On exception, the temp key is best-effort
+    deleted and the original exception re-raised.
 
-    For S3-compatible stores, writes to a local temp directory first, then uploads
-    via fs.put() to avoid server-side multipart copy which is unreliable on some
-    providers (e.g. Cloudflare R2).
+    Callers may pass a pre-constructed ``fs`` to reuse a configured
+    filesystem (e.g. an ``S3FileSystem`` with ``fixed_upload_size=True``)
+    instead of letting atomic_rename build a default one from ``output_path``.
 
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)
         # File is now at output.jsonl.gz
     """
-    if output_path.startswith("s3://"):
-        fs, resolved_path = url_to_fs(output_path)
-        with tempfile.TemporaryDirectory() as local_tmp_dir:
-            local_path = os.path.join(local_tmp_dir, "output")
-            yield local_path
-            if os.path.isdir(local_path):
-                # Trailing slash prevents fsspec from nesting under an extra
-                # "output/" level when the destination already exists.
-                fs.put(local_path + "/", resolved_path, recursive=True)
-            else:
-                fs.put(local_path, resolved_path)
-        return
-
     temp_path = unique_temp_path(output_path)
-    fs = url_to_fs(output_path)[0]
-
+    if fs is None:
+        fs = url_to_fs(output_path)[0]
     try:
         yield temp_path
-        fs.mv(temp_path, output_path, recursive=True)
+        _mv_with_retry(fs, temp_path, output_path)
     except Exception:
         # Best-effort cleanup: temp file may not exist (writer crashed before
         # creating it) so we tolerate any rm error and re-raise the original.
@@ -117,8 +159,6 @@ def ensure_parent_dir(path: str) -> None:
 def _open_write_stream(fs, resolved_path: str, output_path: str):
     """Open a binary write stream with compression inferred from ``output_path``."""
     if output_path.endswith(".zst"):
-        import zstandard as zstd
-
         cctx = zstd.ZstdCompressor(level=2, threads=1)
         with fs.open(resolved_path, "wb", block_size=_WRITE_BLOCK_SIZE) as raw_f:
             with cctx.stream_writer(raw_f) as f:
@@ -280,8 +320,6 @@ def write_parquet_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import pyarrow.parquet as pq
-
     ensure_parent_dir(output_path)
     count = 0
 
@@ -324,8 +362,6 @@ def write_vortex_file(
     Returns:
         Dict with metadata: {"path": output_path, "count": num_records}
     """
-    import vortex
-
     ensure_parent_dir(output_path)
 
     table_iter = _accumulate_tables(records, schema=schema, target_bytes=target_buffer_bytes)
