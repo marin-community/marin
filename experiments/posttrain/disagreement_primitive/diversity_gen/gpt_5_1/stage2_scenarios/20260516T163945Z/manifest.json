@@ -1,0 +1,26 @@
+{
+  "run_id": "20260516T163945Z",
+  "model": "gpt-5.1",
+  "temperature": 1.0,
+  "reasoning_effort": "none",
+  "mode": "sync",
+  "strategy": "one_axis_at_a_time_from_default",
+  "stage1_dir": "experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage1_understanding/20260516T162911Z",
+  "stage1_run_id": "20260516T162911Z",
+  "statements": [
+    "be_engaging",
+    "refusal_style"
+  ],
+  "per_statement_scenario_counts": {
+    "be_engaging": 25,
+    "refusal_style": 19
+  },
+  "total_scenarios": 44,
+  "max_retries": 5,
+  "workers": 16,
+  "git_commit": "f96f95035",
+  "started_utc": "2026-05-16T16:39:45.140534+00:00",
+  "finished_utc": "2026-05-16T16:40:16.363202+00:00",
+  "n_succeeded": 44,
+  "n_failed": 0
+}

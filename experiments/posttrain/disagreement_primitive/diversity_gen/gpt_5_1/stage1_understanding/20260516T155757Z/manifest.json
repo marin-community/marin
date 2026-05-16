@@ -1,0 +1,20 @@
+{
+  "run_id": "20260516T155757Z",
+  "model": "gpt-5.1",
+  "temperature": 1.0,
+  "reasoning_effort": "none",
+  "mode": "sync",
+  "statements_filter": [
+    "be_engaging",
+    "refusal_style"
+  ],
+  "n_statements": 2,
+  "max_retries": 5,
+  "workers": 2,
+  "spec_path": "/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/specs/openai_model_spec.jsonl",
+  "git_commit": "8535efc15",
+  "started_utc": "2026-05-16T15:57:57.206551+00:00",
+  "finished_utc": "2026-05-16T15:58:24.854703+00:00",
+  "n_succeeded": 2,
+  "n_failed": 0
+}
