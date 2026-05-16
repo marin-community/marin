@@ -34,27 +34,29 @@ Submit::
 """
 
 import logging
+import os
 
-from fray import ResourceConfig
-from marin.datakit.normalize import NormalizedData
-from marin.datakit.sources import all_sources
-from marin.execution.artifact import Artifact
-from marin.execution.remote import remote
-from marin.execution.step_runner import StepRunner
-from marin.execution.step_spec import StepSpec
+DATA_REGION = "europe-west4"
+os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 
-from experiments.datakit.cluster.assign import AssignmentAttrData, assign_source
-from experiments.datakit.cluster.sample import sample_centroid_inputs
-from experiments.datakit.cluster.summarize import summarize_at_k
-from experiments.datakit.cluster.train import train_centroids
-from experiments.datakit.embeddings.luxical.pipeline import (
+from fray import ResourceConfig  # noqa: E402
+from marin.datakit.normalize import NormalizedData  # noqa: E402
+from marin.datakit.sources import all_sources  # noqa: E402
+from marin.execution.artifact import Artifact  # noqa: E402
+from marin.execution.remote import remote  # noqa: E402
+from marin.execution.step_runner import StepRunner  # noqa: E402
+from marin.execution.step_spec import StepSpec  # noqa: E402
+
+from experiments.datakit.cluster.assign import AssignmentAttrData, assign_source  # noqa: E402
+from experiments.datakit.cluster.sample import sample_centroid_inputs  # noqa: E402
+from experiments.datakit.cluster.summarize import summarize_at_k  # noqa: E402
+from experiments.datakit.cluster.train import train_centroids  # noqa: E402
+from experiments.datakit.embeddings.luxical.pipeline import (  # noqa: E402
     LUXICAL_REPO,
     LUXICAL_WEIGHTS_FILE,
     EmbeddingAttrData,
     embed_source,
 )
-
-DATA_REGION = "europe-west4"
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +93,7 @@ _THREAD_ENV = {
     )
 }
 
-# Output layout (resolved against the runtime MARIN_PREFIX):
+# Hard-pinned to eu-west4 (don't rely on the driver's MARIN_PREFIX). Layout:
 #   datakit/embed/luxical/<source>_<hash>/   <- one EmbeddingAttrData per source
 #   datakit/cluster/sample_centroids_<hash>/
 #   datakit/cluster/train_centroids_<hash>/
@@ -100,6 +102,7 @@ _THREAD_ENV = {
 # Embed gets its own top-level since embeddings are reusable beyond clustering
 # (decon, ANN, downstream attribute joins, etc.); the cluster-specific steps
 # live together under cluster/.
+_OUTPUT_PREFIX = "gs://marin-eu-west4/datakit"
 
 
 def _build_steps() -> list[StepSpec]:
@@ -110,7 +113,8 @@ def _build_steps() -> list[StepSpec]:
     for source_name, source in sources.items():
         normalize_step = source.normalized
         embed_steps[source_name] = StepSpec(
-            name=f"datakit/embed/luxical/{source_name}",
+            name=f"embed/luxical/{source_name}",
+            output_path_prefix=_OUTPUT_PREFIX,
             deps=[normalize_step],
             hash_attrs={
                 "luxical_repo": LUXICAL_REPO,
@@ -140,7 +144,8 @@ def _build_steps() -> list[StepSpec]:
 
     # --- Sample step (depends on all embeds) --------------------------------
     sample_step = StepSpec(
-        name="datakit/cluster/sample_centroids",
+        name="cluster/sample_centroids",
+        output_path_prefix=_OUTPUT_PREFIX,
         deps=list(embed_steps.values()),
         hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "v": 1},
         fn=remote(
@@ -155,7 +160,8 @@ def _build_steps() -> list[StepSpec]:
 
     # --- Train step ---------------------------------------------------------
     train_step = StepSpec(
-        name="datakit/cluster/train_centroids",
+        name="cluster/train_centroids",
+        output_path_prefix=_OUTPUT_PREFIX,
         deps=[sample_step],
         hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "v": 1},
         fn=remote(
@@ -178,7 +184,8 @@ def _build_steps() -> list[StepSpec]:
     assign_steps: dict[str, StepSpec] = {}
     for source_name, embed_step in embed_steps.items():
         assign_steps[source_name] = StepSpec(
-            name=f"datakit/cluster/assign/{source_name}",
+            name=f"cluster/assign/{source_name}",
+            output_path_prefix=_OUTPUT_PREFIX,
             deps=[embed_step, train_step],
             hash_attrs={"k_train": K_TRAIN, "k_views": list(K_VIEWS), "window": ASSIGN_WINDOW, "v": 2},
             fn=remote(
@@ -204,7 +211,8 @@ def _build_steps() -> list[StepSpec]:
         n_sample = N_SAMPLE_PER_CLUSTER_AT_K_TRAIN if k_view == K_TRAIN else N_SAMPLE_PER_CLUSTER_AT_K_COARSER
         summarize_steps.append(
             StepSpec(
-                name=f"datakit/cluster/summarize_k{k_view}",
+                name=f"cluster/summarize_k{k_view}",
+                output_path_prefix=_OUTPUT_PREFIX,
                 deps=[train_step, *assign_steps.values()],
                 hash_attrs={"k_train": K_TRAIN, "k_view": k_view, "n_sample": n_sample, "v": 1},
                 fn=remote(
