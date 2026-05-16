@@ -84,6 +84,14 @@ class GrugModelConfig:
     router_z_loss_coef: float = 0.001
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
+    """Per-expert capacity factor for the routed MoE dispatch.
+
+    At training time the default of 1.0 sizes each expert for its fair share
+    and silently drops overflow tokens (the QB router bias compensates over
+    time). At eval time, dropped tokens get zero contribution to the residual
+    stream, which corrupts logits — bump this (e.g. 8.0, or num_experts /
+    num_experts_per_token) for inference."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -352,7 +360,7 @@ class MoEMLP(eqx.Module):
                 key=k_expert_mlp,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.capacity_factor,
             ),
             cfg=cfg,
         )
