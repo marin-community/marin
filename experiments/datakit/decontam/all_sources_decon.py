@@ -34,8 +34,7 @@ in-region.
 Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 
     uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
-        --priority production \\
-        -- python experiments/decontamination/all_sources_decon.py
+        -- python experiments/datakit/decontam/all_sources_decon.py
 """
 
 import logging
@@ -74,7 +73,7 @@ EVAL_SOURCES: tuple[str, ...] = (
 )
 
 # Bloom capacity -- unique ngram hashes the filter must hold. Measured by
-# experiments/decontamination/count_docs.py: the 11 available eval sets yield
+# experiments/datakit/decontam/count_docs.py: the 11 available eval sets yield
 # ~327K unique hashes (~544K total inserts). 2e6 gives ~6x headroom, enough
 # slack to add the 7 currently-stubbed evals later without resizing. Filter
 # footprint ~30 MB per per-eval bloom at FPR=1e-9; ~330 MB total across the

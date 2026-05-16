@@ -24,11 +24,11 @@ Three numbers we care about:
 Submit on iris (eu-west4 worker pins ``MARIN_PREFIX`` to gs://marin-eu-west4):
 
     uv run iris --config lib/iris/examples/marin.yaml job run --region europe-west4 -- \\
-        python experiments/decontamination/count_docs.py
+        python experiments/datakit/decontam/count_docs.py
 
 Or run locally against a known prefix:
 
-    MARIN_PREFIX=gs://marin-eu-west4 uv run python experiments/decontamination/count_docs.py
+    MARIN_PREFIX=gs://marin-eu-west4 uv run python experiments/datakit/decontam/count_docs.py
 """
 
 import gzip
@@ -47,7 +47,7 @@ from marin.execution.artifact import Artifact
 from pyarrow import fs
 from rigging.filesystem import marin_prefix
 
-from experiments.decontamination.all_sources_decon import EVAL_SOURCES, NGRAM_LENGTH, OVERLAP_THRESHOLD
+from experiments.datakit.decontam.all_sources_decon import EVAL_SOURCES, NGRAM_LENGTH, OVERLAP_THRESHOLD
 
 NGRAM = NGramConfig(ngram_length=NGRAM_LENGTH, overlap_threshold=OVERLAP_THRESHOLD)
 
