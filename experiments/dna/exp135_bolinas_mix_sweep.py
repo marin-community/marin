@@ -389,6 +389,48 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         ),
         data_seed=9,
     ),
+    # Same uniform→upstream family but warm-started from step-25004 instead of
+    # step-20000 and using the upstream-sized token budget (~68.3M examples,
+    # ~3.3x the downstream budget used by uniform_to_upstream_{1..5}).
+    MixConfig(
+        name="uniform_to_upstream_3.5",
+        weights={"upstream": 0.5, "cds": 0.25, "downstream": 0.25},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["upstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-25004/"
+        ),
+        data_seed=10,
+    ),
+    MixConfig(
+        name="uniform_to_upstream_3.6",
+        weights={"upstream": 0.4, "cds": 0.3, "downstream": 0.3},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["upstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-25004/"
+        ),
+        data_seed=11,
+    ),
+    MixConfig(
+        name="uniform_to_upstream_3.7",
+        weights={"upstream": 1 / 3, "cds": 1 / 3, "downstream": 1 / 3},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["upstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-25004/"
+        ),
+        data_seed=12,
+    ),
+    # Uniform 1/3 continuation from the step-20000 uniform checkpoint, sized
+    # to the cds dataset (~242M examples, ~62B tokens) — ~3.5x the
+    # upstream-sized budget used by uniform_to_upstream_3.{5,6,7}.
+    MixConfig(
+        name="uniform_to_uniform_1",
+        weights={"upstream": 1 / 3, "cds": 1 / 3, "downstream": 1 / 3},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i0-uniform-2ba217/hf/step-20000/"
+        ),
+        data_seed=13,
+    ),
 )
 
 
