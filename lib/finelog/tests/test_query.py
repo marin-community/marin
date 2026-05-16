@@ -117,9 +117,9 @@ def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
     store.register_table("iris.worker", _worker_schema())
     ns = store.catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
-    ns._flush_step()
+    ns.flush()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
-    ns._flush_step()
+    ns.flush()
 
     rwlock = store._query_visibility_lock
     rwlock.read_acquire()
@@ -127,7 +127,7 @@ def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
     try:
 
         def run_compaction():
-            ns._force_compact_l0()
+            ns.force_compact_l0()
             compaction_done.set()
 
         t = threading.Thread(target=run_compaction, daemon=True)
@@ -153,16 +153,16 @@ def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):
     store.register_table("iris.worker", _worker_schema())
     ns = store.catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
-    ns._flush_step()
-    ns._force_compact_l0()
+    ns.flush()
+    ns.force_compact_l0()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
-    ns._flush_step()
-    ns._force_compact_l0()
+    ns.flush()
+    ns.force_compact_l0()
 
     table = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
     assert table.column("worker_id").to_pylist() == ["a", "b"]
 
-    ns._compaction_step()
+    ns.compact()
     table2 = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
     assert table2.column("worker_id").to_pylist() == ["a", "b"]
 
@@ -179,9 +179,9 @@ def test_writes_proceed_during_compaction_copy(store: DuckDBLogStore, monkeypatc
 
     # Two L0 segments so ``_compaction_step`` plans an actual merge.
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
-    ns._flush_step()
+    ns.flush()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
-    ns._flush_step()
+    ns.flush()
 
     copy_entered = threading.Event()
     release_copy = threading.Event()
@@ -212,7 +212,7 @@ def test_writes_proceed_during_compaction_copy(store: DuckDBLogStore, monkeypatc
     compaction_done = threading.Event()
 
     def run_compaction():
-        ns._force_compact_l0()
+        ns.force_compact_l0()
         compaction_done.set()
 
     compactor = threading.Thread(target=run_compaction, daemon=True)

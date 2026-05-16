@@ -651,10 +651,10 @@ class DuckDBLogStore:
         return ns
 
     def _force_flush(self) -> None:
-        self._log_namespace._flush_step()
+        self._log_namespace.flush()
 
     def _force_compaction(self) -> None:
-        self._log_namespace._force_compact_l0()
+        self._log_namespace.force_compact_l0()
 
     def _wait_persisted(self, name: str, target_seq: int, timeout: float = 10.0) -> None:
         """Test helper: spin until ``max_persisted_seq(name) >= target_seq``.

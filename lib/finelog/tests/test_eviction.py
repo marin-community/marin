@@ -41,8 +41,8 @@ def test_eviction_drops_oldest_segment_when_cap_exceeded(tmp_path: Path):
 
         store.write_rows("ns", _ipc_bytes(_worker_batch(["b"], [2], [2])))
         _seal(store, "ns")
-        # Drive the eviction tick (compaction tail invokes _eviction_step).
-        store.catalog["ns"]._eviction_step()
+        # Drive the eviction tick (compaction tail invokes eviction).
+        store.catalog["ns"].compact()
 
         remaining = sorted((tmp_path / "data" / "ns").glob("seg_L1_*.parquet"))
         assert len(remaining) == 1
@@ -64,7 +64,7 @@ def test_eviction_skips_segments_not_yet_copied(tmp_path: Path):
         _seal(store, "ns")
 
         # Two L1s on disk, neither marked copied; eviction must skip both.
-        store.catalog["ns"]._eviction_step()
+        store.catalog["ns"].compact()
         all_files = sorted((tmp_path / "data" / "ns").glob("seg_L1_*.parquet"))
         assert len(all_files) == 2
     finally:
@@ -110,15 +110,13 @@ def test_fifo_eviction_across_mixed_levels(tmp_path: Path):
         # each L0 hits the size threshold and promotes to L1 then L2.
         for i in range(3):
             store.write_rows("ns", _ipc_bytes(_worker_batch([f"w-{i}"], [i], [i])))
-            ns._flush_step()
-            while ns._compaction_step():
-                pass
-            ns._sync_step()
+            ns.flush()
+            ns.compact()
 
         # Eviction should now have run and brought us to <=2 local segments,
         # popping oldest first. Evicted rows stay in the catalog with
         # location=REMOTE so the bucket archive is preserved.
-        ns._eviction_step()
+        ns.compact()
         all_rows = _list_segments_locked(store, "ns")
         local_rows = [r for r in all_rows if r.location in {SegmentLocation.LOCAL, SegmentLocation.BOTH}]
         remote_rows = [r for r in all_rows if r.location is SegmentLocation.REMOTE]

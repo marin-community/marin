@@ -49,11 +49,17 @@ def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) ->
 
 
 def _seal(store: DuckDBLogStore, namespace: str) -> None:
-    """Run flush -> compact -> sync synchronously, mirroring one bg-loop tick."""
+    """Run flush -> force-merge-L0 -> sync+evict synchronously.
+
+    ``force_compact_l0`` is used (rather than ``compact``) because the
+    default planner ``level_targets`` are huge so tiny test segments
+    would never promote on their own. The trailing ``compact()`` runs
+    sync + eviction so remote uploads land before any test assertion.
+    """
     ns = store.catalog[namespace]
-    ns._flush_step()
-    ns._force_compact_l0()
-    ns._sync_step()
+    ns.flush()
+    ns.force_compact_l0()
+    ns.compact()
 
 
 @pytest.fixture()

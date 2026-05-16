@@ -96,8 +96,8 @@ def test_query_and_drop_via_asgi(tmp_path: Path):
             assert resp.status_code == 200, resp.text
 
             ns = log_service.log_store.catalog["iris.worker"]
-            ns._flush_step()
-            ns._force_compact_l0()
+            ns.flush()
+            ns.force_compact_l0()
 
             resp = client.post(
                 "/finelog.stats.StatsService/Query",

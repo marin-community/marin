@@ -61,7 +61,7 @@ def test_stats_after_flush_match_segments_table(store):
     batch = _worker_batch(["w-0", "w-1"], [1, 2], [10, 20])
     store.write_rows("iris.worker", _ipc_bytes(batch))
 
-    store.catalog["iris.worker"]._flush_step()
+    store.catalog["iris.worker"].flush()
 
     stats = _stats(store, "iris.worker")
     assert stats.row_count == 2
@@ -82,14 +82,14 @@ def test_compaction_replaces_l0_rows_atomically(store):
     for i in range(3):
         batch = _worker_batch([f"w-{i}"], [i], [i])
         store.write_rows("iris.worker", _ipc_bytes(batch))
-        store.catalog["iris.worker"]._flush_step()
+        store.catalog["iris.worker"].flush()
 
     # Three L0 segments before compaction.
     pre = _segments(store, "iris.worker")
     assert len(pre) == 3
     assert all(s.level == 0 for s in pre)
 
-    store.catalog["iris.worker"]._force_compact_l0()
+    store.catalog["iris.worker"].force_compact_l0()
 
     post = _segments(store, "iris.worker")
     assert len(post) == 1
@@ -135,7 +135,7 @@ def test_eviction_flips_remote_durable_segment(tmp_path):
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-0"], [1], [1])))
         _seal(store, "iris.worker")
         ns = store.catalog["iris.worker"]
-        ns._sync_step()
+        ns.compact()
         segs = _segments(store, "iris.worker")
         assert len(segs) == 1
         path = segs[0].path
@@ -283,7 +283,7 @@ def test_log_namespace_stats_count_pushed_logs(store):
 
 
 def _flush_one(store: DuckDBLogStore, namespace: str) -> None:
-    store.catalog[namespace]._flush_step()
+    store.catalog[namespace].flush()
 
 
 def test_key_value_bounds_populated_for_log_namespace(store):
@@ -322,7 +322,7 @@ def test_key_value_bounds_survive_compaction(store):
     pre = _segments(store, "log")
     assert {s.min_key_value for s in pre} == {"/system/aaa", "/system/zzz"}
 
-    store.catalog["log"]._force_compact_l0()
+    store.catalog["log"].force_compact_l0()
 
     post = _segments(store, "log")
     assert len(post) == 1

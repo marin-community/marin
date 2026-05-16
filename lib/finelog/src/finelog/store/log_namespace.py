@@ -8,8 +8,10 @@ backs the in-memory store mode. Both satisfy :class:`LogNamespaceProtocol`.
 
 The two global locks (insertion mutex + query-visibility rwlock) live on the
 registry and are passed in at construction. The disk variant additionally
-owns a per-namespace flush mutex preventing the test ``_force_flush`` hook
-from racing the bg thread on the same segment filename.
+owns a per-namespace flush mutex serializing the flush loop with direct
+``flush()`` callers (tests, ``close()``) on the same segment filename, plus
+a maintenance mutex serializing the maintenance loop with ``compact()`` /
+``force_compact_l0()`` callers.
 """
 
 from __future__ import annotations
@@ -476,9 +478,9 @@ class DiskLogNamespace:
         # catalog mutex is held only for registry mutations and snapshots.
         self._insertion_lock = Lock()
         self._query_visibility_lock = query_visibility_lock
-        # Prevents the test ``_force_flush`` hook racing the bg thread on
-        # the same segment filename (both derive from this namespace's
-        # _next_seq).
+        # Serializes the flush loop with direct ``flush()`` callers so
+        # they can't race on the same segment filename (both derive from
+        # this namespace's ``_next_seq``).
         self._flush_lock = Lock()
 
         # Compaction uses a fresh DuckDB connection per merge (see
@@ -594,24 +596,39 @@ class DiskLogNamespace:
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_config.check_interval_sec)
-        # Mark just-run so the bg loop doesn't fire a spurious tick at startup
+        # Mark just-run so the bg loops don't fire a spurious tick at startup
         # and compact a partially-written set of segments.
         self._flush_rl.mark_run()
         self._compaction_rl.mark_run()
         self._stop = threading.Event()
-        self._wake = threading.Event()
+        # Set by ``append_*`` to nudge the flush loop early instead of waiting
+        # for the next ``flush_interval_sec`` timer fire. Idempotent / coalesced
+        # — many appends collapse to one wake.
+        self._flush_wake = threading.Event()
+        # Serializes the maintenance cycle (compaction drain + sync + evict)
+        # against ``compact()`` / ``force_compact_l0()`` callers. The flush
+        # path uses ``_flush_lock`` instead so flushes and compactions stay
+        # concurrent (the whole point of splitting the loops).
+        self._maint_lock = Lock()
+
         # Highest ``seq`` value durably written to an L0 (or higher) parquet
         # segment. Service handlers poll this to block writers until their
         # rows are persisted. Int reads/writes are atomic under the GIL so
-        # no explicit synchronization is required; the bg flush thread is
-        # the sole writer.
+        # no explicit synchronization is required; the flush thread is the
+        # sole writer.
         self._max_persisted_seq = -1
-        self._bg_thread = threading.Thread(
-            target=self._bg_loop,
+        self._flush_thread = threading.Thread(
+            target=self._flush_loop,
             name=f"finelog_flush_{self.name}",
             daemon=True,
         )
-        self._bg_thread.start()
+        self._maint_thread = threading.Thread(
+            target=self._maint_loop,
+            name=f"finelog_maint_{self.name}",
+            daemon=True,
+        )
+        self._flush_thread.start()
+        self._maint_thread.start()
 
     def _open_compaction_conn(self) -> duckdb.DuckDBPyConnection:
         """Fresh DuckDB connection for one compaction COPY.
@@ -688,11 +705,11 @@ class DiskLogNamespace:
                 added_bytes=non_seq_bytes + 8 * total,
             )
         critical_end = time.monotonic()
-        # Always wake the bg loop: the loop treats an append-driven wake as
-        # a flush request so service handlers blocking on
+        # Always wake the flush loop: the loop treats an append-driven wake
+        # as a flush request so service handlers blocking on
         # ``max_persisted_seq`` see L0 within one turnaround instead of the
         # idle ``flush_interval_sec`` ceiling.
-        self._wake.set()
+        self._flush_wake.set()
 
         total_ms = int((critical_end - t_enter) * 1000)
         if total_ms >= _SLOW_APPEND_THRESHOLD_MS:
@@ -721,9 +738,9 @@ class DiskLogNamespace:
             stamped = _stamp_seq_and_build(aligned, first_seq, self._arrow_schema)
             # 8 bytes per row for the stamped int64 seq column.
             self._buffers.append_table(stamped, added_bytes=aligned.byte_size + 8 * aligned.num_rows)
-        # Wake the bg loop on every non-empty append: writers blocked on the
-        # persistence cursor get a flush within one turnaround.
-        self._wake.set()
+        # Wake the flush loop on every non-empty append: writers blocked on
+        # the persistence cursor get a flush within one turnaround.
+        self._flush_wake.set()
         return first_seq + aligned.num_rows - 1
 
     def max_persisted_seq(self) -> int:
@@ -757,19 +774,22 @@ class DiskLogNamespace:
 
     def close(self) -> None:
         self._stop.set()
-        self._wake.set()
-        self._bg_thread.join()
+        self._flush_wake.set()
+        self._flush_thread.join()
+        self._maint_thread.join()
         # Flush RAM to L0 so a clean restart picks it up. We deliberately do
-        # NOT promote L0 to L1 here — L0 is local-only by design.
-        self._flush_step()
+        # NOT promote L0 to L1 here — L0 is local-only by design. Both bg
+        # threads are joined so direct calls don't need to coordinate.
+        self.flush()
         # Final reconcile so the bucket matches the catalog at shutdown.
         self._sync_step()
 
     def stop_and_join(self) -> None:
-        """Stop the bg thread without flushing or compacting (used by ``DropTable``)."""
+        """Stop the bg threads without flushing or compacting (used by ``DropTable``)."""
         self._stop.set()
-        self._wake.set()
-        self._bg_thread.join()
+        self._flush_wake.set()
+        self._flush_thread.join()
+        self._maint_thread.join()
 
     def ram_bytes(self) -> int:
         with self._insertion_lock:
@@ -784,12 +804,24 @@ class DiskLogNamespace:
         self.schema = new_schema
         self._arrow_schema = schema_to_arrow(new_schema)
 
-    def _bg_loop(self) -> None:
+    def _flush_loop(self) -> None:
+        """Drain in-RAM chunks to L0 on a timer or in response to appends.
+
+        Splitting flush off the maintenance loop is what keeps writers
+        unblocked when a long L≥2 merge is running: durable-write waits
+        only depend on this thread's progress.
+        """
         last_heartbeat = 0.0
         last_flush_at = time.monotonic()
-        last_compact_at = time.monotonic()
-        woken_by_append = False
         while not self._stop.is_set():
+            timeout = min(max(self._flush_rl.time_until_next(), 0.0), 1.0)
+            if timeout > 0:
+                self._flush_wake.wait(timeout=timeout)
+            woken_by_append = self._flush_wake.is_set()
+            self._flush_wake.clear()
+            if self._stop.is_set():
+                break
+
             # Read internal buffer fields directly under the lock; the
             # public ``ram_bytes`` / ``chunk_count`` accessors also take
             # this lock, so we'd deadlock if we used them here.
@@ -800,18 +832,19 @@ class DiskLogNamespace:
                 level_counts = _level_histogram(self._local_segments)
                 level_bytes = _level_bytes_summary(self._local_segments, self._compactor.config.level_targets)
             force_drain = ram_bytes >= self._segment_target_bytes
-            # Appends ``_wake.set()`` on every non-empty batch. We still
-            # gate the wake-driven flush on ``flush_rl`` so a steady writer
-            # can't shred L0 into many sub-second segments — at multi-flush/s
-            # the compaction tick can't keep L0 fanout bounded. ``force_drain``
-            # remains the unconditional safety valve for ram pressure.
+            # Appends ``_flush_wake.set()`` on every non-empty batch. We
+            # still gate the wake-driven flush on ``flush_rl`` so a steady
+            # writer can't shred L0 into many sub-second segments — at
+            # multi-flush/s the compaction tick can't keep L0 fanout
+            # bounded. ``force_drain`` remains the unconditional safety
+            # valve for ram pressure.
             writer_pending = woken_by_append and chunk_count > 0 and self._flush_rl.should_run()
 
             now = time.monotonic()
             if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
                 logger.info(
-                    "bg-loop tick ns=%s: chunks=%d ram_bytes=%d levels=%s level_bytes=%s "
-                    "next_seq=%d since_flush_ms=%d since_compact_ms=%d",
+                    "flush-loop tick ns=%s: chunks=%d ram_bytes=%d levels=%s level_bytes=%s "
+                    "next_seq=%d since_flush_ms=%d",
                     self.name,
                     chunk_count,
                     ram_bytes,
@@ -819,42 +852,63 @@ class DiskLogNamespace:
                     level_bytes,
                     next_seq,
                     int((now - last_flush_at) * 1000),
-                    int((now - last_compact_at) * 1000),
                 )
                 last_heartbeat = now
 
             if force_drain or writer_pending:
-                self._flush_step()
+                self.flush()
                 self._flush_rl.mark_run()
                 last_flush_at = time.monotonic()
             elif self._flush_rl.should_run():
-                self._flush_step()
+                self.flush()
                 last_flush_at = time.monotonic()
-            if self._compaction_rl.should_run():
-                # Drain promotable runs back-to-back on the same tick: a
-                # large flush burst can leave several tiers eligible at once,
-                # and waiting another check_interval per merge needlessly
-                # extends per-read fanout. Yield to flush between jobs so a
-                # long L>=1 merge (seconds to tens of seconds) doesn't starve
-                # writers — under sustained load the ram buffer would
-                # otherwise grow past ``segment_target_bytes`` while we keep
-                # merging.
+
+    def _maint_loop(self) -> None:
+        """Drain planner-driven compaction, then sync + evict.
+
+        Runs independently of the flush loop so a multi-second L≥2 merge
+        cannot stall writers waiting on ``max_persisted_seq``. The full
+        cycle is serialized against direct ``compact()`` /
+        ``force_compact_l0()`` callers via ``_maint_lock``.
+        """
+        last_heartbeat = 0.0
+        last_compact_at = time.monotonic()
+        while not self._stop.is_set():
+            timeout = min(max(self._compaction_rl.time_until_next(), 0.0), 1.0)
+            if self._stop.wait(timeout=timeout):
+                break
+            if not self._compaction_rl.should_run():
+                continue
+
+            now = time.monotonic()
+            if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
+                with self._insertion_lock:
+                    level_counts = _level_histogram(self._local_segments)
+                    level_bytes = _level_bytes_summary(self._local_segments, self._compactor.config.level_targets)
+                logger.info(
+                    "maint-loop tick ns=%s: levels=%s level_bytes=%s since_compact_ms=%d",
+                    self.name,
+                    level_counts,
+                    level_bytes,
+                    int((now - last_compact_at) * 1000),
+                )
+                last_heartbeat = now
+
+            with self._maint_lock:
                 while self._compaction_step():
-                    with self._insertion_lock:
-                        ram_bytes = self._buffers.ram_bytes()
-                    if ram_bytes >= self._segment_target_bytes:
-                        self._flush_step()
-                        self._flush_rl.mark_run()
-                        last_flush_at = time.monotonic()
+                    pass
                 self._compaction_rl.mark_run()
-                last_compact_at = time.monotonic()
                 self._sync_step()
                 self._eviction_step()
+            last_compact_at = time.monotonic()
 
-            woken_by_append = self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
-            self._wake.clear()
+    def flush(self) -> None:
+        """Drain the in-RAM buffer to a new L0 segment.
 
-    def _flush_step(self) -> None:
+        Synchronous sync-point for tests, ``close()``, and the flush loop.
+        Returns immediately if the buffer is empty. Serialized against
+        concurrent flushers via ``_flush_lock``.
+        """
         with self._flush_lock:
             flush_start = time.monotonic()
             with self._insertion_lock:
@@ -894,6 +948,32 @@ class DiskLogNamespace:
             # Atomic int write; service handlers polling
             # ``max_persisted_seq()`` will observe this on their next tick.
             self._max_persisted_seq = visible.max_seq
+
+    def compact(self) -> None:
+        """Drain planner-driven compaction, then sync + evict.
+
+        Synchronous sync-point that mirrors one maintenance-loop tick.
+        Tests use this to wait for any pending merges, uploads, and
+        eviction work to finish.
+        """
+        with self._maint_lock:
+            while self._compaction_step():
+                pass
+            self._compaction_rl.mark_run()
+            self._sync_step()
+            self._eviction_step()
+
+    def force_compact_l0(self) -> None:
+        """Synthesize a one-shot L0 → L1 merge regardless of planner policy.
+
+        Production code never calls this — the planner is policy-driven
+        and L0 segments are intentionally kept local-only between
+        compactions. Tests use this when they need to assert against L1
+        state without configuring tiny ``level_targets`` on every fixture.
+        Serialized against the maintenance loop via ``_maint_lock``.
+        """
+        with self._maint_lock:
+            self._apply_force_compact_l0()
 
     def _key_bounds_from_table(self, table: pa.Table) -> tuple[object | None, object | None]:
         """Compute (min, max) over the namespace's ``key_column`` in ``table``.
@@ -1044,15 +1124,8 @@ class DiskLogNamespace:
         self._run_job(job)
         return True
 
-    def _force_compact_l0(self) -> None:
-        """Test-only hook: synthesize a one-shot L0 → L1 merge regardless of policy.
-
-        Production code (including ``close()``) never calls this — the
-        regular bg loop is planner-driven, and L0 segments are intentionally
-        kept local-only between compactions. Tests use this when they need
-        to assert against L1 state without configuring tiny ``level_targets``
-        on every fixture.
-        """
+    def _apply_force_compact_l0(self) -> None:
+        """Body of :meth:`force_compact_l0`; caller must hold ``_maint_lock``."""
         with self._insertion_lock:
             l0 = sorted(
                 [self._segment_to_row(s) for s in self._local_segments if s.level == 0],

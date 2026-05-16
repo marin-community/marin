@@ -28,13 +28,13 @@ def test_sync_uploads_compacted_segments(tmp_path: Path) -> None:
         ns = store.catalog["iris.worker"]
         assert isinstance(ns, DiskLogNamespace)
 
-        ns._flush_step()
-        ns._force_compact_l0()
+        ns.flush()
+        ns.force_compact_l0()
 
         # Compaction itself does not upload — sync runs separately.
         assert _remote_files(remote, "iris.worker") == []
 
-        ns._sync_step()
+        ns.compact()
         assert len(_remote_files(remote, "iris.worker")) == 1
     finally:
         store.close()
@@ -55,9 +55,9 @@ def test_sync_deletes_orphaned_remote_segments(tmp_path: Path) -> None:
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = store.catalog["iris.worker"]
         assert isinstance(ns, DiskLogNamespace)
-        ns._flush_step()
-        ns._force_compact_l0()
-        ns._sync_step()
+        ns.flush()
+        ns.force_compact_l0()
+        ns.compact()
         live_remote = _remote_files(remote, "iris.worker")
         assert len(live_remote) == 1
 
@@ -66,7 +66,7 @@ def test_sync_deletes_orphaned_remote_segments(tmp_path: Path) -> None:
         assert orphan.name not in live_names
         orphan.write_bytes(b"orphan")
 
-        ns._sync_step()
+        ns.compact()
         remaining = _remote_files(remote, "iris.worker")
         assert remaining == live_remote
         assert not orphan.exists()
@@ -84,8 +84,8 @@ def test_close_drains_pending_uploads(tmp_path: Path) -> None:
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = store.catalog["iris.worker"]
         assert isinstance(ns, DiskLogNamespace)
-        ns._flush_step()
-        ns._force_compact_l0()
+        ns.flush()
+        ns.force_compact_l0()
         # Skip the manual sync — close() must run it.
     except Exception:
         store.close()
@@ -112,24 +112,19 @@ def test_sync_does_not_delete_remote_after_eviction(tmp_path: Path) -> None:
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = store.catalog["iris.worker"]
-        ns._flush_step()
-        while ns._compaction_step():
-            pass
-        ns._sync_step()
+        ns.flush()
+        ns.compact()
         assert len(_remote_files(remote, "iris.worker")) == 1
         evicted_basename = _remote_files(remote, "iris.worker")[0].name
 
         # Trigger eviction: append another row, compact, evict (the cap is 1).
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-2"], [200], [2])))
-        ns._flush_step()
-        while ns._compaction_step():
-            pass
-        ns._sync_step()
-        ns._eviction_step()
+        ns.flush()
+        ns.compact()
 
         # Several sync ticks: the durable archive must still be present.
         for _ in range(3):
-            ns._sync_step()
+            ns.compact()
         remote_names = {p.name for p in _remote_files(remote, "iris.worker")}
         assert evicted_basename in remote_names
     finally:
@@ -160,10 +155,8 @@ def test_orphan_delete_runs_only_after_replacement_uploaded(tmp_path: Path) -> N
         ns = store.catalog["iris.worker"]
 
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-        ns._flush_step()
-        while ns._compaction_step():
-            pass
-        ns._sync_step()
+        ns.flush()
+        ns.compact()
         # After L0 → L1 → L2, only the L2 file should be in remote: the
         # L1 file was uploaded then immediately orphan-deleted by sync's
         # phase 2 once the L2 replacement was durable.
@@ -190,9 +183,9 @@ def test_wiped_catalog_recovers_from_remote(tmp_path: Path) -> None:
         s1.register_table("iris.worker", _worker_schema())
         s1.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = s1.catalog["iris.worker"]
-        ns._flush_step()
-        ns._force_compact_l0()
-        ns._sync_step()
+        ns.flush()
+        ns.force_compact_l0()
+        ns.compact()
         bucket_files_before = sorted(p.name for p in _remote_files(remote, "iris.worker"))
         assert bucket_files_before
     finally:
@@ -212,7 +205,7 @@ def test_wiped_catalog_recovers_from_remote(tmp_path: Path) -> None:
         adopted = [r for r in rows if r.location is SegmentLocation.REMOTE]
         assert {Path(r.path).name for r in adopted} == set(bucket_files_before)
         # Sync runs without nuking the bucket.
-        ns._sync_step()
+        ns.compact()
         bucket_files_after = sorted(p.name for p in _remote_files(remote, "iris.worker"))
         assert bucket_files_after == bucket_files_before
     finally:
@@ -246,10 +239,8 @@ def test_reconcile_drops_stale_compaction_inputs_at_boot(tmp_path: Path) -> None
         s1.register_table("iris.worker", _worker_schema())
         s1.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = s1.catalog["iris.worker"]
-        ns._flush_step()
-        while ns._compaction_step():
-            pass
-        ns._sync_step()
+        ns.flush()
+        ns.compact()
         live_after_compact = sorted(p.name for p in _remote_files(remote, "iris.worker"))
         assert live_after_compact and all(n.startswith("seg_L2_") for n in live_after_compact)
     finally:
@@ -300,9 +291,9 @@ def test_reconcile_preserves_uncovered_lower_level(tmp_path: Path) -> None:
         s1.register_table("iris.worker", _worker_schema())
         s1.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = s1.catalog["iris.worker"]
-        ns._flush_step()
-        ns._force_compact_l0()
-        ns._sync_step()
+        ns.flush()
+        ns.force_compact_l0()
+        ns.compact()
         bucket_files = sorted(p.name for p in _remote_files(remote, "iris.worker"))
         # Single L1, no L2: nothing covers it.
         assert bucket_files and all(n.startswith("seg_L1_") for n in bucket_files)

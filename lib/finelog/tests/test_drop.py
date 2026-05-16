@@ -80,10 +80,10 @@ def test_drop_table_does_not_delete_remote_objects(tmp_path: Path):
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = store.catalog["iris.worker"]
-        ns._flush_step()
+        ns.flush()
         # Only compacted segments are uploaded.
-        ns._force_compact_l0()
-        ns._sync_step()
+        ns.force_compact_l0()
+        ns.compact()
 
         remote_ns_dir = remote / "iris.worker"
         assert remote_ns_dir.exists()
@@ -120,9 +120,9 @@ def test_drop_table_rejects_concurrent_register(tmp_path: Path):
         store.register_table("iris.worker", schema)
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = store.catalog["iris.worker"]
-        ns._flush_step()
-        ns._force_compact_l0()
-        ns._sync_step()
+        ns.flush()
+        ns.force_compact_l0()
+        ns.compact()
 
         # Spy on ``stop_and_join`` to attempt a same-name ``register_table``
         # at the exact point of the prior race. ``_dropping`` should make
@@ -169,9 +169,9 @@ def test_drop_table_stops_bg_thread_before_dropping_catalog_rows(tmp_path: Path)
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
         ns = store.catalog["iris.worker"]
-        ns._flush_step()
-        ns._force_compact_l0()
-        ns._sync_step()
+        ns.flush()
+        ns.force_compact_l0()
+        ns.compact()
         assert sorted((remote / "iris.worker").glob("*.parquet"))
 
         # Spy on stop_and_join to assert the catalog still has rows when

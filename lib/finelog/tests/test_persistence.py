@@ -40,7 +40,7 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
         )
         store.write_rows("ns.evolve", _ipc_bytes(batch1))
         ns = store.catalog["ns.evolve"]
-        ns._flush_step()
+        ns.flush()
 
         s2 = Schema(
             columns=(*s1.columns, Column(name="c", type=stats_pb2.COLUMN_TYPE_FLOAT64, nullable=True)),
@@ -58,9 +58,9 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
             ),
         )
         store.write_rows("ns.evolve", _ipc_bytes(batch2))
-        ns._flush_step()
+        ns.flush()
 
-        ns._force_compact_l0()
+        ns.force_compact_l0()
         seg_dir = tmp_path / "data" / "ns.evolve"
         assert sorted(p.name for p in seg_dir.glob("seg_L0_*.parquet")) == []
         l1_files = sorted(seg_dir.glob("seg_L1_*.parquet"))

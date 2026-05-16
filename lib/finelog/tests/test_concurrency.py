@@ -61,8 +61,8 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
     else:
         assert "iris.worker" in store.catalog
         ns = store.catalog["iris.worker"]
-        ns._flush_step()
-        ns._force_compact_l0()
+        ns.flush()
+        ns.force_compact_l0()
         table = store.query('SELECT worker_id FROM "iris.worker"')
         assert table.num_rows == successes
 
@@ -126,8 +126,8 @@ def test_query_acquires_read_lock_for_duration(store: DuckDBLogStore):
     store.register_table("iris.worker", _worker_schema())
     ns = store.catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-    ns._flush_step()
-    ns._force_compact_l0()
+    ns.flush()
+    ns.force_compact_l0()
 
     rwlock = store._query_visibility_lock
     write_held_during_query: list[bool] = []
