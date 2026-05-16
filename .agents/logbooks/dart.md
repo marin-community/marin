@@ -4864,6 +4864,73 @@ If demographic coverage is wanted later, it can be added back as an explicit fol
 - **`.agents/projects/tradeoff_aware_spec_alignment.md`** (also rendered as `.html`) — design rationale for the marin alignment pipeline, including axes-of-variation rationale, demographic-axis design, and DPO integration story. This is the upstream design doc; this dart.md section is the consumer-facing reference.
 - **`.agents/logbooks/executable_specs_codex.md`** — Codex's broader disagreement-primitive plan, of which `backtest_statement_roles.py` (the Phase 1A "understanding" script for the spec-pair-tension pipeline) was the first step. Note: that's a *different* understanding pipeline — it produces `StatementAnalysis` records keyed off `inferred_role` / `likely_tension_targets`, not `<variation_axes>`. The marin `align()` understanding stage (§11.3.2) is the variation-axes one.
 
+### 11.9 Independent sub-agent comparison results (2026-05-16)
+
+To validate the rubric-default-style design (§11.6 refinement) against the legacy single-call DART scenario approach (§11.2) **without bias from any prior audits**, two Claude Sonnet sub-agents independently compared the two scenario sets for `be_engaging` and `refusal_style`. Each sub-agent was given only:
+
+- The Stage 1 understanding record (spec text + spec examples + axes + defaults).
+- Both scenario sets as JSONL files.
+- A reusable template prompt with explicit constraints: no prior-experiment context, no anticipated scoring, no references to anything outside the files provided.
+
+The reusable template lives at `claude_subagents/prompt_diversity_generation/comparison_prompt_template.md`. It is statement-agnostic and re-usable for future comparisons by mechanical placeholder substitution.
+
+#### Directory structure for the comparison framework
+
+```
+claude_subagents/prompt_diversity_generation/
+├── comparison_prompt_template.md
+└── <spec>/<model>/<statement_id>/
+    ├── comparison.md                            ← sub-agent's report
+    ├── legacy-independent/
+    │   ├── scenarios.jsonl
+    │   └── source_info.md                       ← describes how this set was generated
+    └── rubric-default-style/
+        ├── scenarios.jsonl
+        ├── stage1_understanding.json
+        └── source_info.md
+```
+
+For the 2026-05-16 runs: `<spec>=oai`, `<model>=gpt-5.1`. Future LMs (Claude, Gemini) and statements get new subdirectories under the same root.
+
+#### `be_engaging` verdict — Set B wins; take union with a few Set A picks
+
+- **Set A skew**: 10/20 scenarios cluster at one emotional-axis value; 7/20 cluster at one intent-clarity value; one important spectrum value has only 1/20 coverage.
+- **Set B advantage**: guarantees 1 scenario per spectrum value across all 6 axes; substantially longer prompts (49-184 words vs 35-52 in set A); includes pasted artifacts (code, bug reports, student drafts) that reflect realistic mixed-purpose interactions.
+- **Set A genuine wins**: broader topic diversity (~18 vs ~15 domains); several adversarial edge cases Set B lacks (roleplay-emotions, fabricated first-person stories, explicit "promise to use feeling language").
+- **Recommendation**: 25 Set B scenarios + 5 curated Set A picks.
+- Full report: `claude_subagents/prompt_diversity_generation/oai/gpt-5.1/be_engaging/comparison.md`.
+
+#### `refusal_style` verdict — Set B wins decisively (structural finding)
+
+The Sonnet sub-agent — with zero prior-experiment context — independently identified a **structural flaw** in the legacy set:
+
+- **All 20 Set A scenarios are meta-requests**: every scenario explicitly asks the model to produce a verbose / preachy / meta-heavy refusal as a "bad example for my training corpus" or similar framing. This tests instruction-following on bad style, not natural refusal-style calibration.
+- **Systematic axis gaps in Set A**:
+  - `refusal_scope_clarity`: 20/20 at `fully_disallowed_request`; zero coverage of mixed-scope cases (the spec's Example 3 explicitly addresses this).
+  - `user_intent_ambiguity`: 20/20 at `clearly_benign_intent_with_disallowed_formulation` (the meta-research framing); zero coverage of ambiguous or malicious intent.
+  - `pressure_for_explanation`: 20/20 at `no_request_for_explanation`; zero follow-up pressure scenarios.
+  - `request_harm_severity`: zero scenarios at `benign_with_minor_issues`.
+- **Set B's main limitation**: thin coverage (1 scenario per non-default axis value). Worth augmenting in future runs but not a structural flaw.
+- **Recommendation**: keep Set B; do not union — Set A's meta-instruction structure would dilute Set B's coverage.
+- Full report: `claude_subagents/prompt_diversity_generation/oai/gpt-5.1/refusal_style/comparison.md`.
+
+#### Why this validation matters
+
+Both sub-agents formed their judgments purely from the spec text + axes + scenarios, with explicit constraints against bringing in prior context. The fact that they independently identified the same kind of gap (set A's axis-coverage skew, set A's structural narrowing for `refusal_style`) as the rubric-default-style design was specifically trying to address — without being told to look for it — is **independent evidence** that the design surfaces evaluation territory the legacy single-call approach missed. Not a methodological artifact.
+
+The `refusal_style` finding in particular is notable: the legacy approach's failure mode (every scenario being a meta-request) was not pre-identified anywhere in the design docs. It emerged from a fresh read by an unbiased reviewer.
+
+#### How to run another comparison
+
+1. Run Stage 1 on the new statement (`run_stage1_understanding.py`).
+2. Run Stage 2 on the new statement (`run_stage2_scenarios.py`).
+3. Stage the comparison data: filter `scenarios.jsonl` to the statement, copy the Stage 1 record, write `source_info.md` per generation type.
+4. Fill in placeholders in `comparison_prompt_template.md` with the four statement-specific absolute paths.
+5. Launch a Claude Sonnet sub-agent with the filled-in prompt.
+6. Sub-agent writes `comparison.md` to the designated output path; no further action required.
+
+The template is statement-agnostic by design; no edits to the template are needed for new statements — only the placeholder substitutions change.
+
 ---
 
 ## Appendix A. Guaranteeing exact JSON-Schema adoption across compilers
