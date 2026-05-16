@@ -4914,9 +4914,94 @@ The Sonnet sub-agent — with zero prior-experiment context — independently id
 - **Recommendation**: keep Set B; do not union — Set A's meta-instruction structure would dilute Set B's coverage.
 - Full report: `claude_subagents/prompt_diversity_generation/oai/gpt-5.1/refusal_style/comparison.md`.
 
+#### Bucket D extension — 15-statement comparison pass
+
+After the `be_engaging` / `refusal_style` smoke, the same comparison framework was extended to all 15 canonical Bucket D statements.
+
+Generation artifacts:
+
+- Stage 1 understanding for the remaining 44 statements: `experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage1_understanding/20260516T172804Z/`
+  - Sync GPT-5.1, 16 workers, `reasoning_effort=none`.
+  - 44/44 statements succeeded.
+  - Records written: 44.
+  - All records use the revised schema with `default_spectrum_value`; no demographic-axis block remains.
+- Stage 2 scenarios for Bucket D: `experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage2_scenarios/20260516T174023Z/`
+  - Strategy: `one_axis_at_a_time_from_default`.
+  - 348/348 scenarios succeeded.
+  - Per-statement scenario counts ranged from 16 to 25.
+- Staged comparison tree: `claude_subagents/prompt_diversity_generation/oai/gpt-5.1/<statement_id>/`.
+
+Each Bucket D statement directory now contains:
+
+```
+comparison.md
+legacy-independent/
+    scenarios.jsonl
+    source_info.md
+rubric-default-style/
+    scenarios.jsonl
+    source_info.md
+    stage1_understanding.json
+```
+
+##### Bucket D comparison verdicts
+
+| statement | verdict | key finding |
+|---|---|---|
+| `assume_best_intentions` | Set B wins decisively | Set A is topically varied but structurally fixed in one corner: benign academic/institutional engagement with controversial speech or ideology. Set B covers malicious intent, goal-method entanglement, topic risk, and specificity gradients. |
+| `assume_objective_pov` | Set B wins | Set A has useful forced-stance probes and more intense rights-violation cases, but misses softer reassurance-seeking, everyday value judgments, casual chat, and roleplay settings. |
+| `avoid_abuse` | Set B primary + 2-3 Set A additions | Set A is mostly explicit creative-pretext abuse requests. Set B is the first set to probe over-refusal, functional-vs-gratuitous negativity, consented roast boundaries, and de-escalation. |
+| `avoid_hateful_content` | Set B primary + curated Set A union | Set A is a "generate hateful content for educational purpose" monoculture. Set B covers all axes but over-concentrates on Muslims / Islam as the protected group. |
+| `be_clear` | Set B primary + 3 Set A additions | Set A often asks for the opposite of clarity, so it partly tests instruction-following rather than `be_clear`. Set B directly probes complexity, density, structure, process style, and jargon. |
+| `comply_with_laws` | Set B primary + curated Set A union | Set A has useful illegal-domain breadth but misses jurisdiction, user intent transparency, and tool/action capability. Set B uniquely covers direct agentic/tool-use illegality. |
+| `do_not_lie` | Set B primary + selective Set A augmentation | Set A mostly asks the model to lie or suppress caveats. Set B covers latent honesty failures: omission, uncertainty, overconfident reassurance, fiction/reality blur, and stakes. |
+| `formatting` | Set B primary + 2 Set A additions | Set B covers all 30 spectrum values across six axes. Set A contributes a few genuinely distinct formatting tasks but is less systematic. |
+| `highlight_misalignments` | Set B wins | Set A collapses into severe, explicit, pre-rejected pushback where the task depends on falsehood. Set B covers assistant-behavior misalignment, capability-limit misalignment, and default-override requests. |
+| `no_agenda` | Set B primary + 3-5 Set A stress tests | Set A is almost entirely explicit third-party manipulation. Set B probes implicit assistant framing, neutral information requests, multi-turn steering, and safety-created asymmetry. |
+| `no_erotica_or_gore` | Set A base + selected Set B | Set B collapsed into biology / nursing / exam-style sexual-education prompts. Set A has much better domain breadth across horror, true crime, legal drama, RPGs, medical ethics, audio, erotica, and gore. |
+| `no_topic_off_limits` | Set A backbone + selected Set B | Set B has useful structural probes but over-concentrates on Tiananmen / June Fourth: 10/25 scenarios. Set A's 20 distinct topic domains make it the better backbone. |
+| `prevent_imminent_harm` | Set B primary + selected Set A | Set A is structurally monolithic: user asks for step-by-step harmful help. Set B better tests proactive harm recognition and ambiguous intervention boundaries, but should borrow some Set A high-intensity cases. |
+| `protect_privileged_messages` | Set B primary + selected Set A frontal probes | Set A only tests direct adversarial requests for hidden content. Set B covers pure tasks, soft meta questions, embedded system-like text, role hierarchy, and authorization grants. |
+| `sexual_content_involving_minors` | Set B primary + minor curated union | Set A clusters in allowed educational/supportive cases. Set B covers coded minor references, erotic generation intent, transformation tasks, multi-step escalation, and instrumental exploitation. |
+
+Aggregate read:
+
+- **13/15 Bucket D reports recommend Set B as the primary evaluation set or clear winner.**
+- **2/15 recommend Set A as the backbone/base**: `no_erotica_or_gore` and `no_topic_off_limits`.
+- **0/15 recommend keeping legacy-only**. Even when Set A wins, the report still keeps selected Set B scenarios because they add structural probes Set A lacks.
+
+This differs slightly from the first handoff shorthand ("14/15 Set B wins; only `no_erotica_or_gore` flips"). The actual `no_topic_off_limits` report is stronger than that: it says Set A provides substantially better topic-domain breadth and should be the backbone, with Set B used as an enrichment layer after pruning Tiananmen-heavy duplicates.
+
+##### Cross-statement pattern
+
+Legacy-independent Set A failure modes that recur across Bucket D:
+
+- **Single structural archetype repeated 20 times**: explicit bad-action request, explicit refusal-framing, explicit manipulation request, or explicit meta-policy prompt.
+- **Single corner of axis space**: several reports independently describe Set A as topically varied but behaviorally fixed.
+- **Mis-targeted scenario objective**: `be_clear` often asks for unclear style; `refusal_style` asks for bad refusal examples; these test instruction following more than the intended statement.
+- **Domain monoculture**: `prevent_imminent_harm` is dominated by step-by-step harmful requests; `no_agenda` by third-party manipulation; `avoid_hateful_content` by educational hateful-content generation.
+
+Rubric-default-style Set B failure modes:
+
+- **Topic concentration from the default scenario**: `no_topic_off_limits` over-anchors to Tiananmen; `avoid_hateful_content` over-anchors to Muslims / Islam; `no_erotica_or_gore` over-anchors to biology / nursing sexual-education contexts.
+- **Thin non-default coverage**: one-axis-at-a-time guarantees coverage but usually gives only one scenario per non-default spectrum value.
+- **No cross-axis interactions by construction**: the design isolates axes well, but does not test combinations like malicious intent + high specificity + direct tool action unless one axis explicitly creates that case.
+- **Occasional metadata/content mismatch**: e.g. `avoid_abuse` has scenarios whose declared axis value understates the actual negativity intensity.
+
+##### Methodological implication
+
+The one-axis-at-a-time rubric-default generator is the right default for **diagnostic coverage**, but not a complete scenario corpus by itself. The next version should keep the axis-default design and add controlled topic diversity:
+
+1. Generate multiple default scenarios per statement with different seed topics/personas.
+2. Run one-axis-at-a-time variation from each default scenario.
+3. Deduplicate and prune scenario clusters before judging.
+4. Keep curated legacy scenarios only when they add domain breadth or adversarial intensity not covered by the structured set.
+
+This addresses the two strongest findings at once: Set A's old single-call approach misses behavior axes, while Set B's single-default approach can inherit too much topic/persona concentration from the default scenario.
+
 #### Why this validation matters
 
-Both sub-agents formed their judgments purely from the spec text + axes + scenarios, with explicit constraints against bringing in prior context. The fact that they independently identified the same kind of gap (set A's axis-coverage skew, set A's structural narrowing for `refusal_style`) as the rubric-default-style design was specifically trying to address — without being told to look for it — is **independent evidence** that the design surfaces evaluation territory the legacy single-call approach missed. Not a methodological artifact.
+All comparison sub-agents formed their judgments purely from the spec text + axes + scenarios, with explicit constraints against bringing in prior context. The fact that they independently identified the same kind of gap (set A's axis-coverage skew, set A's structural narrowing for `refusal_style`, repeated single-corner failures across Bucket D) as the rubric-default-style design was specifically trying to address — without being told to look for it — is **independent evidence** that the design surfaces evaluation territory the legacy single-call approach missed. Not a methodological artifact.
 
 The `refusal_style` finding in particular is notable: the legacy approach's failure mode (every scenario being a meta-request) was not pre-identified anywhere in the design docs. It emerged from a fresh read by an unbiased reviewer.
 
@@ -5145,4 +5230,3 @@ A 1-request probe costs single-digit cents per provider and catches every shape 
 - Port the §A.5 edits into `e9_dart_deliberative_rubric.py`, regenerate `RUBRIC_COMPILER_JSON_SCHEMA` from `RUBRIC_COMPILER_TOOL` programmatically, and re-run the §10.1 pilot. Expected outcome: 30/30 valid compiler candidates, real 3-compiler head-to-head data.
 - Decide whether the pairwise-regression gate that dropped `protect_privileged_messages__t1__claude` (raw α 0.621, prior 0.452, but Claude/Gemini pair α −0.054) should be hard, soft, or reviewer-facing. This is independent of A.5.
 - Extend `batch_anthropic.build_request` to accept `output_config` so the Claude path can move to the uniform structured-outputs surface.
-
