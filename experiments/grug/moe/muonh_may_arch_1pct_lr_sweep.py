@@ -51,10 +51,12 @@ def _label(scale: float) -> str:
     return str(scale).replace(".", "p")
 
 
-# Build all 15 perturbations: (label, override-dict)
+# Build perturbations: (label, override-dict). After the second-round
+# extension, lm_head adds 1.2x (the lone scale-up direction missing from
+# the initial down-only lm_head sweep).
 def _make_trials() -> list[tuple[str, dict]]:
     trials = []
-    for s in [0.9, 0.8, 0.7, 0.5, 0.3]:
+    for s in [0.9, 0.8, 0.7, 0.5, 0.3, 1.2]:
         trials.append((f"lmhead-{_label(s)}", {"adamh_lmhead_lr_scale": s}))
     for s in [0.6, 0.8, 1.0, 1.2, 1.4]:
         trials.append((f"embed-{_label(s)}", {"adamh_embed_lr_scale": s}))
@@ -66,7 +68,7 @@ def _make_trials() -> list[tuple[str, dict]]:
 
 
 _TRIALS = tuple(_make_trials())
-assert len(_TRIALS) == 15, f"expected 15 trials, got {len(_TRIALS)}"
+assert len(_TRIALS) == 16, f"expected 16 trials, got {len(_TRIALS)}"
 
 _WARMUP_FRACTION: float = 0.01
 _NUM_EXPERTS: int = 256
