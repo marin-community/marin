@@ -84,6 +84,11 @@ class GrugModelConfig:
     use_partial_rope: bool = False
     # Force the last layer to use long sliding window + PKO.
     last_layer_pko: bool = False
+    # Multiplier applied to the routed-expert MLP output before adding the
+    # shared expert and residual. ``1.0`` is the standard recipe; values
+    # above 1 up-weight the routed mixture relative to the shared dense
+    # MLP. Set per-experiment via ``GrugModelConfig``.
+    routed_expert_scale: float = 1.0
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -488,6 +493,7 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -505,6 +511,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            config=cfg,
         )
 
     @named_call
@@ -521,6 +528,12 @@ class Block(eqx.Module):
         )
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
+        # Scale the routed mixture before combining with the shared dense
+        # branch. Driven by ``GrugModelConfig.routed_expert_scale`` (default
+        # 1.0 = unchanged); values above 1 up-weight the routed mixture
+        # relative to the shared expert.
+        if self.config.routed_expert_scale != 1.0:
+            mlp_out = mlp_out * self.config.routed_expert_scale
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out

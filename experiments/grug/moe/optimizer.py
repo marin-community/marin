@@ -137,79 +137,6 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def _equalize_long_axis_norms(w):
-    """Equalize per-vector norms along a 2-D matrix's longer axis.
-
-    Newton-Schulz on a 2-D rectangular matrix unit-normalizes vectors
-    along the *shorter* axis; the vectors along the *longer* axis still
-    have non-uniform norms. This helper rescales the longer-axis vectors
-    so they all share the same norm (= mean of their original norms),
-    leaving the matrix in a "doubly balanced" state before hyperball
-    re-projection.
-
-    For shape ``(a, b)`` with ``a >= b``:
-      * each row has length b (the shorter axis)
-      * normalize rows so their norms are all equal to the mean row norm
-    For ``a < b``, transpose-equivalent normalization on columns.
-    """
-    if not hasattr(w, "ndim") or w.ndim != 2:
-        return w
-    a, b = w.shape
-    if a >= b:
-        # Normalize per row (long axis = rows, length b each).
-        row_norms = jnp.linalg.norm(w, axis=-1, keepdims=True)
-        target = jnp.mean(row_norms)
-        return w * target / jnp.maximum(row_norms, 1e-10)
-    # a < b: normalize per column (long axis = cols, length a each).
-    col_norms = jnp.linalg.norm(w, axis=0, keepdims=True)
-    target = jnp.mean(col_norms)
-    return w * target / jnp.maximum(col_norms, 1e-10)
-
-
-def scale_with_grug_muonh_col_norm(
-    momentum: float = 0.95,
-    nesterov: bool = True,
-    steps: int = 5,
-    muon_eps: float = 1e-8,
-    learning_rate: float = 0.02,
-    coefficient_type: CoefficientType = "quintic",
-) -> optax.GradientTransformation:
-    """MuonH + column-normalization step between NS and hyperball.
-
-    Designed for rectangular weight matrices (e.g. GatedNorm's rank-128
-    ``(hidden, 128)`` and ``(128, hidden)`` factors) where NS only
-    unit-normalizes one axis. After NS we equalize the norms along the
-    longer axis (see :func:`_equalize_long_axis_norms`) before feeding
-    into the standard Frobenius hyperball update.
-
-    On square or 3-D leaves the col-norm step is a no-op (handled inside
-    :func:`_equalize_long_axis_norms`).
-    """
-    muon_transform = _grug_scale_with_muon(
-        momentum=momentum,
-        nesterov=nesterov,
-        steps=steps,
-        muon_eps=muon_eps,
-        use_kimi_scaling=False,
-        coefficient_type=coefficient_type,
-    )
-
-    def init_fn(params):
-        return muon_transform.init(params)
-
-    def update_fn(updates, state, params=None):
-        if params is None:
-            raise ValueError("scale_with_grug_muonh_col_norm requires params for norm-preserving updates")
-
-        muon_updates, next_state = muon_transform.update(updates, state, params)
-        # Equalize long-axis norms on each 2-D leaf before hyperball.
-        muon_updates = jax.tree.map(_equalize_long_axis_norms, muon_updates, is_leaf=lambda x: x is None)
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
-        return muonh_updates, next_state
-
-    return optax.GradientTransformation(init_fn, update_fn)
-
-
 class ScaleByGrugNorMuonHState(NamedTuple):
     muon_state: optax.OptState
     row_nu: optax.Updates
@@ -619,143 +546,21 @@ class GrugMoeMuonHMayArchGNLrConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
-@OptimizerConfig.register_subclass("grug_moe_muonh_may_arch_gn_muonh_colnorm_v1")
+@OptimizerConfig.register_subclass("grug_moe_muonh_may_arch_gn_muonh_v1")
 @dataclass(frozen=True)
-class GrugMoeMuonHMayArchGNMuonHColNormConfig(OptimizerConfig):
-    """may_arch MuonH variant: route GatedNorms through MuonH + col-norm.
+class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
+    """may_arch MuonH variant: route GatedNorms to the muonh group (no col-norm).
 
-    Same routing skeleton as :class:`GrugMoeMuonHMayArchGNLrConfig` (muonh
-    for matrices, adamh_embed for token_embed, adamh for lm_head, adam
-    for biases/router) except the 4 GatedNorm instances route to a new
-    ``muonh_col_norm`` group that uses :func:`scale_with_grug_muonh_col_norm`:
-    NS direction + per-row/col norm equalization + Frobenius hyperball.
+    Four LR groups:
+    - ``muonh``: matrices (attn, MoE MLP, shared) **and** all 4 GatedNorms.
+    - ``adamh_embed``: ``token_embed``.
+    - ``adamh``: ``lm_head`` / ``output_proj``.
+    - ``adam``: ``router`` / ``router_bias`` / ``attn_gate`` / 1-D norm weights.
 
-    Defaults to unperturbed LR (all scales 1.0x). The col-norm step only
-    fires on 2-D leaves (the GN ``w_up`` / ``w_down`` matrices) — 3-D
-    leaves in the same group would pass through unchanged.
-    """
-
-    adam_lr: float = 6e-4
-    momentum: float = 0.95
-    nesterov: bool = True
-    backend_steps: int = 5
-    beta1: float = 0.9
-    beta2: float = 0.95
-    epsilon: float = 1e-8
-    muon_epsilon: float = 1e-8
-    max_grad_norm: float | None = 1.0
-    coefficient_type: CoefficientType = "quintic"
-
-    def build(self, num_train_steps):
-        learning_rate_schedule = self.lr_scheduler(num_train_steps)
-        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
-
-        def optimizer(learning_rate, adam_lr):
-            def muonh_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    scale_with_grug_muonh(
-                        momentum=self.momentum,
-                        nesterov=self.nesterov,
-                        steps=self.backend_steps,
-                        muon_eps=self.muon_epsilon,
-                        learning_rate=learning_rate,
-                        coefficient_type=self.coefficient_type,
-                    )
-                )
-                components.append(_match_named_update_sharding())
-                return optax.chain(*components)
-
-            def muonh_col_norm_transform():
-                # Same as muonh but with per-row/col norm equalization
-                # between NS and the Frobenius hyperball update. Used for
-                # GatedNorm's rank-128 rectangular matrices.
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    scale_with_grug_muonh_col_norm(
-                        momentum=self.momentum,
-                        nesterov=self.nesterov,
-                        steps=self.backend_steps,
-                        muon_eps=self.muon_epsilon,
-                        learning_rate=learning_rate,
-                        coefficient_type=self.coefficient_type,
-                    )
-                )
-                components.append(_match_named_update_sharding())
-                return optax.chain(*components)
-
-            def adamh_transform_at(lr):
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
-                return optax.chain(*components)
-
-            def adam_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
-                components.append(optax.scale(-adam_lr))
-                return optax.chain(*components)
-
-            return optax.multi_transform(
-                {
-                    "muonh": muonh_transform(),
-                    "muonh_col_norm": muonh_col_norm_transform(),
-                    "adamh_embed": adamh_transform_at(learning_rate),
-                    "adamh": adamh_transform_at(learning_rate),
-                    "adam": adam_transform(),
-                },
-                self.create_mask,
-            )
-
-        return optax.inject_hyperparams(optimizer)(
-            learning_rate=learning_rate_schedule,
-            adam_lr=adam_lr_schedule,
-        )
-
-    def create_mask(self, params):
-        paths = leaf_key_paths(params)
-
-        def mask_fn(param, path):
-            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
-            path_lower = path_str.lower()
-            if "token_embed" in path_lower:
-                return "adamh_embed"
-            if "router_bias" in path_lower or path_lower.endswith(".attn_gate") or ".router" in path_lower:
-                return "adam"
-            if "output_proj" in path_lower or "lm_head" in path_lower:
-                return "adamh"
-            # GatedNorms go to MuonH with the col-norm step.
-            if "gated_norm" in path_lower:
-                return "muonh_col_norm"
-            if hasattr(param, "ndim") and param.ndim in (2, 3):
-                return "muonh"
-            return "adam"
-
-        return jax.tree.map(mask_fn, params, paths)
-
-
-@OptimizerConfig.register_subclass("grug_moe_muonh_may_arch_colnorm_variant_v1")
-@dataclass(frozen=True)
-class GrugMoeMuonHMayArchColNormVariantConfig(OptimizerConfig):
-    """may_arch MuonH variant with selectable col-norm targets.
-
-    Built on the 1pct-noclip recipe (max_grad_norm=None, GN routes to
-    muonh, embed -> AdamH). Two boolean flags pick which subgroup(s) of
-    matrices get the column-normalization step (NS + col-norm + hyperball)
-    instead of plain MuonH (NS + hyperball):
-
-    * ``gn_colnorm``: route all 4 GatedNorm matrices to ``muonh_col_norm``.
-    * ``kv_colnorm``: route ``attn.w_k`` and ``attn.w_v`` to ``muonh_col_norm``.
-
-    When both flags are False this config is functionally identical to
-    :class:`GrugMoeMuonHMayArchGNMuonHConfig` (the 1pct-noclip baseline).
+    Sibling to :class:`GrugMoeMuonHMayArchGNMuonHColNormConfig` but
+    without the per-row/col norm equalization step. Defaults to LR scale
+    1.0x everywhere. ``max_grad_norm`` defaults to ``None`` here (no
+    clipping) for this variant.
     """
 
     adam_lr: float = 6e-4
@@ -768,8 +573,6 @@ class GrugMoeMuonHMayArchColNormVariantConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
-    gn_colnorm: bool = False
-    kv_colnorm: bool = False
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -782,23 +585,6 @@ class GrugMoeMuonHMayArchColNormVariantConfig(OptimizerConfig):
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(
                     scale_with_grug_muonh(
-                        momentum=self.momentum,
-                        nesterov=self.nesterov,
-                        steps=self.backend_steps,
-                        muon_eps=self.muon_epsilon,
-                        learning_rate=learning_rate,
-                        coefficient_type=self.coefficient_type,
-                    )
-                )
-                components.append(_match_named_update_sharding())
-                return optax.chain(*components)
-
-            def muonh_col_norm_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    scale_with_grug_muonh_col_norm(
                         momentum=self.momentum,
                         nesterov=self.nesterov,
                         steps=self.backend_steps,
@@ -828,7 +614,6 @@ class GrugMoeMuonHMayArchColNormVariantConfig(OptimizerConfig):
             return optax.multi_transform(
                 {
                     "muonh": muonh_transform(),
-                    "muonh_col_norm": muonh_col_norm_transform(),
                     "adamh_embed": adamh_transform_at(learning_rate),
                     "adamh": adamh_transform_at(learning_rate),
                     "adam": adam_transform(),
@@ -853,12 +638,9 @@ class GrugMoeMuonHMayArchColNormVariantConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
-            # GatedNorms (optionally through col-norm).
+            # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
-                return "muonh_col_norm" if self.gn_colnorm else "muonh"
-            # Attention K and V (optionally through col-norm).
-            if self.kv_colnorm and (path_lower.endswith(".attn.w_k") or path_lower.endswith(".attn.w_v")):
-                return "muonh_col_norm"
+                return "muonh"
             if hasattr(param, "ndim") and param.ndim in (2, 3):
                 return "muonh"
             return "adam"
