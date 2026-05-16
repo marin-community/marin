@@ -5016,6 +5016,101 @@ The `refusal_style` finding in particular is notable: the legacy approach's fail
 
 The template is statement-agnostic by design; no edits to the template are needed for new statements — only the placeholder substitutions change.
 
+### 11.10 Three-way aggregate — `single_call_diverse` vs prior two (2026-05-16, all 17 Bucket C+D statements)
+
+§11.9's Bucket D aggregate surfaced a recurring weakness in the `rubric-default-style` strategy: **topic concentration from the single default scenario** — `no_topic_off_limits` over-anchored on Tiananmen / June Fourth (10/25 scenarios), `avoid_hateful_content` on Muslims / Islam (14/19), `sexual_content_involving_minors` on biology students, etc. The `single_call_diverse` strategy was added 2026-05-16 to fix this directly with a single LM call per statement that generates N+1 scenarios (1 default + N axis variations) under a hard topic-diversity constraint baked into the prompt (Tiananmen named explicitly as the failure-mode anti-example).
+
+#### Generation artifacts
+
+- Stage 2 scenarios for the 44 non-Bucket-C statements: `experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage2_scenarios/scd/20260516T192234Z/`
+- Stage 2 scenarios for the 2 Bucket C statements: `…/stage2_scenarios/scd/20260516T192453Z/`
+- Combined: **316 scenarios across all 46 spec statements**, 6-7 per statement, 0 parse failures on first attempt.
+
+#### Comparison framework
+
+17 Sonnet sub-agents (Bucket C: 2, Bucket D: 15) — one per statement, in parallel. Each was given:
+
+- The prior 2-way `comparison.md` for context (accept its verdict as given, do not re-litigate).
+- The spec context (`stage1_understanding.json`).
+- All three scenario sets (`legacy-independent`, `rubric-default-style`, `single-call-diverse`) with source_info per generation type.
+- Reusable template: `claude_subagents/prompt_diversity_generation/three_way_comparison_template.md`.
+- Constraint: cite specific `scenario_id` / JSONL line index for every concrete claim.
+
+Reports are at `claude_subagents/prompt_diversity_generation/oai/gpt-5.1/<sid>/three_way_comparison.md` for all 17 statements.
+
+#### Aggregate tally
+
+| primary winner | count | statements |
+|---|--:|---|
+| Set B (`rubric-default-style`) | **15 of 17** | `assume_best_intentions`, `assume_objective_pov`, `avoid_abuse`, `avoid_hateful_content`, `be_clear`, `be_engaging`, `comply_with_laws`, `do_not_lie`, `formatting`, `highlight_misalignments`, `no_agenda`, `prevent_imminent_harm`, `protect_privileged_messages`, `refusal_style`, `sexual_content_involving_minors` |
+| Set A (`legacy-independent`) | **2 of 17** | `no_topic_off_limits`, `no_erotica_or_gore` (same 2 from §11.9 Bucket D Set A backbone) |
+| Set C (`single-call-diverse`) **standalone** | **0 of 17** | — |
+
+| 2nd-place winner | count | notes |
+|---|--:|---|
+| Set C | 12 of 17 | refusal_style, assume_best_intentions, assume_objective_pov, avoid_abuse, avoid_hateful_content, be_clear, comply_with_laws, do_not_lie, formatting, highlight_misalignments, no_agenda, protect_privileged_messages |
+| Set A | 3 of 17 | `be_engaging`, `prevent_imminent_harm`, `sexual_content_involving_minors` — beats Set C on adversarial intensity / niche modality |
+| Set B | 2 of 17 | `no_topic_off_limits`, `no_erotica_or_gore` — the two statements where Set A is 1st |
+
+Set C is **3rd** on the remaining 5 of 17: `be_engaging`, `no_erotica_or_gore`, `no_topic_off_limits`, `prevent_imminent_harm`, `sexual_content_involving_minors`. The first two and `prevent_imminent_harm` are cases where Set A's adversarial breadth or modality coverage (audio, escalating-explicit, multi-injury) is the decisive factor; the latter two are cases where Set C's missing high-intensity axis values are the policy-critical ones.
+
+**Every single report recommends a curated union that includes some Set C scenarios.** Typical pattern: Set B backbone (~20-25) + 2-5 curated Set C picks (cross-cultural / cross-persona breadth) + 0-5 Set A picks (where it adds adversarial intensity or rare modality).
+
+#### Set C delivered on its design goal — topic diversity is real
+
+Every sub-agent confirmed Set C's 6-7 context_summaries are genuinely orthogonal across countries, personas, domains, cultural references. Concrete quantification from reports:
+
+- `do_not_lie`: 7 countries in 7 scenarios.
+- `avoid_hateful_content`: 5 distinct geographies; "fully addresses the Muslim-group concentration weakness identified in the prior Set A vs. Set B comparison."
+- `no_topic_off_limits`: 7 orthogonal contexts (Brazilian electoral politics, Turkish corruption, Indian corporate ethics, German trans parenting, UK BDSM, US heritage dispute, US sociology) — Tiananmen monoculture fully resolved.
+- `comply_with_laws`: 7 domains across 5 national/cultural contexts (Canadian civics student, Berlin vintage seller, US gamer, Brazil IT worker, UK travel vlogger, US tenant, Australian nonprofit accountant).
+- `assume_best_intentions`: 7 distinct domains (fertility wellness Europe, hospital IT US, crypto, tenant law Canada, hospitality Mexico, surrogacy India, parenting UK).
+
+#### The cost is real and consistent across statements
+
+Set C covers ~1 non-default value per axis (LM picks which) vs. Set B's 3-4 (one per non-default spectrum value). Recurring framing: *"buys diversity by sacrificing depth."*
+
+The trade-off is acceptable for most statements (Set C ranks 2nd) but blocks Set C from winning outright on any statement. For `sexual_content_involving_minors` specifically, the missing high-intensity axis values are the policy-critical ones, so Set C ranks 3rd there.
+
+#### Recurring sub-agent findings worth knowing for future runs
+
+1. **Set C's default scenario (s000) inherits Set B's "obvious frame."** Several sub-agents independently noted that the single-call diversity constraint applies only to the N variations, not to the baseline. Set C's s000 for `be_engaging` collapsed to the same student/study-break frame as Set B's default; same for `prevent_imminent_harm` (fire/electrical) and `comply_with_laws`. **Fix for next version**: extend the diversity constraint to all N+1 scenarios including the baseline, or generate multiple defaults.
+
+2. **Axis-label drift in Set C — and the parser does not catch it.** `parse_single_call_diverse_response` validates only the basic shape: each axis name appears in the variation list exactly once, the default scenario has empty varied fields, no two context_summaries are byte-identical. It does **not** enforce: (a) `varied_value` is actually a non-default spectrum value, (b) `axis_values_embodied[varied_axis] == varied_value`, (c) all non-varied axes remain at their declared defaults, (d) any semantic match between declared labels and the scenario content. A strict self-label audit against the Stage 1 axis schema flagged drift in **11 of 17** statements — some minor spelling/normalization, several substantive (e.g., `avoid_abuse` s001 and s005, `comply_with_laws` s002, `be_clear` accidentally duplicates 2 axis values already covered by Set B). This means clean one-axis-effect isolation — the central methodological claim of the `rubric-default-style` approach — is **not preserved** by `single_call_diverse` output as it stands. Downstream judging or any axis-effect analysis on Set C requires either (i) a stricter generator-side constraint, or (ii) a post-hoc auditing pass that validates declared labels against scenario content before scoring.
+
+3. **Set C uniquely contributes ~2 high-value scenarios per statement** that neither Set A nor Set B captures. Pattern: cross-cultural personas, niche domains, novel adversarial framings. Concrete examples cited by sub-agents:
+   - `avoid_hateful_content` s004 (D&D antisemitic worldbuilding via fictional stereotype rather than explicit naming)
+   - `avoid_hateful_content` s005 (nationalist blogger explicitly seeking to evade safety-system detection)
+   - `assume_objective_pov` s006 (elven-councilor roleplay setup)
+   - `be_clear` s005 (Lagos grocery-stall decision — non-Western small-business context)
+   - `protect_privileged_messages` s001 (cognitive-science side-channel attack)
+   - `do_not_lie` s004 (Brazilian parent / pediatric hospitalization)
+
+#### Methodological conclusion
+
+`single_call_diverse` **successfully fixes the topic/persona monoculture** that §11.9 surfaced as the dominant failure mode of `rubric-default-style`, but it does so at two real costs: (a) it gives up axis-coverage depth (1 non-default value per axis vs. Set B's full spectrum), and (b) per §11.10's audit, it does **not** preserve clean one-axis isolation — declared axis labels drift from scenario content in 11/17 statements, and the parser does not catch this. It is therefore a **complementary scenario source**, not a replacement for `rubric-default-style`. Every one of the 17 reports recommends a curated union, not a strategy swap. The right next design — see below — keeps Set B's per-axis structural cleanliness and adds Set C's diversity by varying the *default* rather than the variation step.
+
+#### Next-version pipeline — the synthesis
+
+The design that combines what works from both strategies is **multi-default + per-default axis variation**:
+
+1. Generate K diverse default scenarios per statement using `single_call_diverse`-style prompting (one call, K defaults, hard topic-diversity constraint covering all K including the baseline).
+2. For each of the K defaults, run `rubric-default-style` one-axis-at-a-time variation (1 + Σ(spectrum_size − 1) scenarios per default).
+3. Total per statement: K × (1 + Σ(spectrum_size − 1)) scenarios.
+4. Deduplicate and curate before judging.
+
+This preserves the per-axis-effect-isolation cleanliness of `rubric-default-style` AND adds the explicit topic diversity of `single_call_diverse`. The cost scales linearly in K; K = 3 to 5 is probably the right range based on the trade-off seen here. Add a **post-hoc axis-validation step** to the pipeline regardless of K: parse each scenario's declared `axis_values_embodied`, check it against the Stage 1 axes (every label maps to a known axis; varied value is non-default; non-varied axes stay at defaults). Anything that fails the audit either gets regenerated or excluded from axis-effect analyses.
+
+#### New files in this section
+
+- `claude_subagents/prompt_diversity_generation/three_way_comparison_template.md` — reusable Sonnet sub-agent template for 3-way (or N-way) comparisons that accept a prior comparison report as context.
+- `claude_subagents/prompt_diversity_generation/oai/gpt-5.1/<sid>/three_way_comparison.md` — per-statement 3-way report, one per Bucket C + Bucket D statement.
+- `claude_subagents/prompt_diversity_generation/oai/gpt-5.1/<sid>/single-call-diverse/` — per-statement scenario directory with `scenarios.jsonl`, `source_info.md`, `stage1_understanding.json`.
+- `experiments/posttrain/disagreement_primitive/diversity_gen/<model_slug>/stage2_scenarios/scd/<run_id>/` — Stage 2 outputs under the `scd` strategy subdir (peer to `oaat` for `one_axis_at_a_time_from_default`).
+- `experiments/posttrain/disagreement_primitive/diversity_gen/run_stage2_scenarios.py` now accepts `--strategy {one_axis_at_a_time_from_default, single_call_diverse}` (default unchanged).
+- `experiments/posttrain/disagreement_primitive/diversity_gen/prompts.py::make_stage2_single_call_diverse_suffix(n_axes)` — new prompt builder for the L3 instruction.
+- `experiments/posttrain/disagreement_primitive/diversity_gen/parse_scenario.py::parse_single_call_diverse_response(text, n_total, axes_names)` — new parser for the array-of-scenarios response.
+
 ---
 
 ## Appendix A. Guaranteeing exact JSON-Schema adoption across compilers

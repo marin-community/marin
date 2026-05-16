@@ -75,9 +75,11 @@ from raw_api_logger import RawAPILogger
 
 from experiments.posttrain.disagreement_primitive.diversity_gen.parse_scenario import (
     parse_scenario_response,
+    parse_single_call_diverse_response,
 )
 from experiments.posttrain.disagreement_primitive.diversity_gen.prompts import (
     STAGE2_SYSTEM_PROMPT,
+    make_stage2_single_call_diverse_suffix,
     make_stage2_statement_prefix,
     make_stage2_universal_prefix,
     make_stage2_variation_suffix,
@@ -338,6 +340,150 @@ def _build_output_record(
         "attempt_index": result.attempts,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Strategy: single_call_diverse — one call per statement, N+1 scenarios in
+# one JSON array, hard topic-diversity constraint. See dart.md §11.9 follow-up
+# and the prompt builder `make_stage2_single_call_diverse_suffix`.
+# ---------------------------------------------------------------------------
+
+
+def run_single_call_diverse_sync(
+    spec: dict[str, dict[str, Any]],
+    understandings: dict[str, dict[str, Any]],
+    statement_ids: list[str],
+    out_dir: Path,
+    model: str,
+    temperature: float,
+    max_retries: int,
+    workers: int,
+    stage1_run_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise SystemExit("OPENAI_API_KEY not in environment. `set -a; source .env; set +a` first.")
+    client = OpenAI(api_key=api_key)
+    log = RawAPILogger(f"diversity_gen_{_model_slug(model)}_stage2_scd")
+    attempts_dir = out_dir / "attempts"
+    attempts_dir.mkdir(parents=True, exist_ok=True)
+    universal_prefix = make_stage2_universal_prefix()
+
+    print(
+        f"sync mode + single_call_diverse: 1 call per statement, " f"{len(statement_ids)} statements, workers={workers}",
+        flush=True,
+    )
+
+    def process(sid: str) -> dict[str, Any]:
+        statement = spec[sid]
+        understanding = understandings[sid]
+        axes = understanding.get("behavior_specific_axes") or []
+        axes_names = [ax["axis"] for ax in axes]
+        n_axes = len(axes)
+        n_total = n_axes + 1
+        statement_prefix = make_stage2_statement_prefix(statement, understanding)
+        suffix = make_stage2_single_call_diverse_suffix(n_axes)
+        user_content = universal_prefix + statement_prefix + suffix
+
+        last_err: str | None = None
+        last_content: str | None = None
+        for attempt in range(1, max_retries + 1):
+            t0 = time.time()
+            try:
+                resp = log.call(
+                    role="stage2_single_call_diverse",
+                    key={"statement_id": sid, "attempt": attempt, "model": model},
+                    fn=lambda: client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": STAGE2_SYSTEM_PROMPT},
+                            {"role": "user", "content": user_content},
+                        ],
+                        temperature=temperature,
+                        max_completion_tokens=16000,
+                        reasoning_effort="none",
+                        response_format={"type": "json_object"},
+                    ),
+                )
+            except Exception as exc:
+                last_err = f"api_error: {type(exc).__name__}: {exc}"
+                print(f"  [{sid}] attempt {attempt} api error: {exc}", flush=True)
+                _save_attempt(attempts_dir, sid, 0, attempt, content="", error=last_err)
+                time.sleep(1 + attempt)
+                continue
+
+            content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+            last_content = content
+            try:
+                scenarios = parse_single_call_diverse_response(content, n_total, axes_names)
+            except ValueError as exc:
+                last_err = f"parse_error: {exc}"
+                print(f"  [{sid}] attempt {attempt} parse error: {exc}", flush=True)
+                _save_attempt(attempts_dir, sid, 0, attempt, content=content, error=last_err)
+                time.sleep(1 + attempt)
+                continue
+
+            _save_attempt(attempts_dir, sid, 0, attempt, content=content, error=None)
+            print(
+                f"  [{sid}] attempt {attempt} OK ({n_total} scenarios, {time.time() - t0:.1f}s)",
+                flush=True,
+            )
+            return {"sid": sid, "success": True, "scenarios": scenarios, "attempts": attempt, "raw": content}
+
+        return {"sid": sid, "success": False, "error": last_err, "attempts": max_retries, "raw": last_content}
+
+    successes: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(process, sid): sid for sid in statement_ids}
+        completed = 0
+        for fut in as_completed(futures):
+            sid = futures[fut]
+            try:
+                res = fut.result()
+            except Exception as exc:
+                failures.append({"statement_id": sid, "error": f"worker_crash: {type(exc).__name__}: {exc}"})
+                continue
+            completed += 1
+            print(f"  done {completed}/{len(statement_ids)}: {sid}", flush=True)
+            if not res["success"]:
+                failures.append(
+                    {
+                        "statement_id": sid,
+                        "error": res["error"],
+                        "attempts": res["attempts"],
+                        "last_raw_truncated": (res.get("raw") or "")[:500],
+                    }
+                )
+                continue
+            # Convert each scenario to the canonical per-record output shape
+            for i, s in enumerate(res["scenarios"]):
+                rec = {
+                    "statement_id": sid,
+                    "scenario_n": i,
+                    "scenario_id": f"{sid}__s{i:03d}",
+                    "is_default_scenario": bool(s["is_default_scenario"]),
+                    "varied_axis": s["varied_axis"],
+                    "varied_value": s["varied_value"],
+                    "strategy": "single_call_diverse",
+                    "scenario_text": s["scenario_text"],
+                    "user_query": s["user_query"],
+                    "system_prompt": s["system_prompt"],
+                    "axis_values_embodied": s["axis_values_embodied"],
+                    "rubric": s["rubric"],
+                    "context_summary": s["context_summary"],
+                    "model": model,
+                    "temperature": temperature,
+                    "reasoning_effort": "none",
+                    "mode": "sync",
+                    "stage1_run_id": stage1_run_id,
+                    "attempt_index": res["attempts"],
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                }
+                successes.append(rec)
+
+    return successes, failures
 
 
 def run_sync_mode(
@@ -632,9 +778,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--mode", choices=["sync", "batch"], default="batch", help="execution mode (default: batch)")
     p.add_argument("--model", default="gpt-5.1", help="LM to use (default: gpt-5.1)")
     p.add_argument("--temperature", type=float, default=1.0, help="generation temperature (default: 1.0)")
-    # Sampling strategy is hard-coded to one_axis_at_a_time_from_default per
-    # dart.md §11.6; total scenarios per statement is determined by each
-    # statement's axis spectrum sizes, not by a fixed --n-scenarios cap.
+    p.add_argument(
+        "--strategy",
+        choices=["one_axis_at_a_time_from_default", "single_call_diverse"],
+        default="one_axis_at_a_time_from_default",
+        help=(
+            "scenario-generation strategy. one_axis_at_a_time_from_default: one LM call per scenario, "
+            "single-axis variation from default (dart.md §11.6). single_call_diverse: one call per "
+            "statement returning N+1 scenarios (1 default + N axis variations) with hard topic-diversity "
+            "constraint (dart.md §11.9 follow-up)."
+        ),
+    )
     p.add_argument("--stage1-dir", type=Path, required=True, help="path to a stage1_understanding/<run_id>/ directory")
     p.add_argument("--statements", default=None, help="comma-separated statement ids (default: all in stage1 output)")
     p.add_argument("--spec-path", type=Path, default=DEFAULT_SPEC_PATH)
@@ -670,20 +824,28 @@ def main(argv: list[str] | None = None) -> int:
     if missing_spec:
         raise SystemExit(f"statements missing from spec file: {missing_spec}")
 
-    out_base = args.output_base_dir or (DEFAULT_OUTPUT_ROOT / _model_slug(args.model) / "stage2_scenarios")
+    # Strategy-specific output subdir + scenario count computation
+    strategy_slug = "scd" if args.strategy == "single_call_diverse" else "oaat"
+    out_base = args.output_base_dir or (
+        DEFAULT_OUTPUT_ROOT / _model_slug(args.model) / "stage2_scenarios" / strategy_slug
+    )
     run_id = _now_stamp()
     out_dir = out_base / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"output dir: {out_dir}", flush=True)
 
-    # Compute and report scenario counts per statement BEFORE running
     per_stmt_counts: list[tuple[str, int]] = []
-    for sid in wanted:
-        axes = understandings[sid].get("behavior_specific_axes") or []
-        per_stmt_counts.append((sid, len(_compute_axis_assignment(axes))))
+    if args.strategy == "single_call_diverse":
+        for sid in wanted:
+            axes = understandings[sid].get("behavior_specific_axes") or []
+            per_stmt_counts.append((sid, len(axes) + 1))  # 1 default + N variations
+    else:
+        for sid in wanted:
+            axes = understandings[sid].get("behavior_specific_axes") or []
+            per_stmt_counts.append((sid, len(_compute_axis_assignment(axes))))
     total_scenarios = sum(c for _, c in per_stmt_counts)
     print(
-        f"will generate {total_scenarios} scenarios across {len(wanted)} statements (one-axis-at-a-time from default):",
+        f"will generate {total_scenarios} scenarios across {len(wanted)} statements (strategy={args.strategy}):",
         flush=True,
     )
     for sid, c in per_stmt_counts:
@@ -695,7 +857,7 @@ def main(argv: list[str] | None = None) -> int:
         "temperature": args.temperature,
         "reasoning_effort": "none",
         "mode": args.mode,
-        "strategy": "one_axis_at_a_time_from_default",
+        "strategy": args.strategy,
         "stage1_dir": str(args.stage1_dir),
         "stage1_run_id": stage1_run_id,
         "statements": wanted,
@@ -708,7 +870,21 @@ def main(argv: list[str] | None = None) -> int:
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
-    if args.mode == "sync":
+    if args.strategy == "single_call_diverse":
+        if args.mode == "batch":
+            raise SystemExit("single_call_diverse + batch mode not implemented yet; use --mode sync")
+        successes, failures = run_single_call_diverse_sync(
+            spec,
+            understandings,
+            wanted,
+            out_dir,
+            args.model,
+            args.temperature,
+            args.max_retries,
+            args.workers,
+            stage1_run_id,
+        )
+    elif args.mode == "sync":
         successes, failures = run_sync_mode(
             spec,
             understandings,
