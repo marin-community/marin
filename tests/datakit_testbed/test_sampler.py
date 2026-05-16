@@ -12,7 +12,7 @@ import pytest
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource
 
-from experiments.datakit_testbed.sampler import (
+from experiments.testbed.sampler import (
     proportional_sample_fractions,
     sample_normalized_shards,
 )

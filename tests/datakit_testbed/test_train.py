@@ -13,8 +13,8 @@ from marin.datakit.sources import all_sources
 from marin.execution.types import ExecutorStep
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config
 
-from experiments.datakit_testbed.sampler import build_testbed_steps
-from experiments.datakit_testbed.train import testbed_tokenize as _testbed_tokenize
+from experiments.testbed.sampler import build_testbed_steps
+from experiments.testbed.train import testbed_tokenize as _testbed_tokenize
 
 _SMOKE_SOURCE = all_sources()["nemotron_cc_code_v1/all"]
 

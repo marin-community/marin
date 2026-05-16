@@ -24,7 +24,7 @@ from marin.execution.step_runner import StepRunner, check_cache
 from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
 
-from experiments.datakit_testbed.sampler import (
+from experiments.testbed.sampler import (
     proportional_sample_fractions,
     sample_normalized_shards_step,
 )
