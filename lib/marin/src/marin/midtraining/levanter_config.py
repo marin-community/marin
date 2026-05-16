@@ -62,10 +62,33 @@ def _deep_copy_jsonable(value: Any) -> Any:
 
 
 def render_train_lm_yaml(resolved: ResolvedMidtrainSpec) -> str:
-    """Serialize the rendered config to YAML for ``--config <path>``."""
+    """Serialize the rendered config to YAML for ``--config <path>``.
+
+    Coerces enum values to their underlying strings before ``yaml.safe_dump``
+    so Levanter-side dataclass enums (e.g. ``ActivationFunctionEnum.silu``)
+    that landed in ``model_config`` via ``dataclasses.asdict`` round-trip
+    cleanly. Levanter parses the YAML back through draccus, which accepts
+    the string form.
+    """
     import yaml
 
-    return yaml.safe_dump(render_train_lm_config(resolved), sort_keys=False, default_flow_style=False)
+    return yaml.safe_dump(
+        _enum_safe(render_train_lm_config(resolved)),
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+
+def _enum_safe(value: Any) -> Any:
+    import enum
+
+    if isinstance(value, enum.Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {k: _enum_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_enum_safe(v) for v in value]
+    return value
 
 
 def _build_trainer_section(resolved: ResolvedMidtrainSpec) -> dict[str, Any]:
