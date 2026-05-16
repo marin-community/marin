@@ -108,9 +108,9 @@ def _build_steps() -> list[StepSpec]:
             "v": 2,
         },
         fn=remote(
-            lambda output_path, normalized_path=normalized.output_path: embed_source(
+            lambda output_path, normalized=normalized: embed_source(
                 output_path=output_path,
-                normalized_path=normalized_path,
+                normalized=normalized,
                 window_size=EMBED_WINDOW,
                 max_shards=MAX_SHARDS,
                 worker_resources=EMBED_WORKER_RESOURCES,

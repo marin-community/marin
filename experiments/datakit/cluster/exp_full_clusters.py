@@ -109,7 +109,6 @@ def _build_steps() -> list[StepSpec]:
     embed_steps: dict[str, StepSpec] = {}
     for source_name, source in sources.items():
         normalized = source.normalized
-        normalized_path = normalized.output_path
         embed_steps[source_name] = StepSpec(
             name=f"embed/luxical/{source_name}",
             output_path_prefix=_OUTPUT_PREFIX,
@@ -123,9 +122,9 @@ def _build_steps() -> list[StepSpec]:
                 "v": 2,
             },
             fn=remote(
-                lambda output_path, normalized_path=normalized_path: embed_source(
+                lambda output_path, normalized=normalized: embed_source(
                     output_path=output_path,
-                    normalized_path=normalized_path,
+                    normalized=normalized,
                     window_size=EMBED_WINDOW,
                     worker_resources=EMBED_WORKER_RESOURCES,
                     max_workers=EMBED_MAX_WORKERS_PER_SOURCE,

@@ -177,7 +177,7 @@ def _embed_shard(
 
 def embed_source(
     output_path: str,
-    normalized_path: str,
+    normalized: NormalizedData,
     *,
     repo_id: str = LUXICAL_REPO,
     weights_filename: str = LUXICAL_WEIGHTS_FILE,
@@ -193,7 +193,6 @@ def embed_source(
     Embedder, L2-normalizes, quantizes to int8, and writes one output
     parquet shard with the same basename.
     """
-    normalized = Artifact.from_path(normalized_path, NormalizedData)
     source_shards = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
     if max_shards is not None:
         source_shards = source_shards[:max_shards]
