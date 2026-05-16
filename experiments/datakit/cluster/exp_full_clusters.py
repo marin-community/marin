@@ -36,6 +36,7 @@ Submit::
 import logging
 
 from fray import ResourceConfig
+from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import Artifact
 from marin.execution.remote import remote
@@ -107,10 +108,10 @@ def _build_steps() -> list[StepSpec]:
     # --- Per-source embed steps ---------------------------------------------
     embed_steps: dict[str, StepSpec] = {}
     for source_name, source in sources.items():
-        normalized = source.normalized
+        normalize_step = source.normalized
         embed_steps[source_name] = StepSpec(
             name=f"datakit/embed/luxical/{source_name}",
-            deps=[normalized],
+            deps=[normalize_step],
             hash_attrs={
                 "luxical_repo": LUXICAL_REPO,
                 "luxical_weights": LUXICAL_WEIGHTS_FILE,
@@ -120,9 +121,9 @@ def _build_steps() -> list[StepSpec]:
                 "v": 2,
             },
             fn=remote(
-                lambda output_path, normalized=normalized: embed_source(
+                lambda output_path, np=normalize_step.output_path: embed_source(
                     output_path=output_path,
-                    normalized=normalized,
+                    normalized=Artifact.from_path(np, NormalizedData),
                     window_size=EMBED_WINDOW,
                     worker_resources=EMBED_WORKER_RESOURCES,
                     max_workers=EMBED_MAX_WORKERS_PER_SOURCE,
