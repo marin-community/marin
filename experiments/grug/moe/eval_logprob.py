@@ -3,29 +3,25 @@
 
 """Minimal logprob lm-eval-harness on a finished grug-MoE checkpoint.
 
-Clean-room replacement for `levanter.eval_harness` that does only what
-logprob evals need:
-
-  1. Load a grug `Transformer` from a Levanter-native checkpoint.
-  2. Run lm-eval's `evaluate()` once with a `GrugLM` whose `loglikelihood`
-     tokenizes the requests, runs the JIT'd forward pass loop, and returns
-     real logprobs in one call. This avoids the two-pass collect-then-replay
-     pattern, which broke for inlined gsm8k / humaneval tasks because
-     lm-eval's two `evaluate` calls produced non-matching request sets.
-  3. Hand the resulting `(loglikelihood, is_greedy)` pairs back to lm-eval
-     for metric aggregation.
+Loads a grug `Transformer` from a Levanter-native checkpoint and runs
+lm-eval's `evaluate()` once with a `GrugLM` whose `loglikelihood` tokenizes
+the requests, runs the JIT'd forward pass loop, and returns real logprobs
+in a single call. Doing the forward pass inside `loglikelihood` (rather
+than collecting requests first and replaying through a second `evaluate()`
+call) keeps the request set deterministic on tasks whose few-shot sampler
+isn't reseeded between calls.
 
 Eval-mode bumps `GrugModelConfig.capacity_factor` so the routed MoE doesn't
-silently drop tokens at inference (training defaults to 1.0; we evaluate at
-8.0).
+silently drop tokens at inference (training runs with capacity_factor=1.0;
+evaluate at 8.0).
 
-One ExecutorStep per (model, task) so adding tasks doesn't invalidate
-cached results for existing tasks.
+Each (model, task) is a separate `ExecutorStep`, so adding either dimension
+is incremental — already-evaluated cells stay cached.
 
 Multi-host coordination: chief enters `evaluate()`; non-chief hosts enter
 `_run_listener_loop` which mirrors chief's `broadcast_one_to_all` /
-`process_allgather` calls so JAX collectives stay in lockstep. Chief sends a
-`n=-1` sentinel after `evaluate()` returns to release the listeners.
+`process_allgather` calls so JAX collectives stay in lockstep. Chief sends
+an `n=-1` sentinel after `evaluate()` returns to release the listeners.
 """
 
 import dataclasses
@@ -73,12 +69,12 @@ def _task_key(task: EvalTaskConfig) -> str:
     return task.task_alias or f"{task.name}_{task.num_fewshot}shot"
 
 
-# `_TASK_SPECS` = exp1337's `LOGPROB_TASKS`: mmlu_sl_verb (0 + 5 shot),
-# logprob_gsm8k_5shot (inlined), logprob_humaneval_10shot (inlined). Extend
-# the tuple locally to add more tasks; bare-continuation MCQ tasks
-# (medmcqa, csqa, boolq, ...) tend to be noisy at small scale — see the
-# `*_sl_verb` variants in the Helw150 fork (Helw150/lm-evaluation-harness)
-# for surface-form-competition-free alternatives.
+# `_TASK_SPECS` defaults to a logprob-only suite (mmlu_sl_verb 0/5-shot plus
+# inlined logprob_gsm8k_5shot / logprob_humaneval_10shot). Extend by appending
+# more `EvalTaskConfig` entries; for MCQ tasks where the bare continuations
+# are short tokens ("A"/"B"/"yes"/"no") the choice_logprob signal scales
+# poorly with model size — prefer task variants with verbalized "A. <text>"
+# continuations (lm-eval's `*_sl_verb` configs) where available.
 
 
 @eqx.filter_jit
@@ -101,13 +97,14 @@ def _batch_logprobs(transformer, tokens, loss_weight):
 def _lm_eval_spec(task: EvalTaskConfig) -> str | dict:
     """Spec for `get_task_dict`.
 
-    Bare registered tasks (no inlined task_kwargs) are passed as a **string**
-    so lm-eval skips the registered-task override path, which drops fields
-    inherited via ``include:`` chains (e.g., ``arc_challenge``'s
-    dataset_path / *_split from arc_easy). Inlined tasks (gsm8k/humaneval
-    in exp1337) still need the dict form. ``num_fewshot`` and ``task_alias``
-    are applied post-build via ``set_config`` so they don't re-trigger the
-    drop.
+    A registered task with no `task_kwargs` is passed as a bare string so
+    lm-eval uses its cached config directly. Passing a dict triggers the
+    registered-task override path, which silently drops fields the task
+    inherits via ``include:`` chains (e.g., ``arc_challenge`` inherits
+    ``dataset_path`` / ``*_split`` from arc_easy). Inlined tasks (where
+    ``task_kwargs`` carries the full config) need the dict form by
+    definition; ``num_fewshot`` and ``task_alias`` are applied post-build
+    via ``set_config`` so they don't re-trigger the drop.
     """
     if not task.task_kwargs:
         return task.name
@@ -121,9 +118,9 @@ def _lm_eval_spec(task: EvalTaskConfig) -> str | dict:
 def _apply_num_fewshot(task_dict: dict, num_fewshot: int) -> None:
     """Walk ``task_dict`` and set ``num_fewshot`` on each leaf Task.
 
-    Mirrors the post-build override that ``simple_evaluate`` does so we get
-    consistent few-shot behavior without re-triggering the include-chain
-    drop bug at build time.
+    Mirrors lm-eval's `simple_evaluate`, which sets fewshot after task
+    construction; doing it post-build avoids the registered-task override
+    path that drops inherited config fields (see `_lm_eval_spec`).
     """
     for v in task_dict.values():
         if hasattr(v, "set_config"):
