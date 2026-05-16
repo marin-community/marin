@@ -12,7 +12,9 @@ d512=3.6427, d768=3.3040). Inside each Block:
         mlp_out = mlp_out + shared(mlp_in)
     x = x + mlp_out
 
-Tests ``routed_expert_scale in {2.0, 3.0}`` at d512 and d768 (4 runs).
+Tests ``routed_expert_scale in {2.0, 2.5, 3.0}`` at d512, d768, and d1024
+(9 runs total; the four d512/d768 entries at 2.0/3.0 are content-hash
+cached from the first round of submissions).
 
 Submit on us-east5-a:
 
@@ -41,9 +43,10 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 _POINTS: tuple[tuple[int, float], ...] = (
     (512, 2.19e17),
     (768, 1.70e18),
+    (1024, 9.00e18),
 )
 
-_SCALES: tuple[float, ...] = (2.0, 3.0)
+_SCALES: tuple[float, ...] = (2.0, 2.5, 3.0)
 
 _WARMUP_FRACTION: float = 0.01
 _NUM_EXPERTS: int = 256
