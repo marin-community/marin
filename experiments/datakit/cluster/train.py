@@ -24,9 +24,37 @@ import tempfile
 import time
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+from marin.utils import fsspec_glob
 from rigging.filesystem import open_url
 
+from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, QUANT_SCALE, dequantize_to_fp32
+
 logger = logging.getLogger(__name__)
+
+
+def _load_sample_parquet(sample_path: str) -> np.ndarray:
+    """Load all sample parquet shards, dequantize int8 → fp32, return one stacked array."""
+    shard_paths = sorted(fsspec_glob(f"{sample_path.rstrip('/')}/*.parquet"))
+    if not shard_paths:
+        raise RuntimeError(f"No sample parquet shards under {sample_path}")
+
+    logger.info("Loading %d sample parquet shards from %s", len(shard_paths), sample_path)
+    t0 = time.monotonic()
+    tables = [pq.read_table(p, columns=["embedding"]) for p in shard_paths]
+    table = pa.concat_tables(tables)
+    fsl = table["embedding"].combine_chunks()
+    flat_int8 = fsl.values.to_numpy(zero_copy_only=False)
+    embeddings_int8 = flat_int8.reshape(-1, LUXICAL_DIM)
+    embeddings = dequantize_to_fp32(embeddings_int8, scale=QUANT_SCALE)
+    logger.info(
+        "Loaded sample (%d x %d) in %.1fs",
+        embeddings.shape[0],
+        embeddings.shape[1],
+        time.monotonic() - t0,
+    )
+    return embeddings
 
 
 def train_centroids(
@@ -43,13 +71,8 @@ def train_centroids(
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import squareform
 
-    local_sample = os.path.join(tempfile.gettempdir(), "sample.npz")
-    with open_url(os.path.join(sample_path, "sample.npz"), "rb") as src, open(local_sample, "wb") as dst:
-        dst.write(src.read())
-    sample = np.load(local_sample)
-    embeddings = sample["embeddings"].astype(np.float32, copy=False)
-    os.remove(local_sample)
-    logger.info("Loaded sample (%d x %d) for K-means K=%d", *embeddings.shape, k_train)
+    embeddings = _load_sample_parquet(sample_path)
+    logger.info("Running K-means K=%d on %d x %d sample", k_train, *embeddings.shape)
 
     t0 = time.monotonic()
     km = faiss.Kmeans(

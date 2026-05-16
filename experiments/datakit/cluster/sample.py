@@ -3,45 +3,73 @@
 
 """Stratified sample across all per-source EmbeddingAttrData → centroid training input.
 
-For each source we pull up to ``n_per_source`` rows uniformly across its
-embedding shards. The per-source cap (not strict proportional) keeps
-long-tail sources audible against the giants. At ~100 active sources x
-n_per_source=100_000 the result is ~10M rows.
+Map-only Zephyr pipeline. One task per ``(source, embedding shard)`` reads the
+shard, samples up to ``per_shard`` rows uniformly, and writes those rows to a
+parquet file labeled with the source. Output schema::
 
-Output is a single ``sample.npz`` (numpy fast-load is what FAISS K-means
-wants; we don't need parquet's columnar machinery for the training set).
+    source     string
+    embedding  list<int8> length 192   (same encoding as EmbeddingAttrData)
+
+Per-source cap: ``per_shard = max(n_per_source // num_shards, 1)`` so every source
+contributes roughly ``n_per_source`` rows (slightly under if not divisible).
+The cap (not strict proportional) keeps long-tail sources audible against the
+giants. At ~100 active sources x n_per_source=100_000 the result is ~10M rows.
+
+Train consumes ``*.parquet`` from the output dir; dequantization to fp32 with
+``dequantize_to_fp32`` happens there. Each shard is independent so the pipeline
+is fully parallelizable and resumable across preemptions (``skip_existing=True``
+on the writer means previously-completed sample shards survive a restart).
 """
+
+from __future__ import annotations
 
 import logging
 import os
-import tempfile
+from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
-import pyarrow.parquet as pq
-from rigging.filesystem import open_url
+import pyarrow as pa
+from fray import ResourceConfig
+from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, load_file
+from zephyr.runners import InlineRunner
 
-from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
+from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, EmbeddingAttrData
 
 logger = logging.getLogger(__name__)
 
 
-def _sample_from_shard(
-    shard_uri: str,
-    take: int,
-    dim: int,
-    scale: float,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """Load int8 embeddings from one parquet shard, dequantize, return ``take`` random rows as fp32."""
-    table = pq.read_table(shard_uri, columns=["embedding"])
-    # ChunkedArray -> FixedSizeListArray -> flat int8 values array.
-    fsl = table["embedding"].combine_chunks()
-    flat_int8 = fsl.values.to_numpy(zero_copy_only=False)
-    embeddings_int8 = flat_int8.reshape(-1, dim)
-    if take < len(embeddings_int8):
-        idx = rng.choice(len(embeddings_int8), size=take, replace=False)
-        embeddings_int8 = embeddings_int8[idx]
-    return dequantize_to_fp32(embeddings_int8, scale=scale)
+_SAMPLE_SCHEMA = pa.schema(
+    [
+        pa.field("source", pa.string()),
+        pa.field("embedding", pa.list_(pa.int8(), LUXICAL_DIM)),
+    ]
+)
+
+
+def _sample_shard(
+    batches: Iterator[list[dict[str, Any]]],
+    shard: ShardInfo,
+    *,
+    source_name: str,
+    per_shard: int,
+    seed: int,
+) -> Iterator[dict[str, Any]]:
+    """Per-shard map: collect rows, uniform-sample ``per_shard`` of them, emit with source label.
+
+    Reads the whole shard into memory because parquet row groups can't be
+    sampled randomly without first knowing row counts. Shards are MB-sized
+    (~22K rows x 192-byte int8 embedding) so this is cheap.
+    """
+    rng = np.random.default_rng(seed + shard.shard_idx)
+    rows: list[dict[str, Any]] = []
+    for batch in batches:
+        rows.extend(batch)
+    if per_shard < len(rows):
+        idx = rng.choice(len(rows), size=per_shard, replace=False)
+        rows = [rows[i] for i in idx]
+    for r in rows:
+        yield {"source": source_name, "embedding": r["embedding"]}
 
 
 def sample_centroid_inputs(
@@ -49,47 +77,67 @@ def sample_centroid_inputs(
     embeddings: dict[str, EmbeddingAttrData],
     n_per_source: int,
     seed: int = 42,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int = 128,
 ) -> None:
-    """Concatenate up to ``n_per_source`` rows from each source's embedding parquet shards."""
-    rng = np.random.default_rng(seed)
-    all_emb: list[np.ndarray] = []
-    all_src: list[np.ndarray] = []
-    total = 0
+    """Map-only Zephyr sample across every (source, shard) pair → parquet shards."""
+    shard_paths: list[str] = []
+    source_by_shard: list[str] = []
+    per_shard_by_shard: list[int] = []
 
     for source_name, attr in sorted(embeddings.items()):
         shards = attr.shard_paths()
         if not shards:
             logger.warning("No embedding shards for %s under %s", source_name, attr.output_dir)
             continue
-
         per_shard = max(n_per_source // len(shards), 1)
-        chunks: list[np.ndarray] = []
-        collected = 0
-        for shard_uri in shards:
-            if collected >= n_per_source:
-                break
-            take = min(per_shard, n_per_source - collected)
-            chunk = _sample_from_shard(shard_uri, take, attr.embedding_dim, attr.quantization_scale, rng)
-            chunks.append(chunk)
-            collected += len(chunk)
+        for shard_path in shards:
+            shard_paths.append(shard_path)
+            source_by_shard.append(source_name)
+            per_shard_by_shard.append(per_shard)
 
-        if not chunks:
-            continue
-        block = np.vstack(chunks).astype(np.float32, copy=False)
-        all_emb.append(block)
-        all_src.append(np.full(len(block), source_name, dtype=object))
-        total += len(block)
-        logger.info("Sampled %d from %s (over %d shards)", len(block), source_name, len(shards))
+    if not shard_paths:
+        raise RuntimeError("No embedding shards found across any source")
 
-    if not all_emb:
-        raise RuntimeError("No embeddings found across any source")
+    logger.info(
+        "Sampling %d shards across %d sources (n_per_source=%d, ~%d total rows)",
+        len(shard_paths),
+        len({s for s in source_by_shard}),
+        n_per_source,
+        sum(per_shard_by_shard),
+    )
 
-    sample_embeddings = np.vstack(all_emb).astype(np.float32, copy=False)
-    sample_sources = np.concatenate(all_src)
-    logger.info("Total sample: %d x %d across %d sources", *sample_embeddings.shape, len(all_emb))
+    output_basenames = [f"{s.replace('/', '-')}-{i:06d}.parquet" for i, s in enumerate(source_by_shard)]
 
-    local = os.path.join(tempfile.gettempdir(), "sample.npz")
-    np.savez_compressed(local, embeddings=sample_embeddings, sources=sample_sources)
-    with open(local, "rb") as src, open_url(os.path.join(output_path, "sample.npz"), "wb") as dst:
-        dst.write(src.read())
-    os.remove(local)
+    def _output_path(shard_idx: int, _total: int, bn: list[str] = output_basenames) -> str:
+        return f"{output_path.rstrip('/')}/{bn[shard_idx]}"
+
+    source_specs = [InputFileSpec(path=p, columns=["embedding"]) for p in shard_paths]
+
+    ds = (
+        Dataset.from_list(source_specs)
+        .flat_map(load_file)
+        .map_shard(
+            lambda batches, shard, sn=source_by_shard, ps=per_shard_by_shard, sd=seed: _sample_shard(
+                batches,
+                shard,
+                source_name=sn[shard.shard_idx],
+                per_shard=ps[shard.shard_idx],
+                seed=sd,
+            )
+        )
+        .write_parquet(_output_path, schema=_SAMPLE_SCHEMA, skip_existing=True)
+    )
+
+    if worker_resources is None:
+        worker_resources = ResourceConfig(cpu=2, ram="4g")
+
+    ctx = ZephyrContext(
+        resources=worker_resources,
+        max_workers=min(max_workers, len(shard_paths)),
+        name=f"sample-centroid-{os.path.basename(output_path.rstrip('/'))[:12]}",
+        # InlineRunner so workers reuse process-level state across shards
+        # (here mostly numpy/pyarrow warmup; modest win at this fan-out).
+        stage_runner_factory=InlineRunner,
+    )
+    ctx.execute(ds, verbose=True)

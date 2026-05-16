@@ -78,9 +78,11 @@ ASSIGN_WINDOW = 4096
 # The StepSpec itself runs only the coordinator (build dataset, submit, wait).
 EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="16g", regions=[DATA_REGION])
 ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="8g", regions=[DATA_REGION])
+SAMPLE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g", regions=[DATA_REGION])
 COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g", regions=[DATA_REGION])
 EMBED_MAX_WORKERS_PER_SOURCE = 128  # cap per-source worker fan-out; tune to cluster headroom
 ASSIGN_MAX_WORKERS_PER_SOURCE = 128
+SAMPLE_MAX_WORKERS = 256  # sample is light per task; fan out aggressively across all (source, shard) pairs
 
 # Sources with very long individual docs that blew the 16 GB worker on prior runs.
 # OOMs (exit 137) and worker-ping timeouts both trace back to a single row group
@@ -188,14 +190,21 @@ def _build_steps() -> list[StepSpec]:
         name="cluster/sample_centroids",
         output_path_prefix=_OUTPUT_PREFIX,
         deps=list(embed_steps.values()),
-        hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "v": 1},
+        # v: 2 -- output format changed from a single sample.npz (fp32) to a
+        # directory of parquet shards (int8) via a Zephyr fan-out, one task per
+        # (source, embedding shard).
+        hash_attrs={"n_per_source": N_PER_SOURCE_FOR_SAMPLE, "format": "parquet", "v": 2},
         fn=remote(
             lambda output_path, eso=embed_step_outputs: sample_centroid_inputs(
                 output_path=output_path,
                 embeddings={n: Artifact.from_path(p, EmbeddingAttrData) for n, p in eso.items()},
                 n_per_source=N_PER_SOURCE_FOR_SAMPLE,
+                worker_resources=SAMPLE_WORKER_RESOURCES,
+                max_workers=SAMPLE_MAX_WORKERS,
             ),
-            resources=ResourceConfig.with_cpu(regions=[DATA_REGION], cpu=4, ram="32g"),
+            # Coordinator only -- workers run via Zephyr.
+            resources=COORDINATOR_RESOURCES,
+            pip_dependency_groups=["cluster"],
         ),
     )
 
