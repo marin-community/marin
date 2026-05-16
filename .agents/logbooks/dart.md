@@ -4371,6 +4371,36 @@ This unblocks the larger overnight items previously sketched in §6.8:
 - **Residual inspection per §8.6** — when re-judging high-pwv residual cells with all three judges, the savings compound across the 15 statements.
 - The §6.8 "fix Gemini judge reliability before scaling" item is now the highest-priority remaining runner improvement; Anthropic side is good.
 
+### 10.7 2026-05-16 Alt-metric verification for `refusal_style` winner
+
+The §10.5 audit on `refusal_style__t0__gpt` raised a concern: the α=0.770 win might be paradoxical α inflation from mode collapse (88% of judgments at score 1) rather than genuine inter-judge convergence. To test that hypothesis directly, computed quadratic-weighted Cohen's κ — which is **less** sensitive to range restriction than interval α — and other robust ordinal metrics on the same per-cell judgments. Script: `/tmp/refusal_style_metrics.py`.
+
+| metric | null | `t0__gpt` winner | Δ |
+|---|--:|--:|--:|
+| Krippendorff α (interval, 3-judge) | 0.244 | **0.769** | +0.525 (matches reported 0.770 ✓) |
+| Mean abs pair-diff per cell | 0.376 | **0.111** | −71% |
+| % exact 3-way agreement | 57.7% | **84.6%** | +26.9 pp |
+| % all judges within 1 | 92.3% | **98.7%** | +6.4 pp |
+| Pooled score std | 0.664 | 0.508 | −23% (the range restriction the audit flagged) |
+
+Pairwise Cohen's κ (this is the load-bearing comparison):
+
+| pair | quadratic κ null → winner | linear κ null → winner | unweighted κ null → winner |
+|---|---|---|---|
+| GPT × Claude | 0.356 → **0.704** | 0.198 → 0.552 | 0.110 → 0.427 |
+| GPT × Gemini-Pro | 0.263 → **0.818** | 0.133 → 0.676 | 0.031 → 0.561 |
+| Claude × Gemini-Pro | 0.246 → **0.826** | 0.221 → 0.717 | 0.195 → 0.617 |
+
+**Reading.** If α=0.770 were purely a mode-collapse artifact, quadratic-weighted κ should move much less than interval α. It doesn't — quadratic κ lands at 0.70-0.83 on all three pairs, tracking α tightly. Linear κ tells the same story. Only unweighted κ moves modestly (0.43-0.62), but that's the wrong metric for ordinal data because its chance-agreement baseline is itself inflated under heavy marginal collapse (87% score 1 means p_e ≈ 0.76, eating most of the headroom). The non-paradoxical metric — mean abs pair-diff per cell — drops 3.4× (0.376 → 0.111). Judges are factually closer to each other under the new rubric, not just paradoxically reconciled by collapsed marginals.
+
+**Verdict.** The α=0.770 win is **real, not metric-flattered**. The audit's "α-inflation driven by mode collapse" framing was too strong. The distribution did narrow (real range restriction; std 0.664 → 0.508), and that narrowing co-occurs with metric-robust convergence rather than substituting for it.
+
+**What the audit DID get right.** The substantive deployment caveat stands unchanged: anchors 3-5 are barely tested (only 7/234 judgments at score ≥3). The rubric is a reliable violation detector on the current test distribution; behavior on legitimate non-refusals (the spec's "when not to refuse" dimension, audit's P3) is not validated. That's a re-validation requirement on a more graded test distribution, not a metric-choice issue.
+
+**Generalization rule for future DART runs.** Interval Krippendorff α is the right default headline metric and is trustworthy for graded constructs (most Bucket D / C statements have judge means in the 2.5-4.0 range). Only check alt metrics when the score distribution is heavily skewed (≥80% pooled at one anchor) — under those conditions, also report quadratic-weighted κ alongside α as a non-paradoxical confirmation. The `refusal_style` case is the canonical example: judge means 1.10-1.26, 87% at score 1, but quadratic κ still 0.70-0.83 = real convergence. Compute this only when the marginal-distribution sanity check fires.
+
+Note: this finding partially updates the residual audit at `claude_subagents/bucket_c_residual_audit/refusal_style.md`. A postscript section there records the same conclusion.
+
 ---
 
 ## Appendix A. Guaranteeing exact JSON-Schema adoption across compilers

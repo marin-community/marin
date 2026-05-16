@@ -175,3 +175,28 @@ rather than on opening productive use of the full ladder. Deploy with
 awareness that the rubric is effectively a "score 1 if violates style, 5
 otherwise" detector wearing a 5-anchor costume, and re-evaluate if the
 generator or scenario distribution shifts.
+
+## 2026-05-16 Postscript — alt-metric verification
+
+The headline concern above — that α=0.770 might be paradoxical α inflation
+from mode collapse rather than genuine convergence — was tested directly
+by computing quadratic-weighted Cohen's κ and related robust ordinal
+metrics on the same per-cell judgments (script:
+`/tmp/refusal_style_metrics.py`; full table and discussion in
+[`dart.md` §10.7](../../.agents/logbooks/dart.md)).
+
+**Result: α is trustworthy here. The audit framing above was too strong on
+the metric question.** Quadratic-weighted κ lands at 0.70-0.83 on all three
+judge pairs (vs 0.25-0.36 at baseline). If α=0.770 were purely a
+collapse artifact, quadratic κ should move much less. It doesn't —
+quadratic κ tracks α tightly, and the non-paradoxical metric (mean abs
+pair-diff per cell) drops 3.4× (0.376 → 0.111). Judges are factually
+closer under the new rubric, not just paradoxically reconciled by
+collapsed marginals.
+
+**The substantive deployment caveat above stands unchanged**: anchors 3-5
+are barely tested (only 7/234 judgments at score ≥3); behavior on
+legitimate non-refusals (P3, the spec's "when not to refuse" dimension) is
+not validated. That's a re-validation requirement on a more graded test
+distribution, not a metric-choice question. Treat the headline α as a
+real convergence signal; treat anchors 3-5 as untested for deployment.
