@@ -14,6 +14,7 @@ from racing the bg thread on the same segment filename.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -92,7 +93,7 @@ _BG_HEARTBEAT_INTERVAL_SEC = 10.0
 
 # Hard ceiling on the per-read parquet working set; safety net for body-LIKE
 # queries that cannot be pruned by row-group statistics.
-_MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
+_MAX_PARQUET_BYTES_PER_READ = 10 * 1024 * 1024 * 1024
 
 
 class SegmentMetadata(NamedTuple):
@@ -431,13 +432,6 @@ class RamBuffers:
         self._ram_rows += self._flushing.num_rows
         self._flushing = None
 
-    def query_snapshot(self) -> list[pa.Table]:
-        """Return chunks plus any in-flight flushing table (for read paths)."""
-        snap = list(self._chunks)
-        if self._flushing is not None:
-            snap.append(self._flushing.table)
-        return snap
-
 
 class DiskLogNamespace:
     """Disk-backed per-namespace storage.
@@ -462,6 +456,7 @@ class DiskLogNamespace:
         duckdb_memory_limit: str,
         read_pool: _ReadPoolProtocol,
         catalog: Catalog,
+        merge_semaphore: threading.Semaphore,
     ) -> None:
         self.name = name
         self.schema = schema
@@ -496,6 +491,7 @@ class DiskLogNamespace:
         self._compaction_conn_memory_limit = duckdb_memory_limit
         self._read_pool = read_pool
         self._catalog = catalog
+        self._merge_semaphore = merge_semaphore
 
         self._buffers = RamBuffers(
             arrow_schema=self._arrow_schema,
@@ -804,12 +800,12 @@ class DiskLogNamespace:
                 level_counts = _level_histogram(self._local_segments)
                 level_bytes = _level_bytes_summary(self._local_segments, self._compactor.config.level_targets)
             force_drain = ram_bytes >= self._segment_target_bytes
-            # Appends ``_wake.set()`` on every non-empty batch so writers
-            # blocked on ``max_persisted_seq`` see a flush within one bg
-            # turnaround (~ms) instead of the configured ``flush_interval``
-            # ceiling. The rate-limiter / size-threshold path still governs
-            # idle ticks where no writer is waiting.
-            writer_pending = woken_by_append and chunk_count > 0
+            # Appends ``_wake.set()`` on every non-empty batch. We still
+            # gate the wake-driven flush on ``flush_rl`` so a steady writer
+            # can't shred L0 into many sub-second segments — at multi-flush/s
+            # the compaction tick can't keep L0 fanout bounded. ``force_drain``
+            # remains the unconditional safety valve for ram pressure.
+            writer_pending = woken_by_append and chunk_count > 0 and self._flush_rl.should_run()
 
             now = time.monotonic()
             if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
@@ -1120,8 +1116,13 @@ class DiskLogNamespace:
         # it touches neither ``_local_segments`` nor any other structure that
         # ``_insertion_lock`` protects, so we run it lock-free. A multi-second
         # COPY would otherwise stall every concurrent ``append_log_batch``.
+        # Global semaphore for L2+ merges only: those are the heavy
+        # rewrites whose per-conn memory caps multiply across namespaces
+        # and blow the pod cgroup. L0→L1 merges are small and frequent —
+        # serializing them would starve compaction throughput.
+        gate = self._merge_semaphore if job.output_level >= 2 else contextlib.nullcontext()
         try:
-            with self._open_compaction_conn() as conn:
+            with gate, self._open_compaction_conn() as conn:
                 conn.execute(sql)
         except Exception:
             logger.warning("Compaction failed, leaving inputs in place", exc_info=True)
@@ -1499,10 +1500,12 @@ class DiskLogNamespace:
                 seg_count - 1,
             )
 
-    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
-        """Return all currently queryable local segments and RAM tables."""
+    def query_snapshot(self) -> list[LocalSegment]:
+        """Return queryable local segments. Queries see only flushed data;
+        the in-RAM buffer is not exposed (flush cadence is ≤1s).
+        """
         with self._insertion_lock:
-            return list(self._local_segments), self._buffers.query_snapshot()
+            return list(self._local_segments)
 
     def all_segments_unlocked(self) -> list[LocalSegment]:
         """Snapshot every locally-tracked segment. Caller MUST hold the insertion lock."""
@@ -1630,7 +1633,6 @@ class DiskLogNamespace:
     ) -> list[tuple]:
         with self._insertion_lock:
             segments = list(self._local_segments)
-            ram_tables: list[pa.Table] = self._buffers.query_snapshot()
 
         segments = _cap_segments(segments)
         parquet_files = [s.path for s in segments]
@@ -1642,8 +1644,8 @@ class DiskLogNamespace:
         order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-        with self._read_pool.cursor(buffers={"_ram": ram_tables} if ram_tables else None) as conn:
-            source = _build_union_source(parquet_files, ["_ram"] if ram_tables else [], self._arrow_schema)
+        with self._read_pool.cursor() as conn:
+            source = _build_union_source(parquet_files, [], self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             return conn.execute(sql, params).fetchall()
 
@@ -1747,9 +1749,8 @@ class MemoryLogNamespace:
 
         return _shape_log_read_result(rows, tail, max_lines, cursor, include_key_in_select, exact_key)
 
-    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
-        with self._insertion_lock:
-            return [], [self._table]
+    def query_snapshot(self) -> list[LocalSegment]:
+        return []
 
     def all_segments_unlocked(self) -> list[LocalSegment]:
         return []

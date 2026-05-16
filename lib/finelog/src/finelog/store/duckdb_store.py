@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -85,11 +86,11 @@ DEFAULT_FLUSH_INTERVAL_SEC = 5.0
 # retain pages indefinitely. 512MB on the read pool is plenty against 5
 # segments x ~50MB + zstd decompression scratch. Compaction tier-merges can
 # spill larger sort buffers, so it gets its own (still bounded) limit.
-_DEFAULT_DUCKDB_MEMORY_LIMIT = "2GB"
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "512GB"
 # Sized for an L1 merge of ~256 MiB segments: DuckDB's working set during
 # COPY (... ORDER BY ...) is several x the output size, and the prod
 # 1 GB cap was OOMing.
-_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "4GB"
+_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "8GB"
 # Read-pool thread cap. Sized so a single query can't monopolize a small VM
 # and starve the namespace bg threads (flush + compaction). On a 4-vCPU host
 # we have 4 namespace bg threads + RPC handlers + per-namespace compaction
@@ -98,7 +99,7 @@ _DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "4GB"
 # because the read pool's threads competed for the same cores. 2 threads is
 # enough to keep large list_recent / range scans parallel without
 # co-monopolizing the box.
-_DEFAULT_DUCKDB_THREADS = "2"
+_DEFAULT_DUCKDB_THREADS = "3"
 
 # Embedded mode (iris controller's bundled log-server) keeps VMS small so the
 # parent doesn't trip Linux's overcommit heuristic when forking subprocesses.
@@ -330,6 +331,13 @@ class DuckDBLogStore:
         )
         self.catalog = Catalog(self._data_dir)
 
+        # Serialize merge COPYs across namespaces: each per-namespace
+        # compaction conn is sized for one merge's worth of RAM, so N
+        # namespaces compacting simultaneously can multiply RSS Nx and
+        # blow past the pod cgroup limit. Level-bumps (rename only) are
+        # not gated by this — see ``DiskLogNamespace._apply_merge``.
+        self._merge_semaphore = threading.Semaphore(1)
+
         # Disk-only kwargs; ignored by memory namespaces. ``duckdb_memory_limit``
         # in this dict feeds the per-namespace compaction connection in
         # ``DiskLogNamespace``; we route the dedicated compaction cap here so
@@ -342,6 +350,7 @@ class DuckDBLogStore:
             compaction_config=compaction_config,
             segment_target_bytes=segment_target_bytes,
             duckdb_memory_limit=duckdb_compaction_memory_limit,
+            merge_semaphore=self._merge_semaphore,
         )
 
         self._rehydrate_from_registry()
@@ -502,6 +511,13 @@ class DuckDBLogStore:
         opens Parquet files lazily during execution, so dropping the lock
         before fetch would let compaction unlink files mid-scan.
 
+        Only namespaces whose quoted identifier appears in ``sql`` get their
+        view rebuilt — for a typical single-namespace query this cuts the
+        per-call setup from O(all namespaces) to O(1). A false positive
+        (literal string containing a quoted name) just rebuilds an unused
+        view; a false negative would surface as a ``CatalogException`` so
+        the substring check is intentionally permissive.
+
         Unknown namespaces in the FROM clause surface as DuckDB
         ``CatalogException`` (the view doesn't exist).
         """
@@ -514,33 +530,27 @@ class DuckDBLogStore:
                 # size during iteration".
                 ns_snapshot = self.catalog.snapshot_live()
 
-                extra_registered: list[str] = []
                 try:
                     for ns_name, ns in ns_snapshot:
                         ns_quoted = quote_ident(ns_name)
+                        if ns_quoted not in sql:
+                            continue
                         view_names.append(ns_quoted)
-                        segments, ram_tables = ns.query_snapshot()
-                        if not segments and not ram_tables:
+                        segments = ns.query_snapshot()
+                        if not segments:
                             cols_sql = ", ".join(
                                 f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
                             )
                             cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
                             continue
 
-                        parts: list[str] = []
-                        if segments:
-                            paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
-                            parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
-                        for table in ram_tables:
-                            reg_name = f"_q{_next_cursor_id()}_seg_{len(extra_registered)}"
-                            cursor.register(reg_name, table)
-                            extra_registered.append(reg_name)
-                            parts.append(f"SELECT * FROM {reg_name}")
-                        cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
+                        paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
+                        cursor.execute(
+                            f"CREATE OR REPLACE VIEW {ns_quoted} AS "
+                            f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)"
+                        )
                     return cursor.execute(sql).fetch_arrow_table()
                 finally:
-                    for name in extra_registered:
-                        cursor.unregister(name)
                     for vname in view_names:
                         cursor.execute(f"DROP VIEW IF EXISTS {vname}")
         finally:

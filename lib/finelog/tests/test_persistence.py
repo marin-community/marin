@@ -112,6 +112,7 @@ def test_log_namespace_round_trip_after_stage2(tmp_path: Path):
     store = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
         store.append("/job/test/0:0", [_entry(f"line-{i}", epoch_ms=i) for i in range(5)])
+        store._force_flush()
         result = store.get_logs("/job/test/0:0")
         assert [e.data for e in result.entries] == [f"line-{i}" for i in range(5)]
     finally:

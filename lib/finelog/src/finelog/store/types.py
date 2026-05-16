@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-import pyarrow as pa
-
 from finelog.rpc import logging_pb2
 from finelog.store.schema import AlignedBatch, Schema
 from finelog.types import LogReadResult
@@ -130,7 +128,7 @@ class LogNamespaceProtocol(Protocol):
         min_level: str = "",
     ) -> LogReadResult: ...
 
-    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]: ...
+    def query_snapshot(self) -> list[LocalSegment]: ...
 
     def all_segments_unlocked(self) -> list[LocalSegment]: ...
 

@@ -22,6 +22,7 @@ here so server/store-layer imports do not have to change.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 import pyarrow as pa
@@ -35,6 +36,8 @@ from finelog.errors import (
     SchemaValidationError,
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
+
+logger = logging.getLogger(__name__)
 
 # Logical column types are owned by the proto schema (single source of truth).
 # ``stats_pb2.ColumnType`` is an ``int``-valued enum with members like
@@ -262,15 +265,19 @@ def merge_schemas(registered: Schema, requested: Schema) -> Schema:
           existing column) raises ``SchemaConflictError``.
         - A non-nullable extension column (in requested but absent from
           registered) raises ``SchemaConflictError``.
-        - A changed ``key_column`` raises ``SchemaConflictError``; the key is
-          fixed for the namespace's lifetime.
-
-    The order of columns in the merged schema is registered's order first,
-    then any new (additive-nullable) columns in requested's order.
+        - A differing ``key_column`` is treated as a hint and silently
+          coerced to the registered value. ``key_column`` is a server-side
+          sort/pruning directive (used by the L0→L1 compaction ORDER BY and
+          by ``_key_bounds_from_table``); the client never acts on it
+          locally. A stale worker that still declares the old key column
+          continues to write correctly because the server-side namespace
+          owns every decision that touches the key.
     """
     if registered.key_column != requested.key_column:
-        raise SchemaConflictError(
-            f"key_column mismatch: registered={registered.key_column!r} requested={requested.key_column!r}"
+        logger.warning(
+            "register: key_column hint mismatch (registered=%r requested=%r) — using registered",
+            registered.key_column,
+            requested.key_column,
         )
 
     by_name_registered = {c.name: c for c in registered.columns}
