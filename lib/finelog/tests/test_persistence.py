@@ -39,8 +39,8 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
             ),
         )
         store.write_rows("ns.evolve", _ipc_bytes(batch1))
-        ns = store._namespaces["ns.evolve"]
-        ns._flush_step()
+        ns = store.catalog["ns.evolve"]
+        ns.flush()
 
         s2 = Schema(
             columns=(*s1.columns, Column(name="c", type=stats_pb2.COLUMN_TYPE_FLOAT64, nullable=True)),
@@ -58,9 +58,9 @@ def test_compaction_across_additive_evolution(tmp_path: Path):
             ),
         )
         store.write_rows("ns.evolve", _ipc_bytes(batch2))
-        ns._flush_step()
+        ns.flush()
 
-        ns._force_compact_l0()
+        ns.force_compact_l0()
         seg_dir = tmp_path / "data" / "ns.evolve"
         assert sorted(p.name for p in seg_dir.glob("seg_L0_*.parquet")) == []
         l1_files = sorted(seg_dir.glob("seg_L1_*.parquet"))
@@ -112,6 +112,7 @@ def test_log_namespace_round_trip_after_stage2(tmp_path: Path):
     store = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
         store.append("/job/test/0:0", [_entry(f"line-{i}", epoch_ms=i) for i in range(5)])
+        store._force_flush()
         result = store.get_logs("/job/test/0:0")
         assert [e.data for e in result.entries] == [f"line-{i}" for i in range(5)]
     finally:
@@ -121,6 +122,6 @@ def test_log_namespace_round_trip_after_stage2(tmp_path: Path):
 def test_log_namespace_eagerly_registered(tmp_path: Path):
     store = DuckDBLogStore(log_dir=tmp_path / "data")
     try:
-        assert "log" in store._namespaces
+        assert "log" in store.catalog
     finally:
         store.close()

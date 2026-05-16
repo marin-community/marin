@@ -11,8 +11,9 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from finelog.store.catalog import Catalog, SegmentLocation, SegmentRow
+from finelog.store.catalog import Catalog
 from finelog.store.migrations import apply_migrations, transactional
+from finelog.store.types import SegmentLocation, SegmentRow
 
 
 def _list_tables(conn: duckdb.DuckDBPyConnection) -> set[str]:

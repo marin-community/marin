@@ -12,12 +12,12 @@ planner shows up with a clear failure.
 
 from __future__ import annotations
 
-from finelog.store.catalog import SegmentRow
 from finelog.store.compactor import (
     CompactionConfig,
     Compactor,
     aggregate_key_bounds,
 )
+from finelog.store.types import SegmentRow
 
 
 def _row(
@@ -103,6 +103,19 @@ def test_plan_count_promotes_non_terminal_l1_below_byte_target():
     assert job is not None
     assert job.output_level == 2
     assert [r.min_seq for r in job.inputs] == [1, 2]
+
+
+def test_plan_single_l2_segment_at_l3_target_emits_single_input_job():
+    """When L2 and L3 targets are equal, a single L2 segment that meets the
+    threshold produces a one-input job so the executor can rename in place.
+    """
+    compactor = Compactor(CompactionConfig(level_targets=(64, 256, 256), max_segments_per_level=32))
+    rows = [_row(level=2, min_seq=1, max_seq=100, byte_size=256)]
+    job = compactor.plan(rows)
+    assert job is not None
+    assert job.output_level == 3
+    assert len(job.inputs) == 1
+    assert job.inputs[0].min_seq == 1
 
 
 def test_aggregate_key_bounds_preserves_numeric_ordering():

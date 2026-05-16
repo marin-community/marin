@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -35,7 +36,7 @@ from .conftest import make_batch, make_run_req, populate_node, populate_pod, pop
 
 
 def _fetch_logs(log_service: LogServiceImpl, key: str, max_lines: int = 100) -> list[logging_pb2.LogEntry]:
-    resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None)
+    resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=key, max_lines=max_lines), ctx=None))
     return list(resp.entries)
 
 
