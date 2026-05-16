@@ -46,10 +46,14 @@ from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
 
 from experiments.datakit.cluster.assign import assign_source  # noqa: E402
-from experiments.datakit.cluster.embed_source import LUXICAL_REPO, LUXICAL_WEIGHTS_FILE, embed_source  # noqa: E402
 from experiments.datakit.cluster.sample import sample_centroid_inputs  # noqa: E402
 from experiments.datakit.cluster.summarize import summarize_at_k  # noqa: E402
 from experiments.datakit.cluster.train import train_centroids  # noqa: E402
+from experiments.datakit.embeddings.luxical.embed_source import (  # noqa: E402
+    LUXICAL_REPO,
+    LUXICAL_WEIGHTS_FILE,
+    embed_source,
+)
 
 logger = logging.getLogger(__name__)
 

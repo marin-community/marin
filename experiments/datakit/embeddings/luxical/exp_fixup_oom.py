@@ -24,7 +24,7 @@ Submit::
     uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G \\
         --extra=cpu --priority production \\
         --job-name "embed-clusters-fixup-$(date +%Y%m%d-%H%M%S)" \\
-        -- python -m experiments.datakit.cluster.exp_fixup_oom
+        -- python -m experiments.datakit.embeddings.luxical.exp_fixup_oom
 """
 
 import logging
@@ -39,7 +39,11 @@ from marin.execution.remote import remote  # noqa: E402
 from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
 
-from experiments.datakit.cluster.embed_source import LUXICAL_REPO, LUXICAL_WEIGHTS_FILE, embed_source  # noqa: E402
+from experiments.datakit.embeddings.luxical.embed_source import (  # noqa: E402
+    LUXICAL_REPO,
+    LUXICAL_WEIGHTS_FILE,
+    embed_source,
+)
 
 logger = logging.getLogger(__name__)
 
