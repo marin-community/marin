@@ -36,9 +36,28 @@ from rigging.log_setup import configure_logging
 logger = logging.getLogger(__name__)
 
 
+# Sources excluded from the dedup. Match against the registry name as a
+# prefix (e.g. ``safety_pt/`` skips every ``safety_pt/...`` source).
+#
+# These sources landed in the registry *after* an earlier dedup run had
+# already built its CC iterations (``it_0`` through ``it_10``) at
+# ``gs://marin-eu-west4/tmp/ttl=2d/rav/datakit/dedup_783d0380/`` but OOM'd at
+# stage1-Reduce. Holding them out keeps the inputs list identical to that
+# earlier run, so this step's deterministic ``hash_id`` lands on
+# ``dedup_783d0380`` naturally -- and ``cc_resume=True`` below picks the
+# cached CC state up where it left off, skipping the multi-hour stage0
+# scatter and the 11 CC iterations.
+_EXCLUDE_PREFIXES: tuple[str, ...] = (
+    "safety_pt/",
+    "climblab-ja",
+)
+
+
 def build_dedup_step() -> StepSpec:
     minhash_steps: list[StepSpec] = []
     for name, src in all_sources().items():
+        if any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES):
+            continue
         norm = src.normalized
         minhash_steps.append(
             StepSpec(
@@ -60,6 +79,7 @@ def build_dedup_step() -> StepSpec:
             inputs=[Artifact.from_path(s, MinHashAttrData) for s in minhash_steps],
             output_path=op,
             max_parallelism=2048,
+            cc_resume=True,
             worker_resources=ResourceConfig(cpu=3, ram="32g", disk="5g"),
             coordinator_resources=ResourceConfig(cpu=1, ram="3.5g", preemptible=False),
         ),
