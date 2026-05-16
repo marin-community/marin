@@ -114,9 +114,12 @@ def sample_centroid_inputs(
 
     source_specs = [InputFileSpec(path=p, columns=["embedding"]) for p in shard_paths]
 
+    # .window() chunks records into lists; the lambda below receives an
+    # Iterator[list[dict]] (matches pipeline.py's _embed_shard signature).
     ds = (
         Dataset.from_list(source_specs)
         .flat_map(load_file)
+        .window(4096)
         .map_shard(
             lambda batches, shard, sn=source_by_shard, ps=per_shard_by_shard, sd=seed: _sample_shard(
                 batches,
