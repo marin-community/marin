@@ -1039,8 +1039,13 @@ class GrugMoeMuonHMayArchAuroraTargetConfig(OptimizerConfig):
     * ``expout_aurora``: route expert MLP output projections
       (``.mlp.w_down`` for the routed-expert 3-D weight and
       ``.shared.w_down`` for the shared expert) to AuroraH.
+    * ``expert_io_aurora``: route both expert MLP inputs and outputs to
+      AuroraH (``.mlp.w_gate``, ``.mlp.w_up``, ``.mlp.w_down`` for the
+      routed experts plus ``.shared.w_down`` for the shared expert).
+      Requires the model to store ``w_gate``/``w_up`` as separate fields
+      (see ``MoEMLP`` in ``model.py``).
 
-    When all three flags are False this config is functionally identical
+    When all four flags are False this config is functionally identical
     to :class:`GrugMoeMuonHMayArchGNMuonHConfig` (the 1pct-noclip
     baseline). Exactly one is expected to be True per sweep trial; the
     config does not enforce mutual exclusion in case a future ablation
@@ -1065,6 +1070,7 @@ class GrugMoeMuonHMayArchAuroraTargetConfig(OptimizerConfig):
     kv_aurora: bool = False
     gn_aurora: bool = False
     expout_aurora: bool = False
+    expert_io_aurora: bool = False
     pp_iterations: int = 2
     pp_beta: float = 0.5
 
@@ -1160,6 +1166,13 @@ class GrugMoeMuonHMayArchAuroraTargetConfig(OptimizerConfig):
             if self.gn_aurora and "gated_norm" in path_lower:
                 return "aurorah"
             if self.expout_aurora and (path_lower.endswith(".mlp.w_down") or path_lower.endswith(".shared.w_down")):
+                return "aurorah"
+            if self.expert_io_aurora and (
+                path_lower.endswith(".mlp.w_gate")
+                or path_lower.endswith(".mlp.w_up")
+                or path_lower.endswith(".mlp.w_down")
+                or path_lower.endswith(".shared.w_down")
+            ):
                 return "aurorah"
             # Default routing (matches the 1pct-noclip recipe).
             if "gated_norm" in path_lower:
