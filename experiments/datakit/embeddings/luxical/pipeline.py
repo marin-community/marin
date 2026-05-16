@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Iterator
+from functools import cache
 from typing import Any
 
 import numpy as np
@@ -116,21 +117,16 @@ def dequantize_to_fp32(arr: np.ndarray, scale: float = QUANT_SCALE) -> np.ndarra
 
 # Per-process embedder cache — survives across map_shard calls under InlineRunner,
 # so a worker loads Luxical exactly once regardless of how many shards it handles.
-_EMBEDDER_CACHE: dict[tuple[str, str], Any] = {}
-
-
+@cache
 def _get_embedder(repo_id: str, weights_filename: str) -> Any:
     """Return the native Luxical Embedder, downloading weights on first use."""
-    key = (repo_id, weights_filename)
-    if key not in _EMBEDDER_CACHE:
-        from huggingface_hub import hf_hub_download
-        from luxical.embedder import Embedder
+    from huggingface_hub import hf_hub_download
+    from luxical.embedder import Embedder
 
-        logger.info("Fetching luxical weights %s/%s", repo_id, weights_filename)
-        npz_path = hf_hub_download(repo_id=repo_id, filename=weights_filename)
-        logger.info("Loading native Luxical embedder from %s", npz_path)
-        _EMBEDDER_CACHE[key] = Embedder.load(npz_path)
-    return _EMBEDDER_CACHE[key]
+    logger.info("Fetching luxical weights %s/%s", repo_id, weights_filename)
+    npz_path = hf_hub_download(repo_id=repo_id, filename=weights_filename)
+    logger.info("Loading native Luxical embedder from %s", npz_path)
+    return Embedder.load(npz_path)
 
 
 def _l2_normalize(arr: np.ndarray) -> np.ndarray:
