@@ -6,9 +6,10 @@
 Loads a grug `Transformer` from a Levanter-native checkpoint and runs
 lm-eval's `evaluate()` once with a `GrugLM` whose `loglikelihood` tokenizes
 the requests, runs the JIT'd forward pass loop, and returns real logprobs.
-Request generation and scoring share a single `evaluate()` call; some
-lm-eval few-shot samplers advance RNG state mid-call, so splitting them
-across two `evaluate()` calls would produce different request sets.
+Keeping the forward pass inside `loglikelihood` puts request generation
+and scoring in the same `evaluate()` call, which is required for tasks
+whose few-shot sampler advances RNG state during the call (the sampler
+state isn't reset between calls).
 
 Eval-mode bumps `GrugModelConfig.capacity_factor` so the routed MoE doesn't
 silently drop tokens at inference (training runs with capacity_factor=1.0;
@@ -68,12 +69,8 @@ def _task_key(task: EvalTaskConfig) -> str:
     return task.task_alias or f"{task.name}_{task.num_fewshot}shot"
 
 
-# `_TASK_SPECS` defaults to a logprob-only suite (mmlu_sl_verb 0/5-shot plus
-# inlined logprob_gsm8k_5shot / logprob_humaneval_10shot). Extend by appending
-# more `EvalTaskConfig` entries; for MCQ tasks where the bare continuations
-# are short tokens ("A"/"B"/"yes"/"no") the choice_logprob signal scales
-# poorly with model size — prefer task variants with verbalized "A. <text>"
-# continuations (lm-eval's `*_sl_verb` configs) where available.
+# Default task suite: mmlu_sl_verb (0-shot and 5-shot), logprob_gsm8k_5shot,
+# logprob_humaneval_10shot. Append more `EvalTaskConfig` entries to extend.
 
 
 @eqx.filter_jit
@@ -97,14 +94,12 @@ def _lm_eval_spec(task: EvalTaskConfig) -> str | dict:
     """Build the spec entry passed to `get_task_dict`.
 
     Registered tasks with no `task_kwargs` are returned as bare strings;
-    lm-eval then loads the cached config directly. The dict form triggers
-    a separate override path that silently drops fields inherited via
-    ``include:`` chains (e.g., ``arc_challenge``'s ``dataset_path`` /
-    ``*_split`` come from arc_easy and would be lost). Inlined tasks need
-    the dict form because the full config lives in ``task_kwargs``;
-    ``num_fewshot`` and ``task_alias`` are deliberately omitted here and
-    applied post-build via `_apply_num_fewshot` to keep the override path
-    cold.
+    lm-eval loads the cached config directly. The dict form triggers
+    lm-eval's override-merge path, which drops fields inherited via
+    ``include:`` chains in the task's yaml. Inlined tasks need the dict
+    form because the full config lives in ``task_kwargs``. ``num_fewshot``
+    and ``task_alias`` are deliberately left out of the returned dict and
+    applied post-build via `_apply_num_fewshot`.
     """
     if not task.task_kwargs:
         return task.name
