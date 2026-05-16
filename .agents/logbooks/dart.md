@@ -2705,6 +2705,8 @@ What we claimed methodologically vs what Run 9 measured:
 
 ### 6.5 Cost and effort accounting
 
+> **Authoritative numbers live in `.agents/logbooks/api_costs.md`.** That file reconstructs spend from the raw_api_logger artifacts under `results/raw/**` and grades each number HIGH / MEDIUM / LOW confidence. Headline corrections vs the table below: real-money total is **between ≈$210 (lower bound, if the $142 OpenAI sync line turns out to be on free credits) and ≈$374 (upper bound, fully measured + ≈$29 estimated Together AI)**, not $263. Anthropic ($179.74) reconciles to the dashboard within 0.5% — HIGH. **OpenAI batch for Runs 8/9/10 ($22.61 = $19.13 measured + $3.48 cancelled-batch ghost) reconciles within 0.7% of the dashboard $22.77, with each of the three dashboard panels (input/cached/output) independently matching within ≤1.5% — HIGH; the cancelled batch is explicitly recorded in `dart_run10/.../run10_r1_judge_r1_batches.json` as `gpt_original_cancelled`.** OpenAI sync ($142.60) is MEDIUM until the non-batch dashboard panel is pulled. Together AI GLM-5.1 (≈$29) is LOW until the Together dashboard is pulled. Gemini hypothetical (≈$134, free credits) is HIGH math but $0 real-money. Under-estimate vs §6.5 was concentrated in pre-Run-1 E8/E9-baseline work ($173 never tallied), Run 7 Claude fill (+$33), and Run 8 Gemini Pro audit (+$55). Runs 9 and 10 forecasts were close (≤$10 off). Use `experiments/posttrain/disagreement_primitive/compute_api_costs.py` for fresh reconciliation.
+
 | run | API cost | wall time |
 |---|--:|--:|
 | Run 0 (v2 + v2.5 pre-DART) | ~$3 | hours |
