@@ -56,7 +56,7 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTraine
 from experiments.marin_models import marin_tokenizer
 
 # ---------------------------------------------------------------------------
-# Mixture: 39 hardcoded merged caches, proportional weights.
+# Mixture: 31 cache-backed domains + 8 hierarchical groups, proportional weights.
 # ---------------------------------------------------------------------------
 
 _MERGED_PREFIX = "tokenized/merged/dolma3_dolmino_top_level"
