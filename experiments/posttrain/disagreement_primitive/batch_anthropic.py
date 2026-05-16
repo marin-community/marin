@@ -3,6 +3,33 @@
 
 """Minimal Anthropic Batch API helper. 50% discount, up to 24h SLA.
 
+============================================================================
+CACHE_CONTROL IS LOAD-BEARING — DO NOT REMOVE FROM CALLERS OR HELPER
+----------------------------------------------------------------------------
+Anthropic prompt caching is OPT-IN (unlike OpenAI which auto-caches). The
+default `cache=True` on `build_request` plus `cache_user_prefix=` on judge
+call sites cuts Claude batch cost by ~40% on DART judge workloads. Verified
+2026-05-15 with a 2-request batch probe (1 cache_creation + 1 cache_read on
+a 1821-token static prefix). See `.agents/logbooks/dart.md` §10.6 and the
+sibling test `test_batch_anthropic_caching.py` for the empirical evidence.
+
+Marker collision risk (read before changing JUDGE_USER_PREFIX_MARKER):
+  `prefix_before` splits content at the FIRST occurrence of the marker. If
+  the marker substring appears anywhere in the STATIC (spec / examples /
+  rubric) portion of the prompt — e.g. because an LM-authored rubric anchor
+  happens to mention "USER QUERY:" verbatim — the cache split happens early
+  and the suffix contains material that should be cached. There is no API
+  error. To make collisions visible, `prefix_before` now RAISES if the
+  marker is found more than once. The marker is also tightened to
+  "\\n\\nUSER QUERY: " (with bracketing whitespace) so accidental matches
+  in prose are vanishingly unlikely.
+
+If a future agent "simplifies" this by dropping `cache_control` markers,
+reverting the marker tightening, or removing the occurrence check: Claude
+batch spend jumps ~40% and the next `compute_api_costs.py` reconciliation
+against the Anthropic dashboard will rediscover this exact gap. Ask first.
+============================================================================
+
 Workflow:
     import batch_anthropic as ba
 
@@ -11,19 +38,25 @@ Workflow:
             custom_id=f"item::{i:07d}",
             model="claude-sonnet-4-6",
             system=SYSTEM,
-            messages=[{"role": "user", "content": "..."}],
+            messages=[{"role": "user", "content": user_text}],
             max_tokens=600,
             tools=[JUDGMENT_TOOL],
             tool_choice={"type": "tool", "name": "submit_judgment"},
             thinking={"type": "disabled"},
+            cache_user_prefix=ba.prefix_before(user_text),  # extends cache through static preamble
         )
-        for i in range(N)
+        for user_text in user_texts
     ]
 
     state = ba.submit(api_key, requests, job_dir, name="my_batch")
     state = ba.poll(api_key, job_dir, interval=60)  # blocks until terminal
     entries = ba.collect(api_key, job_dir)  # list of result dicts
     args = ba.extract_tool_args(entries[0])  # parsed input dict, or None
+
+Verifying the cache engaged after a batch:
+    hits = sum(1 for e in entries
+               if ba.usage_of(e).get("cache_read_input_tokens", 0) > 0)
+    assert hits > 0, "cache did not engage — audit static prefix length and marker"
 """
 
 from __future__ import annotations
@@ -41,7 +74,15 @@ HEADERS_BASE = {"anthropic-version": "2023-06-01", "content-type": "application/
 
 _EPHEMERAL = {"type": "ephemeral"}
 
-JUDGE_USER_PREFIX_MARKER = "USER QUERY:"
+# Default marker for DART judge prompts. The leading "\n\n" and trailing
+# space narrow it to the canonical separator emitted by every judge prompt
+# builder (`f"...RUBRIC: ...\n\nUSER QUERY: {user_q}\n\n..."`). The bare
+# string "USER QUERY:" — which an earlier revision used — could collide
+# with LM-authored rubric anchor text. The hardened form makes that
+# vanishingly unlikely; the occurrence check in `prefix_before` also
+# raises if a collision does happen, so it fails loud instead of silently
+# corrupting the cache split.
+JUDGE_USER_PREFIX_MARKER = "\n\nUSER QUERY: "
 
 
 def prefix_before(content: str, marker: str = JUDGE_USER_PREFIX_MARKER) -> str | None:
@@ -54,7 +95,22 @@ def prefix_before(content: str, marker: str = JUDGE_USER_PREFIX_MARKER) -> str |
     ``build_request(..., cache_user_prefix=...)`` to extend the ephemeral
     cache breakpoint past system+tools through the static user-message
     preamble.
+
+    Raises ValueError if ``marker`` is found more than once in ``content``,
+    which would make the cache split ambiguous (and silently degrade
+    caching). Audit the static spec/rubric text for accidental marker
+    usage; the canonical marker is structured whitespace-bracketed for
+    exactly this reason.
     """
+    occurrences = content.count(marker)
+    if occurrences == 0:
+        return None
+    if occurrences > 1:
+        raise ValueError(
+            f"prefix_before: marker {marker!r} appears {occurrences} times in "
+            f"content; cache split would be ambiguous. Audit static (spec / "
+            f"rubric / examples) text for accidental marker usage."
+        )
     idx = content.find(marker)
     return content[:idx] if idx > 0 else None
 
