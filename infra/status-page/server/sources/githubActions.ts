@@ -9,6 +9,9 @@
 
 import { githubAuthHeaders, REPO } from "./github.js";
 
+const MAX_WORKFLOW_RUNS_PER_REQUEST = 100;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 export const FERRY_WORKFLOWS = [
   { name: "Canary ferry", file: "marin-canary-ferry.yaml" },
   { name: "CW ferry", file: "marin-canary-ferry-coreweave.yaml" },
@@ -47,7 +50,8 @@ interface GhRun {
   conclusion: string | null;
   status: string;
   head_sha: string;
-  run_started_at: string;
+  created_at: string;
+  run_started_at: string | null;
   updated_at: string;
   html_url: string;
   event: string;
@@ -59,7 +63,8 @@ interface GhRunsResponse {
 }
 
 function toFerryRun(run: GhRun): FerryRun {
-  const startedMs = Date.parse(run.run_started_at);
+  const startedAt = run.run_started_at ?? run.created_at;
+  const startedMs = run.run_started_at === null ? Number.NaN : Date.parse(run.run_started_at);
   const updatedMs = Date.parse(run.updated_at);
   const durationSeconds =
     run.status === "completed" && Number.isFinite(startedMs) && Number.isFinite(updatedMs)
@@ -71,7 +76,7 @@ function toFerryRun(run: GhRun): FerryRun {
     status: run.status,
     sha: run.head_sha,
     shaShort: run.head_sha.slice(0, 7),
-    startedAt: run.run_started_at,
+    startedAt,
     durationSeconds,
     url: run.html_url,
     event: run.event,
@@ -88,12 +93,18 @@ function computeSuccessRate(runs: FerryRun[]): number | null {
 
 export async function fetchWorkflowStatus(
   workflow: WorkflowConfig,
-  historyWindow: number,
+  windowDays: number,
 ): Promise<FerryWorkflowStatus> {
+  const fetchedAt = new Date().toISOString();
+  const cutoff = new Date(Date.now() - windowDays * MS_PER_DAY);
+  const params = new URLSearchParams({
+    per_page: String(MAX_WORKFLOW_RUNS_PER_REQUEST),
+    branch: "main",
+    created: `>=${cutoff.toISOString()}`,
+  });
   const url =
     `https://api.github.com/repos/${REPO}/actions/workflows/${workflow.file}` +
-    `/runs?per_page=${historyWindow}&branch=main`;
-  const fetchedAt = new Date().toISOString();
+    `/runs?${params.toString()}`;
 
   // Every failure path returns a snapshot with `error` set instead of
   // throwing, so callers that aggregate multiple workflows with
@@ -115,7 +126,10 @@ export async function fetchWorkflowStatus(
     }
 
     const data = (await res.json()) as GhRunsResponse;
-    const history = (data.workflow_runs ?? []).map(toFerryRun);
+    const cutoffMs = cutoff.getTime();
+    const history = (data.workflow_runs ?? [])
+      .map(toFerryRun)
+      .filter((run) => Date.parse(run.startedAt) >= cutoffMs);
     return {
       name: workflow.name,
       file: workflow.file,
