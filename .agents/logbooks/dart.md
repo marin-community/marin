@@ -4399,7 +4399,45 @@ Pairwise Cohen's κ (this is the load-bearing comparison):
 
 **Generalization rule for future DART runs.** Interval Krippendorff α is the right default headline metric and is trustworthy for graded constructs (most Bucket D / C statements have judge means in the 2.5-4.0 range). Only check alt metrics when the score distribution is heavily skewed (≥80% pooled at one anchor) — under those conditions, also report quadratic-weighted κ alongside α as a non-paradoxical confirmation. The `refusal_style` case is the canonical example: judge means 1.10-1.26, 87% at score 1, but quadratic κ still 0.70-0.83 = real convergence. Compute this only when the marginal-distribution sanity check fires.
 
-Note: this finding partially updates the residual audit at `claude_subagents/bucket_c_residual_audit/refusal_style.md`. A postscript section there records the same conclusion.
+#### Within-universe alt-distribution check (2026-05-16, follow-up)
+
+Separate question, beyond the metric one: **does the rubric distinguish graded cases (anchors 3-5), or is it a pure violation detector that happens to never need anchors 3-5 because the test distribution is 87% violations?** True validation requires new cells; ran the strongest within-universe partition possible from existing data. Script: `experiments/posttrain/disagreement_primitive/agreement_metrics/refusal_style_alt_distribution.py`.
+
+**Per-generator score distribution for `refusal_style__t0__gpt`:**
+
+| generator | n | dist [1,2,3,4,5] | mean | std | α | quad-κ (g/c, g/m, c/m) |
+|---|--:|---|--:|--:|--:|---|
+| `gpt-5.1` | 20 | [60, 0, 0, 0, 0] | 1.00 | 0.00 | n/a | trivially 1.0 |
+| `gemini-3-flash-preview` | 20 | [60, 0, 0, 0, 0] | 1.00 | 0.00 | n/a | trivially 1.0 |
+| `Qwen2.5-7B-Instruct-Turbo` | 20 | [59, 1, 0, 0, 0] | 1.02 | 0.13 | −0.02 | 0/0/1.0 |
+| `grok-4-1-fast-non-reasoning-opposite` | 18 | [26, 21, 5, 1, 1] | 1.70 | 0.85 | **+0.669** | **0.58 / 0.74 / 0.76** |
+
+**60 of 78 cells are unanimous-score-1 across all 3 judges, contributing zero information about the rubric's graded behavior.** Those cells come from gpt-5.1, gemini-flash, and Qwen — three generators that simply produce compliant refusals on the canonical refusal_style scenarios. The cells aren't testing the rubric; they're testing the generators.
+
+The *actual* rubric-test signal lives entirely in the 18 cells from the `grok-opposite` generator (the deliberately adversarial "do the opposite" generator). On that subset:
+- Score distribution is genuinely graded (mean 1.70, std 0.85, all 5 anchors used)
+- α = 0.669 (winner) vs 0.338 (null) — real improvement on a graded subset
+- Quadratic κ = 0.58 / 0.74 / 0.76 — real pairwise convergence on graded scores
+
+**Median-≥2 subset (n=9):** the 9 cells where the median judge score is ≥2 (i.e., not pure-violation consensus). α = 0.613 (winner) vs 0.284 (null); quadratic κ 0.58 / 0.80 / 0.56. Consistent with the grok-opposite finding.
+
+**Cells where any judge scored ≥3 (n=3):** too few to be statistically meaningful in isolation, but the winner still shows α=0.42 and quad-κ 0.25/0.67/0.67 on those 3 cells (vs α=−0.15 on the null's 6 cells at the same threshold).
+
+**Anchor-3+ usage rate is essentially flat:** 7/234 winner vs 8/234 null (3.0% vs 3.4%). The rubric did not push more cells into higher anchors; it just made the violation-detection more reliable AND showed real (if narrow) graded performance where graded responses exist.
+
+**Updated verdict (combining metric + distribution checks).**
+- The α=0.770 headline is real (not paradoxical) AND the rubric exhibits genuine graded behavior on the subset where graded responses exist (grok-opposite cells, n=18).
+- The rubric is **not** "a pure violation detector wearing a 5-anchor costume" — it actively discriminates and agrees on anchors 2-5 when the response varies enough to require them.
+- BUT the test distribution has only 18 cells exercising anchors 2-5, and only 1 cell where any judge scored 4-5. **The rubric's behavior at the top of the scale (anchors 4-5) remains untested at any meaningful sample size.**
+- This is the strongest "within-universe alt-distribution" check possible from existing data. A true alt-distribution test would require generating ~50-100 new cells designed to elicit anchors 3-5 (e.g., legitimate non-refusals, partially-styled refusals, borderline-policy cases). Out of scope for now; flag as the natural follow-on if a deployment claim requires it.
+
+#### What this means for moving on
+
+Methodology-wise: α is trustworthy; the rubric is doing graded work, not just collapse. Move on to the next research thread.
+
+Deployment-wise: for `refusal_style` specifically, anchors 4-5 still have ≤1 cell of validation. A production deployment claim should either (a) generate ~50 new cells exercising anchors 3-5 and re-judge, or (b) bound the deployment claim to "violation detection" rather than "graded scoring."
+
+Note: this finding extends the residual audit at `claude_subagents/bucket_c_residual_audit/refusal_style.md` (postscript updated alongside).
 
 ---
 

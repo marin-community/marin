@@ -200,3 +200,32 @@ legitimate non-refusals (P3, the spec's "when not to refuse" dimension) is
 not validated. That's a re-validation requirement on a more graded test
 distribution, not a metric-choice question. Treat the headline α as a
 real convergence signal; treat anchors 3-5 as untested for deployment.
+
+### Within-universe alt-distribution check
+
+Partitioned the 78 cells by generator and by judge-score level (script:
+`agreement_metrics/refusal_style_alt_distribution.py`). Key finding:
+
+**60 of 78 cells are unanimous-score-1 across all 3 judges**, contributing
+zero information about graded behavior. Those come from `gpt-5.1`,
+`gemini-3-flash-preview`, and `Qwen2.5-7B-Instruct-Turbo` — three
+generators that simply produce compliant refusals on these scenarios.
+
+The actual rubric-test signal lives in the 18 cells from
+`grok-4-1-fast-non-reasoning-opposite` (the adversarial "do the opposite"
+generator). On those 18 cells:
+- Score distribution is genuinely graded: mean 1.70, std 0.85, all 5
+  anchors used
+- α = 0.669 (winner) vs 0.338 (null) — real improvement on graded subset
+- Quadratic κ = 0.58 / 0.74 / 0.76 across pairs — real convergence
+
+On the median-≥2 subset (n=9): α = 0.613, quad-κ 0.58/0.80/0.56 — same
+story at a tighter cut.
+
+**Updated verdict.** The rubric is **not** a pure violation detector. It
+does real graded discrimination where graded responses exist. BUT only 18
+cells exercise anchors 2-5 (and only 1 cell where any judge scored 4-5),
+so anchors 4-5 specifically are still essentially untested at any
+meaningful sample size. For a deployment claim that uses the full
+graded scale, generating ~50-100 new cells designed to elicit anchors 3-5
+remains the natural next test.
