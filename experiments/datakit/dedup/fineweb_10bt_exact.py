@@ -5,7 +5,7 @@
 
 Usage:
     MARIN_PREFIX=/tmp/marin uv run iris --config=lib/iris/config/local.yaml job run -- \\
-        python experiments/dedup/fineweb_10bt_exact.py [--max-parallelism N]
+        python experiments/datakit/dedup/fineweb_10bt_exact.py [--max-parallelism N]
 """
 
 import argparse

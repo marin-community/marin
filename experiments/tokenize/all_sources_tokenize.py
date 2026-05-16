@@ -4,7 +4,7 @@
 """Tokenize every Datakit source -- produce co-partitioned attribute parquets.
 
 Mirrors ``experiments/decontamination/all_sources_decon.py`` and
-``experiments/dedup/all_sources_fuzzy.py`` shape: one
+``experiments/datakit/dedup/all_sources_fuzzy.py`` shape: one
 :func:`tokenize_attributes_step` per source in
 :func:`marin.datakit.sources.all_sources`, hanging off that source's
 ``normalized`` terminal. Each step emits ``{id, input_ids}`` parquet
