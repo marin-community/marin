@@ -10,6 +10,7 @@ They focus on:
 - Final state verification rather than intermediate steps
 """
 
+import asyncio
 import threading
 
 from finelog.rpc import logging_pb2
@@ -1688,9 +1689,9 @@ def test_log_service_direct_push(state, log_service):
     log_entry = logging_pb2.LogEntry(source="stdout", data="hello world")
     log_entry.timestamp.epoch_ms = 1000
     push_req = logging_pb2.PushLogsRequest(key=log_key, entries=[log_entry])
-    log_service.push_logs(push_req, None)
+    asyncio.run(log_service.push_logs(push_req, None))
 
-    fetch_resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None)
+    fetch_resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None))
     assert len(fetch_resp.entries) == 1
     assert fetch_resp.entries[0].data == "hello world"
 
@@ -1713,9 +1714,9 @@ def test_log_service_accumulates_pushes(state, log_service):
     for i in range(3):
         entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
         entry.timestamp.epoch_ms = 1000 + i
-        log_service.push_logs(logging_pb2.PushLogsRequest(key=log_key, entries=[entry]), None)
+        asyncio.run(log_service.push_logs(logging_pb2.PushLogsRequest(key=log_key, entries=[entry]), None))
 
-    fetch_resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None)
+    fetch_resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None))
     assert len(fetch_resp.entries) == 3
     assert [e.data for e in fetch_resp.entries] == ["line 0", "line 1", "line 2"]
 
