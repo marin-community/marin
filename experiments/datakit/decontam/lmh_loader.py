@@ -31,15 +31,21 @@ logger = logging.getLogger(__name__)
 
 
 def trust_remote_code_for_hf() -> None:
-    """Force ``trust_remote_code=True`` on every ``datasets.load_dataset`` call.
+    """Try ``trust_remote_code=True`` on every ``datasets.load_dataset`` call, fall back without on kwarg rejection.
 
     In ``datasets`` 4.x the ``HF_DATASETS_TRUST_REMOTE_CODE`` env var and
     ``datasets.config.HF_DATASETS_TRUST_REMOTE_CODE`` flag were removed; only
     the per-call kwarg is honored. lm-eval task configs don't pass it, so
-    tasks shipping custom HF loading scripts (piqa, logiqa*, ethics_*,
-    crows_pairs_*, social_iqa, ...) fail to load. Wrap ``load_dataset`` /
-    ``load_dataset_builder`` to always pass it. We're only ingesting public
-    eval text into a decon bloom -- no model code is executed downstream.
+    custom-loader datasets (piqa, logiqa*, ethics_*, crows_pairs_*, ...)
+    fail without it. But many other lm-eval tasks resolve to built-in
+    csv / parquet / json builders that DON'T accept ``trust_remote_code``
+    -- forcing the kwarg unconditionally breaks them with
+    ``BuilderConfig X doesn't have a 'trust_remote_code' key``.
+
+    Strategy: attempt with ``trust_remote_code=True`` first; on the specific
+    "doesn't have a 'trust_remote_code' key" error, retry without. Any other
+    error propagates as-is. We're only ingesting public eval text into a
+    decon bloom -- no model code is executed downstream.
 
     Patches both the ``datasets`` module attrs AND any already-imported
     ``from datasets import load_dataset`` bindings (lm-eval pulls
@@ -54,13 +60,30 @@ def trust_remote_code_for_hf() -> None:
     original_load = datasets.load_dataset
     original_builder = datasets.load_dataset_builder
 
+    def _is_trc_rejection(exc: BaseException) -> bool:
+        # Builders that don't accept the kwarg raise either TypeError or
+        # ValueError; the message reliably mentions ``'trust_remote_code'``.
+        return isinstance(exc, (TypeError, ValueError)) and "trust_remote_code" in str(exc)
+
     def patched_load_dataset(*args, **kwargs):
-        kwargs.setdefault("trust_remote_code", True)
-        return original_load(*args, **kwargs)
+        if "trust_remote_code" in kwargs:
+            return original_load(*args, **kwargs)
+        try:
+            return original_load(*args, trust_remote_code=True, **kwargs)
+        except Exception as exc:
+            if _is_trc_rejection(exc):
+                return original_load(*args, **kwargs)
+            raise
 
     def patched_builder(*args, **kwargs):
-        kwargs.setdefault("trust_remote_code", True)
-        return original_builder(*args, **kwargs)
+        if "trust_remote_code" in kwargs:
+            return original_builder(*args, **kwargs)
+        try:
+            return original_builder(*args, trust_remote_code=True, **kwargs)
+        except Exception as exc:
+            if _is_trc_rejection(exc):
+                return original_builder(*args, **kwargs)
+            raise
 
     datasets.load_dataset = patched_load_dataset  # type: ignore[assignment]
     datasets.load_dataset_builder = patched_builder  # type: ignore[assignment]
