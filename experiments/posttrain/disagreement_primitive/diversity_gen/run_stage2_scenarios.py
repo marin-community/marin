@@ -68,7 +68,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI  # still used by batch-mode path (OpenAI-only)
+
+from experiments.posttrain.disagreement_primitive.diversity_gen.lm_client import call_lm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from raw_api_logger import RawAPILogger
@@ -249,19 +251,16 @@ def process_scenario_sync(
     last_content: str | None = None
     for attempt in range(1, max_retries + 1):
         try:
-            resp = log.call(
+            content = log.call(
                 role="stage2_scenarios",
                 key={"statement_id": sid, "scenario_n": scenario_n, "attempt": attempt, "model": model},
-                fn=lambda: client.chat.completions.create(
+                fn=lambda: call_lm(
                     model=model,
-                    messages=[
-                        {"role": "system", "content": STAGE2_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_content},
-                    ],
+                    system=STAGE2_SYSTEM_PROMPT,
+                    user=user_content,
+                    max_output_tokens=3000,
                     temperature=temperature,
-                    max_completion_tokens=3000,
-                    reasoning_effort="none",
-                    response_format={"type": "json_object"},
+                    response_schema=None,
                 ),
             )
         except Exception as exc:
@@ -270,7 +269,7 @@ def process_scenario_sync(
             time.sleep(1 + attempt)
             continue
 
-        content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+        content = (content or "").strip()
         last_content = content
         try:
             parsed = parse_scenario_response(content)
@@ -607,6 +606,130 @@ def run_sync_mode(
     return successes, failures
 
 
+def run_batch_anthropic_mode(
+    spec: dict[str, dict[str, Any]],
+    understandings: dict[str, dict[str, Any]],
+    statement_ids: list[str],
+    out_dir: Path,
+    model: str,
+    temperature: float,
+    stage1_run_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Anthropic Message Batches API for Stage 2a oaat.
+
+    Caching: the cacheable prefix per call is `universal_prefix + statement_prefix`
+    (~2.5-3k tokens). Across the ~22 calls per statement, all share the same
+    per-statement prefix. Anthropic ephemeral caching engages because the prefix
+    exceeds the 1024-token threshold.
+    """
+    import batch_anthropic as ba  # type: ignore
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise SystemExit("ANTHROPIC_API_KEY not set — `unset ANTHROPIC_API_KEY; set -a; source .env; source .env2; set +a`")
+    log = RawAPILogger(f"diversity_gen_{_model_slug(model)}_stage2")
+    attempts_dir = out_dir / "attempts"
+    attempts_dir.mkdir(parents=True, exist_ok=True)
+
+    universal_prefix = make_stage2_universal_prefix()
+
+    requests = []
+    cmap: dict[str, dict[str, Any]] = {}
+    for sid in statement_ids:
+        statement = spec[sid]
+        understanding = understandings[sid]
+        axes = understanding.get("behavior_specific_axes") or []
+        assignments = _compute_axis_assignment(axes)
+        statement_prefix = make_stage2_statement_prefix(statement, understanding)
+        cacheable_prefix = universal_prefix + statement_prefix  # ~2-3k tokens, >1024 threshold
+        n_total_for_stmt = len(assignments)
+        for assignment in assignments:
+            n = assignment.scenario_n
+            custom_id = f"stage2__{sid}__s{n:03d}"
+            cmap[custom_id] = {
+                "statement_id": sid,
+                "scenario_n": n,
+                "is_default_scenario": assignment.is_default,
+                "varied_axis": assignment.varied_axis,
+                "varied_value": assignment.varied_value,
+                "n_total_for_stmt": n_total_for_stmt,
+            }
+            suffix = make_stage2_variation_suffix(
+                n,
+                n_total_for_stmt,
+                is_default_scenario=assignment.is_default,
+                varied_axis=assignment.varied_axis,
+                varied_value=assignment.varied_value,
+            )
+            user_content = _build_user_prompt(universal_prefix, statement_prefix, suffix)
+            req = ba.build_request(
+                custom_id=custom_id,
+                model=model,
+                system=STAGE2_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_content}],
+                max_tokens=3000,
+                temperature=temperature,
+                cache=True,
+                cache_user_prefix=cacheable_prefix,
+            )
+            requests.append(req)
+
+    (out_dir / "batch_custom_id_map.json").write_text(json.dumps(cmap, indent=2))
+    print(f"submitting anthropic batch with {len(requests)} rows", flush=True)
+    state = ba.submit(api_key, requests, out_dir, name="batch")
+    print(f"  batch_id: {state['batch_id']}", flush=True)
+    ba.poll(api_key, out_dir, name="batch", interval=30.0, timeout=86400.0)
+    entries = ba.collect(api_key, out_dir, name="batch")
+
+    successes: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for entry in entries:
+        custom_id = entry.get("custom_id", "?")
+        cinfo = cmap.get(custom_id) or {}
+        sid = cinfo.get("statement_id", custom_id)
+        n = cinfo.get("scenario_n", 0)
+        log.call(
+            role="stage2_scenarios_batch_anthropic",
+            key={"statement_id": sid, "scenario_n": n, "custom_id": custom_id, "model": model},
+            fn=lambda e=entry: e,
+        )
+        result = entry.get("result") or {}
+        if result.get("type") != "succeeded":
+            err = json.dumps(result)[:300]
+            failures.append({"statement_id": sid, "scenario_n": n, "error": f"batch_error: {err}"})
+            _save_attempt(attempts_dir, sid, n, 1, content="", error=err)
+            continue
+        msg = result.get("message") or {}
+        blocks = msg.get("content") or []
+        content = ""
+        for b in blocks:
+            if b.get("type") == "text":
+                content += b.get("text", "")
+        content = content.strip()
+        try:
+            parsed = parse_scenario_response(content)
+        except ValueError as exc:
+            failures.append({"statement_id": sid, "scenario_n": n, "error": f"parse_error: {exc}", "last_raw_truncated": content[:500]})
+            _save_attempt(attempts_dir, sid, n, 1, content=content, error=f"parse_error: {exc}")
+            continue
+        _save_attempt(attempts_dir, sid, n, 1, content=content, error=None)
+        sr = ScenarioResult(
+            statement_id=sid,
+            scenario_n=n,
+            is_default_scenario=cinfo.get("is_default_scenario", False),
+            varied_axis=cinfo.get("varied_axis", ""),
+            varied_value=cinfo.get("varied_value", ""),
+            success=True,
+            attempts=1,
+            parsed=parsed,
+            last_error=None,
+            last_raw=content,
+        )
+        rec = _build_output_record(spec[sid], sr, model, temperature, "batch_anthropic", stage1_run_id)
+        successes.append(rec)
+    return successes, failures
+
+
 def run_batch_mode(
     spec: dict[str, dict[str, Any]],
     understandings: dict[str, dict[str, Any]],
@@ -895,6 +1018,10 @@ def main(argv: list[str] | None = None) -> int:
             args.max_retries,
             args.workers,
             stage1_run_id,
+        )
+    elif args.model.lower().startswith("claude-"):
+        successes, failures = run_batch_anthropic_mode(
+            spec, understandings, wanted, out_dir, args.model, args.temperature, stage1_run_id,
         )
     else:
         successes, failures = run_batch_mode(

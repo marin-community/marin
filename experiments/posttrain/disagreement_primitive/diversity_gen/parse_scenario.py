@@ -23,7 +23,56 @@ orchestrator can then retry.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+
+def _extract_json_payload(raw_text: str) -> str:
+    """Pull a JSON object out of a possibly prose-prefixed response.
+
+    Some models (e.g., Claude when given a 'plan globally before writing'
+    instruction) emit a planning preamble in prose, then a fenced ```json ...```
+    block. Others wrap the whole response in a fence. Others emit bare JSON.
+    This helper handles all three.
+
+    1. If the response starts with a fence, strip it (legacy behavior).
+    2. Else, look for a ```json ... ``` (or ``` ... ```) block anywhere in the
+       text and extract its body.
+    3. Else, take the substring from the first `{` to the matching last `}`.
+    4. Else, return the stripped text and let json.loads raise.
+    """
+    cleaned = (raw_text or "").strip()
+    if not cleaned:
+        return cleaned
+
+    if cleaned.startswith("```"):
+        # Strip the outer fence — use last ``` as closer (not first, since
+        # the JSON body itself may contain ``` inside user_query code blocks).
+        body = cleaned[3:]
+        if body.lower().startswith("json"):
+            body = body[4:]
+        last = body.rfind("```")
+        if last > 0:
+            body = body[:last]
+        return body.strip()
+
+    # Look for an opening ```json (or ```) anywhere, then use the LAST ``` after
+    # it as the closer. Non-greedy matching breaks when JSON contains ``` inside
+    # string values (e.g., code in user_query).
+    open_match = re.search(r"```(?:json)?\s*\n?", cleaned)
+    if open_match:
+        body = cleaned[open_match.end():]
+        last = body.rfind("```")
+        if last > 0:
+            body = body[:last]
+        return body.strip()
+
+    i = cleaned.find("{")
+    j = cleaned.rfind("}")
+    if i >= 0 and j > i:
+        return cleaned[i : j + 1].strip()
+
+    return cleaned
 
 REQUIRED_TOP_KEYS = {
     "scenario_text",
@@ -49,12 +98,7 @@ def parse_scenario_response(raw_text: str) -> dict[str, Any]:
     if not raw_text or not raw_text.strip():
         raise ValueError("empty response")
 
-    cleaned = raw_text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
+    cleaned = _extract_json_payload(raw_text)
 
     try:
         parsed = json.loads(cleaned)
@@ -121,12 +165,7 @@ def parse_single_call_diverse_response(
     """
     if not raw_text or not raw_text.strip():
         raise ValueError("empty response")
-    cleaned = raw_text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
+    cleaned = _extract_json_payload(raw_text)
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as exc:
@@ -253,12 +292,7 @@ def parse_repair_response(
     if not raw_text or not raw_text.strip():
         raise ValueError("empty response")
 
-    cleaned = raw_text.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:]
-        cleaned = cleaned.strip()
+    cleaned = _extract_json_payload(raw_text)
 
     try:
         parsed = json.loads(cleaned)

@@ -38,11 +38,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI  # kept for type hints / future batch-mode use
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from raw_api_logger import RawAPILogger
 
+from experiments.posttrain.disagreement_primitive.diversity_gen.lm_client import call_lm
 from experiments.posttrain.disagreement_primitive.diversity_gen.parse_scenario import (
     parse_repair_response,
 )
@@ -183,19 +184,16 @@ def process_statement_iterative(
         rewritten_one: dict[str, Any] | None = None
         for attempt in range(1, max_retries + 1):
             try:
-                resp = log.call(
+                content = log.call(
                     role="stage2_repair_iterative",
                     key={"statement_id": sid, "scenario_n": scenario_n, "attempt": attempt, "model": model},
-                    fn=lambda: client.chat.completions.create(
+                    fn=lambda: call_lm(
                         model=model,
-                        messages=[
-                            {"role": "system", "content": STAGE2_REPAIR_SYSTEM_PROMPT},
-                            {"role": "user", "content": user_content},
-                        ],
+                        system=STAGE2_REPAIR_SYSTEM_PROMPT,
+                        user=user_content,
+                        max_output_tokens=max_completion_tokens,
                         temperature=temperature,
-                        max_completion_tokens=max_completion_tokens,
-                        reasoning_effort="none",
-                        response_format={"type": "json_object"},
+                        response_schema=None,
                     ),
                 )
             except Exception as exc:
@@ -204,7 +202,7 @@ def process_statement_iterative(
                 time.sleep(1 + attempt)
                 continue
 
-            content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+            content = (content or "").strip()
             last_content = content
             try:
                 parsed = parse_repair_response(content, [source])
@@ -263,29 +261,22 @@ def process_statement_sync(
         scenarios=source_scenarios,
         max_per_surface_value=max_per_surface_value,
     )
-    response_format: dict[str, Any] = (
-        {"type": "json_schema", "json_schema": REPAIR_OUTPUT_JSON_SCHEMA}
-        if strict_schema
-        else {"type": "json_object"}
-    )
+    schema = REPAIR_OUTPUT_JSON_SCHEMA if strict_schema else None
 
     last_err: str | None = None
     last_content: str | None = None
     for attempt in range(1, max_retries + 1):
         try:
-            resp = log.call(
+            content = log.call(
                 role="stage2_repair_singlepass",
                 key={"statement_id": sid, "attempt": attempt, "model": model},
-                fn=lambda: client.chat.completions.create(
+                fn=lambda: call_lm(
                     model=model,
-                    messages=[
-                        {"role": "system", "content": STAGE2_REPAIR_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_content},
-                    ],
+                    system=STAGE2_REPAIR_SYSTEM_PROMPT,
+                    user=user_content,
+                    max_output_tokens=max_completion_tokens,
                     temperature=temperature,
-                    max_completion_tokens=max_completion_tokens,
-                    reasoning_effort="none",
-                    response_format=response_format,
+                    response_schema=schema,
                 ),
             )
         except Exception as exc:
@@ -294,7 +285,7 @@ def process_statement_sync(
             time.sleep(1 + attempt)
             continue
 
-        content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+        content = (content or "").strip()
         last_content = content
         try:
             rewritten = parse_repair_response(content, source_scenarios)
@@ -324,6 +315,130 @@ def process_statement_sync(
         last_error=last_err,
         last_raw=last_content,
     )
+
+
+def run_anthropic_batch_singlepass(
+    spec: dict[str, dict[str, Any]],
+    understandings: dict[str, dict[str, Any]],
+    by_sid: dict[str, list[dict[str, Any]]],
+    statement_ids: list[str],
+    out_root: Path,
+    model: str,
+    temperature: float,
+    max_completion_tokens: int,
+    max_per_surface_value: int | None,
+    strict_schema: bool,
+    attempts_dir: Path,
+) -> tuple[int, int, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Anthropic Message Batches API for Stage 2b single_pass repair.
+
+    One batch row per statement. No `cache_user_prefix` — the V2.5a prompt
+    layout puts statement-specific content BEFORE the methodology, so there's
+    no shared byte-prefix across the 46 calls to amortize.
+
+    Returns (n_admitted, n_failed_statements, admitted_records, failure_records).
+    """
+    import batch_anthropic as ba  # type: ignore
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise SystemExit("ANTHROPIC_API_KEY not set — `unset ANTHROPIC_API_KEY; set -a; source .env; source .env2; set +a`")
+    log = RawAPILogger(f"diversity_gen_{_model_slug(model)}_stage2_repair")
+
+    schema = REPAIR_OUTPUT_JSON_SCHEMA if strict_schema else None
+
+    requests = []
+    cmap: dict[str, str] = {}  # custom_id -> statement_id
+    for sid in statement_ids:
+        statement = spec[sid]
+        understanding = understandings[sid]
+        source_scenarios = by_sid[sid]
+        user_content = make_stage2_repair_singlepass_prompt(
+            statement_record=statement,
+            understanding_record=understanding,
+            scenarios=source_scenarios,
+            max_per_surface_value=max_per_surface_value,
+        )
+        custom_id = f"stage2b__{sid}"
+        cmap[custom_id] = sid
+        req = ba.build_request(
+            custom_id=custom_id,
+            model=model,
+            system=STAGE2_REPAIR_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_content}],
+            max_tokens=max_completion_tokens,
+            temperature=temperature,
+            cache=False,
+            # Strict JSON schema enforced server-side. Anthropic takes the raw
+            # schema dict (no `{name, strict, schema}` wrapper). Eliminates the
+            # planning-preamble parse failure mode we saw without it.
+            output_schema=schema["schema"] if schema is not None else None,
+        )
+        requests.append(req)
+
+    (out_root / "batch_custom_id_map.json").write_text(json.dumps(cmap, indent=2))
+    print(f"submitting anthropic batch with {len(requests)} statements", flush=True)
+    state = ba.submit(api_key, requests, out_root, name="batch")
+    print(f"  batch_id: {state['batch_id']}", flush=True)
+    ba.poll(api_key, out_root, name="batch", interval=30.0, timeout=86400.0)
+    entries = ba.collect(api_key, out_root, name="batch")
+
+    admitted: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    n_admitted = 0
+    n_failed = 0
+    for entry in entries:
+        custom_id = entry.get("custom_id", "?")
+        sid = cmap.get(custom_id, custom_id)
+        log.call(
+            role="stage2_repair_singlepass_batch_anthropic",
+            key={"statement_id": sid, "custom_id": custom_id, "model": model},
+            fn=lambda e=entry: e,
+        )
+        result = entry.get("result") or {}
+        if result.get("type") != "succeeded":
+            n_failed += 1
+            err = json.dumps(result)[:400]
+            failures.append({"statement_id": sid, "n_source": len(by_sid[sid]), "error": f"batch_error: {err}"})
+            print(f"   [FAIL] {sid}: {err[:200]}")
+            continue
+        msg = result.get("message") or {}
+        blocks = msg.get("content") or []
+        content = ""
+        for b in blocks:
+            if b.get("type") == "text":
+                content += b.get("text", "")
+        content = content.strip()
+        try:
+            rewritten = parse_repair_response(content, by_sid[sid])
+        except ValueError as exc:
+            n_failed += 1
+            failures.append({"statement_id": sid, "n_source": len(by_sid[sid]), "error": f"parse_error: {exc}", "last_raw_truncated": content[:500]})
+            print(f"   [FAIL] {sid}: parse_error: {str(exc)[:200]}")
+            continue
+        for rew, src in zip(rewritten, by_sid[sid], strict=True):
+            rec = {
+                "statement_id": sid,
+                "scenario_n": rew["scenario_n"],
+                "scenario_id": rew["scenario_id"],
+                "is_default_scenario": rew["is_default_scenario"],
+                "varied_axis": rew["varied_axis"],
+                "varied_value": rew["varied_value"],
+                "strategy": "repair_singlepass",
+                "source_strategy": src.get("strategy", "one_axis_at_a_time_from_default"),
+                "scenario_text": rew["scenario_text"],
+                "user_query": rew["user_query"],
+                "system_prompt": rew["system_prompt"],
+                "rubric": rew["rubric"],
+            }
+            if "contains_placeholder" in rew:
+                rec["contains_placeholder"] = rew["contains_placeholder"]
+                rec["placeholder_notes"] = rew.get("placeholder_notes", "")
+            admitted.append(rec)
+            n_admitted += 1
+        print(f"   [OK]   {sid}: {len(rewritten)} rewritten")
+
+    return n_admitted, n_failed, admitted, failures
 
 
 def main() -> None:
@@ -364,8 +479,8 @@ def main() -> None:
                     help="print plan + first ~500 chars of one prompt, then exit (no API calls)")
     args = ap.parse_args()
 
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise SystemExit("OPENAI_API_KEY not set in environment — `set -a; source .env; set +a` first")
+    # Backend keys validated lazily inside lm_client.call_lm() on first call
+    # (OPENAI_API_KEY for gpt-*, GEMINI_API_KEY for gemini-*, etc.).
 
     spec = _load_spec(args.spec_path)
     understandings = _load_understandings(args.stage1_dir)
@@ -428,11 +543,40 @@ def main() -> None:
         print(f"\n=== full prompt length: {len(prompt)} chars ===")
         return
 
-    client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    client = None  # unused — lm_client.call_lm() lazy-inits per-backend
     log = RawAPILogger(experiment_name="stage2_repair_singlepass", base_dir=out_root / "raw_api_log")
 
     out_scenarios_path = out_root / "scenarios.jsonl"
     out_failures_path = out_root / "parse_failures.jsonl"
+
+    # Anthropic batch path: skip the ThreadPoolExecutor and submit all statements as
+    # a single batch. Only supported for single_pass (iterative is sequential by design).
+    if args.model.lower().startswith("claude-") and args.mode == "single_pass":
+        n_admitted, n_failed, admitted, failures = run_anthropic_batch_singlepass(
+            spec=spec,
+            understandings=understandings,
+            by_sid=by_sid,
+            statement_ids=statement_ids,
+            out_root=out_root,
+            model=args.model,
+            temperature=args.temperature,
+            max_completion_tokens=args.max_completion_tokens,
+            max_per_surface_value=args.max_per_surface_value,
+            strict_schema=args.strict_schema,
+            attempts_dir=attempts_dir,
+        )
+        with out_scenarios_path.open("w") as fout:
+            for rec in admitted:
+                fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        with out_failures_path.open("w") as ferr:
+            for rec in failures:
+                ferr.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        manifest["finished_utc"] = datetime.now(timezone.utc).isoformat()
+        manifest["n_admitted"] = n_admitted
+        manifest["n_failed_statements"] = n_failed
+        (out_root / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        print(f"\n== summary ==\nadmitted scenarios: {n_admitted}\nfailed statements:  {n_failed}\nout: {out_root}")
+        return
 
     n_admitted = 0
     n_failed = 0

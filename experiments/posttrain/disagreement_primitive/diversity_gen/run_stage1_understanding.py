@@ -56,11 +56,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from openai import OpenAI
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from raw_api_logger import RawAPILogger
 
+from experiments.posttrain.disagreement_primitive.diversity_gen.lm_client import call_lm
 from experiments.posttrain.disagreement_primitive.diversity_gen.parse_understanding import (
     parse_understanding_response,
 )
@@ -132,7 +131,7 @@ def _save_attempt(attempts_dir: Path, statement_id: str, attempt: int, content: 
 
 
 def process_statement_sync(
-    client: OpenAI,
+    client: Any,  # unused — kept for backwards compat in caller signatures
     log: RawAPILogger,
     statement: dict[str, Any],
     model: str,
@@ -149,19 +148,16 @@ def process_statement_sync(
     for attempt in range(1, max_retries + 1):
         t0 = time.time()
         try:
-            resp = log.call(
+            content = log.call(
                 role="stage1_understanding",
                 key={"statement_id": sid, "attempt": attempt, "model": model},
-                fn=lambda: client.chat.completions.create(
+                fn=lambda: call_lm(
                     model=model,
-                    messages=[
-                        {"role": "system", "content": STAGE1_SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    system=STAGE1_SYSTEM_PROMPT,
+                    user=user_prompt,
+                    max_output_tokens=4000,
                     temperature=temperature,
-                    max_completion_tokens=4000,
-                    reasoning_effort="none",
-                    response_format={"type": "json_object"},
+                    response_schema=None,
                 ),
             )
         except Exception as exc:
@@ -171,7 +167,7 @@ def process_statement_sync(
             time.sleep(1 + attempt)
             continue
 
-        content = (resp.choices[0].message.content or "").strip() if resp.choices else ""
+        content = (content or "").strip()
         last_content = content
         # raw_api_logger files are timestamped with seq; we record the elapsed
         # time as a proxy. Full provenance is in results/raw/...
@@ -262,10 +258,8 @@ def run_sync_mode(
     workers: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run all statements via sync chat-completions. Returns (successes, failures)."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("OPENAI_API_KEY not in environment. Did you `set -a; source .env; set +a` first?")
-    client = OpenAI(api_key=api_key)
+    # Per-backend key validation happens lazily inside call_lm() on first use.
+    client = None  # unused — kept in signature for batch-mode (OpenAI-only) compat
     log = RawAPILogger(f"diversity_gen_{_model_slug(model)}_stage1")
     attempts_dir = out_dir / "attempts"
     attempts_dir.mkdir(parents=True, exist_ok=True)
@@ -439,6 +433,103 @@ def run_batch_mode(
     return successes, failures
 
 
+def run_batch_anthropic_mode(
+    spec: list[dict[str, Any]],
+    out_dir: Path,
+    model: str,
+    temperature: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run all statements via Anthropic Message Batches API. Same shape as OpenAI batch.
+
+    System prompt is short (~200 tokens, below the 1024-token caching floor),
+    so no `cache_control` markers — caching would not engage anyway. Pure batch
+    discount only (50% off baseline).
+    """
+    import batch_anthropic as ba  # type: ignore
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise SystemExit("ANTHROPIC_API_KEY not set. Did you `unset ANTHROPIC_API_KEY; set -a; source .env; source .env2; set +a`?")
+    log = RawAPILogger(f"diversity_gen_{_model_slug(model)}_stage1")
+    attempts_dir = out_dir / "attempts"
+    attempts_dir.mkdir(parents=True, exist_ok=True)
+
+    requests = []
+    cmap: dict[str, dict[str, Any]] = {}
+    for s in spec:
+        sid = s["id"]
+        custom_id = f"stage1__{sid}"
+        cmap[custom_id] = {"statement_id": sid}
+        req = ba.build_request(
+            custom_id=custom_id,
+            model=model,
+            system=STAGE1_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": make_stage1_user_prompt(s)}],
+            max_tokens=4000,
+            temperature=temperature,
+            cache=False,  # system <1024 tokens; nothing to cache
+        )
+        requests.append(req)
+
+    (out_dir / "batch_custom_id_map.json").write_text(json.dumps(cmap, indent=2))
+    state = ba.submit(api_key, requests, out_dir, name="batch")
+    print(f"submitted anthropic batch {state['batch_id']}", flush=True)
+    ba.poll(api_key, out_dir, name="batch", interval=30.0, timeout=86400.0)
+    print("batch terminal — collecting results", flush=True)
+    entries = ba.collect(api_key, out_dir, name="batch")
+
+    successes: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for entry in entries:
+        custom_id = entry.get("custom_id", "?")
+        sid = cmap.get(custom_id, {}).get("statement_id", custom_id)
+        statement = next((s for s in spec if s["id"] == sid), None)
+        if statement is None:
+            failures.append({"statement_id": sid, "error": "no matching spec record"})
+            continue
+
+        log.call(
+            role="stage1_understanding_batch_anthropic",
+            key={"statement_id": sid, "custom_id": custom_id, "model": model},
+            fn=lambda e=entry: e,
+        )
+
+        result = entry.get("result") or {}
+        if result.get("type") != "succeeded":
+            err = json.dumps(result)[:300]
+            failures.append({"statement_id": sid, "error": f"batch_error: {err}"})
+            _save_attempt(attempts_dir, sid, 1, content="", error=err)
+            continue
+        msg = result.get("message") or {}
+        blocks = msg.get("content") or []
+        content = ""
+        for b in blocks:
+            if b.get("type") == "text":
+                content += b.get("text", "")
+        content = content.strip()
+
+        try:
+            parsed = parse_understanding_response(content)
+        except ValueError as exc:
+            failures.append({"statement_id": sid, "error": f"parse_error: {exc}", "last_raw_truncated": content[:500]})
+            _save_attempt(attempts_dir, sid, 1, content=content, error=f"parse_error: {exc}")
+            continue
+
+        _save_attempt(attempts_dir, sid, 1, content=content, error=None)
+        result_obj = StatementResult(
+            statement_id=sid,
+            success=True,
+            attempts=1,
+            parsed=parsed,
+            last_error=None,
+            last_raw=content,
+            raw_seq=["batch_anthropic_attempt_1"],
+        )
+        successes.append(_build_record(statement, result_obj, model, temperature, "batch_anthropic"))
+
+    return successes, failures
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Stage 1 (understanding) for diversity-gen pipeline.")
     p.add_argument(
@@ -491,6 +582,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mode == "sync":
         successes, failures = run_sync_mode(spec, out_dir, args.model, args.temperature, args.max_retries, args.workers)
+    elif args.model.lower().startswith("claude-"):
+        successes, failures = run_batch_anthropic_mode(spec, out_dir, args.model, args.temperature)
     else:
         successes, failures = run_batch_mode(spec, out_dir, args.model, args.temperature)
 

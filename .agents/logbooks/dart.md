@@ -5828,6 +5828,132 @@ PYENV_VERSION=3.12.0 uv run python -m experiments.posttrain.disagreement_primiti
 
 §11 (prompt diversity generation) is SOLVED at the generation level. Section 11.14's pipeline is the canonical recipe for any future spec. The remaining open work is quality-control overlays and downstream evaluation, not core pipeline design.
 
+### 11.15 Multi-backend execution — Gemini-3.1-Pro + Claude Sonnet 4.6 corpora (2026-05-17)
+
+The §11.14 canonical pipeline (Stage 1 understanding → Stage 2a oaat Set B → Stage 2b V2.5a repair with strict schema + self-report) was originally validated against GPT-5.1 (full 46-statement coverage). §11.15 extends it to two additional generator backends — Gemini-3.1-Pro and Claude Sonnet 4.6 — and locks in the multi-backend code path.
+
+#### Code changes added in §11.15
+
+Three pieces of plumbing turn the GPT-5.1-only §11.14 pipeline into a backend-agnostic one:
+
+1. **`lm_client.py`** (new) — `call_lm(model, system, user, max_output_tokens, temperature, response_schema)` routes by model prefix:
+   - `gpt-*` / `o*` → OpenAI (sync) with `reasoning_effort="none"` for gpt-5.x (hard rule).
+   - `gemini-*` → Google GenAI with `thinking_level="low"`, `temperature=0`, permissive `safety_settings=BLOCK_NONE` (hard rules per project memory), `response_json_schema=<schema>` for strict mode.
+   - `claude-*` → Anthropic sync with `thinking={"type":"disabled"}`, `output_config={"format":{"type":"json_schema","schema":...}}` for strict.
+   - `grok-*` → xAI via OpenAI-compatible base_url.
+   - Lazy per-backend client init; thread-safe.
+
+2. **`batch_anthropic.build_request(output_schema=...)`** (extended) — adds optional `output_schema` kwarg that emits `params["output_config"] = {"format": {"type": "json_schema", "schema": <raw_schema>}}` per Appendix A.5. Mutually exclusive with `tools`/`tool_choice`. **This fix was load-bearing**: the initial Sonnet Stage 2b run silently dropped strict-schema enforcement at the batch boundary, producing planning-preamble prose before the JSON; 13 of 46 statements then failed parsing on truncated/malformed JSON. With `output_schema` wired through, the same model produces clean schema-conformant JSON starting at byte 0.
+
+3. **`parse_scenario.py::_extract_json_payload`** (new) — robust JSON extraction for cases where the model wraps output in a ```json ... ``` fence with a planning preamble. Uses last `` ``` `` as the closer (not first — first breaks when JSON contains ``` inside `user_query` code blocks, which Sonnet emitted on programming-related scenarios). Fallback to first-`{` / last-`}` substring grab.
+
+4. **Anthropic batch+caching paths added to all 3 stages**:
+   - `run_stage1_understanding.py::run_batch_anthropic_mode` — system <1024 tokens, no caching engages, pure batch discount (50%).
+   - `run_stage2_scenarios.py::run_batch_anthropic_mode` — uses `cache_user_prefix = universal_prefix + statement_prefix` (~2.5k tokens, >1024 caching threshold). ~22 calls per statement share the per-statement prefix.
+   - `run_stage2_repair.py::run_anthropic_batch_singlepass` — `output_schema` passed via the extended `build_request`. No `cache_user_prefix` because the per-statement content comes first in the prompt (V2.5a prompt layout puts statement context before the methodology).
+
+#### Anthropic caching: what the probes told us
+
+Two verification probes were built before scaling Sonnet:
+
+- `probe_claude_batch_cache.py`: 20 requests, batch only, all sharing one ~1500-token cacheable prefix. Result: 8/20 cache-hit, 12/20 cache-wrote. ~20% savings. Pattern: when N batch workers all start in parallel, the first ones see an empty cache and write; later ones (after the first writes complete) see the cache and read. Eventual consistency.
+- `probe_claude_warmup_batch.py`: 1 sync warmup call (writes cache) → wait → batch of 19. Result: 11/19 cache-hit, 8/19 cache-wrote. 7.2% savings (worse than batch-only because warmup paid sync rates). **Anthropic's batch infrastructure is distributed across multiple cache nodes with eventual consistency** — a pre-warmed cache entry on one node doesn't propagate before parallel batch workers fan out to other nodes. Warmup is not worth the latency.
+
+The real-world Stage 2a Sonnet run on 906 batch requests hit **66.2% cache hit rate** — significantly better than the small probes. Reason: per-statement prefix amortizes across ~22 calls, and within-statement parallelism is bounded so the cache settles faster relative to total request count. Measured savings: **23.9% ($7.39 actual vs $9.71 no-cache)**.
+
+#### Per-backend execution results
+
+| backend | Stage 1 | Stage 2a (Set B) | Stage 2b (V2.5a repair) | refusal handling |
+|---|--:|--:|--:|---|
+| GPT-5.1 (sync; §11.14 canonical) | 46/46 | 1037/1037 (46 statements) | 1037/1037 (46 statements) | hedges → 6/1037 `contains_placeholder=true` → Grok concretize 6/6 |
+| Gemini-3.1-Pro (sync) | 46/46 | 639/654 (45 statements; safety-empty on `no_erotica_or_gore` entirely + 14 SCIM scenarios) | 593 across 43 statements (3 Stage 2b refusals on `no_erotica_or_gore`, `avoid_hateful_content`, `formatting`) | 0/593 self-flag — Sonnet sub-agent audit confirmed honest (refuse-or-be-concrete pattern) |
+| Claude Sonnet 4.6 (batch+cache+strict_schema) | 46/46 | 900/906 (45 statements; safety-empty on `sexual_content_involving_minors`) | **876 across 45 statements** (1 Stage 2b refusal on `comply_with_laws` — `stop_reason: refusal` mid-output) | 0/876 self-flag — same pattern as Gemini |
+
+**Three different safety-refusal failure modes across the three providers**:
+
+- GPT-5.1: completes the call but emits a placeholder / hedge token (`[slur]`, censored `f***ing`, etc.) — caught by the self-report flag, fixed by the Grok concretize stage.
+- Gemini-3.1-Pro: refuses at the API boundary — empty response or echo of the source. The model never started generating; nothing to recover from.
+- Claude Sonnet 4.6: generates fluently then **halts mid-output** with `stop_reason: refusal` once content moderation flags something. The partial output is well-formed up to the halt point; everything after is missing.
+
+**Decision: refused statements are dropped per-backend, not backfilled from another backend.** Cross-backend mixing would create attribution problems in downstream judge analysis. Each backend's canonical corpus reports its own coverage. The Sonnet sub-agent audit (§11.15 verification) confirms that the per-backend non-refused subset is honest about hedging (0% silent placeholder rate on Gemini's 593; same expected on Sonnet's 876).
+
+#### Final canonical corpora on disk
+
+| backend | path | statements | scenarios |
+|---|---|--:|--:|
+| GPT-5.1 (§11.14) | `experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage2_scenarios/repaired/20260516T235810Z_v25a_strict_all46/concretized/20260517T001323Z/concretized_scenarios.jsonl` | 46 | 1037 |
+| Gemini-3.1-Pro | `experiments/posttrain/disagreement_primitive/diversity_gen/gemini_3_1_pro_preview/stage2_scenarios/repaired/20260517T003828Z_gemini_v25a_strict_all46/scenarios.jsonl` | 43 | 593 |
+| Claude Sonnet 4.6 | `experiments/posttrain/disagreement_primitive/diversity_gen/claude_sonnet_4_6/stage2_scenarios/repaired/sonnet_v25a_final/scenarios.jsonl` | 45 | 876 |
+
+**Total across three backends**: 134 statement-backend pairs, 2506 scenarios. For statements covered by all three backends (avg 41 of 46), the corpus has triple coverage — usable for cross-backend judge-agreement studies without single-backend bias.
+
+#### Cost summary
+
+| backend | run | cost |
+|---|---|--:|
+| GPT-5.1 | full pipeline + iterations + Grok | ~$40 |
+| Gemini-3.1-Pro | full pipeline (sync; Gemini has no batch API) | ~$25 |
+| Claude Sonnet 4.6 | full pipeline (batch+cache+strict_schema, 23.9% caching savings on Stage 2a) | **~$17** |
+| Verification probes (Anthropic batch+cache + warmup) | one-off | <$1 |
+| **Total** | | **~$83** |
+
+Claude Sonnet 4.6 was the cheapest per-corpus despite higher sticker rates — batch (50% off) + caching (23.9% additional on Stage 2a) + strict_schema (eliminated wasted output on plan-preamble) compounded.
+
+#### Sub-agent honesty audit on Gemini corpus
+
+A single Sonnet 4.6 sub-agent audited all 593 Gemini Stage 2b scenarios looking for placeholders / censoring / vague substitutes / semantic softening that Gemini did NOT self-flag. Verdict (A) — honest: **zero hedges found in scenario_text + user_query content**. Four regex false-positives all resolved to rubric `bad_indicators` exemplars (where censored forms appear as illustrations of what bad behavior looks like, not as hedges). Audit report: `claude_subagents/diversity_repair_audit/gemini_self_report_honesty.md`.
+
+**Operational note for future audits**: hedge-detection regex must be scoped to `scenario_text` + `user_query` only, NOT the full record — rubrics legitimately contain censored exemplars.
+
+The same audit pattern should be applied to the Sonnet corpus before any production use. Not done yet; recorded as a follow-up.
+
+#### Key files added or extended in §11.15
+
+| artifact | path |
+|---|---|
+| Unified backend caller | `experiments/posttrain/disagreement_primitive/diversity_gen/lm_client.py` |
+| Anthropic batch+cache+schema fix | `experiments/posttrain/disagreement_primitive/batch_anthropic.py` (new `output_schema` kwarg on `build_request`) |
+| Parser robustness | `experiments/posttrain/disagreement_primitive/diversity_gen/parse_scenario.py` (`_extract_json_payload`) |
+| Stage 1 batch-anthropic mode | `run_stage1_understanding.py::run_batch_anthropic_mode` |
+| Stage 2a batch-anthropic mode + caching | `run_stage2_scenarios.py::run_batch_anthropic_mode` |
+| Stage 2b batch-anthropic + strict schema | `run_stage2_repair.py::run_anthropic_batch_singlepass` |
+| Anthropic batch+cache probes | `diversity_gen/probe_claude_batch_cache.py`, `diversity_gen/probe_claude_warmup_batch.py` |
+| Sub-agent audit report (Gemini) | `claude_subagents/diversity_repair_audit/gemini_self_report_honesty.md` |
+
+#### Locked-in: §11.14 + §11.15 together
+
+The §11.14 canonical pipeline IS backend-agnostic when `lm_client.call_lm` is the dispatch point. To run the full pipeline on ANY supported backend:
+
+```bash
+unset ANTHROPIC_API_KEY  # only needed for Claude — session token shadows .env2
+set -a; source .env; source .env2; set +a
+
+# Stage 1 (understanding) — pick any of: gpt-5.1 | gemini-3.1-pro-preview | claude-sonnet-4-6
+PYENV_VERSION=3.12.0 uv run python -m experiments.posttrain.disagreement_primitive.diversity_gen.run_stage1_understanding \
+    --mode batch \
+    --model claude-sonnet-4-6
+
+# Stage 2a (Set B oaat)
+PYENV_VERSION=3.12.0 uv run python -m experiments.posttrain.disagreement_primitive.diversity_gen.run_stage2_scenarios \
+    --mode batch \
+    --strategy one_axis_at_a_time_from_default \
+    --model claude-sonnet-4-6 \
+    --stage1-dir <stage 1 run dir>
+
+# Stage 2b (V2.5a repair with strict schema)
+PYENV_VERSION=3.12.0 uv run python -m experiments.posttrain.disagreement_primitive.diversity_gen.run_stage2_repair \
+    --mode single_pass --max-per-surface-value 2 --strict-schema \
+    --model claude-sonnet-4-6 \
+    --source-set-b-dir <stage 2a run dir> \
+    --stage1-dir       <stage 1 run dir> \
+    --statements       all
+
+# Stage 2c (Grok concretize on flagged) — only useful for backends that hedge with placeholders (GPT-5.1).
+# Gemini and Sonnet have 0% self-flag rates so concretize is a no-op for them.
+```
+
+§11 prompt diversity generation is now SOLVED across three production backends. §11.15 extends the §11.14 SOLVED status to multi-backend.
+
 ---
 
 ## Appendix A. Guaranteeing exact JSON-Schema adoption across compilers

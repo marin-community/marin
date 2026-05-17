@@ -128,6 +128,7 @@ def build_request(
     temperature: float = 0,
     cache: bool = True,
     cache_user_prefix: str | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a single Anthropic Messages-API request envelope.
 
@@ -179,6 +180,15 @@ def build_request(
         params["tool_choice"] = tool_choice
     if thinking is not None:
         params["thinking"] = thinking
+    # Anthropic structured-outputs surface (dart.md Appendix A.5). Accepts the
+    # raw JSON Schema dict — NOT the OpenAI {name, strict, schema} wrapper.
+    # Use either output_schema OR tools+tool_choice, not both.
+    if output_schema is not None:
+        if tools is not None or tool_choice is not None:
+            raise ValueError("output_schema and tools/tool_choice are mutually exclusive")
+        params["output_config"] = {
+            "format": {"type": "json_schema", "schema": output_schema},
+        }
     return {"custom_id": custom_id, "params": params}
 
 

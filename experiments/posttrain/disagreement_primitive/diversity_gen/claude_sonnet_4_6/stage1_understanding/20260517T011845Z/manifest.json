@@ -1,0 +1,17 @@
+{
+  "run_id": "20260517T011845Z",
+  "model": "claude-sonnet-4-6",
+  "temperature": 1.0,
+  "reasoning_effort": "none",
+  "mode": "batch",
+  "statements_filter": null,
+  "n_statements": 46,
+  "max_retries": 5,
+  "workers": 8,
+  "spec_path": "/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/specs/openai_model_spec.jsonl",
+  "git_commit": "f7d6c6b40",
+  "started_utc": "2026-05-17T01:18:45.504233+00:00",
+  "finished_utc": "2026-05-17T01:22:18.026979+00:00",
+  "n_succeeded": 46,
+  "n_failed": 0
+}
