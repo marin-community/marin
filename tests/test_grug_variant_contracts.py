@@ -183,6 +183,28 @@ def test_grug_moe_per_expert_lr_selected_gate1_launcher_builds_one_run():
     assert step.config.tracker.group == "muonh-may-arch-per-expert-lr-gate1"
 
 
+def test_grug_moe_per_expert_lr_selected_gate1_parser_leaves_executor_args():
+    selected_module = importlib.import_module("experiments.grug.moe.muonh_may_arch_per_expert_lr_selected_gate1")
+
+    args, executor_args = selected_module._parse_args(
+        [
+            "--candidate",
+            "shrink-expert",
+            "--hidden-dim",
+            "512",
+            "--run-suffix",
+            "retry1",
+            "--dry_run",
+            "true",
+        ]
+    )
+
+    assert args.candidate == "shrink-expert"
+    assert args.hidden_dim == 512
+    assert args.run_suffix == "retry1"
+    assert executor_args == ["--dry_run", "true"]
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),

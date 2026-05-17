@@ -20,6 +20,7 @@ Submit one replacement run:
 """
 
 import argparse
+import sys
 
 from marin.execution.executor import ExecutorStep, executor_main
 
@@ -41,16 +42,17 @@ def _build_selected_step(candidate: str, *, hidden_dim: int, run_suffix: str = _
     return _build_step(candidate, hidden_dim=hidden_dim, budget=_GATE1_BUDGET_BY_DIM[hidden_dim], run_suffix=run_suffix)
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", choices=_CANDIDATES, required=True)
     parser.add_argument("--hidden-dim", type=int, choices=tuple(_GATE1_BUDGET_BY_DIM), required=True)
     parser.add_argument("--run-suffix", default=_RUN_SUFFIX)
-    return parser.parse_args()
+    return parser.parse_known_args(argv)
 
 
 if __name__ == "__main__":
-    args = _parse_args()
+    args, executor_args = _parse_args()
+    sys.argv = [sys.argv[0], *executor_args]
     step = _build_selected_step(args.candidate, hidden_dim=args.hidden_dim, run_suffix=args.run_suffix)
     executor_main(
         steps=[step],
