@@ -3,6 +3,45 @@
 End-to-end log of the all-sources decontamination experiment under
 `experiments/datakit/decontam/`. Updated as the pipeline runs.
 
+## TL;DR
+
+* Pipeline runs end-to-end. **15B records scanned across 113 sources;
+  5.7M flagged (0.038%).**
+* Eval corpus on GCS at `gs://marin-eu-west4/datakit/decontam/evals/`
+  (8 AA + 849 LMH = 857 parquet files, 1.8M eval records). Combined
+  bloom at `gs://marin-eu-west4/datakit/bloom/_combined_5eebba96`.
+* Decon outputs at
+  `gs://marin-eu-west4/tmp/ttl=7d/rav/decon-all-sources-v1/datakit/decon/<source>/`
+  with `attributes.{contaminated, max_overlap, matched_hashes}`
+  per record.
+* **Three structural failure modes** quantified by spot-precision
+  analysis on three contrasting sources:
+  1. **Short-item recall** = 54% on verbatim (eval items under 13 words
+     can't be represented in the bloom). Filler prefix/suffix don't
+     hurt recall (100% relative to verbatim).
+  2. **Code idiom collision**: code corpora (coderforge) get 0%
+     precision because the bloom hits shared OSS function signatures.
+  3. **Template collision**: synthetic eval-format training data
+     (formal_logic) gets 0% precision because the bloom hits shared
+     question stems, not actual content.
+* **Prose-vs-prose decon works**: cp/biodiversity gets 31% strict /
+  69% lenient precision (failure cases are eval *source-text* overlap
+  — arguably also contamination from a training perspective).
+* **Bottom line**: trust flags for prose; treat code/template-mirror
+  flags as noise; don't expect short-item coverage.
+
+Three follow-ups would substantially improve the pipeline:
+
+1. Build the bloom from **eval answers + reasoning chains**, not full
+   records — eliminates the template-collision failure mode.
+2. Add an **exact-string index for short eval items** as a separate
+   pipeline — recovers the 46% of short-item recall the bloom can't
+   reach.
+3. **Exclude `code2text_*` from the bloom** or build a code-specific
+   AST-based decon — eliminates the code idiom-collision failure mode.
+
+See per-section detail below.
+
 ## Goal
 
 Build a single eval-overlap bloom filter from **every** AA Intelligence
