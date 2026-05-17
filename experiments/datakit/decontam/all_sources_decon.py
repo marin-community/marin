@@ -11,7 +11,7 @@ DAG shape:
         │     (datakit/bloom/_combined)
         │
         ▼ one decon_step per Datakit source, consuming the combined bloom
-              (datakit/decon/<source>)
+              (datakit/decontam/<source>)
 
 We deliberately build a single combined bloom rather than per-eval blooms +
 merge. The eval corpus contains ~850 leaves (8 AA + ~850 lm-eval-harness
@@ -20,6 +20,11 @@ mean ~850 bloom build steps, all sharing identical sizing, which is pure
 DAG overhead without real cache-reuse value. Adding or swapping one eval
 invalidates the single bloom plus all 104 corpus marks — acceptable
 for the cadence at which the eval set changes.
+
+Decon outputs land at ``gs://marin-eu-west4/datakit/decontam/<source>_<hash>/``
+(no ``output_path_prefix`` override — the iris worker's ``MARIN_PREFIX``
+is ``gs://marin-eu-west4`` and the step name carries the rest of the
+path). Persistent (no TTL).
 
 Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 
@@ -36,7 +41,6 @@ from marin.datakit.decon import build_eval_bloom_step, decon_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -75,10 +79,11 @@ def build_decon_steps() -> list[StepSpec]:
     )
 
     # Per-corpus decon steps, all consuming the same combined bloom.
-    decon_output_prefix = marin_temp_bucket(ttl_days=7, prefix="rav/decon-all-sources-v1")
+    # Step name is the routing path (under marin_prefix on the iris worker),
+    # so outputs land at gs://marin-eu-west4/datakit/decontam/<source>_<hash>/.
     return [
         decon_step(
-            name=f"datakit/decon/{name}",
+            name=f"datakit/decontam/{name}",
             normalized=src.normalized,
             prebuilt_bloom=combined_bloom,
             ngram_length=NGRAM_LENGTH,
@@ -86,7 +91,6 @@ def build_decon_steps() -> list[StepSpec]:
             estimated_doc_count=ESTIMATED_DOC_COUNT,
             false_positive_rate=FALSE_POSITIVE_RATE,
             worker_resources=WORKER_RESOURCES,
-            output_path_prefix=decon_output_prefix,
         )
         for name, src in all_sources().items()
     ]

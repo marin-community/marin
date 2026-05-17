@@ -11,9 +11,10 @@ End-to-end log of the all-sources decontamination experiment under
   (8 AA + 849 LMH = 857 parquet files, 1.8M eval records). Combined
   bloom at `gs://marin-eu-west4/datakit/bloom/_combined_5eebba96`.
 * Decon outputs at
-  `gs://marin-eu-west4/tmp/ttl=7d/rav/decon-all-sources-v1/datakit/decon/<source>/`
+  `gs://marin-eu-west4/datakit/decontam/<source>_<hash>/`
   with `attributes.{contaminated, max_overlap, matched_hashes}`
-  per record.
+  per record. Persistent (no TTL); moved server-side from the original
+  `tmp/ttl=7d/...` temp-bucket path after the run.
 * **Three structural failure modes** quantified by spot-precision
   analysis on three contrasting sources:
   1. **Short-item recall** = 54% on verbatim (eval items under 13 words
@@ -356,7 +357,7 @@ operators need to understand before consuming the output.
   ngrams, 50M sizing, FPR=1e-9, ~270 MB filter at
   `gs://marin-eu-west4/datakit/bloom/_combined_5eebba96`.
 * **All-sources decon completes.** 113/113 sources marked, output at
-  `gs://marin-eu-west4/tmp/ttl=7d/rav/decon-all-sources-v1/datakit/decon/<source>/`.
+  `gs://marin-eu-west4/datakit/decontam/<source>/`.
 * **Filler-prefix / filler-suffix recall is 100% of verbatim** —
   the bloom is robust to local contextual noise around quoted eval
   text, which is the realistic contamination shape in web-scrape
