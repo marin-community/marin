@@ -84,6 +84,35 @@ Submitted iris job `iris-run-prepare_eval_corpus-20260517-072359` with
   `belebele_*` (122 language variants). Pace ~10-15 files/min →
   estimated total ~60 min if pace holds.
 
+### 2026-05-17 — parquet prep complete, count_docs, all_sources_decon submitted
+
+Parquet prep wrapped at ~08:27 UTC (~63 min total). Final: 8 AA + 849
+LMH = **857 parquet files** on GCS. Same coverage rate as the
+jsonl.gz baseline; the 94 unrecoverable failures are unchanged (40
+script-loader victims, 53 `include_base_44_*` KeyErrors, 1 misc).
+
+**count_docs against the parquet corpus** (eval pass succeeded; corpus
+pass crashed on a pre-existing `_row_count` bug that I fixed):
+
+| metric | value |
+|---|---|
+| eval total records | 1,807,224 |
+| eval total ngram inserts (bf.add calls) | 98,208,930 |
+| **eval unique ngram hashes** | **21,780,715** |
+
+For comparison the old 11-eval set produced 327k unique ngrams. The
+new corpus is **66× denser** in the bloom-sense; the original
+`ESTIMATED_DOC_COUNT=2M` would have been ~10× under-sized. Bumped to
+**50M** in `all_sources_decon.py` (2.3× over measured, ~270 MB filter
+at FPR=1e-9).
+
+**All-sources decon submitted** as iris job `bmz6mnf96`. Builds the
+combined bloom, then per-source decon over the 104 normalized corpora
+(`count_docs` reported 113 sources actually — todo, reconcile). Expect
+multi-hour run. Bloom build should land in the first 15-30 min, after
+which `recall_analysis.py` can run against the built bloom without
+waiting for the per-source scans.
+
 ### 2026-05-17 — scaffolding committed while waiting
 
 Pre-staged for analysis once decon lands:
