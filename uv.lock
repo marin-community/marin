@@ -4490,6 +4490,15 @@ wheels = [
 ]
 
 [[package]]
+name = "langdetect"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
+
+[[package]]
 name = "lark"
 version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4861,6 +4870,11 @@ api = [
     { name = "tiktoken" },
     { name = "tqdm" },
 ]
+ifeval = [
+    { name = "immutabledict" },
+    { name = "langdetect" },
+    { name = "nltk" },
+]
 math = [
     { name = "antlr4-python3-runtime" },
     { name = "math-verify", extra = ["antlr4-11-0"] },
@@ -5047,7 +5061,7 @@ embed = [
     { name = "luxical" },
 ]
 eval = [
-    { name = "lm-eval", extra = ["api", "math"] },
+    { name = "lm-eval", extra = ["api", "ifeval", "math"] },
 ]
 evalchemy = [
     { name = "antlr4-python3-runtime" },
@@ -5213,7 +5227,7 @@ requires-dist = [
     { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "libtpu", marker = "extra == 'tpu'", specifier = "==0.0.39" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'evalchemy'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
-    { name = "lm-eval", extras = ["math", "api"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
+    { name = "lm-eval", extras = ["math", "api", "ifeval"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "luxical", marker = "extra == 'embed'" },
     { name = "lxml", extras = ["html-clean"] },
     { name = "lxml-html-clean", specifier = ">=0.4.4" },
