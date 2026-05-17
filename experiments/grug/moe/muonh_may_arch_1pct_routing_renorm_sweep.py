@@ -3,14 +3,15 @@
 
 """may_arch + 1pct-noclip + renormalize sigmoid combine-weight sum to X.
 
-Builds on the 1pct-noclip recipe. Selection of the K=2 routed experts is
-unchanged (top-K on **biased** logits), but the per-token sigmoid combine
-weights on the **unbiased** logits are rescaled so they sum to ``X``
-across the K selected experts. The current baseline applies the raw
-sigmoid weights (sum varies per token in roughly ``[0, K]``).
+Builds on the 1pct-noclip recipe. Selection of the K=4 routed experts
+is unchanged (top-K on **biased** logits), but the per-token sigmoid
+combine weights on the **unbiased** logits are rescaled so they sum to
+``X`` across the K=4 selected experts. The current baseline applies the
+raw sigmoid weights (per-token sum in roughly ``[0, K]`` = ``[0, 4]``).
 
-Sweep ``X`` ∈ {1, 2, 2.5, 3, 4} at d512 and d768 to learn the right
-total magnitude.
+Sweep ``X`` ∈ {1, 2, 2.5, 3, 4} at d512 and d768. X=1 forces a true
+probability simplex (mean weight 0.25); X=4 is the natural cap (mean
+weight 1.0).
 
 10 runs total. Submit on us-east5-a:
 
