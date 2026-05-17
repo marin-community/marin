@@ -51,12 +51,11 @@ logger = logging.getLogger(__name__)
 EVAL_ROOT = "gs://marin-eu-west4/datakit/decontam/evals"
 
 # Bloom capacity — unique ngram hashes the filter must hold. Sized from
-# ``count_docs.py`` against the parquet corpus, with ~2x headroom so
-# adding a handful of evals doesn't blow the FPR. **TODO**: refresh this
-# constant once count_docs.py has run against the new corpus; the
-# pre-parquet value (327k unique ngrams) was measured against the old
-# 11-eval set and is almost certainly too small now.
-ESTIMATED_DOC_COUNT = 20_000_000
+# ``count_docs.py`` against the parquet eval corpus (2026-05-17 run):
+# 1.8M eval records, 98M total ngram inserts, **21.78M unique ngram
+# hashes** across the AA + LMH corpus. 2.3x headroom for stability.
+# At FPR=1e-9 this gives a ~270 MB bloom filter.
+ESTIMATED_DOC_COUNT = 50_000_000
 FALSE_POSITIVE_RATE = 1e-9
 NGRAM_LENGTH = 13
 OVERLAP_THRESHOLD = 0.5

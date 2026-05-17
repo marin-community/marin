@@ -58,7 +58,9 @@ EVAL_FILE_CONCURRENCY = 16
 
 def _row_count(path: str) -> int:
     gcs = fs.GcsFileSystem()
-    return pq.ParquetFile(path, filesystem=gcs).metadata.num_rows
+    # pyarrow's GcsFileSystem expects bare ``bucket/key``, not a ``gs://...`` URI.
+    bare = path.removeprefix("gs://")
+    return pq.ParquetFile(bare, filesystem=gcs).metadata.num_rows
 
 
 def _list_parquet_shards(main_output_dir: str) -> list[str]:
