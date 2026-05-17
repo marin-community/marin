@@ -5,12 +5,11 @@
 
 Three numbers we care about:
 
-1. **Eval ngram count** (the 18 lm-eval-harness sets in ``EVAL_SOURCES``).
-   This is the exact number of ``bf.add`` calls the bloom build would make
-   — same ``_extract_features`` and ``_bloom_hash`` paths as
-   ``decon.py``. We report both total inserts (= ``estimated_doc_count``
-   floor) and unique hashes (the bloom math actually cares about uniques,
-   but oversizing for total inserts is safe and cheap).
+1. **Eval ngram count** -- exact ``bf.add`` call count for a single
+   combined bloom built over the parquet eval tree under ``EVAL_ROOT``
+   (same ``_extract_features`` and ``_bloom_hash`` paths as ``decon.py``).
+   We report both total inserts and unique hashes; the bloom math cares
+   about uniques but oversizing for total inserts is safe.
 
 2. **Eval record count** — orthogonal sanity check.
 
@@ -23,17 +22,16 @@ Three numbers we care about:
 
 Submit on iris (eu-west4 worker pins ``MARIN_PREFIX`` to gs://marin-eu-west4):
 
-    uv run iris --config lib/iris/examples/marin.yaml job run --region europe-west4 -- \\
-        python experiments/datakit/decontam/count_docs.py
+    uv run iris --cluster=marin job run --region europe-west4 \\
+        --extra=cpu --priority interactive --memory 8GB --cpu 2 \\
+        --enable-extra-resources \\
+        -- python experiments/datakit/decontam/count_docs.py
 
 Or run locally against a known prefix:
 
     MARIN_PREFIX=gs://marin-eu-west4 uv run python experiments/datakit/decontam/count_docs.py
 """
 
-import gzip
-import io
-import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -47,7 +45,7 @@ from marin.execution.artifact import Artifact
 from pyarrow import fs
 from rigging.filesystem import marin_prefix
 
-from experiments.datakit.decontam.all_sources_decon import EVAL_SOURCES, NGRAM_LENGTH, OVERLAP_THRESHOLD
+from experiments.datakit.decontam.all_sources_decon import EVAL_ROOT, NGRAM_LENGTH, OVERLAP_THRESHOLD
 
 NGRAM = NGramConfig(ngram_length=NGRAM_LENGTH, overlap_threshold=OVERLAP_THRESHOLD)
 
@@ -70,11 +68,11 @@ def _list_parquet_shards(main_output_dir: str) -> list[str]:
     return sorted(f"gs://{e.path}" for e in entries if e.path.endswith(".parquet"))
 
 
-def _list_jsonl_gz(root: str) -> list[str]:
+def _list_parquet_recursive(root: str) -> list[str]:
     gcs = fs.GcsFileSystem()
-    bare = root.removeprefix("gs://")
+    bare = root.removeprefix("gs://").rstrip("/")
     entries = gcs.get_file_info(fs.FileSelector(bare, recursive=True))
-    return sorted(f"gs://{e.path}" for e in entries if e.path.endswith(".jsonl.gz"))
+    return sorted(f"gs://{e.path}" for e in entries if e.path.endswith(".parquet"))
 
 
 @dataclass
@@ -84,38 +82,22 @@ class EvalStats:
     unique_hashes: set[int]
 
 
-def _iter_jsonl_gz_lines(path: str):
-    # pyarrow's GcsFileSystem transparently decompresses these files even though
-    # they have no Content-Encoding header, so we can't blindly wrap the stream
-    # in gzip.open. Peek the first two bytes and branch.
+def _file_ngram_stats(path: str) -> EvalStats:
+    """Walk a parquet file's ``text`` column and compute exact ngram stats."""
     gcs = fs.GcsFileSystem()
     bare = path.removeprefix("gs://")
-    with gcs.open_input_stream(bare) as raw:
-        head = raw.read(2)
-        if head == b"\x1f\x8b":
-            data = head + raw.read()
-            yield from gzip.open(io.BytesIO(data), "rb")
-            return
-        # Already decompressed — reconstruct full content then split on newlines.
-        rest = raw.read()
-        for line in (head + rest).splitlines(keepends=False):
-            if line:
-                yield line + b"\n"
-
-
-def _file_ngram_stats(path: str) -> EvalStats:
     n_records = 0
     n_ngrams = 0
     unique: set[int] = set()
-    for line in _iter_jsonl_gz_lines(path):
-        record = json.loads(line)
-        text = record.get("text")
-        if not text:
-            continue
-        n_records += 1
-        for feat in _extract_features(str(text), NGRAM):
-            n_ngrams += 1
-            unique.add(_bloom_hash(feat))
+    pf = pq.ParquetFile(bare, filesystem=gcs)
+    for batch in pf.iter_batches(columns=["text"], batch_size=1024):
+        for v in batch.column("text").to_pylist():
+            if not v:
+                continue
+            n_records += 1
+            for feat in _extract_features(str(v), NGRAM):
+                n_ngrams += 1
+                unique.add(_bloom_hash(feat))
     return EvalStats(n_records=n_records, n_ngram_inserts=n_ngrams, unique_hashes=unique)
 
 
@@ -140,15 +122,10 @@ def count_corpus_source(name: str, normalized_step) -> tuple[str, int | None, st
     return (name, sum(counts), f"{len(shards)} shard(s) @ {nd.main_output_dir}")
 
 
-def count_eval_source(path: str) -> tuple[str, EvalStats | None, str]:
-    """Return (basename, stats or None, status)."""
-    name = path.rstrip("/").rsplit("/", 1)[-1]
-    try:
-        files = _list_jsonl_gz(path)
-    except Exception as e:
-        return (name, None, f"list failed at {path}: {e!r}")
+def count_eval_subtree(name: str, files: list[str]) -> tuple[str, EvalStats | None, str]:
+    """Aggregate ngram stats over a list of parquet files (one eval subdir)."""
     if not files:
-        return (name, None, f"no *.jsonl.gz under {path}")
+        return (name, None, "no parquet files")
     with ThreadPoolExecutor(max_workers=EVAL_FILE_CONCURRENCY) as pool:
         per_file = list(pool.map(_file_ngram_stats, files))
     combined = EvalStats(n_records=0, n_ngram_inserts=0, unique_hashes=set())
@@ -156,7 +133,7 @@ def count_eval_source(path: str) -> tuple[str, EvalStats | None, str]:
         combined.n_records += s.n_records
         combined.n_ngram_inserts += s.n_ngram_inserts
         combined.unique_hashes |= s.unique_hashes
-    return (name, combined, f"{len(files)} file(s) @ {path}")
+    return (name, combined, f"{len(files)} file(s)")
 
 
 def _report_corpus(results: list[tuple[str, int | None, str]]) -> int:
@@ -202,17 +179,39 @@ def _report_evals(results: list[tuple[str, EvalStats | None, str]]) -> tuple[int
     return total_records, total_inserts, len(global_unique)
 
 
+def _group_files_by_eval(files: list[str], eval_root: str) -> dict[str, list[str]]:
+    """Group parquet paths by ``<bucket>/<aa-or-lmh>/<eval-name>/`` prefix.
+
+    For ``gs://.../evals/aa/hle/test.parquet`` the group key is ``aa/hle``;
+    for ``gs://.../evals/lmh/mmlu_anatomy/eval.parquet`` it's ``lmh/mmlu_anatomy``.
+    """
+    root = eval_root.rstrip("/") + "/"
+    groups: dict[str, list[str]] = {}
+    for p in files:
+        rel = p.removeprefix(root)
+        parts = rel.split("/")
+        if len(parts) < 3:
+            continue  # skip stray top-level files
+        key = "/".join(parts[:2])  # e.g. "aa/hle" or "lmh/mmlu_anatomy"
+        groups.setdefault(key, []).append(p)
+    return groups
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     prefix = marin_prefix()
     logger.info("using MARIN_PREFIX=%s", prefix)
 
-    # Pass 1: eval sources (small, region-fixed, ngram-exact)
-    logger.info("counting ngrams across %d eval sources", len(EVAL_SOURCES))
+    # Pass 1: eval corpus (under EVAL_ROOT, parquet tree, ngram-exact).
+    logger.info("listing eval parquet files under %s", EVAL_ROOT)
+    all_eval_files = _list_parquet_recursive(EVAL_ROOT)
+    groups = _group_files_by_eval(all_eval_files, EVAL_ROOT)
+    logger.info("found %d eval subtrees across %d parquet files", len(groups), len(all_eval_files))
     eval_results: list[tuple[str, EvalStats | None, str]] = []
     with ThreadPoolExecutor(max_workers=SOURCE_CONCURRENCY) as pool:
-        for r in pool.map(count_eval_source, EVAL_SOURCES):
-            eval_results.append(r)
+        futures = {pool.submit(count_eval_subtree, name, files): name for name, files in groups.items()}
+        for fut in futures:
+            eval_results.append(fut.result())
     _, eval_inserts, eval_unique = _report_evals(eval_results)
 
     # Pass 2: corpus sources (large, MARIN_PREFIX-relative)
