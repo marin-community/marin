@@ -84,6 +84,11 @@ class GrugModelConfig:
     use_partial_rope: bool = False
     # Force the last layer to use long sliding window + PKO.
     last_layer_pko: bool = False
+    # If set, the per-token MoE combine weights ``sigmoid(unbiased_topk)`` are
+    # rescaled to sum to this value across the K selected experts. Top-k
+    # selection itself is unchanged. ``None`` (default) leaves the raw
+    # sigmoid weights in place.
+    routing_renorm_sum: float | None = None
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -101,6 +106,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.routing_renorm_sum is not None and self.routing_renorm_sum <= 0:
+            raise ValueError("routing_renorm_sum must be positive when set")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -433,7 +440,14 @@ class MoEMLP(eqx.Module):
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        if self.cfg.routing_renorm_sum is not None:
+            # Rescale the K selected experts' weights so they sum to a fixed
+            # target value per token. Top-k selection above is unchanged; only
+            # the magnitudes of the combine weights change.
+            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+            combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+        combine_weights = combine_weights_f.astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
