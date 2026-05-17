@@ -47,7 +47,7 @@ from experiments.grug.moe.launch import (
     GrugMoeLaunchConfig,
     run_grug_moe_trial,
 )
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHMayArchGNMuonHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHMayArchAuroraTargetConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _POINTS: tuple[tuple[int, float], ...] = (
@@ -75,8 +75,13 @@ def _format_run_id(hidden_dim: int, budget: float, run_suffix: str = "") -> str:
     return f"muonh-may-arch-1pct-split-wupgate-{suffix}d{hidden_dim}-{budget_label}"
 
 
-def _muonh_optimizer(base_optimizer: GrugMoeAdamHConfig) -> GrugMoeMuonHMayArchGNMuonHConfig:
-    return GrugMoeMuonHMayArchGNMuonHConfig(
+def _muonh_optimizer(base_optimizer: GrugMoeAdamHConfig) -> GrugMoeMuonHMayArchAuroraTargetConfig:
+    # All ``*_aurora`` flags default to False, so this is functionally the
+    # 1pct-noclip baseline. We use the same config class as #5785 so the
+    # ``inject_hyperparams`` / ``multi_transform`` machinery is identical
+    # (same numeric drift) — gives a clean ablation vs aurorah-expert-io.
+    # (GrugMoeMuonHMayArchGNMuonHConfig isn't on this branch's optimizer.py.)
+    return GrugMoeMuonHMayArchAuroraTargetConfig(
         learning_rate=base_optimizer.learning_rate,
         adam_lr=base_optimizer.adam_lr,
         min_lr_ratio=base_optimizer.min_lr_ratio,
