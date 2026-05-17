@@ -361,19 +361,69 @@ For consumers of the decon output:
 
 ### Per-source flag rates
 
-Computed by `flag_rates.py` iris job. Numbers below are placeholders —
-filled in once `bo0k1lj14` lands.
+Computed by `flag_rates.py` iris job. Vectorized over decon-output
+parquet files via `pa.compute.sum` on `attributes.contaminated`.
 
 | metric | value |
 |---|---|
-| total records across 113 sources | TBD |
-| total flagged | TBD |
-| overall flag rate | TBD |
-| top-10 sources by flag rate | TBD |
+| total records across 113 sources | **15,077,568,955** |
+| total flagged | **5,696,170** |
+| overall flag rate | **0.0378%** |
+| sources with zero flagged docs | 8 |
 
-(The earlier coderforge 258× biodiversity differential foreshadows what
-this table will show: code/agent corpora dominate the flag count even
-though most flags are false positives.)
+The overall 0.038% rate is reassuringly low — for the vast majority of
+corpus records, the bloom does not fire. Where it does fire, the
+precision analysis above tells us how to interpret it.
+
+**Top 15 sources by flag rate** (excluding zero-flag sources):
+
+| source | records | flagged | rate |
+|---|---:|---:|---:|
+| nemotron_specialized_v1_1/formal_logic | 489,061 | 172,554 | **35.28%** |
+| davinci-dev/ctx-native | 4,155,216 | 75,825 | 1.82% |
+| coderforge | 258,133 | 4,129 | 1.60% |
+| cp/oercommons | 5,244 | 81 | 1.54% |
+| swe-rebench-openhands | 67,074 | 981 | 1.46% |
+| davinci-dev/env-native | 73,956 | 1,011 | 1.37% |
+| cp/pressbooks | 54,434 | 695 | 1.28% |
+| institutional_books | 982,983 | 11,173 | 1.14% |
+| cp/libretexts | 40,042 | 433 | 1.08% |
+| cp/project_gutenberg | 55,454 | 544 | 0.98% |
+| starcoder2/documentation | 59,733 | 438 | 0.73% |
+| cp/library_of_congress | 128,686 | 814 | 0.63% |
+| cp/arxiv_papers | 295,411 | 1,727 | 0.58% |
+| superior-reasoning | 434,521 | 2,400 | 0.55% |
+| nemotron-terminal | 366,154 | 1,812 | 0.49% |
+
+The headline is the **35.28% formal_logic outlier**. The source is
+`nemotron_specialized_v1_1/formal_logic` — a synthetic training set
+generated specifically for the MMLU `formal_logic` subtask. The
+collision rate is so high precisely because *the corpus is engineered
+to teach the eval*. This is a textbook contamination case and the
+exact thing decon should catch. Precision on this source TBD pending
+the running iris job; expect it to be very high.
+
+The other code-heavy entries (davinci-dev, coderforge, swe-rebench,
+nemotron-terminal) are the over-flagging pattern the coderforge
+precision analysis already characterized — high flag rate, low
+precision, driven by code idiom collision.
+
+**Top sources by absolute flagged count** (volume rather than rate):
+
+| source | flagged | rate |
+|---|---:|---:|
+| cp/stackv2_code | 958,972 | 0.44% |
+| nemotron_sft/sft_math | 688,125 | 0.49% |
+| nemotron_cc_v2/medium_quality | 523,936 | 0.022% |
+| hplt_v3 | 452,346 | 0.095% |
+| finepdfs_ac5c9b63 | 329,238 | 0.16% |
+| nemotron_cc_code_v1/all | 289,148 | 0.13% |
+| nemotron_code_v2/synthetic_rewriting | 267,000 | 0.30% |
+| nemotron_cc_v2/diverse_qa | 207,616 | 0.017% |
+
+stackv2_code has the highest absolute count (~1M flagged) at a
+relatively modest rate (0.44%), suggesting the same code-idiom-collision
+story scaled by the corpus size.
 
 ## Analysis plan
 
