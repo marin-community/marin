@@ -32,6 +32,7 @@ import logging
 import os
 import tempfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -45,6 +46,7 @@ DEFAULT_N_REPS = 5
 DEFAULT_N_TERMS = 10
 DEFAULT_EXCERPT_CHARS = 500
 CTFIDF_MAX_FEATURES = 50_000
+_IO_THREADS = 64  # GCS round-trip parallelism for parquet reads
 
 
 def _scan_assignments(
@@ -75,34 +77,46 @@ def _scan_assignments(
     reps_heap: dict[int, list[tuple[float, str, str, int]]] = defaultdict(list)
     source_main_dirs: dict[str, str] = {}
 
-    for source_name, attr in sorted(assignments.items()):
-        source_main_dirs[source_name] = attr.source_main_dir
-        for shard_uri in attr.shard_paths():
-            basename = os.path.basename(shard_uri)
-            table = pq.read_table(shard_uri, columns=[cluster_col, dist_col])
-            cl = table[cluster_col].to_numpy(zero_copy_only=False)
-            d_arr = table[dist_col].to_numpy(zero_copy_only=False)
-            for row_idx in range(len(cl)):
-                c = int(cl[row_idx])
-                d = float(d_arr[row_idx])
-                entry = (source_name, basename, row_idx, d)
+    def _read_shard(shard_uri: str) -> tuple[str, np.ndarray, np.ndarray]:
+        basename = os.path.basename(shard_uri)
+        table = pq.read_table(shard_uri, columns=[cluster_col, dist_col])
+        cl = table[cluster_col].to_numpy(zero_copy_only=False)
+        d_arr = table[dist_col].to_numpy(zero_copy_only=False)
+        return basename, cl, d_arr
 
-                # Reservoir sample for c-TF-IDF.
-                counts[c] += 1
-                if len(samples[c]) < n_sample_per_cluster:
-                    samples[c].append(entry)
-                else:
-                    j = int(rng.integers(0, counts[c]))
-                    if j < n_sample_per_cluster:
-                        samples[c][j] = entry
+    # IO is parallel across shards (~100ms GCS round-trip each); state mutation
+    # (samples / counts / reps_heap) stays single-threaded to avoid locks.
+    with ThreadPoolExecutor(max_workers=_IO_THREADS) as pool:
+        for source_name, attr in sorted(assignments.items()):
+            source_main_dirs[source_name] = attr.source_main_dir
+            shard_uris = attr.shard_paths()
+            for basename, cl, d_arr in pool.map(_read_shard, shard_uris):
+                for row_idx in range(len(cl)):
+                    c = int(cl[row_idx])
+                    d = float(d_arr[row_idx])
+                    entry = (source_name, basename, row_idx, d)
 
-                # Top-K heap for reps: (-d, ...) so heap[0] has the largest dist.
-                rep_item = (-d, source_name, basename, row_idx)
-                if len(reps_heap[c]) < n_reps:
-                    heapq.heappush(reps_heap[c], rep_item)
-                else:
-                    heapq.heappushpop(reps_heap[c], rep_item)
-        logger.info("Scanned %s assignments; clusters seen=%d", source_name, len(samples))
+                    # Reservoir sample for c-TF-IDF.
+                    counts[c] += 1
+                    if len(samples[c]) < n_sample_per_cluster:
+                        samples[c].append(entry)
+                    else:
+                        j = int(rng.integers(0, counts[c]))
+                        if j < n_sample_per_cluster:
+                            samples[c][j] = entry
+
+                    # Top-K heap for reps: (-d, ...) so heap[0] has the largest dist.
+                    rep_item = (-d, source_name, basename, row_idx)
+                    if len(reps_heap[c]) < n_reps:
+                        heapq.heappush(reps_heap[c], rep_item)
+                    else:
+                        heapq.heappushpop(reps_heap[c], rep_item)
+            logger.info(
+                "Scanned %s assignments (%d shards); clusters seen=%d",
+                source_name,
+                len(shard_uris),
+                len(samples),
+            )
 
     reps: dict[int, list[tuple[str, str, int, float]]] = {}
     for c, heap in reps_heap.items():
@@ -125,15 +139,21 @@ def _fetch_texts(
         plan[(source_name, basename)].append(row_idx)
 
     out: dict[tuple[str, str, int], str] = {}
-    for (source_name, basename), row_idxs in plan.items():
+
+    def _fetch_pair(item: tuple[tuple[str, str], list[int]]) -> tuple[tuple[str, str], list[tuple[int, str]]]:
+        (source_name, basename), row_idxs = item
         shard_uri = f"{source_main_dirs[source_name].rstrip('/')}/{basename}"
         # Reading only the text column from this one shard is much cheaper
         # than a corpus scan. For 256MB partitions that's ~hundreds of MB
         # of GCS read per source — manageable.
         text_col = pq.read_table(shard_uri, columns=["text"])["text"]
-        for row_idx in row_idxs:
-            t = text_col[row_idx].as_py() or ""
-            out[(source_name, basename, row_idx)] = t[:excerpt_chars]
+        rows = [(row_idx, (text_col[row_idx].as_py() or "")[:excerpt_chars]) for row_idx in row_idxs]
+        return (source_name, basename), rows
+
+    with ThreadPoolExecutor(max_workers=_IO_THREADS) as pool:
+        for (source_name, basename), rows in pool.map(_fetch_pair, plan.items()):
+            for row_idx, text in rows:
+                out[(source_name, basename, row_idx)] = text
     logger.info("Fetched %d texts across %d (source, shard) pairs", len(out), len(plan))
     return out
 
