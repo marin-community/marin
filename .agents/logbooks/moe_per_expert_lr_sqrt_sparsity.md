@@ -43,3 +43,25 @@
 - Result: pending submission.
 - Interpretation: pending.
 - Next action: validate code, commit, push branch, submit gate-1 job.
+
+### 2026-05-17 12:00 - MOE-PELR-002 mid-ratio add-on
+
+- Hypothesis: The fixed 8:1 non-expert/expert LR ratio may be useful, but the two initial candidates also change the absolute LR scale. A geometric-middle point can separate ratio from absolute scale.
+- Command:
+
+```bash
+.venv/bin/iris --config lib/iris/examples/marin.yaml job run \
+  --no-wait \
+  --reserve v5p-8 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.moe.muonh_may_arch_per_expert_lr_mid_ratio_gate1
+```
+
+- Config:
+  - `mid-ratio`: routed expert MuonH LR = `sqrt(0.125 * 1.0) = 0.353553x` heuristic.
+  - Remaining MuonH LR keeps the same 8:1 non-expert/expert ratio: `2.828427x` heuristic.
+  - Adam/AdamH groups unchanged.
+  - Gate-1 points only: d512 at 2.19e17 FLOPs, d768 at 1.70e18 FLOPs.
+- Result: pending submission.
+- Interpretation: pending.
+- Next action: validate add-on launcher, commit, push branch, submit add-on gate-1 job.

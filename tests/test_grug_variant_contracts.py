@@ -146,6 +146,17 @@ def test_grug_moe_per_expert_lr_mask_splits_routed_experts_only():
     assert mask["output_proj"] == "adamh"
 
 
+def test_grug_moe_per_expert_lr_gate1_candidate_scales():
+    sweep_module = importlib.import_module("experiments.grug.moe.muonh_may_arch_per_expert_lr_gate1")
+    model = sweep_module.GrugModelConfig(vocab_size=1024, num_experts=256, num_experts_per_token=4)
+
+    assert sweep_module._candidate_lr_scales("shrink-expert", model) == pytest.approx((1.0, 0.125))
+    assert sweep_module._candidate_lr_scales("boost-nonexpert", model) == pytest.approx((8.0, 1.0))
+    assert sweep_module._candidate_lr_scales("mid-ratio", model) == pytest.approx(
+        (2.8284271247461903, 0.3535533905932738)
+    )
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),

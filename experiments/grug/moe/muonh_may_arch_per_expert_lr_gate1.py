@@ -13,9 +13,11 @@ Hypothesis: routed expert weights see only a sparse fraction of tokens, so
 their MuonH LR should be scaled down by sqrt(sparsity), where
 sparsity = num_experts_per_token / num_experts.
 
-Gate 1 runs d512 and d768 for two candidates:
+Gate 1 runs d512 and d768 for three candidates:
 1. shrink-expert: keep non-expert MuonH LR at 1.0x, set expert LR to sqrt(sparsity).
 2. boost-nonexpert: keep expert LR at 1.0x, set non-expert MuonH LR to 1/sqrt(sparsity).
+3. mid-ratio: keep the same non-expert/expert ratio as above, but set
+   expert LR to the geometric middle between sqrt(sparsity) and 1.0.
 
 Submit:
 
@@ -51,6 +53,7 @@ _GATE1_POINTS: tuple[tuple[int, float], ...] = (
 _CANDIDATES: tuple[str, ...] = (
     "shrink-expert",
     "boost-nonexpert",
+    "mid-ratio",
 )
 
 _WARMUP_FRACTION: float = 0.01
@@ -86,6 +89,9 @@ def _candidate_lr_scales(candidate: str, model: GrugModelConfig) -> tuple[float,
         return 1.0, sqrt_sparsity
     if candidate == "boost-nonexpert":
         return 1.0 / sqrt_sparsity, 1.0
+    if candidate == "mid-ratio":
+        expert_lr_scale = math.sqrt(sqrt_sparsity)
+        return expert_lr_scale / sqrt_sparsity, expert_lr_scale
     raise ValueError(f"unknown per-expert LR candidate: {candidate}")
 
 
