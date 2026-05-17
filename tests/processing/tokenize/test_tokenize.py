@@ -235,14 +235,10 @@ def test_tokenize_full_pipeline_integration(tmp_path):
     print("\nSuccessfully created mixture and sampled example!")
 
 
+@pytest.mark.slow
 def test_exemplar_for_skips_empty_leading_shard(tmp_path):
-    """Regression for #5790: tokenize must not raise IndexError when shard 0
-    is an empty parquet. ``_exemplar_for`` now scans files until one yields
-    a record.
-    """
-    # pytest's tmp_path contains "test" (e.g. ``.../test_<func>_0/``), which
-    # would trip _validate_train_urls. Use a vanilla tmpdir for the data so
-    # ``train_paths`` doesn't hit the validator.
+    """Regression for #5790."""
+    # train_paths must not contain "test"; pytest's tmp_path always does.
     with tempfile.TemporaryDirectory(prefix="sparse_") as raw_dir:
         data_dir = Path(raw_dir)
         pq.write_table(
