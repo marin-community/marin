@@ -26,13 +26,13 @@ from typing import Any
 
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.lmh_loader import materialize_first_nonempty_split
 from experiments.datakit.decontam.prepare_eval_corpus import (
     AA_EVALS,
     _concat_strings,
     _extract_aa_text,
     _iter_aa_rows,
     _lmh_task_names,
-    _materialize_first_nonempty_split,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ def _inspect_lmh_sample() -> None:
         except Exception as exc:
             print(f"  LOAD FAILED: {type(exc).__name__}: {exc}")
             continue
-        chosen = _materialize_first_nonempty_split(task)
+        chosen = materialize_first_nonempty_split(task)
         if chosen is None:
             print("  no docs in any split")
             continue

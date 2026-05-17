@@ -40,13 +40,17 @@ import dataclasses
 import gzip
 import json
 import logging
-import os
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.decontam.lmh_loader import (
+    flatten_task_dict,
+    materialize_first_nonempty_split,
+    trust_remote_code_for_hf,
+)
 from experiments.evals.task_configs import (
     ACTION_TASKS,
     BIAS_SAFETY_TASKS,
@@ -344,86 +348,8 @@ def _lmh_task_names() -> list[str]:
     return sorted(names)
 
 
-def _materialize_first_nonempty_split(task) -> tuple[str, list] | None:
-    """Return (split_name, docs) for the first non-empty split, or None."""
-    for split_name, getter in (
-        ("test", task.test_docs),
-        ("validation", task.validation_docs),
-        ("training", task.training_docs),
-    ):
-        try:
-            docs = list(getter())
-        except Exception:
-            docs = []
-        if docs:
-            return (split_name, docs)
-    return None
-
-
-def _flatten_task_dict(d: dict) -> Iterator[tuple[str, Any]]:
-    """Yield ``(task_name, task_obj)`` pairs from a (possibly nested) ``get_task_dict`` result.
-
-    lm-eval-harness returns groups as nested dicts keyed by ``ConfigurableGroup``
-    objects (``mmlu -> mmlu_stem -> {str_name: ConfigurableTask}``); only leaf
-    values are real tasks. Walk top-down and yield ``(str, ConfigurableTask)``
-    pairs only. ``ConfigurableGroup`` keys at the leaf level (single-task
-    groups) fall back to their ``.group`` attribute.
-    """
-    for k, v in d.items():
-        if isinstance(v, dict):
-            yield from _flatten_task_dict(v)
-            continue
-        name = k if isinstance(k, str) else getattr(k, "group", str(k))
-        yield (name, v)
-
-
-def _trust_remote_code_for_hf() -> None:
-    """Force ``trust_remote_code=True`` on every ``datasets.load_dataset`` call.
-
-    In ``datasets`` 4.x the ``HF_DATASETS_TRUST_REMOTE_CODE`` env var and
-    ``datasets.config.HF_DATASETS_TRUST_REMOTE_CODE`` flag were removed; only
-    the per-call kwarg is honored. lm-eval task configs don't pass it, so
-    tasks shipping custom HF loading scripts (piqa, logiqa*, ethics_*,
-    crows_pairs_*, social_iqa, ...) fail to load. Wrap ``load_dataset`` /
-    ``load_dataset_builder`` to always pass it. We're only ingesting public
-    eval text into a decon bloom — no model code is executed downstream.
-
-    Patches both the ``datasets`` module attrs AND any already-imported
-    ``from datasets import load_dataset`` bindings (lm-eval pulls
-    ``datasets`` transitively when this module is imported).
-
-    Also sets ``HF_ALLOW_CODE_EVAL=1`` so humaneval's ``code_eval`` metric
-    initializes without an interactive disclaimer.
-    """
-    import sys
-
-    import datasets
-
-    os.environ["HF_ALLOW_CODE_EVAL"] = "1"
-    original_load = datasets.load_dataset
-    original_builder = datasets.load_dataset_builder
-
-    def patched_load_dataset(*args, **kwargs):
-        kwargs.setdefault("trust_remote_code", True)
-        return original_load(*args, **kwargs)
-
-    def patched_builder(*args, **kwargs):
-        kwargs.setdefault("trust_remote_code", True)
-        return original_builder(*args, **kwargs)
-
-    datasets.load_dataset = patched_load_dataset  # type: ignore[assignment]
-    datasets.load_dataset_builder = patched_builder  # type: ignore[assignment]
-    for mod in list(sys.modules.values()):
-        if mod is None or mod is datasets:
-            continue
-        if getattr(mod, "load_dataset", None) is original_load:
-            mod.load_dataset = patched_load_dataset  # type: ignore[attr-defined]
-        if getattr(mod, "load_dataset_builder", None) is original_builder:
-            mod.load_dataset_builder = patched_builder  # type: ignore[attr-defined]
-
-
 def _prepare_lmh() -> None:
-    _trust_remote_code_for_hf()
+    trust_remote_code_for_hf()
     from lm_eval.tasks import get_task_dict
 
     names = _lmh_task_names()
@@ -440,7 +366,7 @@ def _prepare_lmh() -> None:
             failed.append((name, f"load: {exc}"))
             continue
 
-        leaves = list(_flatten_task_dict(task_dict))
+        leaves = list(flatten_task_dict(task_dict))
         if not leaves:
             logger.warning("lmh/%s: no leaf tasks after flatten", name)
             failed.append((name, "no leaf tasks"))
@@ -456,7 +382,7 @@ def _prepare_lmh() -> None:
                 skipped_existing += 1
                 continue
 
-            chosen = _materialize_first_nonempty_split(task)
+            chosen = materialize_first_nonempty_split(task)
             if chosen is None:
                 logger.warning("lmh/%s: no docs in any split", child_name)
                 failed.append((child_name, "no docs"))
