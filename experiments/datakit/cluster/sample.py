@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import numpy as np
@@ -137,21 +138,51 @@ def sample_centroid_inputs(
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 128,
+    parallel_sources: int = 8,
 ) -> None:
-    """Stratified sample across every source via per-source Zephyr contexts."""
+    """Stratified sample across every source via per-source Zephyr contexts.
+
+    ``parallel_sources`` ZephyrContexts run concurrently via a thread pool;
+    each spawns its own coordinator + worker pool, so total resource use is
+    ``parallel_sources * (1 coord + up to max_workers workers)``. Sources
+    are still chosen in sorted order; first-completed-first-reported on the
+    way out.
+    """
     if worker_resources is None:
         worker_resources = ResourceConfig(cpu=2, ram="4g")
 
-    total_sources = len(embeddings)
-    for i, (source_name, attr) in enumerate(sorted(embeddings.items()), 1):
-        logger.info("Source %d/%d: %s", i, total_sources, source_name)
-        _sample_one_source(
-            source_name=source_name,
-            attr=attr,
-            output_path=output_path,
-            n_per_source=n_per_source,
-            seed=seed,
-            worker_resources=worker_resources,
-            max_workers=max_workers,
-        )
-    logger.info("Sample pipeline complete: %d sources written under %s", total_sources, output_path)
+    items = sorted(embeddings.items())
+    total = len(items)
+    logger.info(
+        "Sample pipeline: %d sources, %d concurrent Zephyr contexts, %d workers each",
+        total,
+        parallel_sources,
+        max_workers,
+    )
+
+    completed = 0
+    with ThreadPoolExecutor(max_workers=parallel_sources) as pool:
+        futures = {
+            pool.submit(
+                _sample_one_source,
+                source_name=sn,
+                attr=a,
+                output_path=output_path,
+                n_per_source=n_per_source,
+                seed=seed,
+                worker_resources=worker_resources,
+                max_workers=max_workers,
+            ): sn
+            for sn, a in items
+        }
+        for fut in as_completed(futures):
+            source_name = futures[fut]
+            try:
+                fut.result()
+            except Exception:
+                logger.exception("Source %s failed", source_name)
+                raise
+            completed += 1
+            logger.info("Completed %d/%d: %s", completed, total, source_name)
+
+    logger.info("Sample pipeline complete: %d sources written under %s", total, output_path)
