@@ -1248,7 +1248,6 @@ class ZephyrCoordinator:
             len(shards),
             output_shard_count=stage.output_shards,
             is_scatter=stage_is_scatter,
-            chunk_prefix=self._chunk_prefix,
         )
 
     def _compute_join_aux(
@@ -1686,8 +1685,6 @@ class ZephyrWorker:
 def _regroup_result_refs(
     result_refs: dict[int, TaskResult],
     input_shard_count: int,
-    *,
-    chunk_prefix: str,
     output_shard_count: int | None = None,
     is_scatter: bool = False,
 ) -> list[Shard]:
@@ -1697,12 +1694,6 @@ def _regroup_result_refs(
     Scatter: passes the list of scatter data-file paths to every reducer.
     Each reducer reads the per-mapper ``.scatter_meta`` sidecars in parallel
     to build its own ``ScatterReader`` without coordinator-side consolidation.
-
-    For scatter, the consolidated path list is spilled to a single
-    :class:`PickleDiskChunk` so the per-task pickle stays tiny regardless of
-    ``input_shard_count * output_shard_count``. Without the spill, every
-    in-flight ``pull_task`` RPC pickles the full path list independently,
-    and concurrent dispatch at high ``max_parallelism`` would OOM the coord.
     """
     if is_scatter:
         # Scatter routes records into exactly ``output_shard_count`` buckets via
@@ -1719,7 +1710,7 @@ def _regroup_result_refs(
         for result in result_refs.values():
             all_paths.extend(result.shard)
 
-        shared_refs = PickleDiskChunk.write(f"{chunk_prefix}/scatter-manifest", all_paths)
+        shared_refs = MemChunk(items=all_paths)
         return [ListShard(refs=[shared_refs]) for _ in range(num_output)]
 
     # Non-scatter: 1:1 mapping from input shard index to output. Resharding
