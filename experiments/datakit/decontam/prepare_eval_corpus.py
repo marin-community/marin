@@ -5,8 +5,8 @@
 
 Two sub-corpora written under ``gs://marin-eu-west4/datakit/decontam/evals/``:
 
-- ``aa/<eval>/<split>.jsonl.gz`` -- AA Intelligence Index v4.0 core 8.
-- ``lmh/<task>/<split>.jsonl.gz`` -- every unique task in
+- ``aa/<eval>/<split>.parquet`` -- AA Intelligence Index v4.0 core 8.
+- ``lmh/<task>/<split>.parquet`` -- every unique task in
   ``experiments/evals/task_configs.py`` bundles, loaded via lm-eval-harness.
   Group names (``mmlu``, ``agieval``, ``bbh_zeroshot``, ``leaderboard_bbh``,
   ...) are expanded to their leaf tasks; one file per leaf.
@@ -20,10 +20,13 @@ Test split is preferred; tasks without a test split fall back to
 validation, then training. Tasks that fail to load (e.g. removed from
 lm-eval since our pinned commit, gated HF datasets) are logged and skipped.
 
-Submit on iris (eu-west4, CPU-only, has HF access):
+Submit on iris (eu-west4, CPU-only, has HF access). The ``eval`` extra is
+needed for ``lm-eval``; AA prep accumulates rows in memory before writing
+so bump RAM (1GB default OOMs on livecodebench):
 
-    uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
-        --priority interactive \\
+    uv run iris --cluster=marin job run --region europe-west4 \\
+        --extra=cpu --extra=eval --priority interactive \\
+        --memory 16GB --cpu 2 --enable-extra-resources \\
         -- python experiments/datakit/decontam/prepare_eval_corpus.py
 
 The iris worker pulls lm-eval via the marin image's ``eval`` extras. To
@@ -37,12 +40,13 @@ plumbing.
 """
 
 import dataclasses
-import gzip
 import json
 import logging
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -217,16 +221,40 @@ def _concat_strings(record: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-def _write_jsonl_gz(path: str, records: Iterator[dict]) -> int:
+_PARQUET_SCHEMA = pa.schema([("id", pa.string()), ("text", pa.string())])
+_PARQUET_BATCH = 1000
+
+
+def _write_parquet(path: str, records: Iterator[dict]) -> int:
+    """Write ``records`` ({id, text}) to a single parquet file at ``path``.
+
+    Streams in ``_PARQUET_BATCH``-row chunks so memory stays bounded for tasks
+    with tens of thousands of docs (bbq=58k, swag=20k, babi=20k, ...).
+    Compression: zstd. zephyr's parquet reader picks up the file regardless
+    of the compression codec.
+    """
     fs_, resolved = url_to_fs(path)
     parent = "/".join(resolved.split("/")[:-1])
     if parent:
         fs_.makedirs(parent, exist_ok=True)
     n = 0
-    with fs_.open(resolved, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb") as gz:
-        for rec in records:
-            gz.write((json.dumps(rec) + "\n").encode("utf-8"))
-            n += 1
+    batch_ids: list[str] = []
+    batch_texts: list[str] = []
+    with fs_.open(resolved, "wb") as raw:
+        writer = pq.ParquetWriter(raw, _PARQUET_SCHEMA, compression="zstd")
+        try:
+            for rec in records:
+                batch_ids.append(rec["id"])
+                batch_texts.append(rec["text"])
+                if len(batch_ids) >= _PARQUET_BATCH:
+                    writer.write_table(pa.table({"id": batch_ids, "text": batch_texts}, schema=_PARQUET_SCHEMA))
+                    n += len(batch_ids)
+                    batch_ids, batch_texts = [], []
+            if batch_ids:
+                writer.write_table(pa.table({"id": batch_ids, "text": batch_texts}, schema=_PARQUET_SCHEMA))
+                n += len(batch_ids)
+        finally:
+            writer.close()
     return n
 
 
@@ -282,7 +310,7 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
 
 def _prepare_aa() -> None:
     for cfg in AA_EVALS:
-        out_path = f"{OUTPUT_ROOT}/aa/{cfg.subdir}/{cfg.split}.jsonl.gz"
+        out_path = f"{OUTPUT_ROOT}/aa/{cfg.subdir}/{cfg.split}.parquet"
         fs_, resolved = url_to_fs(out_path)
         if fs_.exists(resolved):
             logger.info("aa/%s: exists, skipping", cfg.subdir)
@@ -314,7 +342,7 @@ def _prepare_aa() -> None:
             if n_skipped:
                 logger.info("aa/%s: skipped %d rows", cfg.subdir, n_skipped)
 
-        n = _write_jsonl_gz(out_path, rows())
+        n = _write_parquet(out_path, rows())
         logger.info("aa/%s: %d records -> %s", cfg.subdir, n, out_path)
 
 
@@ -375,7 +403,7 @@ def _prepare_lmh() -> None:
             logger.info("lmh/%s: group expanded to %d leaf tasks", name, len(leaves))
 
         for child_name, task in leaves:
-            out_path = f"{OUTPUT_ROOT}/lmh/{child_name}/eval.jsonl.gz"
+            out_path = f"{OUTPUT_ROOT}/lmh/{child_name}/eval.parquet"
             fs_, resolved = url_to_fs(out_path)
             if fs_.exists(resolved):
                 logger.info("lmh/%s: exists, skipping", child_name)
@@ -412,7 +440,7 @@ def _prepare_lmh() -> None:
                     yield {"id": f"{name}-{split}-{i}", "text": text}
 
             try:
-                n = _write_jsonl_gz(out_path, rows())
+                n = _write_parquet(out_path, rows())
                 logger.info("lmh/%s: %d records (%s split) -> %s", child_name, n, split, out_path)
                 succeeded += 1
             except Exception as exc:
