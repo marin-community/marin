@@ -196,15 +196,20 @@ class CausalSelfAttention(eqx.Module):
             # doc-start iff its segment id differs from the previous position's.
             k_stationary = k[..., half:]
             prev_stationary = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-            if segment_ids is not None:
-                is_doc_start = jnp.concatenate(
-                    [
-                        jnp.ones_like(segment_ids[:, :1], dtype=bool),
-                        segment_ids[:, 1:] != segment_ids[:, :-1],
-                    ],
-                    axis=1,
-                )
+            seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
+            if seg is not None:
+                # ``segment_ids`` is stored as ``(q_segment_ids, kv_segment_ids)``;
+                # both refer to the same position axis. Use the query side.
+                q_seg = seg[0]
+                # 1-D ``(seq_len,)`` (broadcast across batch) or 2-D ``(batch, seq_len)``.
+                if q_seg.ndim == 1:
+                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_stationary.shape[:2])
+                else:
+                    is_doc_start = jnp.concatenate(
+                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
+                        axis=1,
+                    )
                 k_shifted = jnp.where(is_doc_start[..., None, None], k_stationary, prev_stationary)
             else:
                 k_shifted = prev_stationary
