@@ -40,7 +40,7 @@
   - `boost-nonexpert`: routed expert MuonH LR = 1.0x heuristic; remaining MuonH LR = 8.0x heuristic.
   - Adam/AdamH groups unchanged.
   - Gate-1 points only: d512 at 2.19e17 FLOPs, d768 at 1.70e18 FLOPs.
-- Result: pending submission.
+- Result: submitted as `/kaiyue/iris-run-job-20260517-184930`.
 - Interpretation: pending.
 - Next action: validate code, commit, push branch, submit gate-1 job.
 
@@ -62,6 +62,6 @@
   - Remaining MuonH LR keeps the same 8:1 non-expert/expert ratio: `2.828427x` heuristic.
   - Adam/AdamH groups unchanged.
   - Gate-1 points only: d512 at 2.19e17 FLOPs, d768 at 1.70e18 FLOPs.
-- Result: pending submission.
+- Result: submitted as `/kaiyue/iris-run-job-20260517-185409`.
 - Interpretation: pending.
 - Next action: validate add-on launcher, commit, push branch, submit add-on gate-1 job.
