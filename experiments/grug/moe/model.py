@@ -126,6 +126,13 @@ class CausalSelfAttention(eqx.Module):
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "... N"] | None
     attn_gate_up: Float[Array, "R N"] | None
+    # Learned per-head replacement for the PKO stationary key half at
+    # doc-start positions. Shape ``(num_kv_heads, head_dim // 2)``. Used
+    # instead of the previous token's stationary half so PKO can't leak
+    # cross-document info past the segment mask while still giving the
+    # model a learnable "doc start" key signal. Always allocated when
+    # PKO is configured for the run; zero at init.
+    pko_doc_start_stat: Float[Array, "M D_half"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -152,6 +159,15 @@ class CausalSelfAttention(eqx.Module):
         else:
             raise ValueError(f"Unknown attn_gate_mode: {gate_mode!r}")
 
+        # PKO-only param: only allocated when PKO is in use for the run.
+        # We still allocate per-block for layout consistency even on layers
+        # that don't actually run the PKO branch (the model picks which
+        # layers run PKO based on layer index); those layers will simply
+        # never read this leaf and its gradient stays zero.
+        pko_doc_start_stat: jax.Array | None = None
+        if cfg.partial_key_offset != "none":
+            pko_doc_start_stat = reshard(jnp.zeros((m, h // 2)), P(None, None))
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
@@ -159,6 +175,7 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=attn_gate,
             attn_gate_up=attn_gate_up,
+            pko_doc_start_stat=pko_doc_start_stat,
             cfg=cfg,
         )
 
@@ -189,15 +206,15 @@ class CausalSelfAttention(eqx.Module):
             )
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             # Shift stationary key dims forward by one position (enables 1-layer induction).
-            # At doc-start positions, fall back to the current token's own stationary
-            # half so PKO does not leak the prior doc's last-token info past the
-            # ``block_cross_document_attention`` segment mask. ``segment_ids`` from
-            # the attention mask tags each token with its doc id; a position is a
-            # doc-start iff its segment id differs from the previous position's.
+            # At doc-start positions, replace the shifted stationary half with the
+            # learned ``pko_doc_start_stat`` embedding instead of pulling from the
+            # previous (cross-doc) token. ``segment_ids`` from the attention mask
+            # tags each token with its doc id; a position is a doc-start iff its
+            # segment id differs from the previous position's.
             k_stationary = k[..., half:]
             prev_stationary = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
             seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
-            if seg is not None:
+            if seg is not None and self.pko_doc_start_stat is not None:
                 # ``segment_ids`` is stored as ``(q_segment_ids, kv_segment_ids)``;
                 # both refer to the same position axis. Use the query side.
                 q_seg = seg[0]
@@ -210,7 +227,9 @@ class CausalSelfAttention(eqx.Module):
                         [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
                         axis=1,
                     )
-                k_shifted = jnp.where(is_doc_start[..., None, None], k_stationary, prev_stationary)
+                # Broadcast ``pko_doc_start_stat`` (M, D_half) to k_stationary's shape.
+                doc_start_embed = jnp.broadcast_to(self.pko_doc_start_stat[None, None, :, :], k_stationary.shape)
+                k_shifted = jnp.where(is_doc_start[..., None, None], doc_start_embed, prev_stationary)
             else:
                 k_shifted = prev_stationary
             k = jnp.concatenate([k_rot, k_shifted], axis=-1)
