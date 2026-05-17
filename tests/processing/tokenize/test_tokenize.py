@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import tempfile
+from pathlib import Path
 
 import jax
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import TextLmDatasetFormat
@@ -229,3 +233,36 @@ def test_tokenize_full_pipeline_integration(tmp_path):
     assert mixture_example is not None
     assert "input_ids" in mixture_example
     print("\nSuccessfully created mixture and sampled example!")
+
+
+def test_exemplar_for_skips_empty_leading_shard(tmp_path):
+    """Regression for #5790: tokenize must not raise IndexError when shard 0
+    is an empty parquet. ``_exemplar_for`` now scans files until one yields
+    a record.
+    """
+    # pytest's tmp_path contains "test" (e.g. ``.../test_<func>_0/``), which
+    # would trip _validate_train_urls. Use a vanilla tmpdir for the data so
+    # ``train_paths`` doesn't hit the validator.
+    with tempfile.TemporaryDirectory(prefix="sparse_") as raw_dir:
+        data_dir = Path(raw_dir)
+        pq.write_table(
+            pa.table({"text": pa.array([], type=pa.string())}),
+            str(data_dir / "data-00000.parquet"),
+        )
+        pq.write_table(
+            pa.table({"text": ["hello world"]}),
+            str(data_dir / "data-00001.parquet"),
+        )
+
+        config = TokenizeConfig(
+            train_paths=[f"{data_dir}/*.parquet"],
+            validation_paths=[],
+            cache_path=str(tmp_path / "cache"),
+            tokenizer="gpt2",
+            format=TextLmDatasetFormat(text_key="text"),
+        )
+        tokenize(config)
+
+    ledger = CacheLedger.load(str(tmp_path / "cache" / "train"))
+    assert ledger.is_finished
+    assert ledger.total_num_rows == 1
