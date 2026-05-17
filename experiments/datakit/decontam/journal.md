@@ -279,15 +279,26 @@ A different signal — function-level AST hashing, exact identifier
 matching, or excluding code2text from the bloom — would be more
 suitable.
 
-### Side-by-side: prose vs code
+### Side-by-side: three sampled sources
 
-| source | size | flagged | precision (strict) | structural reason |
-|---|---:|---:|---:|---|
-| cp/biodiversity (academic prose) | 19 GB | 16 | 0.31 | bloom works; FPs are eval-source overlap |
-| coderforge (agent code logs) | 12.8 GB | **4129** | **0.00** | 13-gram idiom collision overwhelms signal |
+| source | size | flagged | flag rate | precision | dominant failure mode |
+|---|---:|---:|---:|---:|---|
+| cp/biodiversity (academic prose) | 19 GB | 16 | 0.029% | **0.31 strict / 0.69 lenient** | eval-source overlap (Bacon ↔ MMLU-Pro) |
+| coderforge (agent code logs) | 12.8 GB | 4,129 | 1.60% | **0.00** (22 errors from prompt injection) | OSS code idiom collision |
+| nemotron_specialized_v1_1/formal_logic | 489k records | 172,554 | **35.28%** | **0.00** | shared eval question stem |
 
-The 258× difference in flag rate alone shows the code-corpus problem —
-the bloom is firing on idiom overlap, not contamination.
+Reading down the table: the bloom works best on prose-vs-prose
+contamination (biodiversity), collapses on code-vs-code (coderforge),
+and over-flags on synthetic data that mimics eval format (formal_logic).
+The 35.28% formal_logic flag rate looks alarming but is essentially all
+template collision -- the synthetic generator copied
+`Which of the given formulas of PL is the best symbolization of the
+following sentence?` and the bloom fires on the stem.
+
+A reinterpretation of the 5.7M total flagged: probably the majority are
+in code- or template-collision regimes, with **true contamination
+likely an order of magnitude smaller** (estimating from the three
+sampled sources extrapolated by category).
 
 ## Synthesis (2026-05-17)
 
@@ -354,10 +365,23 @@ For consumers of the decon output:
 * **Treat code-corpus flags with suspicion.** Coderforge-style flags
   are essentially noise from idiom collisions. Don't drop code-corpus
   docs based on this bloom alone.
+* **Treat synthetic-eval-format training data with suspicion.**
+  Sources like `nemotron_specialized_v1_1/formal_logic` that mirror
+  the question template of an eval will collide en masse on the stem.
+  Look at *content* (formulas, code, factual claims), not flag count.
 * **Don't rely on the bloom to catch short-item contamination.**
   Boolean MCQs, Chinese-character benchmarks, and other ≤13-word eval
   items aren't in the bloom and won't be detected. Use a separate
   exact-match index for those if needed.
+
+A pragmatic improvement that would address the template-collision
+failure mode without abandoning 13-gram matching: **build the bloom
+from eval *answers* and reasoning chains, not from question stems**.
+Question stems are recyclable templates; answer content is what a
+contaminated model would memorize. The current pipeline ingests the
+full record (question + answer concatenated) which gives the stems
+equal weight, hence the false-positive blowup on template-mimicry
+synthetic corpora.
 
 ### Per-source flag rates
 
@@ -397,11 +421,31 @@ precision analysis above tells us how to interpret it.
 
 The headline is the **35.28% formal_logic outlier**. The source is
 `nemotron_specialized_v1_1/formal_logic` — a synthetic training set
-generated specifically for the MMLU `formal_logic` subtask. The
-collision rate is so high precisely because *the corpus is engineered
-to teach the eval*. This is a textbook contamination case and the
-exact thing decon should catch. Precision on this source TBD pending
-the running iris job; expect it to be very high.
+generated for the MMLU formal_logic subtask. The collision rate is so
+high that my first read was "textbook contamination, exactly what
+decon should catch."
+
+**Precision on formal_logic is 0/50 = 0%.** The collisions are all on
+shared eval *question stems* ("Which of the given formulas of PL is
+the best symbolization of the following sentence?" — 13+ words,
+verbatim across MMLU-Pro and the synthetic set), but the actual
+formulas, variables, and answer choices are entirely different.
+
+This is a third structural failure mode: **eval-question-template
+collision**. The synthetic generator copied the stem verbatim and
+generated novel content underneath. The bloom flags any record sharing
+that template. From a training-decon standpoint these are *not*
+contamination — a model trained on these synthetic problems would not
+gain an advantage on the MMLU-Pro test items unless the actual problem
+content matched, which it does not.
+
+Adding this to the failure-mode list:
+
+| failure mode | symptom | example |
+|---|---|---|
+| short-item recall | bloom can't represent items <13 words | agieval Chinese, lm_syneval |
+| code idiom collision | shared OSS code triggers false flags | coderforge ↔ code2text |
+| **template collision** | shared eval question stems trigger flags | formal_logic synthetic ↔ MMLU-Pro stems |
 
 The other code-heavy entries (davinci-dev, coderforge, swe-rebench,
 nemotron-terminal) are the over-flagging pattern the coderforge
