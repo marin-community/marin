@@ -84,6 +84,14 @@ class GrugModelConfig:
     use_partial_rope: bool = False
     # Force the last layer to use long sliding window + PKO.
     last_layer_pko: bool = False
+    # MoEMLP routed-expert gate/up storage layout.
+    # ``True``  — store ``w_gate`` and ``w_up`` as two ``(e, d, i)`` tensors,
+    #             concatenate on the forward pass. Lets per-parameter
+    #             optimizers (AuroraH / AdamH scale-invariant norm / etc.)
+    #             treat each projection as its own rectangular tensor.
+    # ``False`` — store as one concatenated ``(e, d, 2i)`` tensor named
+    #             ``w_gate_up``; this is the original layout.
+    split_w_gate_up: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -383,18 +391,26 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
 
 
 class MoEMLP(eqx.Module):
-    """QB-routed MoE with sigmoid combine weights."""
+    """QB-routed MoE with sigmoid combine weights.
+
+    Routed-expert input projections can be stored in two layouts (selected
+    by ``cfg.split_w_gate_up``):
+
+    - ``split_w_gate_up=False`` (default): one concatenated ``w_gate_up``
+      tensor of shape ``(e, d, 2i)``. Matches the original MoEMLP layout.
+    - ``split_w_gate_up=True``: two ``(e, d, i)`` tensors ``w_gate`` and
+      ``w_up``, concatenated on the forward pass. Lets per-parameter
+      optimizers (AuroraH, AdamH scale-invariant norm) treat each
+      projection as its own rectangular tensor.
+    """
 
     router: jax.Array
     router_bias: jax.Array
-    # ``w_gate`` and ``w_up`` are stored separately and concatenated on the
-    # forward pass before being passed into ``levanter.grug.grug_moe.moe_mlp``.
-    # Keeping them separate lets per-parameter optimizers (e.g. AuroraH,
-    # AdamH's scale-invariant norm) treat each projection as its own
-    # rectangular ``(e, d, i)`` tensor rather than as the wider concatenated
-    # ``(e, d, 2i)`` blob.
-    w_gate: jax.Array
-    w_up: jax.Array
+    # Exactly one of (w_gate_up,) or (w_gate, w_up) is populated; see class
+    # docstring. The other(s) are ``None``.
+    w_gate_up: jax.Array | None
+    w_gate: jax.Array | None
+    w_up: jax.Array | None
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -408,11 +424,22 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
+        w_gate_full = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
+        w_up_full = _init_weight(k_up, (e, d, i), cfg.initializer_std)
+        if cfg.split_w_gate_up:
+            w_gate_up: jax.Array | None = None
+            w_gate: jax.Array | None = reshard(w_gate_full, P("expert", "data", "model"))
+            w_up: jax.Array | None = reshard(w_up_full, P("expert", "data", "model"))
+        else:
+            w_gate_up = reshard(jnp.concatenate([w_gate_full, w_up_full], axis=-1), P("expert", "data", "model"))
+            w_gate = None
+            w_up = None
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate=reshard(_init_weight(k_gate, (e, d, i), cfg.initializer_std), P("expert", "data", "model")),
-            w_up=reshard(_init_weight(k_up, (e, d, i), cfg.initializer_std), P("expert", "data", "model")),
+            w_gate_up=w_gate_up,
+            w_gate=w_gate,
+            w_up=w_up,
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
@@ -465,9 +492,12 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        # Concatenate gate + up on the forward pass (matching the original
-        # contiguous layout that ``moe_mlp`` expects).
-        w_gate_up = reshard(jnp.concatenate([self.w_gate, self.w_up], axis=-1), P("expert", "data", "model"))
+        # ``moe_mlp`` always expects the concatenated ``(e, d, 2i)`` layout.
+        # When stored split, concat on the forward pass.
+        if self.w_gate_up is not None:
+            w_gate_up = self.w_gate_up
+        else:
+            w_gate_up = reshard(jnp.concatenate([self.w_gate, self.w_up], axis=-1), P("expert", "data", "model"))
         routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
