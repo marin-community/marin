@@ -648,6 +648,127 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+@OptimizerConfig.register_subclass("grug_moe_muonh_may_arch_1pct_gn_split_lr_v1")
+@dataclass(frozen=True)
+class GrugMoeMuonHMayArch1pctGnSplitLrConfig(OptimizerConfig):
+    """1pct-noclip with GatedNorm w_up vs w_down on separate MuonH LR scales.
+
+    Splits the single ``muonh`` group of :class:`GrugMoeMuonHMayArchGNMuonHConfig`
+    (the 1pct-noclip baseline) into three MuonH sub-groups:
+
+    | sub-group           | matches                                  | LR                                    |
+    |---------------------|------------------------------------------|---------------------------------------|
+    | ``muonh``           | everything matrix-shaped except GN       | ``learning_rate``                     |
+    | ``muonh_gn_wup``    | GatedNorm ``.w_up`` (all 4 instances)    | ``learning_rate * gn_wup_lr_scale``   |
+    | ``muonh_gn_wdown``  | GatedNorm ``.w_down`` (all 4 instances)  | ``learning_rate * gn_wdown_lr_scale`` |
+
+    Setting both ``gn_wup_lr_scale`` and ``gn_wdown_lr_scale`` to 1.0 reduces
+    to :class:`GrugMoeMuonHMayArchGNMuonHConfig` (1pct-noclip baseline).
+
+    Motivated by #5746's gnwup-0.7x finding (in the 2pct+clip recipe): GN w_up
+    wants ~30% less LR than GN w_down at all 3 scales. This config lets us test
+    the same direction on the 1pct-noclip recipe.
+    """
+
+    adam_lr: float = 6e-4
+    momentum: float = 0.95
+    nesterov: bool = True
+    backend_steps: int = 5
+    beta1: float = 0.9
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    muon_epsilon: float = 1e-8
+    max_grad_norm: float | None = None
+    coefficient_type: CoefficientType = "quintic"
+    gn_wup_lr_scale: float = 1.0
+    gn_wdown_lr_scale: float = 1.0
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        gn_wup_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.learning_rate * self.gn_wup_lr_scale)
+        gn_wdown_lr_schedule = self.lr_scheduler(
+            num_train_steps, override_lr=self.learning_rate * self.gn_wdown_lr_scale
+        )
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, gn_wup_lr, gn_wdown_lr, adam_lr):
+            def muonh_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_muonh(
+                        momentum=self.momentum,
+                        nesterov=self.nesterov,
+                        steps=self.backend_steps,
+                        muon_eps=self.muon_epsilon,
+                        learning_rate=lr,
+                        coefficient_type=self.coefficient_type,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "muonh": muonh_transform_at(learning_rate),
+                    "muonh_gn_wup": muonh_transform_at(gn_wup_lr),
+                    "muonh_gn_wdown": muonh_transform_at(gn_wdown_lr),
+                    "adamh_embed": adamh_transform_at(learning_rate),
+                    "adamh": adamh_transform_at(learning_rate),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            gn_wup_lr=gn_wup_lr_schedule,
+            gn_wdown_lr=gn_wdown_lr_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if "token_embed" in path_lower:
+                return "adamh_embed"
+            if "router_bias" in path_lower or path_lower.endswith(".attn_gate") or ".router" in path_lower:
+                return "adam"
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh"
+            # GatedNorm split into w_up and w_down sub-groups.
+            if "gated_norm" in path_lower:
+                if path_lower.endswith(".w_up"):
+                    return "muonh_gn_wup"
+                if path_lower.endswith(".w_down"):
+                    return "muonh_gn_wdown"
+                return "muonh"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "muonh"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
 @OptimizerConfig.register_subclass("grug_moe_normuonh_v1")
 @dataclass(frozen=True)
 class GrugMoeNorMuonHConfig(OptimizerConfig):
