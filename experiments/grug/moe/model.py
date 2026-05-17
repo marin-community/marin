@@ -84,6 +84,13 @@ class GrugModelConfig:
     use_partial_rope: bool = False
     # Force the last layer to use long sliding window + PKO.
     last_layer_pko: bool = False
+    # What to do with the **stationary** half of the key at doc-start
+    # positions in PKO layers, after the +1 shift. ``"leak"`` (default)
+    # is the original behaviour: ``k_stationary[BOS]`` ends up holding
+    # the previous doc's last token's stationary half (cross-doc leak).
+    # ``"zero"`` replaces it with zeros. Detected from segment_ids on
+    # the attention mask; no-op when no segment_ids are present.
+    pko_bos_stationary_mode: str = "leak"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -101,6 +108,8 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.pko_bos_stationary_mode not in ("leak", "zero"):
+            raise ValueError(f"pko_bos_stationary_mode must be 'leak' or 'zero'; got {self.pko_bos_stationary_mode!r}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -191,6 +200,24 @@ class CausalSelfAttention(eqx.Module):
             # Shift stationary key dims forward by one position (enables 1-layer induction).
             k_stationary = k[..., half:]
             k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            if self.cfg.pko_bos_stationary_mode == "zero":
+                # At doc-start positions, the shift would otherwise pull in the
+                # previous doc's last-token stationary half (cross-doc leak).
+                # Replace with zeros instead. ``segment_ids`` is the per-token
+                # doc id; a position is a doc-start iff its segment id differs
+                # from the previous position's. Position 0 is always doc-start.
+                seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
+                if seg is not None:
+                    q_seg = seg[0]
+                    if q_seg.ndim == 1:
+                        is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+                        is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
+                    else:
+                        is_doc_start = jnp.concatenate(
+                            [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
+                            axis=1,
+                        )
+                    k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
             k = jnp.concatenate([k_rot, k_shifted], axis=-1)
         elif use_partial_rope:
             # Partial RoPE only (no key shift): rotate first half, leave rest stationary.
