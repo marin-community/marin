@@ -85,6 +85,7 @@ MAX_CORPUS_CHARS = 12000
 @dataclass
 class FlaggedRecord:
     corpus_id: str
+    partition_id: int
     matched_hashes: list[int]
     max_overlap: float
 
@@ -121,13 +122,15 @@ def _iter_flagged_records(decon_output: str) -> Iterator[FlaggedRecord]:
     for f in files:
         bare = f.removeprefix("gs://")
         pf = pq.ParquetFile(bare, filesystem=gcs)
-        for batch in pf.iter_batches(columns=["id", "attributes"], batch_size=2048):
+        for batch in pf.iter_batches(columns=["id", "partition_id", "attributes"], batch_size=2048):
             ids = batch.column("id").to_pylist()
+            partition_ids = batch.column("partition_id").to_pylist()
             attrs = batch.column("attributes").to_pylist()
-            for i, a in zip(ids, attrs, strict=True):
+            for i, p, a in zip(ids, partition_ids, attrs, strict=True):
                 if a and a.get("contaminated"):
                     yield FlaggedRecord(
                         corpus_id=str(i),
+                        partition_id=int(p),
                         matched_hashes=list(a.get("matched_hashes") or []),
                         max_overlap=float(a.get("max_overlap") or 0.0),
                     )
@@ -147,50 +150,107 @@ def _load_eval_hash_index(bloom_dir: str) -> dict[int, list[str]]:
     return by_hash
 
 
-def _eval_id_to_text(eval_root: str) -> dict[str, tuple[str, str]]:
-    """Eval ``id → (text, parquet_path)`` across the whole eval corpus."""
+def _eval_id_to_text(eval_root: str, keep_ids: set[str]) -> dict[str, tuple[str, str]]:
+    """Eval ``id → (text, parquet_path)``, restricted to ``keep_ids``.
+
+    Streams the eval corpus parquet tree and only retains records whose
+    ``id`` is requested. Early-exits when all ids are found. Avoids
+    materializing all 1.8M eval records when we only need a handful.
+    """
     files = _list_parquet_recursive(eval_root)
-    logger.info("eval corpus: %d parquet files under %s", len(files), eval_root)
+    logger.info(
+        "eval corpus: %d parquet files under %s (filtering to %d ids)",
+        len(files),
+        eval_root,
+        len(keep_ids),
+    )
     gcs = pa_fs.GcsFileSystem()
     out: dict[str, tuple[str, str]] = {}
-    for f in files:
+    for f_idx, f in enumerate(files, 1):
         bare = f.removeprefix("gs://")
         pf = pq.ParquetFile(bare, filesystem=gcs)
         for batch in pf.iter_batches(columns=["id", "text"], batch_size=2048):
             ids = batch.column("id").to_pylist()
             texts = batch.column("text").to_pylist()
             for eid, t in zip(ids, texts, strict=True):
-                out[str(eid)] = (str(t), f)
-    logger.info("eval id index: %d records", len(out))
+                sid = str(eid)
+                if sid in keep_ids:
+                    out[sid] = (str(t), f)
+        if len(out) >= len(keep_ids):
+            logger.info("found all %d eval ids after %d/%d files", len(out), f_idx, len(files))
+            return out
+        if f_idx % 200 == 0:
+            logger.info(
+                "scanned %d/%d eval files, found %d/%d ids",
+                f_idx,
+                len(files),
+                len(out),
+                len(keep_ids),
+            )
+    logger.info("eval id index: %d / %d ids found", len(out), len(keep_ids))
     return out
 
 
-def _corpus_id_to_text(source_name: str) -> dict[str, str]:
-    """Build ``corpus_id → text`` from the normalized source.
+def _corpus_id_to_text(source_name: str, sample: list[FlaggedRecord]) -> dict[str, str]:
+    """Build ``corpus_id → text`` by opening only the parquet shards that contain ``sample`` ids.
 
-    Loads the source's NormalizedData artifact to find ``main_output_dir``,
-    then reads every parquet shard's ``id`` + ``text`` columns. For huge
-    corpora this is memory-heavy; callers should restrict via a SAMPLE_IDS
-    set if needed. For now this is a single shot for the precision analysis
-    of the sampled records only -- we filter in-loop.
+    The decon output stores ``partition_id`` per record, which mirrors the
+    source's ``part-NNNNN-of-NNNNN`` shard index (`marin.datakit.decon`
+    contract). So we can index directly into the source corpus and skip
+    the brute-force shard-scan that costs ~95 min on a 19 GB / 76-shard
+    source like cp/biodiversity.
     """
     sources = all_sources()
     if source_name not in sources:
         raise KeyError(f"unknown source {source_name!r}; known: {sorted(sources)}")
     nd: NormalizedData = Artifact.from_path(sources[source_name].normalized, NormalizedData)
-    files = _list_parquet_recursive(nd.main_output_dir)
-    logger.info("source %s: %d parquet shards under %s", source_name, len(files), nd.main_output_dir)
+    all_files = _list_parquet_recursive(nd.main_output_dir)
+    n_total_shards = len(all_files)
+
+    keep_ids = {r.corpus_id for r in sample}
+    needed_partitions: set[int] = {r.partition_id for r in sample}
+    files_by_partition: dict[int, str] = {}
+    for f in all_files:
+        # part-NNNNN-of-NNNNN.parquet → partition idx is the first NNNNN
+        name = f.rsplit("/", 1)[-1]
+        try:
+            part_idx = int(name.split("-")[1])
+        except (ValueError, IndexError):
+            continue
+        files_by_partition[part_idx] = f
+
+    target_files = [files_by_partition[p] for p in sorted(needed_partitions) if p in files_by_partition]
+    logger.info(
+        "source %s: opening %d targeted shards (of %d total) for %d ids",
+        source_name,
+        len(target_files),
+        n_total_shards,
+        len(keep_ids),
+    )
     gcs = pa_fs.GcsFileSystem()
     out: dict[str, str] = {}
-    for f in files:
+    for f_idx, f in enumerate(target_files, 1):
         bare = f.removeprefix("gs://")
         pf = pq.ParquetFile(bare, filesystem=gcs)
         for batch in pf.iter_batches(columns=["id", "text"], batch_size=2048):
             ids = batch.column("id").to_pylist()
             texts = batch.column("text").to_pylist()
             for i, t in zip(ids, texts, strict=True):
-                out[str(i)] = str(t)
-    logger.info("corpus id index: %d records", len(out))
+                sid = str(i)
+                if sid in keep_ids:
+                    out[sid] = str(t)
+        if f_idx % 10 == 0:
+            logger.info(
+                "scanned %d/%d targeted shards, found %d/%d ids",
+                f_idx,
+                len(target_files),
+                len(out),
+                len(keep_ids),
+            )
+        if len(out) >= len(keep_ids):
+            logger.info("found all %d ids after %d/%d shards", len(out), f_idx, len(target_files))
+            return out
+    logger.info("corpus id index: %d / %d ids found", len(out), len(keep_ids))
     return out
 
 
@@ -243,7 +303,8 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
-    report_path = args.report or f"precision_{args.source_name}.tsv"
+    safe_source = args.source_name.replace("/", "_")
+    report_path = args.report or f"precision_{safe_source}.tsv"
 
     # Stage 1: collect flagged records.
     flagged = list(_iter_flagged_records(args.decon_output))
@@ -254,12 +315,19 @@ def main() -> None:
     rng = random.Random(args.seed)
     sample = rng.sample(flagged, min(args.sample_size, len(flagged)))
 
-    # Stage 2: build the three lookup tables.
+    # Stage 2: build the three lookup tables. Load hash index in full (small
+    # enough), then derive the needed eval_id set for stream-filtering both
+    # the eval corpus and the source corpus reads.
     hash_to_eval_ids = _load_eval_hash_index(args.bloom_dir)
-    eval_id_to_text = _eval_id_to_text(EVAL_ROOT)
-    sample_ids = {r.corpus_id for r in sample}
-    corpus_id_to_text_full = _corpus_id_to_text(args.source_name)
-    corpus_id_to_text = {k: v for k, v in corpus_id_to_text_full.items() if k in sample_ids}
+    needed_eval_ids: set[str] = set()
+    for r in sample:
+        for h in r.matched_hashes:
+            eids = hash_to_eval_ids.get(int(h))
+            if eids:
+                needed_eval_ids.add(eids[0])
+                break
+    eval_id_to_text = _eval_id_to_text(EVAL_ROOT, needed_eval_ids)
+    corpus_id_to_text = _corpus_id_to_text(args.source_name, sample)
 
     # Stage 3: judge.
     from anthropic import Anthropic

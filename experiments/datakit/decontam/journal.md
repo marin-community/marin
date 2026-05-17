@@ -188,6 +188,44 @@ Filler-prefix and filler-suffix variants did not affect recall
 (matched verbatim). That's good: the bloom is robust to local
 contextual noise around an eval-text quote.
 
+## Precision analysis — cp/biodiversity (2026-05-17)
+
+19 GB / 76 normalized shards. Decon found **16 contaminated records**
+in the source. Sampled all 16; Claude-judged each. Headline:
+
+| label | count |
+|---|---|
+| true_positive (literal eval-text in corpus) | 5 |
+| false_positive | 11 |
+| **precision (strict)** | **5/16 = 0.312** |
+
+**The 11 false-positive set splits into three sub-categories**:
+
+1. **Eval-source-overlap (6)** — corpus contains the *primary text*
+   the eval quotes from (`MMLU-Pro-test-4846` quotes Bacon's Novum
+   Organum; the corpus has 6 docs that are Bacon's Novum Organum or
+   editions / prefaces / commentary on it). Claude scores these
+   "false_positive" because they don't reproduce the MCQ format, but
+   from a training-decon standpoint they're contamination -- if a
+   model trained on biodiversity sees Bacon's Aphorisms XI, XIX, XXII,
+   XXXVI verbatim, it'll answer MMLU-Pro-4846 from training-set
+   familiarity.
+2. **Coincidental common phrasing (3)** — boolq Sixth-Amendment +
+   MMLU-Pro Copernicus where the 13-gram collision is incidental
+   shared phrasing in unrelated contexts.
+3. **Bloom-filter false-positive (2)** — both livecodebench, both
+   with `n_matched_hashes=1`. With FPR=1e-9 and many records, ~1 per
+   million records can collide spuriously; these are the artifact.
+
+**Reinterpreted precision: 11/16 = 0.69** if we count eval-source
+overlap as contamination (which is the operationally-correct frame).
+
+Implementation note: rewrote `_corpus_id_to_text` to use `partition_id`
+from the decon output to open only the specific source shards holding
+the sampled records -- 15 shards instead of all 76 for biodiversity.
+Saves ~80 min per source for medium corpora; will scale better to
+TB-class sources.
+
 ## Analysis plan (placeholder; filled in as runs complete)
 
 1. **Per-source flag rates**: how many docs in each of the 104 sources
