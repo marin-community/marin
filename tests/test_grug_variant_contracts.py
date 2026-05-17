@@ -172,6 +172,17 @@ def test_grug_moe_per_expert_lr_gate2_launcher_builds_selected_candidates_only()
         assert step.config.tracker.group == "muonh-may-arch-per-expert-lr-gate2"
 
 
+def test_grug_moe_per_expert_lr_selected_gate1_launcher_builds_one_run():
+    selected_module = importlib.import_module("experiments.grug.moe.muonh_may_arch_per_expert_lr_selected_gate1")
+
+    step = selected_module._build_selected_step("shrink-expert", hidden_dim=512, run_suffix="retry1")
+
+    expected_run_id = "muonh-may-arch-per-expert-lr-gate1-shrink-expert-retry1-d512-2.19e17"
+    assert step.config.run_id == expected_run_id
+    assert step.name == f"grug/muonh_may_arch_per_expert_lr_gate1/{expected_run_id}"
+    assert step.config.tracker.group == "muonh-may-arch-per-expert-lr-gate1"
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
