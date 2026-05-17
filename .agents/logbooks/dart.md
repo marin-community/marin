@@ -5954,6 +5954,117 @@ PYENV_VERSION=3.12.0 uv run python -m experiments.posttrain.disagreement_primiti
 
 §11 prompt diversity generation is now SOLVED across three production backends. §11.15 extends the §11.14 SOLVED status to multi-backend.
 
+### 11.16 Cross-backend diversity audit — 17 sub-agents on Bucket C+D corpora (2026-05-17)
+
+After §11.15 produced three independent corpora (GPT-5.1: 1037 scenarios, Gemini-3.1-Pro: 593, Claude Sonnet 4.6: 876), the empirical question became: do the three backends actually explore *substantively different ground*, or do they converge on the same content? If they converge, running three is wasted compute and we should pick one. If they diverge, running all three is justified.
+
+§11.16 answers that question via 17 Sonnet 4.6 sub-agents — one per Bucket C+D statement — each comparing all three backends' corpora for its statement and producing a forced (A) / (B) / (C) diversity verdict.
+
+#### Methodological setup
+
+Critical: each backend ran its own Stage 1 → produced its own axes → scenario grids are NOT paired across backends. Direct scenario-to-scenario comparison is impossible. The sub-agents instead compare at the **set level**: do the three scenario *sets* cover the same ground or different ground? The output is structured as:
+
+- §1. Spec statement + Stage 1 axis-set comparison (substantively similar or different conceptual dimensions?)
+- §2. Per-backend scenario inventory (read scenarios as text, summarize target referent / persona / geography / domain per scenario)
+- §3. Convergence — what all backends explore in common (with quoted parallels)
+- §4. Divergence — what each backend uniquely contributes
+- §5. Forced verdict: (A) High meaningful diversity / (B) Moderate diversity / (C) Substantial convergence
+- §6. One-sentence per-statement recommendation
+
+All 17 sub-agents launched in parallel (free per project memory rule, Sonnet 4.6 reads). Wall-clock ~5-10 min for slowest. Per-statement reports land at `claude_subagents/cross_backend_diversity_audit/<sid>/cross_backend_analysis.md`.
+
+#### Aggregate verdict
+
+**Zero statements rated (C) "substantial convergence". Every one of the 17 statements had meaningful cross-backend diversity.**
+
+| verdict | count | statements |
+|---|--:|---|
+| **(A) High meaningful diversity** | **7 of 17** | `avoid_hateful_content`, `comply_with_laws`, `assume_objective_pov`, `prevent_imminent_harm`, `protect_privileged_messages`, `sexual_content_involving_minors`, `no_agenda` |
+| **(B) Moderate diversity** | **10 of 17** | `refusal_style`, `assume_best_intentions`, `be_engaging`, `avoid_abuse`, `be_clear`, `formatting`, `no_erotica_or_gore`, `highlight_misalignments`, `no_topic_off_limits`, `do_not_lie` |
+| **(C) Substantial convergence** | **0 of 17** | — |
+
+This rules out the "running all three is wasted compute" failure mode that §11.16 was designed to detect. Running multiple backends generates meaningful additional evaluation coverage on every statement tested.
+
+#### Per-statement details (each row from one sub-agent's verdict)
+
+| statement | verdict | scenario counts (GPT / Gemini / Sonnet) | key cross-backend finding |
+|---|---|---|---|
+| `avoid_hateful_content` | A | 19 / **0** / 23 | Gemini Stage 2b refused entirely. GPT covers coded/dog-whistle linguistic axes; Sonnet adds target-specificity + authority-source axes — non-overlapping. |
+| `comply_with_laws` | A | 22 / 13 / **0** | Sonnet Stage 2b refused mid-output. GPT covers gray-zone small-business compliance (18/22); Gemini covers overt-crime adversarial robustness (12/13). Structurally non-overlapping. |
+| `assume_objective_pov` | A | 21 / 13 / 19 | Only ~9 functional parallels of ~53 total scenarios. GPT: emotional reassurance + adversarial debate; Gemini: harm-tradeoff severity; Sonnet: reverse false balance. |
+| `prevent_imminent_harm` | A | 25 / 13 / 20 | GPT: user-resists-safety; Gemini: only suicide-crisis scenario across all backends (Mapo Bridge); Sonnet: professional-help-unavailable + fictional-framing-bypass. |
+| `protect_privileged_messages` | A | 25 / 16 / 20 | GPT: user-pasted text + tool-routed nesting; Gemini: schema-as-content + instruction-conflict; Sonnet: behavioral-implication leakage + leaky-refusal. |
+| `sexual_content_involving_minors` | A | 25 / **0** / 23 | Gemini total refusal (65 attempts, all empty). GPT: coded-slang + specificity-detail-level axis; Sonnet: escalation-pattern axis + adversarial-pretext-ladder. |
+| `no_agenda` | A | 25 / 15 / 25 | GPT: safety-constraint as agenda + multi-turn accumulation; Gemini: mundane-topic baselines as editorial probes; Sonnet: all four agenda-concealment mechanisms + model-self-interest. |
+| `refusal_style` | B | 19 / 13 / 19 | All three found unique axes: GPT (pushback/persona-override), Gemini (emotional-intensity), Sonnet (ability-vs-choice + false-refusal). Non-trivial shared core on harm-severity. |
+| `assume_best_intentions` | B | 24 / 14 / 21 | ~30-40% convergent core. GPT-5.1 + Sonnet primary pair; cherry-pick 3 Gemini scenarios for unique sub-behaviors (s002, s008, s013). |
+| `be_engaging` | B | 25 / 16 / 21 | ~40-50% convergent. GPT unique: crisis-emotional + conversation-termination; Sonnet unique: humor axis; Gemini unique: minimal-statement + anthropomorphic-pressure. |
+| `avoid_abuse` | B | 16 / 14 / 20 | Non-trivial redundancy on negativity-explicitness; GPT: functionality_vs_gratuitousness axis; Gemini: concept/object roasts; Sonnet: refusal_pressure + incitement-framed. |
+| `be_clear` | B | 25 / 13 / 21 | High overlap on Fermi/recall/formatting. GPT unique: input-overload + jargon-audience; Gemini unique: user-prose-register-mirroring; Sonnet unique: directness-conflict + ornate-genre. |
+| `formatting` | B | 25 / **0** / 17 | Gemini absent. ~60-65% overlap; GPT length-axis + conflicting-instructions unique; Sonnet extreme-math + RST-override unique. |
+| `no_erotica_or_gore` | B | 21 / **0** / 23 | Gemini absent. ~6-8 novel scenarios per backend, ~8 thematic overlap. GPT: model-initiated amplification; Sonnet: audio/visual modality + consent-law. |
+| `highlight_misalignments` | B | 25 / 13 / 17 | ~25% convergent core. GPT: post-warning escalation + incoherent tasks; Gemini: multi-turn emergent + invited-evaluation; Sonnet: inferred-long-term-goals + latent-fragility. |
+| `no_topic_off_limits` | B | 25 / 15 / 16 | Sonnet's novel `sanitization_temptation` axis is load-bearing; Gemini adversarial-framing non-redundant; GPT depth-of-engagement unique. Sonnet primary. |
+| `do_not_lie` | B | 25 / 13 / 21 | ~25-46% shared core. GPT + Sonnet primary pair; Gemini additive on s003 (prompt-injection) and s012 (Amanita phalloides omission). |
+
+#### Cross-cutting patterns
+
+**Statement class predicts verdict.** The 7 (A) statements skew safety-critical / adversarial; the 10 (B) statements skew general behavioral.
+
+| class | (A) High | (B) Moderate |
+|---|--:|--:|
+| Safety-critical / adversarial / high-stakes | 6 of 7 | 1 of 10 |
+| General behavioral / format / tone | 1 of 7 | 9 of 10 |
+
+The two exceptions:
+- `no_agenda` is general-behavioral but rated (A) — sub-agent found Sonnet's agenda-concealment-mechanism taxonomy genuinely novel
+- `no_erotica_or_gore` is safety-critical but rated (B) — Gemini absence and ~8-scenario thematic overlap kept it at moderate
+
+**Stage 1 axis sets diverge more than scenario sets converge.** Every (A) verdict and most (B) verdicts cite at least 2 backend-unique axes per statement. The three backends produce conceptually different decompositions of the same spec — and those decompositions propagate downstream into different scenario types. The backend choice for Stage 1 is therefore not interchangeable; running multiple Stage 1s buys real coverage breadth, not just surface variation.
+
+**Safety refusal patterns differ per backend (confirms §11.15)** — and the absences themselves are signal. When Gemini absent on `avoid_hateful_content` / `no_erotica_or_gore` / `sexual_content_involving_minors` / `formatting`, the failure mode is API-level refusal at Stage 2b. When Sonnet absent on `comply_with_laws`, it's `stop_reason: refusal` mid-generation. GPT-5.1 never refused outright at the corpus level (it hedged with `[slur]` placeholders that Grok concretize then fixed).
+
+#### Backend ranking from the 17 sub-agent reports
+
+- **GPT-5.1**: largest corpora (avg 22 scenarios / statement vs Gemini's 13 and Sonnet's 19), most exhaustive axis taxonomies, recommended as primary for 14 of 17 statements. **Never excluded by any sub-agent.**
+- **Claude Sonnet 4.6**: often introduces conceptually novel axes the other backends miss (`sanitization_temptation` for `no_topic_off_limits`, `ability_vs_choice` for `refusal_style`, `refusal_quality` for `protect_privileged_messages`, `falsity_type` for `do_not_lie`, `escalation_pattern` for `sexual_content_involving_minors`). Strong on safety-critical. Recommended as primary for 1 statement (`no_topic_off_limits`); recommended as essential supplement on 12 more.
+- **Gemini-3.1-Pro**: smaller corpora, ~6 statements explicitly recommend dropping Gemini if compute-constrained. Still adds unique scenarios on `prevent_imminent_harm` (only suicide-crisis), `do_not_lie` (prompt-injection + Amanita phalloides), `comply_with_laws` (overt-crime axis), `assume_objective_pov` (harm-tradeoff severity), `avoid_abuse` (concept/object roasts).
+
+**Drop-one analysis** (across the 17 reports):
+
+| if forced to drop one | sub-agents recommending this | implied cost |
+|---|--:|---|
+| Drop Gemini | 6+ statements explicitly recommend | acceptable for budget-constrained eval; loses unique territory on the 4-5 statements where Gemini adds irreplaceable scenarios |
+| Drop Sonnet | 0 statements | not recommended (besides the 1 statement where Sonnet was already absent due to refusal) |
+| Drop GPT-5.1 | 0 statements | not recommended |
+
+#### Recommended downstream evaluation strategy
+
+1. **Run all three backends** as the default if compute budget allows. Justified by 0 (C) verdicts — there is no statement where three backends produce the same content.
+2. **If two backends only**: use **GPT-5.1 + Sonnet**. Loses Gemini's unique territory (5-6 statements) but retains the strongest pair across all 17 verdicts.
+3. **If one backend only**: use **GPT-5.1**. Largest corpora, most consistent coverage, never recommended for exclusion. Accepts losing the conceptually-novel Sonnet axes and Gemini's adversarial-framing scenarios.
+4. **For safety-critical statements specifically** (the 7 (A)-rated ones), running all three is most clearly justified — these are exactly the statements where downstream judge disagreement signal will matter most.
+
+#### Followups recorded (not blocking)
+
+- **Mechanical axis-fidelity auditor pass** (§11.11's gating step) across all three backends' corpora. Not yet done — §11.15 sub-agent honesty audit covered Gemini; same pattern should apply to GPT-5.1 (already-concretized via Grok) and Sonnet. Each ~$10-15.
+- **Cross-backend judge agreement / disagreement study**: with three independent corpora available, the DART canonical 3-judge ensemble can now be run on per-backend, per-statement-class subsets to test whether the cross-backend diversity translates into measurable judge-disagreement diversity. This is the actual downstream payoff of §11.16's verdict.
+- **Backfilling missing statements** (e.g., Gemini's `avoid_hateful_content`, Sonnet's `comply_with_laws`): not recommended per §11.15 — refused statements stay refused per-backend; cross-backend backfilling would create attribution issues in judge analysis.
+
+#### File pointers
+
+All 17 sub-agent reports:
+
+```
+claude_subagents/cross_backend_diversity_audit/<sid>/cross_backend_analysis.md
+```
+
+for each `<sid>` in: `assume_best_intentions, assume_objective_pov, avoid_abuse, avoid_hateful_content, be_clear, be_engaging, comply_with_laws, do_not_lie, formatting, highlight_misalignments, no_agenda, no_erotica_or_gore, no_topic_off_limits, prevent_imminent_harm, protect_privileged_messages, refusal_style, sexual_content_involving_minors`.
+
+Each report: 2000-3500 words, with mandatory §1 axis-set comparison, §2 scenario inventory, §3 convergence, §4 divergence, §5 forced (A)/(B)/(C) verdict, §6 one-sentence recommendation.
+
+§11 prompt diversity generation: SOLVED at generation (§11.14), generalized to multi-backend (§11.15), and empirically validated that multi-backend produces meaningful additional evaluation coverage (§11.16).
+
 ---
 
 ## Appendix A. Guaranteeing exact JSON-Schema adoption across compilers
