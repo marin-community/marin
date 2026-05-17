@@ -102,6 +102,50 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     return model_config_cls(**kwargs)
 
 
+def test_grug_moe_per_expert_lr_mask_splits_routed_experts_only():
+    optimizer_module = importlib.import_module("experiments.grug.moe.optimizer")
+    optimizer_config = optimizer_module.GrugMoeMuonHMayArchPerExpertLrConfig()
+    params = {
+        "blocks": [
+            {
+                "mlp": {
+                    "w_gate_up": jnp.ones((4, 8, 16)),
+                    "w_down": jnp.ones((4, 16, 8)),
+                    "shared": {
+                        "w_gate_up": jnp.ones((8, 16)),
+                        "w_down": jnp.ones((16, 8)),
+                    },
+                    "router": jnp.ones((8, 4)),
+                },
+                "attn": {
+                    "w_qkv": jnp.ones((8, 24)),
+                    "attn_gate": jnp.ones((8,)),
+                },
+                "mlp_gated_norm": {
+                    "w_up": jnp.ones((8, 128)),
+                    "w_down": jnp.ones((128, 8)),
+                },
+            }
+        ],
+        "token_embed": jnp.ones((128, 8)),
+        "output_proj": jnp.ones((8, 128)),
+    }
+
+    mask = optimizer_config.create_mask(params)
+
+    assert mask["blocks"][0]["mlp"]["w_gate_up"] == "muonh_expert"
+    assert mask["blocks"][0]["mlp"]["w_down"] == "muonh_expert"
+    assert mask["blocks"][0]["mlp"]["shared"]["w_gate_up"] == "muonh"
+    assert mask["blocks"][0]["mlp"]["shared"]["w_down"] == "muonh"
+    assert mask["blocks"][0]["attn"]["w_qkv"] == "muonh"
+    assert mask["blocks"][0]["mlp_gated_norm"]["w_up"] == "muonh"
+    assert mask["blocks"][0]["mlp_gated_norm"]["w_down"] == "muonh"
+    assert mask["blocks"][0]["mlp"]["router"] == "adam"
+    assert mask["blocks"][0]["attn"]["attn_gate"] == "adam"
+    assert mask["token_embed"] == "adamh_embed"
+    assert mask["output_proj"] == "adamh"
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
