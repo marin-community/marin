@@ -157,6 +157,21 @@ def test_grug_moe_per_expert_lr_gate1_candidate_scales():
     )
 
 
+def test_grug_moe_per_expert_lr_gate2_launcher_builds_selected_candidates_only():
+    gate2_module = importlib.import_module("experiments.grug.moe.muonh_may_arch_per_expert_lr_gate2")
+
+    steps = gate2_module._build_steps_for_candidates(("mid-ratio",), run_suffix="test")
+
+    assert gate2_module._GATE2_POINTS == ((1024, 9.00e18), (1280, 2.83e19))
+    assert [step.config.run_id for step in steps] == [
+        "muonh-may-arch-per-expert-lr-gate2-mid-ratio-test-d1024-9.00e18",
+        "muonh-may-arch-per-expert-lr-gate2-mid-ratio-test-d1280-2.83e19",
+    ]
+    for step in steps:
+        assert step.name.startswith("grug/muonh_may_arch_per_expert_lr_gate2/")
+        assert step.config.tracker.group == "muonh-may-arch-per-expert-lr-gate2"
+
+
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),

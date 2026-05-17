@@ -65,3 +65,24 @@
 - Result: submitted as `/kaiyue/iris-run-job-20260517-185409`.
 - Interpretation: pending.
 - Next action: validate add-on launcher, commit, push branch, submit add-on gate-1 job.
+
+### 2026-05-17 13:56 - MOE-PELR-003 babysit and gate-2 readiness
+
+- Hypothesis: If a gate-1 candidate passes at both small scales, we should advance only that candidate to gate 2 without resubmitting failed or incomplete candidates.
+- Command:
+
+```bash
+.venv/bin/iris --config lib/iris/examples/marin.yaml job run \
+  --no-wait \
+  --reserve v5p-8 \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.moe.muonh_may_arch_per_expert_lr_gate2 \
+    --candidate <passing-candidate>
+```
+
+- Config:
+  - Gate-2 points: d1024 at 9.00e18 FLOPs, d1280 at 2.83e19 FLOPs.
+  - Candidate set is explicit and must be derived from gate-1 effective-speedup results.
+- Result: gate-2 launcher prepared; no gate-2 job submitted yet.
+- Interpretation: pending gate-1 completion.
+- Next action: continue Iris monitoring and evaluate W&B metrics once all six gate-1 runs finish.

@@ -67,13 +67,13 @@ def _format_budget(budget: float) -> str:
     return f"{budget:.2e}".replace("+", "")
 
 
-def _format_run_id(candidate: str, hidden_dim: int, budget: float, run_suffix: str = "") -> str:
+def _format_run_id(candidate: str, hidden_dim: int, budget: float, run_suffix: str = "", stage: str = "gate1") -> str:
     budget_label = _format_budget(budget)
     normalized_suffix = run_suffix.strip()
     if normalized_suffix and not normalized_suffix.replace("-", "").replace("_", "").isalnum():
         raise ValueError("run_suffix may only contain letters, numbers, hyphens, and underscores")
     suffix = f"{normalized_suffix}-" if normalized_suffix else ""
-    return f"muonh-may-arch-per-expert-lr-gate1-{candidate}-{suffix}d{hidden_dim}-{budget_label}"
+    return f"muonh-may-arch-per-expert-lr-{stage}-{candidate}-{suffix}d{hidden_dim}-{budget_label}"
 
 
 def _sqrt_sparsity(model: GrugModelConfig) -> float:
@@ -118,7 +118,14 @@ def _muonh_optimizer(
     )
 
 
-def _build_step(candidate: str, hidden_dim: int, budget: float, run_suffix: str = "") -> ExecutorStep:
+def _build_step(
+    candidate: str,
+    hidden_dim: int,
+    budget: float,
+    run_suffix: str = "",
+    stage: str = "gate1",
+    group_name: str = _GROUP_NAME,
+) -> ExecutorStep:
     model, base_optimizer, batch_size, num_steps = build_from_heuristic(
         budget=budget,
         hidden_dim=hidden_dim,
@@ -134,8 +141,8 @@ def _build_step(candidate: str, hidden_dim: int, budget: float, run_suffix: str 
     )
     optimizer = _muonh_optimizer(base_optimizer, model=model, candidate=candidate)
 
-    run_id = _format_run_id(candidate, hidden_dim, budget, run_suffix=run_suffix)
-    step_name = f"grug/muonh_may_arch_per_expert_lr_gate1/{run_id}"
+    run_id = _format_run_id(candidate, hidden_dim, budget, run_suffix=run_suffix, stage=stage)
+    step_name = f"grug/muonh_may_arch_per_expert_lr_{stage}/{run_id}"
 
     return ExecutorStep(
         name=step_name,
@@ -154,7 +161,7 @@ def _build_step(candidate: str, hidden_dim: int, budget: float, run_suffix: str 
                 entity="marin-community",
                 project="marin_moe",
                 tags=["moe", "per_expert_lr", "gate1", candidate, f"d{hidden_dim}"],
-                group=_GROUP_NAME,
+                group=group_name,
                 name=None,
             ),
             optimizer=versioned(optimizer),
