@@ -222,6 +222,12 @@ REPAIR_REQUIRED_PER_SCENARIO = set(REPAIR_IMMUTABLE_FIELDS) | {
     "rubric",
 }
 
+# Strict-mode-only fields that the LM self-reports about its own output.
+# Present when `--strict-schema` is used (response_format=json_schema). Absent
+# otherwise — the parser tolerates their absence to keep backwards compat with
+# the V1/V2/V2.5/V3 outputs already on disk.
+REPAIR_PLACEHOLDER_FIELDS = {"contains_placeholder", "placeholder_notes"}
+
 
 def parse_repair_response(
     raw_text: str,
@@ -318,5 +324,17 @@ def parse_repair_response(
                 f"scenarios[{i}] BOTH scenario_text AND user_query are byte-identical "
                 f"to source — the LM echoed instead of rewriting"
             )
+
+        # Strict-mode-only fields (present iff the orchestrator used the strict
+        # json_schema response_format). Validate their types when present.
+        if "contains_placeholder" in rew:
+            if not isinstance(rew["contains_placeholder"], bool):
+                raise ValueError(
+                    f"scenarios[{i}].contains_placeholder must be bool, got {type(rew['contains_placeholder']).__name__}"
+                )
+            if "placeholder_notes" not in rew:
+                raise ValueError(f"scenarios[{i}] has contains_placeholder but no placeholder_notes")
+            if not isinstance(rew["placeholder_notes"], str):
+                raise ValueError(f"scenarios[{i}].placeholder_notes must be string")
 
     return items

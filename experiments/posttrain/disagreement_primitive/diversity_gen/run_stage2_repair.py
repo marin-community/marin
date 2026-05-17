@@ -47,6 +47,7 @@ from experiments.posttrain.disagreement_primitive.diversity_gen.parse_scenario i
     parse_repair_response,
 )
 from experiments.posttrain.disagreement_primitive.diversity_gen.prompts import (
+    REPAIR_OUTPUT_JSON_SCHEMA,
     STAGE2_REPAIR_SYSTEM_PROMPT,
     make_stage2_repair_iterative_prompt,
     make_stage2_repair_singlepass_prompt,
@@ -253,6 +254,7 @@ def process_statement_sync(
     max_completion_tokens: int,
     attempts_dir: Path,
     max_per_surface_value: int | None = None,
+    strict_schema: bool = False,
 ) -> RepairResult:
     sid = statement["id"]
     user_content = make_stage2_repair_singlepass_prompt(
@@ -260,6 +262,11 @@ def process_statement_sync(
         understanding_record=understanding,
         scenarios=source_scenarios,
         max_per_surface_value=max_per_surface_value,
+    )
+    response_format: dict[str, Any] = (
+        {"type": "json_schema", "json_schema": REPAIR_OUTPUT_JSON_SCHEMA}
+        if strict_schema
+        else {"type": "json_object"}
     )
 
     last_err: str | None = None
@@ -278,7 +285,7 @@ def process_statement_sync(
                     temperature=temperature,
                     max_completion_tokens=max_completion_tokens,
                     reasoning_effort="none",
-                    response_format={"type": "json_object"},
+                    response_format=response_format,
                 ),
             )
         except Exception as exc:
@@ -346,6 +353,10 @@ def main() -> None:
                     help="single_pass only: hard cap on how many scenarios may share the same "
                          "surface-dimension value (target referent / persona / country / domain). "
                          "Default None = use ⌈N/5⌉ (V2 pilot). Set 2 for V2.5a; set 1 for V2.5b.")
+    ap.add_argument("--strict-schema", action="store_true",
+                    help="Use OpenAI strict json_schema response_format (server-side schema enforcement). "
+                         "Adds two diagnostic fields per scenario: contains_placeholder + placeholder_notes "
+                         "(LM self-reports if it hedged or used a placeholder). Default off (json_object mode).")
     ap.add_argument("--run-tag", type=str, default=None,
                     help="optional short tag appended to the output run_id (e.g., 'v25a_cap2'). "
                          "Helps name parallel pilot runs without collisions.")
@@ -391,6 +402,7 @@ def main() -> None:
         "max_retries": args.max_retries,
         "max_completion_tokens": args.max_completion_tokens,
         "max_per_surface_value": args.max_per_surface_value,
+        "strict_schema": args.strict_schema,
         "source_set_b_dir": str(args.source_set_b_dir.resolve()),
         "stage1_dir": str(args.stage1_dir.resolve()),
         "spec_path": str(args.spec_path.resolve()),
@@ -443,7 +455,12 @@ def main() -> None:
                 attempts_dir=attempts_dir,
             )
             if args.mode == "single_pass":
-                return ex.submit(process_statement_sync, max_per_surface_value=args.max_per_surface_value, **common)
+                return ex.submit(
+                    process_statement_sync,
+                    max_per_surface_value=args.max_per_surface_value,
+                    strict_schema=args.strict_schema,
+                    **common,
+                )
             return ex.submit(process_statement_iterative, **common)
 
         futs = {_submit(sid): sid for sid in statement_ids}
@@ -483,6 +500,10 @@ def main() -> None:
                     "system_prompt": rew["system_prompt"],
                     "rubric": rew["rubric"],
                 }
+                # Pass through LM self-report fields when present (strict-schema runs).
+                if "contains_placeholder" in rew:
+                    rec["contains_placeholder"] = rew["contains_placeholder"]
+                    rec["placeholder_notes"] = rew.get("placeholder_notes", "")
                 fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 n_admitted += 1
             print(f"   [OK]   {sid}: {len(res.rewritten)} rewritten in {res.attempts} attempt(s)")

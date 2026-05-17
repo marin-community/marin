@@ -1,0 +1,23 @@
+{
+  "run_id": "20260516T232714Z_v2_aih",
+  "mode": "single_pass",
+  "model": "gpt-5.1",
+  "temperature": 1.0,
+  "max_retries": 3,
+  "max_completion_tokens": 30000,
+  "max_per_surface_value": null,
+  "source_set_b_dir": "/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage2_scenarios/combined_oaat_46",
+  "stage1_dir": "/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/disagreement_primitive/diversity_gen/gpt_5_1/stage1_understanding/combined_46",
+  "spec_path": "/lfs/skampere3/0/ahmedah/code/marin/.claude/worktrees/align/experiments/posttrain/specs/openai_model_spec.jsonl",
+  "statements": [
+    "avoid_info_hazards"
+  ],
+  "scenario_counts": {
+    "avoid_info_hazards": 19
+  },
+  "git_commit": "8e1b9a7ff",
+  "started_utc": "2026-05-16T23:27:14.604445+00:00",
+  "finished_utc": "2026-05-16T23:28:36.319736+00:00",
+  "n_admitted": 19,
+  "n_failed_statements": 0
+}
