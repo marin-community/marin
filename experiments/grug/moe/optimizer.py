@@ -639,6 +639,7 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
                 or path_lower.endswith(".attn_gate")
                 or ".router" in path_lower
                 or path_lower.endswith(".pko_doc_start_stat")
+                or path_lower.endswith(".bos_key_embed")
             ):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
