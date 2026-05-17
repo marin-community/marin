@@ -8,6 +8,8 @@ Two sub-corpora written under ``gs://marin-eu-west4/datakit/decontam/evals/``:
 - ``aa/<eval>/<split>.jsonl.gz`` -- AA Intelligence Index v4.0 core 8.
 - ``lmh/<task>/<split>.jsonl.gz`` -- every unique task in
   ``experiments/evals/task_configs.py`` bundles, loaded via lm-eval-harness.
+  Group names (``mmlu``, ``agieval``, ``bbh_zeroshot``, ``leaderboard_bbh``,
+  ...) are expanded to their leaf tasks; one file per leaf.
 
 Each record: ``{id: str, text: str}`` where ``text`` concatenates every
 string-typed field of the source row in deterministic key order. Generic
@@ -23,12 +25,22 @@ Submit on iris (eu-west4, CPU-only, has HF access):
     uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
         --priority interactive \\
         -- python experiments/datakit/decontam/prepare_eval_corpus.py
+
+The iris worker pulls lm-eval via the marin image's ``eval`` extras. To
+include ifeval / leaderboard_ifeval we depend on ``lm-eval[ifeval]`` so
+``langdetect`` is available; see ``lib/marin/pyproject.toml`` (the ``eval``
+extra). The script monkey-patches ``datasets.load_dataset`` to force
+``trust_remote_code=True`` and sets ``HF_ALLOW_CODE_EVAL=1`` before
+loading any task, so tasks shipping custom HF loading scripts (logiqa,
+piqa, ethics_*, crows_pairs_*, ...) and humaneval load without per-task
+plumbing.
 """
 
 import dataclasses
 import gzip
 import json
 import logging
+import os
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
@@ -348,67 +360,145 @@ def _materialize_first_nonempty_split(task) -> tuple[str, list] | None:
     return None
 
 
+def _flatten_task_dict(d: dict) -> Iterator[tuple[str, Any]]:
+    """Yield ``(task_name, task_obj)`` pairs from a (possibly nested) ``get_task_dict`` result.
+
+    lm-eval-harness returns groups as nested dicts keyed by ``ConfigurableGroup``
+    objects (``mmlu -> mmlu_stem -> {str_name: ConfigurableTask}``); only leaf
+    values are real tasks. Walk top-down and yield ``(str, ConfigurableTask)``
+    pairs only. ``ConfigurableGroup`` keys at the leaf level (single-task
+    groups) fall back to their ``.group`` attribute.
+    """
+    for k, v in d.items():
+        if isinstance(v, dict):
+            yield from _flatten_task_dict(v)
+            continue
+        name = k if isinstance(k, str) else getattr(k, "group", str(k))
+        yield (name, v)
+
+
+def _trust_remote_code_for_hf() -> None:
+    """Force ``trust_remote_code=True`` on every ``datasets.load_dataset`` call.
+
+    In ``datasets`` 4.x the ``HF_DATASETS_TRUST_REMOTE_CODE`` env var and
+    ``datasets.config.HF_DATASETS_TRUST_REMOTE_CODE`` flag were removed; only
+    the per-call kwarg is honored. lm-eval task configs don't pass it, so
+    tasks shipping custom HF loading scripts (piqa, logiqa*, ethics_*,
+    crows_pairs_*, social_iqa, ...) fail to load. Wrap ``load_dataset`` /
+    ``load_dataset_builder`` to always pass it. We're only ingesting public
+    eval text into a decon bloom — no model code is executed downstream.
+
+    Patches both the ``datasets`` module attrs AND any already-imported
+    ``from datasets import load_dataset`` bindings (lm-eval pulls
+    ``datasets`` transitively when this module is imported).
+
+    Also sets ``HF_ALLOW_CODE_EVAL=1`` so humaneval's ``code_eval`` metric
+    initializes without an interactive disclaimer.
+    """
+    import sys
+
+    import datasets
+
+    os.environ["HF_ALLOW_CODE_EVAL"] = "1"
+    original_load = datasets.load_dataset
+    original_builder = datasets.load_dataset_builder
+
+    def patched_load_dataset(*args, **kwargs):
+        kwargs.setdefault("trust_remote_code", True)
+        return original_load(*args, **kwargs)
+
+    def patched_builder(*args, **kwargs):
+        kwargs.setdefault("trust_remote_code", True)
+        return original_builder(*args, **kwargs)
+
+    datasets.load_dataset = patched_load_dataset  # type: ignore[assignment]
+    datasets.load_dataset_builder = patched_builder  # type: ignore[assignment]
+    for mod in list(sys.modules.values()):
+        if mod is None or mod is datasets:
+            continue
+        if getattr(mod, "load_dataset", None) is original_load:
+            mod.load_dataset = patched_load_dataset  # type: ignore[attr-defined]
+        if getattr(mod, "load_dataset_builder", None) is original_builder:
+            mod.load_dataset_builder = patched_builder  # type: ignore[attr-defined]
+
+
 def _prepare_lmh() -> None:
+    _trust_remote_code_for_hf()
     from lm_eval.tasks import get_task_dict
 
     names = _lmh_task_names()
     logger.info("lmh: %d unique task names from task_configs.py", len(names))
 
     succeeded = 0
+    skipped_existing = 0
     failed: list[tuple[str, str]] = []
     for name in names:
-        out_path = f"{OUTPUT_ROOT}/lmh/{name}/eval.jsonl.gz"
-        fs_, resolved = url_to_fs(out_path)
-        if fs_.exists(resolved):
-            logger.info("lmh/%s: exists, skipping", name)
-            succeeded += 1
-            continue
         try:
             task_dict = get_task_dict([name])
-            task = task_dict[name]
         except Exception as exc:
             logger.warning("lmh/%s: load failed: %s", name, exc)
             failed.append((name, f"load: {exc}"))
             continue
 
-        chosen = _materialize_first_nonempty_split(task)
-        if chosen is None:
-            logger.warning("lmh/%s: no docs in any split", name)
-            failed.append((name, "no docs"))
+        leaves = list(_flatten_task_dict(task_dict))
+        if not leaves:
+            logger.warning("lmh/%s: no leaf tasks after flatten", name)
+            failed.append((name, "no leaf tasks"))
             continue
-        split, docs = chosen
+        if len(leaves) > 1:
+            logger.info("lmh/%s: group expanded to %d leaf tasks", name, len(leaves))
 
-        def rows(task=task, docs=docs, split=split, name=name) -> Iterator[dict]:
-            for i, doc in enumerate(docs):
-                try:
-                    prompt = task.doc_to_text(doc) or ""
-                except Exception:
-                    prompt = ""
-                try:
-                    target = task.doc_to_target(doc) or ""
-                except Exception:
-                    target = ""
-                parts: list[str] = []
-                if prompt:
-                    parts.append(str(prompt))
-                if target:
-                    parts.append(str(target))
-                if isinstance(doc, dict):
-                    parts.append(_concat_strings(doc))
-                text = "\n\n".join(p for p in parts if p.strip())
-                if not text:
-                    continue
-                yield {"id": f"{name}-{split}-{i}", "text": text}
+        for child_name, task in leaves:
+            out_path = f"{OUTPUT_ROOT}/lmh/{child_name}/eval.jsonl.gz"
+            fs_, resolved = url_to_fs(out_path)
+            if fs_.exists(resolved):
+                logger.info("lmh/%s: exists, skipping", child_name)
+                skipped_existing += 1
+                continue
 
-        try:
-            n = _write_jsonl_gz(out_path, rows())
-            logger.info("lmh/%s: %d records (%s split) -> %s", name, n, split, out_path)
-            succeeded += 1
-        except Exception as exc:
-            logger.warning("lmh/%s: write failed: %s", name, exc)
-            failed.append((name, f"write: {exc}"))
+            chosen = _materialize_first_nonempty_split(task)
+            if chosen is None:
+                logger.warning("lmh/%s: no docs in any split", child_name)
+                failed.append((child_name, "no docs"))
+                continue
+            split, docs = chosen
 
-    logger.info("lmh summary: %d/%d succeeded, %d failed", succeeded, len(names), len(failed))
+            def rows(task=task, docs=docs, split=split, name=child_name) -> Iterator[dict]:
+                for i, doc in enumerate(docs):
+                    try:
+                        prompt = task.doc_to_text(doc) or ""
+                    except Exception:
+                        prompt = ""
+                    try:
+                        target = task.doc_to_target(doc) or ""
+                    except Exception:
+                        target = ""
+                    parts: list[str] = []
+                    if prompt:
+                        parts.append(str(prompt))
+                    if target:
+                        parts.append(str(target))
+                    if isinstance(doc, dict):
+                        parts.append(_concat_strings(doc))
+                    text = "\n\n".join(p for p in parts if p.strip())
+                    if not text:
+                        continue
+                    yield {"id": f"{name}-{split}-{i}", "text": text}
+
+            try:
+                n = _write_jsonl_gz(out_path, rows())
+                logger.info("lmh/%s: %d records (%s split) -> %s", child_name, n, split, out_path)
+                succeeded += 1
+            except Exception as exc:
+                logger.warning("lmh/%s: write failed: %s", child_name, exc)
+                failed.append((child_name, f"write: {exc}"))
+
+    logger.info(
+        "lmh summary: %d succeeded, %d skipped (existing), %d failed",
+        succeeded,
+        skipped_existing,
+        len(failed),
+    )
     if failed:
         for n, reason in failed:
             logger.info("  FAIL lmh/%s: %s", n, reason)
