@@ -101,35 +101,44 @@ def _list_parquet_recursive(root: str) -> list[str]:
 
 
 def _sample_eval_records(eval_root: str, n: int, seed: int) -> Iterator[tuple[str, str, str]]:
-    """Yield (eval_id, eval_text, subtree_key) for ``n`` randomly-chosen records.
+    """Yield (eval_id, eval_text, subtree_key) for ``n`` records.
 
-    Reservoir-samples across the whole eval corpus -- doesn't materialize
-    the full record set in memory.
+    Two-stage sampler that doesn't iterate the whole 1.8M-record corpus:
+
+    1. Uniformly pick ``n`` parquet files from the eval tree (with
+       replacement). Files have varying record counts (~80-58k), so this
+       biases toward small evals -- acceptable for a smoke-test recall
+       check across the eval landscape.
+    2. For each picked file, open it and select one random non-empty
+       record by absolute index via parquet metadata.
     """
     files = _list_parquet_recursive(eval_root)
     rng = random.Random(seed)
-    reservoir: list[tuple[str, str, str]] = []
-    seen = 0
     gcs = pa_fs.GcsFileSystem()
-    for f in files:
+    picked_files = [rng.choice(files) for _ in range(n)]
+    for f in picked_files:
         bare = f.removeprefix("gs://")
         rel = f.removeprefix(eval_root.rstrip("/") + "/")
         subtree_key = "/".join(rel.split("/")[:2])
         pf = pq.ParquetFile(bare, filesystem=gcs)
+        total = pf.metadata.num_rows
+        if total == 0:
+            continue
+        target_idx = rng.randint(0, total - 1)
+        # Walk batches until we cross ``target_idx``; cheap because each
+        # eval file is small (a few thousand rows max).
+        seen = 0
         for batch in pf.iter_batches(columns=["id", "text"], batch_size=2048):
             ids = batch.column("id").to_pylist()
             texts = batch.column("text").to_pylist()
-            for eid, t in zip(ids, texts, strict=True):
-                if not t:
-                    continue
-                if len(reservoir) < n:
-                    reservoir.append((str(eid), str(t), subtree_key))
-                else:
-                    j = rng.randint(0, seen)
-                    if j < n:
-                        reservoir[j] = (str(eid), str(t), subtree_key)
-                seen += 1
-    yield from reservoir
+            if seen + len(ids) <= target_idx:
+                seen += len(ids)
+                continue
+            local = target_idx - seen
+            eid, t = ids[local], texts[local]
+            if t:
+                yield (str(eid), str(t), subtree_key)
+            break
 
 
 def _paraphrase(client, text: str) -> str | None:

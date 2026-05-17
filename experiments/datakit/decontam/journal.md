@@ -145,6 +145,49 @@ Pre-staged for analysis once decon lands:
 After parquet run lands, re-size the bloom, restructure the DAG,
 submit on iris (eu-west4). 104 normalized sources, in-region scan.
 
+## Recall analysis (2026-05-17)
+
+Sampled 50 eval records uniformly from parquet eval files, planted four
+variants, ran the production bloom inline.
+
+| variant | flagged / 50 | recall |
+|---|---|---|
+| **verbatim** | 27 | **0.54** |
+| with_prefix | 27 | 0.54 |
+| with_suffix | 27 | 0.54 |
+| paraphrase  |  5 | 0.10 |
+
+**Surprise**: verbatim recall is 54%, not the ~100% you'd expect from a
+bloom built from the same exact text. **Cause**: the 13-gram + per-paragraph
+matching is structurally blind to short eval items. 19/23 unflagged
+verbatim records are under 200 chars; they yield zero 13-grams (no
+paragraph with 13+ words) so neither the build nor the scan ever inserts
+them. Affected families:
+
+* `agieval_gaokao_*` (Chinese benchmarks; whitespace tokenization on
+  CJK text effectively yields very few tokens)
+* `zhoblimp_*`, `blimp_nl_*`, `lm_syneval_*`, `turblimp_*`
+  (single-sentence linguistic-acceptability tasks)
+* `bbh_fewshot_boolean_expressions` and similar short-prompt MCQ items
+
+This is a structural decon ceiling: the 13-gram bloom is appropriate
+for paragraph-level passage contamination (which is the dominant
+contamination mode for web-scrape corpora) but cannot detect short-item
+contamination. Two options if we wanted to address it later:
+
+1. **Lower NGRAM_LENGTH** to e.g. 7. Recovers short items but inflates
+   false-positive rate against common-phrase ngrams.
+2. **Run a separate exact-match index** for items under N tokens
+   (simple set lookup over normalized strings).
+
+Paraphrase recall = 10% is expected — paraphrasing changes most
+13-grams. The bloom is designed to catch near-verbatim contamination,
+not semantic-level retraining contamination.
+
+Filler-prefix and filler-suffix variants did not affect recall
+(matched verbatim). That's good: the bloom is robust to local
+contextual noise around an eval-text quote.
+
 ## Analysis plan (placeholder; filled in as runs complete)
 
 1. **Per-source flag rates**: how many docs in each of the 104 sources
