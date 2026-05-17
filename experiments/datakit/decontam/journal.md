@@ -80,7 +80,27 @@ Submitted iris job `iris-run-prepare_eval_corpus-20260517-072359` with
 * LMH phase entered: `_lmh_task_names()` reports 355 unique task names
   (vs 180 found by verify's AST regex — the bundles include
   multi-line `EvalTaskConfig(...)` definitions the regex missed).
-* Status as of journal write: in progress.
+* 13.5 min in (07:37 UTC): 218 parquet files on GCS, ploughing through
+  `belebele_*` (122 language variants). Pace ~10-15 files/min →
+  estimated total ~60 min if pace holds.
+
+### 2026-05-17 — scaffolding committed while waiting
+
+Pre-staged for analysis once decon lands:
+
+* `count_docs.py` — rewritten to walk EVAL_ROOT recursively, group by
+  `aa/<eval>` and `lmh/<task>` subtrees, compute exact ngram inserts +
+  unique hashes via parquet batch reads.
+* `all_sources_decon.py` — collapsed 11 per-eval blooms + merge into
+  one combined bloom over EVAL_ROOT. ESTIMATED_DOC_COUNT bumped to 20M
+  as a placeholder; needs the real count_docs number once corpus lands.
+* `precision_analysis.py` — Claude-judge of sampled flagged corpus
+  docs against their matched eval text. CLI takes `--decon-output`,
+  `--source-name`, `--bloom-dir`, `--sample-size`.
+* `recall_analysis.py` — reservoir-sample eval records, plant four
+  variants (verbatim / with_prefix / with_suffix / paraphrase) into
+  synthetic shards, re-score against the combined bloom inline. Reports
+  per-variant recall. Untested (waits for the bloom).
 
 ### Earlier runs (this PR)
 
