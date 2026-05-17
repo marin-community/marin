@@ -44,17 +44,24 @@ from experiments.grug.moe.launch import (
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHMayArch1pctFinerLrConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
-_POINTS: tuple[tuple[int, float], ...] = (
-    (512, 2.19e17),
-    (768, 1.70e18),
-)
+# Original 8-run sweep at d512/d768 is content-hash cached; the entries
+# are commented out so a fresh ``iris job run`` only enqueues the new
+# d1024 follow-up trial below.
+#
+# _POINTS = ((512, 2.19e17), (768, 1.70e18))
+# _TRIALS = (
+#     ("qk-1p3-vo-0p7", {"qk_lr_scale": 1.3, "vo_lr_scale": 0.7}),
+#     ("qk-0p7-vo-1p3", {"qk_lr_scale": 0.7, "vo_lr_scale": 1.3}),
+#     ("mlpout-1p3-mlpin-0p7", {"mlp_out_lr_scale": 1.3, "mlp_in_lr_scale": 0.7}),
+#     ("mlpout-0p7-mlpin-1p3", {"mlp_out_lr_scale": 0.7, "mlp_in_lr_scale": 1.3}),
+# )
+#
+# Second-round extension: ``qk-1p2-vo-0p8`` at d1024 only. Motivated by
+# ``qk-1p3-vo-0p7`` tying for d768 leader (3.3002) — softens the
+# perturbation and tests whether the win generalizes to d1024.
+_POINTS: tuple[tuple[int, float], ...] = ((1024, 9.00e18),)
 
-_TRIALS: tuple[tuple[str, dict], ...] = (
-    ("qk-1p3-vo-0p7", {"qk_lr_scale": 1.3, "vo_lr_scale": 0.7}),
-    ("qk-0p7-vo-1p3", {"qk_lr_scale": 0.7, "vo_lr_scale": 1.3}),
-    ("mlpout-1p3-mlpin-0p7", {"mlp_out_lr_scale": 1.3, "mlp_in_lr_scale": 0.7}),
-    ("mlpout-0p7-mlpin-1p3", {"mlp_out_lr_scale": 0.7, "mlp_in_lr_scale": 1.3}),
-)
+_TRIALS: tuple[tuple[str, dict], ...] = (("qk-1p2-vo-0p8", {"qk_lr_scale": 1.2, "vo_lr_scale": 0.8}),)
 
 _WARMUP_FRACTION: float = 0.01
 _NUM_EXPERTS: int = 256
