@@ -131,14 +131,14 @@ class CausalSelfAttention(eqx.Module):
     # Allocated for every block when PKO is configured for the run; used
     # only on layers that actually take the PKO branch in ``__call__``.
     pko_doc_start_stat: Float[Array, "M D_half"] | None
-    # Learned per-head **BOS key** embedding, applied at every doc-start
-    # position in **every** layer (PKO or not). Shape
-    # ``(num_kv_heads, head_dim)``. Replaces the full rotated-half +
-    # stationary-half key vector at BOS positions (in the partial-rope /
-    # PKO paths, only the rotated half is overridden, since the stationary
-    # half already gets its own learned replacement above for PKO layers
-    # and is just the current token's stationary half for partial-rope
-    # layers).
+    # Learned per-head **BOS key** embedding, applied **before** RoPE at
+    # every doc-start position in **every** layer (PKO or not). Shape
+    # ``(num_kv_heads, head_dim)``. Replaces the full key vector at BOS
+    # positions; the replacement then participates in RoPE / partial RoPE
+    # and the PKO shift like any other key. In PKO layers, the stationary
+    # half at the BOS position itself is overwritten again by
+    # ``pko_doc_start_stat`` (since the PKO shift pulls in the previous
+    # doc's stationary half there).
     bos_key_embed: Float[Array, "M D"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -210,8 +210,8 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
 
         # Compute is_doc_start once if segment_ids are available, used by both
-        # the PKO stationary-half replacement and the post-RoPE BOS-key
-        # embedding override.
+        # the BOS key embedding (applied here, pre-RoPE) and the PKO stationary
+        # half replacement below.
         seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         is_doc_start: jax.Array | None = None
         if seg is not None:
@@ -224,6 +224,22 @@ class CausalSelfAttention(eqx.Module):
                     [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
                     axis=1,
                 )
+
+        # Apply the per-block learned BOS key embedding at every doc-start
+        # position in **every** layer (PKO or not), **before** RoPE. The
+        # replaced key then participates in RoPE and the PKO stationary-shift
+        # like any other key, so it picks up phase information from the
+        # absolute sequence position of the doc-start, and (in PKO layers) its
+        # stationary half propagates one position forward via the PKO shift to
+        # give the next token's stationary key a learned doc-start signal.
+        # In PKO layers the stationary half at the BOS position itself is
+        # then overwritten by ``pko_doc_start_stat`` further down (so only
+        # ``bos_key_embed[..., :half]`` survives at the BOS position; the
+        # ``bos_key_embed[..., half:]`` part survives one step later via the
+        # PKO shift).
+        if is_doc_start is not None and self.bos_key_embed is not None:
+            bos_full = jnp.broadcast_to(self.bos_key_embed[None, None, :, :], k.shape)
+            k = jnp.where(is_doc_start[..., None, None], bos_full, k)
 
         if use_partial_key_offset:
             # Partial RoPE: only rotate the first half of head dims.
@@ -257,20 +273,6 @@ class CausalSelfAttention(eqx.Module):
         else:
             q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
 
-        # Apply the per-block learned BOS key embedding at every doc-start position
-        # in **every** layer (PKO or not). This overrides the rotated half (always)
-        # and, for non-PKO layers, also the stationary half. For PKO layers the
-        # stationary half was already replaced by ``pko_doc_start_stat`` above; we
-        # only override the rotated half here so both learned variables co-exist.
-        if is_doc_start is not None and self.bos_key_embed is not None:
-            if use_partial_key_offset:
-                half = head_dim // 2
-                bos_rot = jnp.broadcast_to(self.bos_key_embed[None, None, :, :half], k[..., :half].shape)
-                k_rot_new = jnp.where(is_doc_start[..., None, None], bos_rot, k[..., :half])
-                k = jnp.concatenate([k_rot_new, k[..., half:]], axis=-1)
-            else:
-                bos_full = jnp.broadcast_to(self.bos_key_embed[None, None, :, :], k.shape)
-                k = jnp.where(is_doc_start[..., None, None], bos_full, k)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
