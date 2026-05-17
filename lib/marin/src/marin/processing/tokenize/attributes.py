@@ -55,7 +55,7 @@ class TokenizedAttrData(BaseModel):
     and co-partitioned with the source — both datakit invariants.
 
     Persisted as the step's ``.artifact``. Load via
-    ``Artifact.load(step, TokenizedAttrData)``.
+    ``Artifact.from_path(step, TokenizedAttrData)``.
 
     Attributes:
         version: Schema version.
@@ -281,9 +281,9 @@ def tokenize_attributes_step(
             "max_workers": max_workers,
         }
         if train_normalize is not None:
-            kwargs["train_source"] = Artifact.load(train_normalize, NormalizedData)
+            kwargs["train_source"] = Artifact.from_path(train_normalize, NormalizedData)
         if validation_normalize is not None:
-            kwargs["validation_source"] = Artifact.load(validation_normalize, NormalizedData)
+            kwargs["validation_source"] = Artifact.from_path(validation_normalize, NormalizedData)
         if worker_resources is not None:
             kwargs["worker_resources"] = worker_resources
         return tokenize_attributes(TokenizeAttributesConfig(**kwargs))

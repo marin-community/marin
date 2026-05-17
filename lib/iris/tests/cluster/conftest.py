@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass
 from unittest.mock import Mock
@@ -37,10 +38,10 @@ class _FakeLogClientFromService:
         self._log_service = log_service
 
     def query(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
-        return self._log_service.fetch_logs(request, ctx=None)
+        return asyncio.run(self._log_service.fetch_logs(request, ctx=None))
 
     def fetch_logs(self, request: logging_pb2.FetchLogsRequest) -> logging_pb2.FetchLogsResponse:
-        return self._log_service.fetch_logs(request, ctx=None)
+        return asyncio.run(self._log_service.fetch_logs(request, ctx=None))
 
     def get_table(self, namespace: str, schema: object) -> None:
         return None
@@ -136,8 +137,8 @@ class _HarnessController:
 
     def __init__(self) -> None:
         self.wake = Mock()
-        self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
+        self.last_scheduling_context = None
         self.autoscaler = None
         self.provider: object = Mock()
         self.has_direct_provider = False

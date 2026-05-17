@@ -21,7 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
-from sqlalchemy import func, select, text, tuple_
+from sqlalchemy import bindparam, func, select, text, tuple_
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import Constraint, constraints_from_resources, merge_constraints, validate_tpu_request
@@ -37,7 +37,6 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.budget import (
-    UserBudgetDefaults,
     compute_effective_band,
     compute_user_spend,
 )
@@ -56,7 +55,7 @@ from iris.cluster.controller.projections.endpoints import (
 )
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.controller.reads import SchedulableWorker, TaskJobSummary
+from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
     job_config_table,
@@ -86,6 +85,7 @@ from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
+    UserBudgetDefaults,
     WorkerId,
     is_job_finished,
 )
@@ -314,7 +314,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
     if task.state == job_pb2.TASK_STATE_PENDING and task.attempts and task.attempts[-1].state in TERMINAL_TASK_STATES:
         last = task.attempts[-1]
         proto.pending_reason = (
-            f"Retrying (attempt {len(task.attempts)}, " f"last: {job_pb2.TaskState.Name(last.state).lower()})"
+            f"Retrying (attempt {len(task.attempts)}, last: {job_pb2.TaskState.Name(last.state).lower()})"
         )
         proto.can_be_scheduled = True
     return proto
@@ -535,8 +535,9 @@ def _read_worker_detail(db: ControllerDB, worker_id: WorkerId) -> _WorkerDetail 
             )
             .where(
                 task_attempts_table.c.worker_id == worker_id,
-                tasks_table.c.state.in_(list(ACTIVE_TASK_STATES)),
-            )
+                tasks_table.c.state.in_(bindparam("active_states", expanding=True)),
+            ),
+            {"active_states": list(ACTIVE_TASK_STATES)},
         ).all()
     return _WorkerDetail(
         worker=worker,
@@ -748,7 +749,8 @@ def _worker_roster(db: ControllerDB) -> list[tuple[Any, dict]]:
                 worker_attributes_table.c.str_value,
                 worker_attributes_table.c.int_value,
                 worker_attributes_table.c.float_value,
-            ).where(worker_attributes_table.c.worker_id.in_(worker_ids))
+            ).where(worker_attributes_table.c.worker_id.in_(bindparam("worker_ids", expanding=True))),
+            {"worker_ids": list(worker_ids)},
         ).all()
         attrs_by_worker: dict[str, dict[str, str | int | float]] = {}
         for row in attr_rows:
@@ -767,6 +769,7 @@ _ACTIVE_JOB_STATES = (
 
 def _live_user_stats(db: ControllerDB) -> list[UserStats]:
     """Aggregate job/task counts per user for active (non-terminal) jobs."""
+    active_states = list(_ACTIVE_JOB_STATES)
     with db.read_snapshot() as tx:
         job_rows = tx.execute(
             select(
@@ -774,8 +777,9 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
                 jobs_table.c.state,
                 func.count().label("cnt"),
             )
-            .where(jobs_table.c.state.in_(list(_ACTIVE_JOB_STATES)))
-            .group_by(jobs_table.c.user_id, jobs_table.c.state)
+            .where(jobs_table.c.state.in_(bindparam("active_states", expanding=True)))
+            .group_by(jobs_table.c.user_id, jobs_table.c.state),
+            {"active_states": active_states},
         ).all()
         task_rows = tx.execute(
             select(
@@ -784,8 +788,9 @@ def _live_user_stats(db: ControllerDB) -> list[UserStats]:
                 func.count().label("cnt"),
             )
             .select_from(tasks_table.join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id))
-            .where(jobs_table.c.state.in_(list(_ACTIVE_JOB_STATES)))
-            .group_by(jobs_table.c.user_id, tasks_table.c.state)
+            .where(jobs_table.c.state.in_(bindparam("active_states", expanding=True)))
+            .group_by(jobs_table.c.user_id, tasks_table.c.state),
+            {"active_states": active_states},
         ).all()
     by_user: dict[str, UserStats] = {}
     for row in job_rows:
@@ -873,11 +878,12 @@ class ControllerProtocol(Protocol):
 
     def wake(self) -> None: ...
 
-    def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext: ...
-
     def get_job_scheduling_diagnostics(self, job_wire_id: str) -> str | None: ...
 
     def begin_checkpoint(self) -> tuple[str, Any]: ...
+
+    @property
+    def last_scheduling_context(self) -> SchedulingContext | None: ...
 
     @property
     def autoscaler(self) -> AutoscalerProtocol | None: ...
@@ -1003,7 +1009,7 @@ class ControllerServiceImpl:
             with self._db.read_snapshot() as tx:
                 return not reads.has_unfinished_worker_attempts(tx, job_id)
 
-        return ExponentialBackoff(initial=0.05, maximum=1.0, factor=1.5).wait_until(drained, timeout=wait)
+        return ExponentialBackoff(initial=1.0, maximum=10.0, factor=2).wait_until(drained, timeout=wait)
 
     def _replace_finished_job(self, cur, job_id: JobName) -> bool:
         """Attempt to replace a terminal job; signal whether a drain is needed.
@@ -1312,7 +1318,6 @@ class ControllerServiceImpl:
             request=redact_request_env_vars(reconstructed_request),
         )
 
-    @on_loop
     def get_job_state(
         self,
         request: controller_pb2.Controller.GetJobStateRequest,
@@ -1329,7 +1334,10 @@ class ControllerServiceImpl:
 
         with self._db.read_snapshot() as tx:
             rows = tx.execute(
-                select(jobs_table.c.job_id, jobs_table.c.state).where(jobs_table.c.job_id.in_(wire_ids))
+                select(jobs_table.c.job_id, jobs_table.c.state).where(
+                    jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True))
+                ),
+                {"job_ids": wire_ids},
             ).all()
 
         states = {row.job_id.to_wire(): int(row.state) for row in rows}

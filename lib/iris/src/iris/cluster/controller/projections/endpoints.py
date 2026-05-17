@@ -303,7 +303,10 @@ class EndpointsProjection:
                 owning_job, _ = row.task_id.require_task()
                 if owning_job.to_wire() in job_id_set:
                     to_remove.append(row.endpoint_id)
-        cur.execute(delete(endpoints_table).where(endpoints_table.c.job_id.in_(list(job_ids))))
+        cur.execute(
+            delete(endpoints_table).where(endpoints_table.c.job_id.in_(bindparam("job_ids", expanding=True))),
+            {"job_ids": list(job_ids)},
+        )
         if not to_remove:
             return []
 
