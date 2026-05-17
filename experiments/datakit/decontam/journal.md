@@ -289,7 +289,93 @@ suitable.
 The 258× difference in flag rate alone shows the code-corpus problem —
 the bloom is firing on idiom overlap, not contamination.
 
-## Analysis plan (placeholder; filled in as runs complete)
+## Synthesis (2026-05-17)
+
+End-to-end the pipeline lands and produces useful decon for prose
+corpora, but the precision analysis reveals two structural limits
+operators need to understand before consuming the output.
+
+### What works
+
+* **AA + LMH eval-corpus prep is complete.** 8/8 AA evals + 850/944
+  LMH leaves (90%) written as parquet. The 94 misses split into 40
+  "datasets 4.x dropped `.py` loader support" and 53
+  `include_base_44_*` not registered in our pinned lm-eval commit;
+  both groups need upstream changes to recover.
+* **Combined bloom is built and consumed correctly.** 21.78M unique
+  ngrams, 50M sizing, FPR=1e-9, ~270 MB filter at
+  `gs://marin-eu-west4/datakit/bloom/_combined_5eebba96`.
+* **All-sources decon completes.** 113/113 sources marked, output at
+  `gs://marin-eu-west4/tmp/ttl=7d/rav/decon-all-sources-v1/datakit/decon/<source>/`.
+* **Filler-prefix / filler-suffix recall is 100% of verbatim** —
+  the bloom is robust to local contextual noise around quoted eval
+  text, which is the realistic contamination shape in web-scrape
+  corpora.
+
+### Two structural limits
+
+**1. Short eval items are invisible to the bloom.**
+
+54% verbatim recall (sampled, n=50). 19/23 misses are eval texts
+under 200 chars: agieval Chinese, zhoblimp / blimp_nl / lm_syneval
+syntax tasks, bbh boolean-expressions. These produce zero 13-grams per
+paragraph so the bloom doesn't represent them, by construction. **The
+13-gram approach is a paragraph-contamination detector, not a
+short-item detector.**
+
+To address: lower `NGRAM_LENGTH` (e.g. 7-8), OR maintain a separate
+exact-string index for items under N tokens. Both have FPR tradeoffs.
+
+**2. Code-vs-code matching mis-fires on shared idioms.**
+
+cp/biodiversity (academic prose, 19 GB): 16 flagged docs, strict
+precision 0.31 / lenient 0.69. The failures are eval-source-overlap
+(Bacon's Novum Organum quoted by MMLU-Pro) which is arguably *correct*
+contamination behavior.
+
+coderforge (OpenHands agent logs, 12.8 GB): **4129 flagged docs**
+(258× biodiversity's flag count), strict precision **0.00**. The
+13-gram bloom matches on shared open-source code idioms (`import
+tornado`, function signatures, common Python boilerplate) rather than
+substantive content overlap. None of the sampled 50 were genuine
+contamination.
+
+To address: exclude `code2text_*` from the combined bloom (these are
+the worst offenders — they're literal OSS code snippets), OR build a
+code-specific decon path using function-level AST hashes.
+
+### Operational recommendations
+
+For consumers of the decon output:
+
+* **Trust the flags for prose corpora.** Biodiversity-style flags are
+  ~70% legitimate (eval text or its primary source appearing
+  verbatim).
+* **Treat code-corpus flags with suspicion.** Coderforge-style flags
+  are essentially noise from idiom collisions. Don't drop code-corpus
+  docs based on this bloom alone.
+* **Don't rely on the bloom to catch short-item contamination.**
+  Boolean MCQs, Chinese-character benchmarks, and other ≤13-word eval
+  items aren't in the bloom and won't be detected. Use a separate
+  exact-match index for those if needed.
+
+### Per-source flag rates
+
+Computed by `flag_rates.py` iris job. Numbers below are placeholders —
+filled in once `bo0k1lj14` lands.
+
+| metric | value |
+|---|---|
+| total records across 113 sources | TBD |
+| total flagged | TBD |
+| overall flag rate | TBD |
+| top-10 sources by flag rate | TBD |
+
+(The earlier coderforge 258× biodiversity differential foreshadows what
+this table will show: code/agent corpora dominate the flag count even
+though most flags are false positives.)
+
+## Analysis plan
 
 1. **Per-source flag rates**: how many docs in each of the 104 sources
    got flagged? Are rates plausible (small fraction) or alarming
