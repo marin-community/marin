@@ -617,6 +617,14 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
                     "adamh_embed": adamh_transform_at(learning_rate),
                     "adamh": adamh_transform_at(learning_rate),
                     "adam": adam_transform(),
+                    # Unused branch added to mirror the optax.multi_transform shape
+                    # of GrugMoeMuonHMayArchAuroraTargetConfig. No params route to
+                    # this label (see ``create_mask``), so it's a pure JIT-cache /
+                    # XLA-graph structural change — tests whether the
+                    # AuroraTargetConfig's ~7% TPS boost (vs this GNMuonHConfig
+                    # baseline) comes from the multi_transform layout rather
+                    # than any actual Aurora computation.
+                    "aurorah_unused": muonh_transform(),
                 },
                 self.create_mask,
             )
