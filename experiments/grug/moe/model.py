@@ -189,8 +189,25 @@ class CausalSelfAttention(eqx.Module):
             )
             q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
             # Shift stationary key dims forward by one position (enables 1-layer induction).
+            # At doc-start positions, fall back to the current token's own stationary
+            # half so PKO does not leak the prior doc's last-token info past the
+            # ``block_cross_document_attention`` segment mask. ``segment_ids`` from
+            # the attention mask tags each token with its doc id; a position is a
+            # doc-start iff its segment id differs from the previous position's.
             k_stationary = k[..., half:]
-            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            prev_stationary = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+            if segment_ids is not None:
+                is_doc_start = jnp.concatenate(
+                    [
+                        jnp.ones_like(segment_ids[:, :1], dtype=bool),
+                        segment_ids[:, 1:] != segment_ids[:, :-1],
+                    ],
+                    axis=1,
+                )
+                k_shifted = jnp.where(is_doc_start[..., None, None], k_stationary, prev_stationary)
+            else:
+                k_shifted = prev_stationary
             k = jnp.concatenate([k_rot, k_shifted], axis=-1)
         elif use_partial_rope:
             # Partial RoPE only (no key shift): rotate first half, leave rest stationary.
