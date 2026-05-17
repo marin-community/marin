@@ -84,6 +84,15 @@ class GrugModelConfig:
     use_partial_rope: bool = False
     # Force the last layer to use long sliding window + PKO.
     last_layer_pko: bool = False
+    # Per-layer scalar gate on the shared expert contribution.
+    # ``"none"``       — no gate, ``shared_out`` unchanged (current default).
+    # ``"sigmoid"``    — ``shared_out *= sigmoid(gate @ x)``; gate ∈ [0, 1],
+    #                    starts at 0.5 with zero-init.
+    # ``"sigmoid_2x"`` — ``shared_out *= 2 * sigmoid(gate @ x)``; gate ∈
+    #                    [0, 2], starts at 1.0 (init-neutral vs baseline).
+    # The learned ``shared_gate`` weight has shape ``(hidden_dim, 1)`` per
+    # block, zero-init, routed to the small-LR ``adam`` group.
+    shared_gate_mode: str = "none"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -101,6 +110,10 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.shared_gate_mode not in ("none", "sigmoid", "sigmoid_2x"):
+            raise ValueError(
+                f"shared_gate_mode must be one of 'none' / 'sigmoid' / 'sigmoid_2x'; got {self.shared_gate_mode!r}"
+            )
 
     @property
     def inferred_head_dim(self) -> int:
@@ -488,6 +501,10 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    # Per-layer scalar gate on shared-expert output. Shape (hidden_dim, 1),
+    # zero-init, only allocated when ``cfg.shared_gate_mode != "none"``.
+    shared_gate: jax.Array | None
+    cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
@@ -497,6 +514,9 @@ class Block(eqx.Module):
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        shared_gate: jax.Array | None = None
+        if cfg.shared_gate_mode != "none" and shared is not None:
+            shared_gate = reshard(jnp.zeros((cfg.hidden_dim, 1)), P(None, None))
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -505,6 +525,8 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            shared_gate=shared_gate,
+            cfg=cfg,
         )
 
     @named_call
@@ -522,7 +544,15 @@ class Block(eqx.Module):
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            shared_out = self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            if self.shared_gate is not None:
+                # ``mlp_in @ shared_gate`` → ``(B, S, 1)`` scalar per token.
+                gate_logits = jnp.einsum("bsd,dx->bsx", mlp_in, self.shared_gate)
+                gate = jax.nn.sigmoid(gate_logits)
+                if self.cfg.shared_gate_mode == "sigmoid_2x":
+                    gate = 2 * gate
+                shared_out = shared_out * gate
+            mlp_out = mlp_out + shared_out
         x = x + mlp_out
         return x, router_stats
 
