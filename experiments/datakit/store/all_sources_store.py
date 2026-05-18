@@ -25,6 +25,8 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``)::
 """
 
 import logging
+import os
+import re
 
 from fray import ResourceConfig
 from marin.datakit.decon import DeconAttributes
@@ -66,14 +68,25 @@ def _is_excluded(name: str) -> bool:
     return any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES)
 
 
+_HASH_LEN = 8
+"""Length of the StepSpec content-hash suffix on every output dir, in hex chars."""
+
+
 def _resolve_artifact_dir(root: str, source_name: str) -> str:
     """Return ``<root>/<source_name>_<hash>`` for the single hashed dir whose
-    ``artifact.json`` is present. Raises if zero or many match.
+    ``artifact.json`` is present.
+
+    The match is anchored on the leaf component plus an 8-hex hash. A loose
+    ``<source_name>_*`` glob would over-match siblings sharing a prefix --
+    e.g. ``nemotron_cc_v2_1/high_quality_*`` also matches
+    ``high_quality_dqa_<hash>``, ``high_quality_synthetic_<hash>``, etc.
     """
+    source_leaf = source_name.rsplit("/", 1)[-1]
+    leaf_re = re.compile(rf"^{re.escape(source_leaf)}_[0-9a-f]{{{_HASH_LEN}}}$")
     candidates = [
         p.rstrip("/")
         for p in fsspec_glob(f"{root.rstrip('/')}/{source_name}_*")
-        if fsspec_exists(f"{p.rstrip('/')}/artifact.json")
+        if leaf_re.match(os.path.basename(p.rstrip("/"))) and fsspec_exists(f"{p.rstrip('/')}/artifact.json")
     ]
     if len(candidates) != 1:
         raise RuntimeError(f"Expected exactly one artifact dir under {root!r} for {source_name!r}, found {candidates}")
