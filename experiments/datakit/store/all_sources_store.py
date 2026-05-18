@@ -30,15 +30,13 @@ from fray import ResourceConfig
 from marin.datakit.decon import DeconAttributes
 from marin.datakit.sources import all_sources
 from marin.execution.artifact import Artifact
-from marin.processing.classification.datakit_store import (
-    BuildClusteredStoreConfig,
-    ClusterAssignAttrData,
-    build_clustered_store,
-)
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from marin.utils import fsspec_exists, fsspec_glob
 from rigging.log_setup import configure_logging
+
+from experiments.datakit.cluster.v0.assign import AssignmentAttrData
+from experiments.datakit.store.datakit_store import build_clustered_store
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +87,7 @@ def main() -> None:
 
     tokenize: dict[str, TokenizedAttrData] = {}
     decontam: dict[str, DeconAttributes] = {}
-    cluster_assign: dict[str, ClusterAssignAttrData] = {}
+    cluster_assign: dict[str, AssignmentAttrData] = {}
 
     for source_name in all_sources():
         if _is_excluded(source_name):
@@ -98,12 +96,12 @@ def main() -> None:
         tokenize[source_name] = Artifact.from_path(_resolve_artifact_dir(TOKENIZE_ROOT, source_name), TokenizedAttrData)
         decontam[source_name] = Artifact.from_path(_resolve_artifact_dir(DECONTAM_ROOT, source_name), DeconAttributes)
         cluster_assign[source_name] = Artifact.from_path(
-            _resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, source_name), ClusterAssignAttrData
+            _resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, source_name), AssignmentAttrData
         )
 
     logger.info("resolved %d sources", len(tokenize))
 
-    config = BuildClusteredStoreConfig(
+    artifact = build_clustered_store(
         tokenize=tokenize,
         decontam=decontam,
         cluster_assign=cluster_assign,
@@ -114,7 +112,6 @@ def main() -> None:
         worker_resources=WORKER_RESOURCES,
         max_workers=MAX_WORKERS,
     )
-    artifact = build_clustered_store(config)
 
     logger.info(
         "done: %d clusters, %d total docs, %d total tokens -> %s",

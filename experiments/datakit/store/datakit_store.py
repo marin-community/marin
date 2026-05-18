@@ -3,8 +3,8 @@
 
 """Datakit -> per-cluster Levanter store: single map-side Zephyr pass.
 
-Sibling to :mod:`marin.processing.classification.consolidate`, specialized for
-the datakit attribute datasets that the global pipelines produce:
+Shape mirrors :mod:`marin.processing.classification.consolidate`, specialized
+for the datakit attribute datasets that the global pipelines produce:
 
     tokenize        per-source ``{id, input_ids}``, dense, sorted by id
     decontam        per-source ``{id, attributes: {contaminated, ...}}``, dense
@@ -35,7 +35,6 @@ plain Python dict (no Zephyr group_by, no shuffle) and calls
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import os
 from collections import defaultdict
@@ -50,39 +49,19 @@ from levanter.store.cache import (
     _merge_sharded_ledgers,
     write_levanter_cache,
 )
-from pydantic import BaseModel
-from rigging.filesystem import url_to_fs
-from zephyr import Dataset, ZephyrContext, counters
-from zephyr.dataset import ShardInfo, format_shard_path
-
 from marin.datakit.decon import DeconAttributes
 from marin.execution.artifact import Artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from marin.utils import fsspec_exists, fsspec_glob
+from pydantic import BaseModel
+from rigging.filesystem import url_to_fs
+from zephyr import Dataset, ZephyrContext, counters
+from zephyr.dataset import ShardInfo, format_shard_path
+
+from experiments.datakit.cluster.v0.assign import AssignmentAttrData
 
 logger = logging.getLogger(__name__)
-
-
-class ClusterAssignAttrData(BaseModel):
-    """Co-partitioned cluster-assignment attrs for one source.
-
-    Field-for-field mirror of
-    ``experiments.datakit.cluster.v0.assign.AssignmentAttrData`` so the same
-    ``artifact.json`` deserializes into either class. Defined here because
-    ``lib/`` cannot import from ``experiments/``.
-    """
-
-    version: str = "v1"
-    output_dir: str
-    source_main_dir: str
-    embedding_output_dir: str
-    k_train: int
-    k_views: list[int]
-    counters: dict[str, int] = {}
-
-    def shard_paths(self) -> list[str]:
-        return sorted(fsspec_glob(f"{self.output_dir.rstrip('/')}/*.parquet"))
 
 
 class ClusterCacheStats(BaseModel):
@@ -124,42 +103,6 @@ class ClusteredStoreData(BaseModel):
     counters: dict[str, int]
 
 
-@dataclasses.dataclass(frozen=True, kw_only=True)
-class BuildClusteredStoreConfig:
-    """Config for :func:`build_clustered_store`.
-
-    All four input dicts must agree on source names (the sources to include in
-    the store). Every included source's ``TokenizedAttrData.source_main_dirs[split]``
-    must appear as a key in ``dedup.sources`` -- callers excluding sources from
-    dedup (e.g. ``safety_pt/*``, ``climblab-ja``) should also drop them from
-    ``tokenize`` / ``decontam`` / ``cluster_assign`` so this contract holds.
-    """
-
-    tokenize: dict[str, TokenizedAttrData]
-    decontam: dict[str, DeconAttributes]
-    cluster_assign: dict[str, ClusterAssignAttrData]
-    dedup: FuzzyDupsAttrData
-
-    output_path: str
-    cluster_view: int = 40
-    split: str = "train"
-
-    worker_resources: ResourceConfig = dataclasses.field(
-        default_factory=lambda: ResourceConfig(cpu=2, ram="16g", disk="10g")
-    )
-    max_workers: int = 4096
-    levanter_batch_size: int | None = None
-
-    def __post_init__(self) -> None:
-        if not self.tokenize:
-            raise ValueError("BuildClusteredStoreConfig: tokenize is empty")
-        for label, d in (("decontam", self.decontam), ("cluster_assign", self.cluster_assign)):
-            if set(d) != set(self.tokenize):
-                missing = sorted(set(self.tokenize) - set(d))
-                extra = sorted(set(d) - set(self.tokenize))
-                raise ValueError(f"{label} source set must equal tokenize: " f"missing={missing!r}, extra={extra!r}")
-
-
 # ---------------------------------------------------------------------------
 # Shard input spec (per-source-shard 4-tuple of paths + global indexing).
 # ---------------------------------------------------------------------------
@@ -170,7 +113,7 @@ def _per_source_shard_tuples(
     source_name: str,
     tokenize: TokenizedAttrData,
     decontam: DeconAttributes,
-    cluster_assign: ClusterAssignAttrData,
+    cluster_assign: AssignmentAttrData,
     dedup_attr_dir: str,
     split: str,
 ) -> list[dict[str, str]]:
@@ -363,7 +306,7 @@ def _join_filter_bucket_shard(
 # ---------------------------------------------------------------------------
 
 
-def _validate_cluster_view(cluster_assign: dict[str, ClusterAssignAttrData], cluster_view: int) -> str:
+def _validate_cluster_view(cluster_assign: dict[str, AssignmentAttrData], cluster_view: int) -> str:
     """Check ``cluster_view`` is materialized by every assignment artifact; return its column name."""
     for name, asg in cluster_assign.items():
         valid_views = {asg.k_train, *asg.k_views}
@@ -435,37 +378,67 @@ def _merge_per_cluster_ledgers(
     return clusters
 
 
-def build_clustered_store(config: BuildClusteredStoreConfig) -> ClusteredStoreData:
+def build_clustered_store(
+    *,
+    tokenize: dict[str, TokenizedAttrData],
+    decontam: dict[str, DeconAttributes],
+    cluster_assign: dict[str, AssignmentAttrData],
+    dedup: FuzzyDupsAttrData,
+    output_path: str,
+    cluster_view: int = 40,
+    split: str = "train",
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int = 4096,
+    levanter_batch_size: int | None = None,
+) -> ClusteredStoreData:
     """Single map-side Zephyr pass: 4-way join + filter + per-cluster Levanter caches.
 
-    See module docstring for the per-shard logic. Returns a
-    :class:`ClusteredStoreData` describing the per-cluster caches, and saves
-    the artifact at ``<output_path>/artifact.json``.
+    See module docstring for the per-shard logic.
+
+    Every source name must appear in ``tokenize``, ``decontam``, and
+    ``cluster_assign``; every included source's
+    ``TokenizedAttrData.source_main_dirs[split]`` must appear as a key in
+    ``dedup.sources`` (so the caller is responsible for dropping sources
+    excluded from dedup, e.g. ``safety_pt/*`` / ``climblab-ja``).
+
+    Returns a :class:`ClusteredStoreData` describing the per-cluster caches
+    and saves the artifact at ``<output_path>/artifact.json``.
     """
-    cluster_col = _validate_cluster_view(config.cluster_assign, config.cluster_view)
+    if not tokenize:
+        raise ValueError("build_clustered_store: tokenize is empty")
+    for label, d in (("decontam", decontam), ("cluster_assign", cluster_assign)):
+        if set(d) != set(tokenize):
+            missing = sorted(set(tokenize) - set(d))
+            extra = sorted(set(d) - set(tokenize))
+            raise ValueError(f"{label} source set must equal tokenize: missing={missing!r}, extra={extra!r}")
+
+    if worker_resources is None:
+        worker_resources = ResourceConfig(cpu=2, ram="16g", disk="10g")
+
+    cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
     logger.info(
         "build_clustered_store: %d sources, cluster_view=%d (column=%s), split=%s -> %s",
-        len(config.tokenize),
-        config.cluster_view,
+        len(tokenize),
+        cluster_view,
         cluster_col,
-        config.split,
-        config.output_path,
+        split,
+        output_path,
     )
 
     shard_specs: list[dict[str, str]] = []
-    for source_name in sorted(config.tokenize):
-        tok = config.tokenize[source_name]
-        decon = config.decontam[source_name]
-        cluster_asg = config.cluster_assign[source_name]
-        main_dir = tok.source_main_dirs.get(config.split)
+    for source_name in sorted(tokenize):
+        tok = tokenize[source_name]
+        decon = decontam[source_name]
+        cluster_asg = cluster_assign[source_name]
+        main_dir = tok.source_main_dirs.get(split)
         if main_dir is None:
-            raise ValueError(f"{source_name}: tokenize has no source_main_dir for split={config.split!r}")
+            raise ValueError(f"{source_name}: tokenize has no source_main_dir for split={split!r}")
         if cluster_asg.source_main_dir != main_dir:
             raise ValueError(
                 f"{source_name}: cluster_assign.source_main_dir={cluster_asg.source_main_dir!r} "
-                f"!= tokenize.source_main_dirs[{config.split!r}]={main_dir!r}"
+                f"!= tokenize.source_main_dirs[{split!r}]={main_dir!r}"
             )
-        dedup_attr_dir = _resolve_dedup_attr_dir(source_name=source_name, main_output_dir=main_dir, dedup=config.dedup)
+        dedup_attr_dir = _resolve_dedup_attr_dir(source_name=source_name, main_output_dir=main_dir, dedup=dedup)
         shard_specs.extend(
             _per_source_shard_tuples(
                 source_name=source_name,
@@ -473,21 +446,19 @@ def build_clustered_store(config: BuildClusteredStoreConfig) -> ClusteredStoreDa
                 decontam=decon,
                 cluster_assign=cluster_asg,
                 dedup_attr_dir=dedup_attr_dir,
-                split=config.split,
+                split=split,
             )
         )
 
-    logger.info("build_clustered_store: %d input shards across %d sources", len(shard_specs), len(config.tokenize))
+    logger.info("build_clustered_store: %d input shards across %d sources", len(shard_specs), len(tokenize))
     if not shard_specs:
         raise ValueError("No input shards resolved -- nothing to do")
 
     ctx = ZephyrContext(
-        resources=config.worker_resources,
-        max_workers=min(config.max_workers, len(shard_specs)),
+        resources=worker_resources,
+        max_workers=min(max_workers, len(shard_specs)),
         name="datakit-clustered-store",
     )
-    levanter_batch_size = config.levanter_batch_size
-    output_path = config.output_path
     ds = Dataset.from_list(shard_specs).map_shard(
         lambda items, shard, cc=cluster_col, op=output_path, lbs=levanter_batch_size: _join_filter_bucket_shard(
             items, shard, cluster_col=cc, output_path=op, levanter_batch_size=lbs
@@ -504,13 +475,13 @@ def build_clustered_store(config: BuildClusteredStoreConfig) -> ClusteredStoreDa
 
     clusters = _merge_per_cluster_ledgers(map_shard_results=outcome.results, output_path=output_path)
 
-    tokenizer = next(iter(config.tokenize.values())).tokenizer
+    tokenizer = next(iter(tokenize.values())).tokenizer
     artifact = ClusteredStoreData(
         cache_path=output_path,
-        cluster_view=config.cluster_view,
-        split=config.split,
+        cluster_view=cluster_view,
+        split=split,
         clusters=clusters,
-        source_names=sorted(config.tokenize),
+        source_names=sorted(tokenize),
         tokenizer=tokenizer,
         counters=dict(outcome.counters),
     )
