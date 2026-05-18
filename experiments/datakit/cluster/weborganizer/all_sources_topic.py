@@ -65,11 +65,13 @@ K = -1
 THRESHOLD = 0.0
 MAX_TEXT_CHARS = 100_000
 
-# Resourcing. fasttext is CPU-only and single-threaded per predict call;
-# 2 CPU / 8 GB RAM matches the decon mark step and gives the parquet writer
-# enough headroom on the larger sources (cp/stackv2_code, finepdfs, nemotron
-# medium_high_quality_synthetic).
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
+# Resourcing. fasttext is CPU-only and single-threaded per predict call.
+# The Dolma3 weborganizer model.bin is ~4 GiB on disk and ~6-8 GiB resident
+# after fasttext.load_model, so 8 GiB workers OOM (observed end-to-end in the
+# weborg-topic-smoke-20260517-184843 run). 16 GiB gives enough headroom for
+# the model plus the per-shard parquet writer buffer on the larger sources
+# (cp/stackv2_code, finepdfs, nemotron medium_high_quality_synthetic).
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
 
 
 def build_classify_steps() -> list[StepSpec]:
