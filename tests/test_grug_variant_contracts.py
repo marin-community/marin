@@ -170,6 +170,8 @@ def test_grug_moe_per_expert_lr_gate2_launcher_builds_selected_candidates_only()
     for step in steps:
         assert step.name.startswith("grug/muonh_may_arch_per_expert_lr_gate2/")
         assert step.config.tracker.group == "muonh-may-arch-per-expert-lr-gate2"
+        assert step.config.resources.value.ram == "256g"
+        assert step.config.resources.value.regions == ["us-east5"]
 
 
 def test_grug_moe_per_expert_lr_selected_gate1_launcher_builds_one_run():

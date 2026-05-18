@@ -126,6 +126,7 @@ def _build_step(
     stage: str = "gate1",
     group_name: str = _GROUP_NAME,
     resource_ram: str | None = None,
+    resource_regions: tuple[str, ...] | None = None,
 ) -> ExecutorStep:
     model, base_optimizer, batch_size, num_steps = build_from_heuristic(
         budget=budget,
@@ -145,6 +146,8 @@ def _build_step(
     run_id = _format_run_id(candidate, hidden_dim, budget, run_suffix=run_suffix, stage=stage)
     step_name = f"grug/muonh_may_arch_per_expert_lr_{stage}/{run_id}"
     resource_kwargs = {"ram": resource_ram} if resource_ram is not None else {}
+    if resource_regions is not None:
+        resource_kwargs["regions"] = list(resource_regions)
 
     return ExecutorStep(
         name=step_name,
