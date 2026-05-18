@@ -1,4 +1,6 @@
 import { useIris } from "../hooks/useIris";
+import { formatDuration } from "./chartUtils";
+import { ControlPlanePanel } from "./ControlPlanePanel";
 import { JobsPanel } from "./JobsPanel";
 import { WorkersPanel } from "./WorkersPanel";
 
@@ -9,6 +11,11 @@ function formatRelative(iso: string): string {
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.round(seconds / 60);
   return `${minutes}m ago`;
+}
+
+function percentileTitle(spanMs: number, count: number): string {
+  if (spanMs > 0) return `over last ${formatDuration(spanMs)}, n=${count}`;
+  return `n=${count}`;
 }
 
 export function IrisPanel() {
@@ -37,10 +44,10 @@ export function IrisPanel() {
             {data.pingPercentiles && (
               <span
                 className="text-xs text-slate-500"
-                title={`over last ${Math.round(data.pingWindowMs / 60_000)}m, n=${data.pingSampleCount}`}
+                title={percentileTitle(data.pingSpanMs, data.pingSampleCount)}
               >
-                · p50 {data.pingPercentiles.p50}ms · p90 {data.pingPercentiles.p90}ms · p95{" "}
-                {data.pingPercentiles.p95}ms · p98 {data.pingPercentiles.p98}ms
+                · p50 {data.pingPercentiles.p50}ms · p90 {data.pingPercentiles.p90}ms · p99{" "}
+                {data.pingPercentiles.p99}ms
               </span>
             )}
             {data.controllerUrl && (
@@ -67,6 +74,7 @@ export function IrisPanel() {
         )}
         {data?.error && <div className="text-sm text-rose-400">{data.error}</div>}
         <WorkersPanel />
+        <ControlPlanePanel />
         <JobsPanel />
       </div>
     </section>

@@ -23,8 +23,7 @@ export interface IrisPingSample {
 export interface PingPercentiles {
   p50: number;
   p90: number;
-  p95: number;
-  p98: number;
+  p99: number;
 }
 
 export interface IrisPingResult {
@@ -42,6 +41,7 @@ export interface IrisStatus {
   latencyMs: number | null;
   pingPercentiles: PingPercentiles | null;
   pingSampleCount: number;
+  pingSpanMs: number;
   pingWindowMs: number;
   controllerUrl: string | null;
   fetchedAt: string;
@@ -116,9 +116,15 @@ export function computePercentiles(samples: IrisPingSample[]): PingPercentiles |
   return {
     p50: Math.round(percentile(sorted, 50)),
     p90: Math.round(percentile(sorted, 90)),
-    p95: Math.round(percentile(sorted, 95)),
-    p98: Math.round(percentile(sorted, 98)),
+    p99: Math.round(percentile(sorted, 99)),
   };
+}
+
+function sampleSpanMs(samples: IrisPingSample[]): number {
+  if (samples.length < 2) return 0;
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  return Math.max(0, last.t - first.t);
 }
 
 export function irisStatus(
@@ -133,6 +139,7 @@ export function irisStatus(
     latencyMs: last?.latencyMs ?? null,
     pingPercentiles: computePercentiles(samples),
     pingSampleCount: samples.length,
+    pingSpanMs: sampleSpanMs(samples),
     pingWindowMs: windowMs,
     controllerUrl: last?.controllerUrl ?? null,
     fetchedAt,

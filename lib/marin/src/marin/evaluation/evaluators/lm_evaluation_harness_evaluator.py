@@ -6,7 +6,6 @@ import os
 import shutil
 import socket
 import tempfile
-import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -99,8 +98,6 @@ class LMEvaluationHarnessEvaluator(Evaluator):
         """
         # From https://github.com/EleutherAI/lm-evaluation-harness?tab=readme-ov-file#model-apis-and-inference-servers
         # Run lm_eval with the model and the specified evals
-        env: VllmEnvironment | None = None
-        resolved_model = model
         try:
             with VllmEnvironment(model) as env:
                 resolved_model = env.model
@@ -209,10 +206,6 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                     _run_with_tokenizer(None)
 
                 return
-
-        except Exception as e:
-            traceback.print_exc()
-            raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
 
         finally:
 

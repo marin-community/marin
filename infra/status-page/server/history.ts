@@ -8,9 +8,10 @@
 // worker_count_history table in the controller).
 
 import type { IrisPingSample } from "./sources/iris.js";
+import type { ServiceHealthHistorySample } from "./sources/serviceHealth.js";
 import type { WorkerSample } from "./sources/workers.js";
 
-class RingBuffer<T> {
+export class RingBuffer<T> {
   private readonly capacity: number;
   private readonly buffer: (T | undefined)[];
   private head = 0;
@@ -46,3 +47,5 @@ class RingBuffer<T> {
 export class WorkerHistory extends RingBuffer<WorkerSample> {}
 
 export class IrisPingHistory extends RingBuffer<IrisPingSample> {}
+
+export class ServiceHealthHistory extends RingBuffer<ServiceHealthHistorySample> {}

@@ -33,9 +33,9 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from finelog.store.catalog import SegmentRow
 from finelog.store.schema import IMPLICIT_SEQ_COLUMN, Schema, duckdb_type_for
 from finelog.store.sql_escape import quote_ident, quote_literal
+from finelog.store.types import SegmentRow
 
 _MiB = 1024 * 1024
 
@@ -65,7 +65,14 @@ class CompactionConfig:
     re-compacted (and become eviction candidates).
     """
 
-    level_targets: tuple[int, ...] = (64 * _MiB, 256 * _MiB)
+    # L0→L1 at 64 MiB, L1→L2 at 256 MiB, L2→L3 (terminal) at 256 MiB.
+    # L2 and L3 targets are intentionally equal: an L2 segment produced by
+    # L1 compaction already meets the L3 threshold on its own, so the
+    # planner emits a single-input job and the executor renames the file
+    # in place rather than rewriting it. Low-activity namespaces whose L2
+    # segments are individually below 256 MiB get consolidated into L3 by
+    # the count cap below.
+    level_targets: tuple[int, ...] = (64 * _MiB, 256 * _MiB, 256 * _MiB)
     check_interval_sec: float = 30.0
     # Per-level fanout cap. Promotes a non-terminal level once its
     # contiguous run reaches this many segments, even if the byte target
@@ -74,10 +81,12 @@ class CompactionConfig:
     # byte target or this count fires — L0 is local-only and disk loss
     # is acceptable (durability comes from L>=1 GCS sync).
     #
-    # Tuned so a slow namespace flushing ~1 L0/min produces ~1-2 L2/day:
-    # with two non-terminal tiers (L0, L1) the total fan-in factor is
-    # count^2; 1440 L0/day / 32^2 ≈ 1.4 L2/day. Worst-case non-terminal
-    # read fanout is 2*count parquet files.
+    # Tuned for a slow namespace at ~1 L0/min (1440 L0/day): with three
+    # non-terminal tiers (L0, L1, L2) the total fan-in factor is count^3,
+    # so 1440 / 32^3 ≈ 0.04 L3/day — small namespaces park their data at
+    # L2 indefinitely and only spill into L3 once the count cap fires,
+    # consolidating sub-target L2s. Worst-case non-terminal read fanout
+    # is 3*count parquet files.
     max_segments_per_level: int = 32
     max_segments_per_namespace: int = 1000
     max_bytes_per_namespace: int = 100 * 1024**3

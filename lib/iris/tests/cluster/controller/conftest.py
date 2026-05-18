@@ -3,6 +3,7 @@
 
 """Shared fixtures for controller unit tests."""
 
+import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
+from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
@@ -157,20 +159,33 @@ def mock_controller() -> MockController:
 def log_service(state, tmp_path) -> LogServiceImpl:
     """LogServiceImpl with its own internal log store.
 
-    Wraps ``fetch_logs`` to run the bg compact step first so push→fetch in
-    the same test is synchronously visible. The production path relies on the
-    1s bg tick; tests can't afford that wait.
+    Wraps ``push_logs`` / ``fetch_logs`` to force flush (and compact on read)
+    so push→fetch in the same test is synchronously visible. The production
+    path relies on the bg flush tick (5s default); tests can't afford that
+    wait — without the push wrapper, each push's ``await_persisted`` blocks
+    for one flush interval, making N sequential pushes take ~N*5s.
     """
     svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
     original_fetch = svc.fetch_logs
 
+    async def push_logs(request, ctx):
+        # Append, then force-flush before returning. Bypasses the original
+        # ``await_persisted`` poll-wait that otherwise blocks for one bg
+        # flush tick (5s by default) on every push.
+        if not request.entries:
+            return logging_pb2.PushLogsResponse()
+        await asyncio.to_thread(svc._log_store.append, request.key, list(request.entries))
+        svc._log_store._force_flush()
+        return logging_pb2.PushLogsResponse()
+
     def fetch_logs(request, ctx):
         # Force a flush + compaction so just-pushed data is queryable
-        # within the same test, bypassing the production 1s bg tick.
+        # within the same test, bypassing the production bg tick.
         svc._log_store._force_flush()
         svc._log_store._force_compaction()
         return original_fetch(request, ctx)
 
+    svc.push_logs = push_logs  # type: ignore[method-assign]
     svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
     yield svc
     svc.close()
