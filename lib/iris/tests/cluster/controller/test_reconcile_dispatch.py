@@ -10,8 +10,8 @@ Tests cover:
   are not called.
 - Flag on, end-to-end: ASSIGNED → BUILDING → RUNNING → SUCCEEDED through the
   Reconcile wire over multiple ticks.
-- Flag on, MISSING observation: apply_reconcile_response fails the attempt as
-  worker_lost_spec.
+- Flag on, MISSING observation: apply_reconcile_observations fails the attempt
+  as worker_lost_spec.
 """
 
 from __future__ import annotations

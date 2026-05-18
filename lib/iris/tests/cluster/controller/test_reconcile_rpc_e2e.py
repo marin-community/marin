@@ -4,7 +4,7 @@
 """End-to-end integration tests for Phase B Reconcile RPC convergence story.
 
 Tests exercise the full convergence loop: controller pure-compute layer
-(reconcile_worker + apply_reconcile_response) together with the worker's
+(reconcile_worker + apply_reconcile_observations) together with the worker's
 handle_reconcile handler and SpecCache, over the real Reconcile wire.
 
 The worker is in-process; the "RPC" is a direct method call on the Worker
@@ -333,7 +333,7 @@ def test_flag_off_legacy_wire_full_lifecycle(make_controller, worker_instance, c
     requires GetTaskAttemptInfo which needs a live controller gRPC server.
     The regression value here is that:
       1. The controller routes through legacy reconcile_workers (not Reconcile RPC).
-      2. Simulated observations flow through apply_reconcile_response correctly.
+      2. Simulated observations flow through apply_reconcile_observations correctly.
       3. The reconcile_workers_via_reconcile method is NEVER called (guard raises).
     """
     from iris.cluster.controller.worker_provider import WorkerReconcileResult

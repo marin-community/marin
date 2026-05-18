@@ -1994,49 +1994,27 @@ class ControllerTransitions:
         attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
         return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
 
-    def apply_reconcile_response(
+    def apply_reconcile_observations(
         self,
         cur: Tx,
         plan,
         observations,
-        error: str | None,
         now: Timestamp,
     ) -> TxResult:
-        """Apply the consequences of one worker's reconcile within the caller's transaction.
+        """Apply observations from a successful Reconcile RPC within the caller's transaction.
 
-        On RPC error: log and apply synthetic WORKER_FAILED for any ASSIGNED-state
-        attempts in the plan (matching today's StartTasks-failure behavior), then
-        return without writing observation-derived state transitions.
-
-        On success: update worker health, apply pre-computed ``plan.db_writes``
-        deltas, then process each observation. MISSING observations are converted
-        to ``FAILED("worker_lost_spec")`` updates that fire the standard
-        cascades. All other observations are routed through
-        ``_apply_task_transitions`` so the existing state-machine guards
-        (idempotency, stale-attempt checks, retry logic, cascade firing) apply
-        unchanged.
+        Updates worker health, applies pre-computed ``plan.db_writes`` deltas,
+        then processes each observation. MISSING observations are converted to
+        ``FAILED("worker_lost_spec")`` updates that fire the standard cascades.
+        All other observations are routed through ``_apply_task_transitions`` so
+        the existing state-machine guards (idempotency, stale-attempt checks,
+        retry logic, cascade firing) apply unchanged.
         """
         # Local import to break the transitions <-> reconcile module cycle.
         from iris.cluster.controller.reconcile import AttemptMissingOnWorker
 
         worker_id = WorkerId(plan.request.worker_id)
         now_ms = now.epoch_ms()
-
-        if error is not None:
-            log_event(
-                "reconcile_rpc_failed",
-                str(worker_id),
-                error=error,
-            )
-            assigned_updates = self._assigned_updates_from_plan(plan, error, cur)
-            if not assigned_updates:
-                return TxResult()
-            task_ids = [u.task_id for u in assigned_updates]
-            task_map = reads.bulk_get_task_detail(cur, task_ids)
-            attempt_keys = [(u.task_id, u.attempt_id) for u in assigned_updates]
-            attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
-            req = HeartbeatApplyRequest(worker_id=worker_id, updates=assigned_updates)
-            return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
 
         existing = reads.filter_existing_workers(cur, [worker_id])
         if str(worker_id) not in existing:
@@ -2047,7 +2025,7 @@ class ControllerTransitions:
         # is the only recognized delta type today; future phases may emit more.
         for delta in plan.db_writes:
             if not isinstance(delta, AttemptMissingOnWorker):
-                logger.warning("apply_reconcile_response: unhandled delta type %s; skipping", type(delta).__name__)
+                logger.warning("apply_reconcile_observations: unhandled delta type %s; skipping", type(delta).__name__)
 
         all_updates = self._observations_to_updates(observations)
         if not all_updates:
@@ -2064,6 +2042,37 @@ class ControllerTransitions:
         attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
 
         req = HeartbeatApplyRequest(worker_id=worker_id, updates=all_updates)
+        return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+    def apply_reconcile_failure(
+        self,
+        cur: Tx,
+        plan,
+        error: str,
+        now: Timestamp,
+    ) -> TxResult:
+        """Apply synthetic WORKER_FAILED updates for ASSIGNED attempts after an RPC failure.
+
+        Logs and applies synthetic WORKER_FAILED for any ASSIGNED-state attempts
+        in the plan, mirroring today's StartTasks-failure behavior. No
+        observation processing happens here; this is the failure-only path.
+        """
+        worker_id = WorkerId(plan.request.worker_id)
+        now_ms = now.epoch_ms()
+
+        log_event(
+            "reconcile_rpc_failed",
+            str(worker_id),
+            error=error,
+        )
+        assigned_updates = self._assigned_updates_from_plan(plan, error, cur)
+        if not assigned_updates:
+            return TxResult()
+        task_ids = [u.task_id for u in assigned_updates]
+        task_map = reads.bulk_get_task_detail(cur, task_ids)
+        attempt_keys = [(u.task_id, u.attempt_id) for u in assigned_updates]
+        attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+        req = HeartbeatApplyRequest(worker_id=worker_id, updates=assigned_updates)
         return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
 
     def _assigned_updates_from_plan(

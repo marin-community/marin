@@ -467,7 +467,7 @@ def observations_from_reconcile_response(
 
     Each ``Worker.AttemptObservation`` proto entry maps to one
     ``AttemptObservation`` plain-dataclass. ``TASK_STATE_MISSING`` passes
-    through as-is; ``apply_reconcile_response`` converts it to
+    through as-is; ``apply_reconcile_observations`` converts it to
     ``AttemptMissingOnWorker`` → ``FAILED("worker_lost_spec")``.
 
     ``finished_at`` from the proto is not forwarded — the apply layer stamps
@@ -506,7 +506,7 @@ def legacy_translator_response(
     Conversion rules:
 
     - ``poll_error is not None`` → return empty list; the apply layer
-      (A.4) handles the error via ``apply_reconcile_response(error=...)``.
+      (A.4) handles the error via ``apply_reconcile_failure``.
     - ``start_error is not None`` → that path is handled by A.4's
       synthetic-WORKER_FAILED logic; no observations fabricated here.
     - ``poll_updates`` (``list[TaskUpdate]``) → one ``AttemptObservation``

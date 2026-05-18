@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for apply_reconcile_response.
+"""Integration tests for apply_reconcile_observations / apply_reconcile_failure.
 
 Each test sets up real SQLite DB state via ControllerTransitions helpers,
-calls apply_reconcile_response, and asserts on post-state and cascade firing.
+calls the appropriate apply method, and asserts on post-state and cascade firing.
 
 Covers all required cases from the kata:
 - Terminal SUCCEEDED observation transitions attempt + fires _recompute_job_state.
@@ -133,7 +133,7 @@ def test_succeeded_observation_transitions_attempt_and_recomputes_job():
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)]
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, observations, None, _NOW)
+            state.apply_reconcile_observations(cur, plan, observations, _NOW)
 
         task = query_task(state, task_id)
         attempt = query_attempt(state, task_id, attempt_id)
@@ -155,7 +155,7 @@ def test_failed_observation_transitions_attempt_and_fires_cascades():
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_FAILED, error="segfault")]
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, observations, None, _NOW)
+            state.apply_reconcile_observations(cur, plan, observations, _NOW)
 
         task = query_task(state, task_id)
         assert task is not None
@@ -173,7 +173,7 @@ def test_missing_observation_fails_attempt_with_worker_lost_spec():
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_MISSING)]
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, observations, None, _NOW)
+            state.apply_reconcile_observations(cur, plan, observations, _NOW)
 
         task = query_task(state, task_id)
         assert task is not None
@@ -217,7 +217,7 @@ def test_missing_observation_on_building_task_fails_with_worker_lost_spec():
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_MISSING)]
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, observations, None, _NOW)
+            state.apply_reconcile_observations(cur, plan, observations, _NOW)
 
         task = query_task(state, task_id)
         assert task.state == job_pb2.TASK_STATE_FAILED
@@ -236,7 +236,7 @@ def test_duplicate_terminal_observation_does_not_overwrite_finished_at():
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)]
 
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, observations, None, _NOW)
+            state.apply_reconcile_observations(cur, plan, observations, _NOW)
 
         attempt_after_first = query_attempt(state, task_id, attempt_id)
         assert attempt_after_first is not None
@@ -244,7 +244,7 @@ def test_duplicate_terminal_observation_does_not_overwrite_finished_at():
 
         # Apply the same observation again.
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, observations, None, _NOW)
+            state.apply_reconcile_observations(cur, plan, observations, _NOW)
 
         attempt_after_second = query_attempt(state, task_id, attempt_id)
         assert attempt_after_second is not None
@@ -266,7 +266,7 @@ def test_stale_running_observation_does_not_revive_cancelled_task():
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_RUNNING)]
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, observations, None, _NOW)
+            state.apply_reconcile_observations(cur, plan, observations, _NOW)
 
         task = query_task(state, task_id)
         assert task.state == job_pb2.TASK_STATE_KILLED
@@ -294,7 +294,7 @@ def test_rpc_error_no_state_change_for_running_task():
             ],
         )
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, [], "connection refused", _NOW)
+            state.apply_reconcile_failure(cur, plan, "connection refused", _NOW)
 
         task = query_task(state, task_id)
         assert task.state == job_pb2.TASK_STATE_RUNNING
@@ -317,7 +317,7 @@ def test_rpc_error_applies_worker_failed_to_assigned_tasks():
             ],
         )
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, [], "timeout", _NOW)
+            state.apply_reconcile_failure(cur, plan, "timeout", _NOW)
 
         task = query_task(state, task_id)
         assert task is not None
@@ -333,7 +333,7 @@ def test_rpc_error_no_cascades():
 
         plan = _make_plan(_W1)
         with state._db.transaction() as cur:
-            result = state.apply_reconcile_response(cur, plan, [], "connection refused", _NOW)
+            result = state.apply_reconcile_failure(cur, plan, "connection refused", _NOW)
 
         assert result.tasks_to_kill == set()
         task = query_task(state, task_id)
@@ -397,7 +397,7 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
         plan = _make_plan(_W1)
         observations = [_obs(task_id_1, attempt_id_1, job_pb2.TASK_STATE_FAILED, error="oom")]
         with state._db.transaction() as cur:
-            state.apply_reconcile_response(cur, plan, observations, None, _NOW)
+            state.apply_reconcile_observations(cur, plan, observations, _NOW)
 
         task1_final = query_task(state, task_id_1)
         task2_final = query_task(state, task_id_2)
@@ -412,11 +412,11 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
 
 
 def test_unknown_worker_returns_empty_result():
-    """apply_reconcile_response on a non-existent worker returns empty TxResult."""
+    """apply_reconcile_observations on a non-existent worker returns empty TxResult."""
     with make_controller_state() as state:
         plan = _make_plan("ghost-worker")
         with state._db.transaction() as cur:
-            result = state.apply_reconcile_response(cur, plan, [], None, _NOW)
+            result = state.apply_reconcile_observations(cur, plan, [], _NOW)
 
         assert result.tasks_to_kill == set()
         assert result.task_kill_workers == {}

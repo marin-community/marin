@@ -2349,8 +2349,9 @@ class Controller:
         StartTasks+PollTasks wire via ``WorkerProvider.reconcile_workers``.
 
         Phase 4 (single write tx): translate each result and apply via
-        ``apply_reconcile_response``. ASSIGNED rows whose RPC failed bounce
-        back to PENDING; observations are applied in the same transaction.
+        ``apply_reconcile_observations`` (success) or ``apply_reconcile_failure``
+        (RPC error). ASSIGNED rows whose RPC failed bounce back to PENDING;
+        observations are applied in the same transaction.
         """
         if self._config.dry_run:
             return
@@ -2451,8 +2452,13 @@ class Controller:
                     plan = plan_by_worker[rr.worker_id]
                     if rr.error is not None:
                         logger.debug("Reconcile RPC failed for worker %s: %s", rr.worker_id, rr.error)
-                    observations = observations_from_reconcile_response(rr.response) if rr.response is not None else []
-                    self._transitions.apply_reconcile_response(cur, plan, observations, rr.error, now)
+                    if rr.error is not None:
+                        self._transitions.apply_reconcile_failure(cur, plan, rr.error, now)
+                    else:
+                        observations = (
+                            observations_from_reconcile_response(rr.response) if rr.response is not None else []
+                        )
+                        self._transitions.apply_reconcile_observations(cur, plan, observations, now)
         else:
             # Legacy wire: StartTasks + PollTasks.
             dispatches = [
@@ -2493,7 +2499,10 @@ class Controller:
                             )
                     if result.poll_error is not None:
                         logger.debug("PollTasks failed for worker %s: %s", result.worker_id, result.poll_error)
-                    self._transitions.apply_reconcile_response(cur, plan, observations, error, now)
+                    if error is not None:
+                        self._transitions.apply_reconcile_failure(cur, plan, error, now)
+                    else:
+                        self._transitions.apply_reconcile_observations(cur, plan, observations, now)
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
