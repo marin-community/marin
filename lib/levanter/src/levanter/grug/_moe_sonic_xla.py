@@ -52,7 +52,7 @@ def _moe_mlp_local_sonic_xla(
     return out, _zero_dropped_assignments()
 
 
-def _moe_mlp_local_sonic_xla_interleaved_w13(
+def _moe_mlp_local_sonic_xla_interleaved_reference(
     x: Float[Array, "T D"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
@@ -85,7 +85,7 @@ def _moe_mlp_local_sonic_xla_interleaved_w13(
     return out, _zero_dropped_assignments()
 
 
-def _moe_mlp_local_sonic_xla_interleaved_w13_custom_vjp_down(
+def _moe_mlp_local_sonic_xla_interleaved(
     x: Float[Array, "T D"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],

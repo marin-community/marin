@@ -12,15 +12,13 @@ from levanter.grug._moe_common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementat
 from levanter.grug._moe_scatter import _moe_mlp_local_scatter
 from levanter.grug._moe_sonic_xla import (
     _moe_mlp_local_sonic_xla,
-    _moe_mlp_local_sonic_xla_interleaved_w13,
-    _moe_mlp_local_sonic_xla_interleaved_w13_custom_vjp_down,
+    _moe_mlp_local_sonic_xla_interleaved,
 )
 
 _MOE_LOCAL_FNS = {
     "scatter": _moe_mlp_local_scatter,
     "sonic_xla": _moe_mlp_local_sonic_xla,
-    "sonic_xla_interleaved_w13": _moe_mlp_local_sonic_xla_interleaved_w13,
-    "sonic_xla_interleaved_w13_custom_vjp_down": _moe_mlp_local_sonic_xla_interleaved_w13_custom_vjp_down,
+    "sonic_xla_interleaved": _moe_mlp_local_sonic_xla_interleaved,
 }
 
 

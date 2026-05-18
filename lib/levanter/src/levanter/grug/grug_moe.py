@@ -149,7 +149,7 @@ def moe_mlp(
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     if resolved_implementation in _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS and activation != ActivationFunctionEnum.silu:
-        raise ValueError("sonic_xla_interleaved_w13_custom_vjp_down only supports silu/SwiGLU activation")
+        raise ValueError("sonic_xla_interleaved only supports silu/SwiGLU activation")
 
     if mesh is None:
         mesh = _current_mesh()

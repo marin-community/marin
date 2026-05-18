@@ -10,6 +10,7 @@ from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
 import levanter.grug.grug_moe as grug_moe
+from levanter.grug._moe_sonic_xla import _moe_mlp_local_sonic_xla_interleaved_reference
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
@@ -199,7 +200,7 @@ def test_moe_mlp_sonic_xla_matches_scatter_values_and_gradients():
         np.testing.assert_allclose(np.asarray(sonic_grad), np.asarray(scatter_grad), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_mlp_sonic_xla_interleaved_w13_matches_concat_values_and_gradients():
+def test_moe_mlp_sonic_xla_interleaved_reference_matches_concat_values_and_gradients():
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
         key=jax.random.key(19),
         tokens=20,
@@ -218,14 +219,14 @@ def test_moe_mlp_sonic_xla_interleaved_w13_matches_concat_values_and_gradients()
         mesh=None,
         implementation="sonic_xla",
     )
-    y_interleaved = moe_mlp(
+    y_interleaved, _ = _moe_mlp_local_sonic_xla_interleaved_reference(
         x,
         selected_experts,
         combine_weights,
         _interleave_concat_w13(w_up_gate),
         w_down,
-        mesh=None,
-        implementation="sonic_xla_interleaved_w13",
+        activation_fn=ActivationFunctionEnum.silu.to_jax_fn(),
+        num_experts=w_down.shape[0],
     )
     np.testing.assert_allclose(np.asarray(y_interleaved), np.asarray(y_concat), rtol=1e-5, atol=1e-5)
 
@@ -242,14 +243,14 @@ def test_moe_mlp_sonic_xla_interleaved_w13_matches_concat_values_and_gradients()
         return jnp.mean(y * y)
 
     def interleaved_loss(x, combine_weights, w_up_gate, w_down):
-        y = moe_mlp(
+        y, _ = _moe_mlp_local_sonic_xla_interleaved_reference(
             x,
             selected_experts,
             combine_weights,
             _interleave_concat_w13(w_up_gate),
             w_down,
-            mesh=None,
-            implementation="sonic_xla_interleaved_w13",
+            activation_fn=ActivationFunctionEnum.silu.to_jax_fn(),
+            num_experts=w_down.shape[0],
         )
         return jnp.mean(y * y)
 
@@ -287,7 +288,7 @@ def test_moe_expert_mlp_init_hides_interleaved_w13_layout():
         intermediate_dim=intermediate_dim,
         initializer_std=0.02,
         key=k_mlp,
-        implementation="sonic_xla_interleaved_w13",
+        implementation="sonic_xla_interleaved",
     )
 
     y_concat = concat_mlp(x, selected_experts, combine_weights, mesh=None)
@@ -307,7 +308,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
             intermediate_dim=24,
             initializer_std=0.02,
             key=jax.random.key(27),
-            implementation="sonic_xla_interleaved_w13",
+            implementation="sonic_xla_interleaved",
             pspecs=pspecs,
         )
 
@@ -315,7 +316,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert getattr(mlp.w_down.sharding, "spec", None) == P(None, "model", "data")
 
 
-def test_moe_mlp_custom_vjp_down_matches_interleaved_values_and_gradients():
+def test_moe_mlp_sonic_xla_interleaved_matches_reference_values_and_gradients():
     x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
         key=jax.random.key(20),
         tokens=20,
@@ -326,14 +327,14 @@ def test_moe_mlp_custom_vjp_down_matches_interleaved_values_and_gradients():
     )
     w13_interleaved = _interleave_concat_w13(w_up_gate)
 
-    y_interleaved = moe_mlp(
+    y_interleaved, _ = _moe_mlp_local_sonic_xla_interleaved_reference(
         x,
         selected_experts,
         combine_weights,
         w13_interleaved,
         w_down,
-        mesh=None,
-        implementation="sonic_xla_interleaved_w13",
+        activation_fn=ActivationFunctionEnum.silu.to_jax_fn(),
+        num_experts=w_down.shape[0],
     )
     y_custom_vjp = moe_mlp(
         x,
@@ -342,11 +343,23 @@ def test_moe_mlp_custom_vjp_down_matches_interleaved_values_and_gradients():
         w13_interleaved,
         w_down,
         mesh=None,
-        implementation="sonic_xla_interleaved_w13_custom_vjp_down",
+        implementation="sonic_xla_interleaved",
     )
     np.testing.assert_allclose(np.asarray(y_custom_vjp), np.asarray(y_interleaved), rtol=1e-5, atol=1e-5)
 
-    def loss(implementation, x, combine_weights, w13_interleaved, w_down):
+    def reference_loss(x, combine_weights, w13_interleaved, w_down):
+        y, _ = _moe_mlp_local_sonic_xla_interleaved_reference(
+            x,
+            selected_experts,
+            combine_weights,
+            w13_interleaved,
+            w_down,
+            activation_fn=ActivationFunctionEnum.silu.to_jax_fn(),
+            num_experts=w_down.shape[0],
+        )
+        return jnp.mean(y * y)
+
+    def custom_vjp_loss(x, combine_weights, w13_interleaved, w_down):
         y = moe_mlp(
             x,
             selected_experts,
@@ -354,25 +367,13 @@ def test_moe_mlp_custom_vjp_down_matches_interleaved_values_and_gradients():
             w13_interleaved,
             w_down,
             mesh=None,
-            implementation=implementation,
+            implementation="sonic_xla_interleaved",
         )
         return jnp.mean(y * y)
 
     _skip_small_ragged_dot_grad_on_tpu()
-    interleaved_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(
-        "sonic_xla_interleaved_w13",
-        x,
-        combine_weights,
-        w13_interleaved,
-        w_down,
-    )
-    custom_vjp_grads = jax.grad(loss, argnums=(1, 2, 3, 4))(
-        "sonic_xla_interleaved_w13_custom_vjp_down",
-        x,
-        combine_weights,
-        w13_interleaved,
-        w_down,
-    )
+    interleaved_grads = jax.grad(reference_loss, argnums=(0, 1, 2, 3))(x, combine_weights, w13_interleaved, w_down)
+    custom_vjp_grads = jax.grad(custom_vjp_loss, argnums=(0, 1, 2, 3))(x, combine_weights, w13_interleaved, w_down)
 
     for custom_vjp_grad, interleaved_grad in zip(custom_vjp_grads, interleaved_grads, strict=True):
         np.testing.assert_allclose(np.asarray(custom_vjp_grad), np.asarray(interleaved_grad), rtol=1e-5, atol=1e-5)

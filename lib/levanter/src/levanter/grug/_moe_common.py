@@ -25,22 +25,17 @@ MoeImplementation: TypeAlias = Literal[
     "ragged_all_to_all",
     "scatter",
     "sonic_xla",
-    "sonic_xla_interleaved_w13",
-    "sonic_xla_interleaved_w13_custom_vjp_down",
+    "sonic_xla_interleaved",
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all")
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
     "sonic_xla",
-    "sonic_xla_interleaved_w13",
-    "sonic_xla_interleaved_w13_custom_vjp_down",
+    "sonic_xla_interleaved",
 )
-_INTERLEAVED_W13_MOE_IMPLEMENTATIONS = (
-    "sonic_xla_interleaved_w13",
-    "sonic_xla_interleaved_w13_custom_vjp_down",
-)
-_CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved_w13_custom_vjp_down",)
+_INTERLEAVED_W13_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved",)
+_CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved",)
 
 
 @dataclass(frozen=True)
