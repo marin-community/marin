@@ -1,39 +1,53 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify the _smoke_v0 datakit-clustered Levanter store against its inputs.
+"""Verify a datakit-clustered Levanter smoke output against its inputs (on Iris).
 
-End-to-end integrity checks for the smoke output at
-``gs://marin-eu-west4/datakit/store/_smoke_v0``:
+Replays the join + filter logic of ``build_clustered_store`` shard-by-shard
+in a Zephyr map_shard pass: each worker loads the three small attribute
+tables for one input shard (``id+contaminated`` from decon, ``id+cluster_K``
+from cluster_assign, ``id+is_cluster_canonical`` from dedup, NOT the
+tokenize ``input_ids``), counts survivors per ``cluster_<view>``, and
+yields per-source totals + per-cluster kept counts.
 
-1. Token-budget reconciliation: per source, the sum across cluster=*/ of
-   ``total_elements`` equals ``tokenize.records_in - decon.contaminated -
-   dedup_noncanonicals``. ``dedup_noncanonicals = cluster_members - canonicals``.
-2. Levanter cache loadability: every cluster=K/ opens via
-   ``TreeCache.load`` and its rolled-up row count matches the ledger.
-3. Ground-truth cluster assignment: from the decon+dedup+cluster_assign
-   shards we compute the expected per-cluster docs ourselves, and verify
-   the output matches.
-4. Id-level cross-cluster uniqueness: each survivor id appears in exactly
-   one cluster (no leakage). We assert this by partitioning ids via the
-   computed assignment in (3); if (3) passes the row count, the uniqueness
-   follows by construction.
+The driver then asserts:
+
+* Aggregate walked totals (across all sources) match the store's
+  ``artifact.counters`` for ``records_in``, ``contaminated_dropped``,
+  ``dedup_noncanonical_dropped``, and ``records_out``.
+* Per-cluster kept counts equal the artifact's ``ClusterCacheStats.total_elements``.
+* Every cluster's ``CacheLedger`` loads cleanly and ``total_num_rows`` matches.
+
+Note: per-source ``TokenizedAttrData.counters`` / ``DeconAttributes.counters``
+are NOT used as ground truth -- those track records processed by *this*
+run of tokenize/decon, but ``skip_existing=True`` preserves pre-existing
+output parquets from earlier (resumed) runs, so the counter underestimates
+the row count in the output directory. The walked totals (counting rows
+in the *actual output parquets the pipeline reads*) are authoritative.
+
+Submit on iris (eu-west4)::
+
+    uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
+        --priority interactive --cpu 2 --memory 8GB --enable-extra-resources \\
+        -- python scripts/verify_smoke_v0.py {v0,mixed}
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
-import os
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 
-import pyarrow.parquet as pq
+from fray import ResourceConfig
 from levanter.store.cache import CacheLedger, CacheMetadata
 from marin.datakit.decon import DeconAttributes
 from marin.execution.artifact import Artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
-from marin.utils import fsspec_glob
+from rigging.log_setup import configure_logging
+from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import ShardInfo
 
 from experiments.datakit.cluster.v0.assign import AssignmentAttrData
 from experiments.datakit.store.all_sources_store import (
@@ -43,7 +57,16 @@ from experiments.datakit.store.all_sources_store import (
     TOKENIZE_ROOT,
     _resolve_artifact_dir,
 )
-from experiments.datakit.store.datakit_store import ClusteredStoreData
+from experiments.datakit.store.datakit_store import (
+    ClusteredStoreData,
+    _load_cluster_table,
+    _load_decon_table,
+    _load_dedup_canonical,
+    _per_source_shard_tuples,
+)
+
+logger = logging.getLogger(__name__)
+
 
 # Named smoke configurations. Each entry: (output_path, source_names, split).
 _PRESETS: dict[str, tuple[str, tuple[str, ...], str]] = {}
@@ -64,135 +87,77 @@ try:
 except ImportError:
     pass
 
-logger = logging.getLogger(__name__)
 
-
-def _shard_basenames(shard_paths: list[str]) -> list[str]:
-    return [os.path.basename(p) for p in shard_paths]
-
-
-def _load_dedup_canonical_for_source(dedup: FuzzyDupsAttrData, main_dir: str) -> dict[str, dict[str, bool]]:
-    """Return ``{basename: {id: is_canonical}}`` from the per-source dedup attr dir."""
-    attr_dir = dedup.sources[main_dir].attr_dir.rstrip("/")
-    out: dict[str, dict[str, bool]] = {}
-    for path in sorted(fsspec_glob(f"{attr_dir}/*.parquet")):
-        table = pq.read_table(path, columns=["id", "attributes"])
-        ids = table.column("id").to_pylist()
-        canonical = table.column("attributes").combine_chunks().field("is_cluster_canonical").to_pylist()
-        out[os.path.basename(path)] = dict(zip(ids, canonical, strict=True))
-    return out
-
-
-def _compute_expected_per_cluster(
+def _verify_shard(
+    items: Iterator[dict[str, str]],
+    shard_info: ShardInfo,
     *,
-    tokenize: TokenizedAttrData,
-    decontam: DeconAttributes,
-    cluster_assign: AssignmentAttrData,
-    dedup: FuzzyDupsAttrData,
-    cluster_view: int,
-    split: str,
-) -> tuple[Counter, dict[str, int], dict[int, list[str]]]:
-    """Replay the join+filter locally and return per-cluster doc counts.
+    cluster_col: str,
+) -> Iterator[dict]:
+    """Per-shard replay: load 3 attribute tables, count survivors per cluster.
 
-    Returns ``(per_cluster_counter, drop_stats, per_cluster_sample_ids)``
-    where ``per_cluster_sample_ids`` carries up to 3 surviving ids per
-    cluster for cross-checking against the Levanter cache.
+    Doesn't touch tokenize ``input_ids`` -- a 10-100x I/O savings vs. the
+    pipeline itself.
     """
-    main_dir = tokenize.source_main_dirs[split]
-    dedup_by_basename = _load_dedup_canonical_for_source(dedup, main_dir)
-
-    tok_shards = tokenize.shard_paths(split)
-    decon_dir = decontam.output_dir.rstrip("/")
-    cluster_dir = cluster_assign.output_dir.rstrip("/")
-    cluster_col = f"cluster_{cluster_view}"
-
-    per_cluster: Counter = Counter()
-    per_cluster_sample: dict[int, list[str]] = defaultdict(list)
-    drops = {"contaminated": 0, "dedup_noncanonical": 0, "kept": 0, "total_in": 0}
-
-    for tok_path in tok_shards:
-        basename = os.path.basename(tok_path)
-        decon_path = f"{decon_dir}/{basename}"
-        cluster_path = f"{cluster_dir}/{basename}"
-        dedup_map = dedup_by_basename.get(basename, {})
-
-        decon_table = pq.read_table(decon_path, columns=["id", "attributes"])
-        decon_ids = decon_table.column("id").to_pylist()
-        contaminated = decon_table.column("attributes").combine_chunks().field("contaminated").to_pylist()
-        cluster_table = pq.read_table(cluster_path, columns=["id", cluster_col])
-        cluster_ids = cluster_table.column("id").to_pylist()
-        cluster_vals = cluster_table.column(cluster_col).to_pylist()
-        if len(decon_ids) != len(cluster_ids):
-            raise RuntimeError(f"{basename}: decon/cluster row mismatch")
-
-        for did, decid, contam, cid, cval in zip(
-            decon_ids, decon_ids, contaminated, cluster_ids, cluster_vals, strict=True
-        ):
-            drops["total_in"] += 1
-            if decid != did or cid != did:
-                raise RuntimeError(f"{basename}: id misalignment {did} vs {decid}/{cid}")
-            if contam:
-                drops["contaminated"] += 1
-                continue
-            canon = dedup_map.get(did)
-            if canon is False:
-                drops["dedup_noncanonical"] += 1
-                continue
-            drops["kept"] += 1
-            per_cluster[int(cval)] += 1
-            if len(per_cluster_sample[int(cval)]) < 3:
-                per_cluster_sample[int(cval)].append(did)
-
-    return per_cluster, drops, per_cluster_sample
-
-
-def verify_source_reconciliation(
-    *,
-    source_name: str,
-    tokenize: TokenizedAttrData,
-    decontam: DeconAttributes,
-    cluster_assign: AssignmentAttrData,
-    dedup: FuzzyDupsAttrData,
-    cluster_view: int,
-    split: str,
-) -> tuple[Counter, dict[str, int]]:
-    """Verify counters reconcile for one source. Returns (per_cluster_counter, drops)."""
-    per_cluster, drops, _ = _compute_expected_per_cluster(
-        tokenize=tokenize,
-        decontam=decontam,
-        cluster_assign=cluster_assign,
-        dedup=dedup,
-        cluster_view=cluster_view,
-        split=split,
-    )
-
-    tok_in = tokenize.counters[split]["zephyr/records_in"]
-    decon_contam = decontam.counters.get("decon/contaminated", 0)
-    logger.info(
-        "[%s] reconciliation: tokenize_in=%d decon_contaminated=%d (artifact says: %d) "
-        "computed_drops_contaminated=%d dedup_noncanonical=%d kept=%d total_in_walk=%d",
-        source_name,
-        tok_in,
-        decon_contam,
-        decon_contam,
-        drops["contaminated"],
-        drops["dedup_noncanonical"],
-        drops["kept"],
-        drops["total_in"],
-    )
-    if drops["total_in"] != tok_in:
-        raise AssertionError(f"[{source_name}] walked rows ({drops['total_in']}) != tokenize records_in ({tok_in})")
-    if drops["contaminated"] != decon_contam:
-        raise AssertionError(
-            f"[{source_name}] contaminated count drift: walk={drops['contaminated']} " f"artifact_counter={decon_contam}"
+    spec = next(iter(items))
+    source_name = spec["source_name"]
+    basename = spec["basename"]
+    decon_ids, contaminated = _load_decon_table(spec["decontam"])
+    cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
+    if len(decon_ids) != len(cluster_ids):
+        raise RuntimeError(
+            f"{source_name}/{basename}: decon rows ({len(decon_ids)}) != "
+            f"cluster rows ({len(cluster_ids)}) -- co-partitioning broken"
         )
-    return per_cluster, drops
+    dedup_canonical = _load_dedup_canonical(spec["dedup"])
+
+    per_cluster: dict[int, int] = defaultdict(int)
+    n_contam = 0
+    n_dedup_drop = 0
+    for did, decid, contam, cid, cval in zip(decon_ids, decon_ids, contaminated, cluster_ids, cluster_vals, strict=True):
+        if decid != did or cid != did:
+            raise RuntimeError(f"{source_name}/{basename}: id misalignment {did} vs {decid}/{cid}")
+        if contam:
+            n_contam += 1
+            continue
+        if dedup_canonical.get(did) is False:
+            n_dedup_drop += 1
+            continue
+        per_cluster[int(cval)] += 1
+    yield {
+        "source_name": source_name,
+        "n_in": len(decon_ids),
+        "contaminated": n_contam,
+        "dedup_noncanonical": n_dedup_drop,
+        "per_cluster": dict(per_cluster),
+    }
 
 
-def verify_cache_loads(artifact: ClusteredStoreData) -> dict[int, int]:
-    """Try to load every cluster=K/ via Levanter. Returns ``{cluster_id: total_rows_from_ledger}``."""
+def _build_shard_specs(sources: tuple[str, ...], split: str, dedup: FuzzyDupsAttrData) -> list[dict[str, str]]:
+    """Resolve per-source artifacts and project to per-shard spec dicts."""
+    specs: list[dict[str, str]] = []
+    for src in sources:
+        tok = Artifact.from_path(_resolve_artifact_dir(TOKENIZE_ROOT, src), TokenizedAttrData)
+        decon = Artifact.from_path(_resolve_artifact_dir(DECONTAM_ROOT, src), DeconAttributes)
+        cluster_a = Artifact.from_path(_resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, src), AssignmentAttrData)
+        main_dir = tok.source_main_dirs[split]
+        dedup_attr_dir = dedup.sources[main_dir].attr_dir
+        specs.extend(
+            _per_source_shard_tuples(
+                source_name=src,
+                tokenize=tok,
+                decontam=decon,
+                cluster_assign=cluster_a,
+                dedup_attr_dir=dedup_attr_dir,
+                split=split,
+            )
+        )
+    return specs
+
+
+def _verify_cache_loads(artifact: ClusteredStoreData) -> None:
+    """Every ``cluster=K/`` ledger opens cleanly and matches the artifact's ``total_elements``."""
     metadata = CacheMetadata.empty()
-    per_cluster_rows: dict[int, int] = {}
     for cluster_id, stats in sorted(artifact.clusters.items()):
         ledger = CacheLedger.load(stats.path, metadata)
         if ledger.total_num_rows != stats.total_elements:
@@ -200,25 +165,7 @@ def verify_cache_loads(artifact: ClusteredStoreData) -> dict[int, int]:
                 f"cluster={cluster_id}: ledger.total_num_rows={ledger.total_num_rows} "
                 f"!= artifact.total_elements={stats.total_elements}"
             )
-        per_cluster_rows[cluster_id] = ledger.total_num_rows
     logger.info("cache-load: every cluster ledger loaded and row counts match artifact")
-    return per_cluster_rows
-
-
-def verify_per_cluster_match(
-    artifact: ClusteredStoreData,
-    expected_per_cluster_total: Counter,
-) -> None:
-    """Verify per-cluster docs in artifact equals the locally-computed expected counts."""
-    artifact_counts = Counter({cid: stats.total_elements for cid, stats in artifact.clusters.items()})
-    if artifact_counts != expected_per_cluster_total:
-        only_artifact = dict(artifact_counts - expected_per_cluster_total)
-        only_expected = dict(expected_per_cluster_total - artifact_counts)
-        raise AssertionError(
-            "per-cluster doc counts disagree. "
-            f"extra-in-artifact={only_artifact!r} extra-in-expected={only_expected!r}"
-        )
-    logger.info("per-cluster doc counts match across all %d clusters", len(artifact.clusters))
 
 
 def main() -> None:
@@ -227,44 +174,91 @@ def main() -> None:
     args = parser.parse_args()
     output_path, sources, split = _PRESETS[args.smoke]
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    configure_logging(logging.INFO)
     artifact = Artifact.from_path(output_path, ClusteredStoreData)
     logger.info("loaded artifact at %s: %d clusters", output_path, len(artifact.clusters))
 
     dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
+    cluster_col = f"cluster_{artifact.cluster_view}"
 
-    combined_expected: Counter = Counter()
-    grand_totals = {"tokenize_in": 0, "contaminated": 0, "dedup_noncanonical": 0, "kept": 0}
+    shard_specs = _build_shard_specs(sources, split, dedup)
+    logger.info("verify: %d input shards across %d sources", len(shard_specs), len(sources))
 
-    for source_name in sources:
-        tokenize = Artifact.from_path(_resolve_artifact_dir(TOKENIZE_ROOT, source_name), TokenizedAttrData)
-        decontam = Artifact.from_path(_resolve_artifact_dir(DECONTAM_ROOT, source_name), DeconAttributes)
-        cluster_assign = Artifact.from_path(_resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, source_name), AssignmentAttrData)
-        per_cluster, drops = verify_source_reconciliation(
-            source_name=source_name,
-            tokenize=tokenize,
-            decontam=decontam,
-            cluster_assign=cluster_assign,
-            dedup=dedup,
-            cluster_view=artifact.cluster_view,
-            split=split,
+    ctx = ZephyrContext(
+        resources=ResourceConfig(cpu=1, ram="2g"),
+        max_workers=min(1024, len(shard_specs)),
+        name="verify-smoke",
+    )
+    ds = Dataset.from_list(shard_specs).map_shard(
+        lambda items, shard, cc=cluster_col: _verify_shard(items, shard, cluster_col=cc)
+    )
+    outcome = ctx.execute(ds, verbose=True)
+
+    # Aggregate per-source and per-cluster.
+    per_source_in: Counter = Counter()
+    per_source_contam: Counter = Counter()
+    per_source_dedup: Counter = Counter()
+    per_cluster_kept: Counter = Counter()
+    for r in outcome.results:
+        per_source_in[r["source_name"]] += r["n_in"]
+        per_source_contam[r["source_name"]] += r["contaminated"]
+        per_source_dedup[r["source_name"]] += r["dedup_noncanonical"]
+        for cid, n in r["per_cluster"].items():
+            per_cluster_kept[int(cid)] += n
+
+    total_in = sum(per_source_in.values())
+    total_contam = sum(per_source_contam.values())
+    total_dedup = sum(per_source_dedup.values())
+    total_kept = sum(per_cluster_kept.values())
+    logger.info(
+        "totals: in=%d contaminated=%d dedup_noncanonical=%d kept=%d",
+        total_in,
+        total_contam,
+        total_dedup,
+        total_kept,
+    )
+
+    # 1. Per-source totals -- logged for visibility. We don't compare against
+    # each source's own TokenizedAttrData / DeconAttributes counters because
+    # those track records processed *by this run of tokenize/decon*; with
+    # skip_existing=True, output parquets from earlier (resumed) runs persist
+    # and contribute rows to what we read here. The walked count is the row
+    # count in the actual output dirs the pipeline reads -- which is what we
+    # want to verify against the store's aggregate counters.
+    for src in sources:
+        logger.info(
+            "[%s] walked: in=%d contaminated=%d dedup_noncanonical=%d",
+            src,
+            per_source_in[src],
+            per_source_contam[src],
+            per_source_dedup[src],
         )
-        combined_expected.update(per_cluster)
-        grand_totals["tokenize_in"] += drops["total_in"]
-        grand_totals["contaminated"] += drops["contaminated"]
-        grand_totals["dedup_noncanonical"] += drops["dedup_noncanonical"]
-        grand_totals["kept"] += drops["kept"]
 
-    logger.info("grand totals: %s", grand_totals)
-    artifact_total_docs = sum(c.total_elements for c in artifact.clusters.values())
-    if artifact_total_docs != grand_totals["kept"]:
+    # 2. Aggregate counters match the store's own artifact.counters.
+    c = artifact.counters
+    expected = {
+        "datakit_store/records_in": total_in,
+        "datakit_store/contaminated_dropped": total_contam,
+        "datakit_store/dedup_noncanonical_dropped": total_dedup,
+        "datakit_store/records_out": total_kept,
+    }
+    for key, walked in expected.items():
+        if c.get(key, -1) != walked:
+            raise AssertionError(f"counter {key}: artifact={c.get(key)!r} walked={walked!r}")
+    logger.info("store counter reconciliation matches walked totals across all 4 buckets")
+
+    # 3. Per-cluster kept matches artifact's per-cluster total_elements.
+    artifact_counts = Counter({cid: s.total_elements for cid, s in artifact.clusters.items()})
+    if artifact_counts != per_cluster_kept:
+        only_artifact = dict(artifact_counts - per_cluster_kept)
+        only_walked = dict(per_cluster_kept - artifact_counts)
         raise AssertionError(
-            f"artifact total docs ({artifact_total_docs}) != walked kept count ({grand_totals['kept']})"
+            "per-cluster counts disagree. " f"extra-in-artifact={only_artifact!r} extra-in-walked={only_walked!r}"
         )
-    logger.info("artifact total docs = walked kept = %d", artifact_total_docs)
+    logger.info("per-cluster kept counts match across all %d clusters", len(artifact.clusters))
 
-    verify_per_cluster_match(artifact, combined_expected)
-    verify_cache_loads(artifact)
+    # 4. Levanter cache loadability.
+    _verify_cache_loads(artifact)
 
     logger.info("ALL CHECKS PASSED.")
 
