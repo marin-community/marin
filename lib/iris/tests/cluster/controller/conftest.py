@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 from finelog.server import LogServiceImpl
+from finelog.store import LogStore
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     AttributeValue,
@@ -158,15 +159,21 @@ def log_service(state, tmp_path) -> LogServiceImpl:
     """LogServiceImpl with its own internal log store.
 
     Wraps ``fetch_logs`` to run the bg compact step first so push→fetch in
-    the same test is synchronously visible. The production path relies on the
-    1s bg tick; tests can't afford that wait.
+    the same test is synchronously visible. Configures a tight bg flush
+    interval so ``push_logs``' ``await_persisted`` wait drains in well
+    under a second instead of the production default.
     """
-    svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
+    # The default flush interval is 5s, which means each ``push_logs`` call
+    # blocks for up to that long inside ``await_persisted`` before the bg
+    # thread writes an L0 segment. Shrink it to ~50ms so tests that issue
+    # several sequential pushes don't accumulate multi-second waits.
+    log_store = LogStore(log_dir=tmp_path / "log_service_logs", flush_interval_sec=0.05)
+    svc = LogServiceImpl(log_store=log_store)
     original_fetch = svc.fetch_logs
 
     def fetch_logs(request, ctx):
         # Force a flush + compaction so just-pushed data is queryable
-        # within the same test, bypassing the production 1s bg tick.
+        # within the same test, bypassing the bg tick.
         svc._log_store._force_flush()
         svc._log_store._force_compaction()
         return original_fetch(request, ctx)
