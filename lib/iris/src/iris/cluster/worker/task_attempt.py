@@ -113,6 +113,10 @@ class TaskCancelled(Exception):
     pass
 
 
+def _unreachable_fetch_request(task_id: str, attempt_id: int) -> "job_pb2.RunTaskRequest":
+    raise AssertionError(f"fetch_request invoked on a path that should not call run(): {task_id}/{attempt_id}")
+
+
 @dataclass
 class TaskAttemptConfig:
     """Immutable configuration for a task attempt, derived from the RPC request."""
@@ -220,6 +224,7 @@ class TaskAttempt:
         *,
         container_handle: ContainerHandle | None = None,
         initial_status: TaskState | None = None,
+        fetch_request: Callable[[str, int], job_pb2.RunTaskRequest],
     ):
         """Initialize a TaskAttempt.
 
@@ -305,6 +310,12 @@ class TaskAttempt:
         self.cleanup_done: bool = False
         self.should_stop: bool = False
         self.on_state_change: Callable[[TaskState], None] | None = None
+        # Called at the top of ``run()`` to obtain the full ``RunTaskRequest``.
+        # Worker uses this to fetch the spec from the controller via
+        # GetTaskAttemptInfo; tests / direct submits pass a constant lambda.
+        # Failure raises ``ContainerInfraError`` so the existing handler
+        # routes it to WORKER_FAILED.
+        self._fetch_request: Callable[[str, int], job_pb2.RunTaskRequest] = fetch_request
 
     @classmethod
     def adopt(
@@ -352,6 +363,9 @@ class TaskAttempt:
             poll_interval_seconds=poll_interval_seconds,
             container_handle=container_handle,
             initial_status=job_pb2.TASK_STATE_RUNNING,
+            # Adopted attempts never call run(); supply a fetcher that would
+            # be a usage bug if it ever fired.
+            fetch_request=_unreachable_fetch_request,
         )
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
@@ -595,6 +609,13 @@ class TaskAttempt:
             self.num_tasks,
         )
         try:
+            self._check_cancelled()
+            try:
+                fetched = self._fetch_request(self.task_id.to_wire(), self.attempt_id)
+            except Exception as e:
+                raise ContainerInfraError(f"GetTaskAttemptInfo failed: {e}") from e
+            self.request = fetched
+            self.num_tasks = fetched.num_tasks
             self._check_cancelled()
             self._setup()
             self._check_cancelled()

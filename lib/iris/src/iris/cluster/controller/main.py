@@ -214,6 +214,9 @@ def run_controller_serve(
     if cluster_config and cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
+    reconcile_rpc_enabled = os.environ.get("IRIS_RECONCILE_RPC_ENABLED", "").lower() in ("1", "true", "yes")
+    logger.info("Reconcile RPC wire: %s", "enabled" if reconcile_rpc_enabled else "disabled (legacy)")
+
     config = ControllerConfig(
         host=host,
         port=port,
@@ -226,6 +229,7 @@ def run_controller_serve(
         dry_run=dry_run,
         log_service_address=log_service_address,
         endpoints=endpoints,
+        reconcile_rpc_enabled=reconcile_rpc_enabled,
     )
 
     controller = Controller(

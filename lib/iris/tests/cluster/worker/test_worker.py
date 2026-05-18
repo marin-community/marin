@@ -1142,8 +1142,15 @@ def test_poll_tasks_after_adoption_reports_running(mock_worker, mock_runtime):
     assert task_status.state == job_pb2.TASK_STATE_RUNNING
 
 
-def test_poll_tasks_without_adoption_reports_worker_failed(mock_worker, mock_runtime):
-    """Without adoption, expected tasks should report WORKER_FAILED."""
+def test_poll_tasks_without_adoption_omits_unknown_expected(mock_worker, mock_runtime):
+    """Unknown expected tasks are omitted from the immediate response.
+
+    The poll handler enqueues a placeholder TaskAttempt (which fetches its
+    own spec on the run thread) and returns synchronously without waiting.
+    The placeholder is in PENDING — not yet reported back in this poll's
+    response since the reconcile loop only emits status for entries that
+    were already in the local task table before this poll.
+    """
     mock_runtime.discover_containers = Mock(return_value=[])
 
     poll_req = worker_pb2.Worker.PollTasksRequest(
@@ -1156,8 +1163,7 @@ def test_poll_tasks_without_adoption_reports_worker_failed(mock_worker, mock_run
     )
     response = mock_worker.handle_poll_tasks(poll_req)
 
-    assert len(response.tasks) == 1
-    assert response.tasks[0].state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert response.tasks == []
 
 
 def test_stop_preserve_containers_does_not_kill_tasks(mock_worker, mock_runtime):

@@ -74,6 +74,17 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import SchedulableWorker
+from iris.cluster.controller.reconcile import (
+    AttemptObservation,
+    WorkerReconcileInputs,
+    WorkerReconcilePlan,
+    WorkerRow,
+    legacy_translator_request,
+    legacy_translator_response,
+    observations_from_reconcile_response,
+    reconcile_request_from_plan,
+    reconcile_worker,
+)
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
@@ -101,18 +112,16 @@ from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     ReservationClaim,
-    RunningTaskEntry,
     SchedulingEvent,
-    TaskUpdate,
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.controller.worker_provider import WorkerReconcilePlan
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
+    AttemptUid,
     JobName,
     PendingTask,
     UserBudgetDefaults,
@@ -123,7 +132,7 @@ from iris.cluster.types import (
 )
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
@@ -1294,6 +1303,12 @@ class ControllerConfig:
     cluster_config.endpoints by the daemon entrypoint. Registered into the
     controller service's _system_endpoints during start()."""
 
+    reconcile_rpc_enabled: bool = False
+    """When True, the controller dispatches the Reconcile RPC instead of the
+    legacy StartTasks+PollTasks wire. Resolved once at startup from the
+    environment variable ``IRIS_RECONCILE_RPC_ENABLED``. Default False keeps
+    production behavior unchanged until the flag-flip in Phase C."""
+
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
     """Return Connect interceptors for controller-originated LogService RPCs.
@@ -2319,23 +2334,27 @@ class Controller:
     def _reconcile_worker_batch(self) -> None:
         """One polling-tick reconcile pass.
 
-        Phase 1 (snapshot read): pick the next batch of healthy workers
-        (priority lane first, then round-robin), and snapshot the
-        ``(worker, task, attempt)`` rows that drive their reconcile. ASSIGNED
-        rows produce StartTasks payloads; BUILDING/RUNNING rows populate the
-        worker's expected_tasks set; workers with no rows still receive an
-        empty Poll so they auto-kill any strays.
+        Phase 1 (snapshot read): snapshot healthy workers and the
+        ``(worker, task, attempt)`` rows that drive reconcile decisions.
+        Build per-job spec templates for ASSIGNED rows.
 
-        Phase 2 (no DB lock): fan out StartTasks and Poll RPCs concurrently.
+        Phase 2 (pure compute, no DB lock): for each worker, call
+        ``reconcile_worker`` to produce a ``WorkerReconcilePlan`` describing
+        the desired set and any DB writes to apply on RPC success.
 
-        Phase 3 (small write tx): apply Poll responses through the existing
-        heartbeat queue, and emit synthetic WORKER_FAILED for StartTasks
-        failures so the scheduler bounces ASSIGNED rows that never landed.
+        Phase 3 (no DB lock): fan out RPCs to workers concurrently.
+        When ``config.reconcile_rpc_enabled`` is True, dispatch the Reconcile
+        RPC (one call per worker). Otherwise dispatch the legacy
+        StartTasks+PollTasks wire via ``WorkerProvider.reconcile_workers``.
+
+        Phase 4 (single write tx): translate each result and apply via
+        ``apply_reconcile_response``. ASSIGNED rows whose RPC failed bounce
+        back to PENDING; observations are applied in the same transaction.
         """
         if self._config.dry_run:
             return
 
-        # ── Phase 1: snapshot every healthy worker ───────────────────────
+        # ── Phase 1: read snapshot ─────────────────────────────────────────
         with self._db.read_snapshot() as snap:
             addresses = reads.list_active_healthy_workers(snap, self._health)
             if not addresses:
@@ -2383,129 +2402,99 @@ class Controller:
                 if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                     continue
                 if row.job_id not in templates_by_job:
-                    templates_by_job[row.job_id] = self._transitions.run_request_template(snap, row.job_id)
+                    templates_by_job[row.job_id] = run_request_template(
+                        snap, row.job_id, self._transitions.run_cache, self._store
+                    )
 
-        expected: dict[WorkerId, list[RunningTaskEntry]] = {wid: [] for wid in worker_ids}
-        starts: dict[WorkerId, list[job_pb2.RunTaskRequest]] = {wid: [] for wid in worker_ids}
-        attempt_by_worker_task: dict[tuple[WorkerId, str], int] = {}
-
+        # ── Phase 2: per-worker pure compute ──────────────────────────────
+        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
         for row in rows:
-            if row.task_state == job_pb2.TASK_STATE_ASSIGNED:
-                template = templates_by_job.get(row.job_id)
-                if template is None:
-                    # Reservation-holder task or a job that disappeared mid-tick.
-                    continue
-                req = job_pb2.RunTaskRequest()
-                req.CopyFrom(template)
-                req.task_id = row.task_id.to_wire()
-                req.attempt_id = row.attempt_id
-                starts[row.worker_id].append(req)
-                attempt_by_worker_task[(row.worker_id, row.task_id.to_wire())] = row.attempt_id
-            # ASSIGNED rows go into ``expected`` too so PollTasks reports
-            # current state. The worker's BUILDING push is best-effort
-            # (worker.py:_on_state_change drops RPC failures); poll is the
-            # only resilient recovery channel for ASSIGNED -> BUILDING.
-            # Per-worker reconcile (see ``WorkerProvider._reconcile_one``)
-            # sends StartTasks then PollTasks under one stub, so by the time
-            # PollTasks lands the worker's task table already contains the
-            # rows we just dispatched and ``_missing_task_status`` cannot
-            # auto-kill them.
-            expected[row.worker_id].append(RunningTaskEntry(task_id=row.task_id, attempt_id=row.attempt_id))
+            rows_by_worker[row.worker_id].append(row)
 
-        # ── Phase 2: per-worker reconcile under a single asyncio loop ────
-        plans = [
-            WorkerReconcilePlan(
-                worker_id=wid,
-                address=addresses.get(wid),
-                start_tasks=starts.get(wid, []),
-                expected_tasks=expected.get(wid, []),
+        now = Timestamp.now()
+        pure_plans: list[WorkerReconcilePlan] = []
+        for wid in worker_ids:
+            inputs = WorkerReconcileInputs(
+                worker=WorkerRow(
+                    worker_id=wid,
+                    address=addresses.get(wid, ""),
+                    total_cpu_millicores=0,
+                    total_memory_bytes=0,
+                    total_gpu_count=0,
+                    total_tpu_count=0,
+                    device_type="",
+                    device_variant="",
+                ),
+                rows=rows_by_worker[wid],
+                job_specs=templates_by_job,
+                now=now,
             )
-            for wid in worker_ids
-        ]
-        results = self._provider.reconcile_workers(plans)
+            pure_plans.append(reconcile_worker(inputs))
 
-        heartbeats: list[HeartbeatApplyRequest] = []
-        for result in results:
-            if result.start_error is not None or result.start_response is not None:
-                self._collect_start_tasks_result(
-                    heartbeats,
-                    result.worker_id,
-                    result.start_response,
-                    result.start_error,
-                    starts.get(result.worker_id, []),
-                    attempt_by_worker_task,
+        # ── Phase 3: fan out RPCs (no DB lock) ────────────────────────────
+        plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {WorkerId(p.request.worker_id): p for p in pure_plans}
+
+        if self._config.reconcile_rpc_enabled:
+            # New Reconcile wire: one RPC per worker replacing StartTasks+PollTasks.
+            plans_with_addresses = [
+                (
+                    plan,
+                    addresses.get(WorkerId(plan.request.worker_id)),
+                    reconcile_request_from_plan(plan),
                 )
-            if result.poll_error is not None:
-                logger.debug("PollTasks failed for worker %s: %s", result.worker_id, result.poll_error)
-            elif result.poll_updates:
-                heartbeats.append(HeartbeatApplyRequest(worker_id=result.worker_id, updates=result.poll_updates))
+                for plan in pure_plans
+            ]
+            reconcile_results = self._provider.reconcile_workers_via_reconcile(plans_with_addresses)
 
-        # ── Phase 3: apply heartbeat-style results in one write txn ──────
-        if heartbeats:
-            self._process_heartbeat_updates(heartbeats)
+            # ── Phase 4 (Reconcile wire): batched apply in one write txn ──────
+            with self._store.transaction() as cur:
+                for rr in reconcile_results:
+                    plan = plan_by_worker[rr.worker_id]
+                    if rr.error is not None:
+                        logger.debug("Reconcile RPC failed for worker %s: %s", rr.worker_id, rr.error)
+                    observations = observations_from_reconcile_response(rr.response) if rr.response is not None else []
+                    self._transitions.apply_reconcile_response(cur, plan, observations, rr.error, now)
+        else:
+            # Legacy wire: StartTasks + PollTasks.
+            dispatches = [
+                legacy_translator_request(plan, addresses.get(WorkerId(plan.request.worker_id))) for plan in pure_plans
+            ]
+            results = self._provider.reconcile_workers(dispatches)
 
-    def _collect_start_tasks_result(
-        self,
-        heartbeats: list[HeartbeatApplyRequest],
-        worker_id: WorkerId,
-        response: worker_pb2.Worker.StartTasksResponse | None,
-        error: str | None,
-        sent: list[job_pb2.RunTaskRequest],
-        attempt_by_worker_task: dict[tuple[WorkerId, str], int],
-    ) -> None:
-        """Convert StartTasks RPC failures and worker rejects into synthetic heartbeats.
-
-        ASSIGNED → WORKER_FAILED through the heartbeat path bounces the task
-        back to PENDING (without consuming a preemption retry; see
-        ``_apply_task_transitions``). The next scheduling tick re-places it.
-        """
-        if error is not None:
-            log_event(
-                "dispatch_failed",
-                str(worker_id),
-                trigger="start_tasks_rpc",
-                task_count=len(sent),
-                error=error,
-            )
-            heartbeats.append(
-                HeartbeatApplyRequest(
-                    worker_id=worker_id,
-                    updates=[
-                        TaskUpdate(
-                            task_id=JobName.from_wire(t.task_id),
-                            attempt_id=attempt_by_worker_task.get((worker_id, t.task_id), -1),
-                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                            error=f"StartTasks RPC failed: {error}",
-                        )
-                        for t in sent
-                    ],
-                )
-            )
-            return
-        assert response is not None
-        for ack in response.acks:
-            if ack.accepted:
-                continue
-            log_event(
-                "task_rejected",
-                ack.task_id,
-                trigger="start_tasks_ack",
-                worker=str(worker_id),
-                error=ack.error,
-            )
-            heartbeats.append(
-                HeartbeatApplyRequest(
-                    worker_id=worker_id,
-                    updates=[
-                        TaskUpdate(
-                            task_id=JobName.from_wire(ack.task_id),
-                            attempt_id=attempt_by_worker_task.get((worker_id, ack.task_id), -1),
-                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                            error=f"Worker rejected task: {ack.error}",
-                        )
-                    ],
-                )
-            )
+            # ── Phase 4 (legacy wire): batched apply in one write txn ─────────
+            with self._store.transaction() as cur:
+                for result in results:
+                    plan = plan_by_worker[result.worker_id]
+                    error: str | None = result.start_error
+                    observations = legacy_translator_response(plan, result)
+                    if result.start_response is not None:
+                        # Append synthetic WORKER_FAILED observations for any
+                        # tasks the worker explicitly rejected.
+                        attempt_by_task = {
+                            d.task_id: d.attempt_id for d in plan.request.desired if d.intent_run is not None
+                        }
+                        for ack in result.start_response.acks:
+                            if ack.accepted:
+                                continue
+                            log_event(
+                                "task_rejected",
+                                ack.task_id,
+                                trigger="start_tasks_ack",
+                                worker=str(result.worker_id),
+                                error=ack.error,
+                            )
+                            observations.append(
+                                AttemptObservation(
+                                    attempt_uid=AttemptUid(""),
+                                    state=job_pb2.TASK_STATE_WORKER_FAILED,
+                                    error=f"Worker rejected task: {ack.error}",
+                                    task_id=ack.task_id,
+                                    attempt_id_compat=attempt_by_task.get(ack.task_id, -1),
+                                )
+                            )
+                    if result.poll_error is not None:
+                        logger.debug("PollTasks failed for worker %s: %s", result.worker_id, result.poll_error)
+                    self._transitions.apply_reconcile_response(cur, plan, observations, error, now)
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""

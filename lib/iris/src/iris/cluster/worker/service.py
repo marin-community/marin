@@ -36,6 +36,7 @@ class TaskProvider(Protocol):
     ) -> worker_pb2.Worker.StartTasksResponse: ...
     def handle_stop_tasks(self, request: worker_pb2.Worker.StopTasksRequest) -> worker_pb2.Worker.StopTasksResponse: ...
     def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse: ...
+    def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse: ...
     def capture_and_log_profile(
         self,
         *,
@@ -166,3 +167,9 @@ class WorkerServiceImpl:
     ) -> worker_pb2.Worker.PollTasksResponse:
         with rpc_error_handler("poll_tasks"):
             return self._provider.handle_poll_tasks(request)
+
+    def reconcile(
+        self, request: worker_pb2.Worker.ReconcileRequest, _ctx: RequestContext
+    ) -> worker_pb2.Worker.ReconcileResponse:
+        with rpc_error_handler("reconcile"):
+            return self._provider.handle_reconcile(request)

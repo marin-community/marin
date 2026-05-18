@@ -46,6 +46,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.engine.cursor import CursorResult
 
 from iris.cluster.controller.schema import auth_metadata, metadata
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,13 @@ def _make_engine(
 
 def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
     return _make_engine(db_path, read_only=False, pool_size=1, max_overflow=0, auth_db_path=auth_db_path)
+
+# States that require a stop-intent in the Reconcile desired set.
+# KILLED corresponds to user-cancelled tasks; PREEMPTED is set by the scheduler.
+# These are not in ACTIVE_TASK_STATES but the reconcile loop may still see rows
+# in these states if the query is expanded to cover non-active tasks.
+TASK_STATE_KILLED: int = job_pb2.TASK_STATE_KILLED
+TASK_STATE_PREEMPTED: int = job_pb2.TASK_STATE_PREEMPTED
 
 
 def _make_read_engine(db_path: Path, auth_db_path: Path | None) -> Engine:

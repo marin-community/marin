@@ -43,6 +43,8 @@ from iris.cluster.worker.env_probe import (
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.reconcile import SpecCache
+from iris.cluster.worker.reconcile import handle_reconcile as _handle_reconcile
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.stats import (
     TASK_STATS_NAMESPACE,
@@ -213,6 +215,9 @@ class Worker:
         # listed it in expected_tasks. See _RECENT_SUBMISSION_GRACE_SECONDS.
         self._recent_submissions: dict[tuple[str, int], float] = {}
         self._lock = threading.Lock()
+        # In-memory spec cache for the Reconcile RPC (Phase B+). Keyed by
+        # (task_id, attempt_id) until Phase C introduces attempt_uid routing.
+        self._spec_cache = SpecCache()
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
@@ -760,6 +765,7 @@ class Worker:
             port_allocator=self._port_allocator,
             log_client=self._log_client,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
+            fetch_request=lambda _t, _a: request,
         )
         attempt.on_state_change = self._make_state_change_callback(attempt)
 
@@ -842,18 +848,6 @@ class Worker:
             entry.finished_at.CopyFrom(task_proto.finished_at)
         return entry
 
-    @staticmethod
-    def _missing_task_status(task_id: str, expected_attempt_id: int) -> job_pb2.WorkerTaskStatus:
-        """Status for an expected task that the worker has no record of (lost state)."""
-        return job_pb2.WorkerTaskStatus(
-            task_id=task_id,
-            attempt_id=expected_attempt_id,
-            state=job_pb2.TASK_STATE_WORKER_FAILED,
-            exit_code=0,
-            error="Task not found on worker",
-            finished_at=timestamp_to_proto(Timestamp.now()),
-        )
-
     def _prune_and_get_recent_submission_keys(self) -> set[tuple[str, int]]:
         """Return keys submitted within the grace window, pruning stale entries.
 
@@ -871,19 +865,19 @@ class Worker:
     def _reconcile_expected_tasks(
         self,
         expected_entries,
-    ) -> tuple[list[job_pb2.WorkerTaskStatus], list[tuple[str, int]]]:
-        """Build status entries for expected tasks; collect non-terminal local tasks
-        not in the expected set as targets to kill.
+    ) -> tuple[list[job_pb2.WorkerTaskStatus], list[tuple[str, int]], list[tuple[str, int]]]:
+        """Partition expected tasks against local state.
 
-        Caller must hold ``self._lock``.
-
-        Freshly-submitted tasks (``self._recent_submissions``) are protected
-        from reconciliation kills via the grace window, which covers the
-        StartTasks → PollTasks race where the controller polls before its
-        internal view catches up with a task it just assigned.
+        Returns ``(status_entries, kill_keys, missing_keys)``: status entries
+        for expected tasks the worker is running, kill keys for non-terminal
+        local tasks not in the expected set, and missing keys (expected with
+        no local record and outside the recent-submission grace window) to be
+        fetched via GetTaskAttemptInfo. Caller must hold ``self._lock``.
         """
         tasks: list[job_pb2.WorkerTaskStatus] = []
         expected_keys: set[tuple[str, int]] = set()
+        missing_keys: list[tuple[str, int]] = []
+        recent_keys = self._prune_and_get_recent_submission_keys()
         for expected_entry in expected_entries:
             task_id = expected_entry.task_id
             expected_attempt_id = expected_entry.attempt_id
@@ -891,15 +885,16 @@ class Worker:
             expected_keys.add(key)
             task = self._tasks.get(key)
             if task is None:
-                tasks.append(self._missing_task_status(task_id, expected_attempt_id))
+                if key not in recent_keys:
+                    missing_keys.append(key)
             else:
                 tasks.append(self._encode_task_status(task, task_id))
-        expected_keys |= self._prune_and_get_recent_submission_keys()
+        expected_keys |= recent_keys
         tasks_to_kill: list[tuple[str, int]] = []
         for key, task in self._tasks.items():
             if key not in expected_keys and task.status not in self._TERMINAL_STATES:
                 tasks_to_kill.append(key)
-        return tasks, tasks_to_kill
+        return tasks, tasks_to_kill, missing_keys
 
     def _collect_resource_metrics(self) -> job_pb2.WorkerResourceSnapshot:
         """Collect host metrics with running-task and process aggregates filled in."""
@@ -957,16 +952,8 @@ class Worker:
         table.write([stat])
 
     def handle_start_tasks(self, request: worker_pb2.Worker.StartTasksRequest) -> worker_pb2.Worker.StartTasksResponse:
-        """Start task attempts on this worker. Returns per-task ack."""
-        acks = []
-        for run_req in request.tasks:
-            try:
-                self.submit_task(run_req)
-                logger.info("StartTasks: submitted task %s", run_req.task_id)
-                acks.append(worker_pb2.Worker.TaskAck(task_id=run_req.task_id, accepted=True))
-            except Exception as e:
-                logger.warning("StartTasks: failed to submit task %s: %s", run_req.task_id, e)
-                acks.append(worker_pb2.Worker.TaskAck(task_id=run_req.task_id, accepted=False, error=str(e)))
+        """Compat stub: acks every entry. Submission happens via PollTasks."""
+        acks = [worker_pb2.Worker.TaskAck(task_id=run_req.task_id, accepted=True) for run_req in request.tasks]
         return worker_pb2.Worker.StartTasksResponse(acks=acks)
 
     def handle_stop_tasks(self, request: worker_pb2.Worker.StopTasksRequest) -> worker_pb2.Worker.StopTasksResponse:
@@ -982,18 +969,94 @@ class Worker:
         return worker_pb2.Worker.StopTasksResponse()
 
     def handle_poll_tasks(self, request: worker_pb2.Worker.PollTasksRequest) -> worker_pb2.Worker.PollTasksResponse:
-        """Report status of expected tasks and kill unexpected tasks.
+        """Report status of expected tasks, kill unexpected tasks, and enqueue
+        any expected tasks the worker has no local record of.
 
-        Freshly-submitted tasks (via StartTasks) are protected from the
-        StartTasks → PollTasks race by the recent-submission grace window
-        applied in _reconcile_expected_tasks.
+        Enqueued attempts go through the normal TaskAttempt lifecycle —
+        fetch spec → setup → run — so spec-fetch failures use the same
+        WORKER_FAILED path as any other infra failure.
         """
         with self._lock:
-            tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks)
+            tasks, tasks_to_kill, missing_keys = self._reconcile_expected_tasks(request.expected_tasks)
         for task_id, attempt_id in tasks_to_kill:
             logger.warning("PollTasks: killing task %s attempt %d (unexpected)", task_id, attempt_id)
             self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+        for task_id, attempt_id in missing_keys:
+            self.enqueue_attempt(task_id, attempt_id)
         return worker_pb2.Worker.PollTasksResponse(tasks=tasks)
+
+    def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse:
+        """Reconcile handler: process desired state from the controller and return observed state.
+
+        Delegates to the module-level ``handle_reconcile as _handle_reconcile`` function which
+        contains the logic. The ``SpecCache`` lives on the Worker so it persists
+        across calls for the lifetime of the worker process.
+        """
+        return _handle_reconcile(self, self._spec_cache, request)
+
+    def enqueue_attempt(self, task_id_wire: str, attempt_id: int) -> None:
+        """Install a placeholder TaskAttempt that fetches its own spec on run().
+
+        The attempt enters ``self._tasks`` immediately so subsequent polls see
+        it locally (no separate pending-fetch bookkeeping). Spec fetch is the
+        first step of ``run()``; failure raises ``ContainerInfraError`` which
+        the existing handler maps to WORKER_FAILED.
+        """
+        task_id = JobName.from_wire(task_id_wire)
+        task_id.require_task()
+        key = (task_id_wire, attempt_id)
+
+        placeholder = job_pb2.RunTaskRequest(task_id=task_id_wire, attempt_id=attempt_id)
+        config = TaskAttemptConfig(
+            task_attempt=TaskAttemptId(task_id=task_id, attempt_id=attempt_id),
+            num_tasks=1,
+            request=placeholder,
+            cache_dir=self._cache_dir,
+        )
+        attempt = TaskAttempt(
+            config=config,
+            bundle_store=self._bundle_store,
+            container_runtime=self._runtime,
+            worker_metadata=self._worker_metadata,
+            worker_id=self._worker_id,
+            controller_address=self._config.controller_address,
+            task_env=self._config.task_env,
+            default_task_image=self._config.default_task_image,
+            resolve_image=self._config.resolve_image,
+            port_allocator=self._port_allocator,
+            log_client=self._log_client,
+            poll_interval_seconds=self._config.poll_interval.to_seconds(),
+            fetch_request=self._fetch_attempt_info,
+        )
+        attempt.on_state_change = self._make_state_change_callback(attempt)
+
+        with self._lock:
+            if key in self._tasks:
+                return
+            self._tasks[key] = attempt
+            self._recent_submissions[key] = time.monotonic()
+
+        def _run_task(stop_event: threading.Event) -> None:
+            attempt.run()
+
+        def _stop_task() -> None:
+            try:
+                attempt.stop(force=True)
+            except RuntimeError:
+                pass
+
+        mt = self._task_threads.spawn(target=_run_task, name=f"task-{task_id_wire}", on_stop=_stop_task)
+        attempt.thread = mt._thread
+
+    def _fetch_attempt_info(self, task_id: str, attempt_id: int) -> job_pb2.RunTaskRequest:
+        """Fetch the ``RunTaskRequest`` for ``(task_id, attempt_id)`` from the controller."""
+        assert self._controller_client is not None, "controller client must be initialized before attempt-info fetches"
+        return self._controller_client.get_task_attempt_info(
+            controller_pb2.Controller.GetTaskAttemptInfoRequest(
+                task_id=task_id,
+                attempt_id=attempt_id,
+            )
+        )
 
     def _kill_task_attempt(
         self,
