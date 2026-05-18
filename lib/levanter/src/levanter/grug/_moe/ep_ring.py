@@ -12,7 +12,7 @@ from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe_ep_common import _prefix_cap_counts
+from levanter.grug._moe.ep_common import _prefix_cap_counts
 
 
 def _moe_mlp_ep_ring_local(

@@ -10,7 +10,7 @@ from jax._src import config as jax_config
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
 import levanter.grug.grug_moe as grug_moe
-from levanter.grug._moe_sonic_xla import _moe_mlp_local_sonic_xla_interleaved_reference
+from levanter.grug._moe.sonic_xla import _moe_mlp_local_sonic_xla_interleaved_reference
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,

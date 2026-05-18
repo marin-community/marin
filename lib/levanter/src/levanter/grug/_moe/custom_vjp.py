@@ -8,7 +8,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe_common import _gather_sum_reference
+from levanter.grug._moe.common import _gather_sum_reference
 
 
 def _custom_vjp_down_bwd(

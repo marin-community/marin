@@ -10,8 +10,8 @@ Implementation overview:
 - Expert parallelism keeps the ring-style strategy from
   https://github.com/marin-community/marin/issues/2710: token-sharded
   `all_gather` for dispatch, then `psum_scatter` for collection.
-- Backend bodies live in focused `moe_*` modules; this module keeps the stable
-  public API used by Grug model code and benchmarks.
+- Backend bodies live in the private `levanter.grug._moe` package; this module
+  keeps the stable public API used by Grug model code and benchmarks.
 """
 
 from collections.abc import Callable
@@ -25,7 +25,7 @@ from jax import shard_map
 from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
-from levanter.grug._moe_common import (
+from levanter.grug._moe.common import (
     _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS,
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
@@ -46,15 +46,15 @@ from levanter.grug._moe_common import (
     resolve_moe_implementation,
     split_moe_w13_output,
 )
-from levanter.grug._moe_ep_common import (
+from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes as _clip_receiver_group_sizes,
     _compact_by_keep_mask as _compact_by_keep_mask,
     _expand_from_keep_mask as _expand_from_keep_mask,
     _shard_a2a_params as _shard_a2a_params,
 )
-from levanter.grug._moe_ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
-from levanter.grug._moe_ep_ring import _moe_mlp_ep_ring_local
-from levanter.grug._moe_local import _moe_mlp_local
+from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
+from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
+from levanter.grug._moe.local import _moe_mlp_local
 from levanter.utils.activation import ActivationFunctionEnum
 
 

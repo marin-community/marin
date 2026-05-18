@@ -8,9 +8,9 @@ from collections.abc import Callable
 import jax
 from jaxtyping import Array, Float, Int
 
-from levanter.grug._moe_common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
-from levanter.grug._moe_scatter import _moe_mlp_local_scatter
-from levanter.grug._moe_sonic_xla import (
+from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
+from levanter.grug._moe.scatter import _moe_mlp_local_scatter
+from levanter.grug._moe.sonic_xla import (
     _moe_mlp_local_sonic_xla,
     _moe_mlp_local_sonic_xla_interleaved,
 )

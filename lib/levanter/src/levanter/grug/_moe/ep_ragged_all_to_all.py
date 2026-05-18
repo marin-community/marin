@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe_ep_common import (
+from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes,
     _compact_by_keep_mask,
     _expand_from_keep_mask,
