@@ -11,6 +11,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
+from iris.cluster.controller import reads
 from iris.cluster.controller.auth import (
     WORKER_USER,
     ControllerAuth,
@@ -20,12 +21,16 @@ from iris.cluster.controller.auth import (
     list_api_keys,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore
 from iris.cluster.controller.transitions import ControllerTransitions
+from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity, hash_token
 from rigging.timing import Timestamp
+
+from tests.cluster.conftest import fake_log_client_from_service
 
 
 @pytest.fixture
@@ -37,23 +42,28 @@ def db(tmp_path):
 
 def _make_service(db, auth=None):
     """Create a ControllerServiceImpl with minimal dependencies for API key tests."""
-    store = ControllerStore(db)
-    state = ControllerTransitions(store=store)
+    health = WorkerHealthTracker()
+    endpoints = EndpointsProjection(db)
+    worker_attrs = WorkerAttrsProjection(db)
+    state = ControllerTransitions(db, health=health, endpoints=endpoints, worker_attrs=worker_attrs)
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
-    controller_mock.create_scheduling_context = Mock(return_value=Mock())
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
+    controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = None
     controller_mock.provider = Mock()
     controller_mock.has_direct_provider = False
 
     return ControllerServiceImpl(
         state,
-        store,
         controller=controller_mock,
         bundle_store=BundleStore(storage_dir=str(db.db_path.parent / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=db,
+        health=health,
+        endpoints=endpoints,
+        worker_attrs=worker_attrs,
         auth=auth or ControllerAuth(),
     )
 
@@ -125,7 +135,8 @@ def test_admin_users_bootstrapped(db):
         admin_users=["alice"],
     )
     create_controller_auth(config, db=db)
-    assert db.get_user_role("alice") == "admin"
+    with db.read_snapshot() as snap:
+        assert reads.get_user_role(snap, "alice") == "admin"
 
 
 def test_login_verifier_set_for_gcp(db):
@@ -222,7 +233,7 @@ def test_login_is_idempotent(db):
 
     # Only 1 active login key
     all_keys = list_api_keys(db, user_id="alice@example.com")
-    active = [k for k in all_keys if k.revoked_at is None]
+    active = [k for k in all_keys if k.revoked_at_ms is None]
     assert len(active) == 1
     assert active[0].key_id == resp2.key_id
 
@@ -425,7 +436,8 @@ def test_null_auth_creates_anonymous_admin_and_worker_token(db):
     """No auth config + DB bootstraps anonymous admin and generates worker token."""
     config = config_pb2.AuthConfig()
     auth = create_controller_auth(config, db=db)
-    assert db.get_user_role("anonymous") == "admin"
+    with db.read_snapshot() as snap:
+        assert reads.get_user_role(snap, "anonymous") == "admin"
     assert auth.verifier is not None
     assert auth.worker_token is not None
     assert auth.provider is None

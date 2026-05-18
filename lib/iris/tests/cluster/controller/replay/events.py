@@ -12,16 +12,15 @@ and ``*_for_test`` helpers are intentionally excluded — scenarios call
 those methods directly when needed.
 """
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.projections.endpoints import EndpointRow
+from iris.cluster.controller.reads import ReservationClaim
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
-    ReservationClaim,
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId
@@ -55,7 +54,6 @@ class RegisterOrRefreshWorker:
 @dataclass(frozen=True, slots=True)
 class QueueAssignments:
     assignments: list[Assignment]
-    direct_dispatch: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +96,7 @@ class RemoveWorker:
 
 @dataclass(frozen=True, slots=True)
 class UpdateWorkerPings:
-    snapshots: Mapping[WorkerId, job_pb2.WorkerResourceSnapshot | None]
+    worker_ids: list[WorkerId]
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,11 +107,6 @@ class DrainForDirectProvider:
 @dataclass(frozen=True, slots=True)
 class ApplyDirectProviderUpdates:
     updates: list[TaskUpdate]
-
-
-@dataclass(frozen=True, slots=True)
-class BufferDirectKill:
-    task_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +139,6 @@ IrisEvent = (
     | UpdateWorkerPings
     | DrainForDirectProvider
     | ApplyDirectProviderUpdates
-    | BufferDirectKill
     | AddEndpoint
     | RemoveEndpoint
     | ReplaceReservationClaims
@@ -162,8 +154,7 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
     granularity as the main-flavor dispatcher that opens its own tx
     inside each method.
     """
-    store = transitions._store
-    with store.transaction() as cur:
+    with transitions._db.transaction() as cur:
         match event:
             case SubmitJob(job_id, request, ts):
                 return transitions.submit_job(cur, job_id, request, ts)
@@ -179,8 +170,8 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
                     slice_id=slice_id,
                     scale_group=scale_group,
                 )
-            case QueueAssignments(assignments, direct_dispatch):
-                return transitions.queue_assignments(cur, assignments, direct_dispatch=direct_dispatch)
+            case QueueAssignments(assignments):
+                return transitions.queue_assignments(cur, assignments)
             case ApplyTaskUpdates(request):
                 return transitions.apply_task_updates(cur, request)
             case ApplyHeartbeatsBatch(requests):
@@ -195,14 +186,12 @@ def apply_event(transitions: ControllerTransitions, event: IrisEvent) -> Any:
                 return transitions.remove_finished_job(cur, job_id)
             case RemoveWorker(worker_id):
                 return transitions.remove_worker(cur, worker_id)
-            case UpdateWorkerPings(snapshots):
-                return transitions.update_worker_pings(cur, snapshots)
+            case UpdateWorkerPings(worker_ids):
+                return transitions.update_worker_pings(worker_ids)
             case DrainForDirectProvider(max_promotions):
                 return transitions.drain_for_direct_provider(cur, max_promotions)
             case ApplyDirectProviderUpdates(updates):
                 return transitions.apply_direct_provider_updates(cur, updates)
-            case BufferDirectKill(task_id):
-                return transitions.buffer_direct_kill(cur, task_id)
             case AddEndpoint(endpoint):
                 return transitions.add_endpoint(cur, endpoint)
             case RemoveEndpoint(endpoint_id):

@@ -107,7 +107,7 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
         tag=local_tag,
         push=True,
         context=None,
-        platform="linux/amd64",
+        platform="linux/amd64,linux/arm64",
         ghcr_org=org,
         verbose=verbose,
     )
@@ -136,7 +136,7 @@ def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
         tag=local_tag,
         push=True,
         context=marin_root,
-        platform="linux/amd64",
+        platform="linux/amd64,linux/arm64",
         ghcr_org=org,
         verbose=verbose,
     )
@@ -436,11 +436,18 @@ def _require_log_server_config(ctx: click.Context) -> str:
 
 
 @log_server.command("up")
+@click.option(
+    "--build/--no-build",
+    "build",
+    default=True,
+    show_default=True,
+    help="Build and push the finelog image before provisioning. Pass --no-build to use the registry's existing :latest.",
+)
 @click.pass_context
-def log_server_up(ctx: click.Context) -> None:
+def log_server_up(ctx: click.Context, build: bool) -> None:
     """Provision/refresh the cluster's finelog deployment (idempotent)."""
     name = _require_log_server_config(ctx)
-    up_cmd.callback(name=name)
+    up_cmd.callback(name=name, build=build)
 
 
 @log_server.command("down")
@@ -453,11 +460,18 @@ def log_server_down(ctx: click.Context, yes: bool) -> None:
 
 
 @log_server.command("restart")
+@click.option(
+    "--build/--no-build",
+    "build",
+    default=True,
+    show_default=True,
+    help="Build and push the finelog image before restarting. Pass --no-build to reuse the registry's :latest.",
+)
 @click.pass_context
-def log_server_restart(ctx: click.Context) -> None:
+def log_server_restart(ctx: click.Context, build: bool) -> None:
     """Restart the cluster's finelog deployment."""
     name = _require_log_server_config(ctx)
-    restart_cmd.callback(name=name)
+    restart_cmd.callback(name=name, build=build)
 
 
 @log_server.command("status")
@@ -723,10 +737,17 @@ def vm_status(ctx, scale_group):
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
         click.echo(f"    Failed: {counts.get('failed', 0)}")
         click.echo(f"  Demand: {group.current_demand} (peak: {group.peak_demand})")
-        backoff_ms = timestamp_from_proto(group.backoff_until).epoch_ms()
-        if backoff_ms > 0:
-            click.echo(f"  Backoff until: {_format_timestamp(backoff_ms)}")
-            click.echo(f"  Consecutive failures: {group.consecutive_failures}")
+        # Availability / churn status. ``consecutive_failures`` in the proto now
+        # carries the windowed failure count from BackoffDetector — see
+        # ``ScalingGroup.to_status``.
+        if group.availability_status and group.availability_status != "available":
+            reason = f" - {group.availability_reason}" if group.availability_reason else ""
+            click.echo(f"  Availability: {group.availability_status}{reason}")
+            blocked_ms = timestamp_from_proto(group.blocked_until).epoch_ms()
+            if blocked_ms > 0:
+                click.echo(f"  Blocked until: {_format_timestamp(blocked_ms)}")
+        if group.consecutive_failures > 0:
+            click.echo(f"  Recent failures: {group.consecutive_failures}")
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:

@@ -1,22 +1,4 @@
 {
-  "dispatch_queue": [
-    {
-      "created_at_ms": 1704067200000,
-      "id": 1,
-      "kind": "run",
-      "payload_proto": "ChcvdGVzdC11c2VyL2NhbmNlbC1qb2IvMBACGhQSEgoGcHl0aG9uCgItYwoEcGFzcyIAKgAyDQjoByCAgICABCoASABIAFoA",
-      "task_id": null,
-      "worker_id": "w-cancel"
-    },
-    {
-      "created_at_ms": 1704067200000,
-      "id": 2,
-      "kind": "run",
-      "payload_proto": "ChcvdGVzdC11c2VyL2NhbmNlbC1qb2IvMRACGhQSEgoGcHl0aG9uCgItYwoEcGFzcyIAKgAyDQjoByCAgICABCoASABIAFoA",
-      "task_id": null,
-      "worker_id": "w-cancel"
-    }
-  ],
   "endpoints": [],
   "job_config": [
     {
@@ -89,7 +71,7 @@
       "created_at_ms": 1704067200000,
       "error": "user-cancel",
       "exit_code": null,
-      "finished_at_ms": 1704067200001,
+      "finished_at_ms": null,
       "started_at_ms": null,
       "state": 6,
       "task_id": "/test-user/cancel-job/0",
@@ -100,14 +82,13 @@
       "created_at_ms": 1704067200000,
       "error": "user-cancel",
       "exit_code": null,
-      "finished_at_ms": 1704067200001,
+      "finished_at_ms": null,
       "started_at_ms": null,
       "state": 6,
       "task_id": "/test-user/cancel-job/1",
       "worker_id": "w-cancel"
     }
   ],
-  "task_resource_history": [],
   "tasks": [
     {
       "container_id": null,
@@ -175,34 +156,11 @@
       "worker_id": "w-cancel"
     }
   ],
-  "worker_resource_history": [],
-  "worker_task_history": [
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 1,
-      "task_id": "/test-user/cancel-job/0",
-      "worker_id": "w-cancel"
-    },
-    {
-      "assigned_at_ms": 1704067200000,
-      "id": 2,
-      "task_id": "/test-user/cancel-job/1",
-      "worker_id": "w-cancel"
-    }
-  ],
   "workers": [
     {
-      "active": 1,
       "address": "w-cancel:8080",
-      "committed_cpu_millicores": 0,
-      "committed_gpu": 0,
-      "committed_mem_bytes": 0,
-      "committed_tpu": 0,
-      "consecutive_failures": 0,
       "device_type": "",
       "device_variant": "",
-      "healthy": 1,
-      "last_heartbeat_ms": 1704067200000,
       "md_cpu_count": 8,
       "md_device_json": "{\"cpu\": {\"variant\": \"cpu\"}}",
       "md_disk_bytes": 17179869184,
@@ -221,15 +179,6 @@
       "md_tpu_worker_id": "",
       "scale_group": "",
       "slice_id": "",
-      "snapshot_disk_total_bytes": null,
-      "snapshot_disk_used_bytes": null,
-      "snapshot_host_cpu_percent": null,
-      "snapshot_memory_total_bytes": null,
-      "snapshot_memory_used_bytes": null,
-      "snapshot_net_recv_bps": null,
-      "snapshot_net_sent_bps": null,
-      "snapshot_running_task_count": null,
-      "snapshot_total_process_count": null,
       "total_cpu_millicores": 8000,
       "total_gpu_count": 0,
       "total_memory_bytes": 17179869184,

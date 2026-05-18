@@ -62,9 +62,6 @@ from iris.time_proto import duration_from_proto, timestamp_to_proto
 logger = logging.getLogger(__name__)
 
 
-# Slices that die within this time of creation trigger backoff (preemption detection)
-SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
-
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
 
@@ -308,6 +305,9 @@ class Autoscaler:
             decisions: List of scaling decisions to execute.
             timestamp: Current timestamp.
         """
+        # Aggregate rate-limited decisions per group so we emit a single summary
+        # line per group per cycle instead of one per deferred slice (#5580).
+        rate_limited: dict[str, list[ScalingDecision]] = {}
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -315,15 +315,27 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
-                if not group.acquire_scale_up_token(timestamp):
-                    logger.info("Rate-limited scale-up for %s: %s", decision.scale_group, decision.reason)
-                    self._log_action(
-                        "rate_limited",
-                        decision.scale_group,
-                        reason=decision.reason,
-                    )
+                if not group.try_acquire_scale_up(timestamp):
+                    rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
+
+        for scale_group, deferred in rate_limited.items():
+            # All decisions in a cycle share the same target/demand snapshot;
+            # the first reason is representative of the whole batch.
+            sample_reason = deferred[0].reason
+            summary = f"deferred={len(deferred)} sample_reason={sample_reason}"
+            logger.info(
+                "Rate-limited scale-up for %s: deferred %d slice(s) (sample reason: %s)",
+                scale_group,
+                len(deferred),
+                sample_reason,
+            )
+            self._log_action(
+                "rate_limited",
+                scale_group,
+                reason=summary,
+            )
 
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.
@@ -378,7 +390,7 @@ class Autoscaler:
             logger.exception("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
-            group.record_failure(ts)
+            group.record_create_failed(ts)
             return False
 
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
@@ -426,7 +438,7 @@ class Autoscaler:
                     group.mark_slice_failed(slice_id, error_message=status.error_message)
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
-                    group.record_failure()
+                    group.record_slice_boot_failed(slice_id, timestamp)
                     reason = status.error_message if status.error_message else "bootstrap failed"
                     self._log_action(
                         "slice_failed",
@@ -441,7 +453,7 @@ class Autoscaler:
                         group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                         group.scale_down(slice_id)
                         self._unregister_slice_workers(slice_id)
-                        group.record_failure()
+                        group.record_slice_boot_failed(slice_id, timestamp)
                         self._log_action(
                             "slice_failed",
                             group.name,
@@ -602,7 +614,6 @@ class Autoscaler:
             unregister_slice_workers=self._unregister_slice_workers,
             log_action=self._log_action,
             timestamp=Timestamp.now(),
-            short_lived_slice_threshold=SHORT_LIVED_SLICE_THRESHOLD,
         )
         for request in result.termination_requests:
 

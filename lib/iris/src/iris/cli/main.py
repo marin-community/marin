@@ -18,35 +18,36 @@ from iris.cli.token_store import cluster_name_from_url, load_any_token, load_tok
 from iris.rpc import config_pb2, job_pb2
 from iris.rpc import controller_pb2 as _controller_pb2
 from iris.rpc.auth import AuthTokenInjector, GcpAccessTokenProvider, StaticTokenProvider, TokenProvider
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.rpc.proto_utils import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
 logger = _logging_module.getLogger(__name__)
 
 
-def _bundled_iris_examples_dir() -> str | None:
-    """Return the iris package's bundled examples/ dir when it ships on disk.
+def _bundled_iris_config_dir() -> str | None:
+    """Return the iris package's bundled config/ dir when it ships on disk.
 
-    Probes two layouts because the examples directory can physically live in
+    Probes two layouts because the config directory can physically live in
     two places depending on how iris was installed:
 
     1. Wheel installs (site-packages): hatchling force-include places the
-       yamls at ``iris/examples/`` inside the package. Resolve that via
-       ``Path(__file__).parent.parent / "examples"``.
+       yamls at ``iris/config/`` inside the package. Resolve that via
+       ``Path(__file__).parent.parent / "config"``.
     2. Editable workspace installs: the yamls stay at their source location
-       ``lib/iris/examples/`` — reachable via ``parents[3] / "examples"`` from
+       ``lib/iris/config/`` — reachable via ``parents[3] / "config"`` from
        ``lib/iris/src/iris/cli/main.py``.
 
     Returns the first directory that exists, or ``None`` for wheel installs
-    that don't ship examples at all.
+    that don't ship configs at all.
     """
     here = Path(__file__).resolve()
-    # Wheel install: examples is a sibling of cli/ inside the iris package.
-    wheel_path = here.parent.parent / "examples"
+    # Wheel install: config is a sibling of cli/ inside the iris package.
+    wheel_path = here.parent.parent / "config"
     if wheel_path.is_dir():
         return str(wheel_path)
-    # Editable install: examples lives at lib/iris/examples/ (parents[3]).
-    editable_path = here.parents[3] / "examples"
+    # Editable install: config lives at lib/iris/config/ (parents[3]).
+    editable_path = here.parents[3] / "config"
     if editable_path.is_dir():
         return str(editable_path)
     return None
@@ -59,8 +60,8 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
     p
     for p in (
         "~/.config/marin/clusters",  # user override — checked first
-        "lib/iris/examples",  # in-tree marin checkout
-        _bundled_iris_examples_dir(),  # editable install from sibling workspace
+        "lib/iris/config",  # in-tree marin checkout
+        _bundled_iris_config_dir(),  # editable install from sibling workspace
     )
     if p is not None
 )
@@ -124,13 +125,19 @@ def rpc_client(
 ) -> ControllerServiceClientSync:
     """Create an RPC client with optional auth. Use as a context manager: ``with rpc_client(url) as c:``."""
     interceptors = [AuthTokenInjector(token_provider)] if token_provider else []
-    return ControllerServiceClientSync(address, timeout_ms=timeout_ms, interceptors=interceptors)
+    return ControllerServiceClientSync(
+        address,
+        timeout_ms=timeout_ms,
+        interceptors=interceptors,
+        accept_compression=IRIS_RPC_COMPRESSIONS,
+        send_compression=None,
+    )
 
 
 def require_controller_url(ctx: click.Context) -> str:
     """Get controller_url from context, establishing a tunnel lazily if needed.
 
-    On first call with a --config, this establishes the tunnel to the controller
+    On first call with a loaded config, this establishes the tunnel to the controller
     and caches the result. Subsequent calls return the cached URL.
     Commands that don't call this (e.g. ``cluster start``) never pay tunnel cost.
     """
@@ -185,12 +192,17 @@ def require_controller_url(ctx: click.Context) -> str:
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.option("--traceback", "show_traceback", is_flag=True, help="Show full stack traces on errors")
 @click.option("--controller-url", help="Controller URL (e.g., http://localhost:10000)")
-@click.option("--config", "config_file", type=click.Path(exists=True), help="Cluster config file")
+@click.option(
+    "--config",
+    "config_file",
+    type=click.Path(exists=True),
+    help="Exact cluster config YAML path; use for custom configs or pinned files",
+)
 @click.option(
     "--cluster",
     "cluster_name",
     default=None,
-    help="Cluster name (resolves config automatically) or used for token lookup",
+    help="Named cluster to resolve from config search paths; preferred for known clusters",
 )
 @click.pass_context
 def iris(

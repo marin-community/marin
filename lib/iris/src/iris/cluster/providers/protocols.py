@@ -16,7 +16,7 @@ from __future__ import annotations
 from contextlib import AbstractContextManager
 from typing import Protocol
 
-from iris.cluster.providers.types import SliceHandle, StandaloneWorkerHandle
+from iris.cluster.providers.types import ListedSlice, SliceHandle, StandaloneWorkerHandle
 from iris.rpc import config_pb2
 
 
@@ -123,8 +123,8 @@ class WorkerInfraProvider(Protocol):
         """List existing slices, filtered by zone and optionally by labels."""
         ...
 
-    def list_all_slices(self) -> list[SliceHandle]:
-        """List all slices managed by this cluster across all zones."""
+    def list_all_slices(self) -> list[ListedSlice]:
+        """List every iris-managed slice across all zones, paired with its cloud state."""
         ...
 
     def list_vms(

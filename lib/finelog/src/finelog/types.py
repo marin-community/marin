@@ -7,12 +7,12 @@ Finelog treats keys as opaque strings — any structure (e.g.
 ``/user/<job>/<task>:<attempt>``) is caller convention, not a finelog
 concern. The only exception is ``parse_attempt_id`` below, which the
 DuckDB store uses to populate ``LogEntry.attempt_id`` for entries fetched
-through pattern queries (best-effort; falls back to 0 on parse failure).
+through PREFIX/REGEX queries that span multiple keys (best-effort; falls
+back to 0 on parse failure).
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -20,12 +20,6 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from finelog.rpc import logging_pb2
-
-# Characters that indicate a regex pattern (vs. a literal key).
-REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
-
-# Rough per-row size estimate for backpressure accounting in DuckDBLogStore.
-_EST_BYTES_PER_ROW = 256
 
 
 @dataclass
@@ -40,10 +34,16 @@ class LogStoreProtocol(Protocol):
     def append_batch(self, items: list[tuple[str, list]]) -> None: ...
 
 
-class LogPusherProtocol(Protocol):
-    """Minimal interface for pushing log entries to the LogService."""
+class LogWriterProtocol(Protocol):
+    """Minimal interface for writing log entries to the LogService.
 
-    def push(self, key: str, entries: list[logging_pb2.LogEntry]) -> None: ...
+    Satisfied by :class:`finelog.client.LogClient` (via ``write_batch``) and
+    by lightweight test fakes that don't want to subclass LogClient. The
+    protocol exists so collectors can accept either without import-cycling
+    through ``finelog.client``.
+    """
+
+    def write_batch(self, key: str, messages: list[logging_pb2.LogEntry]) -> None: ...
 
 
 _STR_TO_ENUM = {
