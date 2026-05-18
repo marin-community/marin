@@ -84,6 +84,17 @@ class GrugModelConfig:
     use_partial_rope: bool = False
     # Force the last layer to use long sliding window + PKO.
     last_layer_pko: bool = False
+    # If set, the per-token MoE combine weights ``sigmoid(unbiased_topk)``
+    # are rescaled to sum to this value across the K selected experts.
+    routing_renorm_sum: float | None = None
+    # MoEMLP storage layout. ``True``: store ``w_gate`` and ``w_up`` as
+    # separate ``(e, d, i)`` tensors, concat on forward.
+    split_w_gate_up: bool = False
+    # PKO ordering vs qk-norm.
+    # ``"norm_first"`` (default): rms_norm(q,k) -> PKO shift -> partial RoPE.
+    # ``"pko_first_bos_zero"``: PKO shift -> zero k.stationary at doc-starts
+    #     (segment_ids) -> rms_norm(q,k) -> partial RoPE.
+    pko_norm_order: str = "norm_first"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -101,6 +112,10 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.routing_renorm_sum is not None and self.routing_renorm_sum <= 0:
+            raise ValueError("routing_renorm_sum must be positive when set")
+        if self.pko_norm_order not in ("norm_first", "pko_first_bos_zero"):
+            raise ValueError(f"pko_norm_order must be 'norm_first' or 'pko_first_bos_zero'; got {self.pko_norm_order!r}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -177,9 +192,38 @@ class CausalSelfAttention(eqx.Module):
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+
+        # ``pko_first_bos_zero``: shift k.stationary + zero at doc-starts
+        # BEFORE rms_norm. The joint k is then normalised as a whole.
+        if use_partial_key_offset and self.cfg.pko_norm_order == "pko_first_bos_zero":
+            half = head_dim // 2
+            k_stationary = k[..., half:]
+            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
+            seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
+            if seg is not None:
+                q_seg = seg[0]
+                if q_seg.ndim == 1:
+                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
+                else:
+                    is_doc_start = jnp.concatenate(
+                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
+                        axis=1,
+                    )
+                k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
+            k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
+
         q = rms_norm(q)
         k = rms_norm(k)
-        if use_partial_key_offset:
+        if use_partial_key_offset and self.cfg.pko_norm_order == "pko_first_bos_zero":
+            # PKO shift + bos-zero already applied above; just partial RoPE now.
+            half = head_dim // 2
+            q_rot, k_rot = apply_rotary_embedding(
+                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+            )
+            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        elif use_partial_key_offset:
             # Partial RoPE: only rotate the first half of head dims.
             # Concatenate rotated and stationary halves to avoid sharding issues
             # with .at[].set() on model-sharded arrays.
@@ -387,7 +431,9 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    w_gate_up: jax.Array
+    w_gate_up: jax.Array | None
+    w_gate: jax.Array | None
+    w_up: jax.Array | None
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -401,17 +447,22 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
-        w_gate = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
-        w_up = _init_weight(k_up, (e, d, i), cfg.initializer_std)
-        # TODO: Explore whether concatenating gate/up at init (instead of keeping separate params)
-        # is (1) a meaningful MFU speedup and (2) a meaningful perf hit due to AdamH treating the
-        # concatenated tensor as a single parameter for its scale-invariant norm computation.
-        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
-
+        w_gate_full = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
+        w_up_full = _init_weight(k_up, (e, d, i), cfg.initializer_std)
+        if cfg.split_w_gate_up:
+            w_gate_up: jax.Array | None = None
+            w_gate: jax.Array | None = reshard(w_gate_full, P("expert", "data", "model"))
+            w_up: jax.Array | None = reshard(w_up_full, P("expert", "data", "model"))
+        else:
+            w_gate_up = reshard(jnp.concatenate([w_gate_full, w_up_full], axis=-1), P("expert", "data", "model"))
+            w_gate = None
+            w_up = None
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate_up=reshard(w_gate_up, P("expert", "data", "model")),
+            w_gate_up=w_gate_up,
+            w_gate=w_gate,
+            w_up=w_up,
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
             cfg=cfg,
         )
@@ -433,7 +484,11 @@ class MoEMLP(eqx.Module):
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights = jax.nn.sigmoid(unbiased_topk).astype(x.dtype)
+        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        if self.cfg.routing_renorm_sum is not None:
+            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+            combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+        combine_weights = combine_weights_f.astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
             router_probs,
@@ -464,11 +519,15 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        if self.w_gate_up is not None:
+            w_gate_up = self.w_gate_up
+        else:
+            w_gate_up = reshard(jnp.concatenate([self.w_gate, self.w_up], axis=-1), P("expert", "data", "model"))
         routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
-            self.w_gate_up,
+            w_gate_up,
             self.w_down,
             activation=ActivationFunctionEnum.silu,
             mesh=get_abstract_mesh(),
