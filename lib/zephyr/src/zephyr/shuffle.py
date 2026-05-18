@@ -49,7 +49,7 @@ import msgspec
 import zstandard as zstd
 from iris.env_resources import TaskResources
 from rigging.filesystem import open_url, url_to_fs
-from rigging.timing import log_time
+from rigging.timing import RateLimiter, log_time
 
 from zephyr.plan import deterministic_hash
 from zephyr.writers import ensure_parent_dir
@@ -121,6 +121,11 @@ _SUB_BATCH_SIZE = 1024
 _SCATTER_WRITE_BUFFER_FRACTION = 0.25
 # Static fallback used when the cgroup memory limit cannot be determined.
 _SCATTER_WRITE_BUFFER_BYTES_FALLBACK = 256 * 1024 * 1024  # 256 MB
+# Minimum wall-clock seconds between per-flush progress lines per ScatterWriter.
+# High-fanout shuffles produce many tiny chunks at sub-millisecond cadence; a
+# count-based gate (e.g. % 10) still floods logs. Time-based gating bounds
+# volume to one line/minute/worker regardless of chunk rate or size.
+_PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 
 
 def _default_scatter_write_buffer_bytes() -> int:
@@ -521,6 +526,9 @@ class ScatterWriter:
         self._avg_item_bytes: float = 0.0
         self._sampled_avg = False
         self._n_chunks_written = 0
+        # Throttles the per-flush progress log so high-fanout workloads (many
+        # tiny chunks) cannot flood the log backend. See #5678.
+        self._progress_log_limiter = RateLimiter(interval_seconds=_PROGRESS_LOG_INTERVAL_SECONDS)
         self._mid_write_flushes: int = 0
         # Running total of rows across all shard buffers; used with
         # _item_bytes_estimate to gate byte-budget flushes.
@@ -564,7 +572,7 @@ class ScatterWriter:
         self._per_shard_max_rows[target] = max(self._per_shard_max_rows[target], len(buf))
 
         self._n_chunks_written += 1
-        if self._n_chunks_written % 10 == 0:
+        if self._progress_log_limiter.should_run():
             logger.info(
                 "[shard %d] Wrote %d scatter chunks so far (latest chunk size: %d items, %d bytes)",
                 self._source_shard,

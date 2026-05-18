@@ -39,7 +39,9 @@ from contextlib import suppress
 from typing import Any, TypeVar
 
 import cloudpickle
+import pyarrow as pa
 from rigging.filesystem import open_url
+from rigging.log_setup import configure_logging
 
 from zephyr.execution import (
     ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
@@ -48,7 +50,10 @@ from zephyr.execution import (
     ShardTask,
     StageRunner,
     TaskResult,
+    _format_bytes,
+    _format_count,
     _shared_data_path,
+    _stage_throughput,
     _worker_ctx_var,
     _write_stage_output,
 )
@@ -227,30 +232,26 @@ def _periodic_status_logger(
     interval: float,
 ) -> None:
     """Per-shard items/bytes rate log line (mirrors coordinator ``_log_status``)."""
-    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
     while not stop_event.wait(timeout=interval):
         if sys.is_finalizing():
             return
-        # Map-only stages never populate these counters; logging zeros is misleading.
-        if item_key not in ctx._counters and byte_key not in ctx._counters:
-            continue
-        items = ctx._counters.get(item_key, 0)
-        bytes_processed = ctx._counters.get(byte_key, 0)
         elapsed = time.monotonic() - monotonic_start
-        item_rate = items / elapsed if elapsed > 0 else 0.0
-        byte_rate = bytes_processed / elapsed if elapsed > 0 else 0.0
+        # Map-only stages never populate these counters; logging zeros is misleading.
+        throughput = _stage_throughput(ctx._counters, stage_name, elapsed)
+        if throughput is None:
+            continue
+        items, bytes_processed, item_rate, byte_rate = throughput
         logger.info(
-            "[%s] [%s] [%s] shard %d/%d; items=%d (%.1f/s), bytes_processed=%.1fMiB (%.1fMiB/s)",
+            "[%s] [%s] [%s] shard %d/%d; items=%s (%s/s), bytes_processed=%s (%s/s)",
             execution_id,
             stage_name,
             threading.current_thread().name,
             shard_idx,
             total_shards,
-            items,
-            item_rate,
-            bytes_processed / (1024 * 1024),
-            byte_rate / (1024 * 1024),
+            _format_count(items),
+            _format_count(item_rate),
+            _format_bytes(bytes_processed),
+            _format_bytes(byte_rate),
         )
 
 
@@ -344,9 +345,6 @@ class SubprocessRunner:
 
 def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
     """Subprocess child body: runs one ShardTask and writes the result file."""
-    import pyarrow as pa
-    from rigging.log_setup import configure_logging
-
     # Each shard already runs in its own subprocess; redundant Arrow thread
     # pools just compete with the parent's shard-level parallelism.
     pa.set_io_thread_count(1)
