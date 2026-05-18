@@ -65,12 +65,7 @@ class ModelSpec:
 
 
 def _task_key(task: EvalTaskConfig) -> str:
-    """Output-dir / wandb-run key for an `EvalTaskConfig`."""
     return task.task_alias or f"{task.name}_{task.num_fewshot}shot"
-
-
-# Default task suite: mmlu_sl_verb (0-shot and 5-shot), logprob_gsm8k_5shot,
-# logprob_humaneval_10shot. Append more `EvalTaskConfig` entries to extend.
 
 
 @eqx.filter_jit
@@ -135,10 +130,6 @@ def _tokenize_request(
     max_seq_len: int,
     max_cont_len: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Tokenize a single (prompt, continuation) into ``(tokens, loss_weight)`` rows.
-
-    Returns ``(int32 (max_seq_len,), f32 (max_seq_len,))``.
-    """
     pad_id = tokenizer.eos_token_id
     prompt_ids = list(tokenizer.encode(prompt, add_special_tokens=True))
     cont_ids = list(tokenizer.encode(continuation, add_special_tokens=False))
@@ -182,14 +173,8 @@ def _run_forward_pass_distributed(
     pad_id: int,
     is_chief: bool,
 ) -> np.ndarray | None:
-    """Broadcast tokens/loss_weight across hosts, run the JIT'd forward pass loop, gather.
-
-    Both chief and non-chief enter this with the same ``n`` (chief sets it from
-    real requests; non-chief receives it via the caller's broadcast). On chief,
-    ``tokens`` and ``loss_weight`` carry real data; on non-chief they're
-    placeholder zeros that get overwritten by the broadcast. Returns the
-    chief's per-row logprobs (``np.ndarray (n,)``) or ``None`` for non-chief.
-    """
+    # Non-chief passes placeholder zeros for tokens/loss_weight; the broadcast
+    # overwrites them with chief's data.
     if n == 0:
         return np.zeros(0, dtype=np.float32) if is_chief else None
 
@@ -217,16 +202,7 @@ def _run_forward_pass_distributed(
 
 
 def _make_grug_lm(transformer, tokenizer, *, max_seq_len, max_cont_len, batch_size, pad_id):
-    """Build a `GrugLM` (lm-eval `LM`) backed by ``transformer`` for live forward passes.
-
-    Each `loglikelihood(requests)` call:
-      1. Tokenizes all requests on the chief host.
-      2. Broadcasts `n`, then `tokens` and `loss_weight` to non-chief hosts.
-      3. Runs the JIT'd batched forward pass with `process_allgather` per batch.
-      4. Returns ``[(logprob, False), ...]`` to lm-eval for metric aggregation.
-
-    Non-chief hosts mirror these collectives in `_run_listener_loop`.
-    """
+    """Build the chief-side `lm-eval` LM. Non-chief hosts mirror its collectives in `_run_listener_loop`."""
     from lm_eval.api.model import LM
 
     class GrugLM(LM):
@@ -245,7 +221,7 @@ def _make_grug_lm(transformer, tokenizer, *, max_seq_len, max_cont_len, batch_si
                 )
                 tokens[i] = t
                 loss_weight[i] = lw
-            # Tell non-chief listeners how many requests are in this batch.
+            # Paired with the listener loop's matching broadcast.
             multihost_utils.broadcast_one_to_all(jnp.array([n], dtype=jnp.int32))
             all_lps = _run_forward_pass_distributed(
                 transformer,
@@ -335,18 +311,6 @@ class GrugLogprobEvalConfig:
 
 
 def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
-    """Multi-host-safe single-task logprob eval.
-
-    Layout:
-      - All hosts initialize JAX/mesh and load the model (Levanter handles
-        cross-host sharding).
-      - **Host 0** runs `lm_eval.evaluator.evaluate` with a `GrugLM` whose
-        `loglikelihood` does tokenize + broadcast + forward pass + allgather
-        in a single call, returning real logprobs to lm-eval directly.
-      - **Other hosts** run `_run_listener_loop`, mirroring chief's collectives.
-      - After `evaluate()` returns, chief broadcasts a sentinel ``n=-1`` to
-        release the listener loop, then writes `results.json`.
-    """
     eval_grug = dataclasses.replace(
         config.grug_model_config,
         capacity_factor=config.eval_capacity_factor,
@@ -424,16 +388,8 @@ def run_grug_logprob_eval(config: GrugLogprobEvalConfig) -> None:
             json.dump(results, f, indent=2, default=lambda v: repr(v))
 
 
-# ---------------------------------------------------------------------------
-# Launcher: one ExecutorStep per (model, task) cross product.
-# ---------------------------------------------------------------------------
-
 _TARGET_STEPS = 2**14
 
-# Populate with `ModelSpec(slug, hidden_dim, budget, checkpoint_subpath)` per
-# trained checkpoint. The cross-product `_MODEL_SPECS x _TASK_SPECS` becomes
-# one `ExecutorStep` each; cached per (model, task) so adding either
-# dimension is incremental.
 _MODEL_SPECS: tuple[ModelSpec, ...] = (
     ModelSpec(
         slug="grug_moe_mix_d512",
