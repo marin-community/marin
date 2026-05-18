@@ -573,12 +573,21 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    # If non-None, route ``token_embed`` to a plain-Adam group with LR
+    # ``embed_adam_lr_scale * adam_lr``. Default ``None`` keeps the
+    # baseline AdamH-on-embed routing.
+    embed_adam_lr_scale: float | None = None
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        embed_adam_lr_schedule = None
+        if self.embed_adam_lr_scale is not None:
+            embed_adam_lr_schedule = self.lr_scheduler(
+                num_train_steps, override_lr=self.adam_lr * self.embed_adam_lr_scale
+            )
 
-        def optimizer(learning_rate, adam_lr):
+        def optimizer(learning_rate, adam_lr, embed_adam_lr):
             def muonh_transform():
                 components = []
                 if self.max_grad_norm:
@@ -603,27 +612,33 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
                 components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, lr))
                 return optax.chain(*components)
 
-            def adam_transform():
+            def adam_transform_at(lr):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
                 components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
-                components.append(optax.scale(-adam_lr))
+                components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
-            return optax.multi_transform(
-                {
-                    "muonh": muonh_transform(),
-                    "adamh_embed": adamh_transform_at(learning_rate),
-                    "adamh": adamh_transform_at(learning_rate),
-                    "adam": adam_transform(),
-                },
-                self.create_mask,
-            )
+            transforms = {
+                "muonh": muonh_transform(),
+                "adamh_embed": adamh_transform_at(learning_rate),
+                "adamh": adamh_transform_at(learning_rate),
+                "adam": adam_transform_at(adam_lr),
+            }
+            if self.embed_adam_lr_scale is not None:
+                transforms["adam_embed"] = adam_transform_at(embed_adam_lr)
+            return optax.multi_transform(transforms, self.create_mask)
 
+        # ``optax.inject_hyperparams`` requires every kwarg to be a real
+        # value -- pass a sentinel zero when the embed-on-adam group is
+        # disabled. The transform itself isn't registered, so the value
+        # never affects training.
+        embed_adam_lr_kw = embed_adam_lr_schedule if embed_adam_lr_schedule is not None else 0.0
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
             adam_lr=adam_lr_schedule,
+            embed_adam_lr=embed_adam_lr_kw,
         )
 
     def create_mask(self, params):
@@ -633,7 +648,7 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
             if "token_embed" in path_lower:
-                return "adamh_embed"
+                return "adam_embed" if self.embed_adam_lr_scale is not None else "adamh_embed"
             if "router_bias" in path_lower or path_lower.endswith(".attn_gate") or ".router" in path_lower:
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
