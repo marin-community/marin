@@ -103,6 +103,11 @@ class GrugModelConfig:
     #                   partial-RoPE; post-norm half magnitudes are
     #                   directly scaled.
     pko_q_split_rescale_mode: str = "none"
+    # Granularity of the q-half rescale weight. ``"kv"`` -> shape
+    # ``(hidden_dim, num_kv_heads)``, broadcast across GQA groups.
+    # ``"q"`` -> shape ``(hidden_dim, num_heads)``, one scalar per q-head
+    # (each q-head can independently choose its rotating/stationary mix).
+    pko_q_split_rescale_heads: str = "kv"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -125,6 +130,8 @@ class GrugModelConfig:
                 f"pko_q_split_rescale_mode must be 'none' / 'pre_norm' / 'post_norm'; "
                 f"got {self.pko_q_split_rescale_mode!r}"
             )
+        if self.pko_q_split_rescale_heads not in ("kv", "q"):
+            raise ValueError(f"pko_q_split_rescale_heads must be 'kv' or 'q'; got {self.pko_q_split_rescale_heads!r}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -182,7 +189,8 @@ class CausalSelfAttention(eqx.Module):
 
         q_split_rescale_weight: jax.Array | None = None
         if cfg.pko_q_split_rescale_mode != "none":
-            q_split_rescale_weight = reshard(jnp.zeros((d, m)), P(None, None))
+            heads_dim = m if cfg.pko_q_split_rescale_heads == "kv" else n
+            q_split_rescale_weight = reshard(jnp.zeros((d, heads_dim)), P(None, None))
 
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
@@ -219,15 +227,22 @@ class CausalSelfAttention(eqx.Module):
         q_rot_w: jax.Array | None = None
         q_stat_w: jax.Array | None = None
         if use_partial_key_offset and self.q_split_rescale_weight is not None:
-            n_q, m_kv = self.cfg.num_heads, self.cfg.num_kv_heads
-            group_size = n_q // m_kv
-            # (B, S, m_kv)
-            weight_logits = jnp.einsum("bsd,dm->bsm", x, self.q_split_rescale_weight)
+            # Logits shape: (B, S, heads) where heads is either num_kv_heads
+            # (broadcast across GQA groups) or num_heads (per-q-head gate).
+            weight_logits = jnp.einsum("bsd,dh->bsh", x, self.q_split_rescale_weight)
             stat_weight = 2 * jax.nn.sigmoid(weight_logits).astype(x.dtype)
             rot_weight = (2 - stat_weight).astype(x.dtype)
-            # Broadcast to all q heads in the GQA group.
-            q_stat_w = jnp.repeat(stat_weight, group_size, axis=-1)[..., None]
-            q_rot_w = jnp.repeat(rot_weight, group_size, axis=-1)[..., None]
+            if self.cfg.pko_q_split_rescale_heads == "kv":
+                n_q, m_kv = self.cfg.num_heads, self.cfg.num_kv_heads
+                group_size = n_q // m_kv
+                # Broadcast each kv-head's scalar across the group_size q-heads
+                # that share it.
+                stat_weight = jnp.repeat(stat_weight, group_size, axis=-1)
+                rot_weight = jnp.repeat(rot_weight, group_size, axis=-1)
+            # Now (B, S, num_q_heads); expand for broadcasting against
+            # (B, S, num_q_heads, half) q halves.
+            q_stat_w = stat_weight[..., None]
+            q_rot_w = rot_weight[..., None]
             if self.cfg.pko_q_split_rescale_mode == "pre_norm":
                 half = head_dim // 2
                 q = jnp.concatenate([q[..., :half] * q_rot_w, q[..., half:] * q_stat_w], axis=-1)
