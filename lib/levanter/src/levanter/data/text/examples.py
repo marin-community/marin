@@ -75,6 +75,7 @@ class GrugLmExample:
         segment_ids: jax.Array | None = None,
         sliding_window: int | None = None,
         block_cross_document_attention: bool = True,
+        max_segments_per_seq: int | None = None,
     ) -> "GrugLmExample":
         if tokens.ndim != 1:
             raise ValueError("tokens must be a 1D array")
@@ -99,7 +100,10 @@ class GrugLmExample:
 
         loss_weight = loss_weight.astype(dtype)
 
-        attn_mask = GrugAttentionMask.causal(sliding_window=sliding_window)
+        attn_mask = GrugAttentionMask.causal(
+            sliding_window=sliding_window,
+            max_segments_per_seq=max_segments_per_seq,
+        )
         if block_cross_document_attention:
             if eos_id is not None and segment_ids is None:
                 eos_mask = jnp.roll(tokens, 1) == eos_id

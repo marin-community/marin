@@ -4,6 +4,7 @@ import functools
 import inspect
 import math
 from dataclasses import dataclass
+from typing import Literal
 
 import equinox as eqx
 import jax
@@ -15,9 +16,16 @@ from jaxtyping import Array, Bool, Float, Int
 from haliax.jax_utils import named_call
 from haliax.partitioning import _get_mesh
 
-
 _SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
 _SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
+GrugAttentionImplementation = Literal[
+    "reference",
+    "tpu_splash",
+    "gpu_xla",
+    "gpu_cudnn",
+    "gpu_te",
+]
+DEFAULT_MAX_PACKED_SEGMENTS = 64
 
 
 @dataclass(frozen=True)
@@ -39,19 +47,34 @@ class AttentionMask(eqx.Module):
     is_causal: bool = eqx.field(default=False, static=True)
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     sliding_window: int | None = eqx.field(default=None, static=True)
+    max_segments_per_seq: int | None = eqx.field(default=None, static=True)
 
     @classmethod
-    def causal(cls, *, sliding_window: int | None = None) -> "AttentionMask":
-        return cls(is_causal=True, sliding_window=sliding_window)
+    def causal(
+        cls,
+        *,
+        sliding_window: int | None = None,
+        max_segments_per_seq: int | None = None,
+    ) -> "AttentionMask":
+        return cls(
+            is_causal=True,
+            sliding_window=sliding_window,
+            max_segments_per_seq=max_segments_per_seq,
+        )
 
     def with_segment_ids(
-        self, q_segment_ids: Int[Array, "..."], kv_segment_ids: Int[Array, "..."] | None = None
+        self,
+        q_segment_ids: Int[Array, "..."],
+        kv_segment_ids: Int[Array, "..."] | None = None,
+        *,
+        max_segments_per_seq: int | None = None,
     ) -> "AttentionMask":
         kv_ids = q_segment_ids if kv_segment_ids is None else kv_segment_ids
         return AttentionMask(
             is_causal=self.is_causal,
             segment_ids=(q_segment_ids, kv_ids),
             sliding_window=self.sliding_window,
+            max_segments_per_seq=self.max_segments_per_seq if max_segments_per_seq is None else max_segments_per_seq,
         )
 
     def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
@@ -59,6 +82,7 @@ class AttentionMask(eqx.Module):
             is_causal=self.is_causal,
             segment_ids=self.segment_ids,
             sliding_window=sliding_window,
+            max_segments_per_seq=self.max_segments_per_seq,
         )
 
     def materialize_mask(self, q_len: int, k_len: int) -> Bool[Array, "..."] | None:
@@ -196,6 +220,349 @@ def reference_attention(
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
     ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
     return ctx.astype(v.dtype)
+
+
+def _dense_attention_mask_to_bnts(
+    mask: Bool[Array, "B Q K"] | Float[Array, "B Q K"],
+    *,
+    batch_size: int,
+    q_len: int,
+    k_len: int,
+) -> jax.Array:
+    if mask.ndim == 2:
+        mask = mask[None, :, :]
+    if mask.ndim != 3:
+        raise ValueError(f"explicit mask must have shape [batch, q, k], got shape={mask.shape}")
+    if mask.shape[0] not in (1, batch_size):
+        raise ValueError(f"explicit mask batch dim must be 1 or {batch_size}, got {mask.shape[0]}")
+    if mask.shape[1] != q_len or mask.shape[2] != k_len:
+        raise ValueError(
+            f"explicit mask must match attention shapes: got mask={mask.shape}, expected [batch,{q_len},{k_len}]"
+        )
+    return mask[:, None, :, :]
+
+
+def _mask_to_jax_dot_product_attention_args(
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    batch_size: int,
+    q_len: int,
+    k_len: int,
+) -> tuple[jax.Array | None, bool, tuple[int, int] | None]:
+    """Map Grug/Splash mask semantics onto `jax.nn.dot_product_attention` args."""
+    if mask is None:
+        return None, False, None
+
+    if isinstance(mask, AttentionMask):
+        if mask.sliding_window is not None and mask.sliding_window <= 0:
+            raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
+
+        if mask.segment_ids is not None:
+            raise NotImplementedError("JAX SDPA backends would require a dense segment_ids mask; use gpu_te instead.")
+
+        dense_mask = None
+        is_causal = mask.is_causal
+        local_window_size = None
+
+        if mask.sliding_window is not None:
+            if mask.is_causal:
+                local_window_size = (mask.sliding_window - 1, 0)
+            else:
+                q_idx = jnp.arange(q_len)[:, None]
+                k_idx = jnp.arange(k_len)[None, :]
+                sliding_mask = k_idx >= q_idx - (mask.sliding_window - 1)
+                sliding_mask = sliding_mask[None, None, :, :]
+                dense_mask = sliding_mask if dense_mask is None else jnp.logical_and(dense_mask, sliding_mask)
+
+        return dense_mask, is_causal, local_window_size
+
+    dense_mask = _dense_attention_mask_to_bnts(mask, batch_size=batch_size, q_len=q_len, k_len=k_len)
+    if dense_mask.dtype != jnp.bool_:
+        raise NotImplementedError("Additive dense masks are not supported by the native GPU attention prototype.")
+    return dense_mask, False, None
+
+
+def _jax_dot_product_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    implementation: Literal["xla", "cudnn"],
+) -> Float[Array, "B Q Hq D"]:
+    if isinstance(mask, AttentionMask) and mask.segment_ids is not None:
+        raise NotImplementedError(
+            "JAX SDPA backends do not support segment_ids without a dense mask; use gpu_te instead."
+        )
+
+    jax_mask, is_causal, local_window_size = _mask_to_jax_dot_product_attention_args(
+        mask,
+        batch_size=q.shape[0],
+        q_len=q.shape[1],
+        k_len=k.shape[1],
+    )
+    return jax.nn.dot_product_attention(
+        q,
+        k,
+        v,
+        mask=jax_mask,
+        is_causal=is_causal,
+        local_window_size=local_window_size,
+        implementation=implementation,
+    ).astype(v.dtype)
+
+
+def gpu_cudnn_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run Grug attention through JAX's native cuDNN SDPA path."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_cudnn_attention requires the JAX GPU backend.")
+    return _jax_dot_product_attention(q, k, v, mask, implementation="cudnn")
+
+
+def gpu_xla_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run Grug attention through JAX's GPU SDPA lowering for JAX-supported masks."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_xla_attention requires the JAX GPU backend.")
+    return _jax_dot_product_attention(q, k, v, mask, implementation="xla")
+
+
+def _packed_segment_seqlens_offsets(
+    segment_ids: jax.Array,
+    *,
+    batch_size: int,
+    seq_len: int,
+    max_segments_per_seq: int,
+) -> tuple[Int[Array, "B M"], Int[Array, "B Mp1"]]:
+    """Convert dynamic loader-style packed segment IDs to TE THD sequence lengths and offsets."""
+    segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
+
+    if max_segments_per_seq <= 0:
+        raise ValueError(f"max_segments_per_seq must be positive, got {max_segments_per_seq}")
+
+    return _seqlens_offsets_from_starts(
+        _segment_starts(segment_ids),
+        segment_ids >= 0,
+        max_segments=max_segments_per_seq,
+    )
+
+
+def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
+    if segment_ids.ndim == 1:
+        if segment_ids.shape[0] != seq_len:
+            raise ValueError(f"1D segment_ids must match sequence length {seq_len}, got {segment_ids.shape}")
+        segment_ids = jnp.broadcast_to(segment_ids[None, :], (batch_size, seq_len))
+    elif segment_ids.ndim == 2:
+        if segment_ids.shape[0] not in (1, batch_size) or segment_ids.shape[1] != seq_len:
+            raise ValueError(f"2D segment_ids must have shape [1|{batch_size}, {seq_len}], got {segment_ids.shape}")
+        if segment_ids.shape[0] == 1 and batch_size != 1:
+            segment_ids = jnp.broadcast_to(segment_ids, (batch_size, seq_len))
+    else:
+        raise ValueError(f"segment_ids must be 1D or 2D, got ndim={segment_ids.ndim}")
+    return segment_ids
+
+
+def _segment_starts(segment_ids: jax.Array) -> jax.Array:
+    valid = segment_ids >= 0
+    previous = jnp.concatenate([segment_ids[:, :1], segment_ids[:, :-1]], axis=1)
+    first = jnp.zeros_like(valid).at[:, 0].set(True)
+    return valid & (first | (segment_ids != previous))
+
+
+def _seqlens_offsets_from_starts(
+    starts: jax.Array,
+    valid: jax.Array,
+    *,
+    max_segments: int,
+    include_terminal_offset: bool = False,
+    cumulative_offsets: bool = False,
+) -> tuple[Int[Array, "B M"], Int[Array, "B Mp1"]]:
+    batch_size = starts.shape[0]
+    num_segments = jnp.sum(starts.astype(jnp.int32), axis=1)
+    starts = eqx.error_if(
+        starts,
+        jnp.any(num_segments > max_segments),
+        "packed segment count exceeds max_segments_per_seq.",
+    )
+    ordinals = jnp.cumsum(starts.astype(jnp.int32), axis=1) - 1
+    clipped_ordinals = jnp.clip(ordinals, 0, max_segments - 1)
+    batch_idx = jnp.arange(batch_size, dtype=jnp.int32)[:, None]
+    lengths = jnp.zeros((batch_size, max_segments), dtype=jnp.int32)
+    lengths = lengths.at[batch_idx, clipped_ordinals].add(valid.astype(jnp.int32))
+
+    segment_idx = jnp.arange(max_segments, dtype=jnp.int32)[None, :]
+    seqlens = jnp.where(segment_idx < num_segments[:, None], lengths, -1)
+
+    if cumulative_offsets:
+        offsets = jnp.concatenate([jnp.zeros((batch_size, 1), dtype=jnp.int32), jnp.cumsum(lengths, axis=1)], axis=1)
+        offset_idx = jnp.arange(max_segments + 1, dtype=jnp.int32)[None, :]
+        offsets = jnp.where(offset_idx <= num_segments[:, None], offsets, -1)
+        return seqlens, offsets
+
+    offsets = jax.vmap(functools.partial(jnp.argwhere, size=max_segments + 1, fill_value=-1))(starts)
+    offsets = offsets.squeeze(axis=-1).astype(jnp.int32)
+    if include_terminal_offset:
+        positions = jnp.arange(starts.shape[1], dtype=jnp.int32)[None, :]
+        terminal_offsets = jnp.max(jnp.where(valid, positions + 1, 0), axis=1)
+        terminal_slots = jnp.clip(num_segments, 0, max_segments)
+        offsets = offsets.at[jnp.arange(batch_size, dtype=jnp.int32), terminal_slots].set(terminal_offsets)
+    return seqlens, offsets
+
+
+def _flattened_packed_segment_seqlens_offsets(
+    segment_ids: jax.Array,
+    *,
+    batch_size: int,
+    seq_len: int,
+    max_segments_per_seq: int,
+) -> tuple[Int[Array, "B M"], Int[Array, "B Mp1"]]:
+    segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
+    max_segments = batch_size * max_segments_per_seq
+    if max_segments <= 0:
+        raise ValueError(f"max_segments must be positive, got {max_segments}")
+
+    starts = _segment_starts(segment_ids).reshape(1, batch_size * seq_len)
+    valid = (segment_ids >= 0).reshape(1, batch_size * seq_len)
+    return _seqlens_offsets_from_starts(
+        starts,
+        valid,
+        max_segments=max_segments,
+        include_terminal_offset=True,
+        cumulative_offsets=batch_size == 1,
+    )
+
+
+def _packed_segment_ids_positions(
+    segment_ids: jax.Array,
+    *,
+    batch_size: int,
+    seq_len: int,
+) -> tuple[Int[Array, "B S"], Int[Array, "B S"]]:
+    segment_ids = _batched_segment_ids(segment_ids, batch_size=batch_size, seq_len=seq_len)
+    valid = segment_ids >= 0
+    starts = _segment_starts(segment_ids)
+    local_segment_ids = jnp.where(valid, jnp.cumsum(starts.astype(jnp.int32), axis=1), 0)
+
+    positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    start_positions = jnp.where(starts, positions, 0)
+    current_start = jax.lax.associative_scan(jnp.maximum, start_positions, axis=1)
+    segment_positions = jnp.where(valid, positions - current_start, 0)
+    return local_segment_ids, segment_positions
+
+
+def gpu_te_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run dynamic packed segment attention through Transformer Engine/cudnn THD attention."""
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_te_attention requires the JAX GPU backend.")
+    if isinstance(mask, jax.Array):
+        raise NotImplementedError("gpu_te_attention does not support dense masks.")
+    if not isinstance(mask, AttentionMask) or mask.segment_ids is None:
+        raise NotImplementedError("gpu_te_attention currently requires packed segment_ids.")
+    if not mask.is_causal:
+        raise NotImplementedError("gpu_te_attention currently supports only causal packed self-attention.")
+    if q.shape[0] != k.shape[0]:
+        raise NotImplementedError("gpu_te_attention requires matching q/kv batch sizes.")
+    if q.shape[1] != k.shape[1]:
+        raise NotImplementedError("gpu_te_attention requires self-attention q_len == k_len.")
+    if mask.sliding_window is not None and mask.sliding_window <= 0:
+        raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
+
+    q_segment_ids, kv_segment_ids = mask.segment_ids
+    max_segments_per_seq = q.shape[1] if mask.max_segments_per_seq is None else mask.max_segments_per_seq
+    same_segment_ids = q_segment_ids is kv_segment_ids
+    q_segment_ids = _batched_segment_ids(q_segment_ids, batch_size=q.shape[0], seq_len=q.shape[1])
+    if same_segment_ids:
+        kv_segment_ids = q_segment_ids
+    else:
+        kv_segment_ids = _batched_segment_ids(kv_segment_ids, batch_size=k.shape[0], seq_len=k.shape[1])
+        q_segment_ids = eqx.error_if(
+            q_segment_ids,
+            jnp.any(q_segment_ids != kv_segment_ids),
+            "gpu_te_attention requires matching q/kv segment_ids for packed self-attention.",
+        )
+    from transformer_engine.jax.attention import (  # type: ignore[import]
+        AttnBiasType,
+        AttnMaskType,
+        AttnSoftmaxType,
+        QKVLayout,
+        SequenceDescriptor,
+        fused_attn,
+    )
+
+    te_max_segments = q.shape[0] * max_segments_per_seq
+    seqlens, offsets = _flattened_packed_segment_seqlens_offsets(
+        q_segment_ids,
+        batch_size=q.shape[0],
+        seq_len=q.shape[1],
+        max_segments_per_seq=max_segments_per_seq,
+    )
+    sequence_descriptor = SequenceDescriptor.from_seqlens_and_offsets(
+        (seqlens, seqlens),
+        (offsets, offsets),
+    )
+    window_size = None
+    if mask.sliding_window is not None and mask.sliding_window < q.shape[1]:
+        window_size = (mask.sliding_window - 1, 0)
+    if window_size is None:
+        te_segment_ids, te_segment_positions = _packed_segment_ids_positions(
+            q_segment_ids,
+            batch_size=q.shape[0],
+            seq_len=q.shape[1],
+        )
+        sequence_descriptor = SequenceDescriptor.from_segment_ids_and_pos(
+            (te_segment_ids, te_segment_ids),
+            (te_segment_positions, te_segment_positions),
+        )
+        out = fused_attn(
+            (q, k, v),
+            None,
+            sequence_descriptor,
+            None,
+            AttnBiasType.NO_BIAS,
+            AttnMaskType.PADDING_CAUSAL_MASK,
+            QKVLayout.THD_THD_THD,
+            AttnSoftmaxType.VANILLA_SOFTMAX,
+            1.0 / math.sqrt(q.shape[-1]),
+            0.0,
+            True,
+            max_segments_per_seq=max_segments_per_seq,
+            window_size=None,
+        )
+        return out.astype(v.dtype)
+
+    q_flat = q.reshape(1, q.shape[0] * q.shape[1], q.shape[2], q.shape[3])
+    k_flat = k.reshape(1, k.shape[0] * k.shape[1], k.shape[2], k.shape[3])
+    v_flat = v.reshape(1, v.shape[0] * v.shape[1], v.shape[2], v.shape[3])
+    out = fused_attn(
+        (q_flat, k_flat, v_flat),
+        None,
+        sequence_descriptor,
+        None,
+        AttnBiasType.NO_BIAS,
+        AttnMaskType.PADDING_CAUSAL_MASK,
+        QKVLayout.THD_THD_THD,
+        AttnSoftmaxType.VANILLA_SOFTMAX,
+        1.0 / math.sqrt(q.shape[-1]),
+        0.0,
+        True,
+        max_segments_per_seq=te_max_segments,
+        window_size=window_size,
+    )
+    return out.reshape(q.shape[0], q.shape[1], q.shape[2], v.shape[3]).astype(v.dtype)
 
 
 def _spec_shard_factor(entry: str | tuple[str, ...] | None, mesh) -> int:
@@ -389,7 +756,25 @@ def attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    implementation: GrugAttentionImplementation | None = None,
 ) -> Float[Array, "B Q Hq D"]:
+    if implementation == "reference":
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if implementation == "gpu_xla":
+        return gpu_xla_attention(q, k, v, mask)
+    if implementation == "gpu_cudnn":
+        return gpu_cudnn_attention(q, k, v, mask)
+    if implementation == "gpu_te":
+        return gpu_te_attention(q, k, v, mask)
+    if implementation == "tpu_splash":
+        if isinstance(mask, jax.Array):
+            raise NotImplementedError("Dense masks are not supported for splash attention.")
+        return _tpu_splash_attention(q, k, v, mask)
+
+    if jax.default_backend() == "gpu" and isinstance(mask, AttentionMask) and mask.segment_ids is not None:
+        return gpu_te_attention(q, k, v, mask)
+
     if jax.default_backend() == "tpu":
         if isinstance(mask, jax.Array):
             return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
@@ -399,9 +784,14 @@ def attention(
 
 __all__ = [
     "AttentionMask",
+    "DEFAULT_MAX_PACKED_SEGMENTS",
+    "GrugAttentionImplementation",
     "RotaryConfig",
     "align_kv_heads",
     "apply_rotary_embedding",
     "attention",
+    "gpu_cudnn_attention",
+    "gpu_te_attention",
+    "gpu_xla_attention",
     "reference_attention",
 ]
