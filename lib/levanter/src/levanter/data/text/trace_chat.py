@@ -296,6 +296,9 @@ class TraceChatProcessor(BatchProcessor[dict, dict]):
                 self._assign_label(labels, label_id, start, end, assistant_positions, message)
                 continue
 
+            if not self.include_role_tags:
+                continue
+
             role = message.get("role")
             if role == "assistant":
                 if self.include_final_assistant_tag and idx == final_assistant_idx:

@@ -378,6 +378,8 @@ def _adapt_trace_row(
     adapted["trace_record_id"] = _row_identifier(row, row_adapter.record_id_field, default="")
     if row_adapter.outcome_field is not None:
         label = _outcome_label(_lookup_field(row, row_adapter.outcome_field), row_adapter)
+        if row_adapter.outcome_prompt:
+            messages.append({"role": "user", "content": row_adapter.outcome_prompt})
         messages.append(
             {
                 "role": "assistant",

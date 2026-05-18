@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from levanter.data.text import ChatProcessor, TraceChatProcessor
-from levanter.data.text.trace_chat import TRACE_LABEL_OBSERVATION
+from levanter.data.text.trace_chat import TRACE_LABEL_ASSISTANT_TEXT, TRACE_LABEL_OBSERVATION, TRACE_LABEL_PATCH
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 
@@ -339,6 +339,33 @@ def test_trace_chat_processor_emits_exclusive_loss_labels(tokenizer: MarinTokeni
     assert "assistant" in label_spec.aggregates
     assert "assistant_text" in label_spec.aggregates
     assert "tool_call" in label_spec.aggregates
+
+
+def test_trace_chat_processor_can_label_only_explicit_message_tags(tokenizer: MarinTokenizer):
+    processor = TraceChatProcessor(
+        tokenizer,
+        chat_template=ALT_TEMPLATE,
+        loss_tags=("assistant_text", "observation", "patch"),
+        include_role_tags=False,
+    )
+
+    result = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Call the adder."},
+                    {"role": "assistant", "content": "I will inspect the repo."},
+                    {"role": "tool", "content": {"result": 5}},
+                    {"role": "assistant", "content": "diff --git a/a.py b/a.py", "loss_tags": ["patch"]},
+                ]
+            }
+        ]
+    )[0]
+
+    labels = result["loss_labels"]
+    assert (labels == TRACE_LABEL_PATCH).sum() > 0
+    assert (labels == TRACE_LABEL_ASSISTANT_TEXT).sum() == 0
+    assert (labels == TRACE_LABEL_OBSERVATION).sum() == 0
 
 
 def test_tool_call_masking_behavior(tokenizer: MarinTokenizer):

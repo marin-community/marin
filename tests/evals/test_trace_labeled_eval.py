@@ -11,6 +11,7 @@ from levanter.tokenizers import load_tokenizer
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.evaluation.trace_labeled_eval import (
+    DEFAULT_OUTCOME_JUDGE_PROMPT,
     DEFAULT_TRACE_LABELED_EVAL_WANDB_PROJECT,
     FirstRowsShardedDataSource,
     TraceLabeledEvalDatasetConfig,
@@ -126,6 +127,15 @@ def test_trace_row_adapter_adds_patch_and_outcome_targets(tmp_path):
     assert adapted_row["messages"][0]["content"] == "You are a coding agent."
     assert adapted_row["messages"][1]["content"] == "Fix the bug."
     assert adapted_row["messages"][2]["role"] == "assistant"
+    assert adapted_row["messages"][-2] == {
+        "role": "user",
+        "content": DEFAULT_OUTCOME_JUDGE_PROMPT,
+    }
+    assert adapted_row["messages"][-1] == {
+        "role": "assistant",
+        "content": "INCORRECT",
+        "loss_tags": ["outcome"],
+    }
 
     processed = trace_format.build_preprocessor(tokenizer)([adapted_row])[0]
     input_ids = processed["input_ids"]
