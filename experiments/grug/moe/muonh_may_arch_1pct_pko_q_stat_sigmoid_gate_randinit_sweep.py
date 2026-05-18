@@ -1,28 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""may_arch + 1pct-noclip + PKO stationary-only sigmoid gate on q.
+"""may_arch + 1pct-noclip + PKO stationary-only sigmoid gate on q (random init).
 
-Single learned weight ``w`` of shape ``(hidden_dim, num_heads)``,
-zero-init. In PKO layers only:
+Same as ``muonh_may_arch_1pct_pko_q_stat_sigmoid_gate_sweep`` except
+the gate weight is initialised with ``cfg.initializer_std`` (random
+small normal) instead of zero-init. The sibling sweep tests zero-init
+where ``sigmoid(0)=0.5`` halves the stationary half at init; this
+variant tests whether starting with a non-degenerate random gate
+helps learning.
 
-    gate = sigmoid(x @ w)              # (B, S, num_heads), [0, 1]
-    q_stat = q[..., half:] * gate      # gate only the stationary half
-    q_rot  = q[..., :half]             # unchanged
+Single d512 run.
 
-Applied BEFORE rms_norm(q) and partial-RoPE. At init sigmoid(0) = 0.5
-so the stationary half is halved at init; rotating half untouched.
-
-``w`` routed to the small-LR ``adam`` group (b1=0.9062, b2 from
-heuristic, LR=adam_lr), matching ``attn_gate`` / ``router_bias``.
-
-Single d512 run. Submit on us-east5-a:
+Submit on us-east5-a:
 
     .venv/bin/iris --config lib/iris/examples/marin.yaml job run \\
       --no-wait \\
       --zone us-east5-a \\
       -e WANDB_API_KEY "$WANDB_API_KEY" \\
-      -- python -m experiments.grug.moe.muonh_may_arch_1pct_pko_q_stat_sigmoid_gate_sweep
+      -- python -m experiments.grug.moe.muonh_may_arch_1pct_pko_q_stat_sigmoid_gate_randinit_sweep
 """
 
 import dataclasses
@@ -46,7 +42,7 @@ _HIDDEN_DIM: int = 512
 _WARMUP_FRACTION: float = 0.01
 _NUM_EXPERTS: int = 256
 _BASELINE_TARGET_STEPS: int = 2**14
-_GROUP_NAME: str = "muonh-may-arch-1pct-pko-q-stat-sigmoid-gate-sweep"
+_GROUP_NAME: str = "muonh-may-arch-1pct-pko-q-stat-sigmoid-gate-randinit-sweep"
 _RUN_SUFFIX: str = "v1"
 
 
@@ -78,12 +74,12 @@ def _build_step() -> ExecutorStep:
         use_partial_rope=True,
         last_layer_pko=True,
         router_z_loss_coef=0.0,
-        pko_q_stat_sigmoid_gate="zero_init",
+        pko_q_stat_sigmoid_gate="random_init",
     )
     optimizer = _muonh_optimizer(base_optimizer)
 
-    run_id = f"muonh-may-arch-1pct-pko-q-stat-sigmoid-gate-{_RUN_SUFFIX}-d{_HIDDEN_DIM}"
-    step_name = f"grug/muonh_may_arch_1pct_pko_q_stat_sigmoid_gate_sweep/{run_id}"
+    run_id = f"muonh-may-arch-1pct-pko-q-stat-sigmoid-gate-randinit-{_RUN_SUFFIX}-d{_HIDDEN_DIM}"
+    step_name = f"grug/muonh_may_arch_1pct_pko_q_stat_sigmoid_gate_randinit_sweep/{run_id}"
 
     return ExecutorStep(
         name=step_name,
@@ -103,7 +99,7 @@ def _build_step() -> ExecutorStep:
                 project="marin_moe",
                 tags=[
                     "moe",
-                    "muonh_may_arch_1pct_pko_q_stat_sigmoid_gate_sweep",
+                    "muonh_may_arch_1pct_pko_q_stat_sigmoid_gate_randinit_sweep",
                     f"d{_HIDDEN_DIM}",
                 ],
                 group=_GROUP_NAME,
@@ -135,7 +131,7 @@ if __name__ == "__main__":
     executor_main(
         steps=[_build_step()],
         description=(
-            "MoE may_arch + 1pct-noclip + PKO stationary-only sigmoid gate on q "
+            "MoE may_arch + 1pct-noclip + PKO stationary-only sigmoid gate on q (random init) "
             f"(d{_HIDDEN_DIM}, run_suffix={_RUN_SUFFIX!r})."
         ),
     )

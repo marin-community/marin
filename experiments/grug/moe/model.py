@@ -140,17 +140,20 @@ class GrugModelConfig:
     # matrices) so the gate has non-degenerate small random values at init.
     pko_q_silu_gate: bool = False
     # Sigmoid gate on the stationary half of ``q`` in PKO layers only.
-    # ``w`` has shape ``(hidden_dim, num_heads)`` (zero-init); produces
-    # per-token, per-q-head sigmoid in [0, 1]. Applied to the stationary
-    # half BEFORE rms_norm(q) and partial-RoPE.
+    # ``w`` has shape ``(hidden_dim, num_heads)``; produces per-token,
+    # per-q-head sigmoid in [0, 1]. Applied to the stationary half
+    # BEFORE rms_norm(q) and partial-RoPE.
     #
     #   gate = sigmoid(x @ w)                # (B, S, num_heads), values in [0, 1]
     #   q_stat = q[..., half:] * gate
     #   (q_rot unchanged)
     #
-    # At init, sigmoid(0) = 0.5 -> stationary half is halved at init.
+    # ``"none"``        — disabled (default).
+    # ``"zero_init"``   — w zero-init; sigmoid(0)=0.5 -> stationary halved at init.
+    # ``"random_init"`` — w init with ``cfg.initializer_std``; gate has
+    #                     small random sigmoid values at init.
     # Routed to the small-LR ``adam`` group.
-    pko_q_stat_sigmoid_gate: bool = False
+    pko_q_stat_sigmoid_gate: str = "none"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -179,6 +182,11 @@ class GrugModelConfig:
             raise ValueError(
                 f"pko_q_split_rescale_v2_mode must be 'none' / 'pre_norm' / 'post_norm'; "
                 f"got {self.pko_q_split_rescale_v2_mode!r}"
+            )
+        if self.pko_q_stat_sigmoid_gate not in ("none", "zero_init", "random_init"):
+            raise ValueError(
+                f"pko_q_stat_sigmoid_gate must be 'none' / 'zero_init' / 'random_init'; "
+                f"got {self.pko_q_stat_sigmoid_gate!r}"
             )
 
     @property
@@ -223,7 +231,7 @@ class CausalSelfAttention(eqx.Module):
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o, k_q_silu = random.split(key, 5)
+        k_q, k_k, k_v, k_o, k_q_silu, k_q_stat_sig = random.split(key, 6)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
 
         gate_mode = cfg.attn_gate_mode
@@ -261,8 +269,10 @@ class CausalSelfAttention(eqx.Module):
             q_silu_gate_weight = reshard(_init_weight(k_q_silu, (d, n, 2), cfg.initializer_std), P(None, None, None))
 
         q_stat_sigmoid_gate_weight: jax.Array | None = None
-        if cfg.pko_q_stat_sigmoid_gate:
+        if cfg.pko_q_stat_sigmoid_gate == "zero_init":
             q_stat_sigmoid_gate_weight = reshard(jnp.zeros((d, n)), P(None, None))
+        elif cfg.pko_q_stat_sigmoid_gate == "random_init":
+            q_stat_sigmoid_gate_weight = reshard(_init_weight(k_q_stat_sig, (d, n), cfg.initializer_std), P(None, None))
 
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
