@@ -37,6 +37,7 @@ class LevanterLmEvalEvaluator(Evaluator):
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
+        eval_datasets_cache_path: str | None = None,
     ) -> None:
         """
         Runs Levanter's lm-eval harness on the specified model and set of tasks.
@@ -47,12 +48,17 @@ class LevanterLmEvalEvaluator(Evaluator):
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
             wandb_tags (list[str] | None): The tags to add to the wandb run.
+            eval_datasets_cache_path (str | None): Accepted for compatibility with
+                EvaluationConfig. Levanter's evaluator currently uses lm-eval's own
+                task loading path, so this cache path is not consumed here.
         """
         # Eval Harness code: https://github.com/stanford-crfm/levanter/blob/main/src/levanter/eval_harness.py
         # Run the harness with the model and the specified evals
         model_name_or_path: str = self.model_name_or_path(model)
         name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
         logger.info(f"Running eval harness on model: {model_name_or_path}, wandb run name: {name}")
+        if eval_datasets_cache_path is not None:
+            logger.info("Levanter lm-eval ignores eval_datasets_cache_path: %s", eval_datasets_cache_path)
 
         # NOTE(chris): Before, the batch size was 16, but this is too large for the 8B model.
         # In the future, we should make this user-configurable.

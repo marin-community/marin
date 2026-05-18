@@ -37,8 +37,10 @@ from marin.execution.executor import ExecutorStep, InputName, VersionedValue, th
 from marin.processing.tokenize import HfDatasetSpec
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.utilities.wandb_utils import init_wandb
+from marin.utils import fsspec_glob
 
 WANDB_PROJECT = "marin-eval"
+GLOB_CHARS = frozenset("*?[")
 
 
 @dataclass(frozen=True)
@@ -313,12 +315,24 @@ def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
         input_path = config.input_path
         if isinstance(input_path, ExecutorStep):
             input_path = input_path.as_input_name()
+        validation_urls = _validation_urls(input_path)
         source = UrlDatasetSourceConfig(
             train_urls=[],
-            validation_urls=[input_path],  # type: ignore[list-item]
+            validation_urls=validation_urls,  # type: ignore[arg-type]
             format=dataset_format,
         )
     return DatasetComponent(source=source, format=dataset_format, tags=list(config.tags), split=config.split)
+
+
+def _validation_urls(input_path: str | InputName) -> list[str | InputName]:
+    if isinstance(input_path, InputName):
+        return [input_path]
+    if not any(char in input_path for char in GLOB_CHARS):
+        return [input_path]
+    matches = sorted(fsspec_glob(input_path))
+    if not matches:
+        raise FileNotFoundError(f"No files matched raw-text validation glob: {input_path}")
+    return matches
 
 
 def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:

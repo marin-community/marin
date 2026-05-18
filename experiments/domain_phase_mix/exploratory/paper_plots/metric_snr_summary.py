@@ -73,6 +73,11 @@ FAMILY_COLORS = {
     "MMLU-Pro": "#9C755F",
     "English MCQ/cloze": "#EDC948",
     "Generation proxies": "#76B7B2",
+    "Raw PPL task train": "#1F77B4",
+    "Raw PPL multilingual": "#8CD17D",
+    "Raw PPL structured/technical": "#B6992D",
+    "Raw PPL bio/chem": "#499894",
+    "Raw PPL other": "#79706E",
     "Other lm-eval": "#BAB0AC",
 }
 
@@ -80,6 +85,7 @@ SOURCE_SYMBOLS = {
     "eval BPB/loss": "circle",
     "lm-eval task": "diamond",
     "custom task proxy": "square",
+    "raw PPL": "triangle-up",
 }
 
 
@@ -102,6 +108,8 @@ def _source_class(metric: str) -> str:
         return "lm-eval task"
     if prefix in {"teacher_forced", "mcq_smooth"}:
         return "custom task proxy"
+    if prefix == "raw_ppl":
+        return "raw PPL"
     return "other"
 
 
@@ -131,6 +139,28 @@ def _metric_family(metric: str) -> str:
         return "Agentic coding BPB"
     if metric.startswith("eval/"):
         return "Generic eval BPB"
+    if metric.startswith("raw_ppl/"):
+        dataset = metric.removeprefix("raw_ppl/").rsplit("/", maxsplit=1)[0]
+        if dataset.startswith("lm_eval/"):
+            return "Raw PPL task train"
+        if dataset.startswith("fineweb2_multilingual/"):
+            return "Raw PPL multilingual"
+        if dataset.startswith("bio_chem/"):
+            return "Raw PPL bio/chem"
+        if dataset.startswith(
+            (
+                "binary_network_security/",
+                "formal_methods/",
+                "gh_archive_structured_output/",
+                "hardware_rtl/",
+                "long_tail_ppl_runnable/",
+                "package_metadata/",
+                "raw_web_markup/",
+                "runnable_long_tail/",
+            )
+        ):
+            return "Raw PPL structured/technical"
+        return "Raw PPL other"
     if len(parts) >= 2 and parts[0] == "lm_eval":
         task = parts[1]
         if "mmlu_pro" in task:
@@ -174,6 +204,8 @@ def _short_item_label(item: str) -> str:
         return item.removeprefix("eval/")
     if item.startswith("lm_eval/"):
         return item.removeprefix("lm_eval/")
+    if item.startswith("raw_ppl/"):
+        return item.removeprefix("raw_ppl/")
     return item
 
 
@@ -271,17 +303,18 @@ def _build_figure(points: pd.DataFrame) -> go.Figure:
 
 def _summary(points: pd.DataFrame) -> dict[str, object]:
     thresholds = {
-        f"snr_ge_{threshold:g}": int((points["signal_to_noise"] >= threshold).sum())
-        for threshold in (1, 2, 5, 10)
+        f"snr_ge_{threshold:g}": int((points["signal_to_noise"] >= threshold).sum()) for threshold in (1, 2, 5, 10)
     }
     return {
         "num_ranked_items": len(points),
         "threshold_counts": thresholds,
         "family_counts": points["family"].value_counts().to_dict(),
         "source_class_counts": points["source_class"].value_counts().to_dict(),
-        "top_20": points.head(20)[
-            ["rank", "item_label", "family", "source_class", "metric", "primary_metric_kind", "signal_to_noise"]
-        ].to_dict(orient="records"),
+        "top_20": (
+            points.head(20)[
+                ["rank", "item_label", "family", "source_class", "metric", "primary_metric_kind", "signal_to_noise"]
+            ].to_dict(orient="records")
+        ),
     }
 
 

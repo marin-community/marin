@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from datasets import load_dataset
+from datasets import Image, load_dataset
 from fray import LocalClient
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
@@ -114,7 +114,11 @@ def _surface_data_files(input_path: str, surface: HfRawTextSurfaceConfig) -> lis
 
 def _load_surface_rows(input_path: str, surface: HfRawTextSurfaceConfig) -> Any:
     data_files = _surface_data_files(input_path, surface)
-    return load_dataset("parquet", data_files={"data": data_files}, split="data", streaming=True)
+    dataset = load_dataset("parquet", data_files={"data": data_files}, split="data", streaming=True)
+    for column_name, feature in (dataset.features or {}).items():
+        if isinstance(feature, Image):
+            dataset = dataset.cast_column(column_name, Image(decode=False))
+    return dataset
 
 
 def _surface_metadata_filename(surface: HfRawTextSurfaceConfig) -> str:

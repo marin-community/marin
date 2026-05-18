@@ -64,7 +64,7 @@ RCSB_DEFAULT_IDS: tuple[str, ...] = (
     "1SVA",
     "1TIM",
     "1UBQ",
-    "1V0G",
+    "1V0A",
     "1W0E",
     "1YJP",
     "2BEG",

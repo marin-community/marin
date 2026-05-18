@@ -1,6 +1,6 @@
 {
   "canonical": {
-    "columns": 1245,
+    "columns": 1445,
     "domains": [
       "dolma3_arxiv",
       "dolma3_cc/art_and_design_high",
@@ -44,14 +44,14 @@
     ],
     "exposure_average_weight_columns": 39,
     "id_columns": 19,
-    "metric_columns": 1109,
+    "metric_columns": 1309,
     "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/raw_metric_matrix_300m.csv",
     "phase0_weight_columns": 39,
     "phase1_weight_columns": 39,
     "rows": 242
   },
   "fixed_subset_noise_baseline": {
-    "columns": 1249,
+    "columns": 1449,
     "domains": [
       "dolma3_arxiv",
       "dolma3_cc/art_and_design_high",
@@ -95,7 +95,7 @@
     ],
     "exposure_average_weight_columns": 39,
     "id_columns": 21,
-    "metric_columns": 1111,
+    "metric_columns": 1311,
     "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/noise_baseline_run00097_fixed_subset_300m.csv",
     "phase0_weight_columns": 39,
     "phase1_weight_columns": 39,
@@ -413,7 +413,7 @@
   },
   "qsplit240_core_rows": 240,
   "variable_subset_noise_baseline": {
-    "columns": 1249,
+    "columns": 1449,
     "domains": [
       "dolma3_arxiv",
       "dolma3_cc/art_and_design_high",
@@ -457,14 +457,14 @@
     ],
     "exposure_average_weight_columns": 39,
     "id_columns": 21,
-    "metric_columns": 1111,
+    "metric_columns": 1311,
     "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/noise_baseline_run00097_variable_subset_300m.csv",
     "phase0_weight_columns": 39,
     "phase1_weight_columns": 39,
     "rows": 10
   },
   "with_noise": {
-    "columns": 1249,
+    "columns": 1449,
     "domains": [
       "dolma3_arxiv",
       "dolma3_cc/art_and_design_high",
@@ -508,7 +508,7 @@
     ],
     "exposure_average_weight_columns": 39,
     "id_columns": 21,
-    "metric_columns": 1111,
+    "metric_columns": 1311,
     "path": "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/raw_metric_matrix_300m/raw_metric_matrix_300m_with_noise.csv",
     "phase0_weight_columns": 39,
     "phase1_weight_columns": 39,

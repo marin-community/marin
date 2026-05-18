@@ -36,6 +36,8 @@ MMLU_DEFAULT_NUM_FEWSHOT = 5
 MMLU_DEFAULT_FEWSHOT_SPLIT = "dev"
 MMLU_CHOICE_LABELS = ("A", "B", "C", "D")
 MMLU_DESCRIPTION_TEMPLATE = "The following are multiple choice questions (with answers) about {subject}."
+MMLU_GENERIC_DESCRIPTION = "The following are multiple choice questions (with answers)."
+MMLU_GLOBAL_FEWSHOT_KEY = "__global__"
 GSM8K_COT_DEFAULT_NUM_FEWSHOT = 8
 # Fallback for environments that do not install Marin's optional lm-eval extra.
 GSM8K_COT_FEWSHOT_EXAMPLES: tuple[tuple[str, str], ...] = (
@@ -162,7 +164,7 @@ def _mmlu_subject(example: dict[str, Any]) -> str:
 
 def _render_mmlu_description(subject: str) -> str:
     if not subject:
-        raise ValueError("MMLU examples must include a subject")
+        return MMLU_GENERIC_DESCRIPTION
     return MMLU_DESCRIPTION_TEMPLATE.format(subject=subject.replace("_", " "))
 
 
@@ -197,14 +199,16 @@ def _build_mmlu_fewshot_index(
 
     for example in _load_hf_iterable(input_path, split, subset):
         subject = _mmlu_subject(example)
-        if not subject:
-            continue
         rendered = _render_mmlu_question_block(example)
         if not rendered:
             continue
-        supports = by_subject.setdefault(subject, [])
-        if len(supports) < num_fewshot:
-            supports.append(rendered)
+        global_supports = by_subject.setdefault(MMLU_GLOBAL_FEWSHOT_KEY, [])
+        if len(global_supports) < num_fewshot:
+            global_supports.append(rendered)
+        if subject:
+            supports = by_subject.setdefault(subject, [])
+            if len(supports) < num_fewshot:
+                supports.append(rendered)
 
     return by_subject
 
@@ -222,7 +226,9 @@ def _render_mmlu_example(
     subject = _mmlu_subject(example)
     blocks = [_render_mmlu_description(subject)]
     if num_fewshot > 0:
-        supports = fewshot_index.get(subject, [])[:num_fewshot]
+        supports = fewshot_index.get(subject, [])[:num_fewshot] if subject else []
+        if len(supports) < num_fewshot:
+            supports = fewshot_index.get(MMLU_GLOBAL_FEWSHOT_KEY, [])[:num_fewshot]
         if len(supports) < num_fewshot:
             message = f"Found {len(supports)} MMLU few-shot examples for subject {subject!r}; expected {num_fewshot}"
             raise ValueError(message)

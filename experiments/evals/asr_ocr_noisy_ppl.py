@@ -201,7 +201,7 @@ def materialize_noisy_asr_ocr_raw(config: NoisyAsrOcrRawConfig) -> None:
         name="materialize-asr-ocr-noisy",
         resources=ResourceConfig(cpu=1, ram="32g"),
     )
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 noisy_asr_ocr_raw = StepSpec(

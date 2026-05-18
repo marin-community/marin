@@ -9,19 +9,24 @@
     "MMLU-Pro": 9,
     "Other lm-eval": 2,
     "Paloma BPB": 19,
+    "Raw PPL bio/chem": 10,
+    "Raw PPL other": 6,
+    "Raw PPL structured/technical": 22,
+    "Raw PPL task train": 2,
     "Uncheatable BPB": 10
   },
-  "num_ranked_items": 189,
+  "num_ranked_items": 229,
   "source_class_counts": {
     "custom task proxy": 8,
     "eval BPB/loss": 43,
-    "lm-eval task": 138
+    "lm-eval task": 138,
+    "raw PPL": 40
   },
   "threshold_counts": {
-    "snr_ge_1": 178,
-    "snr_ge_10": 24,
-    "snr_ge_2": 73,
-    "snr_ge_5": 41
+    "snr_ge_1": 217,
+    "snr_ge_10": 25,
+    "snr_ge_2": 99,
+    "snr_ge_5": 48
   },
   "top_20": [
     {
@@ -124,11 +129,20 @@
       "source_class": "eval BPB/loss"
     },
     {
+      "family": "Raw PPL other",
+      "item_label": "asr_ocr_noisy_ppl/rtm_sgt_ocr_v1_train/clean",
+      "metric": "raw_ppl/asr_ocr_noisy_ppl/rtm_sgt_ocr_v1_train/clean/loss",
+      "primary_metric_kind": "loss",
+      "rank": 12,
+      "signal_to_noise": 18.398042909999827,
+      "source_class": "raw PPL"
+    },
+    {
       "family": "Paloma BPB",
       "item_label": "paloma/redpajama",
       "metric": "eval/paloma/redpajama/bpb",
       "primary_metric_kind": "bpb",
-      "rank": 12,
+      "rank": 13,
       "signal_to_noise": 17.489064127315242,
       "source_class": "eval BPB/loss"
     },
@@ -137,7 +151,7 @@
       "item_label": "uncheatable_eval/ao3_english",
       "metric": "eval/uncheatable_eval/ao3_english/bpb",
       "primary_metric_kind": "bpb",
-      "rank": 13,
+      "rank": 14,
       "signal_to_noise": 15.759693672607732,
       "source_class": "eval BPB/loss"
     },
@@ -146,7 +160,7 @@
       "item_label": "uncheatable_eval/arxiv_computer_science",
       "metric": "eval/uncheatable_eval/arxiv_computer_science/loss",
       "primary_metric_kind": "loss",
-      "rank": 14,
+      "rank": 15,
       "signal_to_noise": 15.589494130506662,
       "source_class": "eval BPB/loss"
     },
@@ -155,7 +169,7 @@
       "item_label": "uncheatable_eval/bbc_news",
       "metric": "eval/uncheatable_eval/bbc_news/bpb",
       "primary_metric_kind": "bpb",
-      "rank": 15,
+      "rank": 16,
       "signal_to_noise": 15.532968572403547,
       "source_class": "eval BPB/loss"
     },
@@ -164,7 +178,7 @@
       "item_label": "macro",
       "metric": "eval/macro_bpb",
       "primary_metric_kind": "bpb",
-      "rank": 16,
+      "rank": 17,
       "signal_to_noise": 15.426914378865598,
       "source_class": "eval BPB/loss"
     },
@@ -173,7 +187,7 @@
       "item_label": "uncheatable_eval/wikipedia_english",
       "metric": "eval/uncheatable_eval/wikipedia_english/loss",
       "primary_metric_kind": "loss",
-      "rank": 17,
+      "rank": 18,
       "signal_to_noise": 15.401632363514423,
       "source_class": "eval BPB/loss"
     },
@@ -182,7 +196,7 @@
       "item_label": "paloma/dolma-v1_5",
       "metric": "eval/paloma/dolma-v1_5/bpb",
       "primary_metric_kind": "bpb",
-      "rank": 18,
+      "rank": 19,
       "signal_to_noise": 13.935304410001343,
       "source_class": "eval BPB/loss"
     },
@@ -191,17 +205,8 @@
       "item_label": "paloma/macro",
       "metric": "eval/paloma/macro_bpb",
       "primary_metric_kind": "bpb",
-      "rank": 19,
-      "signal_to_noise": 13.507776244155696,
-      "source_class": "eval BPB/loss"
-    },
-    {
-      "family": "Generic eval BPB",
-      "item_label": "eval",
-      "metric": "eval/bpb",
-      "primary_metric_kind": "bpb",
       "rank": 20,
-      "signal_to_noise": 12.745365041628904,
+      "signal_to_noise": 13.507776244155696,
       "source_class": "eval BPB/loss"
     }
   ]

@@ -182,9 +182,17 @@ LOCAL_COLLECTED_EVAL_CSVS = (
         140,
         "local_collected_downstream_eval",
     ),
+    (
+        "local_300m_raw_ppl_completion",
+        SCRIPT_DIR / "300m_raw_ppl_completion" / "300m_raw_ppl_eval_results.csv",
+        "300m_6b",
+        "signal",
+        142,
+        "local_collected_raw_ppl_eval",
+    ),
 )
 
-METRIC_PREFIXES = ("eval/", "lm_eval/", "teacher_forced/", "mcq_smooth/")
+METRIC_PREFIXES = ("eval/", "lm_eval/", "teacher_forced/", "mcq_smooth/", "raw_ppl/")
 AMBIGUOUS_METRIC_PREFIXES = ("lm_eval/averages/",)
 WEIGHT_PREFIXES = ("phase_0_", "phase_1_")
 KNOWN_ID_COLUMNS = (
@@ -403,6 +411,20 @@ def canonicalize_metric_key(metric_key: str) -> dict[str, Any]:
             "higher_is_better": _higher_is_better(metric_name),
         }
 
+    if metric_key.startswith("raw_ppl/"):
+        rest = metric_key.removeprefix("raw_ppl/")
+        parts = rest.split("/")
+        metric_name = parts[-1]
+        task = "/".join(parts[:-1]) if len(parts) > 1 else "global"
+        return {
+            "suite": "raw_ppl",
+            "task": task,
+            "num_fewshot": pd.NA,
+            "metric": metric_name,
+            "canonical_metric_key": metric_key,
+            "higher_is_better": _higher_is_better(metric_name),
+        }
+
     if metric_key.startswith("eval/"):
         rest = metric_key.removeprefix("eval/")
         parts = rest.split("/")
@@ -422,7 +444,7 @@ def canonicalize_metric_key(metric_key: str) -> dict[str, Any]:
 
 def _higher_is_better(metric_name: str) -> bool:
     lower = metric_name.lower()
-    if any(token in lower for token in ("bpb", "loss", "perplexity", "nll")):
+    if any(token in lower for token in ("bpb", "loss", "perplexity", "nll", "bits")):
         return False
     if any(token in lower for token in ("acc", "logprob", "prob", "f1", "exact_match")):
         return True
@@ -575,7 +597,7 @@ def _source_frames(*, include_gcs: bool) -> list[SourceFrame]:
             )
         )
 
-    if STRICT_300M_SUCCESS_CSV.exists():
+    if include_gcs and STRICT_300M_SUCCESS_CSV.exists():
         sources.append(
             SourceFrame(
                 source_name="gcs_qsplit240_300m_6b_strict_success",
@@ -589,12 +611,12 @@ def _source_frames(*, include_gcs: bool) -> list[SourceFrame]:
             )
         )
 
+    if not include_gcs:
+        return sources
+
     sources.extend(_strong_tier_source_frames())
     sources.extend(_single_phase_exposure_average_source_frames())
     sources.extend(_run_registry_checkpoint_source_frames(PROPORTIONAL_PERTURBATION_FAMILIES))
-
-    if not include_gcs:
-        return sources
 
     sources.extend(
         [
@@ -927,11 +949,43 @@ def _source_scale_series(source: SourceFrame) -> pd.Series:
     if source.scale != "mixed":
         return pd.Series([source.scale] * len(frame), index=frame.index)
     if "scale" not in frame.columns:
+        scale = _infer_mixed_scale_series(source, frame)
+        if scale is not None:
+            return scale
         raise ValueError(f"{source.source_name} is a mixed-scale source but has no scale column")
     scale = frame["scale"].astype(str)
     if scale.isna().any() or scale.str.strip().eq("").any():
         raise ValueError(f"{source.source_name} has blank scale values")
     return scale
+
+
+def _cell_text(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value)
+
+
+def _infer_mixed_scale_series(source: SourceFrame, frame: pd.DataFrame) -> pd.Series | None:
+    """Infer scale for older mixed-scale local overlays lacking a scale column."""
+    candidate_columns = [
+        column for column in ("panel", "source_experiment", "registry_key", "eval_key") if column in frame.columns
+    ]
+    if not candidate_columns:
+        return None
+    scales: list[str | None] = []
+    for _, row in frame.iterrows():
+        text = " ".join(_cell_text(row.get(column)) for column in candidate_columns)
+        has_60m = "60m_1p2b" in text
+        has_300m = "300m_6b" in text
+        if has_60m == has_300m:
+            scales.append(None)
+        elif has_60m:
+            scales.append("60m_1p2b")
+        else:
+            scales.append("300m_6b")
+    if any(scale is None for scale in scales):
+        return None
+    return pd.Series(scales, index=frame.index, dtype="string")
 
 
 def _run_key(scale: str, cohort: pd.Series, source_experiment: pd.Series, run_name: pd.Series) -> pd.Series:
@@ -1094,26 +1148,26 @@ def _canonical_runs(source_runs: pd.DataFrame) -> pd.DataFrame:
 def _metric_conflicts(all_metrics: pd.DataFrame) -> pd.DataFrame:
     if all_metrics.empty:
         return pd.DataFrame()
-    rows: list[dict[str, Any]] = []
-    for (registry_run_key, canonical_metric_key), group in all_metrics.groupby(
-        ["registry_run_key", "canonical_metric_key"], sort=True
-    ):
-        values = group["value"].astype(float)
-        if float(values.max() - values.min()) <= CONFLICT_TOLERANCE:
-            continue
-        rows.append(
-            {
-                "registry_run_key": registry_run_key,
-                "canonical_metric_key": canonical_metric_key,
-                "value_min": float(values.min()),
-                "value_max": float(values.max()),
-                "value_range": float(values.max() - values.min()),
-                "source_names": ",".join(sorted(set(group["source_name"].astype(str)))),
-                "source_uris": " ".join(sorted(set(group["source_uri"].astype(str)))),
-                "value_count": len(group),
-            }
+    keys = ["registry_run_key", "canonical_metric_key"]
+    stats = (
+        all_metrics.groupby(keys, sort=True)["value"]
+        .agg(value_min="min", value_max="max", value_count="size")
+        .reset_index()
+    )
+    stats["value_range"] = stats["value_max"] - stats["value_min"]
+    conflicts = stats.loc[stats["value_range"] > CONFLICT_TOLERANCE].copy()
+    if conflicts.empty:
+        return conflicts
+    conflict_members = all_metrics.merge(conflicts[keys], on=keys, how="inner")
+    source_summary = (
+        conflict_members.groupby(keys, sort=True)
+        .agg(
+            source_names=("source_name", lambda values: ",".join(sorted(set(values.astype(str))))),
+            source_uris=("source_uri", lambda values: " ".join(sorted(set(values.astype(str))))),
         )
-    return pd.DataFrame.from_records(rows)
+        .reset_index()
+    )
+    return conflicts.merge(source_summary, on=keys, how="left")
 
 
 def _canonical_metrics(all_metrics: pd.DataFrame) -> pd.DataFrame:

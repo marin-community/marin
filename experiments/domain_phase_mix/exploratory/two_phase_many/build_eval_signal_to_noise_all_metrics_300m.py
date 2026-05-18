@@ -63,6 +63,7 @@ DEFAULT_EXTRA_RESULTS_CSVS = (
     / "300m_noise_parity_completion"
     / "300m_noise_parity_eval_results_variable_subset_mmlupro_only.csv",
     SCRIPT_DIR / "metric_registry" / "300m_agentic_coding_bpb" / "300m_agentic_coding_bpb_results.csv",
+    SCRIPT_DIR / "metric_registry" / "300m_raw_ppl_completion" / "300m_raw_ppl_eval_results.csv",
 )
 RUN00097_300M_FIXED_SUBSET_RESULTS_URI = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"
@@ -82,7 +83,7 @@ PROPORTIONAL_300M_VARIABLE_SUBSET_SOURCE_EXPERIMENT = (
     "pinlin_calvin_xu/data_mixture/ngd3dm2_proportional_variable_subset_noise_300m_6b"
 )
 
-METRIC_PREFIXES = ("eval/", "lm_eval/", "teacher_forced/", "mcq_smooth/")
+METRIC_PREFIXES = ("eval/", "lm_eval/", "teacher_forced/", "mcq_smooth/", "raw_ppl/")
 MMLU_SOURCE_PATH = SCRIPT_DIR.parents[2] / "evals" / "olmo_base_easy_overlap.py"
 MMLU_CATEGORY_ORDER = ("stem", "humanities", "social_sciences", "other")
 MMLU_CATEGORY_SMOOTH_LEAVES = (
@@ -203,6 +204,8 @@ def _metric_task(metric: str) -> str:
         return parts[1]
     if len(parts) >= 3 and parts[0] == "mcq_smooth":
         return parts[1]
+    if len(parts) >= 3 and parts[0] == "raw_ppl":
+        return "/".join(parts[1:-1])
     if len(parts) >= 2 and parts[0] == "eval":
         return "eval"
     return metric.rsplit("/", maxsplit=1)[0]

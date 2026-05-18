@@ -515,3 +515,83 @@
 - Scale-specific finite perturbation predictions:
   - `60m_1p2b`: `37/39` signs agree.
   - `300m_6b`: `36/39` signs agree.
+
+### 2026-05-16 - parity backfill and raw-PPL SNR overlay
+- Completed the remaining perturbation noise/parity backfill with failure-only retry:
+  `/calvinxu/dm-ppert-noise-parity-retry6-20260516-060847`.
+  - Collected from original prefix `ngd3dm2_ppert3_noise_parity_20260509` plus retry prefix
+    `ngd3dm2_ppert3_noise_parity_retry6_20260515`.
+  - Local overlay:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/ppert_noise_parity_eval_results.csv`.
+  - Result: `15/15` retry rows collected, `0` remaining missing rows, `863` `lm_eval/` metric columns.
+- Added David/#5005 raw-PPL priority eval coverage for the 300M signal/noise matrix.
+  - Canary succeeded: `/calvinxu/dm-300m-raw-ppl-canary-20260516-061950`.
+  - First full wave `/calvinxu/dm-300m-raw-ppl-firstwave-20260516-062925` produced `66` valid
+    summaries before failing on FineWeb2 HF rate limits and W&B artifact finalization.
+  - Recovered with priority-only retry
+    `/calvinxu/dm-300m-raw-ppl-priority-retry1-20260516-073839`, collecting the remaining `196`
+    rows with a fresh executor prefix.
+  - Local overlay:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_raw_ppl_completion/300m_raw_ppl_eval_results.csv`.
+  - Result: `262/262` rows collected over `242` signal + `10` fixed noise + `10` variable noise,
+    with `40` selected raw-PPL BPB datasets fully non-null.
+- Deferred raw-PPL slices from this priority pass:
+  - `formal_methods/tptp`: current materializer OOMs before byte cap.
+  - `bio_chem/refseq/refseq_viral_fasta` and `bio_chem/refseq/refseq_viral_gff`: stale NCBI viral GFF
+    source URL affects the shared RefSeq step.
+  - `gh_archive_structured_output/WorkflowRunEvent`, `hardware_rtl/rtl_coder`, and `hardware_rtl/rtl_repo`:
+    current bounded sample surfaces produce no scored metric rows, so they are not required for
+    failure-only retry completeness.
+- Rebuilt local 300M artifacts:
+  - `raw_metric_matrix_300m.csv`: `242` rows, `40` raw-PPL BPB columns complete.
+  - `noise_baseline_run00097_fixed_subset_300m.csv`: `10` rows, `40` raw-PPL BPB columns complete.
+  - `noise_baseline_run00097_variable_subset_300m.csv`: `10` rows, `40` raw-PPL BPB columns complete.
+  - `raw_metric_matrix_300m_with_noise.csv`: `262` rows, `40` raw-PPL BPB columns complete.
+  - `metric_registry/metrics_wide.csv`: local registry refresh with `969` runs, `1,279` canonical
+    metrics, `486,157` canonical metric facts, and `0` conflicts.
+  - `paper_plots/img/metric_snr_summary.html/.png/.pdf`: refreshed with `40` raw-PPL items included.
+- SNR highlights from `eval_signal_to_noise_all_metrics_300m_current.csv`:
+  - `signal_rows=242`, `noise_rows=10`, `shared_metric_count=1311`, `noise_subset_mode=variable`.
+  - Top raw-PPL item: `asr_ocr_noisy_ppl/rtm_sgt_ocr_v1_train/clean` with SNR `18.40`.
+  - Other high raw-PPL items include `bio_chem/rnacentral/rnacentral_active_fasta` with SNR `6.57`,
+    `asr_ocr_noisy_ppl/hypr_librispeech_without_lm_test_clean/clean` with SNR `5.89`, and
+    `formal_methods/coqgym` with SNR `5.73`.
+
+### 2026-05-18 - MCQ smooth-proxy perturbation controllability
+- Goal: use the completed 300M proportional perturbation MCQ smooth-proxy evals to inspect local
+  directional finite differences around proportional.
+- Notebook:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/perturbation_mcq_smooth_controllability.py`.
+- Output directory:
+  `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/ppert_mcq_smooth_controllability_20260518/`.
+- Data coverage:
+  - `ppert_mcq_smooth_proxy_eval_results.csv` has all `55/55` 300M perturbations for
+    `medmcqa_5shot`, `sciq_5shot`, `swag_0shot`, `truthfulqa_mc1_0shot`, and
+    `truthfulqa_mc2_0shot`.
+  - Domain-effect table has `39` domain bumps x `5` tasks x `7` metric leaves = `1248`
+    complete rows.
+- Method:
+  - Treat domain bumps as directional finite differences, not unconstrained partial derivatives.
+  - Orient metrics so positive means better: probabilities/logprobs positive, BPB/NLL negative.
+  - Noise-scale effects by the fixed-subset `run_00097` 300M noise baseline. Exported CSVs also
+    include slopes using intervention TV as the denominator (`0.05` for current domain/family bumps).
+  - Keep all metric leaves in CSVs, but headline plots omit redundant `logprob`/`nll` columns and
+    show `bpb` instead.
+- Findings:
+  - `medmcqa_5shot` is strongly locally controllable for BPB/logprob-style proxies. `bpb` has
+    median `|z|=2.18`, max `|z|=5.69`, and `56%` of domain bumps exceed `|z|>=2`.
+  - `swag_0shot` is strongly locally controllable for normalized-choice proxies. `choice_prob_norm`
+    has median `|z|=2.29`, max `|z|=5.10`, and `56%` of domain bumps exceed `|z|>=2`.
+  - `sciq_5shot` is effectively flat at this perturbation scale: `choice_prob_norm` max `|z|=0.71`
+    and BPB max `|z|=0.34`.
+  - `truthfulqa_mc1_0shot` and `truthfulqa_mc2_0shot` are weak under these domain bumps; most smooth
+    proxies have median `|z|<1` and only isolated domains exceed `|z|>=2`.
+  - Highest-potency domains across displayed MCQ smooth proxies include `dolmino_olmocr_pdfs_hq`,
+    `dolma3_cc/games_low`, `dolmino_stem_heavy_crawl`, `dolma3_cc/literature_high`, and
+    `dolmino_synth_instruction`; signs are not uniformly helpful.
+- CC review:
+  - Invoked Claude Code Opus 4.7 Max with `env -u ANTHROPIC_API_KEY`; account preflight showed
+    `plambdafour@proton.me` / `stripe_subscription`.
+  - Review agreed with the directional finite-difference framing and highlighted three issues:
+    slope fallback should use `tv_distance`, redundant BPB/NLL/logprob should not be triple-counted
+    in headline plots, and non-domain bars should not stack multiple metrics. All three were fixed.

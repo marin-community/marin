@@ -212,6 +212,12 @@ def average_phase_tv_distance(left: np.ndarray, right: np.ndarray) -> np.ndarray
     return np.abs(left - right).sum(axis=(1, 2)) / (2.0 * left.shape[1])
 
 
+def entropy(weights: np.ndarray) -> float:
+    """Shannon entropy of a simplex vector."""
+    clipped = np.clip(np.asarray(weights, dtype=float), 1e-300, 1.0)
+    return float(-np.sum(clipped * np.log(clipped)))
+
+
 def normalize_weights(weights: np.ndarray) -> np.ndarray:
     """Normalize phase rows and fail on invalid mass."""
     sums = weights.sum(axis=-1, keepdims=True)
@@ -666,10 +672,37 @@ def value_grad_logits(model: FittedDSPModel, logits: np.ndarray) -> tuple[float,
     return value, np.concatenate([grad_logits0, grad_logits1])
 
 
-def optimize_raw(model: FittedDSPModel, *, num_starts: int = 20) -> tuple[Any, np.ndarray]:
+def weights_to_logits(weights: np.ndarray) -> np.ndarray:
+    """Convert phase-simplex weights to unconstrained softmax logits."""
+    return np.log(np.clip(np.asarray(weights, dtype=float), 1e-12, 1.0)).reshape(-1)
+
+
+def optimize_raw(
+    model: FittedDSPModel,
+    *,
+    num_starts: int = 20,
+    seed: int = CV_SEED,
+    observed_start_weights: np.ndarray | None = None,
+    observed_jitter_scale: float = 0.03,
+    max_observed_starts: int | None = None,
+) -> tuple[Any, np.ndarray]:
     """Optimize unconstrained raw simplex weights with softmax logits."""
-    rng = np.random.default_rng(CV_SEED)
+    rng = np.random.default_rng(seed)
     starts = [np.zeros(2 * len(model.domain_names), dtype=float)]
+    if observed_start_weights is not None:
+        observed = np.asarray(observed_start_weights, dtype=float)
+        if observed.ndim != 3 or observed.shape[1:] != (2, len(model.domain_names)):
+            raise ValueError(
+                f"observed_start_weights must have shape (n, 2, {len(model.domain_names)}), got {observed.shape}"
+            )
+        if max_observed_starts is not None and len(observed) > max_observed_starts:
+            selected = np.linspace(0, len(observed) - 1, max_observed_starts, dtype=int)
+            observed = observed[selected]
+        for weights in observed:
+            logits = weights_to_logits(weights)
+            starts.append(logits)
+            if observed_jitter_scale > 0.0:
+                starts.append(logits + rng.normal(scale=observed_jitter_scale, size=logits.shape))
     starts.extend(
         np.concatenate(
             [
@@ -739,8 +772,14 @@ def metrics(packet: PacketData, model: FittedDSPModel, raw_result: Any, raw_weig
         "raw_nearest_observed_value": float(packet.y[nearest_idx]),
         "raw_phase0_support_gt_1e3": int(np.sum(raw_weights[0] > 1e-3)),
         "raw_phase1_support_gt_1e3": int(np.sum(raw_weights[1] > 1e-3)),
+        "raw_phase0_entropy": entropy(raw_weights[0]),
+        "raw_phase1_entropy": entropy(raw_weights[1]),
+        "raw_phase0_effective_support": float(np.exp(entropy(raw_weights[0]))),
+        "raw_phase1_effective_support": float(np.exp(entropy(raw_weights[1]))),
         "phase0_max_weight": float(np.max(raw_weights[0])),
         "phase1_max_weight": float(np.max(raw_weights[1])),
+        "active_benefit_coef_count": int(np.sum(model.benefit_coef > 1e-10)),
+        "active_penalty_coef_count": int(np.sum(model.penalty_coef > 1e-10)),
         "optimum_success": bool(raw_result.success),
         "optimum_message": str(raw_result.message),
     }

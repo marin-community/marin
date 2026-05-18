@@ -166,3 +166,80 @@
 - Code/documentation updates:
   - Added the canonical DSP formulation to the top of `experiments/domain_phase_mix/exploratory/two_phase_many/pareto_aware_effective_exposure_issue5416.py`.
   - Updated the self-contained collaborator implementation `experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430/standalone_code/dsp_exact.py` so `--variant canonical` maps to `dsp_effective_exposure_penalty_nnls`; the old `dsp_phase_benefit_penalty_nnls` form remains available as `--variant benefit_gain`.
+
+### 2026-05-18 - Clean-slate aggregate metric iteration
+- Goal: rebuild the aggregate task metric from the current 300M raw metric matrix, including David/#5005 raw-PPL additions, without inheriting the issue #5416 projection quirks.
+- Notebook: `experiments/domain_phase_mix/exploratory/two_phase_many/aggregate_metric_clean_slate_20260518.py`.
+- Artifacts: `experiments/domain_phase_mix/exploratory/two_phase_many/reference_outputs/aggregate_metric_clean_slate_20260518/`.
+- Construction changes:
+  - Exclude hard accuracy, diagnostic metrics, `lm_eval/averages/*`, top-level `eval/macro_*`, nested `*_macro_*`, and top-level Paloma/Uncheatable aggregate BPB/loss rows from aggregate items.
+  - Pool `Generation proxies` and `Raw PPL task train` into `Generative/task-train proxies`, so HumanEval teacher-forced NLL and GSM8K-train raw PPL are not dropped as singleton suites.
+  - Make `suite_balanced_mean_no_dsp` the true primary no-DSP aggregate: it is suite-balanced and role/SNR/MoE-R2 weighted, but not suite-gated by DSP controllability. The old suite-gated sensitivity is now `suite_balanced_mean_dsp_suite_gated`.
+  - Add robust value-transform sensitivities: clipped-z and rank-z variants.
+- Current selected primary aggregate: `82` smooth items across `10` suites.
+- Key observed-row result:
+  - Primary `suite_balanced_mean_no_dsp`: best observed row `run_00200`, proportional rank `75/242`, top-minus-proportional `0.8385`.
+  - Role-balanced primary: best observed row `run_00200`, proportional rank `91/242`.
+  - Optimize-only primary: best observed row `run_00200`, proportional rank `158/242`.
+- Effective-exposure DSP check on 12 aggregate candidates:
+  - The DSP-suite-gated sensitivity fits best among scalar aggregates (`OOF Spearman 0.9047`) but is partly circular by construction.
+  - The true primary no-DSP aggregate fits worse (`OOF Spearman 0.8418`, normalized CV RMSE `0.5224`) after including low-controllability MMLU/MMLU-SL suites.
+  - Rank/clipped robust transforms do not fix raw optimum behavior; raw optima remain far from the observed manifold (`nearest observed TV` mostly `0.46`-`0.77`) and often concentrate a phase heavily.
+  - `suite_balanced_mean_dsp_weighted` has the least-collapsed raw mixture among the inspected scalar aggregate variants, but it is DSP-weighted and lower rank-fit (`OOF Spearman 0.8217`).
+- Interpretation:
+  - The aggregate construction is now less circular and more suite-complete, but that makes the modeling problem visibly harder.
+  - The current evidence favors using these aggregates for observed-row ranking and constrained/trust-region search, not raw unconstrained DSP optima.
+  - The main unresolved tension is that MMLU/MMLU-SL are task-relevant but weakly controllable under the current partition/model, so including them lowers DSP fit quality rather than producing a clean deployable optimum.
+- Review:
+  - Claude Code Opus 4.7 Max was invoked with `env -u ANTHROPIC_API_KEY`; account preflight showed `plambdafour@proton.me` / `stripe_subscription`.
+  - First review found macro leakage, accidental DSP suite gating in the primary aggregate, and stale-cache hazards; these were fixed.
+  - Second review reported no remaining correctness blockers. Minor cleanup applied afterward: also exclude `micro*` suite aggregates and remove an unused suite-weight accumulator.
+
+### 2026-05-18 - aggregate candidate review and raw-optimum plots
+- Goal: decide which clean-slate aggregate variants are useful enough to keep, and visualize each raw DSP optimum mixture in full.
+- Notebook update:
+  - Added a `Predicted Optimum Mixtures` section to `experiments/domain_phase_mix/exploratory/two_phase_many/aggregate_metric_clean_slate_20260518.py`.
+  - The section includes a full heatmap for all raw DSP optima by candidate, phase, and domain, plus a dropdown-selected full per-domain phase bar chart with `weight / effective epochs` end labels.
+  - Sparse/extrapolative raw optima are now explicitly marked in the heatmap row labels and selected-candidate title.
+- Current diagnostic result:
+  - All `12/12` cached raw DSP optima are sparse/extrapolative under the notebook criterion (`nearest observed TV >= 0.5` or a phase-domain max weight `>= 0.5`).
+  - Primary `suite_balanced_mean_no_dsp`: OOF Spearman `0.8418`, normalized CV RMSE `0.5224`, raw nearest-observed TV `0.7348`, raw max weights `0.9776/0.5164`.
+  - Best fit is the DSP-suite-gated sensitivity `suite_balanced_mean_dsp_suite_gated`: OOF Spearman `0.9047`, normalized CV RMSE `0.3928`, but it is partially circular because suite eligibility uses DSP controllability.
+  - The least-collapsed-looking raw mixture is `suite_balanced_mean_dsp_weighted` by phase max weights (`0.1759/0.3234`), but it has poor `cv_regret_at_1=0.8243`, lower OOF Spearman `0.8217`, and uses DSP weighting.
+- Claude Code review take:
+  - Keep `suite_balanced_mean_no_dsp` as the primary aggregate because it is the least circular and suite-complete.
+  - Keep `suite_balanced_clipped_mean_no_dsp` as a robustness twin.
+  - Keep `suite_balanced_mean_dsp_suite_gated` as a labeled sensitivity showing what happens when we trust DSP for suite eligibility.
+  - Treat suite-factor, unbalanced reliability-weighted, optimize-only, role-balanced, and rank-z variants as diagnostics rather than primary optimization targets.
+  - Do not validate any raw unconstrained DSP optimum directly. Use constrained/trust-region optimization, a consensus observed-near mixture, or validate `run_00200`-like candidates first.
+
+### 2026-05-18 - factor aggregate sprint for non-sparse raw DSP optima
+- Goal: find a clean-slate aggregate whose unregularized raw effective-exposure DSP optimum is qualitatively non-sparse, rather than relying on explicit TV penalties or trust-region optimization.
+- CC ideation feedback:
+  - The previous suite-level factor variants were too coarse and mostly rank-1; use item-level factor analysis on the selected smooth items instead.
+  - Diagnose optimizer starts and raw-optimum stability before attributing sparsity only to aggregate construction.
+  - Keep raw unregularized DSP as the acceptance target; TV regularization remains diagnostic only.
+- Notebook and fitting updates:
+  - Added item-level factor candidates to `experiments/domain_phase_mix/exploratory/two_phase_many/aggregate_metric_clean_slate_20260518.py`.
+  - Initial item-factor family uses the current 82 selected smooth items; Horn parallel analysis selected `K=7`.
+  - Added stricter item-filter iterations with the sprint loop capped at `10` item-filter iterations. The current implementation realizes 4 item-filter iterations and 12 stricter factor candidates: controllability `>=0.65`, controllability `>=0.80`, optimize-role controllability `>=0.65`, and task-proxy optimize-role controllability `>=0.65`, each with balanced projection plus factor-balance penalties `0.5` and `1.0`.
+  - Extended `standalone_code/dsp_exact.py` and `fit_effective_exposure_dsp_aggregate_candidates_300m.py` with observed-mixture seeded raw optimization, entropy/effective-support diagnostics, fitted `gamma`/`tau` diagnostics, and top-8 Jaccard stability across raw-optimization seeds.
+- Full DSP refit command:
+  - `uv run --with numpy --with pandas --with scipy --with scikit-learn python experiments/domain_phase_mix/exploratory/two_phase_many/fit_effective_exposure_dsp_aggregate_candidates_300m.py --workers 16`
+  - Settings: `27` candidates, `maxiter=100`, `optimum_starts=200`, `stability_seeds=5`, `stability_starts=80`, `max_observed_starts=242`.
+- Acceptance gates:
+  - `oof_spearman >= 0.88`
+  - `raw_nearest_observed_tv <= 0.40`
+  - `max_phase_weight <= 0.40`
+  - `min_phase_support_gt_1e3 >= 8`
+  - multi-seed top-8 domain Jaccard `>= 0.70`
+- Result:
+  - `0/27` candidates passed all raw-optimum gates.
+  - Best gate-ish stricter factor candidate by rank fit: `item_factor_controllable080_balanced_projection`, with OOF Spearman `0.8951`, nearest-observed TV `0.7874`, max phase weight `0.8418`, min support `9`, and top-8 Jaccard `0.7333`; it fails because the raw optimum is still far off-manifold and concentrated.
+  - Best gate-ish candidate by max-weight geometry: `item_factor_task_proxy_controllable065_balanced_projection`, with OOF Spearman `0.8880`, nearest-observed TV `0.6023`, max phase weight `0.2827`, min support `8`, and top-8 Jaccard `0.3414`; it avoids single-domain collapse but remains off-manifold and optimizer-unstable.
+  - Strongest raw rank fit among item-factor candidates: `item_factor_horn_balanced_projection`, OOF Spearman `0.9066`, but it collapses phase 1 to `0.9430` on `dolma3_cc/literature_high` and fails TV, max-weight, support, and stability gates.
+  - Factor-balance penalties improve stability for some candidates but usually trade off rank fit and still do not bring raw optima close enough to the observed manifold.
+- Interpretation:
+  - Item-level factors improve target construction diagnostics but do not solve the raw-unconstrained DSP sparsity problem.
+  - The current evidence still argues against validating a raw aggregate-DSP optimum directly.
+  - Next useful path is likely constrained/trust-region or observed-near optimization, plus using these factor aggregates as latent scoring coordinates rather than as unconstrained raw-optimum targets.

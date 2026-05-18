@@ -489,11 +489,14 @@ def _log_model_score_artifact(
             vocab_size=vocab_size,
             token_id_to_text=token_id_to_text,
         )
-        levanter.tracker.current_tracker().log_artifact(
-            tmpdir,
-            name="model_perplexity_scores",
-            type="model_perplexity_scores",
-        )
+        try:
+            levanter.tracker.current_tracker().log_artifact(
+                tmpdir,
+                name="model_perplexity_scores",
+                type="model_perplexity_scores",
+            )
+        except Exception:
+            logger.warning("Failed to log model perplexity score artifact.", exc_info=True)
 
 
 if __name__ == "__main__":
