@@ -4,6 +4,7 @@ This document explains how Marin evaluates models and where to find runnable wor
 
 For step-by-step usage, start with:
 - [Running Evaluations with Marin](../tutorials/run-lm-evals.md) for multiple-choice, generation, and key eval suites.
+- [Perplexity Gap Analysis Workflow](../references/perplexity-gap-analysis.md) for raw-text bpb comparisons, dashboard refreshes, and heatmaps.
 - [Harbor Framework Integration](../harbor-integration.md) for Harbor-backed agent and benchmark evaluation.
 
 ## Evaluation modes
@@ -67,6 +68,7 @@ Harbor tasks use [`evaluate_harbor`](https://github.com/marin-community/marin/bl
 ## Where to go next
 
 - [Running Evaluations with Marin](../tutorials/run-lm-evals.md)
+- [Perplexity Gap Analysis Workflow](../references/perplexity-gap-analysis.md)
 - [Harbor Framework Integration](../harbor-integration.md)
 - [`experiments/evals/evals.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/evals.py)
 - [`experiments/evals/task_configs.py`](https://github.com/marin-community/marin/blob/main/experiments/evals/task_configs.py)
