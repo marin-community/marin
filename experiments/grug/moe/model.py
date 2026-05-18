@@ -84,6 +84,25 @@ class GrugModelConfig:
     use_partial_rope: bool = False
     # Force the last layer to use long sliding window + PKO.
     last_layer_pko: bool = False
+    # Per-token rescaling of the rotating vs stationary halves of ``q`` in
+    # PKO layers only. A learned per-block ``q_split_rescale_weight`` of
+    # shape ``(hidden_dim, num_kv_heads)`` (zero-init) produces a scalar
+    # per (token, kv-head); broadcast across the q-heads in each GQA group.
+    #
+    #   s = 2 * sigmoid(x @ w)                    # stationary weight in [0, 2]
+    #   r = 2 - s                                 # rotating weight in [0, 2]
+    #   q_rot = q[..., :half]    * r
+    #   q_stat = q[..., half:]   * s
+    #
+    # Init s = r = 1.0 (no-op vs baseline). Only active in PKO layers.
+    #
+    # ``"none"``      — no rescale (default).
+    # ``"pre_norm"``  — apply BEFORE ``rms_norm(q)``; rms_norm then
+    #                   normalises but the per-half ratio is preserved.
+    # ``"post_norm"`` — apply AFTER ``rms_norm(q)`` and before
+    #                   partial-RoPE; post-norm half magnitudes are
+    #                   directly scaled.
+    pko_q_split_rescale_mode: str = "none"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -101,6 +120,11 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        if self.pko_q_split_rescale_mode not in ("none", "pre_norm", "post_norm"):
+            raise ValueError(
+                f"pko_q_split_rescale_mode must be 'none' / 'pre_norm' / 'post_norm'; "
+                f"got {self.pko_q_split_rescale_mode!r}"
+            )
 
     @property
     def inferred_head_dim(self) -> int:
@@ -126,6 +150,10 @@ class CausalSelfAttention(eqx.Module):
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "... N"] | None
     attn_gate_up: Float[Array, "R N"] | None
+    # Per-token weight on the rotating vs stationary halves of q in PKO
+    # layers; shape ``(hidden_dim, num_kv_heads)``. Only allocated when
+    # ``cfg.pko_q_split_rescale_mode != "none"``. See GrugModelConfig docs.
+    q_split_rescale_weight: Float[Array, "D M"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -152,6 +180,10 @@ class CausalSelfAttention(eqx.Module):
         else:
             raise ValueError(f"Unknown attn_gate_mode: {gate_mode!r}")
 
+        q_split_rescale_weight: jax.Array | None = None
+        if cfg.pko_q_split_rescale_mode != "none":
+            q_split_rescale_weight = reshard(jnp.zeros((d, m)), P(None, None))
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
@@ -159,6 +191,7 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=attn_gate,
             attn_gate_up=attn_gate_up,
+            q_split_rescale_weight=q_split_rescale_weight,
             cfg=cfg,
         )
 
@@ -177,8 +210,39 @@ class CausalSelfAttention(eqx.Module):
         q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+
+        # Compute q-half rescale weights once if enabled. Only used on PKO
+        # layers. Shape ``(B, S, num_q_heads, 1)`` for broadcasting against
+        # the (B, S, num_q_heads, half) q halves. ``num_q_heads = group_size
+        # * num_kv_heads`` so we repeat each kv-head's scalar across the
+        # group_size q-heads that share it.
+        q_rot_w: jax.Array | None = None
+        q_stat_w: jax.Array | None = None
+        if use_partial_key_offset and self.q_split_rescale_weight is not None:
+            n_q, m_kv = self.cfg.num_heads, self.cfg.num_kv_heads
+            group_size = n_q // m_kv
+            # (B, S, m_kv)
+            weight_logits = jnp.einsum("bsd,dm->bsm", x, self.q_split_rescale_weight)
+            stat_weight = 2 * jax.nn.sigmoid(weight_logits).astype(x.dtype)
+            rot_weight = (2 - stat_weight).astype(x.dtype)
+            # Broadcast to all q heads in the GQA group.
+            q_stat_w = jnp.repeat(stat_weight, group_size, axis=-1)[..., None]
+            q_rot_w = jnp.repeat(rot_weight, group_size, axis=-1)[..., None]
+            if self.cfg.pko_q_split_rescale_mode == "pre_norm":
+                half = head_dim // 2
+                q = jnp.concatenate([q[..., :half] * q_rot_w, q[..., half:] * q_stat_w], axis=-1)
+                # Consume now so we don't re-apply below.
+                q_rot_w = None
+                q_stat_w = None
+
         q = rms_norm(q)
         k = rms_norm(k)
+
+        if q_rot_w is not None:
+            # post_norm: rescale after rms_norm and before partial-RoPE.
+            half = head_dim // 2
+            q = jnp.concatenate([q[..., :half] * q_rot_w, q[..., half:] * q_stat_w], axis=-1)
+
         if use_partial_key_offset:
             # Partial RoPE: only rotate the first half of head dims.
             # Concatenate rotated and stationary halves to avoid sharding issues
