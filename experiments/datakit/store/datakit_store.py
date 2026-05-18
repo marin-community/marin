@@ -236,6 +236,13 @@ def _load_dedup_canonical(path: str) -> dict[str, bool]:
     """
     if not fsspec_exists(path):
         return {}
+    # Sources with zero non-singletons (e.g. ghalogs/public) get an empty
+    # parquet stub from the dedup writer -- 176 bytes, num_rows=0, zero
+    # data columns. Treat that as "no non-singletons" rather than letting
+    # ``pq.read_table(columns=["id","attributes"])`` raise ArrowInvalid
+    # because the projected columns don't exist in the empty schema.
+    if pq.ParquetFile(path).metadata.num_rows == 0:
+        return {}
     table = pq.read_table(path, columns=["id", "attributes"])
     ids = table.column("id").to_pylist()
     canonical = table.column("attributes").combine_chunks().field("is_cluster_canonical").to_pylist()
