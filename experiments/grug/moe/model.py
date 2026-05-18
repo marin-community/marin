@@ -139,6 +139,18 @@ class GrugModelConfig:
     # ``g_w`` is allocated with ``initializer_std`` (matching other weight
     # matrices) so the gate has non-degenerate small random values at init.
     pko_q_silu_gate: bool = False
+    # Sigmoid gate on the stationary half of ``q`` in PKO layers only.
+    # ``w`` has shape ``(hidden_dim, num_heads)`` (zero-init); produces
+    # per-token, per-q-head sigmoid in [0, 1]. Applied to the stationary
+    # half BEFORE rms_norm(q) and partial-RoPE.
+    #
+    #   gate = sigmoid(x @ w)                # (B, S, num_heads), values in [0, 1]
+    #   q_stat = q[..., half:] * gate
+    #   (q_rot unchanged)
+    #
+    # At init, sigmoid(0) = 0.5 -> stationary half is halved at init.
+    # Routed to the small-LR ``adam`` group.
+    pko_q_stat_sigmoid_gate: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -204,6 +216,9 @@ class CausalSelfAttention(eqx.Module):
     # V3 (SiLU-gated query): shape (hidden_dim, num_heads, 2). The trailing
     # 2 are (rotating-half, stationary-half) multipliers per q-head.
     q_silu_gate_weight: Float[Array, "D N two"] | None
+    # V4 (stationary-only sigmoid gate): shape (hidden_dim, num_heads).
+    # Gates only the stationary half of q in PKO layers.
+    q_stat_sigmoid_gate_weight: Float[Array, "D N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -245,6 +260,10 @@ class CausalSelfAttention(eqx.Module):
         if cfg.pko_q_silu_gate:
             q_silu_gate_weight = reshard(_init_weight(k_q_silu, (d, n, 2), cfg.initializer_std), P(None, None, None))
 
+        q_stat_sigmoid_gate_weight: jax.Array | None = None
+        if cfg.pko_q_stat_sigmoid_gate:
+            q_stat_sigmoid_gate_weight = reshard(jnp.zeros((d, n)), P(None, None))
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
@@ -256,6 +275,7 @@ class CausalSelfAttention(eqx.Module):
             q_split_rescale_v2_stat_weight=q_split_rescale_v2_stat_weight,
             q_split_rescale_v2_rot_weight=q_split_rescale_v2_rot_weight,
             q_silu_gate_weight=q_silu_gate_weight,
+            q_stat_sigmoid_gate_weight=q_stat_sigmoid_gate_weight,
             cfg=cfg,
         )
 
@@ -329,6 +349,15 @@ class CausalSelfAttention(eqx.Module):
             half = head_dim // 2
             # gate[..., 0:1] is the rotating-half multiplier; gate[..., 1:2] is stationary.
             q = jnp.concatenate([q[..., :half] * gate[..., 0:1], q[..., half:] * gate[..., 1:2]], axis=-1)
+
+        # V4 (stationary-only sigmoid gate): q_stat *= sigmoid(w @ x).
+        # Applied BEFORE rms_norm and partial-RoPE. Only on PKO layers.
+        # q_rot is unchanged.
+        if use_partial_key_offset and self.q_stat_sigmoid_gate_weight is not None:
+            gate_logits = jnp.einsum("bsd,dn->bsn", x, self.q_stat_sigmoid_gate_weight)
+            gate = jax.nn.sigmoid(gate_logits).astype(x.dtype)[..., None]  # (B, S, num_heads, 1)
+            half = head_dim // 2
+            q = jnp.concatenate([q[..., :half], q[..., half:] * gate], axis=-1)
 
         q = rms_norm(q)
         k = rms_norm(k)

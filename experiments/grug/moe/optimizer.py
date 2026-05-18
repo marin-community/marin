@@ -24,6 +24,7 @@ def _uses_adamh_baseline_adam_group(path_lower: str) -> bool:
         or path_lower.endswith(".attn_gate")
         or path_lower.endswith(".q_split_rescale_weight")
         or path_lower.endswith(".q_silu_gate_weight")
+        or path_lower.endswith(".q_stat_sigmoid_gate_weight")
         or ".router" in path_lower
     )
 
@@ -663,6 +664,7 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
                 or path_lower.endswith(".attn_gate")
                 or path_lower.endswith(".q_split_rescale_weight")
                 or path_lower.endswith(".q_silu_gate_weight")
+                or path_lower.endswith(".q_stat_sigmoid_gate_weight")
                 or ".router" in path_lower
             ):
                 return "adam"
