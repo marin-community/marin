@@ -65,6 +65,26 @@ class TaskInfo(Protocol):
         """Current task state (PENDING, RUNNING, SUCCEEDED, etc.)."""
         ...
 
+    @property
+    def exit_code(self) -> int | None:
+        """Process exit code once the container has stopped, else ``None``."""
+        ...
+
+    @property
+    def error(self) -> str | None:
+        """Human-readable error string for failed/worker-failed attempts."""
+        ...
+
+    @property
+    def platform_container_id(self) -> str | None:
+        """Platform-specific container ID (docker hash, k8s pod name, etc.)."""
+        ...
+
+    @property
+    def finished_at(self) -> Timestamp | None:
+        """Terminal-state timestamp; ``None`` while the attempt is still active."""
+        ...
+
     def to_proto(self) -> job_pb2.TaskStatus:
         """Convert to protobuf TaskStatus message."""
         ...

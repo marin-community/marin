@@ -2010,9 +2010,6 @@ class ControllerTransitions:
         the existing state-machine guards (idempotency, stale-attempt checks,
         retry logic, cascade firing) apply unchanged.
         """
-        # Local import to break the transitions <-> reconcile module cycle.
-        from iris.cluster.controller.reconcile import AttemptMissingOnWorker
-
         worker_id = WorkerId(plan.request.worker_id)
         now_ms = now.epoch_ms()
 
@@ -2021,11 +2018,10 @@ class ControllerTransitions:
             return TxResult()
         self._health.heartbeat([worker_id], now_ms)
 
-        # Apply pre-computed deltas from the pure layer. AttemptMissingOnWorker
-        # is the only recognized delta type today; future phases may emit more.
-        for delta in plan.db_writes:
-            if not isinstance(delta, AttemptMissingOnWorker):
-                logger.warning("apply_reconcile_observations: unhandled delta type %s; skipping", type(delta).__name__)
+        # plan.db_writes carries pre-computed AttemptMissingOnWorker deltas from
+        # the pure layer; the MISSING→FAILED transition is driven through
+        # ``_observations_to_updates`` below, so we don't apply the deltas here
+        # directly. Widen handling when a second TransitionDelta variant lands.
 
         all_updates = self._observations_to_updates(observations)
         if not all_updates:

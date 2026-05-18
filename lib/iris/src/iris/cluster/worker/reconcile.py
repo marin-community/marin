@@ -20,10 +20,12 @@ Design notes:
 
 import logging
 import threading
+from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.worker.env_probe import check_worker_health
 from iris.cluster.worker.task_attempt import TaskAttempt
+from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -74,7 +76,7 @@ class ReconcileContext(Protocol):
     # Task map and lock — caller must NOT hold the lock before calling
     # handle_reconcile (the function acquires/releases as needed).
     @property
-    def _tasks(self) -> dict[_AttemptKey, object]: ...
+    def _tasks(self) -> dict[_AttemptKey, TaskInfo]: ...
 
     @property
     def _lock(self) -> threading.Lock: ...
@@ -95,7 +97,7 @@ class ReconcileContext(Protocol):
     def _collect_resource_metrics(self) -> job_pb2.WorkerResourceSnapshot: ...
 
     @property
-    def _cache_dir(self) -> object: ...
+    def _cache_dir(self) -> Path: ...
 
     @property
     def _worker_id(self) -> str | None: ...
@@ -104,7 +106,7 @@ class ReconcileContext(Protocol):
 def _build_observation(
     task_id: str,
     attempt_id: int,
-    task: object,
+    task: TaskInfo,
     terminal_states: frozenset,
 ) -> worker_pb2.Worker.AttemptObservation:
     """Build an AttemptObservation from a local TaskAttempt."""

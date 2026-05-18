@@ -8,7 +8,6 @@ snapshot and returns a ``WorkerReconcilePlan`` describing:
 
   - the wire payload to send to the worker (``desired`` attempts)
   - any DB writes to apply if the RPC succeeds (``db_writes``)
-  - audit events to record (``events``)
 
 The wire-payload types (``DesiredAttempt``, ``AttemptSpec``, etc.) mirror
 the proto shape from the Reconcile RPC but are plain dataclasses.
@@ -26,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol
 
 from rigging.timing import Timestamp
 
@@ -107,9 +106,7 @@ class AttemptSpec:
     See spec.md §4.3 for the dispatch invariant.
     """
 
-    # Any here: the reconcile_worker pure function is agnostic to the proto shape;
-    # legacy_translator_request stamps the concrete RunTaskRequest at the wire boundary.
-    request: Any | None = None
+    request: job_pb2.RunTaskRequest | None = None
 
 
 @dataclass(frozen=True)
@@ -196,15 +193,6 @@ class WorkerReconcileDispatch:
 # ---------------------------------------------------------------------------
 
 
-@runtime_checkable
-class TransitionDelta(Protocol):
-    """A single DB-mutating effect of a reconcile decision.
-
-    Implementations are frozen dataclasses; the apply layer in
-    ``transitions.py`` dispatches on the concrete type.
-    """
-
-
 @dataclass(frozen=True)
 class AttemptObserved:
     """Recorded when a worker reports observing this attempt.
@@ -233,6 +221,10 @@ class AttemptMissingOnWorker:
     attempt_uid: AttemptUid
 
 
+# Single concrete variant today; widen to a Union when a second delta lands.
+TransitionDelta = AttemptMissingOnWorker
+
+
 # ---------------------------------------------------------------------------
 # WorkerReconcileInputs / WorkerReconcilePlan
 # ---------------------------------------------------------------------------
@@ -244,15 +236,14 @@ class WorkerReconcileInputs:
 
     This is the sole input to ``reconcile_worker``; no DB access, no I/O.
 
-    ``job_specs`` maps ``JobName`` → the ``RunTaskRequest``-shaped object
-    (or ``None`` if the spec is unavailable — reservation holder or job
-    disappeared mid-tick). The type is ``Any`` here so this module stays
-    proto-free; the call site provides the concrete proto.
+    ``job_specs`` maps ``JobName`` → the cached ``RunTaskRequest`` for that
+    job, or ``None`` if the spec is unavailable (reservation holder or job
+    disappeared mid-tick).
     """
 
     worker: WorkerRow
     rows: list[ReconcileRow]
-    job_specs: dict[JobName, Any]
+    job_specs: dict[JobName, job_pb2.RunTaskRequest]
     now: Timestamp
 
 
@@ -262,12 +253,10 @@ class WorkerReconcilePlan:
 
     ``request`` is the ``ReconcileRequest`` to send to the worker.
     ``db_writes`` are applied to the DB only if the RPC succeeds.
-    ``events`` are audit-log entries regardless of RPC outcome.
     """
 
     request: ReconcileRequest
     db_writes: list[TransitionDelta] = field(default_factory=list)
-    events: list[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -493,15 +482,22 @@ def observations_from_reconcile_response(
     return observations
 
 
+class WorkerReconcileResultLike(Protocol):
+    """Subset of ``WorkerReconcileResult`` consumed by ``legacy_translator_response``.
+
+    Defined as a Protocol so this module does not depend on ``worker_provider``
+    (which itself imports from this module).
+    """
+
+    poll_error: str | None
+    poll_updates: list | None
+
+
 def legacy_translator_response(
     plan: WorkerReconcilePlan,
-    result: Any,
+    result: WorkerReconcileResultLike,
 ) -> list[AttemptObservation]:
     """Translate a legacy ``WorkerReconcileResult`` into ``AttemptObservation`` list.
-
-    ``result`` is a ``WorkerReconcileResult`` (from ``worker_provider``). The
-    type is ``Any`` here to avoid a circular import; the caller provides the
-    concrete instance.
 
     Conversion rules:
 
