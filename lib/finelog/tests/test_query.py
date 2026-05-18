@@ -105,6 +105,13 @@ def test_query_unknown_namespace_in_sql_raises(store: DuckDBLogStore):
         store.query('SELECT * FROM "nope.unknown"')
 
 
+def test_query_resolves_unquoted_identifier(store: DuckDBLogStore):
+    # Regression: the old "register only views whose quoted form appears in
+    # the SQL" fast path skipped this query because '"log"' is not a
+    # substring of "FROM log", and DuckDB raised CatalogException.
+    store.query("SELECT * FROM log LIMIT 1")
+
+
 def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
     """Commit (rename + catalog swap + unlink) must drain readers first.
 
