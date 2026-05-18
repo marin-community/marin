@@ -35,6 +35,7 @@ plain Python dict (no Zephyr group_by, no shuffle) and calls
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 from collections import defaultdict
@@ -195,6 +196,24 @@ def _load_dedup_canonical(path: str) -> dict[str, bool]:
     return dict(zip(ids, canonical, strict=True))
 
 
+@dataclasses.dataclass(frozen=True)
+class _WrittenShard:
+    """Slim summary of one per-(input_shard, cluster) Levanter shard cache.
+
+    Only the fields the driver actually needs for ``_merge_sharded_ledgers``
+    travel from worker to driver -- the full ``CacheLedger`` would carry
+    ``shard_rows`` / ``finished_shards`` / ``field_counts_by_shard`` per
+    record (10-20x larger), and at full-fleet scale (~17K input shards x
+    ~20 non-empty clusters each = ~340K records) the resulting
+    ``outcome.results`` payload starts to crowd the 1 GB iris coord.
+    """
+
+    cluster_id: int
+    path: str
+    total_num_rows: int
+    field_counts: dict[str, int]
+
+
 def _join_filter_bucket_shard(
     items: Iterator[dict[str, str]],
     shard_info: ShardInfo,
@@ -202,11 +221,11 @@ def _join_filter_bucket_shard(
     cluster_col: str,
     output_path: str,
     levanter_batch_size: int | None,
-) -> Iterator[dict[str, Any]]:
+) -> Iterator[_WrittenShard]:
     """One input shard -> up to K Levanter shard caches under ``cluster=<C>/``.
 
-    Yields ``{cluster_id, path, count, source_name}`` per non-empty cluster
-    bucket. The driver collects these and consolidates per cluster.
+    Yields one :class:`_WrittenShard` per non-empty cluster bucket. The
+    driver collects these and consolidates per cluster.
     """
     spec = next(iter(items))
     source_name = spec["source_name"]
@@ -289,16 +308,15 @@ def _join_filter_bucket_shard(
         # Load the just-written ledger so the driver can merge per-cluster
         # ledgers in pure Python without a second Zephyr probe pass.
         # SerialCacheWriter populates `field_counts`, so this is a single
-        # JSON read.
+        # JSON read. We project to the slim _WrittenShard shape because the
+        # full CacheLedger would 10-20x the cross-wire payload.
         ledger = CacheLedger.load(result["path"], metadata)
-        yield {
-            "cluster_id": cluster_id,
-            "path": result["path"],
-            "count": result["count"],
-            "ledger": ledger,
-            "source_name": source_name,
-            "global_shard_idx": shard_info.shard_idx,
-        }
+        yield _WrittenShard(
+            cluster_id=cluster_id,
+            path=result["path"],
+            total_num_rows=ledger.total_num_rows,
+            field_counts=dict(ledger.field_counts),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -334,30 +352,41 @@ def _resolve_dedup_attr_dir(
 
 def _merge_per_cluster_ledgers(
     *,
-    map_shard_results: list[dict[str, Any]],
+    map_shard_results: list[_WrittenShard],
     output_path: str,
 ) -> dict[int, ClusterCacheStats]:
     """Merge per-(input_shard, cluster) ledgers into one ledger per cluster.
 
     Pure driver-side work: ``map_shard_results`` already carries each
-    written shard's :class:`CacheLedger` (loaded by the worker right after
-    ``write_levanter_cache``). We group by ``cluster_id`` in a Python dict
-    (no Zephyr group_by, no shuffle) and call
-    ``_merge_sharded_ledgers`` -- which only writes the small
+    written shard's ``total_num_rows`` + ``field_counts`` (loaded by the
+    worker right after ``write_levanter_cache`` and projected to the slim
+    :class:`_WrittenShard`). We group by ``cluster_id`` in a Python dict
+    (no Zephyr group_by, no shuffle), synthesize minimal ``CacheLedger``
+    stubs since ``_merge_sharded_ledgers`` only reads ``total_num_rows``,
+    and call it -- which only writes the small
     ``cluster=<C>/shard_ledger.json`` per cluster.
     """
-    by_cluster: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    by_cluster: dict[int, list[_WrittenShard]] = defaultdict(list)
     for r in map_shard_results:
-        by_cluster[r["cluster_id"]].append(r)
+        by_cluster[r.cluster_id].append(r)
 
     metadata = CacheMetadata.empty()
     clusters: dict[int, ClusterCacheStats] = {}
     for cluster_id in sorted(by_cluster):
         cluster_root = f"{output_path.rstrip('/')}/cluster={cluster_id}"
-        entries = sorted(by_cluster[cluster_id], key=lambda e: e["path"])
-        shard_paths = [e["path"] for e in entries]
-        shard_ledgers = [e["ledger"] for e in entries]
-        per_shard_field_counts = [e["ledger"].field_counts for e in entries]
+        entries = sorted(by_cluster[cluster_id], key=lambda e: e.path)
+        shard_paths = [e.path for e in entries]
+        shard_ledgers = [
+            CacheLedger(
+                total_num_rows=e.total_num_rows,
+                shard_rows={},
+                finished_shards=[],
+                field_counts={},
+                metadata=metadata,
+            )
+            for e in entries
+        ]
+        per_shard_field_counts = [e.field_counts for e in entries]
         ledger = _merge_sharded_ledgers(cluster_root, shard_paths, shard_ledgers, per_shard_field_counts, metadata)
         total_tokens = ledger.field_counts.get("input_ids", 0)
         clusters[cluster_id] = ClusterCacheStats(
@@ -466,7 +495,7 @@ def build_clustered_store(
     )
     outcome = ctx.execute(ds, verbose=True)
 
-    n_non_empty_clusters = len({r["cluster_id"] for r in outcome.results})
+    n_non_empty_clusters = len({r.cluster_id for r in outcome.results})
     logger.info(
         "build_clustered_store: zephyr pass wrote %d shard caches across %d non-empty clusters",
         len(outcome.results),
