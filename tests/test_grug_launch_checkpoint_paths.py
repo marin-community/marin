@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import io
+import json
 import os
 from typing import Any
 from unittest.mock import patch
@@ -10,6 +12,7 @@ from levanter.optim import AdamConfig
 from levanter.tracker import NoopConfig
 
 from experiments.grug.base.launch import GRUG_130M_MODEL, GrugBaseLaunchConfig, resolve_grug_run_config
+from experiments.grug.moe.launch import _find_checkpoint_across_regions
 
 _DUMMY_DATA: Any = object()
 
@@ -54,3 +57,36 @@ def test_resolve_grug_run_config_sets_temporary_checkpoint_base_path():
         "gs://marin-us-east5/experiments/grug/base-trial/checkpoints",
         "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints",
     ]
+
+
+def test_find_checkpoint_across_regions_finds_temporary_checkpoint(monkeypatch):
+    output_path = "gs://marin-us-central1/grug/moe-trial"
+    temp_root = "marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5/grug/moe-trial/checkpoints"
+    temp_step = f"{temp_root}/step-720"
+
+    class FakeGCSFileSystem:
+        def ls(self, path: str):
+            if path == temp_root:
+                return [temp_step]
+            raise FileNotFoundError(path)
+
+        def exists(self, path: str) -> bool:
+            return path in {
+                f"{temp_step}/metadata.json",
+                f"{temp_step}/manifest.ocdbt",
+            }
+
+        def open(self, path: str):
+            assert path == f"{temp_step}/metadata.json"
+            return io.StringIO(json.dumps({"step": 720}))
+
+    monkeypatch.setattr("gcsfs.GCSFileSystem", FakeGCSFileSystem)
+    monkeypatch.setattr(
+        "rigging.filesystem.REGION_TO_DATA_BUCKET",
+        {
+            "us-central1": "marin-us-central1",
+            "us-east5": "marin-us-east5",
+        },
+    )
+
+    assert _find_checkpoint_across_regions(output_path) == f"gs://{temp_root}"
