@@ -8,25 +8,26 @@ End-to-end correctness is covered by ``tests/e2e/test_smoke.py`` and
 the real fetch + submit path. The cases here pin down the local-only
 behaviors the e2e suite would not catch quickly on regression:
 
-  - PollTasks enqueues a placeholder TaskAttempt that fetches its own spec.
   - Rapid duplicate polls do not enqueue twice (the placeholder is already
     in ``self._tasks``).
   - On fetch failure, the attempt transitions to WORKER_FAILED via its
     normal lifecycle and pushes a status update to the controller.
+
+The placeholder-enqueue path itself is covered by
+``test_worker.py::test_poll_tasks_without_adoption_omits_unknown_expected``.
 """
 
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from iris.cluster.runtime.types import ContainerPhase, ContainerStatus
 from iris.cluster.types import JobName
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 
-from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
+from tests.cluster.worker.conftest import create_run_task_request
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -45,38 +46,6 @@ def worker(mock_bundle_store, mock_runtime, tmp_path) -> Worker:
 
 def _expected(task_id: str, attempt_id: int = 0) -> job_pb2.WorkerTaskStatus:
     return job_pb2.WorkerTaskStatus(task_id=task_id, attempt_id=attempt_id)
-
-
-def test_poll_enqueues_attempt_that_fetches_spec(worker, mock_runtime):
-    """Unknown expected task is installed as a placeholder; its run thread
-    fetches the spec via GetTaskAttemptInfo and proceeds with the lifecycle."""
-    mock_runtime.create_container = Mock(
-        return_value=create_mock_container_handle(
-            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
-        )
-    )
-    task_id = JobName.root("test-user", "fetch").task(0).to_wire()
-    canned = create_run_task_request(task_id=task_id, attempt_id=0)
-    rpc_spy = Mock(return_value=canned)
-    worker._controller_client = SimpleNamespace(
-        get_task_attempt_info=rpc_spy,
-        update_task_status=Mock(),
-    )
-
-    worker.handle_poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=[_expected(task_id, 0)]))
-
-    # Placeholder is installed synchronously.
-    assert worker.get_task(task_id, attempt_id=0) is not None
-    # Fetch happens on the run thread.
-    wait_for_condition(lambda: rpc_spy.call_count == 1)
-    request = rpc_spy.call_args.args[0]
-    assert (request.task_id, request.attempt_id) == (task_id, 0)
-
-    worker._recent_submissions.clear()
-    worker.handle_poll_tasks(worker_pb2.Worker.PollTasksRequest(expected_tasks=[]))
-    task = worker.get_task(task_id, attempt_id=0)
-    if task and task.thread:
-        task.thread.join(timeout=15.0)
 
 
 def test_duplicate_polls_do_not_double_enqueue(worker):

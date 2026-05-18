@@ -18,6 +18,7 @@ Covers:
 
 from dataclasses import dataclass
 
+import pytest
 from iris.cluster.controller.reconcile import (
     AttemptSpec,
     DesiredAttempt,
@@ -137,46 +138,36 @@ def test_assigned_with_spec_lands_in_start_and_expected() -> None:
     assert dispatch.stop_tasks == []
 
 
-def test_building_no_spec_only_in_expected() -> None:
-    """BUILDING (run, no spec) → expected_tasks only; not in start_tasks."""
-    da = _desired_run_no_spec(_TASK2, attempt_id=2)
+@pytest.mark.parametrize("attempt_id", [2, 5])
+def test_active_no_spec_only_in_expected(attempt_id: int) -> None:
+    """BUILDING/RUNNING (run, no spec) → expected_tasks only; not in start_tasks.
+
+    BUILDING and RUNNING share the same dispatch shape — the translator does
+    not distinguish them; both produce an expected_tasks entry and nothing else.
+    """
+    da = _desired_run_no_spec(_TASK2, attempt_id=attempt_id)
     dispatch = legacy_translator_request(_plan([da]), _ADDRESS)
 
     assert dispatch.start_tasks == []
-    assert len(dispatch.expected_tasks) == 1
-    assert dispatch.expected_tasks[0] == RunningTaskEntry(task_id=_TASK2, attempt_id=2)
+    assert dispatch.expected_tasks == [RunningTaskEntry(task_id=_TASK2, attempt_id=attempt_id)]
     assert dispatch.stop_tasks == []
 
 
-def test_running_no_spec_only_in_expected() -> None:
-    """RUNNING (run, no spec) → expected_tasks only; same as BUILDING."""
-    da = _desired_run_no_spec(_TASK2, attempt_id=5)
-    dispatch = legacy_translator_request(_plan([da]), _ADDRESS)
-
-    assert dispatch.start_tasks == []
-    assert len(dispatch.expected_tasks) == 1
-    assert dispatch.expected_tasks[0].attempt_id == 5
-    assert dispatch.stop_tasks == []
-
-
-def test_cancelled_in_stop_only() -> None:
-    """CANCELLED row (intent_stop=CANCELLED) → stop_tasks only."""
-    da = _desired_stop(_TASK3, attempt_id=3, stop_reason=StopReason.CANCELLED)
+@pytest.mark.parametrize(
+    "task_id,attempt_id,stop_reason",
+    [
+        (_TASK3, 3, StopReason.CANCELLED),
+        (_TASK4, 4, StopReason.PREEMPTED),
+    ],
+)
+def test_stop_intent_in_stop_only(task_id: JobName, attempt_id: int, stop_reason: StopReason) -> None:
+    """CANCELLED/PREEMPTED row (intent_stop set) → stop_tasks only."""
+    da = _desired_stop(task_id, attempt_id=attempt_id, stop_reason=stop_reason)
     dispatch = legacy_translator_request(_plan([da]), _ADDRESS)
 
     assert dispatch.start_tasks == []
     assert dispatch.expected_tasks == []
-    assert dispatch.stop_tasks == [_TASK3.to_wire()]
-
-
-def test_preempted_in_stop_only() -> None:
-    """PREEMPTED row (intent_stop=PREEMPTED) → stop_tasks only."""
-    da = _desired_stop(_TASK4, attempt_id=4, stop_reason=StopReason.PREEMPTED)
-    dispatch = legacy_translator_request(_plan([da]), _ADDRESS)
-
-    assert dispatch.start_tasks == []
-    assert dispatch.expected_tasks == []
-    assert dispatch.stop_tasks == [_TASK4.to_wire()]
+    assert dispatch.stop_tasks == [task_id.to_wire()]
 
 
 def test_mixed_plan_all_cells() -> None:

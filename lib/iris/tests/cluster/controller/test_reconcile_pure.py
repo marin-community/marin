@@ -109,10 +109,6 @@ def test_assigned_spec_inline() -> None:
     assert da.intent_stop is None
     assert da.task_id == _TASK1.to_wire()
     assert da.attempt_id == 1
-
-
-def test_assigned_spec_inline_no_db_writes() -> None:
-    plan = reconcile_worker(_inputs(rows=[_row(task_state=job_pb2.TASK_STATE_ASSIGNED)], job_specs={_JOB1: _SPEC1}))
     assert plan.db_writes == []
 
 
@@ -149,10 +145,6 @@ def test_building_no_spec() -> None:
     assert da.intent_run is not None
     assert da.intent_run.request is None
     assert da.intent_stop is None
-
-
-def test_building_no_db_writes() -> None:
-    plan = reconcile_worker(_inputs(rows=[_row(task_state=job_pb2.TASK_STATE_BUILDING)]))
     assert plan.db_writes == []
 
 
@@ -168,10 +160,6 @@ def test_running_no_spec() -> None:
     assert da.intent_run is not None
     assert da.intent_run.request is None
     assert da.intent_stop is None
-
-
-def test_running_no_db_writes() -> None:
-    plan = reconcile_worker(_inputs(rows=[_row(task_state=job_pb2.TASK_STATE_RUNNING)]))
     assert plan.db_writes == []
 
 
@@ -186,10 +174,6 @@ def test_cancelled_emits_stop() -> None:
     da = plan.request.desired[0]
     assert da.intent_stop == StopReason.CANCELLED
     assert da.intent_run is None
-
-
-def test_cancelled_no_db_writes() -> None:
-    plan = reconcile_worker(_inputs(rows=[_row(task_state=TASK_STATE_KILLED)]))
     assert plan.db_writes == []
 
 
@@ -204,10 +188,6 @@ def test_preempted_emits_stop() -> None:
     da = plan.request.desired[0]
     assert da.intent_stop == StopReason.PREEMPTED
     assert da.intent_run is None
-
-
-def test_preempted_no_db_writes() -> None:
-    plan = reconcile_worker(_inputs(rows=[_row(task_state=TASK_STATE_PREEMPTED)]))
     assert plan.db_writes == []
 
 
