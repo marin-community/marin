@@ -574,12 +574,20 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    # Hyperparameters for the dedicated ``adam_q_split_v2`` group routing
+    # ``q_split_rescale_v2_{stat,rot}_weight``. Plain Adam (not AdamH).
+    q_split_v2_beta1: float = 0.95
+    q_split_v2_beta2: float = 0.999
+    q_split_v2_lr_scale: float = 0.1
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        adam_q_split_v2_lr_schedule = self.lr_scheduler(
+            num_train_steps, override_lr=self.adam_lr * self.q_split_v2_lr_scale
+        )
 
-        def optimizer(learning_rate, adam_lr):
+        def optimizer(learning_rate, adam_lr, adam_q_split_v2_lr):
             def muonh_transform():
                 components = []
                 if self.max_grad_norm:
@@ -612,12 +620,21 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
                 components.append(optax.scale(-adam_lr))
                 return optax.chain(*components)
 
+            def adam_q_split_v2_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.q_split_v2_beta1, self.q_split_v2_beta2, self.epsilon))
+                components.append(optax.scale(-adam_q_split_v2_lr))
+                return optax.chain(*components)
+
             return optax.multi_transform(
                 {
                     "muonh": muonh_transform(),
                     "adamh_embed": adamh_transform_at(learning_rate),
                     "adamh": adamh_transform_at(learning_rate),
                     "adam": adam_transform(),
+                    "adam_q_split_v2": adam_q_split_v2_transform(),
                 },
                 self.create_mask,
             )
@@ -625,6 +642,7 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
             adam_lr=adam_lr_schedule,
+            adam_q_split_v2_lr=adam_q_split_v2_lr_schedule,
         )
 
     def create_mask(self, params):
@@ -633,6 +651,10 @@ class GrugMoeMuonHMayArchGNMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
+            if path_lower.endswith(".q_split_rescale_v2_stat_weight") or path_lower.endswith(
+                ".q_split_rescale_v2_rot_weight"
+            ):
+                return "adam_q_split_v2"
             if "token_embed" in path_lower:
                 return "adamh_embed"
             if (

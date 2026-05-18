@@ -108,6 +108,23 @@ class GrugModelConfig:
     # ``"q"`` -> shape ``(hidden_dim, num_heads)``, one scalar per q-head
     # (each q-head can independently choose its rotating/stationary mix).
     pko_q_split_rescale_heads: str = "kv"
+    # V2 variant: TWO independent per-q-head weight matrices for the
+    # stationary and rotating halves; each produces a per-token, per-q-head
+    # ``sigmoid`` in [0, 1] (NOT 2*sigmoid). At init both halves are scaled
+    # by 0.5 (q magnitude halved). Only active in PKO layers.
+    #
+    #   stat_w = sigmoid(x @ W_stat)          # (B, S, num_heads), values in [0, 1]
+    #   rot_w  = sigmoid(x @ W_rot)           # (B, S, num_heads), values in [0, 1]
+    #   q_stat = q[..., half:] * stat_w
+    #   q_rot  = q[..., :half] * rot_w
+    #
+    # ``"none"``      — disabled (default).
+    # ``"pre_norm"``  — apply BEFORE rms_norm(q).
+    # ``"post_norm"`` — apply AFTER rms_norm(q), before partial-RoPE.
+    #
+    # Weight matrices are routed to a dedicated optimizer group with
+    # Adam(b1=0.95, b2=0.999) at 0.1x the small-LR ``adam_lr``.
+    pko_q_split_rescale_v2_mode: str = "none"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -132,6 +149,11 @@ class GrugModelConfig:
             )
         if self.pko_q_split_rescale_heads not in ("kv", "q"):
             raise ValueError(f"pko_q_split_rescale_heads must be 'kv' or 'q'; got {self.pko_q_split_rescale_heads!r}")
+        if self.pko_q_split_rescale_v2_mode not in ("none", "pre_norm", "post_norm"):
+            raise ValueError(
+                f"pko_q_split_rescale_v2_mode must be 'none' / 'pre_norm' / 'post_norm'; "
+                f"got {self.pko_q_split_rescale_v2_mode!r}"
+            )
 
     @property
     def inferred_head_dim(self) -> int:
@@ -161,6 +183,10 @@ class CausalSelfAttention(eqx.Module):
     # layers; shape ``(hidden_dim, num_kv_heads)``. Only allocated when
     # ``cfg.pko_q_split_rescale_mode != "none"``. See GrugModelConfig docs.
     q_split_rescale_weight: Float[Array, "D M"] | None
+    # V2: two independent (hidden_dim, num_heads) weights, each producing a
+    # per-token, per-q-head sigmoid in [0, 1] for stationary and rotating.
+    q_split_rescale_v2_stat_weight: Float[Array, "D N"] | None
+    q_split_rescale_v2_rot_weight: Float[Array, "D N"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -192,6 +218,12 @@ class CausalSelfAttention(eqx.Module):
             heads_dim = m if cfg.pko_q_split_rescale_heads == "kv" else n
             q_split_rescale_weight = reshard(jnp.zeros((d, heads_dim)), P(None, None))
 
+        q_split_rescale_v2_stat_weight: jax.Array | None = None
+        q_split_rescale_v2_rot_weight: jax.Array | None = None
+        if cfg.pko_q_split_rescale_v2_mode != "none":
+            q_split_rescale_v2_stat_weight = reshard(jnp.zeros((d, n)), P(None, None))
+            q_split_rescale_v2_rot_weight = reshard(jnp.zeros((d, n)), P(None, None))
+
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
@@ -200,6 +232,8 @@ class CausalSelfAttention(eqx.Module):
             attn_gate=attn_gate,
             attn_gate_up=attn_gate_up,
             q_split_rescale_weight=q_split_rescale_weight,
+            q_split_rescale_v2_stat_weight=q_split_rescale_v2_stat_weight,
+            q_split_rescale_v2_rot_weight=q_split_rescale_v2_rot_weight,
             cfg=cfg,
         )
 
@@ -250,6 +284,20 @@ class CausalSelfAttention(eqx.Module):
                 q_rot_w = None
                 q_stat_w = None
 
+        # V2: two independent sigmoid weights for stationary / rotating halves.
+        q_v2_rot_w: jax.Array | None = None
+        q_v2_stat_w: jax.Array | None = None
+        if use_partial_key_offset and self.q_split_rescale_v2_stat_weight is not None:
+            stat_logits = jnp.einsum("bsd,dn->bsn", x, self.q_split_rescale_v2_stat_weight)
+            rot_logits = jnp.einsum("bsd,dn->bsn", x, self.q_split_rescale_v2_rot_weight)
+            q_v2_stat_w = jax.nn.sigmoid(stat_logits).astype(x.dtype)[..., None]
+            q_v2_rot_w = jax.nn.sigmoid(rot_logits).astype(x.dtype)[..., None]
+            if self.cfg.pko_q_split_rescale_v2_mode == "pre_norm":
+                half = head_dim // 2
+                q = jnp.concatenate([q[..., :half] * q_v2_rot_w, q[..., half:] * q_v2_stat_w], axis=-1)
+                q_v2_rot_w = None
+                q_v2_stat_w = None
+
         q = rms_norm(q)
         k = rms_norm(k)
 
@@ -257,6 +305,11 @@ class CausalSelfAttention(eqx.Module):
             # post_norm: rescale after rms_norm and before partial-RoPE.
             half = head_dim // 2
             q = jnp.concatenate([q[..., :half] * q_rot_w, q[..., half:] * q_stat_w], axis=-1)
+
+        if q_v2_rot_w is not None:
+            # v2 post_norm: rescale after rms_norm and before partial-RoPE.
+            half = head_dim // 2
+            q = jnp.concatenate([q[..., :half] * q_v2_rot_w, q[..., half:] * q_v2_stat_w], axis=-1)
 
         if use_partial_key_offset:
             # Partial RoPE: only rotate the first half of head dims.
