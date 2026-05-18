@@ -51,6 +51,7 @@ import logging
 import os
 from collections import defaultdict
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pyarrow as pa
@@ -602,6 +603,7 @@ def build_clustered_store(
     split: str = "train",
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 4096,
+    aggregate_only: bool = False,
 ) -> ClusteredStoreData:
     """Single map-side Zephyr pass: 5-way join + filter + per-(cluster, quality) Levanter caches.
 
@@ -624,84 +626,105 @@ def build_clustered_store(
             extra = sorted(set(d) - set(tokenize))
             raise ValueError(f"{label} source set must equal tokenize: missing={missing!r}, extra={extra!r}")
 
-    if worker_resources is None:
-        worker_resources = ResourceConfig(cpu=2, ram="16g", disk="10g")
-
     cluster_col = _validate_cluster_view(cluster_assign, cluster_view)
-    logger.info(
-        "build_clustered_store: %d sources, cluster_view=%d (column=%s), quality_thresholds=%s, split=%s -> %s",
-        len(tokenize),
-        cluster_view,
-        cluster_col,
-        list(_QUALITY_THRESHOLDS),
-        split,
-        output_path,
-    )
+    counters: dict[str, int] = {}
 
-    shard_specs: list[dict[str, str]] = []
-    for source_name in sorted(tokenize):
-        tok = tokenize[source_name]
-        decon = decontam[source_name]
-        cluster_asg = cluster_assign[source_name]
-        qual = quality[source_name]
-        main_dir = tok.source_main_dirs.get(split)
-        if main_dir is None:
-            raise ValueError(f"{source_name}: tokenize has no source_main_dir for split={split!r}")
-        if cluster_asg.source_main_dir != main_dir:
-            raise ValueError(
-                f"{source_name}: cluster_assign.source_main_dir={cluster_asg.source_main_dir!r} "
-                f"!= tokenize.source_main_dirs[{split!r}]={main_dir!r}"
-            )
-        dedup_attr_dir = _resolve_dedup_attr_dir(source_name=source_name, main_output_dir=main_dir, dedup=dedup)
-        shard_specs.extend(
-            _per_source_shard_tuples(
-                source_name=source_name,
-                tokenize=tok,
-                decontam=decon,
-                cluster_assign=cluster_asg,
-                quality=qual,
-                dedup_attr_dir=dedup_attr_dir,
-                split=split,
-            )
+    if aggregate_only:
+        # Skip the zephyr pass entirely and pick up from the durable sidecars
+        # already on GCS. Used to recover when a prior run finished the
+        # map-side work but died before producing the per-bucket ledgers +
+        # artifact.json (sequential sidecar load + driver-side merge).
+        logger.info(
+            "build_clustered_store: aggregate_only=True, skipping zephyr; sources=%d split=%s -> %s",
+            len(tokenize),
+            split,
+            output_path,
+        )
+    else:
+        if worker_resources is None:
+            worker_resources = ResourceConfig(cpu=2, ram="16g", disk="10g")
+
+        logger.info(
+            "build_clustered_store: %d sources, cluster_view=%d (column=%s), quality_thresholds=%s, split=%s -> %s",
+            len(tokenize),
+            cluster_view,
+            cluster_col,
+            list(_QUALITY_THRESHOLDS),
+            split,
+            output_path,
         )
 
-    logger.info("build_clustered_store: %d input shards across %d sources", len(shard_specs), len(tokenize))
-    if not shard_specs:
-        raise ValueError("No input shards resolved -- nothing to do")
+        shard_specs: list[dict[str, str]] = []
+        for source_name in sorted(tokenize):
+            tok = tokenize[source_name]
+            decon = decontam[source_name]
+            cluster_asg = cluster_assign[source_name]
+            qual = quality[source_name]
+            main_dir = tok.source_main_dirs.get(split)
+            if main_dir is None:
+                raise ValueError(f"{source_name}: tokenize has no source_main_dir for split={split!r}")
+            if cluster_asg.source_main_dir != main_dir:
+                raise ValueError(
+                    f"{source_name}: cluster_assign.source_main_dir={cluster_asg.source_main_dir!r} "
+                    f"!= tokenize.source_main_dirs[{split!r}]={main_dir!r}"
+                )
+            dedup_attr_dir = _resolve_dedup_attr_dir(source_name=source_name, main_output_dir=main_dir, dedup=dedup)
+            shard_specs.extend(
+                _per_source_shard_tuples(
+                    source_name=source_name,
+                    tokenize=tok,
+                    decontam=decon,
+                    cluster_assign=cluster_asg,
+                    quality=qual,
+                    dedup_attr_dir=dedup_attr_dir,
+                    split=split,
+                )
+            )
 
-    # Zephyr coordinator needs more than the iris 1GB default: it tracks
-    # the worker pool + retry state + per-shard confirmations. Workers yield
-    # only tiny ``{shard_idx, n_buckets}`` records now (sidecar in GCS holds
-    # the full _WrittenShard list), so 3g is enough headroom for ~2k workers.
-    # preemptible=False because coord death = whole-job restart.
-    ctx = ZephyrContext(
-        resources=worker_resources,
-        coordinator_resources=ResourceConfig(cpu=1, ram="3g", preemptible=False),
-        max_workers=min(max_workers, len(shard_specs)),
-        name="datakit-clustered-store",
-    )
-    ds = Dataset.from_list(shard_specs).map_shard(
-        lambda items, shard, cc=cluster_col, op=output_path: _join_filter_stream_shard(
-            items, shard, cluster_col=cc, output_path=op
+        logger.info("build_clustered_store: %d input shards across %d sources", len(shard_specs), len(tokenize))
+        if not shard_specs:
+            raise ValueError("No input shards resolved -- nothing to do")
+
+        # Zephyr coordinator needs more than the iris 1GB default: it tracks
+        # the worker pool + retry state + per-shard confirmations. Workers yield
+        # only tiny ``{shard_idx, n_buckets}`` records now (sidecar in GCS holds
+        # the full _WrittenShard list), so 3g is enough headroom for ~2k workers.
+        # preemptible=False because coord death = whole-job restart.
+        ctx = ZephyrContext(
+            resources=worker_resources,
+            coordinator_resources=ResourceConfig(cpu=1, ram="3g", preemptible=False),
+            max_workers=min(max_workers, len(shard_specs)),
+            name="datakit-clustered-store",
         )
-    )
-    outcome = ctx.execute(ds, verbose=True)
-    logger.info(
-        "build_clustered_store: zephyr pass produced %d shard confirmations (resumed=%d)",
-        len(outcome.results),
-        outcome.counters.get("datakit_store/shards_resumed", 0),
-    )
+        ds = Dataset.from_list(shard_specs).map_shard(
+            lambda items, shard, cc=cluster_col, op=output_path: _join_filter_stream_shard(
+                items, shard, cluster_col=cc, output_path=op
+            )
+        )
+        outcome = ctx.execute(ds, verbose=True)
+        logger.info(
+            "build_clustered_store: zephyr pass produced %d shard confirmations (resumed=%d)",
+            len(outcome.results),
+            outcome.counters.get("datakit_store/shards_resumed", 0),
+        )
+        counters = dict(outcome.counters)
 
     # Aggregation: scan per-shard sidecars in GCS rather than carrying
     # the full _WrittenShard records through coord.outcome.results.
     sidecar_glob = f"{output_path.rstrip('/')}/_done/shard-*.json"
     sidecar_paths = sorted(fsspec_glob(sidecar_glob))
-    logger.info("build_clustered_store: loading %d shard sidecars", len(sidecar_paths))
-    all_written: list[_WrittenShard] = []
-    for sp in sidecar_paths:
+    logger.info("build_clustered_store: loading %d shard sidecars (parallel)", len(sidecar_paths))
+
+    def _load_one(sp: str) -> list[_WrittenShard]:
         sp_url = sp if sp.startswith("gs://") else f"gs://{sp}"
-        recs = _load_shard_sidecar(sp_url)
-        if recs:
+        return _load_shard_sidecar(sp_url) or []
+
+    # Sequential ``_load_shard_sidecar`` over O(100K) sidecars at ~50-100ms
+    # per GCS GET runs into hours of wall-clock. The fetches are independent
+    # JSON reads, so a bounded threadpool collapses it to minutes.
+    all_written: list[_WrittenShard] = []
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        for recs in pool.map(_load_one, sidecar_paths):
             all_written.extend(recs)
     logger.info("build_clustered_store: %d per-bucket records across %d shards", len(all_written), len(sidecar_paths))
 
@@ -716,7 +739,7 @@ def build_clustered_store(
         buckets=buckets,
         source_names=sorted(tokenize),
         tokenizer=tokenizer,
-        counters=dict(outcome.counters),
+        counters=counters,
     )
     Artifact.save(artifact, output_path)
     return artifact

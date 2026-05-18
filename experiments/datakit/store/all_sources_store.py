@@ -28,6 +28,7 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``)::
         -- python experiments/datakit/store/all_sources_store.py
 """
 
+import argparse
 import logging
 import os
 import re
@@ -131,6 +132,14 @@ def _build_resolution_index(root: str) -> dict[str, str]:
 def main() -> None:
     configure_logging(logging.INFO)
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--aggregate-only",
+        action="store_true",
+        help="Skip the zephyr map-side pass and aggregate from the durable sidecars already on GCS.",
+    )
+    args = parser.parse_args()
+
     dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
 
     sources_to_resolve = []
@@ -186,6 +195,7 @@ def main() -> None:
         split=SPLIT,
         worker_resources=WORKER_RESOURCES,
         max_workers=MAX_WORKERS,
+        aggregate_only=args.aggregate_only,
     )
 
     logger.info(
