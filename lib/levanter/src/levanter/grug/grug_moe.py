@@ -17,6 +17,7 @@ Implementation overview:
 import math
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from typing import Literal, TypeAlias, cast, get_args
 
@@ -34,6 +35,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 # #2710 used 1.25 as the practical EP ring default to avoid over/under-packing.
 
+PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
     "ring",
@@ -56,6 +58,23 @@ _INTERLEAVED_W13_MOE_IMPLEMENTATIONS = (
     "sonic_xla_interleaved_w13_custom_vjp_down",
 )
 _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved_w13_custom_vjp_down",)
+
+
+@dataclass(frozen=True)
+class MoEExpertMlpPspecs:
+    """Logical sharding axes for local MoE expert MLP weights."""
+
+    expert: PspecAxis = "expert"
+    hidden: PspecAxis = "data"
+    intermediate: PspecAxis = "model"
+
+    @property
+    def w_gate_up(self) -> P:
+        return P(self.expert, self.hidden, self.intermediate)
+
+    @property
+    def w_down(self) -> P:
+        return P(self.expert, self.intermediate, self.hidden)
 
 
 def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
@@ -151,6 +170,7 @@ class MoEExpertMlp(eqx.Module):
         implementation: MoeImplementation | str | None = None,
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
+        pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
         k_gate, k_up, k_down = jax.random.split(key, 3)
@@ -162,10 +182,10 @@ class MoEExpertMlp(eqx.Module):
             w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
         return MoEExpertMlp(
-            w_gate_up=_reshard_for_init(w_gate_up, P("expert", "data", "model")),
+            w_gate_up=_reshard_for_init(w_gate_up, pspecs.w_gate_up),
             w_down=_reshard_for_init(
                 _init_weight(k_down, (num_experts, intermediate_dim, hidden_dim), initializer_std),
-                P("expert", "model", "data"),
+                pspecs.w_down,
             ),
             implementation=resolved_implementation,
             activation=activation,
@@ -1026,7 +1046,9 @@ def moe_mlp(
 __all__ = [
     "MoeActivation",
     "MoEExpertMlp",
+    "MoEExpertMlpPspecs",
     "MoeImplementation",
+    "PspecAxis",
     "interleave_moe_w13",
     "moe_mlp",
     "moe_implementation_uses_interleaved_w13",

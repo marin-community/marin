@@ -12,6 +12,7 @@ from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionS
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
+    MoEExpertMlpPspecs,
     MoeImplementation,
     _compact_by_keep_mask,
     _expand_from_keep_mask,
@@ -293,6 +294,25 @@ def test_moe_expert_mlp_init_hides_interleaved_w13_layout():
     y_interleaved = interleaved_mlp(x, selected_experts, combine_weights, mesh=None)
 
     np.testing.assert_allclose(np.asarray(y_interleaved), np.asarray(y_concat), rtol=1e-5, atol=1e-5)
+
+
+def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
+    mesh = _make_dense_mesh()
+    pspecs = MoEExpertMlpPspecs(expert=None, hidden="data", intermediate="model")
+
+    with jax.set_mesh(mesh):
+        mlp = MoEExpertMlp.init(
+            num_experts=4,
+            hidden_dim=16,
+            intermediate_dim=24,
+            initializer_std=0.02,
+            key=jax.random.key(27),
+            implementation="sonic_xla_interleaved_w13",
+            pspecs=pspecs,
+        )
+
+    assert getattr(mlp.w_gate_up.sharding, "spec", None) == P(None, "data", "model")
+    assert getattr(mlp.w_down.sharding, "spec", None) == P(None, "model", "data")
 
 
 def test_moe_mlp_custom_vjp_down_matches_interleaved_values_and_gradients():
