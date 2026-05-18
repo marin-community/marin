@@ -3,13 +3,16 @@
 import itertools
 import logging
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import dupekit
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray import ResourceConfig
 from zephyr import ZephyrContext, counters, write_parquet_file
 from zephyr.dataset import Dataset
+from zephyr.readers import iter_parquet_row_groups, open_file
 
 from marin.processing.classification.deduplication.dedup_commons import (
     DEFAULT_FILETYPES,
@@ -27,6 +30,46 @@ from marin.utils import rebase_file_path
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_SPLIT_TARGET_BYTES = 256 * 1024 * 1024  # 256 MB target per parquet split
+
+
+@dataclass(frozen=True)
+class ParquetSplit:
+    path: str
+    file_idx: int
+    row_start: int | None = None
+    row_end: int | None = None
+
+
+def _compute_parquet_splits(path: str, file_idx: int) -> Iterator[ParquetSplit]:
+    """Split a parquet file into ~256 MB chunks based on row group sizes.
+
+    Non-parquet files emit a single split with no row range.
+    """
+    if not path.endswith(".parquet"):
+        raise ValueError(f"Expected a parquet file, got {path}")
+
+    with open_file(path, "rb") as f:
+        metadata = pq.ParquetFile(f).metadata
+
+    cumulative_rows = 0
+    split_start_row = 0
+    split_bytes = 0
+
+    for i in range(metadata.num_row_groups):
+        rg_meta = metadata.row_group(i)
+        rg_bytes = rg_meta.total_byte_size
+
+        if split_bytes > 0 and split_bytes + rg_bytes > _SPLIT_TARGET_BYTES:
+            yield ParquetSplit(path=path, file_idx=file_idx, row_start=split_start_row, row_end=cumulative_rows)
+            split_start_row = cumulative_rows
+            split_bytes = 0
+
+        split_bytes += rg_bytes
+        cumulative_rows += rg_meta.num_rows
+
+    yield ParquetSplit(path=path, file_idx=file_idx, row_start=split_start_row, row_end=cumulative_rows)
 
 
 def _iter_has_more_than_one(records: Iterator[T]) -> tuple[bool, T, Iterator[T]]:
@@ -78,7 +121,8 @@ def dedup_exact_paragraph(
     ctx_kwargs: dict = {
         "name": "exact-para-dedup",
         "max_workers": max_parallelism,
-        "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        "resources": worker_resources or ResourceConfig(cpu=2, ram="32g", disk="5g"),
+        "map_workers_per_actor": 2,
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
@@ -153,15 +197,23 @@ def dedup_exact_paragraph(
                 "file_idx": item["file_idx"],
             }
 
-    def _flat_map_paragraph_hashes(path: str) -> Iterator[dict]:
-        for batch in _load_batches(path):
-            hashes = compute_paragraph_hashes(batch).to_pylist()
-            counters.increment("hash/paragraphs", len(hashes))
-            for hash_record in hashes:
-                yield {"file_idx": path_to_idx[path], "id": hash_record.pop("doc_id"), **hash_record}
+    def _expand_to_splits(path: str) -> Iterator[ParquetSplit]:
+        yield from _compute_parquet_splits(path, path_to_idx[path])
+
+    def _flat_map_paragraph_hashes(split: ParquetSplit) -> Iterator[dict]:
+        with open_file(split.path, "rb") as f:
+            pf = pq.ParquetFile(f)
+            for table in iter_parquet_row_groups(pf, row_start=split.row_start, row_end=split.row_end):
+                for batch in table.to_batches():
+                    hashes = compute_paragraph_hashes(batch).to_pylist()
+                    counters.increment("hash/paragraphs", len(hashes))
+                    for hash_record in hashes:
+                        yield {"file_idx": split.file_idx, "id": hash_record.pop("doc_id"), **hash_record}
 
     shard_results = ctx.execute(
         Dataset.from_list(input_files)
+        .flat_map(_expand_to_splits)
+        .reshard(num_shards=max_parallelism)
         .flat_map(_flat_map_paragraph_hashes)
         .group_by(
             lambda record: record["hash"],
