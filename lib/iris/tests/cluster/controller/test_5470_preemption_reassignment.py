@@ -23,14 +23,20 @@ from iris.cluster.controller import reads
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.controller import SchedulingOutcome
 from iris.cluster.controller.reads import WorkerResourceUsage
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
+from iris.cluster.controller.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    worker_snapshot_from_row,
+)
 from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.transitions import (
     Assignment,
     HeartbeatApplyRequest,
     TaskUpdate,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from sqlalchemy import func, select, update
 
@@ -129,7 +135,21 @@ def _build_context(scheduler, state):
                 jobs[task.job_id] = _job_requirements_from_job(job)
     usage = _read_usage_by_worker(state)
     snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
-    return scheduler.create_scheduling_context(snapshots, building_counts=bc, pending_tasks=task_ids, jobs=jobs)
+    return SchedulingContext(
+        workers=snapshots,
+        building_counts=bc,
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+        pending_tasks=task_ids,
+        jobs=jobs,
+        pending_task_rows=[],
+        user_spend={},
+        user_budget_limits={},
+        requested_bands={},
+        reserved_job_ids=frozenset(),
+        reservation_entry_counts={},
+        user_budget_defaults=UserBudgetDefaults(),
+    )
 
 
 def _schedulable_tasks_for_test(state):

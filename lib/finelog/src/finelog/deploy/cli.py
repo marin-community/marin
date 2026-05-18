@@ -157,6 +157,7 @@ def status_cmd(name: str) -> None:
 class OutputFormat(StrEnum):
     TABLE = "table"
     JSON = "json"
+    JSONL = "jsonl"
     CSV = "csv"
 
 
@@ -192,6 +193,12 @@ def _print_json(table: pa.Table) -> None:
     sys.stdout.write("\n")
 
 
+def _print_jsonl(table: pa.Table) -> None:
+    for row in table.to_pylist():
+        json.dump(row, sys.stdout, default=str)
+        sys.stdout.write("\n")
+
+
 def _print_csv(table: pa.Table) -> None:
     writer = csv.writer(sys.stdout)
     writer.writerow(table.schema.names)
@@ -202,6 +209,7 @@ def _print_csv(table: pa.Table) -> None:
 _PRINTERS = {
     OutputFormat.TABLE: _print_table,
     OutputFormat.JSON: _print_json,
+    OutputFormat.JSONL: _print_jsonl,
     OutputFormat.CSV: _print_csv,
 }
 
@@ -213,7 +221,7 @@ _PRINTERS = {
     "--format",
     "output_format",
     type=click.Choice([f.value for f in OutputFormat]),
-    default=OutputFormat.TABLE.value,
+    default=OutputFormat.JSONL.value,
     show_default=True,
     help="Output format for the result.",
 )
@@ -399,7 +407,7 @@ def _register_namespace_views(
     "--format",
     "output_format",
     type=click.Choice([f.value for f in OutputFormat]),
-    default=OutputFormat.TABLE.value,
+    default=OutputFormat.JSONL.value,
     show_default=True,
     help="Output format for the result.",
 )

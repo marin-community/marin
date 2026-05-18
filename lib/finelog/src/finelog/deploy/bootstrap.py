@@ -75,24 +75,27 @@ sudo docker stop --timeout 5 {{ container_name }} 2>/dev/null || true
 sudo docker rm -f {{ container_name }} 2>/dev/null || true
 
 host_cpus=$(nproc)
-container_milli_cpus=$(( host_cpus * 1000 - 500 ))
-if [ "$container_milli_cpus" -lt 500 ]; then container_milli_cpus=500; fi
-container_cpus=$(awk -v m="$container_milli_cpus" 'BEGIN{printf "%.3f", m/1000}')
 host_mem_mib=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
 host_reserved_mem_mib=1700
 container_mem_mib=$(( host_mem_mib - host_reserved_mem_mib ))
 if [ "$container_mem_mib" -lt 256 ]; then container_mem_mib=256; fi
 echo "[finelog-init] host=${host_cpus}cpu/${host_mem_mib}MiB" \\
-    "container=${container_cpus}cpu/${container_mem_mib}MiB" \\
+    "container_mem=${container_mem_mib}MiB" \\
     "host_reserved_mem=${host_reserved_mem_mib}MiB"
 
+# No --cpus cap: with Docker's --cpus the cgroup gets a CFS bandwidth quota
+# (e.g. quota=350000us per 100000us period for --cpus=3.5). When the
+# container's combined threads exhaust the quota mid-period the kernel
+# parks every thread in the cgroup until the next 100ms window, which
+# shows up as multi-hundred-ms spikes on otherwise-fast operations like
+# parquet encode. The VM is dedicated to finelog, so let it use all
+# host CPUs without bandwidth throttling.
 sudo docker run -d --name {{ container_name }} \\
     --network=host \\
     --restart=unless-stopped \\
     --ulimit core=0:0 \\
     --ulimit nofile=1048576:1048576 \\
     --cap-add SYS_PTRACE \\
-    --cpus="${container_cpus}" \\
     --memory="${container_mem_mib}m" \\
     -e FINELOG_PORT={{ port }} \\
     -e FINELOG_REMOTE_DIR={{ remote_log_dir }} \\

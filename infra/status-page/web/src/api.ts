@@ -29,6 +29,7 @@ export interface FerryWorkflowStatus {
 }
 
 export interface FerryResponse {
+  windowDays: number;
   workflows: FerryWorkflowStatus[];
 }
 
@@ -64,8 +65,7 @@ export interface BuildsResponse {
 export interface PingPercentiles {
   p50: number;
   p90: number;
-  p95: number;
-  p98: number;
+  p99: number;
 }
 
 export interface IrisStatus {
@@ -74,11 +74,58 @@ export interface IrisStatus {
   latencyMs: number | null;
   pingPercentiles: PingPercentiles | null;
   pingSampleCount: number;
+  pingSpanMs: number;
   pingWindowMs: number;
   controllerUrl: string | null;
   fetchedAt: string;
   error?: string;
   raw?: unknown;
+}
+
+export type ServiceEnvironment = "prod" | "dev";
+export type ControlPlaneService = "iris" | "finelog";
+
+export interface ServiceHealthSeries {
+  id: string;
+  environment: ServiceEnvironment;
+  service: ControlPlaneService;
+  name: string;
+}
+
+export interface ServiceHealthSnapshot extends ServiceHealthSeries {
+  reachable: boolean;
+  latencyMs: number | null;
+  url: string | null;
+  fetchedAt: string;
+  error?: string;
+}
+
+export interface ServiceHealthHistorySample {
+  t: number;
+  latencies: Record<string, number | null>;
+  ok: Record<string, boolean>;
+}
+
+export interface ServiceLatencyStats {
+  p50: number;
+  max: number;
+}
+
+export interface ServiceHealthSummarySample {
+  t: number;
+  stats: Record<string, ServiceLatencyStats | null>;
+  sampleCounts: Record<string, number>;
+}
+
+export interface ServiceHealthResponse {
+  environment: ServiceEnvironment;
+  series: ServiceHealthSeries[];
+  latest: ServiceHealthSnapshot[];
+  samples: ServiceHealthHistorySample[];
+  summarySamples: ServiceHealthSummarySample[];
+  aggregationWindowMs: number;
+  windowMs: number;
+  fetchedAt: string;
 }
 
 export interface WorkerResourceTotals {
@@ -139,6 +186,8 @@ async function getJson<T>(path: string): Promise<T> {
 export const fetchFerry = () => getJson<FerryResponse>("/api/ferry");
 export const fetchBuilds = () => getJson<BuildsResponse>("/api/builds");
 export const fetchIris = () => getJson<IrisStatus>("/api/iris");
+export const fetchControlPlaneHealth = () =>
+  getJson<ServiceHealthResponse>("/api/control-plane/health");
 export const fetchWorkers = () => getJson<WorkersSnapshot>("/api/workers");
 export const fetchWorkersHistory = () => getJson<WorkersHistoryResponse>("/api/workers/history");
 export const fetchJobs = () => getJson<JobsSnapshot>("/api/jobs");

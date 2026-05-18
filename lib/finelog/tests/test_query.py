@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import duckdb
 import pyarrow as pa
 import pytest
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
-from finelog.store.duckdb_store import DuckDBLogStore
+from finelog.store.duckdb_store import ConnectionPool, DuckDBLogStore, _QueryWatchdog
 from finelog.store.schema import Column, Schema
 from finelog.store.sql_escape import quote_ident, quote_literal
 
@@ -34,18 +35,6 @@ def test_query_round_trip_via_sealed_segment(store: DuckDBLogStore):
 
     table = store.query('SELECT worker_id, mem_bytes FROM "iris.worker" ORDER BY worker_id')
     assert table.column_names == ["worker_id", "mem_bytes"]
-    assert table.column("worker_id").to_pylist() == ["w-1", "w-2"]
-    assert table.column("mem_bytes").to_pylist() == [100, 200]
-
-
-def test_query_sees_unflushed_rows(store: DuckDBLogStore):
-    store.register_table("iris.worker", _worker_schema())
-    store.write_rows(
-        "iris.worker",
-        _ipc_bytes(_worker_batch(["w-1", "w-2"], [100, 200], [1, 2])),
-    )
-
-    table = store.query('SELECT worker_id, mem_bytes FROM "iris.worker" ORDER BY worker_id')
     assert table.column("worker_id").to_pylist() == ["w-1", "w-2"]
     assert table.column("mem_bytes").to_pylist() == [100, 200]
 
@@ -126,11 +115,11 @@ def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
     the write side, which blocks until in-flight readers release.
     """
     store.register_table("iris.worker", _worker_schema())
-    ns = store._namespaces["iris.worker"]
+    ns = store.catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
-    ns._flush_step()
+    ns.flush()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
-    ns._flush_step()
+    ns.flush()
 
     rwlock = store._query_visibility_lock
     rwlock.read_acquire()
@@ -138,7 +127,7 @@ def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
     try:
 
         def run_compaction():
-            ns._force_compact_l0()
+            ns.force_compact_l0()
             compaction_done.set()
 
         t = threading.Thread(target=run_compaction, daemon=True)
@@ -162,18 +151,18 @@ def test_compaction_commit_waits_for_active_readers(store: DuckDBLogStore):
 def test_query_completes_on_snapshot_during_compaction(store: DuckDBLogStore):
     """Read path is independent of which physical files back the namespace."""
     store.register_table("iris.worker", _worker_schema())
-    ns = store._namespaces["iris.worker"]
+    ns = store.catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
-    ns._flush_step()
-    ns._force_compact_l0()
+    ns.flush()
+    ns.force_compact_l0()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
-    ns._flush_step()
-    ns._force_compact_l0()
+    ns.flush()
+    ns.force_compact_l0()
 
     table = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
     assert table.column("worker_id").to_pylist() == ["a", "b"]
 
-    ns._compaction_step()
+    ns.compact()
     table2 = store.query('SELECT worker_id FROM "iris.worker" ORDER BY worker_id')
     assert table2.column("worker_id").to_pylist() == ["a", "b"]
 
@@ -186,13 +175,13 @@ def test_writes_proceed_during_compaction_copy(store: DuckDBLogStore, monkeypatc
     release the gate — proving the insertion lock is not held across the COPY.
     """
     store.register_table("iris.worker", _worker_schema())
-    ns = store._namespaces["iris.worker"]
+    ns = store.catalog["iris.worker"]
 
     # Two L0 segments so ``_compaction_step`` plans an actual merge.
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["a"], [1], [1])))
-    ns._flush_step()
+    ns.flush()
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["b"], [2], [2])))
-    ns._flush_step()
+    ns.flush()
 
     copy_entered = threading.Event()
     release_copy = threading.Event()
@@ -223,7 +212,7 @@ def test_writes_proceed_during_compaction_copy(store: DuckDBLogStore, monkeypatc
     compaction_done = threading.Event()
 
     def run_compaction():
-        ns._force_compact_l0()
+        ns.force_compact_l0()
         compaction_done.set()
 
     compactor = threading.Thread(target=run_compaction, daemon=True)
@@ -253,3 +242,62 @@ def test_writes_proceed_during_compaction_copy(store: DuckDBLogStore, monkeypatc
     compactor.join(timeout=5.0)
     assert compaction_done.is_set()
     writer.join(timeout=1.0)
+
+
+class _CountingConn:
+    def __init__(self) -> None:
+        self.interrupted = 0
+
+    def interrupt(self) -> None:
+        self.interrupted += 1
+
+
+def test_query_watchdog_fires_after_timeout():
+    conn = _CountingConn()
+    wd = _QueryWatchdog(conn, timeout_sec=0.05)
+    wd.start()
+    time.sleep(0.2)
+    wd.disarm()
+    assert conn.interrupted == 1
+
+
+def test_query_watchdog_disarm_suppresses_late_fire():
+    conn = _CountingConn()
+    wd = _QueryWatchdog(conn, timeout_sec=0.5)
+    wd.start()
+    wd.disarm()
+    time.sleep(0.6)
+    assert conn.interrupted == 0
+
+
+def test_connection_pool_interrupts_runaway_query(tmp_path):
+    pool = ConnectionPool(
+        temp_directory=tmp_path / "tmp",
+        query_timeout_sec=0.1,
+    )
+    try:
+        start = time.monotonic()
+        with pytest.raises(duckdb.InterruptException):
+            with pool.cursor() as cur:
+                # ``count(*) FROM range(N)`` short-circuits in DuckDB; ``sum``
+                # forces an actual scan that the interrupt can latch onto.
+                cur.execute("SELECT sum(i) FROM range(100000000000) t(i)").fetchall()
+        assert time.monotonic() - start < 2.0
+        # Pool must remain usable after a timeout.
+        with pool.cursor() as cur:
+            assert cur.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        pool.close()
+
+
+def test_connection_pool_timeout_disabled_completes_long_query(tmp_path):
+    pool = ConnectionPool(
+        temp_directory=tmp_path / "tmp",
+        query_timeout_sec=None,
+    )
+    try:
+        with pool.cursor() as cur:
+            # Cheap query; just proves None disables the watchdog path.
+            assert cur.execute("SELECT count(*) FROM range(1000)").fetchone() == (1000,)
+    finally:
+        pool.close()

@@ -216,6 +216,14 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         except InfraError as e:
             logger.warning("Failed to set metadata on %s: %s", self._gce_vm_name, e)
 
+    def bootstrap(self, script: str) -> None:
+        # Persist the script as the instance's startup-script before executing it
+        # over SSH, so a future GCE-initiated reboot (host maintenance, manual
+        # reset) re-runs *this* script — not the original baked in at VM creation,
+        # which would pin the controller to the day-one image.
+        self.set_metadata({"startup-script": script})
+        super().bootstrap(script)
+
 
 class GcpSliceHandle:
     """Handle to a GCP TPU slice (pod).
