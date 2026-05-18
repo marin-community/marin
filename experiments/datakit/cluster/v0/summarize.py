@@ -30,10 +30,13 @@ import heapq
 import json
 import logging
 import os
+import pickle
 import tempfile
+import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import fsspec
 import numpy as np
 import pyarrow.parquet as pq
 from rigging.filesystem import open_url
@@ -47,6 +50,43 @@ DEFAULT_N_TERMS = 10
 DEFAULT_EXCERPT_CHARS = 500
 CTFIDF_MAX_FEATURES = 50_000
 _IO_THREADS = 64  # GCS round-trip parallelism for parquet reads
+_FETCH_TIMEOUT_S = 300.0  # per-shard text-fetch wait cap; skip a hung read past this
+_CHECKPOINT_FILENAME = "_scan_checkpoint.pkl"  # pass-1 state, written after each source
+
+
+def _checkpoint_uri(output_path: str) -> str:
+    return f"{output_path.rstrip('/')}/{_CHECKPOINT_FILENAME}"
+
+
+def _load_scan_checkpoint(output_path: str) -> dict | None:
+    """Return prior pass-1 state if a checkpoint exists, else None."""
+    try:
+        with open_url(_checkpoint_uri(output_path), "rb") as f:
+            state = pickle.load(f)
+        logger.info(
+            "Resuming pass 1 from checkpoint: %d sources already scanned",
+            len(state.get("processed_sources", ())),
+        )
+        return state
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        # Corrupt or unreadable checkpoint -- start fresh rather than fail.
+        logger.warning("Ignoring unreadable checkpoint at %s: %r", _checkpoint_uri(output_path), e)
+        return None
+
+
+def _save_scan_checkpoint(output_path: str, state: dict) -> None:
+    """Write pass-1 state with temp+rename so a partial write can't corrupt the
+    checkpoint a future restart reads. On GCS, fsspec.mv == copy + delete."""
+    target = _checkpoint_uri(output_path)
+    tmp = f"{target}.tmp"
+    payload = pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)
+    with open_url(tmp, "wb") as f:
+        f.write(payload)
+    fs, target_path = fsspec.url_to_fs(target)
+    _, tmp_path = fsspec.url_to_fs(tmp)
+    fs.mv(tmp_path, target_path)
 
 
 def _scan_assignments(
@@ -55,6 +95,7 @@ def _scan_assignments(
     dist_col: str,
     n_sample_per_cluster: int,
     n_reps: int,
+    output_path: str,
     seed: int = 42,
 ) -> tuple[
     dict[int, list[tuple[str, str, int, float]]],
@@ -68,14 +109,29 @@ def _scan_assignments(
     * ``reps[c]``: the ``n_reps`` rows with smallest ``dist`` in cluster ``c``,
       sorted ascending by ``dist`` (for representative docs).
     * ``source_main_dirs[source_name]``: normalized main_output_dir.
+
+    State is checkpointed to ``{output_path}/_scan_checkpoint.pkl`` after each
+    source. A preempt-restart resumes from the last completed source instead
+    of replaying the entire pass.
     """
-    rng = np.random.default_rng(seed)
-    samples: dict[int, list[tuple[str, str, int, float]]] = defaultdict(list)
-    counts: dict[int, int] = defaultdict(int)
-    # Top-K-by-smallest-dist via a max-heap on (-dist). heappushpop keeps
-    # heap size <= n_reps and the items with the n_reps smallest dists.
-    reps_heap: dict[int, list[tuple[float, str, str, int]]] = defaultdict(list)
-    source_main_dirs: dict[str, str] = {}
+    ckpt = _load_scan_checkpoint(output_path)
+    if ckpt is not None:
+        samples: dict[int, list[tuple[str, str, int, float]]] = defaultdict(list, ckpt["samples"])
+        counts: dict[int, int] = defaultdict(int, ckpt["counts"])
+        reps_heap: dict[int, list[tuple[float, str, str, int]]] = defaultdict(list, ckpt["reps_heap"])
+        source_main_dirs: dict[str, str] = dict(ckpt["source_main_dirs"])
+        processed_sources: set[str] = set(ckpt["processed_sources"])
+        rng = np.random.default_rng(seed)
+        rng.bit_generator.state = ckpt["rng_state"]
+    else:
+        samples = defaultdict(list)
+        counts = defaultdict(int)
+        # Top-K-by-smallest-dist via a max-heap on (-dist). heappushpop keeps
+        # heap size <= n_reps and the items with the n_reps smallest dists.
+        reps_heap = defaultdict(list)
+        source_main_dirs = {}
+        processed_sources = set()
+        rng = np.random.default_rng(seed)
 
     def _read_shard(shard_uri: str) -> tuple[str, np.ndarray, np.ndarray]:
         basename = os.path.basename(shard_uri)
@@ -88,6 +144,8 @@ def _scan_assignments(
     # (samples / counts / reps_heap) stays single-threaded to avoid locks.
     with ThreadPoolExecutor(max_workers=_IO_THREADS) as pool:
         for source_name, attr in sorted(assignments.items()):
+            if source_name in processed_sources:
+                continue
             source_main_dirs[source_name] = attr.source_main_dir
             shard_uris = attr.shard_paths()
             for basename, cl, d_arr in pool.map(_read_shard, shard_uris):
@@ -111,11 +169,25 @@ def _scan_assignments(
                         heapq.heappush(reps_heap[c], rep_item)
                     else:
                         heapq.heappushpop(reps_heap[c], rep_item)
+            processed_sources.add(source_name)
             logger.info(
-                "Scanned %s assignments (%d shards); clusters seen=%d",
+                "Scanned %s assignments (%d shards); clusters seen=%d; %d/%d sources done",
                 source_name,
                 len(shard_uris),
                 len(samples),
+                len(processed_sources),
+                len(assignments),
+            )
+            _save_scan_checkpoint(
+                output_path,
+                {
+                    "samples": dict(samples),
+                    "counts": dict(counts),
+                    "reps_heap": dict(reps_heap),
+                    "source_main_dirs": source_main_dirs,
+                    "processed_sources": processed_sources,
+                    "rng_state": rng.bit_generator.state,
+                },
             )
 
     reps: dict[int, list[tuple[str, str, int, float]]] = {}
@@ -133,7 +205,14 @@ def _fetch_texts(
     needed: set[tuple[str, str, int]],
     excerpt_chars: int,
 ) -> dict[tuple[str, str, int], str]:
-    """For each (source, basename, row_idx) in ``needed``, pluck text from the normalized shard."""
+    """For each (source, basename, row_idx) in ``needed``, pluck text from the normalized shard.
+
+    Each (source, shard) pair is one independent parquet read on a thread.
+    Results are consumed via ``as_completed`` (not ``pool.map``) so a single
+    stuck GCS read can't block the whole pool — that hung the previous run.
+    Per-future wait is capped at ``_FETCH_TIMEOUT_S``; on timeout the shard's
+    rows are simply skipped (those texts are missing from the summary).
+    """
     plan: dict[tuple[str, str], list[int]] = defaultdict(list)
     for source_name, basename, row_idx in needed:
         plan[(source_name, basename)].append(row_idx)
@@ -150,11 +229,36 @@ def _fetch_texts(
         rows = [(row_idx, (text_col[row_idx].as_py() or "")[:excerpt_chars]) for row_idx in row_idxs]
         return (source_name, basename), rows
 
+    items = list(plan.items())
+    skipped = 0
+    progress_step = max(1, len(items) // 20)
+    t0 = time.monotonic()
     with ThreadPoolExecutor(max_workers=_IO_THREADS) as pool:
-        for (source_name, basename), rows in pool.map(_fetch_pair, plan.items()):
-            for row_idx, text in rows:
-                out[(source_name, basename, row_idx)] = text
-    logger.info("Fetched %d texts across %d (source, shard) pairs", len(out), len(plan))
+        futures = {pool.submit(_fetch_pair, item): item for item in items}
+        for i, fut in enumerate(as_completed(futures), 1):
+            item = futures[fut]
+            try:
+                (source_name, basename), rows = fut.result(timeout=_FETCH_TIMEOUT_S)
+                for row_idx, text in rows:
+                    out[(source_name, basename, row_idx)] = text
+            except Exception as e:
+                skipped += 1
+                logger.warning("Skipping fetch %s/%s due to %s", item[0][0], item[0][1], type(e).__name__)
+            if i % progress_step == 0:
+                logger.info(
+                    "Fetched %d/%d (source,shard) pairs (%d skipped, %.0fs elapsed)",
+                    i,
+                    len(items),
+                    skipped,
+                    time.monotonic() - t0,
+                )
+    logger.info(
+        "Fetched %d texts across %d (source, shard) pairs (%d skipped, total %.0fs)",
+        len(out),
+        len(plan),
+        skipped,
+        time.monotonic() - t0,
+    )
     return out
 
 
@@ -192,6 +296,7 @@ def summarize_at_k(
         dist_col=dist_col,
         n_sample_per_cluster=n_sample_per_cluster,
         n_reps=n_reps,
+        output_path=output_path,
     )
 
     needed: set[tuple[str, str, int]] = set()
