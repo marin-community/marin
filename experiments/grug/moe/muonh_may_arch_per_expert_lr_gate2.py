@@ -17,6 +17,7 @@ Submit one or more passing candidates:
 """
 
 import argparse
+import sys
 
 from marin.execution.executor import ExecutorStep, executor_main
 
@@ -48,7 +49,7 @@ def _build_steps_for_candidates(candidates: tuple[str, ...], run_suffix: str = _
     ]
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--candidate",
@@ -58,11 +59,12 @@ def _parse_args() -> argparse.Namespace:
         help="Gate-1 candidate to advance to gate 2. Pass multiple times for multiple candidates.",
     )
     parser.add_argument("--run-suffix", default=_RUN_SUFFIX)
-    return parser.parse_args()
+    return parser.parse_known_args(argv)
 
 
 if __name__ == "__main__":
-    args = _parse_args()
+    args, executor_args = _parse_args()
+    sys.argv = [sys.argv[0], *executor_args]
     candidates = tuple(args.candidate)
     steps = _build_steps_for_candidates(candidates, run_suffix=args.run_suffix)
     executor_main(
