@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Protocol
 
 from iris.cluster.worker.env_probe import check_worker_health
-from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker_types import TaskInfo
 from iris.rpc import job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
@@ -110,8 +109,6 @@ def _build_observation(
     terminal_states: frozenset,
 ) -> worker_pb2.Worker.AttemptObservation:
     """Build an AttemptObservation from a local TaskAttempt."""
-    assert isinstance(task, TaskAttempt)
-
     state = task.status
     # Workers never report PENDING to the controller; map it to BUILDING.
     if state == job_pb2.TASK_STATE_PENDING:
@@ -185,7 +182,7 @@ def handle_reconcile(
             task = ctx._tasks.get(key)
             if task is None:
                 continue
-            is_terminal = getattr(task, "status", None) in ctx._TERMINAL_STATES
+            is_terminal = task.status in ctx._TERMINAL_STATES
         if key not in desired_keys and not is_terminal:
             logger.info(
                 "Reconcile: killing zombie attempt %s/%d (not in desired set)",
@@ -208,7 +205,7 @@ def handle_reconcile(
         observations.append(obs)
 
         # Evict terminal entries from spec_cache so it stays bounded.
-        is_terminal = getattr(task, "status", None) in ctx._TERMINAL_STATES
+        is_terminal = task.status in ctx._TERMINAL_STATES
         if is_terminal:
             spec_cache.evict(task_id, attempt_id)
 
@@ -275,18 +272,6 @@ def _process_run_intent(
         spec_cache.add(task_id, attempt_id, run_request)
         logger.info("Reconcile: enqueuing attempt %s/%d (spec inline)", task_id, attempt_id)
         ctx.submit_task(run_request)
-    elif spec_cache.lookup(task_id, attempt_id) is not None:
-        # No inline spec but we have a cached copy — this shouldn't happen in
-        # normal operation (attempt would already be in _tasks), but handle it
-        # defensively: enqueue using the cached spec.
-        cached_request = spec_cache.lookup(task_id, attempt_id)
-        assert cached_request is not None
-        logger.warning(
-            "Reconcile: attempt %s/%d not in tasks but found in spec_cache; re-enqueuing",
-            task_id,
-            attempt_id,
-        )
-        ctx.submit_task(cached_request)
     else:
         # No spec anywhere: will surface as TASK_STATE_MISSING in observed.
         logger.info(
@@ -310,7 +295,7 @@ def _process_stop_intent(
         task = ctx._tasks.get((task_id, attempt_id))
         if task is None:
             return
-        is_terminal = getattr(task, "status", None) in ctx._TERMINAL_STATES
+        is_terminal = task.status in ctx._TERMINAL_STATES
 
     if is_terminal:
         return
