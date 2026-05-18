@@ -1,32 +1,37 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the v0 datakit-clustered Levanter store.
+"""Build the v0.1 datakit (cluster x quality) Levanter store.
 
 Joins, filters, and routes every Datakit source's tokenized output into one
-Levanter cache per cluster (K=40):
+Levanter cache per (cluster=40, quality=5) bucket -> 200 leaves max:
 
     tokenize    gs://marin-eu-west4/datakit/tokenize/<src>_<hash>/
     decontam    gs://marin-eu-west4/datakit/decontam/<src>_<hash>/
     cluster     gs://marin-eu-west4/datakit/cluster/assign/<src>_<hash>/
+    quality     gs://marin-eu-west4/datakit/llm-quality-classifier/inference/sonnet46-thr05/quality-llm/<src>_<hash>/
+                (Sonnet 4.6 rubric distilled to a fasttext classifier; see experiments/datakit/cluster/llm_quality/)
     dedup       gs://marin-eu-west4/datakit/dedup/dedup_v0_manual/
 
 Excludes ``safety_pt/*`` and ``climblab-ja`` -- both are missing from the
 dedup output (see ``experiments/datakit/dedup/all_sources_fuzzy.py``).
 
-Output: ``gs://marin-eu-west4/datakit/store/v0/cluster=<K>/`` for K in 0..39,
-plus ``v0/artifact.json`` describing the per-cluster stats.
+Output: ``gs://marin-eu-west4/datakit/store/v0.1_20260518/cluster=<K>/quality=<Q>/``
+for K in 0..39 and Q in 0..4, plus ``artifact.json`` describing the
+per-bucket stats and quality cutoffs.
 
 Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``)::
 
     uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
-        --priority interactive --cpu 2 --memory 8GB \\
+        --priority production --cpu 2 --memory 8GB --enable-extra-resources \\
+        --no-preemptible \\
         -- python experiments/datakit/store/all_sources_store.py
 """
 
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from fray import ResourceConfig
 from marin.datakit.decon import DeconAttributes
@@ -34,10 +39,11 @@ from marin.datakit.sources import all_sources
 from marin.execution.artifact import Artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData
 from marin.processing.tokenize.attributes import TokenizedAttrData
-from marin.utils import fsspec_exists, fsspec_glob
+from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.v0.assign import AssignmentAttrData
+from experiments.datakit.fasttext import FastTextAttributes
 from experiments.datakit.store.datakit_store import build_clustered_store
 
 logger = logging.getLogger(__name__)
@@ -46,8 +52,9 @@ logger = logging.getLogger(__name__)
 TOKENIZE_ROOT = "gs://marin-eu-west4/datakit/tokenize"
 DECONTAM_ROOT = "gs://marin-eu-west4/datakit/decontam"
 CLUSTER_ASSIGN_ROOT = "gs://marin-eu-west4/datakit/cluster/assign"
+QUALITY_ROOT = "gs://marin-eu-west4/datakit/llm-quality-classifier/inference/sonnet46-thr05/quality-llm"
 DEDUP_PATH = "gs://marin-eu-west4/datakit/dedup/dedup_v0_manual"
-OUTPUT_PATH = "gs://marin-eu-west4/datakit/store/v0"
+OUTPUT_PATH = "gs://marin-eu-west4/datakit/store/v0.1_20260518"
 
 # Sources excluded from the v0 store. Both were held out of the dedup run
 # (see ``experiments/datakit/dedup/all_sources_fuzzy.py``), so excluding them
@@ -60,8 +67,12 @@ _EXCLUDE_PREFIXES: tuple[str, ...] = (
 CLUSTER_VIEW = 40
 SPLIT = "train"
 
-WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="10g")
-MAX_WORKERS = 1024
+# Mixed smoke validated 8g workers handle even big nemotron shards
+# (numpy-int32 input_ids + bounded iter_batches + _BATCH_FLUSH=256 in
+# the join loop). Bigger workers would crowd the cluster's preemptible
+# pool without benefit.
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="5g")
+MAX_WORKERS = 2048
 
 
 def _is_excluded(name: str) -> bool:
@@ -70,27 +81,51 @@ def _is_excluded(name: str) -> bool:
 
 _HASH_LEN = 8
 """Length of the StepSpec content-hash suffix on every output dir, in hex chars."""
+_HASH_RE = re.compile(rf"^(.+)_([0-9a-f]{{{_HASH_LEN}}})$")
 
 
-def _resolve_artifact_dir(root: str, source_name: str) -> str:
-    """Return ``<root>/<source_name>_<hash>`` for the single hashed dir whose
-    ``artifact.json`` is present.
+def _build_resolution_index(root: str) -> dict[str, str]:
+    """Walk ``root`` via shallow ``fs.ls`` and return ``{source_name: full_path}``.
 
-    The match is anchored on the leaf component plus an 8-hex hash. A loose
-    ``<source_name>_*`` glob would over-match siblings sharing a prefix --
-    e.g. ``nemotron_cc_v2_1/high_quality_*`` also matches
-    ``high_quality_dqa_<hash>``, ``high_quality_synthetic_<hash>``, etc.
+    A previous version used ``fsspec_glob(<root>/<src>_*)`` per source, but
+    gcsfs implements glob as a recursive ``_find`` that lists every object
+    under the prefix and caches the result. With 4 roots x ~100 sources that
+    blew up to multiple GB of cached listings, OOM'ing the 8g driver in <2 min.
+
+    Shallow walk:
+      - ``fs.ls(root, detail=True)`` yields top-level entries with types.
+      - Entries matching ``<name>_<8hex>`` are recorded as flat sources
+        (e.g. ``coderforge``); we do NOT recurse into them.
+      - Other DIRECTORIES are treated as nested namespaces (e.g. ``cp/``,
+        ``finepdfs/``, ``nemotron_cc_v2/``); we recurse one level deeper.
+        File entries (e.g. the ``evals/`` parquet tree under ``decontam/``)
+        are skipped without recursing.
+
+    Total GCS work: ~1 ls per root + ~1 ls per nested subdirectory
+    (~15-20 nested dirs across the datakit), independent of source count.
     """
-    source_leaf = source_name.rsplit("/", 1)[-1]
-    leaf_re = re.compile(rf"^{re.escape(source_leaf)}_[0-9a-f]{{{_HASH_LEN}}}$")
-    candidates = [
-        p.rstrip("/")
-        for p in fsspec_glob(f"{root.rstrip('/')}/{source_name}_*")
-        if leaf_re.match(os.path.basename(p.rstrip("/"))) and fsspec_exists(f"{p.rstrip('/')}/artifact.json")
-    ]
-    if len(candidates) != 1:
-        raise RuntimeError(f"Expected exactly one artifact dir under {root!r} for {source_name!r}, found {candidates}")
-    return candidates[0]
+    fs, _ = url_to_fs(root)
+    root_clean = root.removeprefix("gs://").rstrip("/")
+    index: dict[str, str] = {}
+
+    def visit(rel_prefix: str) -> None:
+        listing_path = f"{root_clean}/{rel_prefix}".rstrip("/")
+        for info in fs.ls(listing_path, detail=True):
+            entry_path = info["name"]
+            bn = os.path.basename(entry_path.rstrip("/"))
+            if not bn:
+                continue
+            m = _HASH_RE.match(bn)
+            if m:
+                source_name = f"{rel_prefix}{m.group(1)}"
+                index[source_name] = f"gs://{entry_path.rstrip('/')}"
+            elif info.get("type") == "directory":
+                # nested namespace (e.g. "cp", "finepdfs", "nemotron_cc_v2")
+                visit(f"{rel_prefix}{bn}/")
+            # else: a file (e.g. decontam/evals/.../*.parquet) — skip
+
+    visit("")
+    return index
 
 
 def main() -> None:
@@ -98,19 +133,45 @@ def main() -> None:
 
     dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
 
-    tokenize: dict[str, TokenizedAttrData] = {}
-    decontam: dict[str, DeconAttributes] = {}
-    cluster_assign: dict[str, AssignmentAttrData] = {}
-
+    sources_to_resolve = []
     for source_name in all_sources():
         if _is_excluded(source_name):
             logger.info("excluding %s", source_name)
             continue
-        tokenize[source_name] = Artifact.from_path(_resolve_artifact_dir(TOKENIZE_ROOT, source_name), TokenizedAttrData)
-        decontam[source_name] = Artifact.from_path(_resolve_artifact_dir(DECONTAM_ROOT, source_name), DeconAttributes)
-        cluster_assign[source_name] = Artifact.from_path(
-            _resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, source_name), AssignmentAttrData
+        sources_to_resolve.append(source_name)
+
+    # Build a {source_name: full_dir} index per root via shallow fs.ls walks
+    # -- bounded GCS work + bounded memory. See `_build_resolution_index`.
+    logger.info("indexing 4 roots via shallow fs.ls")
+    tokenize_index = _build_resolution_index(TOKENIZE_ROOT)
+    decontam_index = _build_resolution_index(DECONTAM_ROOT)
+    cluster_assign_index = _build_resolution_index(CLUSTER_ASSIGN_ROOT)
+    quality_index = _build_resolution_index(QUALITY_ROOT)
+
+    def _resolve(name: str) -> tuple[str, TokenizedAttrData, DeconAttributes, AssignmentAttrData, FastTextAttributes]:
+        return (
+            name,
+            Artifact.from_path(tokenize_index[name], TokenizedAttrData),
+            Artifact.from_path(decontam_index[name], DeconAttributes),
+            Artifact.from_path(cluster_assign_index[name], AssignmentAttrData),
+            Artifact.from_path(quality_index[name], FastTextAttributes),
         )
+
+    tokenize: dict[str, TokenizedAttrData] = {}
+    decontam: dict[str, DeconAttributes] = {}
+    cluster_assign: dict[str, AssignmentAttrData] = {}
+    quality: dict[str, FastTextAttributes] = {}
+
+    # Index lookups are O(1); only the 4 ``Artifact.from_path`` reads per
+    # source need parallelization. Threadpool of 16 fans those out without
+    # the gcsfs cache blow-up we saw at 32+.
+    logger.info("loading typed artifacts for %d sources (ThreadPoolExecutor=16)", len(sources_to_resolve))
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for name, tok, decon, cluster_a, qual in pool.map(_resolve, sources_to_resolve):
+            tokenize[name] = tok
+            decontam[name] = decon
+            cluster_assign[name] = cluster_a
+            quality[name] = qual
 
     logger.info("resolved %d sources", len(tokenize))
 
@@ -118,6 +179,7 @@ def main() -> None:
         tokenize=tokenize,
         decontam=decontam,
         cluster_assign=cluster_assign,
+        quality=quality,
         dedup=dedup,
         output_path=OUTPUT_PATH,
         cluster_view=CLUSTER_VIEW,
@@ -127,10 +189,10 @@ def main() -> None:
     )
 
     logger.info(
-        "done: %d clusters, %d total docs, %d total tokens -> %s",
-        len(artifact.clusters),
-        sum(c.total_elements for c in artifact.clusters.values()),
-        sum(c.total_tokens for c in artifact.clusters.values()),
+        "done: %d buckets, %d total docs, %d total tokens -> %s",
+        len(artifact.buckets),
+        sum(b.total_elements for b in artifact.buckets),
+        sum(b.total_tokens for b in artifact.buckets),
         artifact.cache_path,
     )
 

@@ -27,12 +27,14 @@ from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.cluster.v0.assign import AssignmentAttrData
+from experiments.datakit.fasttext import FastTextAttributes
 from experiments.datakit.store.all_sources_store import (
     CLUSTER_ASSIGN_ROOT,
     DECONTAM_ROOT,
     DEDUP_PATH,
+    QUALITY_ROOT,
     TOKENIZE_ROOT,
-    _resolve_artifact_dir,
+    _build_resolution_index,
 )
 from experiments.datakit.store.datakit_store import build_clustered_store
 
@@ -40,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 SMOKE_SOURCES = ("cp/peps", "cp/foodista")
-OUTPUT_PATH = "gs://marin-eu-west4/datakit/store/_smoke_v0"
+OUTPUT_PATH = "gs://marin-eu-west4/datakit/store/_smoke_v0.1_20260518"
 
 CLUSTER_VIEW = 40
 SPLIT = "train"
@@ -54,21 +56,27 @@ def main() -> None:
 
     dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
 
+    tokenize_index = _build_resolution_index(TOKENIZE_ROOT)
+    decontam_index = _build_resolution_index(DECONTAM_ROOT)
+    cluster_assign_index = _build_resolution_index(CLUSTER_ASSIGN_ROOT)
+    quality_index = _build_resolution_index(QUALITY_ROOT)
+
     tokenize: dict[str, TokenizedAttrData] = {}
     decontam: dict[str, DeconAttributes] = {}
     cluster_assign: dict[str, AssignmentAttrData] = {}
+    quality: dict[str, FastTextAttributes] = {}
 
     for source_name in SMOKE_SOURCES:
-        tokenize[source_name] = Artifact.from_path(_resolve_artifact_dir(TOKENIZE_ROOT, source_name), TokenizedAttrData)
-        decontam[source_name] = Artifact.from_path(_resolve_artifact_dir(DECONTAM_ROOT, source_name), DeconAttributes)
-        cluster_assign[source_name] = Artifact.from_path(
-            _resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, source_name), AssignmentAttrData
-        )
+        tokenize[source_name] = Artifact.from_path(tokenize_index[source_name], TokenizedAttrData)
+        decontam[source_name] = Artifact.from_path(decontam_index[source_name], DeconAttributes)
+        cluster_assign[source_name] = Artifact.from_path(cluster_assign_index[source_name], AssignmentAttrData)
+        quality[source_name] = Artifact.from_path(quality_index[source_name], FastTextAttributes)
 
     artifact = build_clustered_store(
         tokenize=tokenize,
         decontam=decontam,
         cluster_assign=cluster_assign,
+        quality=quality,
         dedup=dedup,
         output_path=OUTPUT_PATH,
         cluster_view=CLUSTER_VIEW,
@@ -78,10 +86,10 @@ def main() -> None:
     )
 
     logger.info(
-        "smoke done: %d clusters, %d total docs, %d total tokens -> %s",
-        len(artifact.clusters),
-        sum(c.total_elements for c in artifact.clusters.values()),
-        sum(c.total_tokens for c in artifact.clusters.values()),
+        "smoke done: %d buckets, %d total docs, %d total tokens -> %s",
+        len(artifact.buckets),
+        sum(b.total_elements for b in artifact.buckets),
+        sum(b.total_tokens for b in artifact.buckets),
         artifact.cache_path,
     )
 
