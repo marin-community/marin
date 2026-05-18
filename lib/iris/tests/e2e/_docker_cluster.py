@@ -8,27 +8,26 @@ Docker mode manually wires up Controller + Workers with DockerRuntime, which is
 needed for tests that exercise container-specific behavior (OOM, JAX env vars).
 """
 
-import re
 import tempfile
 import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+
+from finelog.rpc import logging_pb2
+from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.client import IrisClient
+from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.providers.types import find_free_port
 from iris.cluster.runtime.docker import DockerRuntime
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
-from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.env_probe import EnvironmentProvider
 from iris.cluster.worker.worker import Worker, WorkerConfig
-from iris.rpc import config_pb2, logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration
 
@@ -149,6 +148,7 @@ class E2ECluster:
             host="127.0.0.1",
             port=self._controller_port,
             remote_state_dir=f"file://{bundle_dir}",
+            local_state_dir=temp_path / "local",
         )
         self._controller = Controller(
             config=controller_config,
@@ -320,7 +320,10 @@ class E2ECluster:
         """Fetch container logs for a task."""
         job_id = self._to_job_id_str(job_or_id)
         task_id = JobName.from_wire(job_id).task(task_index).to_wire()
-        request = logging_pb2.FetchLogsRequest(source=re.escape(task_id) + ":.*")
+        request = logging_pb2.FetchLogsRequest(
+            source=f"{task_id}:",
+            match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
+        )
         assert self._log_client is not None
         response = self._log_client.fetch_logs(request)
         return [f"{e.source}: {e.data}" for e in response.entries]

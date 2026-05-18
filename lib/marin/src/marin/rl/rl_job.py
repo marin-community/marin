@@ -31,7 +31,7 @@ from marin.rl.environments.inference_ctx import (
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
-from marin.rl.rollout_worker import RolloutWorkerConfig, RolloutTrackerConfig
+from marin.rl.rollout_worker import RolloutTrackerConfig, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.utilities.json_encoder import CustomJsonEncoder
@@ -216,7 +216,7 @@ class RLJob:
         and child jobs (trainer + rollout workers). The coordinator runs
         inside the cluster with proper job hierarchy.
         """
-        from marin.rl.orchestration import submit_rl_job
+        from marin.rl.orchestration import submit_rl_job  # circular import
 
         handle = submit_rl_job(self.config)
         handle.wait(raise_on_failure=True)

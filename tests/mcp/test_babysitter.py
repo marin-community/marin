@@ -1,13 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import marin.mcp.babysitter as babysitter
 from iris.cli.token_store import store_token
-from iris.rpc import controller_pb2, job_pb2, time_pb2
-
+from iris.rpc import job_pb2, time_pb2
 from marin.mcp.babysitter import (
-    IrisBabysitter,
-    IrisConnectionConfig,
-    _job_summary_payload,
     _token_provider,
     classify_diagnosis,
     parse_zephyr_progress,
@@ -18,21 +15,6 @@ from marin.mcp.babysitter import (
 
 def _timestamp(epoch_ms: int):
     return time_pb2.Timestamp(epoch_ms=epoch_ms)
-
-
-class _ListJobsController:
-    def __init__(self, jobs: list[job_pb2.JobStatus]):
-        self.jobs = jobs
-
-    def list_jobs(self, _request):
-        return controller_pb2.Controller.ListJobsResponse(jobs=self.jobs, has_more=False)
-
-
-def _service_with_controller(controller):
-    service = object.__new__(IrisBabysitter)
-    service.config = IrisConnectionConfig(controller_url="http://controller", cluster="test")
-    service.controller = controller
-    return service
 
 
 def test_task_status_json_includes_attempts_timestamps_and_usage():
@@ -105,27 +87,32 @@ def test_job_summary_payload_preserves_summary_task_fields():
         exit_code=0,
     )
 
-    payload = _job_summary_payload(job, [running_task])
+    payload = babysitter._job_summary_payload(job, [running_task])
 
     assert payload["tasks"][0]["index"] == "0"
     assert payload["tasks"][0]["exit_code"] is None
+    assert "resource_usage" not in payload
     assert "resource_requests" in payload
+    assert "resource_usage" not in payload
 
 
-def test_jobs_with_prefix_excludes_string_prefix_siblings():
-    service = _service_with_controller(
-        _ListJobsController(
-            [
-                job_pb2.JobStatus(job_id="/alice/train"),
-                job_pb2.JobStatus(job_id="/alice/train/child"),
-                job_pb2.JobStatus(job_id="/alice/train-v2"),
-            ]
-        )
+def test_job_summary_payload_does_not_require_full_job_serialization(monkeypatch):
+    job = job_pb2.JobStatus(
+        job_id="/alice/train",
+        name="train",
+        state=job_pb2.JOB_STATE_RUNNING,
+        task_count=1,
     )
 
-    jobs = service._jobs_with_prefix("/alice/train")
+    def fail_full_job_serialization(_job):
+        raise AttributeError("resource_usage")
 
-    assert [job.job_id for job in jobs] == ["/alice/train", "/alice/train/child"]
+    monkeypatch.setattr(babysitter, "job_status_to_json", fail_full_job_serialization)
+
+    payload = babysitter._job_summary_payload(job, [])
+
+    assert payload["job_id"] == "/alice/train"
+    assert "resource_requests" in payload
 
 
 def test_token_provider_loads_iris_token_store(tmp_path):

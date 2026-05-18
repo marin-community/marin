@@ -13,11 +13,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 
 import yaml
 from google.protobuf.json_format import MessageToDict
 
-from collections.abc import Callable
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -198,9 +198,9 @@ for i in $(seq 1 60); do
     if ! sudo docker ps -q -f name=iris-worker | grep -q .; then
         echo "[iris-init] ERROR: Worker container exited unexpectedly"
         echo "[iris-init] Container status:"
-        sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}"
+        sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
         echo "[iris-init] Container logs:"
-        sudo docker logs iris-worker --tail 100
+        sudo docker logs iris-worker --tail 100 2>&1 | sed 's/^/[iris-init] /'
         exit 1
     fi
 
@@ -216,9 +216,9 @@ done
 
 echo "[iris-init] ERROR: Worker failed to become healthy after 120s"
 echo "[iris-init] Container status:"
-sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}"
+sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
 echo "[iris-init] Container logs:"
-sudo docker logs iris-worker --tail 100
+sudo docker logs iris-worker --tail 100 2>&1 | sed 's/^/[iris-init] /'
 exit 1
 """
 
@@ -479,7 +479,7 @@ def build_controller_bootstrap_script_from_config(
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
     """
-    # Local import to avoid circular dependency (config.py imports from bootstrap)
+    # circular import: config → factory → gcp.workers → bootstrap → config
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)

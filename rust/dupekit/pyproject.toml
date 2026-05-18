@@ -3,8 +3,10 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "dupekit"
-version = "0.1.0"
+name = "marin-dupekit"
+# Version is read from rust/dupekit/Cargo.toml by maturin so the release
+# workflow has a single source of truth to bump.
+dynamic = ["version"]
 description = "Optimized code for text de-duplication, written in Rust"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -13,6 +13,7 @@ silence_transformer_nag()
 # HfTokenizer is retained only for callers that need the actual HF transformers
 # tokenizer object (hf_checkpoints, lora save_pretrained, etc.).
 if TYPE_CHECKING:
+    # transformers is an optional dep; keep guard to avoid import at type-check time only
     from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
 
     HfTokenizer: TypeAlias = PreTrainedTokenizerFast | PreTrainedTokenizer

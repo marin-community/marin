@@ -11,10 +11,6 @@ import json
 import logging
 import os
 
-from rigging.filesystem import marin_temp_bucket, url_to_fs
-from rigging.log_setup import configure_logging
-from rigging.timing import log_time
-
 from fray import ResourceConfig
 from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.normalize import NormalizedData, normalize_step
@@ -35,6 +31,9 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
+from rigging.filesystem import marin_temp_bucket, url_to_fs
+from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
     normalized = normalize_step(
         name="datakit-smoke/normalize",
         download=downloaded,
-        input_path=f"{downloaded.output_path}/sample/10BT",
+        relative_input_path="sample/10BT",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="20g"),
         override_output_path=f"{base}/normalize",
     )
@@ -69,7 +68,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-smoke/minhash",
         deps=[normalized],
         fn=lambda output_path: compute_minhash_attrs(
-            source=Artifact.load(normalized, NormalizedData),
+            source=Artifact.from_path(normalized, NormalizedData),
             output_path=output_path,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="10g"),
         ),
@@ -83,7 +82,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         deps=[minhash],
         hash_attrs={"cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.load(minhash, MinHashAttrData)],
+            inputs=[Artifact.from_path(minhash, MinHashAttrData)],
             output_path=output_path,
             max_parallelism=128,
             cc_max_iterations=3,
@@ -96,7 +95,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-smoke/consolidate",
         deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
-            input_path=Artifact.load(normalized, NormalizedData).main_output_dir,
+            input_path=Artifact.from_path(normalized, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
@@ -105,8 +104,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 # keep_if_missing=True passes them through.
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=Artifact.load(deduped, FuzzyDupsAttrData)
-                    .sources[Artifact.load(normalized, NormalizedData).main_output_dir]
+                    attribute_path=Artifact.from_path(deduped, FuzzyDupsAttrData)
+                    .sources[Artifact.from_path(normalized, NormalizedData).main_output_dir]
                     .attr_dir,
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",

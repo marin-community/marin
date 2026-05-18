@@ -10,16 +10,16 @@ different number of datasets you will need to change the number of training step
 accordingly.
 """
 
-from levanter.data.text import ChatLmDatasetFormat
+from fray.cluster import ResourceConfig
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, ChatLmDatasetFormat
+from marin.execution.executor import ExecutorStep, executor_main
+from marin.processing.tokenize import lm_mixture_data_config
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.llama import llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, executor_main
-from marin.processing.tokenize import lm_mixture_data_config
 
 
 def create_tokenization_step(dataset_name: str) -> ExecutorStep:
@@ -94,7 +94,7 @@ mixture_sft_config = SimpleSFTConfig(
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    shuffle=True,
+    shuffle=DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation=True,
 )
 

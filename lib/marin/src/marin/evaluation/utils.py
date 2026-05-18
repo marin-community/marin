@@ -58,34 +58,16 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     logger.info(f"Uploaded {local_path} to {gcs_path}.")
 
 
-def discover_checkpoints(base_path: str, initial_glob_pattern: str, is_checkpoint_dir_pattern: list[str]) -> list[str]:
+def discover_hf_checkpoints(base_path: str) -> list[str]:
+    """Discover Hugging Face checkpoints under ``base_path``, sorted by mtime ascending (most recent last).
+
+    A directory counts as a checkpoint when it contains both ``config.json``
+    (matched by the glob) and ``tokenizer_config.json``.
     """
-    Discover the checkpoints in the given path, sorted by the last modified time. (Most recent last)
-    Args:
-        base_path:  Fsspec Path to the directory containing the checkpoints, possibly in nested directories.
-        initial_glob_pattern:  Initial glob pattern to use to find the checkpoints.
-        is_checkpoint_dir_pattern:  List of patterns to check if a directory is a checkpoint directory.
-    """
-
-    def _is_checkpoint_dir(path):
-        for checkpoint_dir_pattern in is_checkpoint_dir_pattern:
-            if not fsspec_exists(os.path.join(path, checkpoint_dir_pattern)):
-                return False
-        return True
-
-    paths = fsspec_glob(os.path.join(base_path, initial_glob_pattern))
-    paths.sort(key=lambda path: fsspec_mtime(path))
-    checkpoint_paths = [os.path.dirname(path) for path in paths if _is_checkpoint_dir(os.path.dirname(path))]
-    return checkpoint_paths
-
-
-def discover_hf_checkpoints(base_path: str):
-    """
-    Discover the Hugging Face checkpoints in the given path, sorted by the last modified time. (Most recent last)
-    Args:
-        base_path:  Fsspec Path to the directory containing the checkpoints, possibly in nested directories.
-    Returns:
-        List of paths to the checkpoints, sorted by the last modified time.
-    """
-
-    return discover_checkpoints(base_path, "**/config.json", ["config.json", "tokenizer_config.json"])
+    config_paths = fsspec_glob(os.path.join(base_path, "**/config.json"))
+    config_paths.sort(key=fsspec_mtime)
+    return [
+        os.path.dirname(path)
+        for path in config_paths
+        if fsspec_exists(os.path.join(os.path.dirname(path), "tokenizer_config.json"))
+    ]

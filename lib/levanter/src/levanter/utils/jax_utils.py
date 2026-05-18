@@ -19,6 +19,7 @@ from haliax._src.util import index_where
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
+import jax._src.distributed as jax_distributed
 from jax._src.mesh import get_concrete_mesh
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
@@ -140,9 +141,7 @@ def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: 
     if jax.process_count() == 1:
         return obj
 
-    import jax._src.distributed as distributed
-
-    client = distributed.global_state.client
+    client = jax_distributed.global_state.client
 
     if client is None:
         raise RuntimeError("multihost_broadcast_sync requires jax distributed client to be initialized")
@@ -169,7 +168,6 @@ def barrier_sync(timeout: float = 200):
     global _sync_counter
     if jax.process_count() == 1:
         return
-    import jax._src.distributed as distributed
 
     try:
         from jaxlib.xla_extension import DistributedRuntimeClient
@@ -178,7 +176,7 @@ def barrier_sync(timeout: float = 200):
 
         DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 
-    client: Optional[DistributedRuntimeClient] = distributed.global_state.client
+    client: Optional[DistributedRuntimeClient] = jax_distributed.global_state.client
 
     if client is None:
         raise RuntimeError("barrier_sync requires jax distributed client to be initialized")

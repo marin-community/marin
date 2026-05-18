@@ -8,7 +8,6 @@ import io
 import zipfile
 
 import pytest
-
 from iris.cluster.bundle import BundleStore
 
 

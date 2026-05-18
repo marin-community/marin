@@ -23,16 +23,16 @@ from pathlib import Path
 
 import yaml
 from google.protobuf.json_format import MessageToDict, ParseDict
+from rigging.timing import Duration
 
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, parse_memory_string, tpu_variant_name
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto, duration_to_proto
-from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -1239,7 +1239,6 @@ def create_autoscaler(
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
-    scale_up_delay = duration_from_proto(autoscaler_config.scale_up_delay)
     scale_down_delay = duration_from_proto(autoscaler_config.scale_down_delay)
 
     scaling_groups: dict[str, ScalingGroup] = {}
@@ -1248,7 +1247,6 @@ def create_autoscaler(
             config=group_config,
             platform=platform,
             label_prefix=label_prefix,
-            scale_up_cooldown=scale_up_delay,
             idle_threshold=scale_down_delay,
             scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,

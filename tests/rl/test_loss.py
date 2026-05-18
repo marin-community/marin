@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import numpy as np
+import pytest
 from marin.rl.rl_losses import RLOOLoss, compute_ppo_loss_objective, compute_rloo_advantages
 from marin.rl.types import Rollout
 

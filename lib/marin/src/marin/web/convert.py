@@ -5,6 +5,8 @@ import logging
 import re
 
 from bs4 import BeautifulSoup
+from resiliparse.extract.html2text import extract_simplified_dom
+from resiliparse.parse.html import HTMLTree
 
 from marin.markdown import to_markdown
 from marin.schemas.web.convert import (
@@ -41,8 +43,6 @@ def extract_content_from_dom(
     the main Resiliparse package. No plans to merge this into the main Resiliparse package yet.
     """
 
-    from resiliparse.extract.html2text import extract_simplified_dom
-
     tree = extract_simplified_dom(html, preserve_formatting=True, main_content=True, **kwargs)
     tree = BeautifulSoup(str(tree), "html.parser")
     markdown = to_markdown(tree, markdownify_config)
@@ -71,8 +71,6 @@ def convert_page_with_resiliparse(
     Returns:
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
     """
-    from resiliparse.parse.html import HTMLTree
-
     tree = HTMLTree.parse(html)
     title = tree.title or None
 

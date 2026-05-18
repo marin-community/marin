@@ -14,7 +14,7 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -412,8 +412,6 @@ class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
     def init(config: Olmo2Config, *, key) -> "Olmo2Transformer":
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         layers = S.init(config.Layers, Olmo2DecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(

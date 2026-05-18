@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pyarrow as pa
 from typing import Any
+
 import dupekit
+import pyarrow as pa
 from dupekit import Transformation
 
 # Python is slow, can't use too many rows

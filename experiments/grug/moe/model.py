@@ -8,7 +8,6 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
-
 from dataclasses import dataclass
 
 import equinox as eqx
@@ -26,7 +25,6 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-
 from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import MoeActivation, MoeImplementation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss

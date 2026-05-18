@@ -20,12 +20,15 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from urllib.parse import urlparse
 
+import fsspec.config
+from rigging.timing import Deadline
+
 from iris.cluster.config import config_to_dict
+from iris.cluster.providers.k8s.constants import NVIDIA_GPU_TOLERATION
 from iris.cluster.providers.k8s.service import K8sService
 from iris.cluster.providers.k8s.types import K8sResource
 from iris.cluster.providers.types import InfraError, Labels
 from iris.rpc import config_pb2
-from rigging.timing import Deadline
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +38,10 @@ _DEFAULT_POLL_INTERVAL = 10.0
 # Maximum time to wait for the controller Deployment to become available (seconds).
 # Includes time for the autoscaler to provision a node.
 _DEPLOYMENT_READY_TIMEOUT = 2400.0
+
+# Maximum time to wait for the controller Deployment to fully delete on `--fresh`
+# restarts. Should exceed the controller pod's terminationGracePeriodSeconds.
+_DEPLOYMENT_DELETE_TIMEOUT = 120.0
 
 # Default kubectl timeout for CoreWeave operations (seconds).
 # CoreWeave bare-metal provisioning/deprovisioning is slow; 60s is not enough.
@@ -74,18 +81,21 @@ def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", r2_secret)
 
     os.environ.setdefault("AWS_ENDPOINT_URL", endpoint)
+    os.environ.setdefault("AWS_REGION", "auto")
+    os.environ.setdefault("AWS_DEFAULT_REGION", "auto")
 
     if "FSSPEC_S3" not in os.environ:
         fsspec_conf: dict = {"endpoint_url": endpoint}
         if _needs_virtual_host_addressing(endpoint):
             fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
-        if ".r2.cloudflarestorage.com" in endpoint:
-            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
+        # Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage, etc.)
+        # don't honor the AWS region scheme; signing with the wrong region
+        # surfaces as 400 Bad Request. "auto" tells boto3 to skip region
+        # validation and let the endpoint route the request itself.
+        fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
         os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
 
     # Flush fsspec/s3fs cached instances so they pick up the new config.
-    import fsspec.config
-
     fsspec.config.set_conf_env(fsspec.config.conf)
     try:
         import s3fs
@@ -144,6 +154,72 @@ def _build_controller_deployment(
         "requests": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
         "limits": {"cpu": _CONTROLLER_CPU_REQUEST, "memory": _CONTROLLER_MEMORY_REQUEST},
     }
+    # `--fresh` wipes the controller's SQLite, so the new pod must NOT overlap
+    # with the OLD one — otherwise a job submitted in the rollout surge window
+    # lands on the OLD controller, then the NEW empty-DB controller deletes
+    # the runner pod as "stray" on its first reconcile (#5590). Setting
+    # `strategy.type: Recreate` here, combined with deleting the existing
+    # Deployment in start_controller (because SSA can't clear the
+    # API-server-defaulted rollingUpdate field), guarantees the old pod is
+    # gone before the new one starts. Non-fresh restarts omit `strategy` so
+    # the API server defaults to RollingUpdate and in-place upgrades stay
+    # zero-downtime.
+    deploy_spec: dict = {
+        "replicas": 1,
+        "selector": {"matchLabels": {"app": "iris-controller"}},
+        "template": {
+            "metadata": {"labels": {"app": "iris-controller"}},
+            "spec": {
+                "serviceAccountName": "iris-controller",
+                "nodeSelector": node_selector,
+                # Tolerate the standard NVIDIA GPU taint so the controller
+                # can schedule onto GPU-only clusters (no CPU NodePool).
+                # Harmless on untainted nodes.
+                "tolerations": [NVIDIA_GPU_TOLERATION],
+                "containers": [
+                    {
+                        "name": "iris-controller",
+                        "image": image,
+                        "imagePullPolicy": "Always",
+                        "command": [
+                            ".venv/bin/python",
+                            "-m",
+                            "iris.cluster.controller.main",
+                            "serve",
+                            "--host=0.0.0.0",
+                            f"--port={port}",
+                            "--config=/etc/iris/config.json",
+                            *(["--fresh"] if fresh else []),
+                        ],
+                        "ports": [{"containerPort": port}],
+                        "env": s3_env_vars,
+                        "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
+                        "resources": controller_resources,
+                        "volumeMounts": [
+                            {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
+                            {"name": "local-state", "mountPath": "/var/cache/iris/controller"},
+                        ],
+                        "readinessProbe": {
+                            "httpGet": {"path": "/health", "port": port},
+                            "initialDelaySeconds": 10,
+                            "periodSeconds": 10,
+                        },
+                        "livenessProbe": {
+                            "httpGet": {"path": "/health", "port": port},
+                            "initialDelaySeconds": 30,
+                            "periodSeconds": 30,
+                        },
+                    },
+                ],
+                "volumes": [
+                    {"name": "config", "configMap": {"name": "iris-cluster-config"}},
+                    {"name": "local-state", "emptyDir": {}},
+                ],
+            },
+        },
+    }
+    if fresh:
+        deploy_spec["strategy"] = {"type": "Recreate"}
     return {
         "apiVersion": "apps/v1",
         "kind": "Deployment",
@@ -152,56 +228,7 @@ def _build_controller_deployment(
             "namespace": namespace,
             "labels": {"app": "iris-controller"},
         },
-        "spec": {
-            "replicas": 1,
-            "selector": {"matchLabels": {"app": "iris-controller"}},
-            "template": {
-                "metadata": {"labels": {"app": "iris-controller"}},
-                "spec": {
-                    "serviceAccountName": "iris-controller",
-                    "nodeSelector": node_selector,
-                    "containers": [
-                        {
-                            "name": "iris-controller",
-                            "image": image,
-                            "imagePullPolicy": "Always",
-                            "command": [
-                                ".venv/bin/python",
-                                "-m",
-                                "iris.cluster.controller.main",
-                                "serve",
-                                "--host=0.0.0.0",
-                                f"--port={port}",
-                                "--config=/etc/iris/config.json",
-                                *(["--fresh"] if fresh else []),
-                            ],
-                            "ports": [{"containerPort": port}],
-                            "env": s3_env_vars,
-                            "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
-                            "resources": controller_resources,
-                            "volumeMounts": [
-                                {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
-                                {"name": "local-state", "mountPath": "/var/cache/iris/controller"},
-                            ],
-                            "readinessProbe": {
-                                "httpGet": {"path": "/health", "port": port},
-                                "initialDelaySeconds": 10,
-                                "periodSeconds": 10,
-                            },
-                            "livenessProbe": {
-                                "httpGet": {"path": "/health", "port": port},
-                                "initialDelaySeconds": 30,
-                                "periodSeconds": 30,
-                            },
-                        },
-                    ],
-                    "volumes": [
-                        {"name": "config", "configMap": {"name": "iris-cluster-config"}},
-                        {"name": "local-state", "emptyDir": {}},
-                    ],
-                },
-            },
-        },
+        "spec": deploy_spec,
     }
 
 
@@ -313,6 +340,15 @@ class K8sControllerProvider:
             s3_env_vars=s3_env,
             fresh=fresh,
         )
+        if fresh:
+            # SSA preserves the API-server-defaulted spec.strategy.rollingUpdate
+            # field, so an apply that switches type to Recreate fails validation
+            # ("rollingUpdate may not be specified when type is Recreate").
+            # Delete the existing Deployment first and wait for it to be gone
+            # so the apply creates a fresh object with no leftover strategy
+            # fields. This also enforces no-overlap with the OLD controller
+            # pod, avoiding the stray-pod race in #5590.
+            self._delete_controller_deployment_and_wait()
         self._kubectl.apply_json(deploy_manifest)
         self._kubectl.rollout_restart(K8sResource.DEPLOYMENTS, "iris-controller")
         logger.info("Controller Deployment iris-controller applied (rollout restarted)")
@@ -349,6 +385,20 @@ class K8sControllerProvider:
 
     def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
         return self.start_controller(config)
+
+    def _delete_controller_deployment_and_wait(self) -> None:
+        """Delete the controller Deployment and wait until it's fully gone."""
+        self._kubectl.delete(K8sResource.DEPLOYMENTS, "iris-controller")
+        deadline = Deadline.from_seconds(_DEPLOYMENT_DELETE_TIMEOUT)
+        while not self._shutdown_event.is_set():
+            if self._kubectl.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None:
+                logger.info("Controller Deployment iris-controller deleted")
+                return
+            if deadline.expired():
+                raise InfraError(
+                    f"Controller Deployment iris-controller did not delete within {_DEPLOYMENT_DELETE_TIMEOUT}s"
+                )
+            self._shutdown_event.wait(self._poll_interval)
 
     def stop_controller(self, config: config_pb2.IrisClusterConfig) -> None:
         cw = config.controller.coreweave
@@ -685,9 +735,15 @@ class K8sControllerProvider:
         endpoint = self._config.object_storage_endpoint
         if endpoint:
             env.append({"name": "AWS_ENDPOINT_URL", "value": endpoint})
+            env.append({"name": "AWS_REGION", "value": "auto"})
+            env.append({"name": "AWS_DEFAULT_REGION", "value": "auto"})
             fsspec_conf: dict = {"endpoint_url": endpoint}
             if _needs_virtual_host_addressing(endpoint):
                 fsspec_conf["config_kwargs"] = {"s3": {"addressing_style": "virtual"}}
+            # Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage)
+            # reject the default us-east-1 region in the v4 signature with
+            # 400 Bad Request. "auto" tells boto3 to skip region validation.
+            fsspec_conf.setdefault("client_kwargs", {})["region_name"] = "auto"
             env.append({"name": "FSSPEC_S3", "value": json.dumps(fsspec_conf)})
         return env
 

@@ -28,7 +28,6 @@ Example:
 
 import logging
 import threading
-import time
 import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
@@ -40,15 +39,15 @@ from typing import Any, Generic, TypeVar
 
 import cloudpickle
 from connectrpc.errors import ConnectError
+from rigging.timing import Duration, ExponentialBackoff
 
 from iris.actor import ActorServer
 from iris.actor.client import ActorClient
 from iris.actor.resolver import Resolver
 from iris.client.client import IrisClient, Job, iris_ctx
 from iris.cluster.client import get_job_info
-from iris.cluster.types import EnvironmentSpec, Entrypoint, JobName, ResourceSpec
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.managed_thread import ThreadContainer, get_thread_container
-from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +85,6 @@ class PendingTask:
     serialized_args: bytes
     serialized_kwargs: bytes
     future: Future
-    fn_name: str
-    submitted_at: float
     retries_remaining: int = 0
 
 
@@ -320,7 +317,6 @@ class WorkerFuture(Generic[T]):
     """Future representing an in-flight task."""
 
     _future: Future
-    _fn_name: str
 
     def result(self, timeout: float | None = None) -> T:
         """Block until result is available.
@@ -480,11 +476,9 @@ class WorkerPool:
         if min_workers is None:
             min_workers = self._config.num_workers
 
-        ExponentialBackoff(initial=0.05, maximum=1.0).wait_until_or_raise(
-            lambda: self.size >= min_workers,
-            timeout=timeout,
-            error_message=f"Only {self.size} of {min_workers} workers registered within {timeout}s",
-        )
+        backoff = ExponentialBackoff(initial=0.05, maximum=1.0)
+        if not backoff.wait_until(lambda: self.size >= min_workers, timeout=timeout):
+            raise TimeoutError(f"Only {self.size} of {min_workers} workers registered within {timeout}")
 
     def submit(
         self,
@@ -514,13 +508,11 @@ class WorkerPool:
             serialized_args=cloudpickle.dumps(args),
             serialized_kwargs=cloudpickle.dumps(kwargs),
             future=Future(),
-            fn_name=getattr(fn, "__name__", "lambda"),
-            submitted_at=time.monotonic(),
             retries_remaining=self._config.max_retries,
         )
 
         self._task_queue.put(task)
-        return WorkerFuture(_future=task.future, _fn_name=task.fn_name)
+        return WorkerFuture(_future=task.future)
 
     def map(
         self,

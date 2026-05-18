@@ -20,22 +20,26 @@ import tempfile
 import threading
 from pathlib import Path
 
+from rigging.timing import Duration, Timestamp
+
+from iris.cli.token_store import store_token
 from iris.cluster.config import make_local_config
 from iris.cluster.constraints import worker_attributes_from_resources
+from iris.cluster.controller import writes
 from iris.cluster.controller.auth import create_api_key, create_controller_auth
 from iris.cluster.controller.autoscaler import Autoscaler
-from iris.cluster.controller.controller import (
-    Controller,
-    ControllerConfig,
-)
-from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.vm_lifecycle import ControllerStatus
 from iris.cluster.controller.autoscaler.scaling_group import (
     DEFAULT_SCALE_DOWN_RATE_LIMIT,
     DEFAULT_SCALE_UP_RATE_LIMIT,
     ScalingGroup,
 )
+from iris.cluster.controller.controller import (
+    Controller,
+    ControllerConfig,
+)
+from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.vm_lifecycle import ControllerStatus
+from iris.cluster.controller.worker_provider import RpcWorkerStubFactory, WorkerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import find_free_port
@@ -44,8 +48,6 @@ from iris.cluster.worker.port_allocator import PortAllocator
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 from iris.rpc.auth import hash_token
-from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 
 def create_local_autoscaler(
@@ -116,15 +118,12 @@ def create_local_autoscaler(
         gcp_service=gcp_service,
     )
 
-    scale_up_delay = duration_from_proto(config.defaults.autoscaler.scale_up_delay)
-
     scale_groups: dict[str, ScalingGroup] = {}
     for name, sg_config in config.scale_groups.items():
         scale_groups[name] = ScalingGroup(
             config=sg_config,
             platform=platform,
             label_prefix=label_prefix,
-            scale_up_cooldown=scale_up_delay,
             scale_up_rate_limit=sg_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=sg_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,
             db=db,
@@ -227,8 +226,9 @@ class LocalCluster:
         url = self._controller.url
         now = Timestamp.now()
         key_id = f"iris_k_local_{secrets.token_hex(8)}"
-        db.ensure_user("local-admin", now, role="admin")
-        db.set_user_role("local-admin", "admin")
+        with db.transaction() as _tx:
+            writes.ensure_user(_tx, "local-admin", now, role="admin")
+            writes.set_user_role(_tx, "local-admin", "admin")
 
         if auth.jwt_manager:
             create_api_key(
@@ -253,10 +253,6 @@ class LocalCluster:
                 name="local-auto-login",
                 now=now,
             )
-
-        # Local import to break circular dependency:
-        # local_cluster → cli.token_store → cli.__init__ → cli.main → client → local_cluster
-        from iris.cli.token_store import store_token
 
         cluster_name = self._config.name or "local"
         store_token(cluster_name, url, jwt_token)

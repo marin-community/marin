@@ -17,16 +17,28 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 
+from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
+from marin.datakit.download.biodiversity import biodiversity_normalize_steps
+from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
+from marin.datakit.download.davinci_dev import (
+    davinci_dev_ctx_native_normalize_steps,
+    davinci_dev_env_native_normalize_steps,
+)
+from marin.datakit.download.diagnostic_logs import GHALOGS_ROUGH_TOKENS_B, ghalogs_public_normalize_steps
 from marin.datakit.download.finepdfs import finepdfs_normalize_steps
 from marin.datakit.download.gpt_oss_rollouts import gpt_oss_rollouts_normalize_steps
+from marin.datakit.download.hplt import hplt_v3_normalize_steps
 from marin.datakit.download.institutional_books import institutional_books_normalize_steps
+from marin.datakit.download.massive import massive_normalize_steps
+from marin.datakit.download.molmo2_cap import molmo2_cap_normalize_steps
 from marin.datakit.download.nemotron_terminal import nemotron_terminal_normalize_steps
 from marin.datakit.download.nemotron_v2 import nemotron_v2_normalize_steps
 from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
+from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
 from marin.execution.step_spec import StepSpec
@@ -114,10 +126,6 @@ def _rows_nemotron(
 # into /multilingual and /web needs different text_field, hf_urls_glob, or
 # data_subdir so the two accounting slices don't normalize to identical rows.
 #
-# TODO: confirm there's a download module for HPLT/HPLT3.0. The previous
-# download_hplt_v3_step was removed from the tree and the staged dir has no
-# provenance.json to recover the revision.
-#
 # TODO: confirm there's a download module for AI-MO/NuminaMath-1.5. Today
 # the dataset is only referenced through gpt-oss-rollouts' NuminaMath-CoT
 # subset; there's no standalone download helper.
@@ -135,12 +143,23 @@ def all_sources() -> dict[str, DatakitSource]:
     # returning ``tuple[StepSpec, ...]``; the registry pairs the chain with
     # a rough token count.
     single_sources: tuple[_SourceRow, ...] = (
+        # cp/biodiversity is carved out of common_pile (see common_pile.py)
+        # because it needs page-stitching before normalize.
+        ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
+        ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
+        ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
+        ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
+        ("ghalogs/public", ghalogs_public_normalize_steps, GHALOGS_ROUGH_TOKENS_B),
         ("gpt-oss-rollouts", gpt_oss_rollouts_normalize_steps, 3.20),
+        ("hplt_v3", hplt_v3_normalize_steps, 612.7),
         ("institutional_books", institutional_books_normalize_steps, 203.63),
+        ("massive_function_calling", massive_normalize_steps, 11.39),
+        ("molmo2-cap", molmo2_cap_normalize_steps, 0.36),
         ("nemotron-terminal", nemotron_terminal_normalize_steps, 6.08),
         ("nsf_awards", nsf_awards_normalize_steps, 0.17),
         ("superior-reasoning", superior_reasoning_normalize_steps, 7.08),
+        ("svg", svgfind_creativecommons_normalize_steps, 8.95),
         ("swe-rebench-openhands", swe_rebench_openhands_normalize_steps, 2.47),
         ("synthetic-1", synthetic1_normalize_steps, 7.32),
     )
@@ -164,7 +183,6 @@ def all_sources() -> dict[str, DatakitSource]:
         {
             "cp/arxiv_abstracts": 0.54,
             "cp/arxiv_papers": 6.63,
-            "cp/biodiversity": 8.60,
             "cp/caselaw": 17.55,
             "cp/data_provenance": 0.82,
             "cp/doab": 2.93,
@@ -307,6 +325,25 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
+    # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
+    # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
+    # excluded to avoid double-counting that corpus). Token counts measured
+    # by tokenizing every subset with the marin-community tokenizer (see
+    # ``scripts/datakit/tokenize_safety_pt.py``).
+    safety_pretraining = _rows_flat(
+        safety_pretraining_normalize_steps,
+        {
+            "safety_pt/moral_education/score_4_morals": 4.41,
+            "safety_pt/moral_education/score_5_morals": 1.80,
+            "safety_pt/safeweb/score_1_rephrased": 6.04,
+            "safety_pt/safeweb/score_3_rephrased": 2.96,
+            "safety_pt/safeweb/score_4_rephrased": 4.20,
+            "safety_pt/safeweb/score_5_rephrased": 3.54,
+            "safety_pt/refuseweb/score_4_refusal": 3.03,
+            "safety_pt/refuseweb/score_5_refusal": 1.12,
+        },
+    )
+
     all_rows: tuple[_SourceRow, ...] = (
         *single_sources,
         *starcoder2_extras,
@@ -320,6 +357,7 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *safety_pretraining,
     )
 
     entries = {

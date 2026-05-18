@@ -2,7 +2,13 @@
 
 All subcommands have `--help`. Use it.
 
-Two connection modes: `--config=PATH` (auto-tunnels) or `--controller-url=URL` (manual tunnel).
+Connection selectors:
+
+- `--cluster=NAME` (preferred for known clusters): resolves a named config and auto-tunnels.
+- `--config=PATH`: pins an exact YAML config file and auto-tunnels.
+- `--controller-url=URL`: connects to a manually established tunnel.
+
+Use `iris cluster list` to see named clusters. Use `--config` when you mean a custom or pinned file path.
 
 ## Cluster Lifecycle
 
@@ -26,7 +32,7 @@ If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (re
 ```bash
 iris job run -- python train.py         # submit + stream logs
 iris job list --state running           # filter by state
-iris job logs /user/job-name -f         # follow logs
+iris job logs /user/job-name -f         # follow job + child logs
 iris job stop /user/job-name            # kill job + children
 iris job summary /user/job-name         # per-task state, exit, duration, peak memory
 iris job summary /user/job-name --json  # same, machine-readable
@@ -35,9 +41,13 @@ iris job bug-report /user/job-name      # structured diagnostic dump
 
 ### `job run` gotchas
 
+- **Remote jobs only see env vars you put in the job spec.** The submitter's
+  shell env is not copied into the container. Pass required values explicitly:
+  `iris job run -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" -- python train.py`.
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
-- **`--extra gpu`** installs CUDA jaxlib but does NOT request GPU hardware. Need both `--gpu H100x8 --extra gpu`.
+- **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
+- **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
 - **`--reserve`** holds capacity for scheduling only — does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
 
@@ -145,6 +155,22 @@ Prefer to use the last checkpoint from GCS. Only take a new controller checkpoin
 iris cluster controller checkpoint
 ```
 
+## Stats Namespaces
+
+Time-series measurements live in finelog stats namespaces, not the controller SQLite DB (see `AGENTS.md` "Decisions vs measurements"). The controller bundles a StatsService alongside its log server (started by `_start_local_log_server` in `controller/controller.py`); both are mounted on the same uvicorn app and reachable at the `/system/log-server` endpoint advertised by `cluster_config.endpoints` (or, in fallback mode, at the URL printed as `Local log server ready at <addr>` on controller startup).
+
+Namespaces:
+
+- `iris.worker` — per-tick host utilization (cpu, mem, disk, running task count, net bps), keyed by `ts`.
+- `iris.task` — per-attempt task resource snapshots, keyed by `ts`.
+- `iris.profile` — per-capture profile blobs (cpu/memory/thread, periodic or on-demand), keyed by `captured_at`. Filter on `source` for one of `/job/.../task/N`, `/system/worker/<id>`, `/system/controller`. `vm_id` is the writer VM (worker id, `controller-self`, or `k8s/<node-or-pod>`).
+
+Retention is finelog segment-based. Target for `iris.profile` is 7 days.
+
+Get a profile for a task — open the dashboard task page and use the "Profile history" panel; rows are CPU captures from the worker's 10-minute periodic loop plus any on-demand captures, click to download. To capture on demand, hit the "Profile now" button on the task page, the worker page (`/system/worker/<id>`), or the controller status page (`/system/controller`).
+
+Profiles are written by the worker (periodic CPU + on-demand all types), by `K8sTaskProvider` (on-demand only), and by the controller for `/system/controller` self-captures.
+
 ## Users & Auth
 
 ```bash
@@ -184,7 +210,8 @@ gcloud compute ssh iris-controller-marin --zone=us-central1-a \
   --project=hai-gcp-models --tunnel-through-iap -- -L 10000:localhost:10000 -N
 
 # Then: iris --controller-url=http://localhost:10000 ...
-# Or config-based auto-tunnel: iris --config=lib/iris/examples/marin.yaml ...
+# Or preferred named-cluster auto-tunnel: iris --cluster=marin ...
+# Exact-file form for custom or pinned configs: iris --config=lib/iris/config/marin.yaml ...
 ```
 
 Configs: `marin.yaml` (production), `marin-dev.yaml` (dev, smaller scale caps).
@@ -218,7 +245,7 @@ Only delete the specific bad node. If multiple nodes fail simultaneously or the 
 
 ### GCP State
 
-State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages), `controller-state/` (SQLite checkpoints), `logs/` (Parquet).
+State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages) and `controller-state/` (SQLite checkpoints). Per-task log parquet segments are shipped separately by finelog under `<finelog.remote_log_dir>/log/` (see `lib/finelog/config/<cluster>.yaml`).
 
 ### GCP Gotchas
 
@@ -230,111 +257,18 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 
 ## CoreWeave (GPU) Operations
 
-### Connecting
-
-Preferred — let the CLI open the tunnel for you:
-
-```bash
-iris --cluster=coreweave-ci job logs /runner/my-job    # auto-tunnels
-iris cluster list                                      # see available cluster names
-```
-
-`--cluster=NAME` resolves to a config under `lib/iris/examples/` and establishes
-a `kubectl port-forward` to the controller service before each call, tearing it
-down on exit. The CLI prints `Establishing tunnel to controller... Tunnel
-ready: 127.0.0.1:<port> -> <svc>:10000`.
-
-Requires the `iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`) in
-your venv — otherwise the CLI fails with `ImportError: Install
-iris[controller] to use CloudK8sService` before it can tunnel. If you see
-that error, `uv pip install 'marin-iris[controller]'` inside the venv.
-
-Fallback — manual port-forward (use if you don't have the extras or need to
-keep the tunnel up across many calls):
-
-```bash
-kubectl --kubeconfig ~/.kube/coreweave-iris \
-  port-forward -n <namespace> svc/<service_name> 10000:10000 &
-iris --controller-url=http://localhost:10000 ...
-```
-
-| Cluster name      | Namespace | Service                  | Config file          |
-|-------------------|-----------|--------------------------|----------------------|
-| `coreweave`       | `iris`    | `iris-controller-svc`    | `coreweave.yaml`     |
-| `coreweave-ci`    | `iris-ci` | `iris-ci-controller-svc` | `coreweave-ci.yaml`  |
-
-### KubernetesProvider vs Worker Daemons
-
-On CW, there are **no persistent worker daemons**. The controller dispatches tasks directly as K8s pods. `list-workers` returns empty. The `workers` SQL table is empty. Use `iris rpc controller get-kubernetes-cluster-status` for pod/node status.
-
-### kubectl Operations
-
-```bash
-kci get pods -n iris -l iris.managed=true     # task pods
-kci get nodepools                             # all nodepools (cluster-scoped)
-kci get events -n iris --sort-by=.lastTimestamp | tail -30
-kci logs -n iris deployment/iris-controller -f        # controller logs
-```
-
-(`kci` = `kubectl --kubeconfig ~/.kube/coreweave-iris`)
-
-### NodePool Management
-
-```bash
-# Check status (columns: TARGET, QUEUED, INPROGRESS, CURRENT, CAPACITY, QUOTA)
-kci get nodepools
-
-# Scale — do NOT use `kubectl scale --replicas`, that's the wrong field
-kci patch nodepool <name> --type=merge -p '{"spec":{"targetNodes":N}}'
-
-# Delete
-kci delete nodepool <name>
-```
-
-**Stuck deletion** (autoscaler fights deletion or node mid-delivery):
-
-```bash
-kci scale deployment iris-controller -n iris --replicas=0   # stop autoscaler
-kci patch nodepool <name> --type=merge -p '{"spec":{"autoscaling":false,"targetNodes":0}}'
-# If still stuck (mid-delivery): remove finalizer
-kci patch nodepool <name> --type=json -p '[{"op":"remove","path":"/metadata/finalizers"}]'
-kci delete nodepool <name>
-```
-
-### CW Teardown
-
-`iris cluster stop` deletes pods but **NodePools survive** (scale to zero via CW autoscaler). To avoid lingering GPU costs:
-
-```bash
-iris cluster stop
-kci delete nodepool -l iris-<label_prefix>-managed=true
-```
-
-### CW Gotchas
-
-- **NodePools survive `cluster stop`.** Delete explicitly to avoid lingering GPU costs.
-- **`list-workers` returns empty.** KubernetesProvider dispatches pods directly — no persistent workers. Use `iris rpc controller get-kubernetes-cluster-status`.
-- **`list-tasks` requires `job_id`.** Calling without it throws `ConnectError: job_id is required`.
-- **`cluster start` always rebuilds+pushes images.** Needs `docker login ghcr.io` with `write:packages` PAT.
-- **Konnectivity agent.** `kubectl port-forward` returns 500 until `konnectivity-agent` pods are running (~18-30s after node provisions).
-- **`kubectl scale --replicas` is wrong for NodePools.** Use `kci patch nodepool ... '{"spec":{"targetNodes":N}}'`.
-
-### GPU-canary pod stuck Pending, `NotTriggerScaleUp: 2 max node group size reached`
-
-- Check **account-wide** H100 contention, not just `iris-canary`: `kci get nodepools -A`. If `iris-ci-h100-8x` (or any other pool) is already holding the zone's H100 quota at `maxNodes=1`, the canary's `iris-canary-h100-8x` cannot scale up — CW account caps total H100 in US-WEST-04A.
-- Workaround: reuse the CI nodepool (point `coreweave-canary.yaml` `h100-8x` selector at `iris-iris-ci-managed=true` and coordinate with iris-ci) or scale `iris-ci-h100-8x` to 0 before the canary runs.
-- Root fix: CW support ticket to raise `gd-8xh100ib-i128` account quota ≥2 in US-WEST-04A.
-
----
+Always read [`docs/coreweave.md`](docs/coreweave.md) before operating a
+GPU/CoreWeave cluster. Use `lib/iris/config/coreweave-*.yaml` for CoreWeave
+cluster configs.
 
 ## CI Workflows
 
 | Workflow | Trigger | What |
 |----------|---------|------|
 | `marin-canary-ferry.yaml` | Daily 6AM UTC | TPU canary on GCP (`marin-dev.yaml`) |
-| `marin-canary-ferry-cw.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-coreweave-ci.yaml` (concurrency group `iris-coreweave-ci-shared`) |
-| `iris-cloud-smoke-gcp.yaml` | PRs touching `lib/iris/` | GCP smoke test (ephemeral cluster) |
-| `iris-coreweave-ci.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
+| `marin-canary-ferry-coreweave.yaml` | Daily 10AM UTC | GPU canary on CW — shares `iris-ci` controller + H100 nodepool with `iris-smoke-coreweave.yaml` (concurrency group `iris-coreweave-ci-shared`) |
+| `iris-smoke-gcp.yaml` | PRs touching `lib/iris/` | GCP smoke test (ephemeral cluster) |
+| `iris-smoke-coreweave.yaml` | PRs touching `lib/iris/` | CW integration tests (warm cluster) |
 
 ```bash
 # Trigger manually
@@ -342,11 +276,3 @@ gh workflow run "<workflow name>" -R marin-community/marin --ref main
 # View failed run
 gh run view <run-id> -R marin-community/marin --log-failed | tail -50
 ```
-
-## Cold-Start Timings
-
-| Resource | Time |
-|----------|------|
-| CW CPU node | ~14 min |
-| CW H100 bare-metal | ~20 min |
-| CW first training step (from zero) | ~25-30 min |

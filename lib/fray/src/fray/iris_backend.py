@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import cloudpickle
-
 from iris.actor.client import ActorClient
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
@@ -33,9 +32,9 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
+from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.rpc import job_pb2
+from iris.rpc import actor_pb2, job_pb2
 from rigging.timing import ExponentialBackoff
 
 from fray.actor import (
@@ -66,15 +65,12 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingConfig | None:
-    """Determine coscheduling config for multi-host jobs.
-
-    Multi-host GPU jobs need coscheduling by pool to ensure all replicas land
-    in the same node pool for NCCL connectivity. Multi-host TPU jobs
-    coschedule by tpu-name so all workers share the same TPU slice.
-    """
+    """Determine coscheduling config for multi-host jobs."""
     if replicas <= 1:
         return None
     if isinstance(device, TpuConfig):
+        if device.vm_count() <= 1:
+            return None
         return CoschedulingConfig(group_by="tpu-name")
     if isinstance(device, GpuConfig):
         return CoschedulingConfig(group_by="pool")
@@ -83,8 +79,6 @@ def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingCon
 
 def _convert_device(device: DeviceConfig) -> job_pb2.DeviceConfig | None:
     """Convert fray DeviceConfig to Iris protobuf DeviceConfig."""
-    from iris.cluster.types import tpu_device
-
     if isinstance(device, CpuConfig):
         return None
     elif isinstance(device, TpuConfig):
@@ -105,8 +99,6 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
       fray device    → Iris device (TPU via tpu_device(), GPU via GpuDevice)
     Replicas are passed separately to iris client.submit().
     """
-    from iris.cluster.types import ResourceSpec
-
     return ResourceSpec(
         cpu=resources.cpu,
         memory=resources.ram,
@@ -133,8 +125,6 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
 
 def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
     """Convert fray Entrypoint to Iris Entrypoint."""
-    from iris.cluster.types import Entrypoint as IrisEntrypoint
-
     if entrypoint.callable_entrypoint is not None:
         ce = entrypoint.callable_entrypoint
         return IrisEntrypoint.from_callable(ce.callable, *ce.args, **ce.kwargs)
@@ -152,8 +142,6 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
             env_vars.setdefault(key, value)
     if env is None and not env_vars:
         return None
-    from iris.cluster.types import EnvironmentSpec
-
     return EnvironmentSpec(
         pip_packages=list(env.pip_packages) if env is not None else [],
         env_vars=env_vars,
@@ -307,8 +295,6 @@ class OperationFuture:
         self._poll_interval = poll_interval
 
     def result(self, timeout: float | None = None) -> Any:
-        from iris.rpc import actor_pb2
-
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             op = self._client.poll_operation_status(self._op_id)
@@ -418,8 +404,6 @@ class IrisActorGroup:
 
     def _get_client(self) -> IrisClientLib:
         """Get IrisClient from context."""
-        from iris.client.client import get_iris_ctx
-
         ctx = get_iris_ctx()
         if ctx is None or ctx.client is None:
             raise RuntimeError("IrisActorGroup requires IrisContext with client. Set context via iris_ctx_scope().")
@@ -639,8 +623,6 @@ class FrayIrisClient:
         Uses Iris's multi-replica job feature instead of creating N separate jobs,
         which improves networking and reduces job overhead.
         """
-        from iris.cluster.types import Entrypoint as IrisEntrypoint
-
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
         iris_environment = convert_environment(None, device=resources.device)

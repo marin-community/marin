@@ -33,9 +33,6 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from starlette.responses import FileResponse, JSONResponse
-
-
 from scripts.storage.constants import (
     GCS_DISCOUNT,
     continent_for_region,
@@ -51,6 +48,7 @@ from scripts.storage.db import (
     flush_protect_rules,
     init_db,
 )
+from starlette.responses import FileResponse, JSONResponse
 
 log = logging.getLogger(__name__)
 
@@ -346,12 +344,19 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
         ]:
             local_dir.mkdir(parents=True, exist_ok=True)
             log.info("syncing %s from %s", name, gcs_prefix)
+            # --delete-unmatched-destination-objects: `distributed_scan.py`
+            # writes parquet segments under fresh UUIDs and truncates the
+            # GCS staging dir each run, so plain rsync would leave stale
+            # segments from prior scans in the container's local cache and
+            # the dashboard would aggregate ghost objects from a union of
+            # every historical scan.
             subprocess.run(
                 [
                     "gcloud",
                     "storage",
                     "rsync",
                     "--recursive",
+                    "--delete-unmatched-destination-objects",
                     f"{gcs_prefix}/{name}/",
                     str(local_dir) + "/",
                 ],

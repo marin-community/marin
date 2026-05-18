@@ -1,16 +1,15 @@
 # Levanter
 
-<a href="https://github.com/stanford-crfm/levanter/actions?query=branch%3Amain++">
-    <img alt="Build Status" src="https://img.shields.io/github/actions/workflow/status/stanford-crfm/levanter/run_tests.yaml?branch=main">
-</a>
+Levanter is developed and released from the
+[marin-community/marin](https://github.com/marin-community/marin) monorepo
+(`lib/levanter`) and published to PyPI as **`marin-levanter`**. This README
+documents the package as shipped from that monorepo.
+
 <a href="https://levanter.readthedocs.io/en/latest/?badge=latest">
     <img alt="Documentation Status" src="https://readthedocs.org/projects/levanter/badge/?version=latest">
 </a>
-<a href="">
-<img alt="License" src="https://img.shields.io/github/license/stanford-crfm/levanter?color=blue" />
-</a>
-<a href="https://https://pypi.org/project/levanter/">
-    <img alt="PyPI" src="https://img.shields.io/pypi/v/levanter?color=blue" />
+<a href="https://pypi.org/project/marin-levanter/">
+    <img alt="PyPI" src="https://img.shields.io/pypi/v/marin-levanter?color=blue" />
 </a>
 
 
@@ -63,29 +62,20 @@ You can also use `--help` or poke around other configs to see all the options av
 <!--levanter-installation-start-->
 
 After [installing JAX](https://github.com/google/jax/blob/main/README.md#installation) with the appropriate configuration
-for your platform, you can install Levanter with:
+for your platform, install Levanter from PyPI:
 
 ```bash
-pip install levanter
-```
-
-or using the latest version from GitHub:
-
-```bash
-pip install git+https://github.com/stanford-crfm/levanter.git
+pip install marin-levanter
 wandb login  # optional, we use wandb for logging
 ```
 
-If you're developing Haliax and Levanter at the same time, you can do something like.
+For development, clone the marin monorepo and use `uv sync` to install Levanter
+alongside its sibling packages (Haliax, Iris, etc.) in editable form:
+
 ```bash
-git clone https://github.com/stanford-crfm/levanter.git
-cd levanter
-pip install -e .
-cd ..
-git clone https://github.com/stanford-crfm/haliax.git
-cd haliax
-pip install -e .
-cd ../levanter
+git clone https://github.com/marin-community/marin.git
+cd marin
+uv sync
 ```
 
 <!--levanter-installation-end-->
@@ -208,9 +198,9 @@ Please see the [CUDA Getting Started](docs/Getting-Started-GPU.md) guide for mor
 
 ## Contributing
 
-[![GitHub repo Good Issues for newbies](https://img.shields.io/github/issues/stanford-crfm/levanter/good%20first%20issue?style=flat&logo=github&logoColor=green&label=Good%20First%20issues)](https://github.com/stanford-crfm/levanter/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) [![GitHub Help Wanted issues](https://img.shields.io/github/issues/stanford-crfm/levanter/help%20wanted?style=flat&logo=github&logoColor=b545d1&label=%22Help%20Wanted%22%20issues)](https://github.com/stanford-crfm/levanter/issues?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22) [![GitHub Help Wanted PRs](https://img.shields.io/github/issues-pr/stanford-crfm/levanter/help%20wanted?style=flat&logo=github&logoColor=b545d1&label=%22Help%20Wanted%22%20PRs)](https://github.com/stanford-crfm/levanter/pulls?q=is%3Aopen+is%3Aissue+label%3A%22help+wanted%22) [![GitHub repo Issues](https://img.shields.io/github/issues/stanford-crfm/levanter?style=flat&logo=github&logoColor=red&label=Issues)](https://github.com/stanford-crfm/levanter/issues?q=is%3Aopen)
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for more information.
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for
+more information. Issues and pull requests are tracked at
+[marin-community/marin](https://github.com/marin-community/marin/issues).
 
 ## License
 

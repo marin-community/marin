@@ -37,15 +37,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow.parquet as pq
 from fray import ResourceConfig
-from rigging.filesystem import url_to_fs
-
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import DatakitSource, all_sources
 from marin.execution.artifact import Artifact
 from marin.execution.remote import remote
-from marin.execution.step_runner import check_cache
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_glob, fsspec_mkdirs
+from rigging.filesystem import url_to_fs
 
 from experiments.datakit_testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
@@ -317,7 +315,7 @@ def sample_normalized_shards_step(
 
     def sample(output_path: str) -> NormalizedData:
         return sample_normalized_shards(
-            source=Artifact.load(normalized_path, NormalizedData),
+            source=Artifact.from_path(normalized_path, NormalizedData),
             output_path=output_path,
             sample_fraction=sample_fraction,
         )
@@ -363,10 +361,10 @@ def build_testbed_steps(
     :mod:`experiments.datakit_testbed.train`), not the ferry.
 
     Args:
-        sources: DatakitSource list to ferry. ``None`` auto-selects every
-            entry from :func:`all_sources` whose normalize output is
-            already cached on GCS, matching the run_source_sampling
-            script. Pass an explicit list to bypass this check.
+        sources: DatakitSource list to ferry. ``None`` selects every entry
+            from :func:`all_sources`. The executor will skip sources whose
+            normalize output is already cached, so unconditionally including
+            them is safe; not-yet-ready sources will be normalized on demand.
         target_total_tokens_b: Target total token count (in billions)
             across the sampled set. Drives per-source sample fractions
             via :func:`proportional_sample_fractions`. Default is
@@ -377,8 +375,7 @@ def build_testbed_steps(
         one sample step per source. Ready to hand to ``StepRunner().run()``.
     """
     if sources is None:
-        # TODO (rav): remove the check_cache when ready?
-        sources = tuple(s for s in all_sources().values() if check_cache(s.normalized.output_path))
+        sources = tuple(all_sources().values())
     if not sources:
         raise ValueError("build_testbed_steps requires at least one source")
 

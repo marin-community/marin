@@ -7,11 +7,10 @@ and the admin API RPCs that expose them."""
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-
+from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.budget import (
-    UserBudgetDefaults,
     UserTask,
     compute_effective_band,
     compute_user_spend,
@@ -20,13 +19,13 @@ from iris.cluster.controller.budget import (
 )
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.types import JobName, WorkerId
-from iris.log_server.server import LogServiceImpl
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from iris.rpc.proto_utils import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
 from rigging.timing import Timestamp
 
+from tests.cluster.conftest import fake_log_client_from_service
 from tests.cluster.controller.conftest import (
     MockController,
     make_controller_state,
@@ -202,11 +201,11 @@ def _start_running_job(
         include_resources=include_resources,
         replicas=replicas,
     )
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, job_id, request, Timestamp.now())
 
     worker_id = WorkerId(f"w-{user}")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.register_or_refresh_worker(
             cur,
             worker_id=worker_id,
@@ -222,27 +221,26 @@ def _start_running_job(
         )
     for idx in range(replicas):
         task_id = job_id.task(idx)
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_task_updates(
                 cur,
                 HeartbeatApplyRequest(
                     worker_id=worker_id,
-                    worker_resource_snapshot=None,
                     updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
                 ),
             )
 
 
 def test_compute_user_spend_empty(state):
-    with state._db.snapshot() as snap:
+    with state._db.read_snapshot() as snap:
         assert compute_user_spend(snap) == {}
 
 
 def test_compute_user_spend_sums_running_tasks(state):
     _start_running_job(state, "alice", "job", cpu_millicores=4000, memory_bytes=16 * GiB, replicas=2)
-    with state._db.snapshot() as snap:
+    with state._db.read_snapshot() as snap:
         spend = compute_user_spend(snap)
     assert spend["alice"] == resource_value(4000, 16 * GiB, 0) * 2
 
@@ -251,16 +249,16 @@ def test_compute_user_spend_excludes_pending(state):
     """Tasks that never reach RUNNING/ASSIGNED/BUILDING do not contribute."""
     job_id = JobName.root("bob", "pending")
     request = _launch_request(job_id.to_wire(), cpu_millicores=2000, memory_bytes=8 * GiB)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, job_id, request, Timestamp.now())
-    with state._db.snapshot() as snap:
+    with state._db.read_snapshot() as snap:
         assert compute_user_spend(snap).get("bob", 0) == 0
 
 
 def test_compute_user_spend_null_resources_proto(state):
     """Regression: res_device_json is NULL when LaunchJobRequest omits resources."""
     _start_running_job(state, "carol", "no-resources", include_resources=False)
-    with state._db.snapshot() as snap:
+    with state._db.read_snapshot() as snap:
         assert compute_user_spend(snap).get("carol", 0) == 0
 
 
@@ -273,12 +271,19 @@ def test_compute_user_spend_null_resources_proto(state):
 def service(state, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl wired with static-provider auth so that
     priority-band authorization triggers (see launch_job band check)."""
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
+    from iris.cluster.controller.worker_health import WorkerHealthTracker
+
     return ControllerServiceImpl(
         state,
-        state._store,
         controller=MockController(),
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_service=LogServiceImpl(),
+        log_client=fake_log_client_from_service(LogServiceImpl()),
+        db=state._db,
+        health=WorkerHealthTracker(),
+        endpoints=EndpointsProjection(state._db),
+        worker_attrs=WorkerAttrsProjection(state._db),
         auth=ControllerAuth(provider="static"),
     )
 

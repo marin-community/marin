@@ -79,6 +79,16 @@ export function useWorkerRpc<T>(
   return useRpc<T>('iris.cluster.WorkerService', method, body)
 }
 
+/** Error thrown by one-shot RPC calls when the HTTP response is non-OK.
+ *  Carries the HTTP status so callers can branch on specific failures
+ *  (e.g. 404 NOT_FOUND from Connect RPC). */
+export class RpcError extends Error {
+  constructor(public readonly method: string, public readonly status: number, public readonly statusText: string) {
+    super(`${method}: ${status} ${statusText}`)
+    this.name = 'RpcError'
+  }
+}
+
 /** One-shot RPC call returning a Promise. For use in async functions that
  *  need to call multiple RPCs or handle the response imperatively. */
 export async function controllerRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
@@ -88,7 +98,7 @@ export async function controllerRpcCall<T>(method: string, body?: Record<string,
     body: JSON.stringify(body ?? {}),
   })
   handleUnauthorized(resp)
-  if (!resp.ok) throw new Error(`${method}: ${resp.status} ${resp.statusText}`)
+  if (!resp.ok) throw new RpcError(method, resp.status, resp.statusText)
   return resp.json() as Promise<T>
 }
 
@@ -97,7 +107,7 @@ export function useLogServiceRpc<T>(
   method: string,
   body?: RpcBody,
 ): RpcState<T> {
-  return useRpc<T>('iris.logging.LogService', method, body)
+  return useRpc<T>('finelog.logging.LogService', method, body)
 }
 
 /** RPC composable for StatsService endpoints. */
@@ -108,9 +118,20 @@ export function useStatsRpc<T>(
   return useRpc<T>('iris.stats.StatsService', method, body)
 }
 
+/**
+ * RPC composable for the finelog StatsService routed via the controller's
+ * endpoint proxy at /proxy/system.log-server/finelog.stats.StatsService/<Method>.
+ */
+export function useLogServerStatsRpc<T>(
+  method: string,
+  body?: RpcBody,
+): RpcState<T> {
+  return useRpc<T>('proxy/system.log-server/finelog.stats.StatsService', method, body)
+}
+
 /** One-shot RPC call for LogService. */
 export async function logServiceRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const resp = await fetch(`/iris.logging.LogService/${method}`, {
+  const resp = await fetch(`/finelog.logging.LogService/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),

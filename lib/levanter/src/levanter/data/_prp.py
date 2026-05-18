@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import time
 import typing
 
 import jax
@@ -252,8 +253,6 @@ if __name__ == "__main__":
     length = 2**33 + 5
     prng_key = jrandom.PRNGKey(0)
     permutation = FeistelPermutation(length, prng_key)
-
-    import time
 
     time_in = time.time()
 

@@ -8,13 +8,14 @@ Evaluate the multilingual CPT continuation (exp1457) and baseline 7B/8B models o
 from collections.abc import Iterable
 from dataclasses import replace
 
-from experiments.evals.evals import default_eval
-from experiments.evals.task_configs import MULTILINGUAL_LM_EVAL_LOGPROB_TASKS
-from experiments.multilingual.exp1457_multilingual_cpt import multilingual_cpt_8b_fineweb2_hq
-from experiments.models import apertus_8b, llama_3_1_8b, olmo_2_base_8b, olmo_3_1025_7b, qwen2_5_7b
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, executor_main
+
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import MULTILINGUAL_LM_EVAL_LOGPROB_TASKS
+from experiments.models import apertus_8b, llama_3_1_8b, olmo_2_base_8b, olmo_3_1025_7b, qwen2_5_7b
+from experiments.multilingual.exp1457_multilingual_cpt import multilingual_cpt_8b_fineweb2_hq
 
 SINGLE_TPU_V5p_8 = ResourceConfig.with_tpu("v5p-8")
 
@@ -56,6 +57,7 @@ multilingual_eval_steps = [
 
 
 if __name__ == "__main__":
-    for i in range(0, len(multilingual_eval_steps), 4):
-        batch = multilingual_eval_steps[i : i + 4]
-        executor_main(steps=batch)
+    # Cap concurrency at 4 to avoid swamping the cluster scheduler with 1,122
+    # ready eval steps. A single executor_main call walks the shared dependency
+    # DAG once instead of once per batch.
+    executor_main(steps=multilingual_eval_steps, max_concurrent=4)

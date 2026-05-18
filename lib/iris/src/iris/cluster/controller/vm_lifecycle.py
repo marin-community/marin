@@ -28,18 +28,19 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
+
+from iris.cluster.providers.gcp.bootstrap import (
+    build_controller_bootstrap_script_from_config,
+)
+from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
     Labels,
     RemoteWorkerHandle,
     StandaloneWorkerHandle,
 )
-from iris.cluster.providers.gcp.bootstrap import (
-    build_controller_bootstrap_script_from_config,
-)
-from iris.cluster.providers.gcp.ssh import OS_LOGIN_METADATA
 from iris.rpc import config_pb2
-from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 
 logger = logging.getLogger(__name__)
 

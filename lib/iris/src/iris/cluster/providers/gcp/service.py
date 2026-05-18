@@ -17,17 +17,17 @@ import google.auth.credentials
 import google.auth.transport.requests
 import httpx
 from google.cloud import tpu_v2alpha1
+from rigging.timing import ExponentialBackoff, Timestamp
 
+from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.providers.types import (
     InfraError,
     QuotaExhaustedError,
     ResourceNotFoundError,
 )
-from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import TPU_TOPOLOGIES
 from iris.rpc import config_pb2
-from rigging.timing import Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,6 @@ _LOGGING_BASE = "https://logging.googleapis.com/v2"
 # HTTP/auth constants
 _REFRESH_MARGIN = 300  # seconds before expiry to refresh token
 _DEFAULT_TIMEOUT = 120  # seconds
-_OPERATION_POLL_INTERVAL = 2  # seconds between operation status polls
 _OPERATION_TIMEOUT = 600  # seconds to wait for an operation to complete
 
 # google.rpc.Code value for RESOURCE_EXHAUSTED. Used to classify LRO failures
@@ -148,6 +147,7 @@ class TpuCreateRequest:
     service_account: str | None = None
     network: str | None = None
     subnetwork: str | None = None
+    enable_external_ip: bool = True
 
 
 @dataclass
@@ -492,6 +492,7 @@ class CloudGcpService:
     def _wait_zone_operation(self, zone: str, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
         url = f"{_COMPUTE_BASE}/projects/{self._project_id}/zones/{zone}/operations/{operation_name}"
         deadline = time.monotonic() + timeout
+        backoff = ExponentialBackoff(initial=1.0, maximum=30.0, factor=1.5)
         while True:
             resp = self._client.get(url, headers=self._headers())
             self._classify_response(resp)
@@ -504,11 +505,12 @@ class CloudGcpService:
                 return data
             if time.monotonic() >= deadline:
                 raise InfraError(f"Operation {operation_name} timed out after {timeout}s")
-            time.sleep(_OPERATION_POLL_INTERVAL)
+            time.sleep(backoff.next_interval())
 
     def _wait_tpu_operation(self, operation_name: str, timeout: float = _OPERATION_TIMEOUT) -> dict:
         url = f"{_TPU_BASE}/{operation_name}"
         deadline = time.monotonic() + timeout
+        backoff = ExponentialBackoff(initial=1.0, maximum=30.0, factor=1.5)
         while True:
             resp = self._client.get(url, headers=self._headers())
             self._classify_response(resp)
@@ -528,7 +530,7 @@ class CloudGcpService:
                 return data
             if time.monotonic() >= deadline:
                 raise InfraError(f"TPU operation {operation_name} timed out after {timeout}s")
-            time.sleep(_OPERATION_POLL_INTERVAL)
+            time.sleep(backoff.next_interval())
 
     # ========================================================================
     # Low-level REST helpers
@@ -562,7 +564,7 @@ class CloudGcpService:
             body["schedulingConfig"] = {"preemptible": True}
         if request.service_account:
             body["serviceAccount"] = {"email": request.service_account}
-        network_config: dict = {"enableExternalIps": True}
+        network_config: dict = {"enableExternalIps": request.enable_external_ip}
         if request.network:
             network_config["network"] = request.network
         if request.subnetwork:
@@ -651,7 +653,7 @@ class CloudGcpService:
             labels=request.labels or {},
             metadata=request.metadata or {},
             network_config=tpu_v2alpha1.NetworkConfig(
-                enable_external_ips=True,
+                enable_external_ips=request.enable_external_ip,
                 network=request.network or "",
                 subnetwork=request.subnetwork or "",
             ),

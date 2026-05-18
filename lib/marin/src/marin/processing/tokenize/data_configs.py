@@ -7,9 +7,8 @@ import os
 from functools import lru_cache
 
 import numpy
-
-from levanter.data.text import BlockShuffleConfig, DatasetComponent, LmDataConfig
-from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from levanter.data.text import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, DatasetComponent, LmDataConfig
+from levanter.tokenizers import load_tokenizer
 
 from marin.execution import unwrap_versioned_value
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
@@ -55,7 +54,7 @@ def lm_data_config(
     training_set: TokenizerStep | InputName,
     *,
     validation_sets: dict[str, TokenizerStep] | None = None,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
     block_cross_document_attention: bool = True,
@@ -68,8 +67,8 @@ def lm_data_config(
     Args:
         training_set: The training set to use
         validation_sets: A sequence of validation sets to use
-        shuffle: Shuffle policy. `True` = full shuffle, positive `int` = era shuffle,
-            `BlockShuffleConfig` = hierarchical block shuffle.
+        shuffle: Shuffle policy. Defaults to hierarchical block shuffle.
+            `True` = full shuffle, `BlockShuffleConfig` = hierarchical block shuffle.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
         block_cross_document_attention: Whether to mask attention across document boundaries.
@@ -101,7 +100,7 @@ def lm_mixture_data_config(
     components: dict[str, TokenizerStep | TokenizeConfig],
     weights: dict[str, float],
     *,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     max_train_batches: dict[str, int] | None = None,
@@ -116,8 +115,8 @@ def lm_mixture_data_config(
     Args:
         components: dict from names of datasets to the steps that produced them.
         weights: dict from names of datasets to their weights.
-        shuffle: shuffling policy. int means era shuffling (~shuffle buffer);
-            `BlockShuffleConfig` enables hierarchical block shuffling.
+        shuffle: shuffling policy. Defaults to hierarchical block shuffle.
+            `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
@@ -196,7 +195,7 @@ def lm_varying_mixture_data_config(
     components: dict[str, TokenizerStep],
     weights_list: list[tuple[int, dict[str, float]]],
     *,
-    shuffle: bool | int | BlockShuffleConfig = True,
+    shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
     missing_weights_are_validation: bool = True,
     include_raw_paths: bool = True,
     mixture_block_size: int | None = None,
@@ -213,8 +212,8 @@ def lm_varying_mixture_data_config(
             weights_dict maps dataset names to their weights.
             The weights will change at each start_seq_index. start_seq_index's must be sorted in ascending order.
             Note that start_seq_index should be the index of the sequence (not batch) where the transition should occur.
-        shuffle: shuffling policy. int means era shuffling (~shuffle buffer);
-            `BlockShuffleConfig` enables hierarchical block shuffling.
+        shuffle: shuffling policy. Defaults to hierarchical block shuffle.
+            `True` enables a full permutation shuffle; `BlockShuffleConfig` enables hierarchical block shuffling.
         missing_weights_are_validation: whether to pad out missing weights with 0's, indicating validation-only sets
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
         mixture_block_size: The block size to use for the mixture.
@@ -323,14 +322,6 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LmDataConfig:
     )
 
 
-def _load_tokenizer(tokenizer_name: str) -> MarinTokenizer:
-    """Load and cache a tokenizer by name.
-
-    Delegates to levanter.tokenizers.load_tokenizer which is already lru_cached.
-    """
-    return load_tokenizer(tokenizer_name)
-
-
 @lru_cache(maxsize=128)
 def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
     """Return the vocabulary size for a tokenizer name.
@@ -350,7 +341,7 @@ def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
         "Consider adding it to _KNOWN_VOCAB_SIZES in data_configs.py to avoid network calls during dry-runs.",
         resolved_name,
     )
-    tokenizer = _load_tokenizer(resolved_name)
+    tokenizer = load_tokenizer(resolved_name)
     return tokenizer.vocab_size
 
 
@@ -364,8 +355,8 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     if tokenizer1 in _EQUIVALENT_TOKENIZERS and tokenizer2 in _EQUIVALENT_TOKENIZERS:
         return True
 
-    t1 = _load_tokenizer(tokenizer1)
-    t2 = _load_tokenizer(tokenizer2)
+    t1 = load_tokenizer(tokenizer1)
+    t2 = load_tokenizer(tokenizer2)
 
     # Compare vocab sizes
     if len(t1.get_vocab()) != len(t2.get_vocab()):

@@ -32,12 +32,14 @@ import sys
 import traceback
 from collections.abc import Sequence
 from typing import ClassVar
+
+import wandb
 from rigging.filesystem import filesystem as marin_filesystem
 
 from marin.evaluation.evaluation_config import WANDB_PROJECT, EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.inference.vllm_server import resolve_model_name_or_path
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
+from marin.inference.vllm_server import resolve_model_name_or_path
 
 logger = logging.getLogger(__name__)
 
@@ -161,12 +163,6 @@ class EvalchemyEvaluator(Evaluator):
         This is done manually because the WandbLogger in lm-eval requires
         init_args/config_args format which is incompatible with CLI parsing.
         """
-        try:
-            import wandb
-        except ImportError:
-            logger.warning("wandb not installed, skipping wandb logging")
-            return
-
         if not os.environ.get("WANDB_API_KEY"):
             logger.info("WANDB_API_KEY not set, skipping wandb logging")
             return
@@ -772,7 +768,7 @@ _patch_autoconfig_for_gcs()
             if hasattr(vllm.distributed, "destroy_model_parallel"):
                 vllm.distributed.destroy_model_parallel()
                 logger.info("Destroyed vLLM model parallel state")
-        except (ImportError, Exception) as e:
+        except Exception as e:
             logger.debug(f"vLLM cleanup skipped: {e}")
 
     def _get_max_model_len_from_config(self, config_dir: str) -> int | None:
@@ -1040,10 +1036,6 @@ _patch_autoconfig_for_gcs()
 
                 # Clean up vLLM state between tasks to release TPU devices
                 self._cleanup_vllm_between_tasks()
-
-        except Exception as e:
-            traceback.print_exc()
-            raise RuntimeError(f"Evalchemy evaluation failed: {e}") from e
 
         finally:
             if is_remote_path(output_path):

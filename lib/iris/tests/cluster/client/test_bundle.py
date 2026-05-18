@@ -8,7 +8,6 @@ import re
 from unittest.mock import patch
 
 import pytest
-
 from iris.cluster.client.bundle import MAX_BUNDLE_SIZE_BYTES, collect_workspace_files, create_workspace_zip
 
 

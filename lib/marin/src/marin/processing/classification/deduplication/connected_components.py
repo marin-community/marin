@@ -6,7 +6,7 @@ from collections.abc import Iterator, Sequence
 from typing import Any, TypedDict
 
 import dupekit
-from zephyr import Dataset, ZephyrContext, counters, write_parquet_file, ShardInfo
+from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 
 from marin.utils import fsspec_glob
 

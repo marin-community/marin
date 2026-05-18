@@ -5,11 +5,11 @@
 
 from typing import Protocol
 
-from iris.cluster.types import Entrypoint, JobName, TaskAttempt
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from finelog.rpc import logging_pb2
 from rigging.timing import Duration
+
+from iris.cluster.types import Entrypoint, JobName, TaskAttempt
+from iris.rpc import controller_pb2, job_pb2
 
 
 class ClusterClient(Protocol):
@@ -95,6 +95,7 @@ class ClusterClient(Protocol):
         self,
         source: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
         since_ms: int = 0,
         cursor: int = 0,
         max_lines: int = 0,

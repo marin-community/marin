@@ -22,7 +22,6 @@ edition = "2023";
 package iris.cluster;
 
 import "job.proto";
-import "logging.proto";
 import "query.proto";
 import "time.proto";
 import "vm.proto";
@@ -129,9 +128,8 @@ message Controller {
   message GetJobStatusResponse {
     iris.job.JobStatus job = 1;
     LaunchJobRequest request = 2;  // Original job request for debugging
-    // Min/max resource usage across currently-running tasks.
-    iris.job.ResourceUsage resource_min = 3;
-    iris.job.ResourceUsage resource_max = 4;
+    reserved 3;  // was: ResourceUsage resource_min (now derived from iris.task stats client-side)
+    reserved 4;  // was: ResourceUsage resource_max (now derived from iris.task stats client-side)
   }
 
   // Lightweight batch state query — returns only the state enum for each job,
@@ -176,7 +174,10 @@ message Controller {
     JobQueryScope scope = 1;
     // Required when scope == JOB_QUERY_SCOPE_CHILDREN; ignored otherwise.
     string parent_job_id = 2;
-    // Substring match against job name (case-insensitive).
+    // Substring match against the job's local name (case-insensitive).
+    // Use this for the dashboard "search by name" box; it does NOT anchor and
+    // does NOT match the leading "/user/..." path. For path-prefix filtering
+    // (e.g. "/alice/exp-"), set ``job_id_prefix`` instead.
     string name_filter = 3;
     // Exact state name (e.g. "running"). Empty means all user-visible states.
     string state_filter = 4;
@@ -184,6 +185,10 @@ message Controller {
     SortDirection sort_direction = 6;
     int32 offset = 7;
     int32 limit = 8;  // Max jobs to return (default: 50, max: 500).
+    // Anchored prefix match against the full job_id (wire form, e.g.
+    // "/alice/exp-"). The caller does not need to provide a parseable JobName;
+    // any string is accepted and is matched as ``job_id LIKE '<prefix>%'``.
+    string job_id_prefix = 9;
   }
 
   message ListJobsRequest {
@@ -252,10 +257,34 @@ message Controller {
     string status_message = 8;             // Error or status message (e.g., "Ping timeout", "Worker crashed")
   }
 
-  message ListWorkersRequest {}
+  // Sort fields for worker listing
+  enum WorkerSortField {
+    WORKER_SORT_FIELD_UNSPECIFIED = 0;
+    WORKER_SORT_FIELD_WORKER_ID = 1;
+    WORKER_SORT_FIELD_LAST_HEARTBEAT = 2;
+    WORKER_SORT_FIELD_DEVICE_TYPE = 3;
+  }
+
+  message WorkerQuery {
+    // Case-insensitive substring match against worker_id (and address as
+    // fallback so address:port searches also work in the dashboard).
+    string contains = 1;
+    WorkerSortField sort_field = 2;
+    SortDirection sort_direction = 3;
+    int32 offset = 4;
+    // Max workers to return. 0 means unbounded (preserves CLI behavior);
+    // dashboard callers should always set an explicit page size.
+    int32 limit = 5;
+  }
+
+  message ListWorkersRequest {
+    WorkerQuery query = 1;
+  }
 
   message ListWorkersResponse {
     repeated WorkerHealthStatus workers = 1;
+    int32 total_count = 2;  // Total workers matching the query before paging.
+    bool has_more = 3;      // More workers available after this page.
   }
 
   message RegisterRequest {
@@ -341,38 +370,6 @@ message Controller {
     repeated UserSummary users = 1;
   }
 
-  // --- Task/Job Logs (batch fetching) ---
-  message GetTaskLogsRequest {
-    string id = 1;                   // Job ID or Task ID (detected by trailing numeric)
-    bool include_children = 2;       // Include child jobs (only for job IDs)
-    int64 since_ms = 3;              // Only return logs after this timestamp (exclusive)
-    int64 max_total_lines = 4;       // Max lines total (0 = default 10000)
-    string substring = 5;             // Literal substring match on log data
-    int32 attempt_id = 6;            // Filter to specific attempt (-1 = all attempts)
-    string min_level = 7;            // Minimum log level filter (DEBUG/INFO/WARNING/ERROR/CRITICAL)
-    int64 cursor = 8;               // Autoincrement id cursor for incremental polling
-    bool tail = 9;                  // If true, return the last N lines instead of the first N
-  }
-
-  message TaskLogBatch {
-    string task_id = 1;
-    repeated iris.logging.LogEntry logs = 2;
-    string error = 3;                // If fetch failed for this task
-    string worker_id = 4;            // Worker that produced these logs
-  }
-
-  message GetTaskLogsResponse {
-    repeated TaskLogBatch task_logs = 1;
-    bool truncated = 2;              // True if max_total_lines hit
-
-    // Child job statuses (populated when include_children=true).
-    // Included on every response so the client can detect state transitions
-    // (e.g. child moved to FAILED) without a separate ListJobs RPC.
-    repeated iris.job.JobStatus child_job_statuses = 3;
-
-    int64 cursor = 4;               // Max autoincrement id seen (cursor for next poll)
-  }
-
   // --- Worker Detail (unified VM + worker view) ---
   message GetWorkerStatusRequest {
     string id = 1;  // VM ID or worker ID — resolved against both
@@ -389,19 +386,26 @@ message Controller {
     // Bootstrap logs (from VM init)
     string bootstrap_logs = 4;
 
-    // Worker daemon logs (proxied from worker via FetchLogs, empty if unhealthy/absent)
-    repeated iris.logging.LogEntry worker_log_entries = 9;
-
     reserved 5;  // was: repeated ProcessLogRecord worker_logs
+    reserved 6;  // was: repeated TaskStatus recent_tasks (replaced by recent_attempts)
+    reserved 7;  // was: WorkerResourceSnapshot current_resources (now in iris.worker stats)
+    reserved 8;  // was: repeated WorkerResourceSnapshot resource_history (now in iris.worker stats)
+    reserved 9;  // was: repeated LogEntry worker_log_entries (now fetched async via FetchLogs)
 
-    // Recent tasks that ran or are running on this worker (newest first)
-    repeated iris.job.TaskStatus recent_tasks = 6;
+    // Per-attempt history for this worker, newest first. Each retry of the
+    // same task gets its own entry — the dashboard needs distinct rows for
+    // distinct attempts so a failed attempt doesn't render with its
+    // successor's state/duration.
+    repeated WorkerTaskAttempt recent_attempts = 10;
+  }
 
-    // Current host-level resource snapshot (from latest Ping)
-    iris.job.WorkerResourceSnapshot current_resources = 7;
-
-    // Recent resource history (ring buffer of Ping snapshots)
-    repeated iris.job.WorkerResourceSnapshot resource_history = 8;
+  // One attempt that ran (or is running) on a worker. Per-attempt projection
+  // for the worker-detail Task History view; embeds the canonical TaskAttempt
+  // alongside its parent task_id so the dashboard can render rows without
+  // re-deriving state from a sibling task.
+  message WorkerTaskAttempt {
+    string task_id = 1;
+    iris.job.TaskAttempt attempt = 2;
   }
 
   // --- Provider Status (for direct-dispatch providers like KubernetesProvider) ---
@@ -513,20 +517,25 @@ message Controller {
   // --- Scheduler State ---
   message GetSchedulerStateRequest {}
 
-  message SchedulerTaskEntry {
-    string task_id = 1;
-    string job_id = 2;
-    string user_id = 3;
-    iris.job.PriorityBand original_band = 4;
-    iris.job.PriorityBand effective_band = 5;
-    int32 queue_position = 6;
-    int32 resource_value = 7;
+  // Aggregated pending-task count keyed by (band, user, job). The dashboard
+  // SchedulerTab derives per-user, per-band, and per-job rollups from these
+  // buckets; the server no longer sends one entry per pending task.
+  message PendingTaskBucket {
+    iris.job.PriorityBand band = 1;
+    string user_id = 2;
+    string job_id = 3;
+    int32 count = 4;
   }
 
-  message SchedulerBandGroup {
+  // Aggregated running-task count keyed by (band, user, worker, job). The
+  // dashboard AutoscalerTab renders one chip per (worker, job) and shows the
+  // bucket count; SchedulerTab uses (band, user, count) for user-band rollups.
+  message RunningTaskBucket {
     iris.job.PriorityBand band = 1;
-    repeated SchedulerTaskEntry tasks = 2;
-    int32 total_in_band = 3;
+    string user_id = 2;
+    string worker_id = 3;
+    string job_id = 4;
+    int32 count = 5;
   }
 
   message SchedulerUserBudget {
@@ -538,24 +547,16 @@ message Controller {
     float utilization_percent = 6;
   }
 
-  message SchedulerRunningTask {
-    string task_id = 1;
-    string job_id = 2;
-    string user_id = 3;
-    string worker_id = 4;
-    iris.job.PriorityBand effective_band = 5;
-    int32 resource_value = 6;
-    bool preemptible = 7;
-    repeated iris.job.PriorityBand preemptible_by = 8;
-    bool is_coscheduled = 9;
-  }
-
   message GetSchedulerStateResponse {
-    repeated SchedulerBandGroup pending_queue = 1;
+    // Old per-task shapes (pending_queue, running_tasks) sent thousands of
+    // entries per response on busy clusters; replaced by aggregated buckets
+    // in fields 6 and 7.
+    reserved 1, 3;
     repeated SchedulerUserBudget user_budgets = 2;
-    repeated SchedulerRunningTask running_tasks = 3;
     int32 total_pending = 4;
     int32 total_running = 5;
+    repeated PendingTaskBucket pending_buckets = 6;
+    repeated RunningTaskBucket running_buckets = 7;
   }
 }
 
@@ -587,10 +588,6 @@ service ControllerService {
   rpc GetAutoscalerStatus(Controller.GetAutoscalerStatusRequest) returns (Controller.GetAutoscalerStatusResponse);
 
   rpc ListUsers(Controller.ListUsersRequest) returns (Controller.ListUsersResponse);
-
-  // DEPRECATED: use LogService.FetchLogs with regex patterns instead.
-  // Forwards to LogService.FetchLogs internally. Scheduled for removal 2026-05-01.
-  rpc GetTaskLogs(Controller.GetTaskLogsRequest) returns (Controller.GetTaskLogsResponse);
 
   // Profiling (proxied to worker)
   rpc ProfileTask(iris.job.ProfileTaskRequest) returns (iris.job.ProfileTaskResponse);
@@ -637,4 +634,7 @@ service ControllerService {
 
   // Worker-to-controller task status push
   rpc UpdateTaskStatus(Controller.UpdateTaskStatusRequest) returns (Controller.UpdateTaskStatusResponse);
+
+  // Task-to-controller status text push
+  rpc SetTaskStatusText(iris.job.SetTaskStatusTextRequest) returns (iris.job.SetTaskStatusTextResponse);
 }

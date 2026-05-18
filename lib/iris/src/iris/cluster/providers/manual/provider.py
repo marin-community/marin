@@ -14,26 +14,28 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
+from iris.cluster.providers._worker_base import RemoteExecWorkerBase
+from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
+from iris.cluster.providers.remote_exec import DirectSshRemoteExec
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
     InfraError,
     Labels,
+    ListedSlice,
     SliceStatus,
     WorkerStatus,
     default_stop_all,
     generate_slice_suffix,
 )
-from iris.cluster.providers._worker_base import RemoteExecWorkerBase
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.providers.remote_exec import DirectSshRemoteExec
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -333,16 +335,23 @@ class ManualWorkerProvider:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results
 
-    def list_all_slices(self) -> list[ManualSliceHandle]:
-        """List autoscaler-managed slices.
+    def list_all_slices(self) -> list[ListedSlice]:
+        """List autoscaler-managed slices paired with cloud state.
 
         Excludes slices tagged iris_manual=true (operator-created via
-        `iris cluster create-slice`), which the autoscaler and
-        `iris cluster stop` must not see or terminate.
+        `iris cluster create-slice`). Manual slices have no real cloud
+        lifecycle; non-terminated ones report READY.
         """
         all_managed = self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
         manual_label = self._iris_labels.iris_manual
-        return [s for s in all_managed if s.labels.get(manual_label) != "true"]
+        return [
+            ListedSlice(
+                handle=s,
+                state=CloudSliceState.DELETING if s._terminated else CloudSliceState.READY,
+            )
+            for s in all_managed
+            if s.labels.get(manual_label) != "true"
+        ]
 
     def list_vms(
         self,

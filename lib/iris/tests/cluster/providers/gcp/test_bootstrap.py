@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import pytest
-
 from iris.cluster.providers.gcp.bootstrap import (
     build_controller_bootstrap_script_from_config,
     build_worker_bootstrap_script,

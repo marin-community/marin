@@ -8,6 +8,7 @@ version = "0.99"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "marin-rigging",
+    "marin-finelog",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
@@ -22,6 +23,7 @@ dependencies = [
     "pydantic>=2.0",
     "PyJWT>=2.12.0",
     "pyyaml>=6.0",
+    "sqlalchemy>=2.0",
     "starlette>=0.50.0",
     "tabulate>=0.9.0",
     "typing-extensions>=4.0",
@@ -72,19 +74,28 @@ packages = ["src/iris"]
 [tool.hatch.build.targets.wheel.force-include]
 # Cluster YAML configs live outside src/ because they are configuration data,
 # not Python package source. force-include maps them into the wheel at
-# iris/examples/ so that when iris is installed as a wheel, the bundled configs
-# are reachable via Path(__file__).parent.parent / "examples" (the wheel-layout
-# probe in _bundled_iris_examples_dir() in iris.cli.main).
-"examples" = "iris/examples"
+# iris/config/ so that when iris is installed as a wheel, the bundled configs
+# are reachable via Path(__file__).parent.parent / "config" (the wheel-layout
+# probe in _bundled_iris_config_dir() in iris.cli.main).
+"config" = "iris/config"
+
+[tool.hatch.build.targets.sdist]
+# Without an explicit sdist scope, hatchling sweeps the whole iris/ directory
+# and bundles ~146 MiB of dashboard/node_modules (git-ignored but still on
+# disk). Restrict to source + configs so the sdist stays small.
+packages = ["src/iris"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"config" = "config"
 
 [tool.pytest.ini_options]
 timeout = 10
 timeout_method = "thread"
-addopts = "-n auto --durations=25 -m 'not slow and not docker and not e2e' -v"
+addopts = "-n auto --durations=25 -m 'not slow and not docker and not requires_cluster' -v"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "docker: marks tests requiring Docker runtime (slow, needs daemon)",
-    "e2e: end-to-end cluster tests (chaos, dashboard, scheduling)",
+    "requires_cluster: mark tests that need a running iris cluster",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 # Cap assertion-diff output even under -v, so a single bad assertion

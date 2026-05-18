@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Datakit nemotron ferry: weekly full-pipeline run on the Nemotron-CC medium split.
+"""Datakit nemotron ferry: weekly full-pipeline run on the Nemotron-CC high split.
 
 Pipeline: verify raw dump → normalize → minhash → fuzzy_dups → consolidate →
-tokenize. The first step is verification-only: it confirms the ``quality=medium``
+tokenize. The first step is verification-only: it confirms the ``quality=high``
 subtree of the Nemotron-CC dump is already staged at ``NEMOTRON_RAW_PATH`` and
 refuses to initiate a Common Crawl download.
 
@@ -15,15 +15,6 @@ Pipeline outputs land under ``$MARIN_PREFIX/datakit-nemotron-smoke/$SMOKE_RUN_ID
 import json
 import logging
 import os
-
-from rigging.filesystem import (
-    check_path_in_region,
-    marin_temp_bucket,
-    region_from_metadata,
-    url_to_fs,
-)
-from rigging.log_setup import configure_logging
-from rigging.timing import log_time
 
 from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData, normalize_step
@@ -44,6 +35,14 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     compute_minhash_attrs,
 )
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
+from rigging.filesystem import (
+    check_path_in_region,
+    marin_temp_bucket,
+    region_from_metadata,
+    url_to_fs,
+)
+from rigging.log_setup import configure_logging
+from rigging.timing import log_time
 
 logger = logging.getLogger(__name__)
 
@@ -53,27 +52,27 @@ logger = logging.getLogger(__name__)
 # ``experiments/dedup/poc_nemotron.py``.
 NEMOTRON_RAW_PATH = "gs://marin-eu-west4/raw/nemotro-cc-eeb783"
 NEMOTRON_DATA_SUBDIR = "contrib/Nemotron/Nemotron-CC/data-jsonl"
-NEMOTRON_MEDIUM_DIR = "quality=medium"
+NEMOTRON_QUALITY_DIR = "quality=high"
 
 
-def _verify_nemotron_medium_present(output_path: str) -> None:
-    """Confirm the medium split is staged at ``output_path``; never downloads.
+def _verify_nemotron_quality_present(output_path: str) -> None:
+    """Confirm the quality split is staged at ``output_path``; never downloads.
 
     Invoked by StepRunner only on a cache miss. Raises with a clear message so
     that an accidental cache eviction can never trigger a multi-TB Common Crawl
     re-download.
     """
-    medium_dir = f"{output_path}/{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_MEDIUM_DIR}"
-    fs, _ = url_to_fs(medium_dir)
-    if not fs.exists(medium_dir):
+    quality_dir = f"{output_path}/{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_QUALITY_DIR}"
+    fs, _ = url_to_fs(quality_dir)
+    if not fs.exists(quality_dir):
         raise RuntimeError(
-            f"Nemotron-CC medium split not found at {medium_dir}. "
+            f"Nemotron-CC {NEMOTRON_QUALITY_DIR} not found at {quality_dir}. "
             "The nemotron ferry refuses to download Common Crawl — stage the raw dump externally first."
         )
-    sample = fs.glob(f"{medium_dir}/**/*.jsonl.*", maxdepth=4)
+    sample = fs.glob(f"{quality_dir}/**/*.jsonl.*", maxdepth=4)
     if not sample:
-        raise RuntimeError(f"Nemotron-CC medium split at {medium_dir} contains no .jsonl.* files.")
-    logger.info("Nemotron-CC medium split confirmed at %s (e.g. %s)", medium_dir, sample[0])
+        raise RuntimeError(f"Nemotron-CC {NEMOTRON_QUALITY_DIR} at {quality_dir} contains no .jsonl.* files.")
+    logger.info("Nemotron-CC %s confirmed at %s (e.g. %s)", NEMOTRON_QUALITY_DIR, quality_dir, sample[0])
 
 
 def build_steps(run_id: str) -> list[StepSpec]:
@@ -83,20 +82,21 @@ def build_steps(run_id: str) -> list[StepSpec]:
     # pre-staged dump regardless of MARIN_PREFIX.
     download = StepSpec(
         name="datakit-nemotron-smoke/download",
-        fn=_verify_nemotron_medium_present,
+        fn=_verify_nemotron_quality_present,
         override_output_path=NEMOTRON_RAW_PATH,
     )
 
-    medium_input = f"{download.output_path}/{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_MEDIUM_DIR}"
-
     # Sizes mirror validate_normalize_phase1.py, which ran successfully on
     # nemotron_v1 in eu-west4. 512 workers across all fan-out stages.
+    # The yaml sets FERRY_TEST_MAX_FILES=1000 to cap the input shard count
+    # (quality=high has ~2,755 shards / ~960 GB; 1000 keeps the run inside
+    # the GH 6h cap). Read at execution time by `_discover_files`.
     normalized = normalize_step(
         name="datakit-nemotron-smoke/normalize",
         download=download,
         text_field="text",
         id_field="id",
-        input_path=medium_input,
+        relative_input_path=f"{NEMOTRON_DATA_SUBDIR}/{NEMOTRON_QUALITY_DIR}",
         worker_resources=ResourceConfig(cpu=2, ram="16g", disk="5g"),
         max_workers=512,
         override_output_path=f"{base}/normalize",
@@ -106,7 +106,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-nemotron-smoke/minhash",
         deps=[normalized],
         fn=lambda output_path: compute_minhash_attrs(
-            source=Artifact.load(normalized, NormalizedData),
+            source=Artifact.from_path(normalized, NormalizedData),
             output_path=output_path,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="5g"),
             max_workers=512,
@@ -119,7 +119,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         deps=[minhash],
         hash_attrs={"cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.load(minhash, MinHashAttrData)],
+            inputs=[Artifact.from_path(minhash, MinHashAttrData)],
             output_path=output_path,
             max_parallelism=512,
             cc_max_iterations=3,
@@ -132,14 +132,14 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-nemotron-smoke/consolidate",
         deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
-            input_path=Artifact.load(normalized, NormalizedData).main_output_dir,
+            input_path=Artifact.from_path(normalized, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=Artifact.load(deduped, FuzzyDupsAttrData)
-                    .sources[Artifact.load(normalized, NormalizedData).main_output_dir]
+                    attribute_path=Artifact.from_path(deduped, FuzzyDupsAttrData)
+                    .sources[Artifact.from_path(normalized, NormalizedData).main_output_dir]
                     .attr_dir,
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",

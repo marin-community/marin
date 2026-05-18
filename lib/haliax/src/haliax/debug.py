@@ -10,7 +10,6 @@ import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
 
-
 from haliax.core import NamedArray
 from haliax.axis import Axis
 from haliax.util import is_jax_or_hax_array_like
@@ -167,7 +166,7 @@ def visualize_shardings(tree) -> None:
     will fall back to :func:`jax.debug.visualize_sharding`.
     """
 
-    import haliax.tree_util as htu
+    import haliax.tree_util as htu  # circular import: debug -> tree_util -> nn -> partitioning -> tree_util
 
     def _show(x):
         if isinstance(x, NamedArray):

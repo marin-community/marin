@@ -43,11 +43,9 @@ import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
-from rigging.log_setup import configure_logging
-from iris.rpc import config_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
+from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +100,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
     Args:
         num_slices: Total number of slices to create across all groups
     """
-    config = load_config(TEST_ROOT / "examples" / "test.yaml")
+    config = load_config(TEST_ROOT / "config" / "test.yaml")
     config.scale_groups.clear()
 
     # Distribute slices across size categories
@@ -228,7 +226,7 @@ class JobResult:
 
 
 def _wait_for_job(job: Job, timeout: float) -> JobResult:
-    """Wait for a single job, streaming logs including children.
+    """Wait for a single job, streaming descendant logs.
 
     Designed to be called from a thread pool. Each thread independently waits
     on its job and streams logs back through the logger.
@@ -310,7 +308,7 @@ def run_benchmark(num_jobs: int, num_slices: int) -> BenchmarkMetrics:
             # Wait for schedulable jobs concurrently, streaming logs from each in its own thread.
             # Unschedulable ("bad") jobs are excluded since they'll never reach a terminal state
             # in a timely manner.
-            print(f"Waiting for {len(schedulable_jobs)} schedulable jobs (streaming logs with children)...")
+            print(f"Waiting for {len(schedulable_jobs)} schedulable jobs (streaming descendant logs)...")
             wait_start = time.monotonic()
             results = _wait_all_jobs_threaded(schedulable_jobs, timeout=600.0)
             time_to_complete = time.monotonic() - wait_start
@@ -362,7 +360,7 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     controller handles a burst of task creation, scheduling, log streaming, and
     completion RPCs from a single source — the scenario that triggered #3062.
     """
-    config = load_config(TEST_ROOT / "examples" / "test.yaml")
+    config = load_config(TEST_ROOT / "config" / "test.yaml")
     config.scale_groups.clear()
 
     sg = config.scale_groups["local-cpu"]
@@ -400,11 +398,11 @@ def _cpu_burn_task(seconds: float = 1.0):
 def run_single_worker_benchmark(num_jobs: int) -> BenchmarkMetrics:
     """Submit *num_jobs* to one worker as fast as possible, streaming logs.
 
-    Every job is waited on concurrently with ``stream_logs=True`` and
-    ``include_children=True``, mirroring how Marin's ferry driver monitors a
-    batch of download tasks.  The goal is to stress the controller's RPC
-    handling and task-dispatch path when a single worker is hit with many
-    concurrent requests.
+    Every job is waited on concurrently with ``stream_logs=True``, which
+    includes descendant job task logs by default. This mirrors how Marin's
+    ferry driver monitors a batch of download tasks. The goal is to stress
+    the controller's RPC handling and task-dispatch path when a single worker
+    is hit with many concurrent requests.
     """
     print("\n" + "=" * 70)
     print("Iris Controller Benchmark — single-worker burst")

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 from iris.cli.job import resolve_multinode_defaults
 
 
