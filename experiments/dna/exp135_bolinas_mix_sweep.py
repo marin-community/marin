@@ -431,6 +431,18 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         ),
         data_seed=13,
     ),
+    # Chained continuation from uniform_to_upstream_3.6's final HF checkpoint;
+    # same 40/30/30 upstream/cds/downstream mixture and another upstream-sized
+    # token budget (~17.5B tokens).
+    MixConfig(
+        name="uniform_to_upstream_3.6.2",
+        weights={"upstream": 0.4, "cds": 0.3, "downstream": 0.3},
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["upstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i16-uniform_to_upstream_3.6-07bc9c/hf/step-8333/"
+        ),
+        data_seed=14,
+    ),
 )
 
 
