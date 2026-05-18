@@ -22,6 +22,7 @@ End-to-end integrity checks for the smoke output at
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 from collections import Counter, defaultdict
@@ -43,7 +44,25 @@ from experiments.datakit.store.all_sources_store import (
     _resolve_artifact_dir,
 )
 from experiments.datakit.store.datakit_store import ClusteredStoreData
-from experiments.datakit.store.smoke_test import OUTPUT_PATH, SMOKE_SOURCES, SPLIT
+
+# Named smoke configurations. Each entry: (output_path, source_names, split).
+_PRESETS: dict[str, tuple[str, tuple[str, ...], str]] = {}
+try:
+    from experiments.datakit.store.smoke_test import OUTPUT_PATH as _V0_OUT
+    from experiments.datakit.store.smoke_test import SMOKE_SOURCES as _V0_SRC
+    from experiments.datakit.store.smoke_test import SPLIT as _V0_SPLIT
+
+    _PRESETS["v0"] = (_V0_OUT, _V0_SRC, _V0_SPLIT)
+except ImportError:
+    pass
+try:
+    from experiments.datakit.store.smoke_test_mixed import OUTPUT_PATH as _MIX_OUT
+    from experiments.datakit.store.smoke_test_mixed import SMOKE_SOURCES as _MIX_SRC
+    from experiments.datakit.store.smoke_test_mixed import SPLIT as _MIX_SPLIT
+
+    _PRESETS["mixed"] = (_MIX_OUT, _MIX_SRC, _MIX_SPLIT)
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -203,16 +222,21 @@ def verify_per_cluster_match(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("smoke", choices=sorted(_PRESETS), help="Which smoke output to verify.")
+    args = parser.parse_args()
+    output_path, sources, split = _PRESETS[args.smoke]
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    artifact = Artifact.from_path(OUTPUT_PATH, ClusteredStoreData)
-    logger.info("loaded artifact at %s: %d clusters", OUTPUT_PATH, len(artifact.clusters))
+    artifact = Artifact.from_path(output_path, ClusteredStoreData)
+    logger.info("loaded artifact at %s: %d clusters", output_path, len(artifact.clusters))
 
     dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
 
     combined_expected: Counter = Counter()
     grand_totals = {"tokenize_in": 0, "contaminated": 0, "dedup_noncanonical": 0, "kept": 0}
 
-    for source_name in SMOKE_SOURCES:
+    for source_name in sources:
         tokenize = Artifact.from_path(_resolve_artifact_dir(TOKENIZE_ROOT, source_name), TokenizedAttrData)
         decontam = Artifact.from_path(_resolve_artifact_dir(DECONTAM_ROOT, source_name), DeconAttributes)
         cluster_assign = Artifact.from_path(_resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, source_name), AssignmentAttrData)
@@ -223,7 +247,7 @@ def main() -> None:
             cluster_assign=cluster_assign,
             dedup=dedup,
             cluster_view=artifact.cluster_view,
-            split=SPLIT,
+            split=split,
         )
         combined_expected.update(per_cluster)
         grand_totals["tokenize_in"] += drops["total_in"]
