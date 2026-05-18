@@ -86,13 +86,14 @@ class GrugModelConfig:
     last_layer_pko: bool = False
     # PKO ordering vs qk-norm:
     # ``"norm_first"`` (default): rms_norm(q), rms_norm(k) -> PKO shift on
-    #     k.stationary -> partial RoPE. The shifted stationary half keeps
-    #     the prev token's post-norm magnitude.
+    #     k.stationary -> partial RoPE.
     # ``"pko_first_bos_zero"``: PKO shift on k.stationary -> zero out
     #     k.stationary at every doc-start (segment_ids-detected) -> then
-    #     rms_norm(q), rms_norm(k) -> partial RoPE. The combined shifted
-    #     k is normalised as a whole; bos stationary contributes 0 to
-    #     attention (post-zero, post-norm).
+    #     rms_norm(q), rms_norm(k) -> partial RoPE.
+    # ``"pko_first_bos_zero_no_q_norm"``: same as ``pko_first_bos_zero``
+    #     but in PKO layers ONLY: skip ``rms_norm(q)`` and skip the
+    #     ``q *= qk_mult`` step. Non-PKO layers retain the standard
+    #     rms_norm(q) + qk_mult behaviour.
     pko_norm_order: str = "norm_first"
 
     def __post_init__(self) -> None:
@@ -111,8 +112,11 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
-        if self.pko_norm_order not in ("norm_first", "pko_first_bos_zero"):
-            raise ValueError(f"pko_norm_order must be 'norm_first' or 'pko_first_bos_zero'; got {self.pko_norm_order!r}")
+        if self.pko_norm_order not in ("norm_first", "pko_first_bos_zero", "pko_first_bos_zero_no_q_norm"):
+            raise ValueError(
+                "pko_norm_order must be 'norm_first' / 'pko_first_bos_zero' / 'pko_first_bos_zero_no_q_norm'; "
+                f"got {self.pko_norm_order!r}"
+            )
 
     @property
     def inferred_head_dim(self) -> int:
@@ -190,10 +194,11 @@ class CausalSelfAttention(eqx.Module):
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
 
-        # ``pko_first_bos_zero``: shift k.stationary forward and zero it at
+        pko_first_modes = ("pko_first_bos_zero", "pko_first_bos_zero_no_q_norm")
+        # ``pko_first_*`` modes: shift k.stationary forward and zero it at
         # doc-start positions BEFORE rms_norm. This pulls the shifted+zeroed
         # k through a joint normalisation with the unshifted rotated half.
-        if use_partial_key_offset and self.cfg.pko_norm_order == "pko_first_bos_zero":
+        if use_partial_key_offset and self.cfg.pko_norm_order in pko_first_modes:
             half = head_dim // 2
             k_stationary = k[..., half:]
             k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
@@ -213,10 +218,14 @@ class CausalSelfAttention(eqx.Module):
                 k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
             k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
 
-        q = rms_norm(q)
+        # ``pko_first_bos_zero_no_q_norm``: skip rms_norm(q) on PKO layers
+        # (q stays as the raw projection). Non-PKO layers always norm q.
+        skip_q_norm = use_partial_key_offset and self.cfg.pko_norm_order == "pko_first_bos_zero_no_q_norm"
+        if not skip_q_norm:
+            q = rms_norm(q)
         k = rms_norm(k)
 
-        if use_partial_key_offset and self.cfg.pko_norm_order == "pko_first_bos_zero":
+        if use_partial_key_offset and self.cfg.pko_norm_order in pko_first_modes:
             # PKO shift + bos-zero was already applied; only need partial RoPE
             # on the rotated half now.
             half = head_dim // 2
@@ -246,7 +255,12 @@ class CausalSelfAttention(eqx.Module):
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         else:
             q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
-        q = q * self.cfg.qk_mult
+        # ``pko_first_bos_zero_no_q_norm`` also skips the qk_mult on PKO
+        # layers (q is raw post-projection except for partial-RoPE on the
+        # rotated half).
+        skip_qk_mult = use_partial_key_offset and self.cfg.pko_norm_order == "pko_first_bos_zero_no_q_norm"
+        if not skip_qk_mult:
+            q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
