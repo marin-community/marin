@@ -33,6 +33,7 @@ _GATE2_POINTS: tuple[tuple[int, float], ...] = (
 )
 
 _GROUP_NAME: str = "muonh-may-arch-per-expert-lr-gate2"
+_GATE2_TPU_RAM: str = "256g"
 
 
 def _build_steps_for_candidates(candidates: tuple[str, ...], run_suffix: str = _RUN_SUFFIX) -> list[ExecutorStep]:
@@ -43,7 +44,15 @@ def _build_steps_for_candidates(candidates: tuple[str, ...], run_suffix: str = _
         raise ValueError("at least one gate-2 candidate is required")
 
     return [
-        _build_step(candidate, hidden_dim=d, budget=c, run_suffix=run_suffix, stage="gate2", group_name=_GROUP_NAME)
+        _build_step(
+            candidate,
+            hidden_dim=d,
+            budget=c,
+            run_suffix=run_suffix,
+            stage="gate2",
+            group_name=_GROUP_NAME,
+            resource_ram=_GATE2_TPU_RAM,
+        )
         for candidate in candidates
         for d, c in _GATE2_POINTS
     ]

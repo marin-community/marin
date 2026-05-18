@@ -125,6 +125,7 @@ def _build_step(
     run_suffix: str = "",
     stage: str = "gate1",
     group_name: str = _GROUP_NAME,
+    resource_ram: str | None = None,
 ) -> ExecutorStep:
     model, base_optimizer, batch_size, num_steps = build_from_heuristic(
         budget=budget,
@@ -143,6 +144,7 @@ def _build_step(
 
     run_id = _format_run_id(candidate, hidden_dim, budget, run_suffix=run_suffix, stage=stage)
     step_name = f"grug/muonh_may_arch_per_expert_lr_{stage}/{run_id}"
+    resource_kwargs = {"ram": resource_ram} if resource_ram is not None else {}
 
     return ExecutorStep(
         name=step_name,
@@ -152,7 +154,7 @@ def _build_step(
             data=NEMOTRON_MIX_WITH_DEFAULT_VALIDATION,
             output_path=this_output_path(),
             run_id=run_id,
-            resources=versioned(ResourceConfig.with_tpu("v5p-8")),
+            resources=versioned(ResourceConfig.with_tpu("v5p-8", **resource_kwargs)),
             steps=versioned(num_steps),
             batch_size=versioned(batch_size),
             seed=versioned(0),
