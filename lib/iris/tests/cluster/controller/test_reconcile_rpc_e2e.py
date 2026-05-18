@@ -280,7 +280,7 @@ def _register_worker(state, worker_id: str = _W1, address: str = _WORKER_ADDR) -
 
 
 def _assign(state, task_id: JobName, worker_id: WorkerId) -> int:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
     task = query_task(state, task_id)
     assert task is not None
@@ -288,7 +288,7 @@ def _assign(state, task_id: JobName, worker_id: WorkerId) -> int:
 
 
 def _transition(state, task_id: JobName, worker_id: WorkerId, attempt_id: int, new_state: int) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -578,15 +578,16 @@ def test_flag_on_missing_path_cold_restart(make_controller, worker_instance):
     # DB should show attempt 0 as FAILED(worker_lost_spec) in task_attempts.
     # The task row itself may show PENDING (requeued) since max_retries_failure=1
     # allows one retry — the task is requeued immediately in the same transaction.
-    from iris.cluster.controller.schema import ATTEMPT_PROJECTION
+    from iris.cluster.controller import reads as _reads
+    from iris.cluster.controller.schema import task_attempts_table
+    from sqlalchemy import select as sa_select
 
     with state._db.read_snapshot() as q:
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall(
-                "SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_id ASC",
-                (task_id.to_wire(),),
-            )
-        )
+        attempts = q.execute(
+            sa_select(*_reads.ATTEMPT_COLS)
+            .where(task_attempts_table.c.task_id == task_id)
+            .order_by(task_attempts_table.c.attempt_id.asc())
+        ).all()
     assert len(attempts) >= 1, "At least one attempt should exist after MISSING"
     # The failed attempt should be attempt_id 0, in FAILED state.
     failed_attempt = next((a for a in attempts if a.attempt_id == attempt_id), None)
@@ -649,7 +650,7 @@ def test_flag_on_cancel_mid_flight(make_controller, worker_instance):
     ctrl._reconcile_worker_batch()
 
     # Cancel the job.
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.cancel_job(cur, job_id, reason="test-cancel")
 
     # DB should now show KILLED state.
@@ -657,15 +658,15 @@ def test_flag_on_cancel_mid_flight(make_controller, worker_instance):
     assert task is not None
     assert task.state == job_pb2.TASK_STATE_KILLED, f"Expected KILLED after cancel_job, got {task.state}"
 
-    # Tick 3: KILLED task not in desired → worker zombie-kills it.
-    # The Reconcile proto request must NOT contain the task in desired
-    # (since reconcile_rows_for_workers excludes KILLED rows).
+    # Tick 3: KILLED task surfaces as an explicit stop intent in desired so
+    # the worker can stop the still-running attempt deterministically.
     ctrl._reconcile_worker_batch()
 
-    # Verify the KILLED task was NOT in desired (zombie kill path, not stop intent).
+    # Verify the KILLED task appears in desired with a stop intent.
     _last_plan, _last_addr, last_proto = provider.calls[-1]
-    task_in_desired = any(d.task_id == task_id.to_wire() for d in last_proto.desired)
-    assert not task_in_desired, "KILLED task should NOT be in the desired set (zombie kill path is correct)"
+    killed_desired = [d for d in last_proto.desired if d.task_id == task_id.to_wire()]
+    assert killed_desired, "KILLED task should be in desired set with a stop intent"
+    assert killed_desired[0].WhichOneof("intent") == "stop", "KILLED task should carry stop intent"
 
     # Worker task should be stopping or already terminal.
     worker_task = worker_instance.get_task(task_id.to_wire(), attempt_id=attempt_id)

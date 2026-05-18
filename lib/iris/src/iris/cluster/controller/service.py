@@ -1562,9 +1562,10 @@ class ControllerServiceImpl:
 
         wire = task_id.to_wire()
         with self._db.read_snapshot() as snap:
-            current_attempt_id = self._store.tasks.get_current_attempt_id(snap, task_id)
-            if current_attempt_id is None:
+            task_row = reads.get_task_detail(snap, task_id)
+            if task_row is None:
                 raise ConnectError(Code.NOT_FOUND, f"Task {wire} not found")
+            current_attempt_id = int(task_row.current_attempt_id)
             if current_attempt_id != int(request.attempt_id):
                 raise ConnectError(
                     Code.FAILED_PRECONDITION,

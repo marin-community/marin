@@ -114,7 +114,7 @@ def _setup_assigned_task(
     register_worker(state, worker_id, f"{worker_id}:8080", make_worker_metadata())
     tasks = submit_job(state, job_name, make_job_request(name=job_name))
     task_row = tasks[0]
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_row.task_id, worker_id=wid)])
     refreshed = query_task(state, task_row.task_id)
     assert refreshed is not None
@@ -132,7 +132,7 @@ def test_succeeded_observation_transitions_attempt_and_recomputes_job():
         task_id, attempt_id = _setup_running_task(state, _W1)
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)]
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, observations, None, _NOW)
 
         task = query_task(state, task_id)
@@ -140,7 +140,7 @@ def test_succeeded_observation_transitions_attempt_and_recomputes_job():
         assert task is not None
         assert task.state == job_pb2.TASK_STATE_SUCCEEDED
         assert attempt is not None
-        assert attempt.finished_at is not None
+        assert attempt.finished_at_ms is not None
         assert attempt.state == job_pb2.TASK_STATE_SUCCEEDED
 
         job_id = task.job_id
@@ -154,7 +154,7 @@ def test_failed_observation_transitions_attempt_and_fires_cascades():
         task_id, attempt_id = _setup_running_task(state, _W1)
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_FAILED, error="segfault")]
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, observations, None, _NOW)
 
         task = query_task(state, task_id)
@@ -172,7 +172,7 @@ def test_missing_observation_fails_attempt_with_worker_lost_spec():
         task_id, attempt_id = _setup_running_task(state, _W1)
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_MISSING)]
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, observations, None, _NOW)
 
         task = query_task(state, task_id)
@@ -197,12 +197,12 @@ def test_missing_observation_on_building_task_fails_with_worker_lost_spec():
         task_row = tasks[0]
         task_id = task_row.task_id
 
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
         refreshed = query_task(state, task_id)
         attempt_id = refreshed.current_attempt_id
 
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_task_updates(
                 cur,
                 HeartbeatApplyRequest(
@@ -216,7 +216,7 @@ def test_missing_observation_on_building_task_fails_with_worker_lost_spec():
 
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_MISSING)]
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, observations, None, _NOW)
 
         task = query_task(state, task_id)
@@ -235,20 +235,20 @@ def test_duplicate_terminal_observation_does_not_overwrite_finished_at():
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)]
 
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, observations, None, _NOW)
 
         attempt_after_first = query_attempt(state, task_id, attempt_id)
         assert attempt_after_first is not None
-        finished_at_first = attempt_after_first.finished_at
+        finished_at_first = attempt_after_first.finished_at_ms
 
         # Apply the same observation again.
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, observations, None, _NOW)
 
         attempt_after_second = query_attempt(state, task_id, attempt_id)
         assert attempt_after_second is not None
-        assert attempt_after_second.finished_at == finished_at_first
+        assert attempt_after_second.finished_at_ms == finished_at_first
 
 
 def test_stale_running_observation_does_not_revive_cancelled_task():
@@ -256,7 +256,7 @@ def test_stale_running_observation_does_not_revive_cancelled_task():
     with make_controller_state() as state:
         task_id, attempt_id = _setup_running_task(state, _W1)
 
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             task_row = query_task(state, task_id)
             state.cancel_job(cur, task_row.job_id, "user_cancel")
 
@@ -265,7 +265,7 @@ def test_stale_running_observation_does_not_revive_cancelled_task():
 
         plan = _make_plan(_W1)
         observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_RUNNING)]
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, observations, None, _NOW)
 
         task = query_task(state, task_id)
@@ -293,7 +293,7 @@ def test_rpc_error_no_state_change_for_running_task():
                 )
             ],
         )
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, [], "connection refused", _NOW)
 
         task = query_task(state, task_id)
@@ -316,7 +316,7 @@ def test_rpc_error_applies_worker_failed_to_assigned_tasks():
                 )
             ],
         )
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, [], "timeout", _NOW)
 
         task = query_task(state, task_id)
@@ -332,7 +332,7 @@ def test_rpc_error_no_cascades():
         task_id = tasks[0].task_id
 
         plan = _make_plan(_W1)
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             result = state.apply_reconcile_response(cur, plan, [], "connection refused", _NOW)
 
         assert result.tasks_to_kill == set()
@@ -363,7 +363,7 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
         task_id_1 = tasks[0].task_id
         task_id_2 = tasks[1].task_id
 
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.queue_assignments(
                 cur,
                 [
@@ -383,7 +383,7 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
             (wid1, task_id_1, attempt_id_1),
             (wid2, task_id_2, attempt_id_2),
         ]:
-            with state._store.transaction() as cur:
+            with state._db.transaction() as cur:
                 state.apply_task_updates(
                     cur,
                     HeartbeatApplyRequest(
@@ -396,7 +396,7 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
 
         plan = _make_plan(_W1)
         observations = [_obs(task_id_1, attempt_id_1, job_pb2.TASK_STATE_FAILED, error="oom")]
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             state.apply_reconcile_response(cur, plan, observations, None, _NOW)
 
         task1_final = query_task(state, task_id_1)
@@ -415,7 +415,7 @@ def test_unknown_worker_returns_empty_result():
     """apply_reconcile_response on a non-existent worker returns empty TxResult."""
     with make_controller_state() as state:
         plan = _make_plan("ghost-worker")
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             result = state.apply_reconcile_response(cur, plan, [], None, _NOW)
 
         assert result.tasks_to_kill == set()

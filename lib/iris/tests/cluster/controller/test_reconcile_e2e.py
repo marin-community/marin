@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from iris.cluster.controller import reads
 from iris.cluster.controller.provider import ProviderError
 from iris.cluster.controller.reconcile import WorkerReconcileDispatch
 from iris.cluster.controller.transitions import HeartbeatApplyRequest, TaskUpdate
@@ -101,8 +102,8 @@ def _set_task_state(state, task_id: JobName, worker_id: WorkerId, new_state: int
     Re-queries ``current_attempt_id`` from the DB so callers don't need to
     track attempt IDs manually.
     """
-    with state._store.transaction() as cur:
-        task = state._store.tasks.get_detail(cur, task_id)
+    with state._db.transaction() as cur:
+        task = reads.get_task_detail(cur, task_id)
         assert task is not None
         state.apply_task_updates(
             cur,
@@ -158,7 +159,7 @@ def test_reconcile_worker_batch_wire_shape(make_controller, tmp_path):
     # Assign all four tasks to the worker
     from iris.cluster.controller.transitions import Assignment
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(
             cur,
             [
@@ -178,7 +179,7 @@ def test_reconcile_worker_batch_wire_shape(make_controller, tmp_path):
 
     # Cancel the fourth job (task transitions to KILLED)
     job_cancelled_id = JobName.root("test-user", "job-cancelled")
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.cancel_job(cur, job_cancelled_id, reason="test cancel")
 
     # Run one reconcile tick
@@ -198,17 +199,17 @@ def test_reconcile_worker_batch_wire_shape(make_controller, tmp_path):
     assert task_assigned.task_id.to_wire() in start_task_ids
 
     # expected_tasks: ASSIGNED + BUILDING + RUNNING (three tasks)
-    # CANCELLED task is NOT in the reconcile query → not in expected → worker auto-kills
-    assert len(dispatch.expected_tasks) == 3
+    # CANCELLED (KILLED) tasks are included in the reconcile query so the
+    # controller can emit an explicit stop intent, but they are not "expected"
+    # to be reported back by the worker.
     expected_task_ids = {e.task_id for e in dispatch.expected_tasks}
     assert task_assigned.task_id in expected_task_ids
     assert task_building.task_id in expected_task_ids
     assert task_running.task_id in expected_task_ids
-    assert task_cancelled.task_id not in expected_task_ids
 
-    # stop_tasks: empty — CANCELLED rows are not returned by reconcile_rows_for_workers
-    # Worker auto-kills because the task is absent from expected_tasks
-    assert dispatch.stop_tasks == []
+    # stop_tasks: KILLED task produces an explicit stop intent.
+    stop_task_ids = set(dispatch.stop_tasks)
+    assert task_cancelled.task_id.to_wire() in stop_task_ids
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +273,7 @@ def test_reconcile_start_tasks_spec_stamped(make_controller):
 
     from iris.cluster.controller.transitions import Assignment
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=wid)])
 
     ctrl._reconcile_worker_batch()
@@ -303,7 +304,7 @@ def test_reconcile_assigned_spec_present_in_start(make_controller):
 
     from iris.cluster.controller.transitions import Assignment
 
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=wid)])
 
     ctrl._reconcile_worker_batch()

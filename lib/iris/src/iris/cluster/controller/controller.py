@@ -76,6 +76,7 @@ from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile import (
     AttemptObservation,
+    ReconcileRow,
     WorkerReconcileInputs,
     WorkerReconcilePlan,
     WorkerRow,
@@ -2402,9 +2403,7 @@ class Controller:
                 if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                     continue
                 if row.job_id not in templates_by_job:
-                    templates_by_job[row.job_id] = run_request_template(
-                        snap, row.job_id, self._transitions.run_cache, self._store
-                    )
+                    templates_by_job[row.job_id] = self._transitions.run_request_template(snap, row.job_id)
 
         # ── Phase 2: per-worker pure compute ──────────────────────────────
         rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
@@ -2447,7 +2446,7 @@ class Controller:
             reconcile_results = self._provider.reconcile_workers_via_reconcile(plans_with_addresses)
 
             # ── Phase 4 (Reconcile wire): batched apply in one write txn ──────
-            with self._store.transaction() as cur:
+            with self._db.transaction() as cur:
                 for rr in reconcile_results:
                     plan = plan_by_worker[rr.worker_id]
                     if rr.error is not None:
@@ -2462,7 +2461,7 @@ class Controller:
             results = self._provider.reconcile_workers(dispatches)
 
             # ── Phase 4 (legacy wire): batched apply in one write txn ─────────
-            with self._store.transaction() as cur:
+            with self._db.transaction() as cur:
                 for result in results:
                     plan = plan_by_worker[result.worker_id]
                     error: str | None = result.start_error

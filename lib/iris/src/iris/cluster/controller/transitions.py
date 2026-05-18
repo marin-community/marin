@@ -1994,6 +1994,149 @@ class ControllerTransitions:
         attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
         return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
 
+    def apply_reconcile_response(
+        self,
+        cur: Tx,
+        plan,
+        observations,
+        error: str | None,
+        now: Timestamp,
+    ) -> TxResult:
+        """Apply the consequences of one worker's reconcile within the caller's transaction.
+
+        On RPC error: log and apply synthetic WORKER_FAILED for any ASSIGNED-state
+        attempts in the plan (matching today's StartTasks-failure behavior), then
+        return without writing observation-derived state transitions.
+
+        On success: update worker health, apply pre-computed ``plan.db_writes``
+        deltas, then process each observation. MISSING observations are converted
+        to ``FAILED("worker_lost_spec")`` updates that fire the standard
+        cascades. All other observations are routed through
+        ``_apply_task_transitions`` so the existing state-machine guards
+        (idempotency, stale-attempt checks, retry logic, cascade firing) apply
+        unchanged.
+        """
+        # Local import to break the transitions <-> reconcile module cycle.
+        from iris.cluster.controller.reconcile import AttemptMissingOnWorker
+
+        worker_id = WorkerId(plan.request.worker_id)
+        now_ms = now.epoch_ms()
+
+        if error is not None:
+            log_event(
+                "reconcile_rpc_failed",
+                str(worker_id),
+                error=error,
+            )
+            assigned_updates = self._assigned_updates_from_plan(plan, error, cur)
+            if not assigned_updates:
+                return TxResult()
+            task_ids = [u.task_id for u in assigned_updates]
+            task_map = reads.bulk_get_task_detail(cur, task_ids)
+            attempt_keys = [(u.task_id, u.attempt_id) for u in assigned_updates]
+            attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+            req = HeartbeatApplyRequest(worker_id=worker_id, updates=assigned_updates)
+            return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+        existing = reads.filter_existing_workers(cur, [worker_id])
+        if str(worker_id) not in existing:
+            return TxResult()
+        self._health.heartbeat([worker_id], now_ms)
+
+        # Apply pre-computed deltas from the pure layer. AttemptMissingOnWorker
+        # is the only recognized delta type today; future phases may emit more.
+        for delta in plan.db_writes:
+            if not isinstance(delta, AttemptMissingOnWorker):
+                logger.warning("apply_reconcile_response: unhandled delta type %s; skipping", type(delta).__name__)
+
+        all_updates = self._observations_to_updates(observations)
+        if not all_updates:
+            return TxResult()
+
+        all_task_ids = [u.task_id for u in all_updates]
+        task_map = reads.bulk_get_task_detail(cur, all_task_ids)
+        attempt_keys: list[tuple[JobName, int]] = []
+        for u in all_updates:
+            attempt_keys.append((u.task_id, u.attempt_id))
+            task = task_map.get(u.task_id)
+            if task is not None and task.current_attempt_id != u.attempt_id:
+                attempt_keys.append((u.task_id, task.current_attempt_id))
+        attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+
+        req = HeartbeatApplyRequest(worker_id=worker_id, updates=all_updates)
+        return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+    def _assigned_updates_from_plan(
+        self,
+        plan,
+        error: str,
+        cur: Tx,
+    ) -> list[TaskUpdate]:
+        """Return synthetic WORKER_FAILED updates for ASSIGNED attempts in the plan.
+
+        Used when the Reconcile RPC failed: we don't know if the worker received
+        the desired set, so we only bounce ASSIGNED rows back to PENDING. This
+        mirrors the StartTasks-failure path in ``_collect_start_tasks_result``.
+        """
+        updates: list[TaskUpdate] = []
+        for desired in plan.request.desired:
+            if desired.intent_run is None or desired.intent_run.request is None:
+                continue
+            task_id = JobName.from_wire(desired.task_id)
+            task = reads.get_task_detail(cur, task_id)
+            if task is None:
+                continue
+            if task.state != job_pb2.TASK_STATE_ASSIGNED:
+                continue
+            updates.append(
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=desired.attempt_id,
+                    new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                    error=f"Reconcile RPC failed: {error}",
+                )
+            )
+        return updates
+
+    def _observations_to_updates(
+        self,
+        observations,
+    ) -> list[TaskUpdate]:
+        """Translate ``AttemptObservation`` list into ``TaskUpdate`` list.
+
+        MISSING observations become ``FAILED("worker_lost_spec")`` updates.
+        All others map directly to a ``TaskUpdate`` with the reported state.
+        Observations with no ``task_id`` compat field are skipped (uid-only
+        routing is a Phase C+ concern).
+        """
+        updates: list[TaskUpdate] = []
+        for obs in observations:
+            if not obs.task_id:
+                logger.warning("AttemptObservation missing task_id compat field; skipping uid=%s", obs.attempt_uid)
+                continue
+            task_id = JobName.from_wire(obs.task_id)
+            if obs.state == job_pb2.TASK_STATE_MISSING:
+                updates.append(
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=obs.attempt_id_compat,
+                        new_state=job_pb2.TASK_STATE_FAILED,
+                        error="worker_lost_spec",
+                    )
+                )
+            else:
+                updates.append(
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=obs.attempt_id_compat,
+                        new_state=obs.state,
+                        error=obs.error,
+                        exit_code=obs.exit_code,
+                        container_id=obs.container_id,
+                    )
+                )
+        return updates
+
     def apply_heartbeats_batch(self, cur: Tx, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
 

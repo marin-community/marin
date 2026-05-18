@@ -179,7 +179,7 @@ def _register_worker(state, worker_id: str = _W1, address: str = _WORKER_ADDR) -
 
 def _assign_task(state, task_id: JobName, worker_id: WorkerId) -> int:
     """Queue an assignment and return the attempt_id."""
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=worker_id)])
     task = query_task(state, task_id)
     assert task is not None
@@ -187,7 +187,7 @@ def _assign_task(state, task_id: JobName, worker_id: WorkerId) -> int:
 
 
 def _transition(state, task_id: JobName, worker_id: WorkerId, attempt_id: int, new_state: int) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -211,7 +211,7 @@ def test_flag_off_uses_legacy_wire(make_controller, tmp_path):
     wid = _register_worker(state)
     tasks = submit_job(state, "job-a", make_job_request(name="job-a", replicas=1))
     assert tasks
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=tasks[0].task_id, worker_id=wid)])
 
     ctrl._reconcile_worker_batch()
@@ -235,7 +235,7 @@ def test_flag_on_uses_reconcile_rpc(make_controller, tmp_path):
     wid = _register_worker(state)
     tasks = submit_job(state, "job-b", make_job_request(name="job-b", replicas=1))
     assert tasks
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=tasks[0].task_id, worker_id=wid)])
 
     ctrl._reconcile_worker_batch()
