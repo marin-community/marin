@@ -5,32 +5,37 @@
 
 Applies AllenAI's Dolma3 fasttext WebOrganizer topic classifier
 (``allenai/dolma3-fasttext-weborganizer-topic-classifier``) to every normalized
-source in :func:`marin.datakit.sources.all_sources`, producing one
-co-partitioned Parquet attributes dataset per source. The output schema is the
-datakit ``{id, partition_id, attributes}`` convention — see
+source in :func:`marin.datakit.sources.all_sources` (minus the standard
+``safety_pt/*`` / ``climblab-ja`` carve-outs -- see ``_EXCLUDE_PREFIXES``),
+producing one co-partitioned Parquet attributes dataset per source. The output
+schema is the datakit ``{id, partition_id, attributes}`` convention -- see
 :mod:`experiments.datakit.fasttext` for the struct layout.
 
-DAG shape:
+DAG shape::
 
     HF: allenai/dolma3-fasttext-weborganizer-topic-classifier@<revision>
         │
-        ▼ prepare_fasttext_model_step (datakit/classify/_model/dolma3-weborg-topic)
-        │     stages model.bin to GCS once
+        ▼ prepare_fasttext_model_step  (_model/dolma3-weborg-topic_<hash>/)
+        │     stages model.bin (~4 GiB) to GCS once
         │
         ▼ one classify_fasttext_step per Datakit source
-              (datakit/classify/topic/<source>)
+              (topic/<source>_<hash>/)
               workers read the .bin from in-region GCS, scan the source's
               normalized parquet, and emit co-partitioned attributes.
 
-The model prep step is small (~MB-scale download) and runs once. The fan-out
-to ~100 sources is what consumes the bulk of the wall-clock time; each source's
-classify step is shard-parallel by ``NormalizedData.num_partitions``.
+The model prep step downloads ~4 GiB once. The fan-out to ~100 sources is what
+consumes the bulk of the wall-clock time; each source's classify step is
+shard-parallel by ``NormalizedData.num_partitions``.
+
+Output rooted at ``gs://marin-eu-west4/datakit/weborganizer/`` -- permanent
+(no TTL), alongside the v0 clustering artifacts under ``gs://marin-eu-west4/datakit/``.
 
 Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 
-    uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
-        --priority production \\
-        -- python experiments/datakit/cluster/weborganizer/all_sources_topic.py
+    uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G \\
+        --extra=cpu --priority production --region europe-west4 \\
+        --job-name "weborg-topic-all-sources-$(date +%Y%m%d-%H%M%S)" \\
+        -- python -m experiments.datakit.cluster.weborganizer.all_sources_topic
 """
 
 import logging
@@ -39,7 +44,6 @@ from fray import ResourceConfig
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.fasttext import classify_fasttext_step, prepare_fasttext_model_step
@@ -73,32 +77,51 @@ MAX_TEXT_CHARS = 100_000
 # (cp/stackv2_code, finepdfs, nemotron medium_high_quality_synthetic).
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
 
+# Permanent output prefix -- sibling of the v0 clustering artifacts under
+# ``gs://marin-eu-west4/datakit/``. No TTL, no churn between runs.
+_OUTPUT_PREFIX = "gs://marin-eu-west4/datakit/weborganizer"
+
+# Sources excluded from the topic fan-out. Match against the registry name as
+# a prefix (``safety_pt/`` skips every ``safety_pt/...`` source). Mirrors the
+# standard datakit carve-outs in dedup/all_sources_fuzzy.py and store/all_sources_store.py:
+# safety_pt and climblab-ja are deliberately omitted from the downstream
+# consolidated store, so classifying them wastes worker time on data nothing
+# downstream consumes.
+_EXCLUDE_PREFIXES: tuple[str, ...] = (
+    "safety_pt/",
+    "climblab-ja",
+)
+
 
 def build_classify_steps() -> list[StepSpec]:
     # Model prep: stage the .bin to GCS exactly once. The artifact's path is
     # then a dep on every per-source classify step, so all 100+ workers read
     # the same in-region GCS object.
     model_step = prepare_fasttext_model_step(
-        name="datakit/classify/_model/dolma3-weborg-topic",
+        name="_model/dolma3-weborg-topic",
         hf_repo_id=MODEL_HF_REPO,
         hf_filename=MODEL_HF_FILENAME,
         revision=MODEL_REVISION,
+        output_path_prefix=_OUTPUT_PREFIX,
     )
 
-    classify_output_prefix = marin_temp_bucket(ttl_days=7, prefix="rav/classify-topic-all-sources-v0")
-    return [model_step] + [
-        classify_fasttext_step(
-            name=f"datakit/classify/topic/{name}",
-            normalized=src.normalized,
-            model_step=model_step,
-            max_text_chars=MAX_TEXT_CHARS,
-            k=K,
-            threshold=THRESHOLD,
-            worker_resources=WORKER_RESOURCES,
-            output_path_prefix=classify_output_prefix,
+    classify_steps: list[StepSpec] = []
+    for name, src in all_sources().items():
+        if any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES):
+            continue
+        classify_steps.append(
+            classify_fasttext_step(
+                name=f"topic/{name}",
+                normalized=src.normalized,
+                model_step=model_step,
+                max_text_chars=MAX_TEXT_CHARS,
+                k=K,
+                threshold=THRESHOLD,
+                worker_resources=WORKER_RESOURCES,
+                output_path_prefix=_OUTPUT_PREFIX,
+            )
         )
-        for name, src in all_sources().items()
-    ]
+    return [model_step, *classify_steps]
 
 
 if __name__ == "__main__":
