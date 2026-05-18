@@ -55,10 +55,6 @@ from experiments.grug.moe.launch import GrugMoeLaunchConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.marin_models import marin_tokenizer
 
-# ---------------------------------------------------------------------------
-# Mixture: 31 cache-backed domains + 8 hierarchical groups, proportional weights.
-# ---------------------------------------------------------------------------
-
 _MERGED_PREFIX = "tokenized/merged/dolma3_dolmino_top_level"
 
 # Region-relative paths: `InputName.hardcoded("foo")` resolves to
@@ -66,7 +62,6 @@ _MERGED_PREFIX = "tokenized/merged/dolma3_dolmino_top_level"
 # `gs://marin-us-east5/`, so launching in any other region intentionally hard-
 # fails on missing-cache rather than triggering a cross-region copy.
 DOMAIN_CACHE_PATHS: dict[str, str] = {
-    # Dolma 3 CC quality-split domains (13 topics x {high, low}).
     "dolma3_cc/art_and_design_high": f"{_MERGED_PREFIX}/dolma3_cc/art_and_design_high-8fd3f7",
     "dolma3_cc/art_and_design_low": f"{_MERGED_PREFIX}/dolma3_cc/art_and_design_low-f75d57",
     "dolma3_cc/crime_and_law_high": f"{_MERGED_PREFIX}/dolma3_cc/crime_and_law_high-d1e71b",
@@ -93,23 +88,15 @@ DOMAIN_CACHE_PATHS: dict[str, str] = {
     "dolma3_cc/literature_low": f"{_MERGED_PREFIX}/dolma3_cc/literature_low-a7a06c",
     "dolma3_cc/science_math_and_technology_high": f"{_MERGED_PREFIX}/dolma3_cc/science_math_and_technology_high-8c6157",
     "dolma3_cc/science_math_and_technology_low": f"{_MERGED_PREFIX}/dolma3_cc/science_math_and_technology_low-f3e030",
-    # Dolma 3 stack-edu (prebuilt merged cache).
     "dolma3_stack_edu": f"{_MERGED_PREFIX}/dolma3_stack_edu-a7297b",
-    # Dolmino stem-heavy-crawl (prebuilt merged cache).
     "dolmino_stem_heavy_crawl": f"{_MERGED_PREFIX}/dolmino_stem_heavy_crawl-e1ec3b",
-    # Singletons: no merged cache under the `dolma3_dolmino_top_level` prefix,
-    # so point at the underlying single-partition tokenized caches directly.
+    # Singletons skip the `dolma3_dolmino_top_level` merged prefix and point at
+    # their underlying single-partition tokenized caches directly.
     "dolma3_arxiv": "tokenized/dolma/arxiv-07a51f",
     "dolma3_finemath_3plus": "tokenized/finemath_3_plus-a26b0f",
     "dolma3_wikipedia": "tokenized/dolma/wiki-212315",
 }
 
-# Per-partition cache paths for the 8 multi-partition Dolmino groups. Each
-# entry maps a domain to a list of (partition_name, relative_cache_path)
-# pairs; paths live under
-# `gs://marin-{region}/tokenized/dolma3_dolmino_pool/...`. Each group is
-# materialized at runtime as a `ConcatDatasetComponent` whose children are
-# the per-partition cache-backed `DatasetComponent`s.
 HIERARCHICAL_PARTITION_PATHS: dict[str, list[tuple[str, str]]] = {
     "dolmino_common_crawl_hq": [
         ("19_adult_content", "tokenized/dolma3_dolmino_pool/common_crawl_hq_19_adult_content-986941"),
@@ -253,8 +240,6 @@ HIERARCHICAL_PARTITION_PATHS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
-# Per-domain token counts (sum of underlying partition counts). Used to
-# derive `PROPORTIONAL_WEIGHTS` and `TARGET_BUDGET` below.
 DOMAIN_TOKEN_COUNTS: dict[str, int] = {
     "dolma3_cc/art_and_design_high": 114170169532,
     "dolma3_cc/art_and_design_low": 46340373707,
@@ -336,14 +321,6 @@ def _build_component(domain: str, cache_path: str) -> DatasetComponent:
 
 
 def _build_hierarchical_components() -> dict[str, ConcatDatasetComponent]:
-    """Build one `ConcatDatasetComponent` per hierarchical Dolmino group.
-
-    Each group's children are cache-backed `DatasetComponent`s pointing at
-    their per-partition tokenized caches via region-relative
-    `InputName.hardcoded` paths. Levanter loads the children's caches on the
-    worker and concatenates them via `ConcatDataset`; the parent
-    `LmDataConfig.shuffle` setting permutes the concatenated result globally.
-    """
     components: dict[str, ConcatDatasetComponent] = {}
     for domain, partitions in HIERARCHICAL_PARTITION_PATHS.items():
         children = {
@@ -352,11 +329,6 @@ def _build_hierarchical_components() -> dict[str, ConcatDatasetComponent]:
         }
         components[domain] = ConcatDatasetComponent(children=children, tags=[domain])
     return components
-
-
-# ---------------------------------------------------------------------------
-# Launch wiring.
-# ---------------------------------------------------------------------------
 
 
 def _resolve_run_id(default_run_id: str) -> str:
