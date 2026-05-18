@@ -9,6 +9,7 @@ the MoE variant can be iterated independently from the dense base template.
 
 import dataclasses
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -76,12 +77,11 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     """Search all regional marin buckets for the latest checkpoint.
 
     Scans each region for permanent and temporary checkpoint subdirectories
-    with metadata.json, reads the step number. Returns the gs:// checkpoints
-    directory of the region with the highest step, but only if that region is
-    different from the local region and has a strictly higher step. Returns
-    None if local already has the best checkpoint (to avoid overriding the
-    trainer's normal checkpoint discovery, which also finds temporary
-    checkpoints).
+    with metadata.json, reads the step number. It checks the current output
+    path and prior sibling output hashes for the same run id so small launcher
+    fixes can still resume existing work. Returns None if the current output
+    path already has the best checkpoint, letting the trainer's normal
+    checkpoint discovery handle it.
     """
     import json
 
@@ -96,12 +96,16 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     local_bucket = parts[2]
     suffix = parts[3]
     checkpoint_suffix = os.path.join(suffix, DEFAULT_CHECKPOINTS_PATH)
+    run_parent = os.path.dirname(suffix)
+    run_dir = os.path.basename(suffix)
+    run_match = re.fullmatch(r"(?P<run_id>.+)-[0-9a-f]{6}", run_dir)
+    run_id_prefix = run_match.group("run_id") if run_match else None
 
     fs = gcsfs.GCSFileSystem()
     best_step = -1
     best_path: str | None = None
-    best_bucket: str | None = None
-    local_step = -1
+    current_step = -1
+    seen_roots: set[str] = set()
 
     for bucket in REGION_TO_DATA_BUCKET.values():
         temp_checkpoint_suffix = os.path.join(
@@ -112,7 +116,35 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
             bucket,
             checkpoint_suffix,
         )
-        for candidate in (f"{bucket}/{checkpoint_suffix}", temp_checkpoint_suffix):
+
+        root_candidates: list[tuple[str, bool]] = [
+            (f"{bucket}/{checkpoint_suffix}", True),
+            (temp_checkpoint_suffix, True),
+        ]
+        if run_id_prefix:
+            glob_patterns = [
+                os.path.join(bucket, run_parent, f"{run_id_prefix}-*", DEFAULT_CHECKPOINTS_PATH),
+                os.path.join(
+                    bucket,
+                    "tmp",
+                    f"ttl={TEMPORARY_CHECKPOINT_TTL_DAYS}d",
+                    TEMPORARY_CHECKPOINTS_PATH,
+                    bucket,
+                    run_parent,
+                    f"{run_id_prefix}-*",
+                    DEFAULT_CHECKPOINTS_PATH,
+                ),
+            ]
+            for pattern in glob_patterns:
+                try:
+                    root_candidates.extend((root, False) for root in fs.glob(pattern))
+                except FileNotFoundError:
+                    continue
+
+        for candidate, is_current_root in root_candidates:
+            if candidate in seen_roots:
+                continue
+            seen_roots.add(candidate)
             try:
                 subdirs = fs.ls(candidate)
             except FileNotFoundError:
@@ -126,19 +158,18 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
                     has_data = fs.exists(f"{subdir}/manifest.ocdbt") or fs.exists(f"{subdir}/d")
                     if not has_data:
                         continue
-                    if bucket == local_bucket:
-                        local_step = max(local_step, step)
+                    if is_current_root and bucket == local_bucket:
+                        current_step = max(current_step, step)
                     if step > best_step:
                         best_step = step
                         best_path = f"gs://{candidate}"
-                        best_bucket = bucket
                 except Exception:
                     continue
 
-    # Only return cross-region path if it's strictly better than local.
-    # Otherwise let the trainer discover its own checkpoints (including
-    # temporary ones that may not have metadata.json).
-    if best_step > local_step and best_path and best_bucket != local_bucket:
+    # Only return an explicit path if the best checkpoint is outside the
+    # current output roots. Otherwise let the trainer discover the current
+    # permanent and temporary checkpoints itself.
+    if best_step > current_step and best_path:
         return best_path
     return None
 

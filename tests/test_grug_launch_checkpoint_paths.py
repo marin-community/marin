@@ -65,6 +65,9 @@ def test_find_checkpoint_across_regions_finds_temporary_checkpoint(monkeypatch):
     temp_step = f"{temp_root}/step-720"
 
     class FakeGCSFileSystem:
+        def glob(self, pattern: str):
+            return []
+
         def ls(self, path: str):
             if path == temp_root:
                 return [temp_step]
@@ -90,3 +93,44 @@ def test_find_checkpoint_across_regions_finds_temporary_checkpoint(monkeypatch):
     )
 
     assert _find_checkpoint_across_regions(output_path) == f"gs://{temp_root}"
+
+
+def test_find_checkpoint_across_regions_finds_prior_output_hash(monkeypatch):
+    output_path = "gs://marin-us-east5/grug/moe-trial/example-run-b689a7"
+    prior_root = "marin-us-east5/grug/moe-trial/example-run-88e57d/checkpoints"
+    prior_step = f"{prior_root}/step-2000"
+
+    class FakeGCSFileSystem:
+        def glob(self, pattern: str):
+            if pattern == "marin-us-east5/grug/moe-trial/example-run-*/checkpoints":
+                return [prior_root]
+            if pattern == (
+                "marin-us-east5/tmp/ttl=14d/checkpoints-temp/" "marin-us-east5/grug/moe-trial/example-run-*/checkpoints"
+            ):
+                return []
+            return []
+
+        def ls(self, path: str):
+            if path == prior_root:
+                return [prior_step]
+            raise FileNotFoundError(path)
+
+        def exists(self, path: str) -> bool:
+            return path in {
+                f"{prior_step}/metadata.json",
+                f"{prior_step}/manifest.ocdbt",
+            }
+
+        def open(self, path: str):
+            assert path == f"{prior_step}/metadata.json"
+            return io.StringIO(json.dumps({"step": 2000}))
+
+    monkeypatch.setattr("gcsfs.GCSFileSystem", FakeGCSFileSystem)
+    monkeypatch.setattr(
+        "rigging.filesystem.REGION_TO_DATA_BUCKET",
+        {
+            "us-east5": "marin-us-east5",
+        },
+    )
+
+    assert _find_checkpoint_across_regions(output_path) == f"gs://{prior_root}"
