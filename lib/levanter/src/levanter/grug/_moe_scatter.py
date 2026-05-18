@@ -11,7 +11,7 @@ from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug.moe_common import _prepare_moe_dispatch, _zero_dropped_assignments, split_moe_w13_output
+from levanter.grug._moe_common import _prepare_moe_dispatch, _zero_dropped_assignments, split_moe_w13_output
 
 
 def _moe_mlp_local_scatter(
