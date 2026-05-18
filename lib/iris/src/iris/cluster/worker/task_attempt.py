@@ -113,10 +113,6 @@ class TaskCancelled(Exception):
     pass
 
 
-def _unreachable_fetch_request(task_id: str, attempt_id: int) -> "job_pb2.RunTaskRequest":
-    raise AssertionError(f"fetch_request invoked on a path that should not call run(): {task_id}/{attempt_id}")
-
-
 @dataclass
 class TaskAttemptConfig:
     """Immutable configuration for a task attempt, derived from the RPC request."""
@@ -224,7 +220,7 @@ class TaskAttempt:
         *,
         container_handle: ContainerHandle | None = None,
         initial_status: TaskState | None = None,
-        fetch_request: Callable[[str, int], job_pb2.RunTaskRequest],
+        fetch_request: Callable[[str, int], job_pb2.RunTaskRequest] | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -315,7 +311,7 @@ class TaskAttempt:
         # GetTaskAttemptInfo; tests / direct submits pass a constant lambda.
         # Failure raises ``ContainerInfraError`` so the existing handler
         # routes it to WORKER_FAILED.
-        self._fetch_request: Callable[[str, int], job_pb2.RunTaskRequest] = fetch_request
+        self._fetch_request: Callable[[str, int], job_pb2.RunTaskRequest] | None = fetch_request
 
     @classmethod
     def adopt(
@@ -363,9 +359,6 @@ class TaskAttempt:
             poll_interval_seconds=poll_interval_seconds,
             container_handle=container_handle,
             initial_status=job_pb2.TASK_STATE_RUNNING,
-            # Adopted attempts never call run(); supply a fetcher that would
-            # be a usage bug if it ever fired.
-            fetch_request=_unreachable_fetch_request,
         )
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
@@ -602,6 +595,10 @@ class TaskAttempt:
         """
         if self._bundle_store is None or self._runtime is None:
             raise RuntimeError("Cannot run() an adopted TaskAttempt — use resume_monitoring()")
+        assert self._fetch_request is not None, (
+            f"run() called on an adopted TaskAttempt ({self.task_id}/{self.attempt_id}); "
+            "adopted attempts have no fetch_request and cannot be re-run"
+        )
         logger.info(
             "TaskAttempt starting: task_id=%s attempt=%s num_tasks=%s",
             self.task_id,
