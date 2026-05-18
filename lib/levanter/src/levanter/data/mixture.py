@@ -48,11 +48,13 @@ class MixtureDataset(AsyncDataset[T]):
             - FIRST_STOP_STRATEGY: stop when one dataset has been exhausted
             - ALL_STOP_STRATEGY: stop when all datasets have been exhausted
             - RESTART_STRATEGY: restart the dataset when it has been exhausted
-        randomize_epochs: if True, each pass through a finite mixture component uses an
-            independent permutation of its samples; if False, the component is accessed in
-            natural order via ``raw_idx % length``. Takes effect only for finite components
-            under ``RESTART_STRATEGY`` or ``ALL_STOP_STRATEGY``; under ``FIRST_STOP_STRATEGY``
-            no component completes more than one pass, so there is no second epoch to permute.
+        randomize_epochs: if True, each pass through a finite component is shuffled
+            independently; if False, it is read in natural order via ``raw_idx % length``.
+            Shuffling reorders chunks (chunk size = the dataset's per-block count) rather
+            than individual items, so each mixture-block still reads a contiguous region
+            of the dataset — preserving I/O locality. Only active for finite components
+            under ``RESTART_STRATEGY`` and ``ALL_STOP_STRATEGY`` (``FIRST_STOP_STRATEGY``
+            halts before any component sees a second pass).
         key: random key for datasets sampling
     """
 
@@ -325,9 +327,15 @@ class MixtureDataset(AsyncDataset[T]):
             out[mask] = perm(in_epoch[mask])
         return [int(x) for x in out]
 
-    @functools.lru_cache(maxsize=128)
-    def _get_epoch_permutation(self, dataset_id: int, epoch: int, length: int) -> Permutation:
-        return _compute_epoch_assignment(dataset_id, epoch, length, self.key)
+    def _get_epoch_permutation(self, dataset_id: int, epoch: int, length: int) -> "_BlockShuffleEpochPermutation":
+        return _compute_epoch_assignment(dataset_id, epoch, length, self._chunk_size_for(dataset_id), self.key)
+
+    def _chunk_size_for(self, dataset_id: int) -> int:
+        """counts_per_block from the first stage in which this dataset has nonzero weight."""
+        for stage_counts in self._counts_per_block_per_stage:
+            if stage_counts[dataset_id] > 0:
+                return int(stage_counts[dataset_id])
+        return 0
 
     def _set_finiteness_cache(self, finite_length: int | None) -> int | None:
         self._cached_finite_length = finite_length
@@ -528,12 +536,60 @@ def _compute_block_assignment(base_ids, index, key):
     return permuted_ids
 
 
-def _compute_epoch_assignment(dataset_id: int, epoch: int, length: int, key: PRNGKeyArray) -> Permutation:
+class _BlockShuffleEpochPermutation:
+    """Permutation on ``[0, length)`` that reorders ``chunk_size``-sized chunks.
+
+    Built per ``(dataset_id, epoch)``. A Feistel permutation reorders the
+    ``num_full = length // chunk_size`` full chunks; the trailing partial
+    chunk (``length % chunk_size`` items, if any) stays at the end of the
+    dataset's index space.
+
+    When ``num_full <= 1`` the remap is the identity — there are no chunks
+    to permute.
+    """
+
+    def __init__(self, chunk_perm: Permutation | None, chunk_size: int, num_full: int, length: int):
+        self.chunk_perm = chunk_perm
+        self.chunk_size = chunk_size
+        self.num_full = num_full
+        self.length = length
+
+    def __call__(self, indices):
+        if isinstance(indices, (int, np.integer)):
+            if self.chunk_perm is None:
+                return int(indices)
+            chunk, offset = divmod(int(indices), self.chunk_size)
+            if chunk >= self.num_full:
+                return self.num_full * self.chunk_size + offset
+            return int(self.chunk_perm(chunk)) * self.chunk_size + offset
+
+        arr = np.asarray(indices, dtype=np.int64)
+        if self.chunk_perm is None:
+            return arr
+        chunk, offset = np.divmod(arr, self.chunk_size)
+        is_tail = chunk >= self.num_full
+        # Substitute an in-range chunk for tail entries; tail results are discarded by `where`.
+        safe_chunk = np.where(is_tail, 0, chunk).astype(np.int64)
+        permuted_chunk = np.asarray(self.chunk_perm(safe_chunk), dtype=np.int64)
+        return np.where(
+            is_tail,
+            self.num_full * self.chunk_size + offset,
+            permuted_chunk * self.chunk_size + offset,
+        )
+
+
+def _compute_epoch_assignment(
+    dataset_id: int, epoch: int, length: int, chunk_size: int, key: PRNGKeyArray
+) -> _BlockShuffleEpochPermutation:
+    num_full = length // chunk_size if chunk_size > 0 else 0
+    if num_full <= 1:
+        return _BlockShuffleEpochPermutation(None, max(chunk_size, 1), num_full, length)
     with local_cpu_mesh():
         sub_key = jax.random.fold_in(key, dataset_id)
         epoch_key = jax.random.fold_in(sub_key, epoch)
         epoch_key = jax.device_put(jax.device_get(epoch_key))
-    return Permutation.make("feistel", length, epoch_key)
+    chunk_perm = Permutation.make("feistel", num_full, epoch_key)
+    return _BlockShuffleEpochPermutation(chunk_perm, chunk_size, num_full, length)
 
 
 def rescale_mixture_schedule_for_batch_schedule(

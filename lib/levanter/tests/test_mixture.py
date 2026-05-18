@@ -269,15 +269,25 @@ async def test_mixture_dataset_randomizes_blocks():
 @pytest.mark.asyncio
 async def test_mixture_dataset_randomize_epochs_permutes_finite_component():
     """Each pass through a finite component is its own permutation when randomize_epochs=True."""
-    finite_length = 8
+    # Need num_full_chunks > 1 for the chunk-Feistel to be non-trivial: L > D.
+    finite_length = 32
+    bs = 16  # weight 0.5 ⇒ D = 8 finite slots per block; L/D = 4 full chunks.
+    finite_per_block = bs // 2
+    blocks_per_epoch = finite_length // finite_per_block
+
     finite = ListAsyncDataset(list(range(finite_length)))  # value at index k is k
     dses = {"finite": finite, "infinite": InfiniteCounterDataset()}
-    bs = 2 * finite_length
     weights = {"finite": 0.5, "infinite": 0.5}
 
-    # randomize_blocks=False + finite registered first ⇒ positions [0, L) of every block are finite.
+    # randomize_blocks=False + finite registered first ⇒ positions [0, D) of every block are finite.
     async def finite_orderings(ds: MixtureDataset, num_epochs: int) -> list[list[int]]:
-        return [list(await ds.get_batch(list(range(e * bs, e * bs + finite_length)))) for e in range(num_epochs)]
+        out = []
+        for e in range(num_epochs):
+            ordering: list[int] = []
+            for m in range(e * blocks_per_epoch, (e + 1) * blocks_per_epoch):
+                ordering.extend(await ds.get_batch(list(range(m * bs, m * bs + finite_per_block))))
+            out.append(ordering)
+        return out
 
     shuffled = MixtureDataset(dses, weights, block_size=bs, key=key(), randomize_blocks=False, randomize_epochs=True)
     epochs = await finite_orderings(shuffled, num_epochs=3)
@@ -294,6 +304,57 @@ async def test_mixture_dataset_randomize_epochs_permutes_finite_component():
     baseline_epochs = await finite_orderings(baseline, num_epochs=3)
     for i, ordering in enumerate(baseline_epochs):
         assert ordering == expected, f"Default (randomize_epochs=False) epoch {i}: {ordering}"
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_randomize_epochs_block_locality():
+    """When L is divisible by D, each mixture-block reads one contiguous D-sized
+    chunk of the finite component (the locality contract of the chunk-shuffle scheme)."""
+    finite_length = 64
+    bs = 8  # weight 0.5 ⇒ D = 4 finite slots per block; L/D = 16 chunks.
+    D = bs // 2
+    assert finite_length % D == 0
+    blocks_per_epoch = finite_length // D
+
+    finite = ListAsyncDataset(list(range(finite_length)))
+    dses = {"finite": finite, "infinite": InfiniteCounterDataset()}
+    weights = {"finite": 0.5, "infinite": 0.5}
+
+    ds = MixtureDataset(dses, weights, block_size=bs, key=key(), randomize_blocks=False, randomize_epochs=True)
+
+    # Cover 3 epochs and verify every mixture-block's finite items are contiguous in physical space.
+    for m in range(3 * blocks_per_epoch):
+        items = list(await ds.get_batch(list(range(m * bs, m * bs + D))))
+        span = max(items) - min(items)
+        assert span == D - 1, f"block {m}: items {items} span {span}, expected {D-1}"
+        assert min(items) % D == 0, f"block {m}: items {items} should start at a chunk boundary"
+
+
+@pytest.mark.asyncio
+async def test_mixture_dataset_randomize_epochs_bijection_with_tail():
+    """When L is not divisible by D, bijection per epoch is still preserved
+    (locality is partially lost; correctness is not)."""
+    finite_length = 30  # 30 % 4 == 2 — tail of size 2
+    bs = 8
+    D = bs // 2  # = 4
+
+    finite = ListAsyncDataset(list(range(finite_length)))
+    dses = {"finite": finite, "infinite": InfiniteCounterDataset()}
+    weights = {"finite": 0.5, "infinite": 0.5}
+
+    ds = MixtureDataset(dses, weights, block_size=bs, key=key(), randomize_blocks=False, randomize_epochs=True)
+
+    # Read enough mixture-blocks to collect 3 epochs' worth of finite items.
+    needed_items = 3 * finite_length
+    blocks_needed = (needed_items + D - 1) // D + 2
+    visits: list[int] = []
+    for m in range(blocks_needed):
+        visits.extend(await ds.get_batch(list(range(m * bs, m * bs + D))))
+
+    expected = list(range(finite_length))
+    for e in range(3):
+        epoch_visits = visits[e * finite_length : (e + 1) * finite_length]
+        assert sorted(epoch_visits) == expected, f"Epoch {e} is not a permutation of [0, L): {epoch_visits}"
 
 
 @pytest.mark.asyncio
