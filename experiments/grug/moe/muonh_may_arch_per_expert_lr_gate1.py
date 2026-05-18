@@ -127,7 +127,6 @@ def _build_step(
     group_name: str = _GROUP_NAME,
     resource_ram: str | None = None,
     resource_regions: tuple[str, ...] | None = None,
-    resource_preemptible: bool | None = None,
 ) -> ExecutorStep:
     model, base_optimizer, batch_size, num_steps = build_from_heuristic(
         budget=budget,
@@ -149,8 +148,6 @@ def _build_step(
     resource_kwargs = {"ram": resource_ram} if resource_ram is not None else {}
     if resource_regions is not None:
         resource_kwargs["regions"] = list(resource_regions)
-    if resource_preemptible is not None:
-        resource_kwargs["preemptible"] = resource_preemptible
 
     return ExecutorStep(
         name=step_name,

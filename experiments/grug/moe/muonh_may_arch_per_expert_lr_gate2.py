@@ -35,7 +35,6 @@ _GATE2_POINTS: tuple[tuple[int, float], ...] = (
 _GROUP_NAME: str = "muonh-may-arch-per-expert-lr-gate2"
 _GATE2_TPU_RAM: str = "256g"
 _GATE2_TPU_REGIONS: tuple[str, ...] = ("us-east5",)
-_GATE2_TPU_PREEMPTIBLE: bool = False
 
 
 def _build_steps_for_candidates(candidates: tuple[str, ...], run_suffix: str = _RUN_SUFFIX) -> list[ExecutorStep]:
@@ -55,7 +54,6 @@ def _build_steps_for_candidates(candidates: tuple[str, ...], run_suffix: str = _
             group_name=_GROUP_NAME,
             resource_ram=_GATE2_TPU_RAM,
             resource_regions=_GATE2_TPU_REGIONS,
-            resource_preemptible=_GATE2_TPU_PREEMPTIBLE,
         )
         for candidate in candidates
         for d, c in _GATE2_POINTS
