@@ -16,11 +16,12 @@ import argparse
 import logging
 import os
 import random
+import sys
 import textwrap
 
 import numpy as np
 from levanter.store.tree_store import TreeStore
-from marin.utils import fsspec_glob
+from rigging.filesystem import url_to_fs
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
@@ -30,17 +31,38 @@ _DEFAULT_OUTPUT = "gs://marin-eu-west4/datakit/store/v0.1_20260518"
 _TOKENIZER = "marin-community/marin-tokenizer"
 _EXEMPLAR = {"input_ids": np.array([0], dtype=np.int32)}
 _PREVIEW_TOKENS = 200
+_PART_PREFIX = "part-"
 
 
 def _list_part_dirs(cluster_quality_root: str) -> list[str]:
-    """List ``part-NNNNN-of-NNNNN/`` subdirs under a cluster=K/quality=Q/ dir."""
-    return sorted(p.rstrip("/") for p in fsspec_glob(f"{cluster_quality_root}/part-*-of-*"))
+    """Shallowly list completed ``part-NNNNN-of-NNNNN/`` subdirs under cluster_quality_root.
+
+    Uses ``fs.ls(detail=True)`` (one delimited call). ``fsspec_glob`` against
+    gcsfs calls ``_find`` which recursively lists every object under the
+    prefix -- against a near-complete cluster=K/quality=Q/ (~98K parts x
+    several files each) that's a 500K+ object listing per (cluster, quality),
+    which wedges in practice.
+    """
+    fs, _ = url_to_fs(cluster_quality_root)
+    prefix = cluster_quality_root.removeprefix("gs://").rstrip("/")
+    parts: list[str] = []
+    for info in fs.ls(prefix, detail=True):
+        if info.get("type") != "directory":
+            continue
+        bn = os.path.basename(info["name"].rstrip("/"))
+        # skip ``.tmp.<hash>`` directories from in-flight writers
+        if bn.startswith(_PART_PREFIX) and ".tmp." not in bn:
+            parts.append(f"gs://{info['name'].rstrip('/')}")
+    parts.sort()
+    return parts
 
 
 def _open_store(part_dir: str) -> TreeStore | None:
     """Open the Levanter shard cache at part_dir, or return None on failure."""
     try:
-        return TreeStore.open(_EXEMPLAR, part_dir, mode="r", cache_metadata=True)
+        # cache_metadata=False keeps open() from eagerly reading every per-shard
+        # ledger (slow when a part has tens of thousands of shards written).
+        return TreeStore.open(_EXEMPLAR, part_dir, mode="r", cache_metadata=False)
     except Exception as e:
         logger.warning("could not open %s: %s", part_dir, e)
         return None
@@ -71,6 +93,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=_DEFAULT_OUTPUT, help="Store root with cluster=K/quality=Q/ subdirs.")
     parser.add_argument("--per-cluster", type=int, default=10, help="Docs to sample per cluster (split across quality).")
+    parser.add_argument("--cluster", type=int, default=None, help="If set, only sample this cluster_id.")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
@@ -81,13 +104,15 @@ def main() -> None:
     n_quality = 5
     per_quality = max(1, args.per_cluster // n_quality)
 
-    for cluster_id in range(40):
+    cluster_ids = [args.cluster] if args.cluster is not None else range(40)
+    for cluster_id in cluster_ids:
         cluster_root = f"{args.output.rstrip('/')}/cluster={cluster_id}"
         printed = 0
-        print(f"\n=== cluster={cluster_id} ===")
+        print(f"\n=== cluster={cluster_id} ===", flush=True)
         for q in range(n_quality):
             cq_root = f"{cluster_root}/quality={q}"
             parts = _list_part_dirs(cq_root)
+            logger.info("cluster=%d quality=%d: %d completed parts", cluster_id, q, len(parts))
             if not parts:
                 continue
             part_dir = random.choice(parts)
@@ -98,8 +123,9 @@ def main() -> None:
             for tokens in docs:
                 _print_doc_preview(tokenizer, cluster_id, q, part_dir, tokens)
                 printed += 1
+            sys.stdout.flush()
         if printed == 0:
-            print("  (no docs available yet)")
+            print("  (no docs available yet)", flush=True)
 
 
 if __name__ == "__main__":
