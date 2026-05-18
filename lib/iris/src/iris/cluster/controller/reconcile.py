@@ -13,11 +13,11 @@ snapshot and returns a ``WorkerReconcilePlan`` describing:
 The wire-payload types (``DesiredAttempt``, ``AttemptSpec``, etc.) mirror
 the proto shape from the Reconcile RPC but are plain dataclasses.
 
-The Phase-A legacy translators (``legacy_translator_request`` /
-``legacy_translator_response``) live here as the first point where
-plain-dataclass payloads cross into the legacy proto wire. They are
-deleted in Phase D when the ``Reconcile`` RPC becomes the steady-state
-wire.
+The legacy wire translators (``legacy_translator_request`` /
+``legacy_translator_response``) translate between the pure ``Reconcile``
+plan and the legacy ``StartTasks`` / ``PollTasks`` / ``StopTasks`` wires.
+They exist as long as both wires coexist; once only the ``Reconcile`` RPC
+is in use they can be removed.
 
 See spec.md §4.2-4.6 and sub/transitions-split.md for design context.
 """
@@ -68,6 +68,7 @@ class ReconcileRow:
     attempt_state: int
     job_id: JobName
 
+
 # ---------------------------------------------------------------------------
 # StopReason — mirrors the proto enum, but as a StrEnum for type safety
 # ---------------------------------------------------------------------------
@@ -117,16 +118,17 @@ class DesiredAttempt:
 
     Exactly one of ``intent_run`` or ``intent_stop`` is set.
 
-    Phase-B compat fields ``task_id`` and ``attempt_id`` are carried here
-    so the legacy translator can build StartTasks / PollTasks calls without
-    needing to re-look up the row.
+    Compat fields ``task_id`` and ``attempt_id`` are carried alongside
+    ``attempt_uid`` for routing while workers still index by the composite
+    key; the legacy translator uses them to build StartTasks / PollTasks
+    calls without re-looking up the row.
     """
 
     attempt_uid: AttemptUid
     # Exactly one of:
     intent_run: AttemptSpec | None = None
     intent_stop: StopReason | None = None
-    # Phase-B compat:
+    # Routing keys carried on the wire for legacy lookups.
     task_id: str = ""
     attempt_id: int = 0
 
@@ -135,8 +137,8 @@ class DesiredAttempt:
 class AttemptObservation:
     """One observation reported by the worker.
 
-    Mirrors ``Worker.AttemptObservation`` proto. Phase-B compat fields
-    included.
+    Mirrors ``Worker.AttemptObservation`` proto. Carries composite-key
+    compat fields alongside ``attempt_uid``.
     """
 
     attempt_uid: AttemptUid
@@ -145,7 +147,7 @@ class AttemptObservation:
     exit_code: int | None = None
     error: str | None = None
     container_id: str | None = None
-    # Phase-B compat:
+    # Routing keys carried on the wire for legacy lookups.
     task_id: str = ""
     attempt_id_compat: int = 0
 
@@ -348,7 +350,7 @@ def reconcile_worker(inputs: WorkerReconcileInputs) -> WorkerReconcilePlan:
 
 
 # ---------------------------------------------------------------------------
-# Legacy wire translators (Phase A shim)
+# Legacy wire translators (StartTasks / PollTasks / StopTasks)
 # ---------------------------------------------------------------------------
 
 
@@ -367,15 +369,15 @@ def legacy_translator_request(plan: WorkerReconcilePlan, address: str | None) ->
     - ``stop_tasks``: task_id wire strings for each stop-intent entry
       (CANCELLED / PREEMPTED rows).
 
-    Phase-A MISSING quirk: the legacy ``PollTasks`` wire has no ``MISSING``
-    state. When the worker does not return a status for an entry in
-    ``expected_tasks``, the controller receives no observation for it on this
-    tick. The worker learns about the attempt on the next tick when it fetches
-    the spec via ``GetTaskAttemptInfo`` and enqueues it itself, reporting
-    BUILDING via the existing pull path. This preserves today's behavior
-    exactly. The MISSING→FAILED path in §5.3 becomes live only once Phase B
-    lands the ``Reconcile`` RPC.
+    The legacy ``PollTasks`` wire has no ``MISSING`` state: when the worker
+    returns no status for an entry in ``expected_tasks``, the controller
+    receives no observation for it on this tick. The worker learns about the
+    attempt on the next tick when it fetches the spec via
+    ``GetTaskAttemptInfo`` and enqueues it itself, reporting BUILDING via the
+    existing pull path. The MISSING→FAILED spec-loss path is only reachable
+    via the ``Reconcile`` RPC.
     """
+    # TODO(Reconcile-RPC-default): collapse once StartTasks/PollTasks retire (kata 5hzc).
     worker_id = WorkerId(plan.request.worker_id)
     start_tasks: list[job_pb2.RunTaskRequest] = []
     expected_tasks: list[RunningTaskEntry] = []
@@ -429,9 +431,9 @@ def reconcile_request_from_plan(plan: WorkerReconcilePlan) -> worker_pb2.Worker.
       ``AttemptSpec`` (BUILDING/RUNNING rows; worker uses its cached spec).
     - ``intent_stop`` → ``stop`` field with the mapped ``StopReason`` proto.
 
-    The Phase-B compat fields ``task_id`` and ``attempt_id`` on
+    The composite-key compat fields ``task_id`` and ``attempt_id`` on
     ``DesiredAttempt`` are forwarded verbatim so the worker-side handler can
-    resolve the spec from ``GetTaskAttemptInfo`` using the same legacy keys.
+    resolve the spec from ``GetTaskAttemptInfo`` using the same routing keys.
     """
     desired_protos: list[worker_pb2.Worker.DesiredAttempt] = []
     for da in plan.request.desired:
@@ -511,7 +513,7 @@ def legacy_translator_response(
       per update with state / exit_code / error / container_id populated.
       Entries absent from the poll response produce no observation — the
       worker learns about them on the next tick via the existing pull path
-      (Phase-A MISSING quirk; see ``legacy_translator_request`` docstring).
+      (see ``legacy_translator_request`` for the MISSING-state explanation).
 
     ``finished_at`` is not populated because the legacy ``TaskUpdate`` type
     does not carry it; the apply layer fills in the timestamp itself.

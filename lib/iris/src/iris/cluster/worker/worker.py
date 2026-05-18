@@ -149,9 +149,9 @@ class Worker:
 
     # Grace period during which a freshly-submitted task is treated as
     # "expected" by reconciliation, even if it hasn't yet appeared in the
-    # controller's expected_tasks list. Protects against the StartTasks →
-    # PollTasks race where the controller polls before its internal view
-    # catches up with the task it just assigned.
+    # controller's expected_tasks list. Protects against the race where the
+    # worker has just enqueued a task (via PollTasks pull or Reconcile) but
+    # the controller's next poll arrives before its internal view catches up.
     _RECENT_SUBMISSION_GRACE_SECONDS = 30.0
 
     def __init__(
@@ -215,8 +215,8 @@ class Worker:
         # listed it in expected_tasks. See _RECENT_SUBMISSION_GRACE_SECONDS.
         self._recent_submissions: dict[tuple[str, int], float] = {}
         self._lock = threading.Lock()
-        # In-memory spec cache for the Reconcile RPC (Phase B+). Keyed by
-        # (task_id, attempt_id) until Phase C introduces attempt_uid routing.
+        # In-memory spec cache for the Reconcile RPC. Keyed by composite
+        # (task_id, attempt_id); see kata h9r9 for the attempt_uid migration.
         self._spec_cache = SpecCache()
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))

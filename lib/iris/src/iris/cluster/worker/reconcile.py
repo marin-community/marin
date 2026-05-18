@@ -3,9 +3,9 @@
 
 """Worker-side Reconcile RPC handler and SpecCache.
 
-Phase B implementation: handles `ReconcileRequest` / `ReconcileResponse`
-using composite `(task_id, attempt_id)` keys. The `attempt_uid` field is
-empty in Phase B; UID-based routing arrives in Phase C.
+Handles `ReconcileRequest` / `ReconcileResponse` on the worker. Cached
+specs are keyed by composite `(task_id, attempt_id)` while UID routing
+is being rolled out (see kata h9r9).
 
 Design notes:
 - `SpecCache` is in-memory only. A cold worker restart loses the cache;
@@ -29,15 +29,15 @@ from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
-# The composite key used in Phase B before attempt_uid routing lands.
+# Composite cache key used while UID routing is rolling out; see kata h9r9.
 _AttemptKey = tuple[str, int]  # (task_id_wire, attempt_id)
 
 
 class SpecCache:
     """In-memory cache of RunTaskRequest specs for active attempts.
 
-    Keyed by `(task_id_wire, attempt_id)` in Phase B. Phase C migrates to
-    `attempt_uid` as the primary key.
+    Keyed by composite `(task_id_wire, attempt_id)` while UID routing is
+    rolling out; `attempt_uid` becomes the primary key (kata h9r9).
 
     Thread-safe: all mutations are expected to occur under the caller's lock.
     """
