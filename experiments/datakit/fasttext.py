@@ -18,6 +18,12 @@ consumable by :func:`marin.processing.classification.consolidate.consolidate`):
         labels               : list[string]   — all labels in fasttext score order
         scores               : list[float]    — corresponding probabilities
 
+If ``score_target_label`` is passed to :func:`classify_fasttext_to_parquet` or
+:func:`classify_fasttext_step` (binary classifiers, e.g. dolma3-quality with
+``"1"``), the ``attributes`` struct collapses to a single ``high_score: float64``
+field equal to ``P(label == score_target_label)`` — the full label distribution
+is redundant when there are only two classes.
+
 The model itself is materialized once via :func:`prepare_fasttext_model_step` —
 a tiny prep step that pulls the model ``.bin`` from HuggingFace and stages it
 into the step's ``output_path`` on GCS. Workers in the classify step then read
@@ -33,7 +39,6 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
@@ -61,26 +66,6 @@ DEFAULT_MAX_TEXT_CHARS = 100_000
 # replace them with a single space before predicting. Matches the
 # canonical preprocessing every fasttext-on-web-text pipeline applies.
 _NEWLINE_REPLACEMENT = " "
-
-
-@dataclass(frozen=True)
-class FastTextConfig:
-    """Inference-time knobs for the classifier.
-
-    Attributes:
-        max_text_chars: Truncate input text to this many UTF-8 chars before
-            predict. ``None`` disables truncation.
-        k: Top-K labels to keep from each prediction. ``-1`` keeps the full
-            label distribution (recommended so downstream consolidate can
-            apply different thresholds without re-classifying).
-        threshold: Minimum score for a label to be kept. ``0.0`` keeps all
-            labels returned by fasttext (with default ``k=-1`` this is the
-            entire vocabulary).
-    """
-
-    max_text_chars: int | None = DEFAULT_MAX_TEXT_CHARS
-    k: int = -1
-    threshold: float = 0.0
 
 
 class FastTextModel(BaseModel):
@@ -216,7 +201,7 @@ def _strip_label_prefix(label: str) -> str:
     return label.removeprefix(_LABEL_PREFIX)
 
 
-_ATTRIBUTES_STRUCT = pa.struct(
+_FULL_ATTRIBUTES_STRUCT = pa.struct(
     [
         pa.field("top_label", pa.string()),
         pa.field("top_score", pa.float64()),
@@ -225,13 +210,23 @@ _ATTRIBUTES_STRUCT = pa.struct(
     ]
 )
 
-_OUTPUT_SCHEMA = pa.schema(
+_BINARY_ATTRIBUTES_STRUCT = pa.struct(
     [
-        pa.field("id", pa.string()),
-        pa.field("partition_id", pa.int64()),
-        pa.field("attributes", _ATTRIBUTES_STRUCT),
+        pa.field("high_score", pa.float64()),
     ]
 )
+
+
+def _output_schema(score_target_label: str | None) -> pa.Schema:
+    """Pick the output schema based on whether we're collapsing to a single high-score."""
+    attrs = _BINARY_ATTRIBUTES_STRUCT if score_target_label is not None else _FULL_ATTRIBUTES_STRUCT
+    return pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("partition_id", pa.int64()),
+            pa.field("attributes", attrs),
+        ]
+    )
 
 
 def _discover_parquet_partitions(input_path: str) -> list[str]:
@@ -260,7 +255,10 @@ def _make_classifier(
     model_path_str: str,
     output_dir: str,
     text_field: str,
-    cfg: FastTextConfig,
+    max_text_chars: int | None,
+    k: int,
+    threshold: float,
+    score_target_label: str | None,
 ) -> Callable[[Iterator[str], ShardInfo], Iterator[dict[str, Any]]]:
     """Return a ``map_shard`` function that classifies one input parquet → one output parquet."""
 
@@ -301,44 +299,53 @@ def _make_classifier(
                     dst.write(chunk)
         model = fasttext.load_model(local)
 
+        def _empty_attrs() -> dict[str, Any]:
+            if score_target_label is not None:
+                return {"high_score": 0.0}
+            return {"top_label": "", "top_score": 0.0, "labels": [], "scores": []}
+
+        def _attrs_from_prediction(stripped: list[str], probs: Any) -> dict[str, Any]:
+            if score_target_label is not None:
+                # Linear scan is fine: K=-1 typical, but even for full
+                # binary/multi-class outputs this is a 2-24 element list.
+                for label, prob in zip(stripped, probs, strict=False):
+                    if label == score_target_label:
+                        return {"high_score": float(prob)}
+                return {"high_score": 0.0}
+            top_label = stripped[0] if stripped else ""
+            top_score = float(probs[0]) if len(probs) > 0 else 0.0
+            return {
+                "top_label": top_label,
+                "top_score": top_score,
+                "labels": stripped,
+                "scores": [float(p) for p in probs],
+            }
+
+        output_schema = _output_schema(score_target_label)
+
         for input_path in paths:
 
             def rows_for(p: str) -> Iterator[dict[str, Any]]:
                 for record in load_file(p):
                     text = str(record.get(text_field, "") or "")
+                    pid = record.get("partition_id", shard.shard_idx)
                     if not text:
                         counters.increment("classify/empty_text")
-                        yield {
-                            "id": record["id"],
-                            "partition_id": record.get("partition_id", shard.shard_idx),
-                            "attributes": {
-                                "top_label": "",
-                                "top_score": 0.0,
-                                "labels": [],
-                                "scores": [],
-                            },
-                        }
+                        yield {"id": record["id"], "partition_id": pid, "attributes": _empty_attrs()}
                         continue
-                    cleaned = _normalize_for_fasttext(text, cfg.max_text_chars)
-                    labels, probs = model.predict(cleaned, k=cfg.k, threshold=cfg.threshold)
+                    cleaned = _normalize_for_fasttext(text, max_text_chars)
+                    labels, probs = model.predict(cleaned, k=k, threshold=threshold)
                     stripped = [_strip_label_prefix(label) for label in labels]
-                    top_label = stripped[0] if stripped else ""
-                    top_score = float(probs[0]) if len(probs) > 0 else 0.0
                     counters.increment("classify/predicted")
                     yield {
                         "id": record["id"],
-                        "partition_id": record.get("partition_id", shard.shard_idx),
-                        "attributes": {
-                            "top_label": top_label,
-                            "top_score": top_score,
-                            "labels": stripped,
-                            "scores": [float(p) for p in probs],
-                        },
+                        "partition_id": pid,
+                        "attributes": _attrs_from_prediction(stripped, probs),
                     }
 
             out_filename = os.path.basename(input_path)
             out_path = f"{output_dir.rstrip('/')}/{out_filename}"
-            result = write_parquet_file(rows_for(input_path), output_path=out_path, schema=_OUTPUT_SCHEMA)
+            result = write_parquet_file(rows_for(input_path), output_path=out_path, schema=output_schema)
             yield result
 
     return classify_shard
@@ -350,7 +357,10 @@ def classify_fasttext_to_parquet(
     model: FastTextModel,
     output_path: str,
     text_field: str = "text",
-    cfg: FastTextConfig | None = None,
+    max_text_chars: int | None = DEFAULT_MAX_TEXT_CHARS,
+    k: int = -1,
+    threshold: float = 0.0,
+    score_target_label: str | None = None,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> FastTextAttributes:
@@ -367,8 +377,15 @@ def classify_fasttext_to_parquet(
         output_path: Directory for co-partitioned Parquet attributes. One
             output file is written per input partition, preserving filenames.
         text_field: Text column name in the input records.
-        cfg: Inference-time knobs. ``None`` uses :class:`FastTextConfig`'s
-            defaults (full label distribution, 100 KiB truncation).
+        max_text_chars: Truncate input text to this many UTF-8 chars before
+            predict. ``None`` disables truncation.
+        k: Top-K labels to keep from each prediction. ``-1`` keeps the full
+            label distribution.
+        threshold: Minimum score for a label to be kept.
+        score_target_label: If set, collapse output ``attributes`` to a single
+            ``high_score: float64`` = ``P(label == score_target_label)``. Use
+            for binary classifiers; ``None`` keeps the full struct (top_label,
+            top_score, labels, scores).
         worker_resources: Per-shard resource request. Defaults to 2 CPU /
             8 GB RAM, matching the decon mark step.
         max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
@@ -376,7 +393,6 @@ def classify_fasttext_to_parquet(
     Returns:
         :class:`FastTextAttributes` describing the output dataset and counters.
     """
-    cfg = cfg or FastTextConfig()
     input_path = normalized_data.main_output_dir
     files = _discover_parquet_partitions(input_path)
     if not files:
@@ -393,7 +409,17 @@ def classify_fasttext_to_parquet(
     pipeline = (
         Dataset.from_list(files)
         .reshard(num_shards=num_partitions)
-        .map_shard(_make_classifier(model.model_path, output_path, text_field, cfg))
+        .map_shard(
+            _make_classifier(
+                model.model_path,
+                output_path,
+                text_field,
+                max_text_chars=max_text_chars,
+                k=k,
+                threshold=threshold,
+                score_target_label=score_target_label,
+            )
+        )
     )
 
     resources = worker_resources or ResourceConfig(cpu=2, ram="8g")
@@ -456,6 +482,7 @@ def classify_fasttext_step(
     max_text_chars: int | None = DEFAULT_MAX_TEXT_CHARS,
     k: int = -1,
     threshold: float = 0.0,
+    score_target_label: str | None = None,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     output_path_prefix: str | None = None,
@@ -473,6 +500,10 @@ def classify_fasttext_step(
             ``None`` disables truncation.
         k: Top-K labels to keep. ``-1`` keeps the full distribution.
         threshold: Minimum probability for a label to be kept.
+        score_target_label: Collapse the output attributes to a single
+            ``high_score: float64`` equal to ``P(label == score_target_label)``.
+            Use for binary classifiers (e.g. dolma3-quality, ``"1"``). ``None``
+            keeps the full ``{top_label, top_score, labels, scores}`` struct.
         worker_resources, max_workers: Zephyr execution knobs.
         output_path_prefix, override_output_path: StepSpec routing.
     """
@@ -482,6 +513,11 @@ def classify_fasttext_step(
         "k": k,
         "threshold": threshold,
     }
+    # Only include when set so the existing full-distribution callers
+    # (weborganizer topic) keep their cache key — adding a ``None`` here
+    # would re-hash and force a re-classify of every already-classified source.
+    if score_target_label is not None:
+        hash_attrs["score_target_label"] = score_target_label
     return StepSpec(
         name=name,
         fn=lambda output_path: classify_fasttext_to_parquet(
@@ -489,7 +525,10 @@ def classify_fasttext_step(
             model=Artifact.from_path(model_step, FastTextModel),
             output_path=output_path,
             text_field=text_field,
-            cfg=FastTextConfig(max_text_chars=max_text_chars, k=k, threshold=threshold),
+            max_text_chars=max_text_chars,
+            k=k,
+            threshold=threshold,
+            score_target_label=score_target_label,
             worker_resources=worker_resources,
             max_workers=max_workers,
         ),
