@@ -22,7 +22,10 @@ import logging
 import threading
 from typing import Protocol
 
+from iris.cluster.worker.env_probe import check_worker_health
+from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.rpc import job_pb2, worker_pb2
+from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
 
@@ -104,16 +107,7 @@ def _build_observation(
     task: object,
     terminal_states: frozenset,
 ) -> worker_pb2.Worker.AttemptObservation:
-    """Build an AttemptObservation from a local TaskAttempt.
-
-    `task` is typed as `object` here because importing `TaskAttempt` would
-    create a dependency on task_attempt.py from this module, coupling the
-    handler to the full attempt implementation. We duck-type the access to
-    the fields we actually need.
-    """
-    from iris.cluster.worker.task_attempt import TaskAttempt  # local import to avoid circular dep
-    from iris.time_proto import timestamp_to_proto
-
+    """Build an AttemptObservation from a local TaskAttempt."""
     assert isinstance(task, TaskAttempt)
 
     state = task.status
@@ -153,8 +147,6 @@ def handle_reconcile(
         Exceptions propagate; Connect's error layer converts them to wire errors.
         No defensive try/except here — let the caller's error handler fire.
     """
-    from iris.cluster.worker.env_probe import check_worker_health
-
     # ── Step 1: Process each DesiredAttempt ───────────────────────────────────
     # Desired keys with intent=run. Used to detect MISSING attempts (those
     # the controller wants running but the worker has no record of and no spec).
