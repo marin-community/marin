@@ -79,9 +79,9 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     Scans each region for permanent and temporary checkpoint subdirectories
     with metadata.json, reads the step number. It checks the current output
     path and prior sibling output hashes for the same run id so small launcher
-    fixes can still resume existing work. Returns None if the current output
-    path already has the best checkpoint, letting the trainer's normal
-    checkpoint discovery handle it.
+    fixes can still resume existing work. Returns the explicit checkpoint root
+    for the newest checkpoint so retries do not rely on a narrower default
+    search path.
     """
     import json
 
@@ -93,7 +93,6 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     parts = output_path.split("/", 3)
     if len(parts) < 4:
         return None
-    local_bucket = parts[2]
     suffix = parts[3]
     checkpoint_suffix = os.path.join(suffix, DEFAULT_CHECKPOINTS_PATH)
     run_parent = os.path.dirname(suffix)
@@ -104,7 +103,6 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
     fs = gcsfs.GCSFileSystem()
     best_step = -1
     best_path: str | None = None
-    current_step = -1
     seen_roots: set[str] = set()
 
     for bucket in REGION_TO_DATA_BUCKET.values():
@@ -117,9 +115,9 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
             checkpoint_suffix,
         )
 
-        root_candidates: list[tuple[str, bool]] = [
-            (f"{bucket}/{checkpoint_suffix}", True),
-            (temp_checkpoint_suffix, True),
+        root_candidates: list[str] = [
+            f"{bucket}/{checkpoint_suffix}",
+            temp_checkpoint_suffix,
         ]
         if run_id_prefix:
             glob_patterns = [
@@ -137,11 +135,11 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
             ]
             for pattern in glob_patterns:
                 try:
-                    root_candidates.extend((root, False) for root in fs.glob(pattern))
+                    root_candidates.extend(fs.glob(pattern))
                 except FileNotFoundError:
                     continue
 
-        for candidate, is_current_root in root_candidates:
+        for candidate in root_candidates:
             if candidate in seen_roots:
                 continue
             seen_roots.add(candidate)
@@ -158,20 +156,13 @@ def _find_checkpoint_across_regions(output_path: str) -> str | None:
                     has_data = fs.exists(f"{subdir}/manifest.ocdbt") or fs.exists(f"{subdir}/d")
                     if not has_data:
                         continue
-                    if is_current_root and bucket == local_bucket:
-                        current_step = max(current_step, step)
                     if step > best_step:
                         best_step = step
                         best_path = f"gs://{candidate}"
                 except Exception:
                     continue
 
-    # Only return an explicit path if the best checkpoint is outside the
-    # current output roots. Otherwise let the trainer discover the current
-    # permanent and temporary checkpoints itself.
-    if best_step > current_step and best_path:
-        return best_path
-    return None
+    return best_path
 
 
 def _resolve_run_id(default_run_id: str) -> str:

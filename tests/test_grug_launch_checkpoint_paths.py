@@ -134,3 +134,55 @@ def test_find_checkpoint_across_regions_finds_prior_output_hash(monkeypatch):
     )
 
     assert _find_checkpoint_across_regions(output_path) == f"gs://{prior_root}"
+
+
+def test_find_checkpoint_across_regions_prefers_current_temp_over_prior_permanent(monkeypatch):
+    output_path = "gs://marin-us-east5/grug/moe-trial/example-run-b689a7"
+    current_temp_root = (
+        "marin-us-east5/tmp/ttl=14d/checkpoints-temp/" "marin-us-east5/grug/moe-trial/example-run-b689a7/checkpoints"
+    )
+    current_temp_step = f"{current_temp_root}/step-6318"
+    prior_root = "marin-us-east5/grug/moe-trial/example-run-88e57d/checkpoints"
+    prior_step = f"{prior_root}/step-2000"
+
+    class FakeGCSFileSystem:
+        def glob(self, pattern: str):
+            if pattern == "marin-us-east5/grug/moe-trial/example-run-*/checkpoints":
+                return [prior_root]
+            if pattern == (
+                "marin-us-east5/tmp/ttl=14d/checkpoints-temp/" "marin-us-east5/grug/moe-trial/example-run-*/checkpoints"
+            ):
+                return [current_temp_root]
+            return []
+
+        def ls(self, path: str):
+            if path == current_temp_root:
+                return [current_temp_step]
+            if path == prior_root:
+                return [prior_step]
+            raise FileNotFoundError(path)
+
+        def exists(self, path: str) -> bool:
+            return path in {
+                f"{current_temp_step}/metadata.json",
+                f"{current_temp_step}/manifest.ocdbt",
+                f"{prior_step}/metadata.json",
+                f"{prior_step}/manifest.ocdbt",
+            }
+
+        def open(self, path: str):
+            if path == f"{current_temp_step}/metadata.json":
+                return io.StringIO(json.dumps({"step": 6318}))
+            if path == f"{prior_step}/metadata.json":
+                return io.StringIO(json.dumps({"step": 2000}))
+            raise FileNotFoundError(path)
+
+    monkeypatch.setattr("gcsfs.GCSFileSystem", FakeGCSFileSystem)
+    monkeypatch.setattr(
+        "rigging.filesystem.REGION_TO_DATA_BUCKET",
+        {
+            "us-east5": "marin-us-east5",
+        },
+    )
+
+    assert _find_checkpoint_across_regions(output_path) == f"gs://{current_temp_root}"
