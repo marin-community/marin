@@ -265,6 +265,23 @@ def _make_classifier(
     """Return a ``map_shard`` function that classifies one input parquet → one output parquet."""
 
     def classify_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
+        # fasttext-wheel 0.9.2 calls ``np.array(..., copy=False)`` inside
+        # ``FastText.predict``; NumPy 2.x rejects ``copy=False`` (must use
+        # ``copy=None``). Patch before importing fasttext so the predict path
+        # inherits the shim. Idempotent across workers in the same process.
+        import numpy as np
+
+        if not getattr(np, "_fasttext_copy_compat", False):
+            _orig_np_array = np.array
+
+            def _np_array_copy_compat(*args: Any, **kwargs: Any) -> Any:
+                if kwargs.get("copy") is False:
+                    kwargs["copy"] = None
+                return _orig_np_array(*args, **kwargs)
+
+            np.array = _np_array_copy_compat
+            np._fasttext_copy_compat = True
+
         # Local import so workers without fasttext (e.g. the driver) don't
         # crash at module-import time. fasttext is a heavyweight C-extension
         # dep; only the classify workers need it.
