@@ -10,18 +10,6 @@ from levanter.dpo import ReferenceEvalCacheConfig
 from levanter.main.train_dpo import DpoReferenceConfig, SeparateReferenceConfig
 from levanter.schedule import IntSchedule
 
-# DPO runs two models (policy + reference) but eval doesn't need gradients/optimizer,
-# so we can fit more examples per device during eval than training.
-# Keyed by TPU variant string from ResourceConfig.
-DPO_EVAL_PARALLELISM: dict[str, int] = {
-    "v5p-8": 16,
-    "v5p-16": 16,
-    "v5p-32": 32,
-    "v5p-64": 32,
-    "v5p-128": 32,
-    "v5p-256": 64,
-}
-
 
 @dataclass(frozen=True)
 class SimpleDPOConfig:
