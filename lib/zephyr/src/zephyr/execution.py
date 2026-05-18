@@ -217,6 +217,31 @@ def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
 
 
+def _push_iris_task_status(
+    rate_limiter: RateLimiter,
+    build_md: Callable[[], tuple[str, str]],
+) -> None:
+    """Push ``(detail, summary)`` markdown to the active Iris task's status, if any.
+
+    No-op when not running inside an Iris task or when ``rate_limiter`` declines
+    this tick. ``build_md`` is invoked lazily after the gating checks so the
+    formatting work is skipped on the no-op path.
+    """
+    iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
+    if iris_client is None:
+        return
+    job_info = get_job_info()
+    if job_info is None:
+        return
+    if not rate_limiter.should_run():
+        return
+    detail_md, summary_md = build_md()
+    try:
+        iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
+    except Exception:
+        logger.warning("Failed to report task status text to Iris controller", exc_info=True)
+
+
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
     """Remove all chunk files for an execution."""
     exec_dir = f"{prefix}/{execution_id}"
@@ -571,63 +596,52 @@ class ZephyrCoordinator:
 
     def _report_task_stats(self) -> None:
         """Push task status text to the Iris coordinator if available."""
-        iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
-        if iris_client is None:
-            return
 
-        job_info = get_job_info()
-        if job_info is None:
-            return
+        def build_md() -> tuple[str, str]:
+            with self._lock:
+                current_stage_index = self._current_stage_index
+                stage_name = self._stage_name
+                plan_stages = self._plan_stages
+                completed = self._completed_shards
+                total_shards = self._total_shards
+                in_flight = len(self._in_flight)
+                queued = len(self._task_queue)
+                stage_start = self._stage_monotonic_start
 
-        if not self._task_stats_limiter.should_run():
-            return
+            totals = self.get_counters()
+            elapsed = time.monotonic() - (stage_start or time.monotonic())
+            throughput = _stage_throughput(totals, stage_name, elapsed)
 
-        with self._lock:
-            current_stage_index = self._current_stage_index
-            stage_name = self._stage_name
-            plan_stages = self._plan_stages
-            completed = self._completed_shards
-            total_shards = self._total_shards
-            in_flight = len(self._in_flight)
-            queued = len(self._task_queue)
-            stage_start = self._stage_monotonic_start
+            lines = ["**Stages**\n"]
+            for idx, stage in enumerate(plan_stages):
+                stage_desc = _get_stage_description(stage)
+                bullet = f"- **{stage_desc}**" if idx == current_stage_index else f"- {stage_desc}"
+                lines.append(f"{bullet}")
 
-        totals = self.get_counters()
-        elapsed = time.monotonic() - (stage_start or time.monotonic())
-        throughput = _stage_throughput(totals, stage_name, elapsed)
-
-        lines = ["**Stages**\n"]
-        for idx, stage in enumerate(plan_stages):
-            stage_desc = _get_stage_description(stage)
-            bullet = f"- **{stage_desc}**" if idx == current_stage_index else f"- {stage_desc}"
-            lines.append(f"{bullet}")
-
-        pct = int(100 * completed / total_shards) if total_shards > 0 else 0
-        lines.append(
-            f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
-        )
-        if throughput is not None:
-            items, bytes_processed, item_rate, byte_rate = throughput
+            pct = int(100 * completed / total_shards) if total_shards > 0 else 0
             lines.append(
-                f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
-                f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
+                f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
             )
+            if throughput is not None:
+                items, bytes_processed, item_rate, byte_rate = throughput
+                lines.append(
+                    f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
+                    f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
+                )
 
-        detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
+            detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
 
-        current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
-        summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
-        summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
-        if throughput is not None:
-            _, _, item_rate, byte_rate = throughput
-            summary_lines.append(f"{_format_count(item_rate)} items/s")
-            summary_lines.append(f"{_format_bytes(byte_rate)}/s")
-        summary_md = "  \n".join(summary_lines)
+            current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
+            summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
+            summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
+            if throughput is not None:
+                _, _, item_rate, byte_rate = throughput
+                summary_lines.append(f"{_format_count(item_rate)} items/s")
+                summary_lines.append(f"{_format_bytes(byte_rate)}/s")
+            summary_md = "  \n".join(summary_lines)
+            return detail_md, summary_md
 
-        try:
-            iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
-        except Exception:
-            logger.warning("Failed to report task status text to Iris controller", exc_info=True)
+        _push_iris_task_status(self._task_stats_limiter, build_md)
 
     def _log_status(self) -> None:
         with self._lock:
@@ -1266,21 +1280,12 @@ class ZephyrWorker:
 
     def _report_worker_iris_status(self) -> None:
         """Push worker status text to Iris for UI display. Called on each heartbeat."""
-        iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
-        if iris_client is None:
-            return
-        job_info = get_job_info()
-        if job_info is None:
-            return
 
-        if not self._iris_status_limiter.should_run():
-            return
+        def build_md() -> tuple[str, str]:
+            task = self._current_task
+            if task is None:
+                return "idle", "idle"
 
-        task = self._current_task
-        if task is None:
-            summary_md = "idle"
-            detail_md = "idle"
-        else:
             stage_name = task.stage_name
             shard_idx = task.shard_idx
             total_shards = task.total_shards
@@ -1299,12 +1304,9 @@ class ZephyrWorker:
                     f"**Items**: {_format_count(items)} ({_format_count(item_rate)}/s)",
                     f"**Throughput**: {_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)",
                 ]
-            detail_md = "  \n".join(detail_lines)
+            return "  \n".join(detail_lines), summary_md
 
-        try:
-            iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
-        except Exception:
-            logger.warning("Failed to report worker status text to Iris controller", exc_info=True)
+        _push_iris_task_status(self._iris_status_limiter, build_md)
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Snapshot the running task's counters, or None when idle/unchanged.
