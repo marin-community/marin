@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""may_arch + 1pct-noclip + routing-renorm X=2.5 at d1024.
+"""may_arch + 1pct-noclip + routing-renorm X in {2.0, 2.5, 3.0} at d1024.
 
-Confirmation sweep for the d768 winner from #5797 (X=2.5, Delta -0.0081
-macro, ~5.2% eq-tps speedup). Targets d1024 / 9.00e18 FLOPs.
+Confirmation sweep for the d768 winners from #5797 (X=2.5 best at
+Delta -0.0081; X=3.0 / X=2.0 tied for second cluster). Targets d1024 /
+9.00e18 FLOPs.
 
 Submit on us-east5-a:
 
@@ -32,7 +33,7 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _HIDDEN_DIM: int = 1024
 _BUDGET: float = 9.00e18
-_X_VALUE: float = 2.5
+_X_VALUES: tuple[float, ...] = (2.0, 2.5, 3.0)
 
 _WARMUP_FRACTION: float = 0.01
 _NUM_EXPERTS: int = 256
@@ -49,7 +50,7 @@ def _format_x(x: float) -> str:
     return f"{x:.1f}".replace(".", "p")
 
 
-def _build_step() -> ExecutorStep:
+def _build_step(x_value: float) -> ExecutorStep:
     model, base_optimizer, batch_size, num_steps = build_from_heuristic(
         budget=_BUDGET,
         hidden_dim=_HIDDEN_DIM,
@@ -62,7 +63,7 @@ def _build_step() -> ExecutorStep:
         use_partial_rope=True,
         last_layer_pko=True,
         router_z_loss_coef=0.0,
-        routing_renorm_sum=_X_VALUE,
+        routing_renorm_sum=x_value,
     )
     optimizer = GrugMoeMuonHMayArchGNMuonHConfig(
         learning_rate=base_optimizer.learning_rate,
@@ -78,7 +79,7 @@ def _build_step() -> ExecutorStep:
     )
 
     run_id = (
-        f"muonh-may-arch-1pct-routing-renorm-x{_format_x(_X_VALUE)}-{_RUN_SUFFIX}-"
+        f"muonh-may-arch-1pct-routing-renorm-x{_format_x(x_value)}-{_RUN_SUFFIX}-"
         f"d{_HIDDEN_DIM}-{_format_budget(_BUDGET)}"
     )
     step_name = f"grug/muonh_may_arch_1pct_routing_renorm_sweep/{run_id}"
@@ -103,7 +104,7 @@ def _build_step() -> ExecutorStep:
                     "moe",
                     "muonh_may_arch_1pct_routing_renorm_sweep",
                     f"d{_HIDDEN_DIM}",
-                    f"x{_format_x(_X_VALUE)}",
+                    f"x{_format_x(x_value)}",
                 ],
                 group=_GROUP_NAME,
                 name=None,
@@ -131,10 +132,11 @@ def _build_step() -> ExecutorStep:
 
 
 if __name__ == "__main__":
+    steps = [_build_step(x) for x in _X_VALUES]
     executor_main(
-        steps=[_build_step()],
+        steps=steps,
         description=(
-            f"MoE may_arch + 1pct-noclip + routing-renorm X={_X_VALUE} at d{_HIDDEN_DIM} "
+            f"MoE may_arch + 1pct-noclip + routing-renorm X in {list(_X_VALUES)} at d{_HIDDEN_DIM} "
             f"(run_suffix={_RUN_SUFFIX!r})."
         ),
     )
