@@ -7,7 +7,6 @@ import logging
 import math
 import os
 import urllib.parse
-from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TypeVar, cast

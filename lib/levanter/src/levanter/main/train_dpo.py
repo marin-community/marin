@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Optional, Union, cast
+from typing import Any, Callable, Literal, Optional, cast
 
 import draccus
 import equinox as eqx
