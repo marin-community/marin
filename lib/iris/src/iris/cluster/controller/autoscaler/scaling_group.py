@@ -131,11 +131,11 @@ class SliceState:
     quiet_since: Timestamp | None = None
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     worker_ids: list[str] = field(default_factory=list)
-    # worker_id -> reachable host:port endpoint. Populated at READY transition
+    # worker_id -> reachable http://host:port URL. Populated at READY transition
     # from the slice handle's worker info. Empty after a controller restart for
     # already-READY slices — the health probe lazy-fetches via
     # handle.describe() in that case. Memory-only.
-    worker_addresses: dict[str, str] = field(default_factory=dict)
+    worker_urls: dict[str, str] = field(default_factory=dict)
     # worker_id -> consecutive /health probe failures since the last
     # success. Reset on a healthy response; once any worker crosses
     # PING_FAILURE_THRESHOLD the slice is terminated. Memory-only.
@@ -555,13 +555,13 @@ class ScalingGroup:
         self,
         slice_id: str,
         worker_ids: list[str],
-        worker_addresses: dict[str, str] | None = None,
+        worker_urls: dict[str, str] | None = None,
         timestamp: Timestamp | None = None,
     ) -> None:
         """Mark a slice READY with its worker IDs. ``quiet_since`` is left None so the next
         autoscaler tick decides idle/active afresh.
 
-        ``worker_addresses`` (worker_id -> host:port endpoint) seeds the slice
+        ``worker_urls`` (worker_id -> http://host:port URL) seeds the slice
         health probe so it doesn't need to call ``handle.describe()`` on the
         first tick. Optional: tests that don't exercise the probe path can omit
         it, and the probe will lazy-fetch from the handle.
@@ -572,7 +572,7 @@ class ScalingGroup:
             if state is not None:
                 state.lifecycle = SliceLifecycleState.READY
                 state.worker_ids = worker_ids
-                state.worker_addresses = dict(worker_addresses or {})
+                state.worker_urls = dict(worker_urls or {})
                 state.ping_failures = {}
                 state.quiet_since = None
         if state is not None:
@@ -743,24 +743,24 @@ class ScalingGroup:
     def ready_slice_probe_targets(self) -> list[tuple[str, SliceHandle, dict[str, str]]]:
         """Snapshot READY slices for the health probe.
 
-        Returns ``(slice_id, handle, worker_addresses_copy)`` tuples. Addresses
-        may be empty (e.g. on a controller restart for a checkpointed READY
-        slice) — callers should lazy-fetch via ``handle.describe()`` and
-        publish back via :meth:`set_worker_addresses`.
+        Returns ``(slice_id, handle, worker_urls_copy)`` tuples. URLs may be
+        empty (e.g. on a controller restart for a checkpointed READY slice) —
+        callers should lazy-fetch via ``handle.describe()`` and publish back
+        via :meth:`set_worker_urls`.
         """
         with self._slices_lock:
             return [
-                (slice_id, state.handle, dict(state.worker_addresses))
+                (slice_id, state.handle, dict(state.worker_urls))
                 for slice_id, state in self._slices.items()
                 if state.lifecycle == SliceLifecycleState.READY
             ]
 
-    def set_worker_addresses(self, slice_id: str, worker_addresses: dict[str, str]) -> None:
-        """Publish freshly-resolved addresses (typically from handle.describe()) back to state."""
+    def set_worker_urls(self, slice_id: str, worker_urls: dict[str, str]) -> None:
+        """Publish freshly-resolved worker URLs (typically from handle.describe()) back to state."""
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
-                state.worker_addresses = dict(worker_addresses)
+                state.worker_urls = dict(worker_urls)
 
     def record_health_probe_result(self, slice_id: str, worker_id: str, healthy: bool) -> int:
         """Update the per-worker ping_failures counter and return the new count.

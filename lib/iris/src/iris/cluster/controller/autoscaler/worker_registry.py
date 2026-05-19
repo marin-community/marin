@@ -22,9 +22,9 @@ from iris.rpc import vm_pb2
 class _RestoredWorkerHandle:
     """Minimal handle placeholder used for restored tracked workers."""
 
-    def __init__(self, worker_id: str, internal_address: str) -> None:
+    def __init__(self, worker_id: str, address: str) -> None:
         self._worker_id = worker_id
-        self._internal_address = internal_address
+        self._address = address  # host:port, as self-reported by the worker at registration
 
     @property
     def worker_id(self) -> str:
@@ -36,11 +36,11 @@ class _RestoredWorkerHandle:
 
     @property
     def internal_address(self) -> str:
-        return self._internal_address
+        return self._address.rpartition(":")[0] or self._address
 
     @property
-    def port(self) -> int | None:
-        return None
+    def worker_url(self) -> str:
+        return f"http://{self._address}" if self._address else ""
 
     @property
     def external_address(self) -> str | None:
@@ -169,7 +169,7 @@ def restore_tracked_workers(rows: list[TrackedWorkerRow]) -> dict[str, TrackedWo
 
     workers: dict[str, TrackedWorker] = {}
     for row in rows:
-        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=row.address)
+        handle = _RestoredWorkerHandle(worker_id=row.worker_id, address=row.address)
         workers[row.worker_id] = TrackedWorker(
             worker_id=row.worker_id,
             slice_id=row.slice_id,

@@ -48,6 +48,7 @@ def create_provider_bundle(
 
     which = platform_config.WhichOneof("platform")
     label_prefix = platform_config.label_prefix or "iris"
+    worker_port = cluster_config.defaults.worker.port if cluster_config else 0
 
     if which == "gcp":
         if not platform_config.gcp.project_id:
@@ -55,6 +56,7 @@ def create_provider_bundle(
         worker_provider = GcpWorkerProvider(
             gcp_config=platform_config.gcp,
             label_prefix=label_prefix,
+            worker_port=worker_port,
             ssh_config=ssh_config,
         )
         return ProviderBundle(
@@ -72,6 +74,7 @@ def create_provider_bundle(
     if which == "manual":
         worker_provider = ManualWorkerProvider(
             label_prefix=label_prefix,
+            worker_port=worker_port,
             ssh_config=ssh_config,
         )
         return ProviderBundle(
@@ -85,6 +88,7 @@ def create_provider_bundle(
         worker_provider = GcpWorkerProvider(
             gcp_config=local_gcp_config,
             label_prefix=label_prefix,
+            worker_port=worker_port,
             gcp_service=gcp_service,
         )
         return ProviderBundle(
