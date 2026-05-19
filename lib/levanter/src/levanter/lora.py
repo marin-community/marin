@@ -478,6 +478,7 @@ def save_peft_checkpoint_callback(
     base_model_name_or_path,
     tokenizer: Optional[PreTrainedTokenizerBase | MarinTokenizer] = None,
     upload_to_hf: Optional[Union[bool, str, RepoRef]] = False,
+    model_getter: Optional[Callable[[StepInfo], PyTree]] = None,
     **hf_upload_kwargs,
 ):
     """
@@ -505,9 +506,10 @@ def save_peft_checkpoint_callback(
             my_upload_kwargs = hf_upload_kwargs
 
         logger.info(f"Saving PEFT checkpoint for step {step.step} to {base_path}")
+        model = model_getter(step) if model_getter is not None else step.eval_model
 
         save_peft_pretrained(
-            step.eval_model,
+            model,
             config,
             base_model_name_or_path,
             os.path.join(base_path, f"step-{step.step}"),

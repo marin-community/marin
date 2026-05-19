@@ -130,6 +130,27 @@ def test_update_config_to_use_out_path_does_not_enable_adapter_hf_export_without
     assert updated.train_config.merged_hf_save_path is None
 
 
+def test_update_config_to_use_out_path_routes_adapter_hf_export_to_peft(trainer_config):
+    with patch(
+        "marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run"
+    ):
+        config = TrainDpoOnPodConfig(
+            train_config=TrainDpoConfig(
+                trainer=dataclasses.replace(trainer_config, num_train_steps=1),
+                adapter=LoraAdaptationConfig(),
+                hf_save_steps=10,
+            ),
+            resources=ResourceConfig.with_tpu("v4-8"),
+            output_path="gs://bucket/checkpoints/dpo/example-run",
+        )
+
+        updated = _update_config_to_use_out_path(config)
+
+    assert updated.train_config.hf_save_path is None
+    assert updated.train_config.peft_save_path == "gs://bucket/checkpoints/dpo/example-run/hf"
+    assert updated.train_config.merged_hf_save_path is None
+
+
 def test_recursive_path_checking(trainer_config):
     """Paths are checked recursively in nested structures."""
     with (

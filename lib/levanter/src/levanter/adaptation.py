@@ -92,7 +92,7 @@ def _parse_hf_save_dtype(hf_save_dtype: str | None) -> jnp.dtype | None:
         return None
 
 
-def _policy_model_for_merged_lora_export(model: DpoModel | LmHeadModel) -> LmHeadModel:
+def _policy_model_for_adapter_export(model: DpoModel | LmHeadModel) -> LmHeadModel:
     if isinstance(model, DpoModel):
         return model.policy
     return model
@@ -195,6 +195,7 @@ class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
                     converter.reference_checkpoint,
                     tokenizer,
                     export.peft_hf_upload,
+                    model_getter=lambda step: _policy_model_for_adapter_export(step.eval_model),
                 ),
                 every=export.hf_save_steps,
             )
@@ -207,7 +208,7 @@ class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
                     converter,
                     export.merged_hf_upload,
                     generation_config=export.generation_config,
-                    model_getter=lambda step: _policy_model_for_merged_lora_export(step.eval_model),
+                    model_getter=lambda step: _policy_model_for_adapter_export(step.eval_model),
                 ),
                 every=export.hf_save_steps,
             )
