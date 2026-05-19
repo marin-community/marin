@@ -41,14 +41,40 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
+import aiofiles
+import contree_sdk.sdk.managers.files._base as _files_base
 import pyarrow as pa
 from contree_sdk._internals.utils.wrapper import coro_sync
+from datasets import load_dataset
 from fray import ResourceConfig
 from rigging.filesystem import marin_prefix
-from datasets import load_dataset
 from zephyr import Dataset, ZephyrContext, counters
 
 logger = logging.getLogger(__name__)
+
+
+# The contree-sdk 0.3.0 native `_upload_file` queries `GET /v1/files?sha256=`
+# expecting a bare `UploadedFile` response, but the server returns
+# `{"files": [...]}`. cattrs raises a non-NotFoundError validation error that
+# the SDK's `with suppress(NotFoundError)` does not catch, crashing every
+# upload. Bypass the broken cache path and always upload fresh.
+#
+# Applied via `_ensure_sdk_patched()` from worker entry points because fray
+# pickles individual functions and does not re-execute module-level code in
+# worker subprocesses.
+async def _upload_file_always_upload(self, local_path):
+    async with aiofiles.open(local_path, "rb") as f:
+        return await self._client._api.upload_file(f)
+
+
+def _ensure_sdk_patched() -> None:
+    if getattr(_files_base._FilesBaseManager, "_marin_upload_patched", False):
+        return
+    _files_base._FilesBaseManager._upload_file = _upload_file_always_upload
+    _files_base._FilesBaseManager._marin_upload_patched = True
+
+
+_ensure_sdk_patched()
 
 PYTRACER_DIR = Path(__file__).resolve().parent / "pytracer"
 TRACER_MOUNT = "/pytracer"
@@ -177,7 +203,10 @@ _CLIENT_CACHE: dict[int, object] = {}
 
 
 def _client():
+    _ensure_sdk_patched()
     from contree_sdk import ContreeSync
+    from contree_sdk.auth import JWTAuth
+    from contree_sdk.config import ContreeConfig
 
     pid = os.getpid()
     client = _CLIENT_CACHE.get(pid)
@@ -186,7 +215,8 @@ def _client():
         token = os.environ.get("CONTREE_TOKEN")
         if not base_url or not token:
             raise RuntimeError("CONTREE_BASE_URL and CONTREE_TOKEN must be set in the worker env")
-        client = ContreeSync(base_url=base_url, token=token)
+        config = ContreeConfig(auth=JWTAuth(token=token, base_url=base_url))
+        client = ContreeSync(config=config)
         _CLIENT_CACHE[pid] = client
     return client
 
