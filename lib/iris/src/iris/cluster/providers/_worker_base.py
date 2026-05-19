@@ -60,6 +60,10 @@ class RemoteExecWorkerBase:
         return self._internal_address
 
     @property
+    def port(self) -> int | None:
+        return None
+
+    @property
     def external_address(self) -> str | None:
         return self._external_address
 

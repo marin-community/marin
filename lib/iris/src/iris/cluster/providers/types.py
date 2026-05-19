@@ -222,7 +222,15 @@ class RemoteWorkerHandle(Protocol):
 
     @property
     def internal_address(self) -> str:
-        """Internal/private IP address for intra-cluster communication."""
+        """Internal/private IP address (host only, no port) for intra-cluster communication."""
+        ...
+
+    @property
+    def port(self) -> int | None:
+        """RPC port, or None when the worker serves on the cluster-configured port.
+
+        Only providers that auto-assign ports per worker (LOCAL) report this.
+        """
         ...
 
     @property

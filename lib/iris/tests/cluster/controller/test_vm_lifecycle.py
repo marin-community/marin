@@ -89,6 +89,10 @@ class FakeWorkerHandle:
         return self._internal_address
 
     @property
+    def port(self) -> int | None:
+        return None
+
+    @property
     def external_address(self) -> str | None:
         return None
 

@@ -2524,6 +2524,7 @@ class Controller:
 
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
+        self._autoscaler.probe_health()
         with self._db.read_snapshot() as tx:
             workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         demand_entries = compute_demand_entries(
