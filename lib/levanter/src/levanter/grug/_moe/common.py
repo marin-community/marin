@@ -24,8 +24,7 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "scatter",  # Single-process grouped GMM with scatter-add combine.
-    "sonic_xla",  # Single-process Sonic-style metadata/combine in JAX/XLA.
-    "sonic_xla_interleaved",  # Sonic-style W13 layout plus custom-VJP down/gather.
+    "sonic",  # Single-process raw Sonic Triton gather/combine backend.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all")
@@ -33,11 +32,8 @@ _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all")
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
-    "sonic_xla",
-    "sonic_xla_interleaved",
+    "sonic",
 )
-_INTERLEAVED_W13_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved",)
-_CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved",)
 
 _CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
 _CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
@@ -69,19 +65,6 @@ def resolve_moe_implementation(implementation: MoeImplementation | str | None) -
         valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
         raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
     return cast(MoeImplementation, implementation)
-
-
-def moe_implementation_uses_interleaved_w13(
-    implementation: MoeImplementation | str | None,
-) -> bool:
-    return resolve_moe_implementation(implementation) in _INTERLEAVED_W13_MOE_IMPLEMENTATIONS
-
-
-def interleave_moe_w13(w_gate: jax.Array, w_up: jax.Array) -> jax.Array:
-    """Pack concat-style gate/up expert weights into Sonic's interleaved GLU layout."""
-    if w_gate.shape != w_up.shape:
-        raise ValueError(f"w_gate and w_up must have the same shape, got {w_gate.shape} vs {w_up.shape}")
-    return jnp.stack((w_gate, w_up), axis=-1).reshape(*w_gate.shape[:-1], 2 * w_gate.shape[-1])
 
 
 def split_moe_w13_output(
@@ -156,21 +139,6 @@ def _prepare_moe_dispatch_indices_with_assignment_ids(
 
     group_sizes = jnp.bincount(expert_ids, length=num_experts).astype(jnp.int32)
     return token_ids_sort, dispatch_positions, group_sizes, sorted_assignment_ids
-
-
-def _gather_sum_reference(
-    dispatch_output: Float[Array, "TK D"],
-    dispatch_positions: Int[Array, "T K"],
-    combine_weights: Float[Array, "T K"],
-) -> Float[Array, "T D"]:
-    acc = jnp.zeros((dispatch_positions.shape[0], dispatch_output.shape[1]), dtype=dispatch_output.dtype)
-    weights = combine_weights.astype(dispatch_output.dtype)
-    for topk_index in range(dispatch_positions.shape[1]):
-        gathered = jnp.take(dispatch_output, dispatch_positions[:, topk_index], axis=0)
-        acc = (acc + (gathered * weights[:, topk_index, None]).astype(dispatch_output.dtype)).astype(
-            dispatch_output.dtype
-        )
-    return acc
 
 
 def _zero_dropped_assignments() -> Int[Array, ""]:

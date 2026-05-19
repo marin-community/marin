@@ -10,15 +10,11 @@ from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
 from levanter.grug._moe.scatter import _moe_mlp_local_scatter
-from levanter.grug._moe.sonic_xla import (
-    _moe_mlp_local_sonic_xla,
-    _moe_mlp_local_sonic_xla_interleaved,
-)
+from levanter.grug._moe.sonic import _moe_mlp_local_sonic
 
 _MOE_LOCAL_FNS = {
     "scatter": _moe_mlp_local_scatter,
-    "sonic_xla": _moe_mlp_local_sonic_xla,
-    "sonic_xla_interleaved": _moe_mlp_local_sonic_xla_interleaved,
+    "sonic": _moe_mlp_local_sonic,
 }
 
 

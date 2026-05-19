@@ -26,12 +26,9 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
 from levanter.grug._moe.common import (
-    _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS,
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _init_weight,
-    interleave_moe_w13,
-    moe_implementation_uses_interleaved_w13,
     MoEExpertMlpPspecs,
     MoeActivation,
     MoeImplementation,
@@ -86,10 +83,7 @@ class MoEExpertMlp(eqx.Module):
         k_gate, k_up, k_down = jax.random.split(key, 3)
         w_gate = _init_weight(k_gate, (num_experts, hidden_dim, intermediate_dim), initializer_std)
         w_up = _init_weight(k_up, (num_experts, hidden_dim, intermediate_dim), initializer_std)
-        if moe_implementation_uses_interleaved_w13(resolved_implementation):
-            w_gate_up = interleave_moe_w13(w_gate, w_up)
-        else:
-            w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
+        w_gate_up = jnp.concatenate([w_gate, w_up], axis=-1)
 
         return MoEExpertMlp(
             w_gate_up=_reshard_for_init(w_gate_up, pspecs.w_gate_up),
@@ -150,11 +144,6 @@ def moe_mlp(
     dropped expert assignments from EP capacity clipping.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
-    if resolved_implementation in _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS and activation != ActivationFunctionEnum.silu:
-        raise ValueError(
-            "sonic_xla_interleaved only supports silu/SwiGLU activation because its custom VJP hard-codes "
-            "the SwiGLU activation pullback"
-        )
 
     if mesh is None:
         mesh = _current_mesh()
@@ -208,8 +197,8 @@ def moe_mlp(
     if has_expert_axis and expert_axis_size > 1:
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
             raise ValueError(
-                "Sonic local MoE implementations do not yet support expert-parallel collectives; adding EP support "
-                "requires a Sonic-style dispatch/combine schedule inside each expert shard plus cross-shard routing. "
+                "Local MoE implementations do not yet support expert-parallel collectives; adding EP support "
+                "requires a dispatch/combine schedule inside each expert shard plus cross-shard routing. "
                 f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
             )
         if num_experts % expert_axis_size != 0:
@@ -300,9 +289,7 @@ __all__ = [
     "MoEExpertMlpPspecs",
     "MoeImplementation",
     "PspecAxis",
-    "interleave_moe_w13",
     "moe_mlp",
-    "moe_implementation_uses_interleaved_w13",
     "resolve_moe_implementation",
     "split_moe_w13_output",
 ]
