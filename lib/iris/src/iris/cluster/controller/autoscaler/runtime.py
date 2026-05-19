@@ -20,6 +20,8 @@ The run_once() flow splits into two phases:
 from __future__ import annotations
 
 import logging
+import urllib.error
+import urllib.request
 from collections import deque
 from collections.abc import Sequence
 
@@ -47,6 +49,7 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
     CloudSliceState,
@@ -64,6 +67,21 @@ logger = logging.getLogger(__name__)
 
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
+# How long the autoscaler waits for a worker /health response per probe.
+_HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
+
+
+def _probe_worker_health(address: str, port: int) -> bool:
+    """Probe a worker's /health endpoint. Returns True iff HTTP 200."""
+    try:
+        resp = urllib.request.urlopen(
+            f"http://{address}:{port}/health",
+            timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
+        )
+        return resp.status == 200
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+        return False
 
 
 class Autoscaler:
@@ -426,7 +444,8 @@ class Autoscaler:
 
                 if status.state == CloudSliceState.READY:
                     worker_ids = [w.worker_id for w in status.workers]
-                    group.mark_slice_ready(slice_id, worker_ids)
+                    worker_addresses = {w.worker_id: w.internal_address for w in status.workers}
+                    group.mark_slice_ready(slice_id, worker_ids, worker_addresses=worker_addresses)
                     self._register_slice_workers(status.workers, slice_id, group.name)
                     self._log_action(
                         "slice_ready",
@@ -482,6 +501,77 @@ class Autoscaler:
                     reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
 
+    def probe_health(self, timestamp: Timestamp | None = None) -> None:
+        """Probe each READY slice's worker /health endpoint and terminate dead slices.
+
+        Catches zombie slices whose VM is still up in the cloud but whose
+        worker process is dead — these would otherwise be invisible to the
+        heartbeat path (no worker row → no heartbeat to time out) and pin the
+        scale group at max_slices indefinitely.
+
+        Per-worker counters live on SliceState. PING_FAILURE_THRESHOLD
+        consecutive failures (~100s at the default 10s evaluation interval,
+        matching the heartbeat-path threshold) trip termination. Addresses
+        come from the slice handle, refreshed lazily via ``handle.describe()``
+        when SliceState has none cached (e.g. after a controller restart).
+        """
+        timestamp = timestamp or Timestamp.now()
+        if self._base_worker_config is None:
+            return  # test/local mode without bootstrap; nothing to probe
+        port = self._base_worker_config.port
+        if port <= 0:
+            return
+
+        for group in self._groups.values():
+            for slice_id, handle, addresses in group.ready_slice_probe_targets():
+                if not addresses:
+                    addresses = self._refresh_slice_addresses(group, slice_id, handle)
+                    if not addresses:
+                        continue  # describe() failed; retry next tick
+
+                trip_slice = False
+                for worker_id, addr in addresses.items():
+                    healthy = _probe_worker_health(addr, port)
+                    count = group.record_health_probe_result(slice_id, worker_id, healthy)
+                    if count >= PING_FAILURE_THRESHOLD:
+                        logger.warning(
+                            "Slice %s worker %s failed /health %d times; terminating slice",
+                            slice_id,
+                            worker_id,
+                            count,
+                        )
+                        trip_slice = True
+                        break
+
+                if trip_slice:
+                    group.mark_slice_failed(slice_id, error_message="health probe failed")
+                    group.scale_down(slice_id, timestamp)
+                    self._unregister_slice_workers(slice_id)
+                    group.record_slice_boot_failed(slice_id, timestamp)
+                    self._log_action(
+                        "slice_failed",
+                        group.name,
+                        slice_id,
+                        reason="health probe failed",
+                        status="failed",
+                    )
+
+    def _refresh_slice_addresses(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> dict[str, str]:
+        """Resolve worker addresses for a slice by calling handle.describe().
+
+        Used by the health probe when SliceState has no cached addresses
+        (after a controller restart, or for slices adopted from cloud).
+        """
+        try:
+            status = handle.describe()
+        except Exception as e:
+            logger.warning("Failed to describe slice %s for health probe: %s", slice_id, e)
+            return {}
+        addresses = {w.worker_id: w.internal_address for w in status.workers if w.internal_address}
+        if addresses:
+            group.set_worker_addresses(slice_id, addresses)
+        return addresses
+
     def update(
         self,
         demand_entries: list[DemandEntry],
@@ -503,10 +593,11 @@ class Autoscaler:
         worker_status_map: WorkerStatusMap,
         timestamp: Timestamp | None = None,
     ) -> list[ScalingDecision]:
-        """Full cycle: refresh + update. Preserved for tests."""
+        """Full cycle: refresh + probe_health + update. Preserved for tests."""
         timestamp = timestamp or Timestamp.now()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
         self.refresh(worker_status_map, timestamp)
+        self.probe_health(timestamp)
         return self.update(demand_entries, timestamp)
 
     def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:

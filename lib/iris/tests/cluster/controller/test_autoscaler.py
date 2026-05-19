@@ -1574,3 +1574,124 @@ class TestAutoscalerUnresolvableTimeout:
 
         assert group.ready_slice_count() == 1
         autoscaler.shutdown()
+
+
+class TestAutoscalerHealthProbe:
+    """Tests for probe_health(): terminate slices whose /health endpoint dies."""
+
+    @pytest.fixture
+    def base_worker_config(self) -> config_pb2.WorkerConfig:
+        return config_pb2.WorkerConfig(port=10001)
+
+    def _setup_ready_group(
+        self, scale_group_config: config_pb2.ScaleGroupConfig, base_worker_config: config_pb2.WorkerConfig
+    ) -> tuple[Autoscaler, ScalingGroup, FakeSliceHandle]:
+        handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        _mark_discovered_ready(group, [handle])
+        # Seed worker_addresses since reconcile() bypasses the refresh() path.
+        addrs = {w.worker_id: w.internal_address for w in handle.describe().workers}
+        group.set_worker_addresses(handle.slice_id, addrs)
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+        return autoscaler, group, handle
+
+    def test_healthy_probes_keep_slice_alive(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Repeated healthy probes never terminate the slice and reset the failure counter."""
+        autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
+        monkeypatch.setattr(
+            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
+            lambda addr, port: True,
+        )
+
+        for _ in range(20):
+            autoscaler.probe_health(Timestamp.from_ms(1_000))
+
+        assert group.ready_slice_count() == 1
+        autoscaler.shutdown()
+
+    def test_unhealthy_probes_terminate_after_threshold(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """PING_FAILURE_THRESHOLD consecutive failures trip slice termination."""
+        from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
+
+        autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
+        monkeypatch.setattr(
+            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
+            lambda addr, port: False,
+        )
+
+        # One probe per tick — need PING_FAILURE_THRESHOLD ticks to trip.
+        for _ in range(PING_FAILURE_THRESHOLD - 1):
+            autoscaler.probe_health(Timestamp.from_ms(1_000))
+        assert group.ready_slice_count() == 1, "should not have terminated yet"
+
+        autoscaler.probe_health(Timestamp.from_ms(2_000))
+        assert group.ready_slice_count() == 0, "threshold-th failure should terminate slice"
+        autoscaler.shutdown()
+
+    def test_recovery_resets_failure_counter(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A single healthy response zeros the per-worker counter so transient flaps don't kill slices."""
+        from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
+
+        autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
+
+        # Alternating bad/good probes. We need to avoid hitting PING_FAILURE_THRESHOLD
+        # consecutive failures even after many ticks.
+        toggle = {"healthy": False}
+
+        def _probe(addr: str, port: int) -> bool:
+            toggle["healthy"] = not toggle["healthy"]
+            return toggle["healthy"]
+
+        monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", _probe)
+
+        for _ in range(PING_FAILURE_THRESHOLD * 3):
+            autoscaler.probe_health(Timestamp.from_ms(1_000))
+
+        assert group.ready_slice_count() == 1
+        autoscaler.shutdown()
+
+    def test_lazy_fetches_addresses_when_state_has_none(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Slices restored without cached addresses get them via handle.describe()."""
+        handle = make_mock_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        _mark_discovered_ready(group, [handle])
+        # Deliberately do NOT call set_worker_addresses — simulate post-restart.
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+
+        seen_addresses: list[str] = []
+
+        def _probe(addr: str, port: int) -> bool:
+            seen_addresses.append(addr)
+            return True
+
+        monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", _probe)
+
+        autoscaler.probe_health(Timestamp.from_ms(1_000))
+
+        expected = [w.internal_address for w in handle.describe().workers]
+        assert seen_addresses == expected, "probe should hit each worker's described address"
+        autoscaler.shutdown()
