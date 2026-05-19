@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from levanter.data.text import HfDatasetSourceConfig
-from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset
+from levanter.data.text import HfDatasetSourceConfig, SupervisedLmDatasetFormat
+from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset, supervised_text_dataset
 from marin.processing.tokenize import HfDatasetSpec
 
 from experiments.evals.long_tail_ppl import (
@@ -43,6 +43,24 @@ def test_hf_backed_raw_dataset_preserves_requested_split():
 
     assert component.split == "test"
     assert component.format.text_key == "body"
+    assert isinstance(component.source, HfDatasetSourceConfig)
+    assert component.source.splits == ["test"]
+
+
+def test_hf_backed_supervised_dataset_uses_supervised_format():
+    dataset = supervised_text_dataset(
+        HfDatasetSpec(id="example/dataset"),
+        input_key="prompt",
+        target_key="completion",
+        split="test",
+    )
+
+    component = _to_dataset_component(dataset)
+
+    assert component.split == "test"
+    assert isinstance(component.format, SupervisedLmDatasetFormat)
+    assert component.format.input_key == "prompt"
+    assert component.format.target_key == "completion"
     assert isinstance(component.source, HfDatasetSourceConfig)
     assert component.source.splits == ["test"]
 

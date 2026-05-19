@@ -9,12 +9,15 @@ raw and processed data).
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel
 from rigging.filesystem import open_url
+
+logger = logging.getLogger(__name__)
 
 
 # === General Pydantic Schema for Quick & Easy Ser/De + Validation ==
@@ -44,7 +47,7 @@ def get_size_bytes(blob: str) -> int:
 
 # === Raw Data Download Utilities ===
 def write_provenance_json(output_path, metadata: dict[str, Any]) -> None:
-    print(f"[*] Writing Dataset `provenance.json` to `{output_path}`")
+    logger.info("Writing Dataset `provenance.json` to `%s`", output_path)
     metadata["access_time"] = datetime.now(timezone.utc).isoformat()
 
     with open_url(f"{output_path}/provenance.json", "w") as f:

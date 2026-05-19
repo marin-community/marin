@@ -44,6 +44,17 @@ MAX_STATE_POLL_INTERVAL = 30.0
 # value before being handed to the backoff.
 MIN_STATE_POLL_INTERVAL = 0.1
 
+# Floor on the per-call deadline for LaunchJob. The handler can legitimately
+# run well past the default 30s client timeout when replacing a still-draining
+# predecessor (_JOB_REPLACEMENT_DRAIN_WAIT is 120s on the controller) or when
+# uploading a large workspace bundle. Setting this below the worst-case server
+# budget guarantees a deadline timeout + retry, which then races the original
+# in-flight INSERT and trips a UNIQUE constraint. Pad past 120s for bundle
+# upload, autoscaler feasibility, and connection overhead. Bump alongside
+# _JOB_REPLACEMENT_DRAIN_WAIT if that grows. Callers that configured a larger
+# RemoteClusterClient timeout keep theirs — this is a floor, not a ceiling.
+LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
+
 
 class RemoteClusterClient:
     """Cluster client via RPC to controller.
@@ -152,8 +163,10 @@ class RemoteClusterClient:
         if reservation is not None:
             request.reservation.CopyFrom(reservation)
 
+        launch_timeout_ms = max(self._timeout_ms, LAUNCH_JOB_TIMEOUT_FLOOR_MS)
+
         def _call():
-            return self._client.launch_job(request)
+            return self._client.launch_job(request, timeout_ms=launch_timeout_ms)
 
         response = call_with_retry(f"launch_job({job_id})", _call)
         return JobName.from_wire(response.job_id)

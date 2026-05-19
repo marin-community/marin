@@ -26,28 +26,28 @@ def _make_chunk(arrow_schema: pa.Schema, first_seq: int, num_rows: int) -> pa.Ta
     )
 
 
-def test_sealed_buffer_caches_nbytes_and_num_rows():
+def test_sealed_buffer_holds_supplied_accounting():
     arrow_schema = _ns_arrow_schema()
     table = _make_chunk(arrow_schema, first_seq=1, num_rows=5)
-    sealed = _SealedBuffer(table=table, min_seq=1, max_seq=5)
-    assert sealed.nbytes == table.nbytes
+    sealed = _SealedBuffer(table=table, nbytes=123, num_rows=table.num_rows, min_seq=1, max_seq=5)
+    assert sealed.nbytes == 123
     assert sealed.num_rows == table.num_rows
 
 
-def test_ram_bytes_reads_cached_flushing_nbytes_not_table():
+def test_ram_bytes_carries_explicit_accounting_through_seal():
     arrow_schema = _ns_arrow_schema()
     buffers = RamBuffers(arrow_schema=arrow_schema, next_seq=1)
-    buffers.append_table(_make_chunk(arrow_schema, first_seq=1, num_rows=3))
-    pre_seal_bytes = buffers.ram_bytes()
-    pre_seal_rows = buffers.ram_rows()
+    buffers.append_table(_make_chunk(arrow_schema, first_seq=1, num_rows=3), added_bytes=1024)
+    assert buffers.ram_bytes() == 1024
+    assert buffers.ram_rows() == 3
 
     sealed = buffers.seal()
     assert sealed is not None
-    assert buffers.ram_bytes() == pre_seal_bytes
-    assert buffers.ram_rows() == pre_seal_rows
+    # seal preserves the accounting (no re-walk of the table's buffers).
+    assert buffers.ram_bytes() == 1024
+    assert buffers.ram_rows() == 3
 
-    # Mutate the cached scalars to confirm ram_bytes / ram_rows read them,
-    # not table.nbytes / table.num_rows on every call.
+    # Mutate the sealed scalars to confirm ram_bytes / ram_rows read them.
     sealed.nbytes = 999_999_999
     sealed.num_rows = 42_424_242
     assert buffers.ram_bytes() == 999_999_999
@@ -57,7 +57,7 @@ def test_ram_bytes_reads_cached_flushing_nbytes_not_table():
 def test_restore_flush_preserves_accounting():
     arrow_schema = _ns_arrow_schema()
     buffers = RamBuffers(arrow_schema=arrow_schema, next_seq=1)
-    buffers.append_table(_make_chunk(arrow_schema, first_seq=1, num_rows=4))
+    buffers.append_table(_make_chunk(arrow_schema, first_seq=1, num_rows=4), added_bytes=2048)
     expected_bytes = buffers.ram_bytes()
     expected_rows = buffers.ram_rows()
 

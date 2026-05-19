@@ -120,11 +120,18 @@ def iter_parquet_row_groups(
                 table = table.slice(local_start, local_end - local_start)
 
         if equality_predicates:
+            # Build a single combined AND mask so we filter once instead of
+            # copying the table N times for N predicates. Drop predicate-only
+            # columns before filtering — drop is metadata-only, so doing it
+            # first keeps the filter copy from materializing columns we are
+            # about to discard.
+            mask = None
             for col_name, value in equality_predicates.items():
-                mask = pa.compute.equal(table.column(col_name), value)
-                table = table.filter(mask)
+                col_mask = pa.compute.equal(table.column(col_name), value)
+                mask = col_mask if mask is None else pa.compute.and_(mask, col_mask)
             if drop_columns:
                 table = table.drop(drop_columns)
+            table = table.filter(mask)
 
         if len(table) > 0:
             yield table
@@ -408,7 +415,7 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
             if filter_fn is not None and not filter_fn(record):
                 continue
             if spec.columns is not None:
-                yield {k: v for k, v in record.items() if k in spec.columns}
+                yield {k: record[k] for k in spec.columns if k in record}
             else:
                 yield record
 

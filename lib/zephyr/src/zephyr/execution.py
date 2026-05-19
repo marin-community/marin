@@ -42,7 +42,7 @@ from fray.types import Entrypoint, JobRequest
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem import marin_temp_bucket, open_url, url_to_fs
-from rigging.timing import ExponentialBackoff, log_time
+from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
@@ -215,6 +215,31 @@ def _stage_throughput(
 def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     """Path for a shared data object: {prefix}/{execution_id}/shared/{name}.pkl"""
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
+
+
+def _push_iris_task_status(
+    rate_limiter: RateLimiter,
+    build_md: Callable[[], tuple[str, str]],
+) -> None:
+    """Push ``(detail, summary)`` markdown to the active Iris task's status, if any.
+
+    No-op when not running inside an Iris task or when ``rate_limiter`` declines
+    this tick. ``build_md`` is invoked lazily after the gating checks so the
+    formatting work is skipped on the no-op path.
+    """
+    iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
+    if iris_client is None:
+        return
+    job_info = get_job_info()
+    if job_info is None:
+        return
+    if not rate_limiter.should_run():
+        return
+    detail_md, summary_md = build_md()
+    try:
+        iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
+    except Exception:
+        logger.warning("Failed to report task status text to Iris controller", exc_info=True)
 
 
 def _cleanup_execution(prefix: str, execution_id: str) -> None:
@@ -446,6 +471,9 @@ class ZephyrCoordinator:
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
+        # Set when a stage may have completed (result, failure, or abort) so
+        # ``_wait_for_stage`` wakes immediately instead of sleeping out its backoff.
+        self._stage_done = threading.Event()
         self._is_last_stage: bool = False
         self._initialized: bool = False
         self._pipeline_running: bool = False
@@ -455,6 +483,10 @@ class ZephyrCoordinator:
 
         # Lock for accessing coordinator state from background thread
         self._lock = threading.Lock()
+
+        # Throttle Iris task-status pushes; the coordinator loop ticks more
+        # frequently than the UI needs to refresh.
+        self._task_stats_limiter = RateLimiter(interval_seconds=10.0)
 
         actor_ctx = current_actor()
         self._name = f"{actor_ctx.group_name}"
@@ -564,60 +596,52 @@ class ZephyrCoordinator:
 
     def _report_task_stats(self) -> None:
         """Push task status text to the Iris coordinator if available."""
-        iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
-        if iris_client is None:
-            return
 
-        job_info = get_job_info()
-        if job_info is None:
-            return
+        def build_md() -> tuple[str, str]:
+            with self._lock:
+                current_stage_index = self._current_stage_index
+                stage_name = self._stage_name
+                plan_stages = self._plan_stages
+                completed = self._completed_shards
+                total_shards = self._total_shards
+                in_flight = len(self._in_flight)
+                queued = len(self._task_queue)
+                stage_start = self._stage_monotonic_start
 
-        with self._lock:
-            current_stage_index = self._current_stage_index
-            stage_name = self._stage_name
-            plan_stages = self._plan_stages
-            completed = self._completed_shards
-            total_shards = self._total_shards
-            in_flight = len(self._in_flight)
-            queued = len(self._task_queue)
-            stage_start = self._stage_monotonic_start
+            totals = self.get_counters()
+            elapsed = time.monotonic() - (stage_start or time.monotonic())
+            throughput = _stage_throughput(totals, stage_name, elapsed)
 
-        totals = self.get_counters()
-        elapsed = time.monotonic() - (stage_start or time.monotonic())
-        throughput = _stage_throughput(totals, stage_name, elapsed)
+            lines = ["**Stages**\n"]
+            for idx, stage in enumerate(plan_stages):
+                stage_desc = _get_stage_description(stage)
+                bullet = f"- **{stage_desc}**" if idx == current_stage_index else f"- {stage_desc}"
+                lines.append(f"{bullet}")
 
-        lines = ["**Stages**\n"]
-        for idx, stage in enumerate(plan_stages):
-            stage_desc = _get_stage_description(stage)
-            bullet = f"- **{stage_desc}**" if idx == current_stage_index else f"- {stage_desc}"
-            lines.append(f"{bullet}")
-
-        pct = int(100 * completed / total_shards) if total_shards > 0 else 0
-        lines.append(
-            f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
-        )
-        if throughput is not None:
-            items, bytes_processed, item_rate, byte_rate = throughput
+            pct = int(100 * completed / total_shards) if total_shards > 0 else 0
             lines.append(
-                f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
-                f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
+                f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
             )
+            if throughput is not None:
+                items, bytes_processed, item_rate, byte_rate = throughput
+                lines.append(
+                    f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
+                    f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
+                )
 
-        detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
+            detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
 
-        current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
-        summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
-        summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
-        if throughput is not None:
-            _, _, item_rate, byte_rate = throughput
-            summary_lines.append(f"{_format_count(item_rate)} items/s")
-            summary_lines.append(f"{_format_bytes(byte_rate)}/s")
-        summary_md = "  \n".join(summary_lines)
+            current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
+            summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
+            summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
+            if throughput is not None:
+                _, _, item_rate, byte_rate = throughput
+                summary_lines.append(f"{_format_count(item_rate)} items/s")
+                summary_lines.append(f"{_format_bytes(byte_rate)}/s")
+            summary_md = "  \n".join(summary_lines)
+            return detail_md, summary_md
 
-        try:
-            iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
-        except Exception:
-            logger.warning("Failed to report task status text to Iris controller", exc_info=True)
+        _push_iris_task_status(self._task_stats_limiter, build_md)
 
     def _log_status(self) -> None:
         with self._lock:
@@ -696,6 +720,9 @@ class ZephyrCoordinator:
 
         # Bump generation regardless of kind so report_result rejects stale attempts.
         self._task_attempts[shard_idx] += 1
+        # Wake _wait_for_stage on every accounted failure (requeue or abort);
+        # the waiter re-checks _fatal_error / completed counts after waking.
+        self._stage_done.set()
 
         if kind is ShardFailureKind.TASK:
             self._task_error_attempts[shard_idx] += 1
@@ -856,6 +883,7 @@ class ZephyrCoordinator:
             # Zero the in-flight counters but keep the generation watermark
             # so late heartbeats from this task are rejected.
             self._worker_counters[worker_id] = CounterSnapshot.empty(counter_snapshot.generation)
+            self._stage_done.set()
 
     def report_error(self, worker_id: str, shard_idx: int, error_info: str) -> None:
         """Worker reports a task failure. Re-queues up to MAX_SHARD_FAILURES."""
@@ -929,6 +957,7 @@ class ZephyrCoordinator:
             if self._fatal_error is None:
                 logger.error("Coordinator aborted: %s", reason)
                 self._fatal_error = reason
+                self._stage_done.set()
 
     def _start_stage(
         self,
@@ -961,6 +990,7 @@ class ZephyrCoordinator:
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
             self._stage_monotonic_start = time.monotonic()
+            self._stage_done.clear()
 
     def _wait_for_stage(self) -> None:
         """Block until current stage completes or error occurs."""
@@ -969,7 +999,6 @@ class ZephyrCoordinator:
         start_time = time.monotonic()
         all_dead_since: float | None = None
         no_workers_timeout = self._no_workers_timeout
-        stage_done = threading.Event()
 
         while True:
             with self._lock:
@@ -1013,7 +1042,10 @@ class ZephyrCoordinator:
                 last_log_completed = completed
                 backoff.reset()
 
-            stage_done.wait(timeout=backoff.next_interval())
+            # Wake promptly on completions / errors / aborts; the timeout still
+            # bounds the sleep so the no-alive-workers timer fires regardless.
+            if self._stage_done.wait(timeout=backoff.next_interval()):
+                self._stage_done.clear()
 
     def _collect_results(self) -> dict[int, TaskResult]:
         """Return results for the completed stage."""
@@ -1224,6 +1256,10 @@ class ZephyrWorker:
         self._current_task: ShardTask | None = None  # set while executing a shard
         self._task_monotonic_start: float = 0.0
 
+        # Throttle Iris status pushes; the heartbeat loop ticks faster than
+        # the UI needs to refresh.
+        self._iris_status_limiter = RateLimiter(interval_seconds=10.0)
+
         # Capture shutdown_event from the actor context while the ContextVar
         # is still set (child threads in Python <3.12 don't inherit it).
         actor_ctx = current_actor()
@@ -1244,18 +1280,12 @@ class ZephyrWorker:
 
     def _report_worker_iris_status(self) -> None:
         """Push worker status text to Iris for UI display. Called on each heartbeat."""
-        iris_client = ctx.client if (ctx := get_iris_ctx()) is not None else None
-        if iris_client is None:
-            return
-        job_info = get_job_info()
-        if job_info is None:
-            return
 
-        task = self._current_task
-        if task is None:
-            summary_md = "idle"
-            detail_md = "idle"
-        else:
+        def build_md() -> tuple[str, str]:
+            task = self._current_task
+            if task is None:
+                return "idle", "idle"
+
             stage_name = task.stage_name
             shard_idx = task.shard_idx
             total_shards = task.total_shards
@@ -1274,12 +1304,9 @@ class ZephyrWorker:
                     f"**Items**: {_format_count(items)} ({_format_count(item_rate)}/s)",
                     f"**Throughput**: {_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)",
                 ]
-            detail_md = "  \n".join(detail_lines)
+            return "  \n".join(detail_lines), summary_md
 
-        try:
-            iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
-        except Exception:
-            logger.warning("Failed to report worker status text to Iris controller", exc_info=True)
+        _push_iris_task_status(self._iris_status_limiter, build_md)
 
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Snapshot the running task's counters, or None when idle/unchanged.
@@ -1653,13 +1680,30 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             raise
     finally:
         # Signal coordinator shutdown first so workers receive SHUTDOWN from
-        # pull_task and self-terminate via shutdown_event → exit_actor()
-        # before worker_group.shutdown() tears down any remaining actors.
+        # pull_task and self-terminate via shutdown_event → exit_actor(). Then
+        # give the worker job a brief window to land in a terminal state on
+        # its own so its Iris tasks record SUCCEEDED instead of KILLED
+        # (#5484); fall back to forcibly terminating if they don't.
         with suppress(Exception):
             coordinator.shutdown.remote().result(timeout=10.0)
         if worker_group is not None:
             with suppress(Exception):
-                worker_group.shutdown()
+                # LocalActorGroup has no Iris task state to wait on — its
+                # synthetic job handles are marked succeeded at registration
+                # and is_done() is permanently False — so the graceful-exit
+                # wait would always exhaust its full 5s budget without
+                # observing any change. Skip it for LocalClient.
+                if isinstance(client, LocalClient):
+                    worker_group.shutdown()
+                else:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        if worker_group.is_done():
+                            break
+                        time.sleep(0.5)
+                    else:
+                        logger.warning("Workers did not exit naturally, terminating")
+                        worker_group.shutdown()
         with suppress(Exception):
             hosted.shutdown()
 

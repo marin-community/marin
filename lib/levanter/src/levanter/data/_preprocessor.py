@@ -149,7 +149,6 @@ def _construct_composite_batch_processor(dataset):
 
     source, transforms, batch_transform = rec(dataset)
 
-    # batch_size = batch_transform.batch_size if batch_transform is not None else 1024
     cpus = batch_transform.num_cpus if batch_transform is not None else 1
     gpus = batch_transform.num_gpus if batch_transform is not None else 0
     resources = batch_transform.resources if batch_transform is not None else {}
@@ -163,10 +162,6 @@ class _CompositeBatchProcessor(BatchProcessor):
         self._num_cpus = num_cpus
         self._num_gpus = num_gpus
         self._resources = resources
-
-    @property
-    def batch_size(self):
-        return self._batch_size
 
     @property
     def num_cpus(self):

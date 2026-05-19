@@ -305,7 +305,7 @@ def test_extract_ghalogs_step_persists_typed_artifact(tmp_path):
     )
     StepRunner().run([step])
 
-    loaded = Artifact.load(step, ExtractedPartitionedDiagnosticLogs)
+    loaded = Artifact.from_path(step, ExtractedPartitionedDiagnosticLogs)
     assert loaded.source_label == "ghalogs"
     assert loaded.record_count == 1
     assert loaded.metadata_path.endswith("/metadata.json")
@@ -363,7 +363,6 @@ def test_materialize_ghalogs_partition_to_parquet_filters_one_partition(tmp_path
         str(materialized_dir),
         str(partition_dir),
         partition=DiagnosticPartition.TRAIN,
-        num_shards=1,
         max_workers=1,
     )
 
@@ -389,12 +388,11 @@ def test_ghalogs_public_normalize_steps_write_datakit_normalized_train_partition
         source_path=str(input_dir),
         max_members=2,
         num_materialize_shards=1,
-        num_partition_shards=1,
         output_path_prefix=str(tmp_path / "steps"),
     )
     StepRunner().run(list(steps))
 
-    normalized = Artifact.load(steps[-1], NormalizedData)
+    normalized = Artifact.from_path(steps[-1], NormalizedData)
     rows = _read_parquet_rows(Path(normalized.main_output_dir))
 
     assert len(rows) == 1

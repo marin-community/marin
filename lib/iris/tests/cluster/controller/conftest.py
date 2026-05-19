@@ -3,6 +3,7 @@
 
 """Shared fixtures for controller unit tests."""
 
+import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -12,9 +13,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
+from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
+    AttributeValue,
     Constraint,
     ConstraintOp,
     DeviceType,
@@ -27,34 +30,22 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import (
-    ACTIVE_TASK_STATES,
-    ControllerDB,
-    SchedulableWorker,
-    _decode_attribute_rows,
-    task_row_can_be_scheduled,
-    task_row_is_finished,
-)
-from iris.cluster.controller.db import healthy_active_workers_with_attributes as _healthy_active_workers_with_attributes
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.provider import ProviderUnsupportedError
+from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.schema import (
-    ATTEMPT_PROJECTION,
-    JOB_CONFIG_JOIN,
-    JOB_DETAIL_PROJECTION,
-    JOB_SCHEDULING_PROJECTION,
-    TASK_DETAIL_PROJECTION,
-    WORKER_ROW_PROJECTION,
-    JobDetailRow,
-    TaskDetailRow,
-    WorkerRow,
-    tasks_with_attempts,
+    jobs_table,
+    task_attempts_table,
+    tasks_table,
+    worker_attributes_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -69,15 +60,27 @@ from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId, is_job_f
 from iris.rpc import config_pb2, controller_pb2, job_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 
 from tests.cluster.conftest import fake_log_client_from_service
+from tests.cluster.controller._test_support import set_task_state_for_test
 from tests.cluster.providers.conftest import make_mock_platform
 
 check_task_can_be_scheduled = task_row_can_be_scheduled
-check_task_is_finished = task_row_is_finished
 
 
-def check_is_job_finished(j: JobDetailRow) -> bool:
+def check_task_is_finished(task) -> bool:
+    return task_is_finished(
+        task.state,
+        task.failure_count,
+        task.max_retries_failure,
+        task.preemption_count,
+        task.max_retries_preemption,
+    )
+
+
+def check_is_job_finished(j) -> bool:
     """Whether a job row is in a terminal state."""
     return is_job_finished(j.state)
 
@@ -140,8 +143,8 @@ class MockController:
 
     def __init__(self):
         self.wake = Mock()
-        self.create_scheduling_context = Mock(return_value=Mock())
         self.get_job_scheduling_diagnostics = Mock(return_value=None)
+        self.last_scheduling_context = None
         self.autoscaler = None
         self.provider = Mock()
         self.has_direct_provider = False
@@ -156,20 +159,33 @@ def mock_controller() -> MockController:
 def log_service(state, tmp_path) -> LogServiceImpl:
     """LogServiceImpl with its own internal log store.
 
-    Wraps ``fetch_logs`` to run the bg compact step first so push→fetch in
-    the same test is synchronously visible. The production path relies on the
-    1s bg tick; tests can't afford that wait.
+    Wraps ``push_logs`` / ``fetch_logs`` to force flush (and compact on read)
+    so push→fetch in the same test is synchronously visible. The production
+    path relies on the bg flush tick (5s default); tests can't afford that
+    wait — without the push wrapper, each push's ``await_persisted`` blocks
+    for one flush interval, making N sequential pushes take ~N*5s.
     """
     svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
     original_fetch = svc.fetch_logs
 
+    async def push_logs(request, ctx):
+        # Append, then force-flush before returning. Bypasses the original
+        # ``await_persisted`` poll-wait that otherwise blocks for one bg
+        # flush tick (5s by default) on every push.
+        if not request.entries:
+            return logging_pb2.PushLogsResponse()
+        await asyncio.to_thread(svc._log_store.append, request.key, list(request.entries))
+        svc._log_store._force_flush()
+        return logging_pb2.PushLogsResponse()
+
     def fetch_logs(request, ctx):
         # Force a flush + compaction so just-pushed data is queryable
-        # within the same test, bypassing the production 1s bg tick.
+        # within the same test, bypassing the production bg tick.
         svc._log_store._force_flush()
         svc._log_store._force_compaction()
         return original_fetch(request, ctx)
 
+    svc.push_logs = push_logs  # type: ignore[method-assign]
     svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
     yield svc
     svc.close()
@@ -180,10 +196,13 @@ def controller_service(state, log_service, mock_controller, tmp_path) -> Control
     """ControllerServiceImpl with fresh DB, log service, and mock controller."""
     return ControllerServiceImpl(
         state,
-        state._store,
         controller=mock_controller,
         bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
         log_client=fake_log_client_from_service(log_service),
+        db=state._db,
+        health=state._health,
+        endpoints=state._endpoints,
+        worker_attrs=state._worker_attrs,
     )
 
 
@@ -198,8 +217,7 @@ def make_controller_state(**kwargs):
     tmp = Path(tempfile.mkdtemp(prefix="iris_test_"))
     try:
         db = ControllerDB(db_dir=tmp)
-        store = ControllerStore(db)
-        yield ControllerTransitions(store=store, **kwargs)
+        yield ControllerTransitions(db, **kwargs)
         db.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -296,11 +314,11 @@ def submit_direct_job(
 ) -> list[JobName]:
     jid = JobName.root("test-user", name)
     req = make_direct_job_request(name, replicas, task_image=task_image)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(cur, jid, req, Timestamp.now())
-    with state._store.read_snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (jid.to_wire(),)))
-    return [t.task_id for t in tasks]
+    with state._db.read_snapshot() as tx:
+        rows = tx.execute(select(tasks_table.c.task_id).where(tasks_table.c.job_id == jid)).all()
+    return [row.task_id for row in rows]
 
 
 # =============================================================================
@@ -309,42 +327,35 @@ def submit_direct_job(
 
 
 def query_task(state: ControllerTransitions, task_id: JobName):
-    with state._db.read_snapshot() as q:
-        return TASK_DETAIL_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM tasks WHERE task_id = ? LIMIT 1", (task_id.to_wire(),)),
-        )
+    """Return the SA Row for ``task_id`` or None.
+
+    Callers access ``row.state``, ``row.current_attempt_id``, etc. via attribute access.
+    """
+    with state._db.read_snapshot() as tx:
+        return reads.get_task_detail(tx, task_id)
 
 
 def query_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int):
-    with state._db.read_snapshot() as q:
-        rows = ATTEMPT_PROJECTION.decode(
-            q.fetchall(
-                "SELECT * FROM task_attempts WHERE task_id = ? AND attempt_id = ?",
-                (task_id.to_wire(), attempt_id),
-            ),
-        )
-    return rows[0] if rows else None
-
-
-def query_job(state: ControllerTransitions, job_id: JobName) -> JobDetailRow | None:
-    with state._db.read_snapshot() as q:
-        return JOB_DETAIL_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
-                (job_id.to_wire(),),
+    """Return the SA Row for the given attempt or None."""
+    with state._db.read_snapshot() as tx:
+        return tx.execute(
+            select(*reads.ATTEMPT_COLS).where(
+                task_attempts_table.c.task_id == task_id,
+                task_attempts_table.c.attempt_id == attempt_id,
             )
-        )
+        ).first()
+
+
+def query_job(state: ControllerTransitions, job_id: JobName):
+    """Return the SA Row for ``job_id`` joining jobs+job_config, or None."""
+    with state._db.read_snapshot() as tx:
+        return reads.get_job_detail(tx, job_id)
 
 
 def query_job_row(state: ControllerTransitions, job_id: JobName):
-    """Query a job as a JobSchedulingRow (scheduling projection with resources/constraints)."""
-    with state._db.read_snapshot() as q:
-        return JOB_SCHEDULING_PROJECTION.decode_one(
-            q.fetchall(
-                f"SELECT j.*, jc.* FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id = ? LIMIT 1",
-                (job_id.to_wire(),),
-            )
-        )
+    """Return the SA Row for ``job_id`` (same as query_job; alias for scheduling projection tests)."""
+    with state._db.read_snapshot() as tx:
+        return reads.get_job_detail(tx, job_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,7 +377,7 @@ class WorkerView:
     last_heartbeat_ms: int
 
 
-def _worker_view(row: WorkerRow, liveness) -> WorkerView:
+def _worker_view(row, liveness) -> WorkerView:
     return WorkerView(
         worker_id=row.worker_id,
         address=row.address,
@@ -376,7 +387,7 @@ def _worker_view(row: WorkerRow, liveness) -> WorkerView:
         total_tpu_count=row.total_tpu_count,
         device_type=row.device_type,
         device_variant=row.device_variant,
-        attributes=row.attributes,
+        attributes=getattr(row, "attributes", {}),
         healthy=liveness.healthy,
         active=liveness.active,
         consecutive_failures=liveness.consecutive_failures,
@@ -385,50 +396,56 @@ def _worker_view(row: WorkerRow, liveness) -> WorkerView:
 
 
 def query_worker(state: ControllerTransitions, worker_id: WorkerId) -> WorkerView | None:
-    with state._db.read_snapshot() as q:
-        decoded = WORKER_ROW_PROJECTION.decode_one(
-            q.fetchall("SELECT * FROM workers WHERE worker_id = ? LIMIT 1", (str(worker_id),)),
-        )
-    if decoded is None:
+    with state._db.read_snapshot() as tx:
+        row = reads.get_worker_detail(tx, worker_id)
+    if row is None:
         return None
-    return _worker_view(decoded, state._store.health.liveness(decoded.worker_id))
+    return _worker_view(row, state._health.liveness(row.worker_id))
 
 
-def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list[TaskDetailRow]:
-    with state._db.read_snapshot() as q:
-        return TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (job_id.to_wire(),)))
+def query_tasks_for_job(state: ControllerTransitions, job_id: JobName) -> list:
+    """Return SA Rows for all tasks in ``job_id``."""
+    with state._db.read_snapshot() as tx:
+        return tx.execute(
+            select(tasks_table).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index)
+        ).all()
 
 
-def schedulable_tasks(state: ControllerTransitions):
-    """Return non-terminal tasks eligible for scheduling, in priority order."""
-    terminal_placeholders = ",".join("?" for _ in TERMINAL_TASK_STATES)
-    with state._db.read_snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT * FROM tasks WHERE state IS NOT NULL AND state NOT IN ({terminal_placeholders})"
-                " ORDER BY priority_neg_depth ASC, priority_root_submitted_ms ASC, submitted_at_ms ASC, task_id ASC",
-                tuple(TERMINAL_TASK_STATES),
-            ),
-        )
+def schedulable_tasks(state: ControllerTransitions) -> list:
+    """Return non-terminal task SA Rows eligible for scheduling, in priority order."""
+    with state._db.read_snapshot() as tx:
+        tasks = tx.execute(
+            select(tasks_table)
+            .where(tasks_table.c.state.not_in(list(TERMINAL_TASK_STATES)))
+            .order_by(
+                tasks_table.c.priority_neg_depth.asc(),
+                tasks_table.c.priority_root_submitted_ms.asc(),
+                tasks_table.c.submitted_at_ms.asc(),
+                tasks_table.c.task_id.asc(),
+            )
+        ).all()
     return [t for t in tasks if check_task_can_be_scheduled(t)]
 
 
 def building_counts(state: ControllerTransitions) -> dict[WorkerId, int]:
     """Count tasks in BUILDING/ASSIGNED state per worker, excluding reservation holders."""
-    with state._db.read_snapshot() as snapshot:
-        rows = snapshot.raw(
-            "SELECT a.worker_id, COUNT(*) as c FROM tasks t "
-            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
-            "JOIN jobs j ON t.job_id = j.job_id "
-            "WHERE t.state IN (?, ?) AND j.is_reservation_holder = 0 "
-            "GROUP BY a.worker_id ORDER BY a.worker_id ASC",
-            (
-                job_pb2.TASK_STATE_BUILDING,
-                job_pb2.TASK_STATE_ASSIGNED,
-            ),
-            decoders={"worker_id": WorkerId, "c": int},
-        )
-    return {row.worker_id: row.c for row in rows}
+    with state._db.read_snapshot() as tx:
+        rows = tx.execute(
+            select(task_attempts_table.c.worker_id, func.count().label("c"))
+            .join(
+                tasks_table,
+                (tasks_table.c.task_id == task_attempts_table.c.task_id)
+                & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
+            )
+            .join(jobs_table, tasks_table.c.job_id == jobs_table.c.job_id)
+            .where(
+                tasks_table.c.state.in_([job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED]),
+                jobs_table.c.is_reservation_holder == False,  # noqa: E712
+            )
+            .group_by(task_attempts_table.c.worker_id)
+            .order_by(task_attempts_table.c.worker_id.asc())
+        ).all()
+    return {row.worker_id: int(row.c) for row in rows}
 
 
 def register_worker(
@@ -441,7 +458,7 @@ def register_worker(
     scale_group: str = "",
 ) -> WorkerId:
     wid = WorkerId(worker_id)
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.register_or_refresh_worker(
             cur,
             worker_id=wid,
@@ -452,7 +469,7 @@ def register_worker(
             scale_group=scale_group,
         )
     if not healthy:
-        state._store.workers.set_health_for_test(wid, healthy=False)
+        state._health.set_health_for_test(wid, healthy=False)
     return wid
 
 
@@ -487,7 +504,7 @@ def submit_job(
     inject_device_constraints(request)
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.submit_job(
             cur,
             jid,
@@ -503,33 +520,49 @@ def submit_job(
 # =============================================================================
 
 
-def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[TaskDetailRow]:
-    with state._db.read_snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall("SELECT * FROM tasks WHERE job_id = ? ORDER BY task_index ASC", (job_id.to_wire(),)),
-        )
-        if not tasks:
+@dataclass(frozen=True, slots=True)
+class TaskWithAttempts:
+    """SA Row for a task with its attempt rows attached under ``.attempts``."""
+
+    _row: object
+    attempts: list
+
+    def __getattr__(self, name: str):
+        return getattr(self._row, name)
+
+
+def query_tasks_with_attempts(state: ControllerTransitions, job_id: JobName) -> list[TaskWithAttempts]:
+    """Return task rows with their attempt rows attached under ``.attempts``."""
+    with state._db.read_snapshot() as tx:
+        task_rows = tx.execute(
+            select(tasks_table).where(tasks_table.c.job_id == job_id).order_by(tasks_table.c.task_index.asc())
+        ).all()
+        if not task_rows:
             return []
-        task_wires = [t.task_id.to_wire() for t in tasks]
-        placeholders = ",".join("?" for _ in task_wires)
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall(
-                f"SELECT * FROM task_attempts WHERE task_id IN ({placeholders})" " ORDER BY task_id ASC, attempt_id ASC",
-                tuple(task_wires),
-            ),
-        )
-    return tasks_with_attempts(tasks, attempts)
+        task_ids = [t.task_id for t in task_rows]
+        attempt_rows = tx.execute(
+            select(task_attempts_table)
+            .where(task_attempts_table.c.task_id.in_(task_ids))
+            .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc())
+        ).all()
+    attempts_by_task: dict = {}
+    for a in attempt_rows:
+        attempts_by_task.setdefault(a.task_id, []).append(a)
+    return [TaskWithAttempts(_row=t, attempts=attempts_by_task.get(t.task_id, [])) for t in task_rows]
 
 
-def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> TaskDetailRow | None:
-    wire = task_id.to_wire()
-    with state._db.read_snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(q.fetchall("SELECT * FROM tasks WHERE task_id = ?", (wire,)))
-        attempts = ATTEMPT_PROJECTION.decode(
-            q.fetchall("SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_id ASC", (wire,)),
-        )
-    hydrated = tasks_with_attempts(tasks, attempts)
-    return hydrated[0] if hydrated else None
+def query_task_with_attempts(state: ControllerTransitions, task_id: JobName) -> TaskWithAttempts | None:
+    """Return the task row with attempts attached, or None."""
+    with state._db.read_snapshot() as tx:
+        task_row = tx.execute(select(tasks_table).where(tasks_table.c.task_id == task_id)).first()
+        if task_row is None:
+            return None
+        attempt_rows = tx.execute(
+            select(task_attempts_table)
+            .where(task_attempts_table.c.task_id == task_id)
+            .order_by(task_attempts_table.c.attempt_id.asc())
+        ).all()
+    return TaskWithAttempts(_row=task_row, attempts=list(attempt_rows))
 
 
 def make_job_request(
@@ -607,40 +640,54 @@ def make_worker_metadata(
 
 
 def worker_running_tasks(state: ControllerTransitions, worker_id: WorkerId) -> frozenset[JobName]:
-    with state._db.read_snapshot() as q:
-        rows = q.raw(
-            "SELECT t.task_id FROM tasks t "
-            "JOIN task_attempts a ON t.task_id = a.task_id AND t.current_attempt_id = a.attempt_id "
-            "WHERE a.worker_id = ? AND t.state IN (?, ?, ?)",
-            (str(worker_id), *ACTIVE_TASK_STATES),
-            decoders={"task_id": JobName.from_wire},
-        )
+    with state._db.read_snapshot() as tx:
+        rows = tx.execute(
+            select(tasks_table.c.task_id)
+            .join(
+                task_attempts_table,
+                (tasks_table.c.task_id == task_attempts_table.c.task_id)
+                & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
+            )
+            .where(
+                task_attempts_table.c.worker_id == worker_id,
+                tasks_table.c.state.in_(list(ACTIVE_TASK_STATES)),
+            )
+        ).all()
     return frozenset(row.task_id for row in rows)
+
+
+def _decode_attr_value(row) -> AttributeValue:
+    """Decode a worker_attributes SA row value based on value_type."""
+    if row.value_type == "int":
+        return AttributeValue(int(row.int_value))
+    if row.value_type == "float":
+        return AttributeValue(float(row.float_value))
+    return AttributeValue(str(row.str_value or ""))
 
 
 def hydrate_worker_attributes(state: ControllerTransitions, workers: list) -> list:
     if not workers:
         return workers
-    worker_ids = [str(w.worker_id) for w in workers]
-    placeholders = ",".join("?" for _ in worker_ids)
-    with state._db.read_snapshot() as q:
-        attrs = q.raw(
-            f"SELECT worker_id, key, value_type, str_value, int_value, float_value"
-            f" FROM worker_attributes WHERE worker_id IN ({placeholders})",
-            tuple(worker_ids),
-        )
-    attrs_by_worker = _decode_attribute_rows(attrs)
+    worker_ids = [w.worker_id for w in workers]
+    with state._db.read_snapshot() as tx:
+        attr_rows = tx.execute(
+            select(worker_attributes_table).where(worker_attributes_table.c.worker_id.in_(worker_ids))
+        ).all()
+    attrs_by_worker: dict = {}
+    for row in attr_rows:
+        attrs_by_worker.setdefault(row.worker_id, {})[row.key] = _decode_attr_value(row)
     return [_replace(w, attributes=attrs_by_worker.get(w.worker_id, {})) for w in workers]
 
 
 def healthy_active_workers(state: ControllerTransitions) -> list[SchedulableWorker]:
-    return _healthy_active_workers_with_attributes(state._db, state._store.health)
+    with state._db.read_snapshot() as tx:
+        return reads.healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
 
 
-def dispatch_task(state: ControllerTransitions, task: TaskDetailRow, worker_id: WorkerId) -> None:
-    with state._store.transaction() as cur:
+def dispatch_task(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -667,20 +714,21 @@ def transition_task(
     task = query_task_with_attempts(state, task_id)
     assert task is not None
     if new_state == job_pb2.TASK_STATE_KILLED:
-        with state._store.transaction() as cur:
+        with state._db.transaction() as cur:
             return state.cancel_job(cur, task.job_id, reason=error or "killed")
     # Compute worker_id: prefer current attempt's worker, fall back to current_worker_id.
     current_attempt = task.attempts[-1] if task.attempts else None
     worker_id = current_attempt.worker_id if current_attempt is not None else task.current_worker_id
     if worker_id is None:
-        state.set_task_state_for_test(
+        set_task_state_for_test(
+            state,
             task_id,
             new_state,
             error=error,
             exit_code=exit_code,
         )
         return state
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         return state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -738,20 +786,20 @@ class ControllerTestHarness:
         )
         return register_worker(self.state, worker_id, address or f"{worker_id}:8080", meta, healthy=healthy)
 
-    def submit(self, name: str = "test-job", *, cpu: int = 1, replicas: int = 1, **kwargs) -> list[TaskDetailRow]:
+    def submit(self, name: str = "test-job", *, cpu: int = 1, replicas: int = 1, **kwargs) -> list:
         req = make_job_request(name=name, cpu=cpu, replicas=replicas, **kwargs)
         return submit_job(self.state, name, req)
 
-    def dispatch(self, task: TaskDetailRow, worker_id: WorkerId) -> None:
+    def dispatch(self, task, worker_id: WorkerId) -> None:
         dispatch_task(self.state, task, worker_id)
 
     def transition(self, task_id: JobName, new_state: int, **kwargs) -> None:
         transition_task(self.state, task_id, new_state, **kwargs)
 
-    def query_task(self, task_id: JobName) -> TaskDetailRow:
+    def query_task(self, task_id: JobName):
         return query_task(self.state, task_id)
 
-    def query_job(self, job_id: JobName) -> JobDetailRow:
+    def query_job(self, job_id: JobName):
         return query_job(self.state, job_id)
 
 
@@ -999,4 +1047,5 @@ def set_task_band(db: ControllerDB, task_id: JobName, band: int) -> None:
     This helper is still needed for tests that change a task's band mid-flight
     (e.g., simulating admin band overrides or budget-triggered demotions).
     """
-    db.execute("UPDATE tasks SET priority_band = ? WHERE task_id = ?", (band, task_id.to_wire()))
+    with db.transaction() as tx:
+        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task_id).values(priority_band=band))

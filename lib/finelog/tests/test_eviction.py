@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from finelog.store.catalog import SegmentLocation
 from finelog.store.compactor import CompactionConfig
 from finelog.store.duckdb_store import DuckDBLogStore
+from finelog.store.types import SegmentLocation
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 
@@ -15,12 +15,10 @@ from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 def _list_segments_locked(store: DuckDBLogStore, namespace: str):
     """Catalog read serialized against the bg thread.
 
-    DuckDB connections aren't thread-safe and the catalog docstring is
-    explicit that callers hold ``_insertion_lock``. Tests that read directly
-    must do the same.
+    DuckDB connections aren't thread-safe, but ``Catalog`` is internally
+    locked so this is a plain pass-through.
     """
-    with store._insertion_lock:
-        return store._catalog.list_segments(namespace)
+    return store.catalog.list_segments(namespace)
 
 
 def test_eviction_drops_oldest_segment_when_cap_exceeded(tmp_path: Path):
@@ -43,8 +41,8 @@ def test_eviction_drops_oldest_segment_when_cap_exceeded(tmp_path: Path):
 
         store.write_rows("ns", _ipc_bytes(_worker_batch(["b"], [2], [2])))
         _seal(store, "ns")
-        # Drive the eviction tick (compaction tail invokes _eviction_step).
-        store._namespaces["ns"]._eviction_step()
+        # Drive the eviction tick (compaction tail invokes eviction).
+        store.catalog["ns"].compact()
 
         remaining = sorted((tmp_path / "data" / "ns").glob("seg_L1_*.parquet"))
         assert len(remaining) == 1
@@ -66,7 +64,7 @@ def test_eviction_skips_segments_not_yet_copied(tmp_path: Path):
         _seal(store, "ns")
 
         # Two L1s on disk, neither marked copied; eviction must skip both.
-        store._namespaces["ns"]._eviction_step()
+        store.catalog["ns"].compact()
         all_files = sorted((tmp_path / "data" / "ns").glob("seg_L1_*.parquet"))
         assert len(all_files) == 2
     finally:
@@ -106,21 +104,19 @@ def test_fifo_eviction_across_mixed_levels(tmp_path: Path):
     )
     try:
         store.register_table("ns", _worker_schema())
-        ns = store._namespaces["ns"]
+        ns = store.catalog["ns"]
 
         # Three flush+compact cycles drive promotions: with level_targets=(1, 2)
         # each L0 hits the size threshold and promotes to L1 then L2.
         for i in range(3):
             store.write_rows("ns", _ipc_bytes(_worker_batch([f"w-{i}"], [i], [i])))
-            ns._flush_step()
-            while ns._compaction_step():
-                pass
-            ns._sync_step()
+            ns.flush()
+            ns.compact()
 
         # Eviction should now have run and brought us to <=2 local segments,
         # popping oldest first. Evicted rows stay in the catalog with
         # location=REMOTE so the bucket archive is preserved.
-        ns._eviction_step()
+        ns.compact()
         all_rows = _list_segments_locked(store, "ns")
         local_rows = [r for r in all_rows if r.location in {SegmentLocation.LOCAL, SegmentLocation.BOTH}]
         remote_rows = [r for r in all_rows if r.location is SegmentLocation.REMOTE]

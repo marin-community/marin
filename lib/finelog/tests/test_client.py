@@ -404,6 +404,33 @@ def test_table_query_raises_on_too_large(tracked_clients):
         client.close()
 
 
+def test_client_query_round_trips_without_table(tracked_clients):
+    """LogClient.query lets the CLI run SQL without registering a Table first."""
+    client = LogClient.connect("http://h:1")
+    try:
+        # First call lazily constructs the stats client; result is the fake's
+        # empty default. Subsequent calls hit the handler.
+        empty = client.query("SELECT 1 AS n")
+        assert empty.num_rows == 0
+        tracked_clients[0].query_handler = lambda _sql: pa.table({"n": [3]})
+        result = client.query('SELECT COUNT(*) AS n FROM "iris.worker"')
+        assert result.column("n").to_pylist() == [3]
+        assert tracked_clients[0].queries[-1] == 'SELECT COUNT(*) AS n FROM "iris.worker"'
+    finally:
+        client.close()
+
+
+def test_client_query_raises_on_too_large(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        client.query("SELECT 1")  # construct the stats client
+        tracked_clients[0].query_handler = lambda _sql: pa.table({"x": list(range(5))})
+        with pytest.raises(QueryResultTooLargeError):
+            client.query('SELECT * FROM "iris.worker"', max_rows=2)
+    finally:
+        client.close()
+
+
 def test_table_query_translates_invalid_argument(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:

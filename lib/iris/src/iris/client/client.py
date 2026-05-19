@@ -462,7 +462,6 @@ class IrisClient:
     def __init__(
         self,
         cluster: ClusterClient,
-        namespace: Namespace = Namespace(""),
         controller: _ClusterLifecycle | None = None,
     ):
         """Initialize IrisClient with a cluster client.
@@ -476,7 +475,6 @@ class IrisClient:
                 ``shutdown()`` will call ``controller.close()``.
         """
         self._cluster_client = cluster
-        self._namespace = namespace
         self._controller = controller
 
     @classmethod

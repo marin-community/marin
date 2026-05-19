@@ -597,6 +597,7 @@ class Trainer:
                     profiler.start_step,
                     total_prof_steps,
                     profiler.perfetto_link,
+                    profiler_options=profiler.build_jax_profile_options(),
                 ),
                 every=1,
             )

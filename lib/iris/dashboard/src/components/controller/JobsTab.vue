@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { controllerRpcCall, useControllerRpc } from '@/composables/useRpc'
+import { controllerRpcCall, RpcError, useControllerRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import { SEGMENT_COLORS, stateToName, stateDisplayName } from '@/types/status'
 import type { JobState } from '@/types/status'
@@ -182,12 +182,25 @@ async function fetchStarredJobs() {
     const results = await Promise.allSettled(
       ids.map(id => controllerRpcCall<GetJobStatusResponse>('GetJobStatus', { jobId: id })),
     )
+    // Auto-prune stars the controller confirms it no longer knows about.
+    // A 404 from GetJobStatus is a definitive NOT_FOUND — the job has been
+    // evicted from controller state, so there's no row UI to unstar from.
+    // Other failure modes (5xx, network) are treated as transient.
+    const goneIds = results.flatMap((r, i) =>
+      r.status === 'rejected' && r.reason instanceof RpcError && r.reason.status === 404 ? [ids[i]] : [],
+    )
+    if (goneIds.length > 0) {
+      const next = new Set(starredJobIds.value)
+      for (const id of goneIds) next.delete(id)
+      starredJobIds.value = next
+      saveStarredJobs()
+    }
     starredJobsData.value = results
       .filter((r): r is PromiseFulfilledResult<GetJobStatusResponse> => r.status === 'fulfilled' && !!r.value?.job)
       .map(r => r.value.job)
-    const failures = results.filter(r => r.status === 'rejected').length
-    if (failures > 0 && starredJobsData.value.length === 0) {
-      starredError.value = `Failed to load ${failures} starred job${failures !== 1 ? 's' : ''}`
+    const transientFailures = results.length - starredJobsData.value.length - goneIds.length
+    if (transientFailures > 0 && starredJobsData.value.length === 0) {
+      starredError.value = `Failed to load ${transientFailures} starred job${transientFailures !== 1 ? 's' : ''}`
     }
   } finally {
     starredLoading.value = false

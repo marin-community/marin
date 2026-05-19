@@ -189,9 +189,8 @@ def _reduce_gen(
 
 
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
-    cols_set = set(columns)
     for item in stream:
-        yield {k: item[k] for k in cols_set if k in item}
+        yield {k: item[k] for k in columns if k in item}
 
 
 def _load_file_gen(stream: Iterator) -> Iterator:
@@ -772,6 +771,7 @@ def run_stage(
         write_binary_file,
         write_jsonl_file,
         write_parquet_file,
+        write_vortex_file,
     )
 
     stream: Iterator = iter(ctx.shard)
@@ -791,29 +791,24 @@ def run_stage(
 
             if op.skip_existing:
                 fs = url_to_fs(output_path)[0]
-                test_path = output_path
-
-                if fs.exists(test_path):
+                if fs.exists(output_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
                     counters.increment("zephyr/partitions_skipped")
                     yield output_path
                     return
 
-            # Write based on type
             if op.writer_type == "jsonl":
-                result = write_jsonl_file(stream, output_path)["path"]
+                write_jsonl_file(stream, output_path)
             elif op.writer_type == "parquet":
-                result = write_parquet_file(stream, output_path, schema=op.schema)["path"]
+                write_parquet_file(stream, output_path, schema=op.schema)
             elif op.writer_type == "binary":
-                result = write_binary_file(stream, output_path)["path"]
+                write_binary_file(stream, output_path)
             elif op.writer_type == "vortex":
-                from zephyr.writers import write_vortex_file  # circular import: writers → counters → execution → plan
-
-                result = write_vortex_file(stream, output_path, schema=op.schema)["path"]
+                write_vortex_file(stream, output_path, schema=op.schema)
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
 
-            yield result
+            yield output_path
             return
 
         elif isinstance(op, Scatter):
