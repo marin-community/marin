@@ -10,7 +10,7 @@ from haliax.jax_utils import tree_checkpoint_name
 from jaxtyping import Array, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.custom_vjp import custom_vjp_interleaved_down_gather_sum
+from levanter.grug._moe.down_gather import custom_vjp_interleaved_down_gather_sum
 from levanter.grug._moe.common import (
     _gather_sum_reference,
     _prepare_moe_dispatch_indices_with_assignment_ids,
