@@ -1514,6 +1514,23 @@ wheels = [
 ]
 
 [[package]]
+name = "datafusion"
+version = "53.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyarrow" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/58/2b/0f96f12b70839c93930c4e17d767fc32b6c77d548c78784128049e944701/datafusion-53.0.0.tar.gz", hash = "sha256:ba9a5ec06b5453fbd8710d6aeeb515a8bcac4b6c140e254409bb53a5f322ef22", size = 224267, upload-time = "2026-04-13T00:45:02.686Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/4c/60e052813d81f1ffe3123ead013dbdd2cf961daa576cb9056cbb80228e6b/datafusion-53.0.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:a0bd1a98d736571321416dc4ed361a9d1225da1ec9f6c5fad818d75f547697a7", size = 35774913, upload-time = "2026-04-13T00:44:46.235Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/59/beabe5301df3338d8206446cd624079e43bdad46e20377a6336017fb6ccf/datafusion-53.0.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:ce186a8d2405afd67e11e2fb75715019f16b00d070b8d0da89d8aa61cc74c8b5", size = 32667118, upload-time = "2026-04-13T00:44:50.269Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/94/636ab61ade98395daea6e733e225e9c7beef111c7c5b575ac851513e203c/datafusion-53.0.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:288a00a7ef03e2807a4667683f7560efd80d60ed1d41696ac15ca9ded14c8251", size = 35585824, upload-time = "2026-04-13T00:44:53.683Z" },
+    { url = "https://files.pythonhosted.org/packages/34/80/b9f4889209af02f8d14bccb0e6f0519c329b072bc4d2595025a1303f144c/datafusion-53.0.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8fef0004f0161fcfc556c025a7201f9cc3169aa3adb97a86419ebb34182d9efb", size = 38083690, upload-time = "2026-04-13T00:44:57.188Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/1a/ea4831fc6aeefedbcf186c9f6a273d507b1787c03cbb905bded7e1149a6a/datafusion-53.0.0-cp310-abi3-win_amd64.whl", hash = "sha256:4c8410f5f659b926677be6c7d443bbc05d825c078c970b7d8cf977ebcf948314", size = 38120687, upload-time = "2026-04-13T00:45:00.633Z" },
+]
+
+[[package]]
 name = "dataproperty"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -11160,12 +11177,12 @@ dependencies = [
     { name = "typing-extensions", marker = "(sys_platform == 'linux' and extra == 'extra-5-marin-gpu') or (sys_platform != 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-tpu') or (sys_platform != 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-vllm') or (sys_platform != 'linux' and extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-tpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-cpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-gpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra != 'extra-14-marin-levanter-gpu' and extra == 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'extra-5-marin-vllm') or (extra == 'extra-14-marin-levanter-gpu' and extra != 'extra-5-marin-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:d76f08e212285bd84c4c5a3472417f8eb4ee72e4067a604f7508dbfa2119771f", upload-time = "2026-04-27T17:36:45Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:c9a7ca4c74fae10a58e6175b4b2cea953f9322bb6562bbf339ad6a05f52190ad", upload-time = "2026-04-27T17:37:32Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:90ef0c2454e5296a9fb021ddd42252e4ce1abe2c0a4988a173ef90a6cded0bf5", upload-time = "2026-04-27T17:39:29Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:9c8f38efee365cb9d334de8a83ce52fc7e5fc9e5a7b0853285efa1b69e00b0f2", upload-time = "2026-04-27T17:41:30Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:d252cf975fb18c94a85336323ad425f473df56dab35a44b00399bd70c7a3b997", upload-time = "2026-04-27T17:42:06Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp312-cp312-win_amd64.whl", hash = "sha256:7c78215c3af4f62e63f2b2e360f1722fc719b0853c7ac22666483d9810613a4c", upload-time = "2026-04-27T17:43:49Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:d76f08e212285bd84c4c5a3472417f8eb4ee72e4067a604f7508dbfa2119771f", upload-time = "2026-04-27T17:36:45Z", upload-time = "2025-10-14T17:28:16Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:c9a7ca4c74fae10a58e6175b4b2cea953f9322bb6562bbf339ad6a05f52190ad", upload-time = "2026-04-27T17:37:32Z", upload-time = "2025-10-14T17:28:26Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp311-cp311-win_amd64.whl", hash = "sha256:90ef0c2454e5296a9fb021ddd42252e4ce1abe2c0a4988a173ef90a6cded0bf5", upload-time = "2026-04-27T17:39:29Z", upload-time = "2025-10-14T17:28:28Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:9c8f38efee365cb9d334de8a83ce52fc7e5fc9e5a7b0853285efa1b69e00b0f2", upload-time = "2026-04-27T17:41:30Z", upload-time = "2025-10-14T17:28:29Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:d252cf975fb18c94a85336323ad425f473df56dab35a44b00399bd70c7a3b997", upload-time = "2026-04-27T17:42:06Z", upload-time = "2025-10-14T17:28:41Z" },
+    { url = "https://download-r2.pytorch.org/whl/cu128/torch-2.11.0%2Bcu128-cp312-cp312-win_amd64.whl", hash = "sha256:7c78215c3af4f62e63f2b2e360f1722fc719b0853c7ac22666483d9810613a4c", upload-time = "2026-04-27T17:43:49Z", upload-time = "2025-10-14T17:28:47Z" },
 ]
 
 [[package]]

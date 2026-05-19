@@ -26,6 +26,26 @@ def sample_data():
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
 
 
+@pytest.fixture
+def sample_datafusion_ctx():
+    from datafusion import SessionContext
+
+    ctx = SessionContext()
+    ctx.from_pylist(
+        [
+            {"id": 1, "text": "hello", "version": 1},
+            {"id": 1, "text": "hello updated", "version": 2},
+            {"id": 2, "text": "world", "version": 1},
+            {"id": 3, "text": "foo", "version": 1},
+            {"id": 4, "text": "baz", "version": 2},
+            {"id": 5, "text": "fizbuzz", "version": 3},
+            {"id": 6, "text": "buzzfizz", "version": 1},
+        ],
+        "mytable",
+    )
+    return ctx
+
+
 def test_from_list(sample_data, zephyr_ctx):
     """Test creating dataset from list."""
     ds = Dataset.from_list(sample_data)
@@ -50,6 +70,13 @@ def test_from_iterable(zephyr_ctx):
     """Test creating dataset from iterable."""
     ds = Dataset.from_iterable(range(5))
     assert zephyr_ctx.execute(ds).results == [0, 1, 2, 3, 4]
+
+
+def test_from_query(zephyr_ctx, sample_datafusion_ctx):
+    ds = Dataset.from_query(
+        sample_datafusion_ctx,
+        """SELECT id from mytable WHERE version = 1""")
+    assert list(zephyr_ctx.execute(ds)) == [1, 2, 3, 6]
 
 
 def test_filter(sample_data, zephyr_ctx):
