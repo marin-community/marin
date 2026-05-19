@@ -224,13 +224,6 @@ message Controller {
     repeated iris.job.TaskStatus tasks = 1;
   }
 
-  // Lookup for the RunTaskRequest belonging to a (task_id, attempt_id),
-  // issued by a worker that has learned about the attempt via PollTasks.
-  message GetTaskAttemptInfoRequest {
-    string task_id = 1;
-    int32 attempt_id = 2;
-  }
-
   // --- Exec in Container (proxied to worker) ---
   message ExecInContainerRequest {
     string task_id = 1;             // Task whose container to exec into
@@ -582,12 +575,6 @@ service ControllerService {
   // Task operations
   rpc GetTaskStatus(Controller.GetTaskStatusRequest) returns (Controller.GetTaskStatusResponse);
   rpc ListTasks(Controller.ListTasksRequest) returns (Controller.ListTasksResponse);
-  // Returns the RunTaskRequest the worker should execute for the given
-  // (task_id, attempt_id). Caller must have role worker or admin.
-  // Errors: NOT_FOUND (no such task, or the task has no dispatchable spec);
-  // FAILED_PRECONDITION (the task's current attempt has moved past the
-  // requested attempt_id — caller should drop the stale entry).
-  rpc GetTaskAttemptInfo(Controller.GetTaskAttemptInfoRequest) returns (iris.job.RunTaskRequest);
 
   // Worker management
   rpc Register(Controller.RegisterRequest) returns (Controller.RegisterResponse);

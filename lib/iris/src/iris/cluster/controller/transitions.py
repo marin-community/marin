@@ -1006,25 +1006,6 @@ class ControllerTransitions:
             template.entrypoint.workdir_files[filename] = data
         return self._run_template_cache.put(wire, template)
 
-    def run_request_for_attempt(
-        self,
-        snap: Tx,
-        task_id: JobName,
-        attempt_id: int,
-    ) -> job_pb2.RunTaskRequest | None:
-        """Per-attempt RunTaskRequest. Returns None if not dispatchable."""
-        task = reads.get_task_detail(snap, task_id)
-        if task is None:
-            return None
-        template = self.run_request_template(snap, task.job_id)
-        if template is None:
-            return None
-        req = job_pb2.RunTaskRequest()
-        req.CopyFrom(template)
-        req.task_id = task_id.to_wire()
-        req.attempt_id = attempt_id
-        return req
-
     def _recompute_job_state(self, cur: Tx, job_id: JobName) -> int | None:
         _basis_row = cur.execute(
             select(jobs_table.c.state, jobs_table.c.started_at_ms, job_config_table.c.max_task_failures)

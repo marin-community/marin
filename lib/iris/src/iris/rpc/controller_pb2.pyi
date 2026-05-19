@@ -200,13 +200,6 @@ class Controller(_message.Message):
         TASKS_FIELD_NUMBER: _ClassVar[int]
         tasks: _containers.RepeatedCompositeFieldContainer[_job_pb2.TaskStatus]
         def __init__(self, tasks: _Optional[_Iterable[_Union[_job_pb2.TaskStatus, _Mapping]]] = ...) -> None: ...
-    class GetTaskAttemptInfoRequest(_message.Message):
-        __slots__ = ("task_id", "attempt_id")
-        TASK_ID_FIELD_NUMBER: _ClassVar[int]
-        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-        task_id: str
-        attempt_id: int
-        def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class ExecInContainerRequest(_message.Message):
         __slots__ = ("task_id", "command", "timeout_seconds")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]

@@ -1541,45 +1541,6 @@ class ControllerServiceImpl:
 
         return controller_pb2.Controller.ListTasksResponse(tasks=task_statuses)
 
-    def get_task_attempt_info(
-        self,
-        request: controller_pb2.Controller.GetTaskAttemptInfoRequest,
-        ctx: Any,
-    ) -> job_pb2.RunTaskRequest:
-        """Return the ``RunTaskRequest`` for a ``(task_id, attempt_id)``."""
-        if not request.task_id:
-            raise ConnectError(Code.INVALID_ARGUMENT, "task_id is required")
-        try:
-            task_id = JobName.from_wire(request.task_id)
-            task_id.require_task()
-        except ValueError as exc:
-            raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
-
-        # The response embeds the job's ``environment``, which Fray populates
-        # with secrets (HF_TOKEN, WANDB_API_KEY, ...). Workers (and admins) only.
-        if self._auth.provider is not None:
-            authorize(AuthzAction.ACT_AS_WORKER)
-
-        wire = task_id.to_wire()
-        with self._db.read_snapshot() as snap:
-            task_row = reads.get_task_detail(snap, task_id)
-            if task_row is None:
-                raise ConnectError(Code.NOT_FOUND, f"Task {wire} not found")
-            current_attempt_id = int(task_row.current_attempt_id)
-            if current_attempt_id != int(request.attempt_id):
-                raise ConnectError(
-                    Code.FAILED_PRECONDITION,
-                    f"Task {wire} current_attempt_id={current_attempt_id} "
-                    f"does not match requested attempt_id={request.attempt_id}",
-                )
-            req = self._transitions.run_request_for_attempt(snap, task_id, int(request.attempt_id))
-            if req is None:
-                raise ConnectError(
-                    Code.NOT_FOUND,
-                    f"Task {wire} has no dispatchable RunTaskRequest (reservation holder or job removed)",
-                )
-        return req
-
     # --- Worker Management ---
 
     def register(
