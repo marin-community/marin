@@ -1693,5 +1693,85 @@ class TestAutoscalerHealthProbe:
         autoscaler.probe_health(Timestamp.from_ms(1_000))
 
         expected = [w.internal_address for w in handle.describe().workers]
-        assert seen_addresses == expected, "probe should hit each worker's described address"
+        assert sorted(seen_addresses) == sorted(expected), "probe should hit each worker's described address"
+        autoscaler.shutdown()
+
+    def test_per_worker_counter_isolates_one_dead_worker(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """One dead worker in a multi-VM slice trips the slice, even when the rest stay healthy."""
+        from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
+
+        handle = make_mock_slice_handle(
+            "slice-001",
+            vm_states=[vm_pb2.VM_STATE_READY, vm_pb2.VM_STATE_READY],
+        )
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        _mark_discovered_ready(group, [handle])
+        addrs = {w.worker_id: w.internal_address for w in handle.describe().workers}
+        group.set_worker_addresses(handle.slice_id, addrs)
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+
+        dead_worker = handle.describe().workers[1]
+        dead_addr = dead_worker.internal_address
+        monkeypatch.setattr(
+            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
+            lambda addr, port: addr != dead_addr,
+        )
+
+        for _ in range(PING_FAILURE_THRESHOLD):
+            autoscaler.probe_health(Timestamp.from_ms(1_000))
+
+        assert group.ready_slice_count() == 0, "dead worker should trip the slice"
+        autoscaler.shutdown()
+
+    def test_describe_failure_during_lazy_fetch_does_not_terminate(
+        self,
+        scale_group_config: config_pb2.ScaleGroupConfig,
+        base_worker_config: config_pb2.WorkerConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A transient handle.describe() exception is logged and skipped, not fatal."""
+        from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
+
+        handle = make_mock_slice_handle("slice-001", all_ready=True)
+        good_addresses = {w.worker_id: w.internal_address for w in handle.describe().workers}
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform)
+        group.reconcile()
+        _mark_discovered_ready(group, [handle])
+        # No cached addresses; describe() will be called.
+        autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+
+        raising = {"on": True}
+        original_describe = handle.describe
+
+        def _maybe_raise():
+            if raising["on"]:
+                raise RuntimeError("transient cloud blip")
+            return original_describe()
+
+        monkeypatch.setattr(handle, "describe", _maybe_raise)
+        monkeypatch.setattr(
+            "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
+            lambda addr, port: True,
+        )
+
+        # PING_FAILURE_THRESHOLD ticks while describe() raises must not terminate.
+        for _ in range(PING_FAILURE_THRESHOLD):
+            autoscaler.probe_health(Timestamp.from_ms(1_000))
+        assert group.ready_slice_count() == 1
+        assert group.get_slice("slice-001") is not None
+        assert group.get_slice("slice-001").describe  # sanity: handle still callable next tick
+
+        # Once describe() recovers, the probe resolves addresses and caches them.
+        raising["on"] = False
+        autoscaler.probe_health(Timestamp.from_ms(2_000))
+        cached = group.ready_slice_probe_targets()[0][2]
+        assert cached == good_addresses
         autoscaler.shutdown()

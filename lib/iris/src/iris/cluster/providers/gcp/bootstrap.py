@@ -207,7 +207,9 @@ for i in $(seq 1 60); do
     sleep 2
 done
 
-echo "[iris-init] WARNING: Worker not healthy after 120s; docker will continue retrying"
+echo "[iris-init] WARNING: Worker not healthy after 120s. Docker will keep restarting the"
+echo "[iris-init] container (--restart=unless-stopped); the autoscaler health probe will reap"
+echo "[iris-init] this slice if /health stays down for ~100s of probes."
 echo "[iris-init] Container status:"
 sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
 echo "[iris-init] Container logs:"
