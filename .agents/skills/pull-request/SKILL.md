@@ -60,7 +60,7 @@ issue link.
 
 Run these before pushing. Do not skip any step.
 
-1. `./infra/pre-commit.py --all-files --fix` — resolve all issues. Do not substitute `uv run pre-commit ...`.
+1. `./infra/pre-commit.py --changed --fix` — resolve all issues. Do not substitute `uv run pre-commit ...`.
 2. `uv run pytest -m 'not slow'` — relevant test directories.
 3. If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`
 4. If docs-heavy: `uv run mkdocs build --strict`
