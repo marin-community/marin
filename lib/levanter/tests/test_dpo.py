@@ -33,7 +33,7 @@ from levanter.data.text import (
     PreferencePairDataset,
     TextLmDatasetFormat,
 )
-from levanter.adaptation import LoraAdaptationConfig, NoAdaptationConfig
+from levanter.adaptation import AdaptationExportConfig, LoraAdaptationConfig, NoAdaptationConfig
 from levanter.dpo import (
     CachedDpoExample,
     DpoModel,
@@ -54,6 +54,7 @@ from levanter.main.train_dpo import (
     TrainDpoConfig,
     _build_dpo_dataset,
     _derive_training_keys,
+    _install_separate_reference_export_hooks,
     _periodic_eval_callback,
     _restore_policy_model_from_partial_checkpoint,
     _scheduled_eval_callback,
@@ -696,6 +697,87 @@ def test_restore_policy_model_from_partial_checkpoint_recovers_base_model():
 
     assert wrong_logp != pytest.approx(trained_logp)
     assert restored_logp == pytest.approx(trained_logp)
+
+
+class _CapturingConverter:
+    reference_checkpoint = "base-model"
+
+    def __init__(self):
+        self.calls = []
+
+    def save_pretrained(self, model, path, **kwargs):
+        self.calls.append((model, path, kwargs))
+
+
+class _CapturingTrainer:
+    run_id = "test-run"
+    config = SimpleNamespace(checkpointer=None)
+
+    def __init__(self):
+        self.hooks = []
+
+    def add_hook(self, hook, *, every: int):
+        self.hooks.append((hook, every))
+
+
+def test_separate_reference_lora_merged_export_saves_policy_model():
+    config = _tiny_gpt2_config()
+    Vocab = Axis("vocab", 32)
+    base_key, reference_key, adapter_key = jrandom.split(jrandom.PRNGKey(0), 3)
+
+    adapter = LoraAdaptationConfig(r=4)
+    policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
+    reference = config.build(Vocab, key=reference_key)
+    trainer = _CapturingTrainer()
+    converter = _CapturingConverter()
+
+    adapter.install_export_hooks(
+        trainer=trainer,
+        converter=converter,
+        tokenizer=None,
+        export=AdaptationExportConfig(
+            hf_save_steps=1,
+            merged_hf_save_path="/tmp/export",
+        ),
+    )
+
+    hook, every = trainer.hooks[0]
+    assert every == 1
+
+    hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
+
+    assert len(converter.calls) == 1
+    saved_model, saved_path, _ = converter.calls[0]
+    assert isinstance(saved_model, Gpt2LMHeadModel)
+    assert saved_path == "/tmp/export/step-1"
+
+
+def test_separate_reference_hf_export_passes_generation_config():
+    trainer = _CapturingTrainer()
+    converter = _CapturingConverter()
+    generation_config = {"eos_token_id": [2, 50]}
+
+    _install_separate_reference_export_hooks(
+        trainer=trainer,
+        converter=converter,
+        export=AdaptationExportConfig(
+            hf_save_path="/tmp/export",
+            hf_save_steps=1,
+            generation_config=generation_config,
+        ),
+    )
+
+    hook, every = trainer.hooks[0]
+    assert every == 1
+
+    model = object()
+    hook(SimpleNamespace(step=1, eval_model=model))
+
+    assert len(converter.calls) == 1
+    saved_model, saved_path, saved_kwargs = converter.calls[0]
+    assert saved_model is model
+    assert saved_path == "/tmp/export/step-1"
+    assert saved_kwargs["generation_config"] == generation_config
 
 
 def test_vmapped_init_with_sharding_handles_layer_axis():

@@ -49,7 +49,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Tuple, TypeVar, Union
+from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Union
 
 import equinox as eqx
 import jax
@@ -526,6 +526,7 @@ def save_merged_hf_checkpoint_callback(
     converter: HFCheckpointConverter,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
     generation_config: Optional[GenerationConfigDict] = None,
+    model_getter: Optional[Callable[[StepInfo], PyTree]] = None,
     **hf_upload_kwargs,
 ):
     """
@@ -559,7 +560,7 @@ def save_merged_hf_checkpoint_callback(
         logger.info(f"Saving merged HF model for step {step.step} to {base_path}")
         path = os.path.join(base_path, f"step-{step.step}")
 
-        model = step.eval_model
+        model = model_getter(step) if model_getter is not None else step.eval_model
 
         save_merged_hf_model(
             model,

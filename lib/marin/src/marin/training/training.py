@@ -204,7 +204,10 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
     # LoRA-DPO: the bare adapter is not a runnable HF checkpoint; export the merged
     # adapter+base instead. bake_output_path put the HF path on hf_save_path.
     if isinstance(config, TrainDpoConfig) and not isinstance(config.adapter, NoAdaptationConfig):
-        config = replace(config, hf_save_path=None, merged_hf_save_path=config.hf_save_path)
+        merged_hf_save_path = config.merged_hf_save_path
+        if merged_hf_save_path is None and config.hf_save_steps is not None:
+            merged_hf_save_path = config.hf_save_path
+        config = replace(config, hf_save_path=None, merged_hf_save_path=merged_hf_save_path)
 
     return replace(pod_config, train_config=config)
 
@@ -297,10 +300,9 @@ def _maybe_auto_resolve_dpo_schedule(config: TrainDpoOnPodConfig) -> TrainDpoOnP
     train_config = config.train_config
     trainer = train_config.trainer
 
-    dataset_size = _dpo_training_dataset_size(train_config)
-    logger.info("Resolved DPO train set size from tokenizer stats: %d examples", dataset_size)
-
     if config.auto_num_epochs is not None:
+        dataset_size = _dpo_training_dataset_size(train_config)
+        logger.info("Resolved DPO train set size from tokenizer stats: %d examples", dataset_size)
         target_examples = math.ceil(config.auto_num_epochs * dataset_size)
         num_train_steps = _num_train_steps_for_examples(trainer.train_batch_size, target_examples)
         logger.info(

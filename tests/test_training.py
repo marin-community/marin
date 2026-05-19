@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 from fray import ResourceConfig
+from levanter.adaptation import LoraAdaptationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DatasetComponent, PreferenceChatLmDatasetFormat, PreferenceLmDataConfig
 from levanter.main import train_lm
@@ -107,6 +108,26 @@ def test_update_config_to_use_out_path_sets_run_specific_temp_checkpoints(traine
         assert checkpointer.temporary_base_path == (
             "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints"
         )
+
+
+def test_update_config_to_use_out_path_does_not_enable_adapter_hf_export_without_steps(trainer_config):
+    with patch(
+        "marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run"
+    ):
+        config = TrainDpoOnPodConfig(
+            train_config=TrainDpoConfig(
+                trainer=dataclasses.replace(trainer_config, num_train_steps=1),
+                adapter=LoraAdaptationConfig(),
+                hf_save_steps=None,
+            ),
+            resources=ResourceConfig.with_tpu("v4-8"),
+            output_path="gs://bucket/checkpoints/dpo/example-run",
+        )
+
+        updated = _update_config_to_use_out_path(config)
+
+    assert updated.train_config.hf_save_path is None
+    assert updated.train_config.merged_hf_save_path is None
 
 
 def test_recursive_path_checking(trainer_config):
@@ -265,6 +286,34 @@ def test_auto_resolve_dpo_schedule_applies_validation_split(trainer_config, tmp_
     resolved = _maybe_auto_resolve_dpo_schedule(config)
 
     assert resolved.train_config.trainer.num_train_steps == 2
+
+
+def test_auto_resolve_dpo_schedule_does_not_require_stats_for_eval_only(trainer_config, tmp_path):
+    data = PreferenceLmDataConfig(
+        components={
+            "prefs": DatasetComponent(
+                cache_dir=str(tmp_path),
+                format=PreferenceChatLmDatasetFormat(),
+            )
+        },
+        train_weights={"prefs": 1.0},
+    )
+    train_config = TrainDpoConfig(
+        data=data,
+        trainer=dataclasses.replace(trainer_config, train_batch_size=64, num_train_steps=100, steps_per_eval=1),
+        validation_split_fraction=None,
+    )
+    config = TrainDpoOnPodConfig(
+        train_config=train_config,
+        resources=ResourceConfig.with_tpu("v4-8"),
+        auto_validation_runs=5,
+    )
+
+    resolved = _maybe_auto_resolve_dpo_schedule(config)
+
+    assert resolved.train_config.trainer.num_train_steps == 100
+    assert resolved.train_config.run_initial_eval is True
+    assert resolved.train_config.scheduled_eval_steps == [25, 50, 75]
 
 
 def test_default_dpo_attaches_lm_validation_sets():

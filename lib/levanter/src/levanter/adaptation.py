@@ -16,6 +16,7 @@ from levanter.compat.hf_checkpoints import (
     RepoRef,
     save_hf_checkpoint_callback,
 )
+from levanter.dpo import DpoModel
 from levanter.lora import (
     LoraConfig,
     lora_trainable_params_filter,
@@ -89,6 +90,12 @@ def _parse_hf_save_dtype(hf_save_dtype: str | None) -> jnp.dtype | None:
     except TypeError:
         logger.warning("Invalid hf_save_dtype: %s. Defaulting to None.", hf_save_dtype)
         return None
+
+
+def _policy_model_for_merged_lora_export(model: DpoModel | LmHeadModel) -> LmHeadModel:
+    if isinstance(model, DpoModel):
+        return model.policy
+    return model
 
 
 @AdaptationConfig.register_subclass("none")
@@ -200,6 +207,7 @@ class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
                     converter,
                     export.merged_hf_upload,
                     generation_config=export.generation_config,
+                    model_getter=lambda step: _policy_model_for_merged_lora_export(step.eval_model),
                 ),
                 every=export.hf_save_steps,
             )

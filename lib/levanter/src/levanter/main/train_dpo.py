@@ -555,6 +555,7 @@ def _install_separate_reference_export_hooks(
             os.path.join(full_save_path, f"step-{step.step}"),
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
+            generation_config=export.generation_config,
             **hf_upload_kwargs,
         )
 
