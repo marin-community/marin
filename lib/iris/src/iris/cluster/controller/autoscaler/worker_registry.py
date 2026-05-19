@@ -23,8 +23,12 @@ class _RestoredWorkerHandle:
     """Minimal handle placeholder used for restored tracked workers."""
 
     def __init__(self, worker_id: str, address: str) -> None:
+        # address is host:port, self-reported by the worker at registration. A
+        # port-less address would build an http://host URL that probes :80 and
+        # silently reap a healthy slice, so reject it here.
+        assert not address or ":" in address, f"restored worker {worker_id} address missing port: {address!r}"
         self._worker_id = worker_id
-        self._address = address  # host:port, as self-reported by the worker at registration
+        self._address = address
 
     @property
     def worker_id(self) -> str:
