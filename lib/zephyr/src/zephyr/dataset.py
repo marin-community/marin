@@ -238,7 +238,7 @@ class FlatMapOp:
 class LoadFileOp:
     """Load records from files (parquet, jsonl, vortex, etc.)."""
 
-    format: Literal["auto", "parquet", "jsonl", "vortex", "datafusion"] = "auto"
+    format: Literal["auto", "parquet", "jsonl", "vortex"] = "auto"
     columns: list[str] | None = None
     approx_shard_bytes: int | None = None
     include_file_paths: bool = False
@@ -728,7 +728,6 @@ class Dataset(Generic[T]):
             self.source,
             [*self.operations, LoadFileOp("vortex", columns, None, include_file_paths, file_path_column)],
         )
-
 
     def map_shard(
         self,
