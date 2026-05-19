@@ -1,6 +1,6 @@
 ---
-name: restart-iris-controller
-description: Restart the Iris controller with state preservation. Use when asked to restart, redeploy, or upgrade the Iris controller or cluster.
+name: restart-iris
+description: Restart the Iris controller with state preservation.
 ---
 
 Restart the Iris controller. Follow the procedures in `lib/iris/OPS.md` — specifically the "Controller Restart" section (dry-run validation, restart workflow, post-restart verification, error recovery).

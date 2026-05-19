@@ -1,13 +1,13 @@
 ---
-name: agent-profiling
-description: Profile JAX training using xprof/TensorBoard/Perfetto and analyze hotspots. Use when asked to profile, benchmark, or optimize training throughput.
+name: profile-training
+description: Profile JAX training and analyze hotspots. Use when profiling or optimizing training throughput.
 ---
 
 # Skill: Agent-Driven Profiling (XPlane/xprof/TensorBoard/Perfetto)
 
 ## Overview
-Use this skill to turn a `jax_profile` artifact into a deterministic, agent-consumable summary and a concrete optimization workflow:
-
+Turn a `jax_profile` artifact into a deterministic, agent-consumable summary and
+a concrete optimization workflow:
 1. capture a representative profile,
 2. ingest to `profile_summary.v1`,
 3. query hotspots and bottlenecks,
@@ -15,26 +15,26 @@ Use this skill to turn a `jax_profile` artifact into a deterministic, agent-cons
 5. re-profile and compare.
 
 ## Scope
-Ingestion source of truth:
-- XPlane protobufs inside Levanter `jax_profile` artifacts:
+Ingestion sources:
+- XPlane protobufs inside Levanter `jax_profile` artifacts (source of truth):
   - `plugins/profile/<timestamp>/*.xplane.pb`
   - explicit local `*.xplane.pb` files via `--xplane-file`
-- xprof aggregate tables exported from the same XPlane protobuf when the optional `xprof` package is available:
-  - step overview timing
-  - kernel stats
-  - collective breakdowns
-  - xprof bottleneck statements
+- xprof aggregate tables exported from the same XPlane protobuf when the
+  optional `xprof` package is available: step overview timing, kernel stats,
+  collective breakdowns, xprof bottleneck statements.
 - Perfetto trace JSON as an explicit/fallback source for old artifacts:
   - `plugins/profile/<timestamp>/perfetto_trace.json.gz`
   - `plugins/profile/<timestamp>/*.trace.json.gz`
 
-Prefer XPlane protobuf for new work. Perfetto trace JSON commonly hits the trace event cap, while XPlane contains the
-uncapped timeline events needed for named-scope regions, pre-op gaps, gap context, process/thread metadata, and xprof
-aggregate tables. Use `--trace-file` only when you intentionally want a specific Perfetto JSON trace or when handling an
-older artifact with no XPlane protobuf.
+Prefer XPlane protobuf for new work. Perfetto trace JSON commonly hits the trace
+event cap; XPlane contains the uncapped timeline events needed for named-scope
+regions, pre-op gaps, gap context, process/thread metadata, and xprof aggregate
+tables. Use `--trace-file` only for a specific Perfetto JSON trace or an older
+artifact with no XPlane protobuf.
 
 ## Capture Profiles
-Use Levanter profiler flags so profiles are uploaded consistently as `jax_profile` artifacts:
+Use Levanter profiler flags so profiles upload consistently as `jax_profile`
+artifacts:
 
 ```bash
 uv run ... \
@@ -44,7 +44,8 @@ uv run ... \
   --trainer.profiler_perfetto_link false
 ```
 
-For profiles where xprof/HLO protobuf tables matter, enable JAX profile options through the Levanter profiler config:
+For profiles where xprof/HLO protobuf tables matter, enable JAX profile options
+through the Levanter profiler config:
 
 ```bash
 uv run ... \
@@ -57,22 +58,20 @@ uv run ... \
   --trainer.profiler.profile_options.enable_hlo_proto true
 ```
 
-Keep the profiler window short when enabling HLO protobuf collection. It can make artifacts much larger and may increase
-profile upload/finalization time.
+Keep the profiler window short when enabling HLO protobuf collection — it
+enlarges artifacts and can increase profile upload/finalization time.
+
+For better profile readability, use `haliax.jax_utils.named_call` and
+`jax.named_scope` liberally in model code; these names flow into trace
+annotations and make region-level summaries far more actionable.
 
 Reference:
 - `lib/levanter/docs/Performance-Guide.md`
 - `.agents/skills/add-pallas-kernel/`
 
-For better profile readability, use `haliax.jax_utils.named_call` and `jax.named_scope` liberally in model code.
-These names flow into trace annotations and make region-level summaries far more actionable.
-
 ## Ingest to Structured Summary
-Pick a download location for pulled profile artifacts:
-- ephemeral/local machine: `/tmp`
-- in-repo working area: `scratch/`
-
-Examples:
+Pick a download location for pulled profile artifacts: `/tmp` for
+ephemeral/local, `scratch/` for an in-repo working area.
 
 ```bash
 # /tmp (ephemeral)
@@ -110,10 +109,8 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
-`--run-target` accepts:
-- bare run id (requires `--entity` and `--project`),
-- `entity/project/run_id`,
-- full W&B run URL.
+`--run-target` accepts: a bare run id (requires `--entity` and `--project`),
+`entity/project/run_id`, or a full W&B run URL.
 
 ### Option C: From a local artifact directory
 
@@ -123,10 +120,10 @@ uv run python lib/marin/tools/profile_summary.py summarize \
   --output /tmp/profile_summary.json
 ```
 
-If the artifact directory contains `*.xplane.pb`, `--profile-dir` automatically uses the XPlane path.
-
-When both `*.xplane.pb` and Perfetto trace JSON are present, `--profile-dir` reads the XPlane protobuf by default because
-Perfetto exports are often capped. Use `--trace-file` to force a specific Perfetto JSON file.
+If the directory contains `*.xplane.pb`, `--profile-dir` uses the XPlane path
+automatically. When both `*.xplane.pb` and Perfetto trace JSON are present,
+`--profile-dir` reads the XPlane protobuf by default (Perfetto exports are often
+capped). Use `--trace-file` to force a specific Perfetto JSON file.
 
 ### Option D: From a specific trace file
 
@@ -138,9 +135,10 @@ uv run python lib/marin/tools/profile_summary.py summarize \
 
 ### Option E: From a specific XPlane protobuf
 
-Direct XPlane timeline parsing uses `protobuf` and does not require TensorFlow-generated `xplane_pb2` modules. If `xprof`
-is installed, ingestion also exports compact xprof table JSON and augments the timeline summary with aggregate step,
-kernel, collective, and bottleneck evidence.
+Direct XPlane timeline parsing uses `protobuf` and does not require
+TensorFlow-generated `xplane_pb2` modules. If `xprof` is installed, ingestion
+also exports compact xprof table JSON and augments the timeline summary with
+aggregate step, kernel, collective, and bottleneck evidence.
 
 ```bash
 uv run --with xprof --with protobuf python lib/marin/tools/profile_summary.py summarize \
@@ -150,16 +148,17 @@ uv run --with xprof --with protobuf python lib/marin/tools/profile_summary.py su
   --output /tmp/profile_summary.json
 ```
 
-Without `--xplane-output-dir`, the command still parses XPlane timeline events directly. Add `--with xprof` when you want
-xprof aggregate table augmentation. Add `--xplane-output-dir` when you want the exported table JSON preserved; this flag
-requires the optional `xprof` package.
+Without `--xplane-output-dir` the command still parses XPlane timeline events
+directly. Add `--with xprof` for xprof aggregate table augmentation; add
+`--xplane-output-dir` to preserve the exported table JSON (this flag requires
+the optional `xprof` package).
 
-XPlane summaries expose hierarchical named-scope regions, pre-op gaps, gap region context, process/thread/timeline event
-metadata, step timing when step markers or xprof overview rows exist, xprof bottleneck statements, kernel stats,
-collective breakdowns, and optimization candidates.
+XPlane summaries expose hierarchical named-scope regions, pre-op gaps, gap
+region context, process/thread/timeline event metadata, step timing (when step
+markers or xprof overview rows exist), xprof bottleneck statements, kernel
+stats, collective breakdowns, and optimization candidates.
 
-Summary version tag:
-- `profile_summary.v1`
+Summary version tag: `profile_summary.v1`
 
 Generate a deterministic markdown root-cause report:
 
@@ -170,8 +169,8 @@ uv run python lib/marin/tools/profile_summary.py report \
 ```
 
 Trace quality checks are surfaced in `trace_overview`:
-- `suspected_truncation`: `true` when event counts match a known export cap pattern.
-- `quality_warnings`: warnings to treat hotspot/gap attribution with extra caution.
+- `suspected_truncation`: `true` when event counts match a known export cap.
+- `quality_warnings`: warnings to treat hotspot/gap attribution with caution.
 
 ## Agent Queries
 Top ops:
@@ -200,7 +199,8 @@ uv run python lib/marin/tools/profile_summary.py query \
 
 Pre-op gap attribution is marker-aware:
 - `gap_before_ops[].payload_op`: op where useful work starts after the idle period.
-- `gap_before_ops[].marker_op`: first op observed after the gap (often lightweight setup like `iota.*`).
+- `gap_before_ops[].marker_op`: first op observed after the gap (often
+  lightweight setup like `iota.*`).
 
 Hierarchical semantic regions (derived from `tf_op` paths when available):
 
@@ -277,18 +277,17 @@ uv run python lib/marin/tools/profile_summary.py publish \
   --alias latest
 ```
 
-The comparison reports:
-- steady-state step-time delta,
-- step class deltas (light/heavy when detected),
-- compute/comm/host/stall share deltas,
-- semantic family deltas with workload-normalized metrics,
-- provenance checks (trace hash/run identity),
-- regressed/improved ops by exclusive duration.
+The comparison reports: steady-state step-time delta, step class deltas
+(light/heavy when detected), compute/comm/host/stall share deltas, semantic
+family deltas with workload-normalized metrics, provenance checks (trace
+hash/run identity), and regressed/improved ops by exclusive duration.
 
 ## Success Metrics
 MVP is successful when:
 - one representative profile is summarized reproducibly into `profile_summary.v1`,
-- queries produce deterministic structured answers for top ops and comm/compute breakdown,
-- one end-to-end before/after comparison bundle is completed and either:
-  - throughput improves measurably, or
-  - a clear root-cause report is produced with profile evidence.
+- queries produce deterministic structured answers for top ops and comm/compute
+  breakdown,
+- one end-to-end before/after comparison bundle is completed and either
+  throughput improves measurably or a clear root-cause report is produced with
+  profile evidence.
+</content>

@@ -1,6 +1,6 @@
 ---
 name: scrub-experiment-issue-tldrs
-description: Scheduled scrub workflow for maintaining newcomer-friendly TL;DR blocks on experiment issues.
+description: Scheduled scrub: TL;DR blocks on experiment issues.
 schedule_cron: "0 8 * * *"
 schedule_tz: America/New_York
 ---
@@ -9,7 +9,7 @@ schedule_tz: America/New_York
 
 Use this skill on scheduled scrub turns that maintain `experiment` issue summaries in `marin-community/marin`.
 
-The Python selector script only decides which issues to inspect and provides thread context. All summary judgment, writing, and GitHub issue editing lives in this markdown workflow.
+The Python selector script only picks which issues to inspect and provides thread context. All summary judgment, writing, and GitHub issue editing lives in this workflow.
 
 ## Focus
 
@@ -62,4 +62,4 @@ One short newcomer-friendly summary paragraph.
 - Keep the run focused on useful issue-body improvements rather than broad repository changes.
 - If there are zero candidates, report that and exit without mutating GitHub.
 - If you mutate any issue bodies or labels, report the affected issue numbers and what changed.
-- Always end with the required `HARNESS_SCRUB_LOOP` footer supplied by the base scrub contract.
+- End the run with exactly one footer line of valid one-line JSON: `HARNESS_SCRUB_LOOP {"needs_followup_at":null}`. Set `needs_followup_at` to null when the run is complete, or a future RFC 3339 timestamp when another follow-up turn is needed.

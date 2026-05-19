@@ -1,9 +1,9 @@
 ---
-name: canary-triage
-description: Triage a failed canary ferry run. Gather diagnostics, identify root cause, file a GitHub issue, and write a Slack summary. Used by CI on scheduled canary failures.
+name: triage-canary
+description: Triage a failed canary ferry run (CI-invoked).
 ---
 
-# Skill: Canary Triage
+# Skill: Triage Canary
 
 Triage a failed canary ferry run. Diagnose root cause, file a GitHub issue,
 write a Slack summary. Diagnosis and reporting only — no code changes, no PRs.
