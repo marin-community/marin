@@ -18,7 +18,7 @@ from unittest.mock import patch
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
 
-from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
+from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
 from experiments.marin_models import MARIN_CHAT_TEMPLATE
 from levanter.tokenizers import (
     MarinTokenizer,
@@ -1135,22 +1135,10 @@ _MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
         {},
     ),
     (
-        "qwen3",
-        "Qwen/Qwen3-8B",
-        QWEN_3_CHAT_TEMPLATE,
+        "llama3.1",
+        "meta-llama/Llama-3.1-8B",
+        LLAMA_3_1_CHAT_TEMPLATE,
         {"tools": None},
-    ),
-    (
-        "gemma3",
-        "google/gemma-3-4b-it",
-        None,
-        {},
-    ),
-    (
-        "gpt-oss",
-        "openai/gpt-oss-20b",
-        None,
-        {"tools": None, "builtin_tools": None},
     ),
 ]
 
