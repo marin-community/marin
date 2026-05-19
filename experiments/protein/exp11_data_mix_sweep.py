@@ -228,6 +228,12 @@ def scaled_lr(batch_size: int, hidden_size: int) -> float:
 WEIGHT_DECAY: float = 0.01
 WARMUP: float = 0.1
 
+# LR schedule (uniform across stages). Linear decay to ``DECAY * peak`` over
+# the post-warmup window. Deliberately overrides Levanter's cosine default so
+# the smoke/mix/scale runs are directly comparable.
+LR_SCHEDULE: str = "linear"
+DECAY: float = 0.2
+
 # Vocab size for the legacy ``timodonnell/protein-docs-tokenizer@83f597d88e9b``
 # revision (pinned in PROTEIN_TOKENIZER). Hardcoded so it lands in run-config
 # hashes / wandb tags; bump if the tokenizer pin changes. Matches the value
@@ -466,6 +472,19 @@ def _components() -> dict[str, DatasetComponent]:
     return components
 
 
+def _has_nonzero_weight(train_weights: dict[str, float] | list[tuple[int, dict[str, float]]], name: str) -> bool:
+    """Mirror of Levanter's ``LmDataConfig._has_nonzero_weight``.
+
+    Levanter's ``build_caches("train")`` skips components that have zero
+    weight in every stage; if ``num_validation_sequences`` lists one of
+    those names, the IID-carve step KeyErrors. Keep this in lockstep with
+    the upstream check at ``lib/levanter/src/levanter/data/text/datasets.py``.
+    """
+    if isinstance(train_weights, dict):
+        return train_weights.get(name, 0) > 0
+    return any(w.get(name, 0) > 0 for _, w in train_weights)
+
+
 def build_mixture(mixture: Mixture, num_train_steps: int, *, batch_size: int) -> LmDataConfig:
     """Build the LmDataConfig for one mixture at a given (step, batch) shape.
 
@@ -475,7 +494,16 @@ def build_mixture(mixture: Mixture, num_train_steps: int, *, batch_size: int) ->
     """
     components = _components()
     train_weights = _train_weights_for(mixture, num_train_steps, batch_size=batch_size)
-    num_validation_sequences = {cell.component_name: IID_EVAL_SEQS_PER_TRAIN for cell in TRAIN_CELLS}
+    # IID-carve only from train cells with nonzero weight in this mixture.
+    # Levanter's build_caches("train") skips components that are zero in every
+    # stage, so listing a skipped cell here KeyErrors in the IID-carve step of
+    # _validation_datasets_unwrapped. Matters for single-cell mixtures (m1/m2/m3)
+    # and staged mixtures that omit a quality (m7/m8 never use M).
+    num_validation_sequences = {
+        cell.component_name: IID_EVAL_SEQS_PER_TRAIN
+        for cell in TRAIN_CELLS
+        if _has_nonzero_weight(train_weights, cell.component_name)
+    }
     return LmDataConfig(
         components=components,
         train_weights=train_weights,
@@ -546,7 +574,8 @@ def _describe_target(spec: "StageSpec", target: SweepTarget) -> str:
     lines = [
         f"  {target.target_id}",
         f"    model={spec.model_tag} batch={spec.batch_size} steps={spec.num_train_steps} "
-        f"steps_per_eval={spec.steps_per_eval} lr={spec.learning_rate:.4g} tokens={tokens_str}",
+        f"steps_per_eval={spec.steps_per_eval} lr={spec.learning_rate:.4g} tokens={tokens_str} "
+        f"lr_schedule={LR_SCHEDULE} decay={DECAY}",
     ]
     if isinstance(quality_weights, dict):
         lines.append(f"    mixture (static): {_format_weights(quality_weights)}")
@@ -622,6 +651,8 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         learning_rate=versioned(spec.learning_rate),
         weight_decay=WEIGHT_DECAY,
         warmup=WARMUP,
+        decay=DECAY,
+        lr_schedule=LR_SCHEDULE,
         train_seq_len=SEQ_LEN,
         steps_per_eval=spec.steps_per_eval,
         max_eval_batches=MAX_EVAL_BATCHES,
@@ -675,7 +706,7 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             num_train_steps=smoke_steps,
             steps_per_eval=smoke_spe,
             learning_rate=scaled_lr(128, HIDDEN_100M),
-            version="v1",
+            version="v5",
             num_workers=1,
         ),
         "run_mix_sweep": StageSpec(
@@ -689,9 +720,9 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             num_train_steps=mix_steps,
             steps_per_eval=mix_spe,
             learning_rate=scaled_lr(128, HIDDEN_100M),
-            version="v1",
-            # 9 trials, one v5p-8 per worker; 4 workers ≈ 2-3 trials each.
-            num_workers=4,
+            version="v2",
+            # 9 trials, one v5p-8 per worker; 9 workers ⇒ one trial each.
+            num_workers=9,
         ),
         "run_scale_sweep": StageSpec(
             name="run_scale_sweep",
