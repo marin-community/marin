@@ -15,7 +15,7 @@ Architecture:
 
 Usage:
     uv run iris --cluster=marin job run \\
-        --cpu 2 --memory 10GB --enable-extra-resources -- \\
+        --cpu 2 --memory 30GB --enable-extra-resources -- \\
         uv run python scripts/ops/storage/distributed_scan.py \\
         --staging-dir gs://marin-us-central2/tmp/storage-scan \\
         --workers 128
@@ -62,6 +62,16 @@ WORKER_THREADS = 16
 # ~2M objects x ~150 bytes/row ≈ 300MB uncompressed, ~50-80MB zstd parquet.
 # Coordinator runs with 30GB so this leaves plenty of headroom.
 COORDINATOR_FLUSH_THRESHOLD = 2_000_000
+
+# Abandon stragglers when the queue has been empty AND no task has finished
+# for this long. A handful of workers stuck on huge flat prefixes can hold
+# up the scan for hours past 99.9% completion; we'd rather lose those tail
+# objects than block the report pipeline.
+STRAGGLER_GRACE_SECONDS = 300
+
+# Hard wall-clock cap on the whole scan. Beyond this we terminate workers
+# and finalize whatever we have, even if some tasks are still in flight.
+MAX_SCAN_SECONDS = 90 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +184,7 @@ class ScanCoordinatorActor:
         self._active_workers = 0
         self._buf = ColumnBuffer()
         self._flush_thread: threading.Thread | None = None
+        self._last_task_completed_at: float | None = None
 
     def load_tasks(self, tasks: list[ScanTask]) -> None:
         with self._lock:
@@ -201,6 +212,7 @@ class ScanCoordinatorActor:
         with self._lock:
             self._tasks_completed += 1
             self._active_workers -= 1
+            self._last_task_completed_at = time.monotonic()
             if new_prefixes:
                 self._queue.extend(new_prefixes)
                 self._tasks_total += len(new_prefixes)
@@ -210,6 +222,7 @@ class ScanCoordinatorActor:
             self._errors.append(f"{prefix}: {error}")
             self._tasks_completed += 1
             self._active_workers -= 1
+            self._last_task_completed_at = time.monotonic()
 
     def flush(self) -> None:
         """Force-flush remaining buffered objects. Blocks until complete."""
@@ -248,6 +261,13 @@ class ScanCoordinatorActor:
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
+            queue_empty = len(self._queue) == 0
+            all_completed = queue_empty and self._active_workers == 0 and self._tasks_completed == self._tasks_total
+            stragglers_timed_out = (
+                queue_empty
+                and self._last_task_completed_at is not None
+                and time.monotonic() - self._last_task_completed_at >= STRAGGLER_GRACE_SECONDS
+            )
             return {
                 "total_objects": self._total_objects,
                 "total_bytes": self._total_bytes,
@@ -258,12 +278,7 @@ class ScanCoordinatorActor:
                 "parquet_count": len(self._parquet_paths),
                 "buffered": self._buf.count,
                 "error_count": len(self._errors),
-                "done": (
-                    len(self._queue) == 0
-                    and self._active_workers == 0
-                    and self._tasks_completed == self._tasks_total
-                    and self._tasks_total > 0
-                ),
+                "done": self._tasks_total > 0 and (all_completed or stragglers_timed_out),
             }
 
     def get_parquet_paths(self) -> list[str]:
@@ -628,6 +643,10 @@ def run_distributed(
             if status["done"]:
                 break
 
+            if elapsed >= MAX_SCAN_SECONDS:
+                print(f"Wall-clock cap of {MAX_SCAN_SECONDS}s hit; abandoning stragglers and finalizing")
+                break
+
             time.sleep(30)
     finally:
         try:
@@ -677,7 +696,7 @@ def main(
     Submit via iris job run:
 
         uv run iris --cluster=marin job run \\
-            --cpu 2 --memory 10GB --enable-extra-resources -- \\
+            --cpu 2 --memory 30GB --enable-extra-resources -- \\
             uv run python scripts/ops/storage/distributed_scan.py \\
             --staging-dir gs://marin-us-central2/tmp/storage-scan \\
             --workers 128
