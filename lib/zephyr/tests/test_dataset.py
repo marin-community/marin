@@ -73,9 +73,14 @@ def test_from_iterable(zephyr_ctx):
 
 
 def test_from_query(zephyr_ctx, sample_datafusion_ctx):
-    ds = Dataset.from_query(
-        sample_datafusion_ctx,
-        """SELECT id from mytable WHERE version = 1""")
+    ds = (
+        Dataset
+        .from_query(
+            sample_datafusion_ctx,
+            """SELECT id from mytable WHERE version = 1"""
+        )
+        .map(lambda x: x["id"])
+    )
     assert list(zephyr_ctx.execute(ds)) == [1, 2, 3, 6]
 
 

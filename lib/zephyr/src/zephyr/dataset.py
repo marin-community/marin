@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
+import datafusion
 from datafusion import SessionContext
 import fsspec
 from braceexpand import braceexpand
@@ -451,9 +452,9 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = list(ctx.execute(ds))
         """
-        def _flatten_records(stream) -> Iterable[dict]:
+        def _flatten_records(stream: datafusion.RecordBatchStream) -> Iterable[dict]:
             for batch in stream:
-                yield from batch.to_pylist()
+                yield from batch.to_pyarrow().to_pylist()
         return (
             Dataset.from_list(ctx.sql(query).execute_stream_partitioned())
             .flat_map(_flatten_records)
