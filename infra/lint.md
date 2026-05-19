@@ -38,10 +38,17 @@ inside every function that needs it. Re-inspect the file and lift the import;
 refactor if you need to.
 
 **When allowed:** Only to handle external-dependency conditions (a package
-only available with a certain extra) or to break a real import cycle. The
-optional-dep case is canonical and *correct*, not a nit. A
-`try/except ImportError` or a docstring noting the extra makes the intent
-obvious.
+only available with a certain extra). The optional-dep case is canonical
+and *correct*, not a nit — a `try/except ImportError` or a docstring
+noting the extra makes the intent obvious.
+
+Import-cycle workarounds are *not* a stable exception. In well-factored
+Python the structural fix always exists: extract a `Protocol` / ABC / shared
+dataclass into a third module that both sides depend on, use
+`from __future__ import annotations` for type-hint-only references, or use
+string forward references in ORM-style declarations. A local import to
+break a cycle is *transition debt* — acceptable only mid-refactor, paired
+with a comment naming the follow-up issue.
 
 **Bad example:**
 ```python
@@ -184,29 +191,6 @@ def open_dataset(source: Path | str) -> Dataset:
     ...
 ```
 
-### `ml-config-dataclass-overhead` — Intermediate config object with no callers
-
-**Why it's bad:** A `@dataclass FooConfig` that exists solely to be unpacked
-into one function adds indirection without reuse. Pass the parameters
-directly.
-
-**When allowed:** Configs threaded through multiple call sites or composed
-into other configs (real reuse). Frozen dataclasses for I/O boundaries
-(deserialization, CLI parsing) are correct.
-
-**Bad example:**
-```python
-@dataclass
-class DownloadConfig:
-    start_date: str
-    end_date: str
-    repo: str
-
-def download(cfg: DownloadConfig) -> None:
-    # one caller, threads its three params straight in. Take them as kwargs.
-    ...
-```
-
 ### `ml-monolithic-function` — Multi-mode function that should be split
 
 **Why it's bad:** One function with three boolean knobs encodes 2³ behaviors
@@ -318,21 +302,6 @@ queue.append(record)   # define a @dataclass Record once and reuse.
 
 ## Configuration explicitness
 
-### `ml-default-wrapper` — `default_*` wrapper function
-
-**Why it's bad:** A `default_get_foo()` wrapper hides what underlying
-mechanism it's deferring to. Reviewers in this repo are actively moving away
-from the `default_*` pattern — surface the real mechanism directly.
-
-**When allowed:** Never as a new wrapper. Existing `default_*` symbols may
-remain if their removal is out of scope, but don't add more.
-
-**Bad example:**
-```python
-def default_tokenizer():
-    return AutoTokenizer.from_pretrained("gpt2")   # just inline the call or take it as a param.
-```
-
 ### `ml-env-var-vs-param` — Env var used in place of an explicit parameter
 
 **Why it's bad:** AGENTS.md § Configuration — prefer constructor/config
@@ -359,14 +328,6 @@ across the codebase and create order-of-import bugs.
 **When allowed:** True constants (frozen sets, immutable lookup tables) at
 module scope are fine. The smell is *mutable* globals or globals that hold
 runtime-configured state.
-
-**Bad example:**
-```python
-_REGISTRY: dict[str, Handler] = {}
-
-def register(name: str, handler: Handler) -> None:
-    _REGISTRY[name] = handler   # make Registry a class instance threaded through.
-```
 
 ### `ml-magic-constant` — Magic string/number repeated without a top-level constant
 
@@ -408,21 +369,6 @@ def main():
 ---
 
 ## Defensive code
-
-### `ml-fallback-id-collision` — Fallback identifier that silently collides
-
-**Why it's bad:** `fallback_id = f"{basename}::{idx}"` looks safe until two
-data sources contain the same filename — distinct records merge under one
-ID and the contract of "per-record attribution" breaks invisibly.
-
-**When allowed:** Where the fallback genuinely cannot collide (e.g. the
-namespace is a content hash or a globally-unique URI). Document the
-uniqueness argument inline.
-
-**Bad example:**
-```python
-eval_id = row.id or f"{Path(path).name}::{idx}"   # two paths, same basename → silent merge.
-```
 
 ### `ml-try-except-fallback` — `try/except` fallback instead of fail-fast
 
@@ -480,26 +426,6 @@ except AttributeError:
         ...
 ```
 
-### `ml-validation-bypass` — Removed validation at a trust boundary
-
-**Why it's bad:** A pooled read-only connection / pre-check is *not* a
-substitute for an explicit allowlist; the upstream guard runs in a
-different scope and the gap is invisible. (Security-flavored cases route
-to `/security-review` — this rule covers the general "validation removed,
-defense weakened" pattern.)
-
-**When allowed:** When the removed validation has been demonstrably
-replaced by a stronger upstream invariant. Show the proof in the PR.
-
-**Bad example:**
-```python
-def handle(req):
-    # the explicit allowlist was here; now we trust the pool config.
-    return conn.execute(req.sql)
-```
-
----
-
 ## Dead code
 
 ### `ml-unused-param` — Unused function parameter
@@ -552,41 +478,6 @@ def push_logs(worker, entries):
         _forward(worker, entries)
 ```
 
-### `ml-stale-test-gating` — Test gate no longer matches what the test needs
-
-**Why it's bad:** `@requires_model` once meant "this test calls
-`hf_hub_download`"; an upstream change broke that implication. The test
-still runs but validates the wrong thing — silent regression amplifier.
-
-**When allowed:** Never knowingly. Update the gate when the dependency
-changes.
-
-**Bad example:**
-```python
-@requires_model   # gate no longer implies hf_hub_download() works
-def test_eval(): ...
-```
-
-### `ml-flag-gated-parallel-path` — New + legacy paths shipping together behind a flag
-
-**Why it's bad:** "Ship both, flip the flag later" doubles the surface
-area, leaves dead branches around forever, and the self-admitted
-`# TODO(collapse once X retires)` is the tell. Either the new path is safe
-enough to merge alone, or the old path shouldn't have been kept.
-
-**When allowed:** Genuinely risky migrations where rollback must be
-flag-flippable. The PR description must commit to a deletion PR with a
-date.
-
-**Bad example:**
-```python
-if os.environ.get("IRIS_RECONCILE_RPC_ENABLED"):
-    reconcile_workers_via_reconcile(...)   # new path
-else:
-    _reconcile_one(...)                    # legacy; will be deleted
-# TODO(Reconcile-RPC-default): collapse once StartTasks/PollTasks retire
-```
-
 ### `ml-add-then-remove` — Within-branch add-then-remove churn
 
 **Why it's bad:** One commit adds a column / flag / field, a later commit
@@ -609,8 +500,8 @@ case we add more variants later" costs reader attention now and pays back
 only at the second case — by which point the shape is concrete and easy to
 refactor anyway.
 
-**When allowed:** When the second variant is in flight in a sibling PR
-(link it). Otherwise wait.
+**When allowed:** When the second variant is in flight, or when this has been explicitly
+designed by the user as part of a longer term evolution.
 
 **Bad example:**
 ```python
@@ -800,6 +691,9 @@ plain names for seconds.
 **Bad example:**
 ```python
 def wait(timeout_s: float): ...   # timeout: float — seconds are the default.
+
+# or better -- use dedicated domain types
+def wait(timeout: Duration)
 ```
 
 ---
@@ -1116,7 +1010,7 @@ For agents running this catalog against a diff:
 
 ### Inputs
 
-Pick the smallest diff source that applies, from the repo root:
+Pick the diff that applies, typically the current code versus the merge-base, unless the user explicitly requests a tighter set.
 
 - Feature branch: `git diff main...HEAD -- '*.py'` (triple-dot — diff against the merge base).
 - Pre-commit / pre-push: `git diff --cached -- '*.py'`.
@@ -1151,15 +1045,7 @@ Do not pad. Empty output is correct. False positives are the failure mode that e
 
 ### Overlap precedence
 
-Several rules touch adjacent surface. Tiebreakers:
-
-- **Vestigial qualifier on a name that also marks a dead variant**: `ml-flag-gated-parallel-path` if the variant will be deleted; `ml-vestigial-qualifier` if both stay but the qualifier no longer disambiguates. Not both.
-- **Parallel implementations**: `ml-flag-gated-parallel-path` if one path is flag-gated for removal; `ml-parallel-source-impl` if both are permanent. Not both.
-- **Boolean flag that could be an enum**: `ml-bool-flag-arg` (api-shape), not types.
-- **Tuple return that should be a dataclass**: `ml-tuple-return-shape` (api-shape), not types.
-- **Silent fallback / swallowed exception**: defensive family.
-- **Missing knob / env-var / magic constant**: config-explicitness family.
-- **Stale doc/comment**: docs family. **Comment that restates code**: comments family.
+Several rules touch adjacent surface.
 
 If a single line legitimately violates two unrelated rules (e.g. `Any` return and a `_v2` suffix), emit two findings.
 
