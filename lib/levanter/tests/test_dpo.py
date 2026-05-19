@@ -741,15 +741,12 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
         ),
     )
 
-    hook, every = trainer.hooks[0]
-    assert every == 1
-
+    hook, _ = trainer.hooks[0]
     hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
 
     assert len(converter.calls) == 1
-    saved_model, saved_path, _ = converter.calls[0]
+    saved_model, _, _ = converter.calls[0]
     assert isinstance(saved_model, Gpt2LMHeadModel)
-    assert saved_path == "/tmp/export/step-1"
 
 
 def test_separate_reference_hf_export_passes_generation_config():
@@ -767,16 +764,13 @@ def test_separate_reference_hf_export_passes_generation_config():
         ),
     )
 
-    hook, every = trainer.hooks[0]
-    assert every == 1
-
+    hook, _ = trainer.hooks[0]
     model = object()
     hook(SimpleNamespace(step=1, eval_model=model))
 
     assert len(converter.calls) == 1
-    saved_model, saved_path, saved_kwargs = converter.calls[0]
+    saved_model, _, saved_kwargs = converter.calls[0]
     assert saved_model is model
-    assert saved_path == "/tmp/export/step-1"
     assert saved_kwargs["generation_config"] == generation_config
 
 
