@@ -33,13 +33,13 @@ def sample_datafusion_ctx():
     ctx = SessionContext()
     ctx.from_pylist(
         [
-            {"id": 1, "text": "hello", "version": 1},
-            {"id": 1, "text": "hello updated", "version": 2},
-            {"id": 2, "text": "world", "version": 1},
-            {"id": 3, "text": "foo", "version": 1},
-            {"id": 4, "text": "baz", "version": 2},
-            {"id": 5, "text": "fizbuzz", "version": 3},
-            {"id": 6, "text": "buzzfizz", "version": 1},
+            {"id": 1, "text": "hello", "version": 1, "rating": 1},
+            {"id": 1, "text": "hello updated", "version": 2, "rating": 2},
+            {"id": 2, "text": "world", "version": 1, "rating": 3},
+            {"id": 3, "text": "foo", "version": 1, "rating": 2},
+            {"id": 4, "text": "baz", "version": 2, "rating": 5},
+            {"id": 5, "text": "fizbuzz", "version": 3, "rating": 0},
+            {"id": 6, "text": "buzzfizz", "version": 1, "rating": 4},
         ],
         "mytable",
     )
@@ -82,6 +82,24 @@ def test_from_query(zephyr_ctx, sample_datafusion_ctx):
         .map(lambda x: x["id"])
     )
     assert list(zephyr_ctx.execute(ds)) == [1, 2, 3, 6]
+
+def test_from_query__agg(zephyr_ctx, sample_datafusion_ctx):
+    ds = (
+        Dataset
+        .from_query(
+            sample_datafusion_ctx,
+            """SELECT version, AVG(rating) as avg_rating 
+                     from mytable 
+                     GROUP BY version 
+                     ORDER BY version"""
+        )
+    )
+    assert list(zephyr_ctx.execute(ds)) == [
+        {"version": 1, "avg_rating": 2.5},
+        {"version": 2, "avg_rating": 3.5},
+        {"version": 3, "avg_rating": 0.0},
+    ]
+
 
 
 def test_filter(sample_data, zephyr_ctx):
