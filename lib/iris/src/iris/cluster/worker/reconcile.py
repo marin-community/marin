@@ -40,7 +40,9 @@ class SpecCache:
     Keyed by composite `(task_id_wire, attempt_id)` while UID routing is
     rolling out; `attempt_uid` becomes the primary key (kata h9r9).
 
-    Thread-safe: all mutations are expected to occur under the caller's lock.
+    Not thread-safe. Concurrent Reconcile RPCs touching the same key would
+    race; today the worker's Connect server effectively serializes calls per
+    handler thread, so this is fine in practice.
     """
 
     def __init__(self) -> None:

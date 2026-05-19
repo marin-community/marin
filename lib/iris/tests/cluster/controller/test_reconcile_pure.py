@@ -7,8 +7,8 @@ Each test constructs WorkerReconcileInputs by hand (no DB, no SQLite) and
 asserts on the resulting WorkerReconcilePlan. Tests cover the row-axis of the
 §5.3 dispatch matrix: what the pure function emits for each DB task state.
 
-Worker-observation column effects (AttemptMissingOnWorker, state transitions)
-are NOT tested here — those belong to the apply-layer tests in A.4.
+Worker-observation column effects (MISSING→FAILED, state transitions) are NOT
+tested here — those belong to the apply-layer tests in A.4.
 """
 
 import pytest
@@ -25,7 +25,6 @@ from iris.cluster.controller.reconcile import (
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import job_pb2
-from rigging.timing import Timestamp
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -36,21 +35,11 @@ _JOB1 = JobName.from_string("/alice/job1")
 _JOB2 = JobName.from_string("/alice/job2")
 _TASK1 = JobName.from_string("/alice/job1/0")
 _TASK2 = JobName.from_string("/alice/job1/1")
-_NOW = Timestamp(1_000_000_000)
 _SPEC1 = object()  # opaque spec object; pure function treats it as Any
 
 
 def _worker(worker_id: WorkerId = _W1) -> WorkerRow:
-    return WorkerRow(
-        worker_id=worker_id,
-        address="localhost:9999",
-        total_cpu_millicores=4000,
-        total_memory_bytes=8 * 1024**3,
-        total_gpu_count=0,
-        total_tpu_count=0,
-        device_type="cpu",
-        device_variant="",
-    )
+    return WorkerRow(worker_id=worker_id, address="localhost:9999")
 
 
 def _row(
@@ -80,7 +69,6 @@ def _inputs(
         worker=worker or _worker(),
         rows=rows,
         job_specs=job_specs if job_specs is not None else {_JOB1: _SPEC1},
-        now=_NOW,
     )
 
 
@@ -92,7 +80,6 @@ def _inputs(
 def test_empty_rows_produces_empty_plan() -> None:
     plan = reconcile_worker(_inputs(rows=[]))
     assert plan.request.desired == []
-    assert plan.db_writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +96,6 @@ def test_assigned_spec_inline() -> None:
     assert da.intent_stop is None
     assert da.task_id == _TASK1.to_wire()
     assert da.attempt_id == 1
-    assert plan.db_writes == []
 
 
 def test_assigned_with_missing_spec_skips() -> None:
@@ -145,7 +131,6 @@ def test_building_no_spec() -> None:
     assert da.intent_run is not None
     assert da.intent_run.request is None
     assert da.intent_stop is None
-    assert plan.db_writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +145,6 @@ def test_running_no_spec() -> None:
     assert da.intent_run is not None
     assert da.intent_run.request is None
     assert da.intent_stop is None
-    assert plan.db_writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +158,6 @@ def test_cancelled_emits_stop() -> None:
     da = plan.request.desired[0]
     assert da.intent_stop == StopReason.CANCELLED
     assert da.intent_run is None
-    assert plan.db_writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +171,6 @@ def test_preempted_emits_stop() -> None:
     da = plan.request.desired[0]
     assert da.intent_stop == StopReason.PREEMPTED
     assert da.intent_run is None
-    assert plan.db_writes == []
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +191,6 @@ def test_preempted_emits_stop() -> None:
 def test_terminal_omitted(terminal_state: int) -> None:
     plan = reconcile_worker(_inputs(rows=[_row(task_state=terminal_state)]))
     assert plan.request.desired == []
-    assert plan.db_writes == []
 
 
 # ---------------------------------------------------------------------------

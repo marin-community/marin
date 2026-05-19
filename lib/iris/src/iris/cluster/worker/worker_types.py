@@ -53,11 +53,12 @@ class TaskLogs(BaseModel):
 
 
 class TaskInfo(Protocol):
-    """Read-only view of task state for RPC handlers.
+    """Read-only view of task state used by RPC handlers and the reconcile path.
 
-    This protocol decouples the service layer from TaskAttempt's execution internals
-    (thread, runtime, providers, etc.) while providing access to state needed for
-    RPC responses.
+    Decouples the service layer from TaskAttempt's execution internals (thread,
+    runtime, providers, etc.) while exposing the state the worker needs to
+    report back to the controller (status, exit_code, error,
+    platform_container_id, finished_at).
     """
 
     @property

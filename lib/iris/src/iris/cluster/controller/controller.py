@@ -2418,16 +2418,9 @@ class Controller:
                 worker=WorkerRow(
                     worker_id=wid,
                     address=addresses.get(wid, ""),
-                    total_cpu_millicores=0,
-                    total_memory_bytes=0,
-                    total_gpu_count=0,
-                    total_tpu_count=0,
-                    device_type="",
-                    device_variant="",
                 ),
                 rows=rows_by_worker[wid],
                 job_specs=templates_by_job,
-                now=now,
             )
             pure_plans.append(reconcile_worker(inputs))
 
@@ -2452,7 +2445,6 @@ class Controller:
                     plan = plan_by_worker[rr.worker_id]
                     if rr.error is not None:
                         logger.debug("Reconcile RPC failed for worker %s: %s", rr.worker_id, rr.error)
-                    if rr.error is not None:
                         self._transitions.apply_reconcile_failure(cur, plan, rr.error, now)
                     else:
                         observations = (

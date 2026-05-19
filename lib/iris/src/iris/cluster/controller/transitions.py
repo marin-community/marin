@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from typing import Any
 
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import bindparam, case, delete, func, insert, select, text
@@ -40,6 +40,7 @@ from iris.cluster.controller.reads import (
     TaskDetailRow,
     TaskScope,
 )
+from iris.cluster.controller.reconcile import AttemptObservation, WorkerReconcilePlan
 from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
@@ -52,7 +53,13 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import (
+    ACTIVE_TASK_STATES,
+    EXECUTING_TASK_STATES,
+    RunningTaskEntry,
+    task_is_finished,
+    task_row_can_be_scheduled,
+)
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
@@ -67,13 +74,6 @@ from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
-# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
-EXECUTING_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
-    }
-)
 
 # All non-terminal task states (ACTIVE plus PENDING).
 NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {job_pb2.TASK_STATE_PENDING}
@@ -416,13 +416,6 @@ class WorkerFailureBatchResult(TxResult):
 
     removed_workers: list[tuple[WorkerId, str | None]] = field(default_factory=list)
     results: list[WorkerFailureResult] = field(default_factory=list)
-
-
-class RunningTaskEntry(NamedTuple):
-    """Task ID and attempt ID pair captured at snapshot time."""
-
-    task_id: JobName
-    attempt_id: int
 
 
 @dataclass(frozen=True)
@@ -1978,18 +1971,18 @@ class ControllerTransitions:
     def apply_reconcile_observations(
         self,
         cur: Tx,
-        plan,
-        observations,
+        plan: WorkerReconcilePlan,
+        observations: list[AttemptObservation],
         now: Timestamp,
     ) -> TxResult:
         """Apply observations from a successful Reconcile RPC within the caller's transaction.
 
-        Updates worker health, applies pre-computed ``plan.db_writes`` deltas,
-        then processes each observation. MISSING observations are converted to
-        ``FAILED("worker_lost_spec")`` updates that fire the standard cascades.
-        All other observations are routed through ``_apply_task_transitions`` so
-        the existing state-machine guards (idempotency, stale-attempt checks,
-        retry logic, cascade firing) apply unchanged.
+        Updates worker health, then processes each observation. MISSING
+        observations are converted to ``FAILED("worker_lost_spec")`` updates
+        that fire the standard cascades. All other observations are routed
+        through ``_apply_task_transitions`` so the existing state-machine
+        guards (idempotency, stale-attempt checks, retry logic, cascade firing)
+        apply unchanged.
         """
         worker_id = WorkerId(plan.request.worker_id)
         now_ms = now.epoch_ms()
@@ -1998,11 +1991,6 @@ class ControllerTransitions:
         if str(worker_id) not in existing:
             return TxResult()
         self._health.heartbeat([worker_id], now_ms)
-
-        # plan.db_writes carries pre-computed AttemptMissingOnWorker deltas from
-        # the pure layer; the MISSING→FAILED transition is driven through
-        # ``_observations_to_updates`` below, so we don't apply the deltas here
-        # directly. Widen handling when a second TransitionDelta variant lands.
 
         all_updates = self._observations_to_updates(observations)
         if not all_updates:
@@ -2024,7 +2012,7 @@ class ControllerTransitions:
     def apply_reconcile_failure(
         self,
         cur: Tx,
-        plan,
+        plan: WorkerReconcilePlan,
         error: str,
         now: Timestamp,
     ) -> TxResult:
@@ -2054,15 +2042,17 @@ class ControllerTransitions:
 
     def _assigned_updates_from_plan(
         self,
-        plan,
+        plan: WorkerReconcilePlan,
         error: str,
         cur: Tx,
     ) -> list[TaskUpdate]:
         """Return synthetic WORKER_FAILED updates for ASSIGNED attempts in the plan.
 
         Used when the Reconcile RPC failed: we don't know if the worker received
-        the desired set, so we only bounce ASSIGNED rows back to PENDING. This
-        mirrors the StartTasks-failure path in ``_collect_start_tasks_result``.
+        the desired set, so we bounce only the rows that the controller intended
+        to start this tick (intent_run with an inline spec, i.e. ASSIGNED rows)
+        back via WORKER_FAILED. Rows whose attempt is no longer ASSIGNED in the
+        DB by the time we look (e.g. concurrent state changes) are skipped.
         """
         updates: list[TaskUpdate] = []
         for desired in plan.request.desired:
@@ -2086,7 +2076,7 @@ class ControllerTransitions:
 
     def _observations_to_updates(
         self,
-        observations,
+        observations: list[AttemptObservation],
     ) -> list[TaskUpdate]:
         """Translate ``AttemptObservation`` list into ``TaskUpdate`` list.
 

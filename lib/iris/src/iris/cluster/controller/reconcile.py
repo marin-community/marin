@@ -4,10 +4,8 @@
 """Pure-compute reconcile layer for the Iris controller.
 
 The central function ``reconcile_worker`` takes a ``WorkerReconcileInputs``
-snapshot and returns a ``WorkerReconcilePlan`` describing:
-
-  - the wire payload to send to the worker (``desired`` attempts)
-  - any DB writes to apply if the RPC succeeds (``db_writes``)
+snapshot and returns a ``WorkerReconcilePlan`` carrying the wire payload
+(``desired`` attempts) to send to the worker.
 
 The wire-payload types (``DesiredAttempt``, ``AttemptSpec``, etc.) mirror
 the proto shape from the Reconcile RPC but are plain dataclasses.
@@ -27,28 +25,18 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
-from rigging.timing import Timestamp
-
 from iris.cluster.controller.db import TASK_STATE_KILLED, TASK_STATE_PREEMPTED
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
-from iris.cluster.controller.transitions import EXECUTING_TASK_STATES, RunningTaskEntry
+from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, EXECUTING_TASK_STATES, RunningTaskEntry
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 
 
 @dataclass(frozen=True, slots=True)
 class WorkerRow:
-    """Durable worker columns: identity and capability."""
+    """Durable worker columns: identity and address."""
 
     worker_id: WorkerId
     address: str
-    total_cpu_millicores: int
-    total_memory_bytes: int
-    total_gpu_count: int
-    total_tpu_count: int
-    device_type: str
-    device_variant: str
-    attributes: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,14 +145,6 @@ class ReconcileRequest:
     desired: list[DesiredAttempt] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class ReconcileResponse:
-    """Plain-dataclass mirror of ``Worker.ReconcileResponse`` proto."""
-
-    worker_id: str
-    observed: list[AttemptObservation] = field(default_factory=list)
-
-
 # ---------------------------------------------------------------------------
 # WorkerReconcileDispatch — wire payload for the legacy StartTasks/PollTasks path
 # ---------------------------------------------------------------------------
@@ -189,43 +169,6 @@ class WorkerReconcileDispatch:
 
 
 # ---------------------------------------------------------------------------
-# TransitionDelta — DB write instructions produced by the pure layer
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class AttemptObserved:
-    """Recorded when a worker reports observing this attempt.
-
-    The apply layer writes the observed state and fires cascades if the
-    new state is terminal.
-    """
-
-    attempt_uid: AttemptUid
-    # state as proto int (job_pb2.TaskState)
-    state: int
-    container_id: str | None = None
-    finished_at: Timestamp | None = None
-    exit_code: int | None = None
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class AttemptMissingOnWorker:
-    """Worker reported MISSING — spec cache lost mid-attempt.
-
-    Apply layer: transition attempt to FAILED("worker_lost_spec"); fire
-    cascades. Scheduler reissues under a new uid on a subsequent tick.
-    """
-
-    attempt_uid: AttemptUid
-
-
-# Single concrete variant today; widen to a Union when a second delta lands.
-TransitionDelta = AttemptMissingOnWorker
-
-
-# ---------------------------------------------------------------------------
 # WorkerReconcileInputs / WorkerReconcilePlan
 # ---------------------------------------------------------------------------
 
@@ -244,19 +187,16 @@ class WorkerReconcileInputs:
     worker: WorkerRow
     rows: list[ReconcileRow]
     job_specs: dict[JobName, job_pb2.RunTaskRequest]
-    now: Timestamp
 
 
 @dataclass(frozen=True)
 class WorkerReconcilePlan:
-    """The reconcile decision for one worker: wire payload + DB writes.
+    """The reconcile decision for one worker: the wire payload to send.
 
     ``request`` is the ``ReconcileRequest`` to send to the worker.
-    ``db_writes`` are applied to the DB only if the RPC succeeds.
     """
 
     request: ReconcileRequest
-    db_writes: list[TransitionDelta] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +223,7 @@ def _stop_reason_from_state(task_state: int) -> StopReason:
 def reconcile_worker(inputs: WorkerReconcileInputs) -> WorkerReconcilePlan:
     """Pure function: compute the reconcile plan for one worker.
 
-    No DB, no RPC, no time.time() — inputs.now is the clock.
+    No DB, no RPC, no clock.
 
     Spec dispatch invariant: ``AttemptSpec.request`` is set exactly when
     the DB attempt state is ``ASSIGNED``. Every other dispatched state
@@ -453,7 +393,7 @@ def observations_from_reconcile_response(
     Each ``Worker.AttemptObservation`` proto entry maps to one
     ``AttemptObservation`` plain-dataclass. ``TASK_STATE_MISSING`` passes
     through as-is; ``apply_reconcile_observations`` converts it to
-    ``AttemptMissingOnWorker`` → ``FAILED("worker_lost_spec")``.
+    ``FAILED("worker_lost_spec")``.
 
     ``finished_at`` from the proto is not forwarded — the apply layer stamps
     the transaction timestamp itself for terminal transitions (consistent with

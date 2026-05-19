@@ -3,11 +3,11 @@
 
 """Controller task and attempt state predicates."""
 
-from typing import Any
+from typing import Any, NamedTuple
 
 from rigging.timing import Deadline, Duration, Timestamp
 
-from iris.cluster.types import TERMINAL_TASK_STATES
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName
 from iris.rpc import job_pb2
 
 ACTIVE_TASK_STATES: frozenset[int] = frozenset(
@@ -17,6 +17,21 @@ ACTIVE_TASK_STATES: frozenset[int] = frozenset(
         job_pb2.TASK_STATE_RUNNING,
     }
 )
+
+# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
+EXECUTING_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_BUILDING,
+        job_pb2.TASK_STATE_RUNNING,
+    }
+)
+
+
+class RunningTaskEntry(NamedTuple):
+    """Task ID and attempt ID pair captured at snapshot time."""
+
+    task_id: JobName
+    attempt_id: int
 
 
 def task_is_finished(
