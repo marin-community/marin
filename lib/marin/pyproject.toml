@@ -203,15 +203,6 @@ dedup = [
     "marin-dupekit",
 ]
 
-# DuckDB is only needed by the SEC-EDGAR downloader (works around
-# apache/arrow#46404 — PyArrow can't decode page headers >8 MiB on the
-# upstream shards). It's heavy enough that we don't want every Marin
-# install to pull it in just for one source; jobs that ingest SEC-EDGAR
-# must opt into this extra (e.g. `iris job run --extra=sec-edgar ...`).
-sec-edgar = [
-    "duckdb",
-]
-
 math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]

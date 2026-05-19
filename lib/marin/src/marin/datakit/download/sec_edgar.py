@@ -8,25 +8,17 @@ organized into per-filing-type subdirectories: 10-K, 10-Q, 8-K, 20-F,
 S-1, S-8, 144, and Form 3/4/5. Text lives in the upstream ``content``
 column.
 
-The download uses DuckDB instead of byte-streaming because the upstream
-parquet shards trip ``apache/arrow#46404`` — PyArrow's parquet reader
-can't decode page headers >8 MiB, which the multi-MB filings in the
-``content`` column overflow on per-page string statistics. DuckDB has
-no such cap, so we re-encode through it once at download time: each
-upstream shard is read via DuckDB and rewritten via PyArrow's default
-writer (whose stats are safely truncated for huge strings — verified
-locally on the offending SEC files). The result is a PyArrow-readable
-``raw/sec-edgar/<form-type>/<file>.parquet`` tree that normalize and
-tokenize consume directly, with no intermediate staging copy.
+The upstream shards trip ``apache/arrow#46404`` — PyArrow's default
+Thrift decoder limits make page headers >8 MiB fail to parse, which
+SEC's multi-MB ``content`` filings overflow on per-page string
+statistics. We raise PyArrow's ``thrift_string_size_limit`` and
+``thrift_container_size_limit`` knobs when constructing the
+``ParquetFile`` so the upstream page headers decode cleanly; the
+shards are then re-emitted via PyArrow's default writer (whose stats
+are safely truncated for huge strings) into
+``raw/sec-edgar/<form-type>/<file>.parquet`` so normalize/tokenize can
+consume them with stock readers.
 
-``duckdb`` is an optional dependency exposed via the ``sec-edgar``
-extra (``uv sync --extra sec-edgar`` locally, or ``iris job run
---extra=sec-edgar ...`` on the cluster); the import is deferred so
-catalog walks that don't actually ingest SEC-EDGAR don't pay for it.
-
-Scoped to this source per https://github.com/marin-community/marin/pull/5335
-— if more datasets hit the page-header cap or we move off PyArrow
-wholesale, lift ``read_parquet_via_duckdb`` into a shared helper.
 Tracking: https://github.com/marin-community/marin/issues/5334.
 """
 
@@ -60,57 +52,40 @@ FILING_TYPES = ("10-K", "10-Q", "8-K", "20-F", "S-1", "S-8", "144", "3", "4", "5
 # while one big SEC row group (~700 MB decompressed) is in flight.
 _ROWS_PER_BATCH = 8
 
+# Lift PyArrow's Thrift decoder caps so page headers carrying multi-MB
+# string statistics (apache/arrow#46404) decode without "Couldn't
+# deserialize thrift" errors. 1 GiB is well above any plausible single
+# page header in SEC's content column (~tens of MB worst case) while
+# still bounded.
+_THRIFT_DECODE_LIMIT_BYTES = 1024 * 1024 * 1024
+
 # Per-file retry policy (HfHubHTTPError 429s, network blips, xet-bridge hiccups).
 _MAX_RETRIES = 20
 _BASE_WAIT_S = 5
 _MAX_WAIT_S = 15 * 60
 
 
-def _import_duckdb():
-    """Import ``duckdb`` lazily so the SEC-EDGAR extra stays opt-in.
+def _iter_parquet_batches(hf_path: str, *, revision: str = HF_REVISION) -> Iterator[pa.RecordBatch]:
+    """Yield Arrow RecordBatches from an HF-hosted parquet shard.
 
-    The wider ``marin`` package doesn't depend on duckdb; only this
-    downloader does. Importing it at module scope would pull duckdb into
-    every catalog walk that touches ``sources.py``, defeating the point
-    of the extra.
+    Opens the file via ``HfFileSystem`` (pinned to *revision*) and reads
+    with PyArrow's Thrift limits bumped so SEC's >8 MiB page headers
+    decode cleanly. See module docstring and
+    https://github.com/marin-community/marin/issues/5334 for context.
     """
-    try:
-        import duckdb
-    except ImportError as e:
-        raise ImportError(
-            "The 'duckdb' package is required to ingest TeraflopAI/SEC-EDGAR. "
-            "Install the extra with `uv sync --extra sec-edgar` locally or "
-            "`iris job run --extra=sec-edgar ...` on the cluster."
-        ) from e
-    return duckdb
-
-
-def read_parquet_via_duckdb(path: str, *, fs: object | None = None) -> Iterator[pa.RecordBatch]:
-    """Yield Arrow RecordBatches from a parquet via DuckDB.
-
-    Works around https://github.com/marin-community/marin/issues/5334
-    (apache/arrow#46404) — PyArrow can't decode page headers >8 MiB,
-    which SEC's multi-MB ``content`` column overflows. DuckDB has no
-    such limit.
-
-    ``fs`` is the fsspec filesystem to register with the DuckDB
-    connection. Defaults to an ``HfFileSystem`` so callers reading
-    ``hf://...`` paths don't have to wire one up.
-    """
-    duckdb = _import_duckdb()
-    if fs is None:
-        fs = HfFileSystem()
-    con = duckdb.connect(":memory:")
-    try:
-        con.register_filesystem(fs)
-        result = con.execute("SELECT * FROM read_parquet(?)", [path])
-        yield from result.fetch_record_batch(rows_per_batch=_ROWS_PER_BATCH)
-    finally:
-        con.close()
+    fs = HfFileSystem()
+    path = hf_path.removeprefix("hf://")
+    with fs.open(path, "rb", revision=revision) as src:
+        pf = pq.ParquetFile(
+            src,
+            thrift_string_size_limit=_THRIFT_DECODE_LIMIT_BYTES,
+            thrift_container_size_limit=_THRIFT_DECODE_LIMIT_BYTES,
+        )
+        yield from pf.iter_batches(batch_size=_ROWS_PER_BATCH)
 
 
 def _download_one(task: dict) -> dict:
-    """Stream one upstream parquet via DuckDB, write a PyArrow-readable shard at ``dst``."""
+    """Stream one upstream parquet, write a PyArrow-readable shard at ``dst``."""
     hf_path = task["hf_path"]
     dst = task["dst"]
 
@@ -119,7 +94,7 @@ def _download_one(task: dict) -> dict:
         try:
             ensure_parent_dir(dst)
             count = 0
-            batches = read_parquet_via_duckdb(hf_path)
+            batches = _iter_parquet_batches(hf_path)
             first = next(batches, None)
             if first is None:
                 counters.increment("sec_edgar/empty_input")
@@ -162,7 +137,7 @@ def _list_hf_parquets() -> list[str]:
 
 
 def download_sec_edgar(output_path: str) -> None:
-    """Pull SEC-EDGAR from HF via DuckDB, write PyArrow-readable shards under ``output_path``."""
+    """Pull SEC-EDGAR from HF and re-emit PyArrow-readable shards under ``output_path``."""
     files = _list_hf_parquets()
     if not files:
         raise ValueError(f"No parquet files matched for {HF_DATASET_ID}@{HF_REVISION}")
@@ -197,7 +172,7 @@ def download_sec_edgar_step() -> StepSpec:
             "hf_dataset_id": HF_DATASET_ID,
             "revision": HF_REVISION,
             "filing_types": list(FILING_TYPES),
-            "reader": "duckdb",
+            "version": "v2",
         },
     )
 

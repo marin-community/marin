@@ -3,15 +3,10 @@
 
 """TeraflopAI/SEC-EDGAR dataset tokenization.
 
-The download stage uses DuckDB to work around
-https://github.com/marin-community/marin/issues/5334 (apache/arrow#46404).
-``duckdb`` is exposed via the ``sec-edgar`` extra in ``lib/marin``, so
-ingestion jobs must opt in — e.g.::
-
-    iris job run --extra=cpu --extra=sec-edgar \\
-        -- python -m experiments.pretraining_datasets.sec_edgar
-
-Local runs need ``uv sync --extra sec-edgar`` first.
+The download stage works around
+https://github.com/marin-community/marin/issues/5334 (apache/arrow#46404)
+by bumping PyArrow's Thrift-decoder caps so SEC's multi-MB ``content``
+column doesn't blow up page-header parsing — no extra dependencies needed.
 """
 
 from fray import ResourceConfig
