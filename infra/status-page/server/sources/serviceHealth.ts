@@ -11,6 +11,7 @@ const GCP_ZONE = process.env.CONTROLLER_ZONE ?? "us-central1-a";
 const CACHE_TTL_MS = 60_000;
 const HEALTH_TIMEOUT_MS = 5_000;
 const LATENCY_SUMMARY_WINDOW_MS = 5 * 60 * 1000;
+const SUMMARY_POINT_INTERVAL_MS = 60_000;
 
 export type Environment = "prod" | "dev";
 type ServiceKind = "iris" | "finelog";
@@ -67,6 +68,7 @@ export interface ServiceHealthResponse {
   samples: ServiceHealthHistorySample[];
   summarySamples: ServiceHealthSummarySample[];
   aggregationWindowMs: number;
+  summaryPointIntervalMs: number;
   windowMs: number;
   fetchedAt: string;
 }
@@ -282,9 +284,10 @@ function latencyStats(values: number[]): ServiceLatencyStats | null {
 export function serviceHealthSummarySamples(
   samples: ServiceHealthHistorySample[],
   aggregationWindowMs = LATENCY_SUMMARY_WINDOW_MS,
+  pointIntervalMs = SUMMARY_POINT_INTERVAL_MS,
 ): ServiceHealthSummarySample[] {
   const series = serviceHealthSeries();
-  return samples.map((sample, i) => {
+  const summaries = samples.map((sample, i) => {
     const windowStart = sample.t - aggregationWindowMs;
     const stats: Record<string, ServiceLatencyStats | null> = {};
     const sampleCounts: Record<string, number> = {};
@@ -305,6 +308,27 @@ export function serviceHealthSummarySamples(
 
     return { t: sample.t, stats, sampleCounts };
   });
+
+  if (pointIntervalMs <= 0) return summaries;
+
+  const bucketed: ServiceHealthSummarySample[] = [];
+  let currentBucket: number | null = null;
+  let latestInBucket: ServiceHealthSummarySample | null = null;
+
+  for (const summary of summaries) {
+    const bucket = Math.floor(summary.t / pointIntervalMs);
+    if (currentBucket !== null && bucket !== currentBucket && latestInBucket) {
+      bucketed.push(latestInBucket);
+    }
+    currentBucket = bucket;
+    latestInBucket = summary;
+  }
+
+  if (latestInBucket) {
+    bucketed.push(latestInBucket);
+  }
+
+  return bucketed;
 }
 
 export function serviceHealthResponse(
@@ -319,6 +343,7 @@ export function serviceHealthResponse(
     samples,
     summarySamples: serviceHealthSummarySamples(samples),
     aggregationWindowMs: LATENCY_SUMMARY_WINDOW_MS,
+    summaryPointIntervalMs: SUMMARY_POINT_INTERVAL_MS,
     windowMs,
     fetchedAt: new Date().toISOString(),
   };
