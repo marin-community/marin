@@ -5,21 +5,16 @@ short code (`ml-...`), the condition, why it's bad, when it's nevertheless
 acceptable, and a bad-pattern example. Rules are *advisory* — surface findings
 to the author, never block.
 
-The single source of style truth is [AGENTS.md](../AGENTS.md); rules below cite
-the section they enforce. If AGENTS.md changes, the rule inherits the change.
+This catalog is self-contained: each rule states the convention it enforces in
+its own "Why it's bad" section. See "Detector usage" below for how to run the
+catalog against a diff.
 
-## How to use this file
+## Audience
 
-- **Reviewer / agent**: scan a diff (`git diff main...HEAD -- '*.py'` or the
-  smallest equivalent — staged diff, `gh pr diff <n>`, named files). For each
-  finding, emit one line in the format described under "Output format" below.
+- **Reviewer / agent**: scan a diff and emit findings in the format described
+  under "Output format". See "Detector usage" for input selection.
 - **Author**: search this file for the code from a finding (`ml-...`) to see
   the rule, why it matters, and when it's OK to ignore.
-
-Only flag added/modified hunks; surrounding context is fair game for judging
-intent. Migrations, `__init__.py`, proto definitions, and test fixtures all
-count. Anything that looks like an actual bug — file under the closest rule
-(usually `defensive`) and let the human decide.
 
 This is not a security review (see `/security-review`), a correctness checker,
 or a formatter (ruff / Black already exist; stay out of whitespace, import
@@ -61,9 +56,9 @@ def write_chunk(path: str, data: bytes) -> None:
 
 ### `ml-type-checking-guard` — `TYPE_CHECKING` guard block
 
-**Why it's bad:** AGENTS.md § Code Style forbids `TYPE_CHECKING` guards
-outright. They hide real cycles instead of fixing them and split the import
-graph across runtime vs. type-check time, which confuses readers and tools.
+**Why it's bad:** `TYPE_CHECKING` guards are forbidden outright. They hide
+real cycles instead of fixing them and split the import graph across runtime
+vs. type-check time, which confuses readers and tools.
 
 **When allowed:** Never in new code. Fix the cycle structurally — define a
 `Protocol` in the layer that owns the type, and have both sides depend on the
@@ -86,7 +81,7 @@ def run(cfg: "ExperimentConfig") -> None: ...
 
 ### `ml-reverse-layer-import` — Reverse-direction import across layers
 
-**Why it's bad:** AGENTS.md § Code Reuse fixes the dependency direction as
+**Why it's bad:** The dependency direction in this repo is
 `{iris, haliax} → {levanter, zephyr} → marin`. A reverse import (e.g. `from
 marin...` inside `lib/iris/`) makes the leaf library un-reusable and creates
 a cycle the moment the trunk reaches back.
@@ -111,7 +106,6 @@ need has been homed in the wrong place. The right home is the leaf tier
 
 **When allowed:** Where the cross-import is a deliberate, documented
 architectural choice and moving the helper would cost more than it saves.
-Surface as a `nit`, not a `warn`.
 
 **Bad example:**
 ```python
@@ -175,9 +169,9 @@ def parse_request(raw: bytes) -> tuple[dict[str, dict], str, bool]:
 
 ### `ml-input-type-union` — `X | str` parameter union forcing `isinstance` checks
 
-**Why it's bad:** AGENTS.md § Types — pick one input type. Polymorphic
-parameters mean every callee branches on `isinstance` and every caller has to
-guess which form is preferred. Normalize once at the boundary.
+**Why it's bad:** Pick one input type. Polymorphic parameters mean every
+callee branches on `isinstance` and every caller has to guess which form is
+preferred. Normalize once at the boundary.
 
 **When allowed:** Backward-compat adapters that must accept both old and new
 calling conventions for one release. New code does not introduce them.
@@ -215,9 +209,9 @@ def compute_loss_mask(
 
 ### `ml-bare-any` — `Any` where the concrete type is known
 
-**Why it's bad:** AGENTS.md § Types — use `Protocol` for decoupling; avoid
-`Any` where the concrete type is known. Bare `Any` defeats the type checker
-exactly at the points where it would have caught the next refactor.
+**Why it's bad:** Bare `Any` defeats the type checker exactly at the points
+where it would have caught the next refactor. Use a `Protocol` or the concrete
+type instead.
 
 **When allowed:** Boundary code that legitimately handles unrelated types
 (generic cache value, ad-hoc JSON blob). Document the reason in a brief
@@ -233,7 +227,8 @@ def send_entries(payloads: list[Any]) -> None:
 ### `ml-non-auto-enum` — Manually numbered enum
 
 **Why it's bad:** Hand-numbered enums (`A = 1; B = 2`) are fragile to reorder
-and add nothing over `auto()`. AGENTS.md prefers `enum.auto()`.
+and add nothing over `auto()`. Prefer `enum.auto()` unless the integer values
+cross a wire.
 
 **When allowed:** Wire identifiers that must stay stable across versions
 (proto enum numbers, serialized IDs). Document that the integer values are
@@ -285,9 +280,9 @@ if hasattr(payload, "to_proto"):
 
 ### `ml-raw-dict-vs-dataclass` — Ad-hoc dict for a structured record
 
-**Why it's bad:** AGENTS.md § Types — dataclass/NamedTuple over raw dicts.
-Dicts skip schema validation, hide field names from the type checker, and
-make evolution painful (rename → silent breakage).
+**Why it's bad:** Prefer dataclass/NamedTuple over raw dicts. Dicts skip
+schema validation, hide field names from the type checker, and make evolution
+painful (rename → silent breakage).
 
 **When allowed:** Truly heterogeneous payloads, JSON deserialization at the
 boundary (then convert to a dataclass), or short-lived intermediate state.
@@ -304,9 +299,9 @@ queue.append(record)   # define a @dataclass Record once and reuse.
 
 ### `ml-env-var-vs-param` — Env var used in place of an explicit parameter
 
-**Why it's bad:** AGENTS.md § Configuration — prefer constructor/config
-parameters over env vars. Env vars couple the call to ambient state, can't be
-type-checked, and divergent overrides accumulate silently.
+**Why it's bad:** Prefer constructor/config parameters over env vars. Env
+vars couple the call to ambient state, can't be type-checked, and divergent
+overrides accumulate silently.
 
 **When allowed:** Operational kill-switches and emergency circuit breakers
 where the value must flip without a redeploy. The env var should still be
@@ -321,9 +316,9 @@ def fetch_mirror_url() -> str:
 
 ### `ml-module-globals` — Module-level mutable state
 
-**Why it's bad:** AGENTS.md § Configuration — composition over inheritance,
-explicit parameters over ambient state. Module globals scatter configuration
-across the codebase and create order-of-import bugs.
+**Why it's bad:** Prefer explicit parameters over ambient state. Module
+globals scatter configuration across the codebase and create order-of-import
+bugs.
 
 **When allowed:** True constants (frozen sets, immutable lookup tables) at
 module scope are fine. The smell is *mutable* globals or globals that hold
@@ -331,9 +326,9 @@ runtime-configured state.
 
 ### `ml-magic-constant` — Magic string/number repeated without a top-level constant
 
-**Why it's bad:** AGENTS.md § Naming — top-level constants for magic
-strings/numbers. Repeated literals drift (one site updated, another not) and
-make searches for "where does this value come from" yield nothing.
+**Why it's bad:** Hoist magic strings/numbers to top-level constants.
+Repeated literals drift (one site updated, another not) and make searches for
+"where does this value come from" yield nothing.
 
 **When allowed:** A literal that appears exactly once, inside the function
 that owns the meaning. Hoist the moment it appears twice.
@@ -372,9 +367,9 @@ def main():
 
 ### `ml-try-except-fallback` — `try/except` fallback instead of fail-fast
 
-**Why it's bad:** AGENTS.md § Error Handling — let exceptions propagate.
-Silent fallbacks obscure whether the code is handling a real recoverable
-case or papering over a bug.
+**Why it's bad:** Let exceptions propagate by default. Silent fallbacks
+obscure whether the code is handling a real recoverable case or papering over
+a bug.
 
 **When allowed:** Real system boundaries (network, filesystem,
 deserialization) where graceful degradation is the documented contract and
@@ -390,10 +385,9 @@ except Exception:
 
 ### `ml-exception-swallow` — `except Exception` returning `None` / a default
 
-**Why it's bad:** AGENTS.md § Error Handling — never swallow exceptions
-unless specifically requested. Returning `None` on parse failure makes the
-caller's `if result is None` indistinguishable from "input legitimately
-empty."
+**Why it's bad:** Never swallow exceptions unless specifically requested.
+Returning `None` on parse failure makes the caller's `if result is None`
+indistinguishable from "input legitimately empty."
 
 **When allowed:** Background tasks that must keep running on per-item
 failure — but log the exception with context, and emit a metric, never just
@@ -430,9 +424,9 @@ except AttributeError:
 
 ### `ml-unused-param` — Unused function parameter
 
-**Why it's bad:** AGENTS.md § Code Style — delete dead code. Unused params
-imply a contract that doesn't exist, and they break tools (template
-validation, type checkers, callers searching for usages).
+**Why it's bad:** Delete dead code. Unused params imply a contract that
+doesn't exist, and they break tools (template validation, type checkers,
+callers searching for usages).
 
 **When allowed:** Required by an interface (e.g. a callback signature) —
 but then use `_` to make the intent explicit, and only for that case.
@@ -516,9 +510,8 @@ db_writes: list[...] = field(default_factory=list)   # always []
 
 ### `ml-duplicate-logic-block` — Same logic block in two+ places
 
-**Why it's bad:** AGENTS.md § Code Reuse — do not create parallel
-implementations. Two copies drift: a fix to one is silently absent in the
-other.
+**Why it's bad:** Do not create parallel implementations. Two copies drift:
+a fix to one is silently absent in the other.
 
 **When allowed:** Two sites in deliberately isolated modules (experiment
 scripts, one-off tools) where coupling them would create worse
@@ -618,9 +611,9 @@ SUPPORTED_MULTI_REGIONS = frozenset({"us", "eu"})   # import the one in bootstra
 
 ### `ml-utils-module` — Module named `*_utils.py` / `*_helpers.py`
 
-**Why it's bad:** AGENTS.md § Naming — no `*_utils.py`; use descriptive
-names like `text_cleaning.py`. Generic `_utils` modules become dumping
-grounds and stop telling readers anything about contents.
+**Why it's bad:** No `*_utils.py`; use descriptive names like
+`text_cleaning.py`. Generic `_utils` modules become dumping grounds and stop
+telling readers anything about contents.
 
 **When allowed:** Cross-cutting utilities for a large number of callers
 across an entire package — but even then, prefer a descriptive name
@@ -633,10 +626,9 @@ lib/marin/src/marin/processing/tokenize/tokenize_utils.py   # rename to byte_pai
 
 ### `ml-misleading-name` — Name doesn't match what the function returns or does
 
-**Why it's bad:** AGENTS.md § Naming — function names should reflect return
-types. `cpu_wall_ms` that measures wall time (not CPU time), or
-`labeled_lm_eval` that does generic masked-span eval, mislead future
-readers and bugs follow.
+**Why it's bad:** Function names should reflect return types and behavior.
+`cpu_wall_ms` that measures wall time (not CPU time), or `labeled_lm_eval`
+that does generic masked-span eval, mislead future readers and bugs follow.
 
 **When allowed:** Never knowingly. Rename when discovered.
 
@@ -667,9 +659,8 @@ attempt_id_compat: str                          # "compat" with what?
 
 ### `ml-abbreviated-name` — Cryptic abbreviation in a name
 
-**Why it's bad:** AGENTS.md § Naming — no abbreviations like `exe`; use
-`exec` or full words. Abbreviations save typing once and cost readability
-forever.
+**Why it's bad:** No abbreviations like `exe`; use `exec` or full words.
+Abbreviations save typing once and cost readability forever.
 
 **When allowed:** Domain-standard short forms (`MAP`/`REDUCE` in enums,
 `http`, `url`, `id`).
@@ -681,9 +672,8 @@ def _list_stg_files(inp_path: str): ...   # staged_files, input_path.
 
 ### `ml-seconds-suffix` — `_s` suffix for "seconds"
 
-**Why it's bad:** AGENTS.md § Naming — `_s` is reserved-or-banned; seconds
-are the assumed unit in this codebase. Naming with `_s` is either
-redundant or confusing (`responses_s`? `rows_s`?).
+**Why it's bad:** Seconds are the assumed unit in this codebase, so the `_s`
+suffix is either redundant or confusing (`responses_s`? `rows_s`?).
 
 **When allowed:** Never. Use `_ms` / `_us` / `_ns` for non-second units;
 plain names for seconds.
@@ -702,9 +692,8 @@ def wait(timeout: Duration)
 
 ### `ml-restating-comment` — Comment paraphrases the line below
 
-**Why it's bad:** AGENTS.md § Comments — write comments for subtle logic,
-not to restate code. A comment that says what the next line says is pure
-noise and rots first.
+**Why it's bad:** Comments are for subtle logic, not for restating code. A
+comment that says what the next line says is pure noise and rots first.
 
 **When allowed:** Never. If you cannot articulate what would be lost by
 deleting the comment, delete it.
@@ -717,9 +706,9 @@ counter += 1
 
 ### `ml-trivial-docstring` — Docstring narrates a self-evident one-liner
 
-**Why it's bad:** AGENTS.md § Comments — skip docstrings on trivial
-functions with clear names. `def get_user_id(user): """Return the user's
-id."""` says nothing the signature didn't.
+**Why it's bad:** Skip docstrings on trivial functions with clear names.
+`def get_user_id(user): """Return the user's id."""` says nothing the
+signature didn't.
 
 **When allowed:** Public-API functions documented in user-facing reference
 docs. Internal one-liners with clear names: no docstring.
@@ -733,9 +722,9 @@ def get_user_id(user: User) -> str:
 
 ### `ml-multi-paragraph-docstring` — Multi-paragraph docstring on a trivial body
 
-**Why it's bad:** AGENTS.md § Comments — one short line max. Multi-paragraph
-docstrings on three-line bodies are an LLM-generated pitfall and bury the
-real public-API docs they should have lived alongside.
+**Why it's bad:** Internal docstrings should be one short line max.
+Multi-paragraph docstrings on three-line bodies are an LLM-generated pitfall
+and bury the real public-API docs they should have lived alongside.
 
 **When allowed:** Genuinely complex public APIs where Google-style sections
 (`Args:`, `Returns:`, `Raises:`) document non-obvious contracts.
@@ -784,9 +773,9 @@ name the trigger.
 
 ### `ml-init-all-export` — `__all__` listing every public symbol in `__init__.py`
 
-**Why it's bad:** AGENTS.md § LLM-Generated Code Pitfalls — `__all__` is
-redundant when the module already exports the names via `from .x import
-Foo`, and it drifts (one symbol added, `__all__` not updated).
+**Why it's bad:** `__all__` is redundant when the module already exports the
+names via `from .x import Foo`, and it drifts (one symbol added, `__all__`
+not updated).
 
 **When allowed:** Modules that genuinely re-export a subset and want
 `from foo import *` to be a narrow set — rare.
@@ -886,9 +875,9 @@ timeout = 60
 
 ### `ml-internal-assertion` — Test asserts on internal state instead of observable behavior
 
-**Why it's bad:** AGENTS.md § Testing — prefer integration-style tests that
-validate externally-observable behavior. Asserting on imported constants
-or private fields fails on refactors that didn't change behavior.
+**Why it's bad:** Prefer integration-style tests that validate
+externally-observable behavior. Asserting on imported constants or private
+fields fails on refactors that didn't change behavior.
 
 **When allowed:** Where the internal state *is* the contract (e.g. a
 serializer's wire format). Otherwise prefer asserting on the output.
@@ -918,9 +907,8 @@ def test_dispatch(mock_db, mock_log, mock_rpc, mock_clock, mock_metrics):
 
 ### `ml-tautological-test` — Test that fails on implementation change but not on behavior change
 
-**Why it's bad:** AGENTS.md § Testing — tests must fail if behavior is
-wrong, not just if implementation changes. Tautological tests train the
-team to ignore failures.
+**Why it's bad:** Tests must fail if behavior is wrong, not just if
+implementation changes. Tautological tests train the team to ignore failures.
 
 **When allowed:** Never. If a test only fires on refactors, delete it or
 rewrite it against externally-observable behavior.
@@ -969,9 +957,9 @@ assert status_line() == "Worker iris-1 (us-central1-a) ready in 12.3s"
 
 ### `ml-time-sleep-in-test` — `time.sleep()` in a test body
 
-**Why it's bad:** AGENTS.md § Testing — no `time.sleep()` in tests; inject
-`now=time.time()` or mock time. Sleeping races the SUT instead of
-controlling it; the test goes flaky under load.
+**Why it's bad:** No `time.sleep()` in tests; inject `now=time.time()` or
+mock time. Sleeping races the SUT instead of controlling it; the test goes
+flaky under load.
 
 **When allowed:** Genuinely time-bound integration tests (waiting on a
 TPU bring-up) marked `@pytest.mark.slow` with a comment naming what the
@@ -987,9 +975,9 @@ def test_eventual_flush():
 
 ### `ml-unittest-class-wrapper` — `class TestFoo(unittest.TestCase)` adding nothing
 
-**Why it's bad:** AGENTS.md § Testing — prefer top-level `def test_*` with
-pytest fixtures. A `TestCase` subclass that just groups tests by topic
-adds setup ceremony without buying anything.
+**Why it's bad:** Prefer top-level `def test_*` with pytest fixtures. A
+`TestCase` subclass that just groups tests by topic adds setup ceremony
+without buying anything.
 
 **When allowed:** Where you genuinely need `setUp/tearDown` semantics that
 fixtures can't express (rare).
@@ -1010,27 +998,18 @@ For agents running this catalog against a diff:
 
 ### Inputs
 
-Pick the diff that applies, typically the current code versus the merge-base, unless the user explicitly requests a tighter set.
+Pick the diff that applies, typically the current code versus the merge base with `main`, unless the user explicitly requests a tighter set.
 
-- Feature branch: `git diff main...HEAD -- '*.py'` (triple-dot — diff against the merge base).
-- Pre-commit / pre-push: `git diff --cached -- '*.py'`.
-- A specific PR: `gh pr diff <number> -- '*.py'`.
+- Feature branch: `git diff main...HEAD -- '*.py' '*.proto'`.
+- Pre-commit / pre-push: `git diff --cached -- '*.py' '*.proto'`.
+- A specific PR: `gh pr diff <number> -- '*.py' '*.proto'`.
 - A named file or two: read the file in full.
 
-If `*.py` is empty, emit nothing and stop. If the diff is larger than one pass, drive a second pass file-by-file via `git diff main...HEAD --name-only -- '*.py'`. Do not sample or truncate.
+If the diff is empty, emit nothing and stop. If it is larger than one pass, drive a second pass file-by-file via `git diff main...HEAD --name-only -- '*.py' '*.proto'`. Do not sample or truncate.
 
-Scan added/modified hunks plus enough surrounding context to judge intent (usually the enclosing function/class). Do not flag pre-existing code in unchanged regions. Migrations, `__init__.py` exports, proto definitions, and test fixtures all count.
+Scan added/modified hunks plus enough surrounding context to judge intent (usually the enclosing function/class). Do not flag pre-existing code in unchanged regions. Migrations, `__init__.py` exports, proto definitions, and test fixtures all count. Generated stubs (e.g. `*_pb2.py`, `*_pb2_grpc.py`) are out of scope — skip them.
 
-Also consult subproject `AGENTS.md` (`lib/iris/AGENTS.md`, `lib/marin/AGENTS.md`, etc.) for files under that subtree; subproject rules override the global ones.
-
-### Severity
-
-- `nit` — by default: imports, naming, comments, docs, duplication.
-- `warn` — by default: api-shape, types, dead-code, defensive, config-explicitness, test-quality, layering.
-
-You may upgrade (a name mismatch obscures a thread-safety guarantee) or downgrade (a flagged shape falls under that rule's "when allowed" but you want to surface it for awareness). When you deviate, explain in the message with `(severity: nit→warn because …)`.
-
-There is no `block` severity. Security findings (auth, injection, secrets) belong in `/security-review`.
+Security findings (auth, injection, secrets) are out of scope — they belong in `/security-review`.
 
 ### Confidence
 
@@ -1038,8 +1017,7 @@ Every finding has a confidence in `[0.0, 1.0]`:
 
 - `≥0.9` — example is near-verbatim; the reviewer comment writes itself.
 - `0.7–0.9` — pattern fits the rule's intent; some context uncertainty.
-- `0.5–0.7` — suggestive; emit only for `warn` rules, suppress for `nit`.
-- `<0.5` — do not emit.
+- `<0.7` — do not emit.
 
 Do not pad. Empty output is correct. False positives are the failure mode that erodes trust.
 
@@ -1049,28 +1027,33 @@ Several rules touch adjacent surface.
 
 If a single line legitimately violates two unrelated rules (e.g. `Any` return and a `_v2` suffix), emit two findings.
 
+When rules overlap on one line, pick the more specific one and emit it alone:
+
+- A comment that is both wrong *and* paraphrases the code → `ml-stale-inline-comment` (the staleness is the bigger problem). Plain restatement of correct code → `ml-restating-comment`.
+- A flag-gated duplicate path → `ml-flag-gated-parallel-path` over `ml-parallel-source-impl` (the flag is the more specific shape) if that rule applies; otherwise `ml-parallel-source-impl`.
+- A `_v2` / `_legacy` suffix on a function whose contrast no longer exists → `ml-vestigial-qualifier`, not `ml-misleading-name`.
+
 ### Output format
 
-One finding per line. Ruff-compatible:
+One finding per line:
 
 ```
-<path>:<line>: <code> [<severity>] (<confidence>) <message>
+<path>:<line>: <code> (<confidence>) <message>
 ```
 
 - `<path>` — repo-relative, forward slashes.
 - `<line>` — 1-indexed in the file as it exists post-change.
 - `<code>` — the `ml-...` code from this file.
-- `<severity>` — `nit` | `warn`.
 - `<confidence>` — two decimals, e.g. `0.82`.
-- `<message>` — ≤200 chars. State the concern; do not propose a fix. If you deviated from default severity, end with `(severity: <reason>)`.
+- `<message>` — ≤200 chars. State the concern; do not propose a fix.
 
 Worked examples:
 
 ```
-lib/iris/src/iris/cluster/worker/reconcile.py:284: ml-try-except-fallback [warn] (0.90) silent fallback contradicts docstring's MISSING contract; will mask cache bugs
-lib/iris/src/iris/cluster/controller/transitions.py:1673: ml-bool-return-status [warn] (0.85) error: str | None encodes two unrelated transactions in one method
-lib/marin/src/marin/processing/tokenize/tokenize_utils.py:1: ml-utils-module [nit] (0.70) module name uses generic _utils suffix
-lib/iris/src/iris/cluster/worker/task_attempt.py:107: ml-speculative-abstraction [warn] (0.80) sentinel exists only to satisfy one import (severity: nit→warn — survived prior review)
+lib/iris/src/iris/cluster/worker/reconcile.py:284: ml-try-except-fallback (0.90) silent fallback contradicts docstring's MISSING contract; will mask cache bugs
+lib/iris/src/iris/cluster/controller/transitions.py:1673: ml-bool-return-status (0.85) error: str | None encodes two unrelated transactions in one method
+lib/marin/src/marin/processing/tokenize/tokenize_utils.py:1: ml-utils-module (0.75) module name uses generic _utils suffix
+lib/iris/src/iris/cluster/worker/task_attempt.py:107: ml-speculative-abstraction (0.80) sentinel exists only to satisfy one import
 ```
 
 If the diff is empty or has no Python files, emit nothing — no "no findings" message, no preamble, no summary, no JSON, no Markdown, no fenced code blocks. One finding per line, no blank lines between them. Do not echo the input.
@@ -1081,4 +1064,3 @@ If the diff is empty or has no Python files, emit nothing — no "no findings" m
 - **Calibration.** If you wouldn't bet $1 on a finding being valid, score it below 0.7.
 - **Stay in scope.** Only the rules in this file. Don't moonlight as a security / perf / style reviewer for things outside the catalog.
 - **Anchor in real shapes.** A reader at the cited line should immediately see why you flagged it. If you're reaching, suppress.
-- **Severity deviations must be justified** in the message with `(severity: …)`.
