@@ -10,6 +10,7 @@ can be audited without launching Iris jobs.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import replace
 
@@ -38,6 +39,8 @@ from experiments.evals.raw_web_markup_ppl import raw_web_markup_raw_validation_s
 from experiments.evals.web_markup_image_text_ppl import web_markup_image_text_raw_validation_sets
 from experiments.marin_models import marin_tokenizer
 from experiments.structured_evals import structured_evals_raw_validation_sets
+
+logger = logging.getLogger(__name__)
 
 RUN_KEY = "model_perplexity_gap_suite_v1"
 RESOURCE_CONFIG = ResourceConfig.with_tpu("v5p-8", regions=["us-central1"])
@@ -72,7 +75,7 @@ def _add(
     if overlap:
         raise ValueError(f"Duplicate dataset keys from {label}: {sorted(overlap)}")
     if skipped:
-        print(f"{label}: skipped broken dashboard slices: {skipped}")
+        logger.info("%s: skipped broken dashboard slices: %s", label, skipped)
     provider = {
         key: dataset if dataset.tags else replace(dataset, tags=(key.split("/", maxsplit=1)[0],))
         for key, dataset in provider.items()
