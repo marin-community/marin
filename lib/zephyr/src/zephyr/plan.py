@@ -153,8 +153,9 @@ PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Join
 class StageType(StrEnum):
     """Type of stage execution."""
 
-    WORKER = auto()  # Normal worker execution
-    RESHARD = auto()  # Redistribute chunks (no worker execution)
+    MAP_WORKER = auto()
+    REDUCE_WORKER = auto()
+    RESHARD = auto()
 
 
 def _map_gen(stream: Iterator, fn: Callable) -> Iterator:
@@ -266,12 +267,13 @@ class PhysicalStage:
 
     A stage contains a sequence of physical operations that can be executed
     together. The stage_type tells the backend HOW to execute it:
-    - WORKER: Normal worker execution
+    - MAP_WORKER: Normal worker execution (map/filter/write)
+    - REDUCE_WORKER: Memory-intensive worker execution (scatter/reduce/join)
     - RESHARD: Redistribute chunks across shards (no worker execution)
     """
 
     operations: list[PhysicalOp] = field(default_factory=list)
-    stage_type: StageType = StageType.WORKER
+    stage_type: StageType = StageType.MAP_WORKER
     output_shards: int | None = None
 
     def stage_name(self, max_length: int | None = None) -> str:
@@ -328,7 +330,20 @@ class FusionState:
     current_ops: list[PhysicalOp] = field(default_factory=list)
     pending_fusible: list = field(default_factory=list)
     output_shards: int | None = None
-    stage_type: StageType = StageType.WORKER
+    stage_type: StageType | None = None
+
+    def _set_stage_type(self, op: PhysicalOp) -> None:
+        if isinstance(op, (Reshard)):
+            if self.stage_type is not None:
+                raise ValueError("Reshard should be the only op in a RESHARD stage")
+            self.stage_type = StageType.RESHARD
+        elif isinstance(op, (Reduce, Join)):
+            self.stage_type = StageType.REDUCE_WORKER
+        else:
+            if self.stage_type is None:
+                # Map ops can happen after a Reduce, Fold, or Join, but in that case the physical
+                # stage is treated like a reduce, since those require more memory.
+                self.stage_type = StageType.MAP_WORKER
 
     def flush_pending(self) -> None:
         """Convert pending fusible ops to a physical Map."""
@@ -336,12 +351,12 @@ class FusionState:
             return
 
         needs_shard_context = any(isinstance(op, MapShardOp) for op in self.pending_fusible)
-        self.current_ops.append(
-            Map(
-                fn=compose_map(self.pending_fusible[:]),
-                needs_shard_context=needs_shard_context,
-            )
+        op = Map(
+            fn=compose_map(self.pending_fusible[:]),
+            needs_shard_context=needs_shard_context,
         )
+        self._set_stage_type(op)
+        self.current_ops.append(op)
         self.pending_fusible = []
 
     def add_op(
@@ -349,7 +364,6 @@ class FusionState:
         op: PhysicalOp,
         *,
         output_shards: int | None = None,
-        stage_type: StageType | None = None,
     ) -> None:
         """Add physical op to current stage.
 
@@ -359,8 +373,8 @@ class FusionState:
         self.current_ops.append(op)
         if output_shards is not None:
             self.output_shards = output_shards
-        if stage_type is not None:
-            self.stage_type = stage_type
+
+        self._set_stage_type(op)
 
     def end_stage(self) -> None:
         """Flush pending ops and close current stage."""
@@ -375,7 +389,7 @@ class FusionState:
             )
             self.current_ops = []
             self.output_shards = None
-            self.stage_type = StageType.WORKER
+            self.stage_type = None
 
     def finalize(self) -> list[PhysicalStage]:
         """Flush remaining ops and return completed stages."""
@@ -433,13 +447,13 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
             state.end_stage()
-            state.add_op(Reshard(num_shards=1), output_shards=1, stage_type=StageType.RESHARD)
+            state.add_op(Reshard(num_shards=1), output_shards=1)
             state.end_stage()
             state.add_op(Fold(fn=op.global_reducer))
 
         elif isinstance(op, ReshardOp):
             state.end_stage()
-            state.add_op(Reshard(num_shards=op.num_shards), output_shards=op.num_shards, stage_type=StageType.RESHARD)
+            state.add_op(Reshard(num_shards=op.num_shards), output_shards=op.num_shards)
             state.end_stage()
 
         elif isinstance(op, JoinOp):

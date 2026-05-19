@@ -36,8 +36,8 @@ Out of scope for this phase:
 
 ## Deliverables
 
-1. Skill doc in `.agents/skills/ferries/`:
-- `.agents/skills/ferries/SKILL.md`
+1. Skill doc in `.agents/skills/run-ferries/`:
+- `.agents/skills/run-ferries/SKILL.md`
   - end-to-end human+agent ferry procedure
   - required inputs, safety gates, commands, and escalation paths
 
@@ -311,7 +311,7 @@ Phase-2:
 ## Implementation Phases
 
 1. **Recipe + Template**
-- add `.agents/skills/ferries/SKILL.md`
+- add `.agents/skills/run-ferries/SKILL.md`
 - establish `experiments/ferries/daily.py`
 
 2. **Proposal Workflow**

@@ -1142,6 +1142,7 @@ class IrisConfig:
 
         return create_provider_bundle(
             platform_config=self._proto.platform,
+            worker_port=self._proto.defaults.worker.port,
             cluster_config=self._proto,
             ssh_config=self._proto.defaults.ssh,
         )

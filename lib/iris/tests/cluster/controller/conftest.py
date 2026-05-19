@@ -1019,7 +1019,7 @@ def make_gcp_provider(
     """
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project", label_prefix="iris")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=[zone])
-    provider = GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", gcp_service=service)
+    provider = GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=service)
     return provider, service
 
 

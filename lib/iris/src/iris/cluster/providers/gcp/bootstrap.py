@@ -177,8 +177,11 @@ echo "[iris-init] Phase: worker_start"
 # from a previous worker during rolling restarts.
 sudo docker rm -f iris-worker 2>/dev/null || true
 
-# Start worker container without restart policy first (fail fast during bootstrap)
+# Start worker container with restart policy from the start so transient
+# failures (image pull races, network hiccups, etc.) self-heal. Give-up is
+# owned by the autoscaler's slice health probe, not by docker.
 sudo docker run -d --name iris-worker \\
+    --restart=unless-stopped \\
     --network=host \\
     --ulimit core=0:0 \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
@@ -192,29 +195,21 @@ echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
 echo "[iris-init] Waiting for worker to register with controller..."
 
-# Wait for worker to be healthy (poll health endpoint)
+# Poll the health endpoint to report bootstrap status. Docker handles
+# restarts; the autoscaler health probe handles give-up if /health never
+# comes up.
 for i in $(seq 1 60); do
-    # Check if container is still running
-    if ! sudo docker ps -q -f name=iris-worker | grep -q .; then
-        echo "[iris-init] ERROR: Worker container exited unexpectedly"
-        echo "[iris-init] Container status:"
-        sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
-        echo "[iris-init] Container logs:"
-        sudo docker logs iris-worker --tail 100 2>&1 | sed 's/^/[iris-init] /'
-        exit 1
-    fi
-
     if curl -sf http://localhost:{{ worker_port }}/health > /dev/null 2>&1; then
         echo "[iris-init] Worker is healthy"
-        # Now add restart policy for production
-        sudo docker update --restart=unless-stopped iris-worker
         echo "[iris-init] Bootstrap complete"
         exit 0
     fi
     sleep 2
 done
 
-echo "[iris-init] ERROR: Worker failed to become healthy after 120s"
+echo "[iris-init] WARNING: Worker not healthy after 120s. Docker will keep restarting the"
+echo "[iris-init] container (--restart=unless-stopped); the autoscaler health probe will reap"
+echo "[iris-init] this slice if /health stays down for ~100s of probes."
 echo "[iris-init] Container status:"
 sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
 echo "[iris-init] Container logs:"
