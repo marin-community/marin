@@ -87,6 +87,7 @@ class ModelPerplexityGapConfig:
     model_b_scores_path: str | InputName | ExecutorStep
     output_path: str = field(default_factory=this_output_path)  # type: ignore[arg-type]
     wandb_tags: list[str] | None = None
+    retry_key: str | None = None
     cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
@@ -190,7 +191,9 @@ def model_perplexity_gap_from_scores(
     model_a_scores_path: str | InputName | ExecutorStep,
     model_b_scores_path: str | InputName | ExecutorStep,
     name: str,
+    resource_config: ResourceConfig | None = None,
     wandb_tags: list[str] | None = None,
+    retry_key: str | None = None,
 ) -> ExecutorStep:
     return ExecutorStep(
         name=f"analysis/perplexity_gap/{name}",
@@ -202,15 +205,18 @@ def model_perplexity_gap_from_scores(
             model_a_scores_path=model_a_scores_path,
             model_b_scores_path=model_b_scores_path,
             wandb_tags=wandb_tags,
+            retry_key=retry_key,
             cache_key=versioned(
                 {
                     "name": name,
                     "model_a_name": model_a_name,
                     "model_b_name": model_b_name,
                     "wandb_tags": wandb_tags,
+                    "retry_key": retry_key,
                 }
             ),
         ),
+        resources=resource_config,
     )
 
 
