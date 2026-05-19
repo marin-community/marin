@@ -19,6 +19,11 @@ locally on the offending SEC files). The result is a PyArrow-readable
 ``raw/sec-edgar/<form-type>/<file>.parquet`` tree that normalize and
 tokenize consume directly, with no intermediate staging copy.
 
+``duckdb`` is an optional dependency exposed via the ``sec-edgar``
+extra (``uv sync --extra sec-edgar`` locally, or ``iris job run
+--extra=sec-edgar ...`` on the cluster); the import is deferred so
+catalog walks that don't actually ingest SEC-EDGAR don't pay for it.
+
 Scoped to this source per https://github.com/marin-community/marin/pull/5335
 — if more datasets hit the page-header cap or we move off PyArrow
 wholesale, lift ``read_parquet_via_duckdb`` into a shared helper.
@@ -33,7 +38,6 @@ import random
 import time
 from collections.abc import Iterator
 
-import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray import ResourceConfig
@@ -62,6 +66,25 @@ _BASE_WAIT_S = 5
 _MAX_WAIT_S = 15 * 60
 
 
+def _import_duckdb():
+    """Import ``duckdb`` lazily so the SEC-EDGAR extra stays opt-in.
+
+    The wider ``marin`` package doesn't depend on duckdb; only this
+    downloader does. Importing it at module scope would pull duckdb into
+    every catalog walk that touches ``sources.py``, defeating the point
+    of the extra.
+    """
+    try:
+        import duckdb
+    except ImportError as e:
+        raise ImportError(
+            "The 'duckdb' package is required to ingest TeraflopAI/SEC-EDGAR. "
+            "Install the extra with `uv sync --extra sec-edgar` locally or "
+            "`iris job run --extra=sec-edgar ...` on the cluster."
+        ) from e
+    return duckdb
+
+
 def read_parquet_via_duckdb(path: str, *, fs: object | None = None) -> Iterator[pa.RecordBatch]:
     """Yield Arrow RecordBatches from a parquet via DuckDB.
 
@@ -74,6 +97,7 @@ def read_parquet_via_duckdb(path: str, *, fs: object | None = None) -> Iterator[
     connection. Defaults to an ``HfFileSystem`` so callers reading
     ``hf://...`` paths don't have to wire one up.
     """
+    duckdb = _import_duckdb()
     if fs is None:
         fs = HfFileSystem()
     con = duckdb.connect(":memory:")

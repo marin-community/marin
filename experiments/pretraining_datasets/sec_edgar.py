@@ -1,7 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""TeraflopAI/SEC-EDGAR dataset tokenization."""
+"""TeraflopAI/SEC-EDGAR dataset tokenization.
+
+The download stage uses DuckDB to work around
+https://github.com/marin-community/marin/issues/5334 (apache/arrow#46404).
+``duckdb`` is exposed via the ``sec-edgar`` extra in ``lib/marin``, so
+ingestion jobs must opt in — e.g.::
+
+    iris job run --extra=cpu --extra=sec-edgar \\
+        -- python -m experiments.pretraining_datasets.sec_edgar
+
+Local runs need ``uv sync --extra sec-edgar`` first.
+"""
 
 from fray import ResourceConfig
 from marin.datakit.download.sec_edgar import sec_edgar_normalize_steps
