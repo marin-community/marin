@@ -195,6 +195,27 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
 
 
 @pytest.mark.parametrize(
+    "task_state",
+    [
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_COSCHED_FAILED,
+    ],
+)
+def test_reconcile_worker_terminal_rows_emit_run_without_inline_spec(task_state):
+    """Worker-bound terminal rows stay expected until their attempt is finalized."""
+    plan = reconcile_worker(_inputs([_row(task_state, attempt_id=4)]))
+
+    assert len(plan.request.desired) == 1
+    desired = plan.request.desired[0]
+    assert desired.HasField("run")
+    assert not desired.run.HasField("request")
+    assert desired.attempt_id == 4
+
+
+@pytest.mark.parametrize(
     "task_state,expected_reason",
     [
         (job_pb2.TASK_STATE_KILLED, worker_pb2.Worker.STOP_REASON_CANCELLED),
@@ -213,20 +234,17 @@ def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected
 @pytest.mark.parametrize(
     "task_state",
     [
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_PENDING,
         job_pb2.TASK_STATE_UNSPECIFIED,
     ],
 )
-def test_reconcile_worker_terminal_and_unrecognised_states_are_omitted(task_state):
+def test_reconcile_worker_unrecognised_states_are_omitted(task_state):
     plan = reconcile_worker(_inputs([_row(task_state)]))
     assert list(plan.request.desired) == []
 
 
 def test_reconcile_worker_mixed_rows_per_axis():
-    """A worker holding tasks across every axis builds one desired entry per non-terminal row."""
+    """A worker holding tasks across every axis builds one desired entry per worker-bound row."""
     rows = [
         _row(job_pb2.TASK_STATE_ASSIGNED, task_id="a", attempt_id=1, job="j1"),
         _row(job_pb2.TASK_STATE_RUNNING, task_id="b", attempt_id=2, job="j2"),
@@ -236,11 +254,16 @@ def test_reconcile_worker_mixed_rows_per_axis():
     plan = reconcile_worker(_inputs(rows, job_specs={_job_id("j1"): _spec("img-j1")}))
 
     by_task = {d.task_id: d for d in plan.request.desired}
-    # SUCCEEDED is dropped.
-    assert set(by_task) == {_task_id("a").to_wire(), _task_id("b").to_wire(), _task_id("c").to_wire()}
+    assert set(by_task) == {
+        _task_id("a").to_wire(),
+        _task_id("b").to_wire(),
+        _task_id("c").to_wire(),
+        _task_id("d").to_wire(),
+    }
     assert by_task[_task_id("a").to_wire()].run.HasField("request")
     assert not by_task[_task_id("b").to_wire()].run.HasField("request")
     assert by_task[_task_id("c").to_wire()].stop == worker_pb2.Worker.STOP_REASON_CANCELLED
+    assert not by_task[_task_id("d").to_wire()].run.HasField("request")
 
 
 # ===========================================================================
@@ -459,14 +482,14 @@ def test_legacy_wire_start_failure_surfaces_as_error():
     assert list(results[0].observations) == []
 
 
-def test_legacy_wire_poll_failure_is_logged_not_fatal():
-    """PollTasks failure: observations are empty but error stays None (logged at debug)."""
+def test_legacy_wire_poll_failure_surfaces_as_error():
+    """PollTasks failure surfaces as a reconcile error."""
     provider, _ = _provider_with_stub(_FakeWorkerStub(address=_W1_ADDR, poll_exc=RuntimeError("timeout")))
     plan = _make_plan(_W1, desired=[_desired_run(_task_id("a"), 1, spec=None)])
 
     results = _reconcile_one(provider, plan, rpc=False)
 
-    assert results[0].error is None
+    assert results[0].error == "timeout"
     assert list(results[0].observations) == []
 
 

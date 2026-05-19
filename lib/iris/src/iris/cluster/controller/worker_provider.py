@@ -376,9 +376,17 @@ class WorkerProvider:
                 continue
             if legacy.poll_error is not None:
                 logger.debug("PollTasks failed for worker %s: %s", legacy.worker_id, legacy.poll_error)
+                out.append(
+                    ReconcileResult(
+                        worker_id=legacy.worker_id,
+                        observations=[],
+                        error=legacy.poll_error,
+                    )
+                )
+                continue
 
             observations: list[worker_pb2.Worker.AttemptObservation] = []
-            if legacy.poll_error is None and legacy.poll_updates:
+            if legacy.poll_updates:
                 for update in legacy.poll_updates:
                     kwargs: dict = {
                         "attempt_uid": "",

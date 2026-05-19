@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, EXECUTING_TASK_STATES
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 
 
@@ -56,6 +56,10 @@ class ReconcileResult:
 
 
 _ASSIGNED_STATES: frozenset[int] = ACTIVE_TASK_STATES - EXECUTING_TASK_STATES
+_TERMINAL_EXPECTED_STATES: frozenset[int] = TERMINAL_TASK_STATES - {
+    job_pb2.TASK_STATE_KILLED,
+    job_pb2.TASK_STATE_PREEMPTED,
+}
 
 
 def reconcile_worker(inputs: WorkerReconcileInputs) -> WorkerReconcilePlan:
@@ -109,7 +113,16 @@ def reconcile_worker(inputs: WorkerReconcileInputs) -> WorkerReconcilePlan:
                     attempt_id=row.attempt_id,
                 )
             )
-        # Terminal and unrecognised states are omitted from desired.
+        elif row.task_state in _TERMINAL_EXPECTED_STATES:
+            desired.append(
+                worker_pb2.Worker.DesiredAttempt(
+                    attempt_uid="",
+                    run=worker_pb2.Worker.AttemptSpec(),
+                    task_id=wire_task_id,
+                    attempt_id=row.attempt_id,
+                )
+            )
+        # Unrecognised states are omitted from desired.
 
     return WorkerReconcilePlan(
         worker_id=inputs.worker_id,
