@@ -44,9 +44,6 @@ from experiments.qwen3 import (
 TRACE_EVAL_TPU_TYPE = "v5p-8"
 MAX_EXAMPLES_PER_DATASET = 128
 MAX_EVAL_LENGTH = 8192
-MAX_OUTCOME_TRACE_MESSAGES = 64
-PRESERVE_INITIAL_OUTCOME_TRACE_MESSAGES = 2
-MAX_OUTCOME_MESSAGE_CHARS = 4096
 PATCH_ABLATION_PREFIX_FRACTIONS = (0.0, 0.5)
 WANDB_GROUP = "exp5724-trace-labeled-head-to-head"
 RUN_SUFFIX = "trace-labeled-prefix-patch-ablation-128ex"
@@ -85,9 +82,6 @@ def outcome_adapter(
         outcome_field=outcome_field,
         task_id_field=task_id_field,
         record_id_field=record_id_field,
-        max_trace_messages=MAX_OUTCOME_TRACE_MESSAGES,
-        preserve_initial_trace_messages=PRESERVE_INITIAL_OUTCOME_TRACE_MESSAGES,
-        max_message_chars=MAX_OUTCOME_MESSAGE_CHARS,
     )
 
 
