@@ -47,7 +47,7 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
-from zephyr.readers import InputFileSpec, load_file
+from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file
 
 logger = logging.getLogger(__name__)
 
@@ -511,19 +511,43 @@ def _compute_file_pushdown(
         else:
             break
 
-    # Create InputFileSpecs with final columns/filter
-    source_items = [
-        SourceItem(
-            shard_idx=i,
-            data=InputFileSpec(
-                path=entry.path,
-                format=load_op.format,
-                columns=select_columns,
-                filter_expr=filter_expr,
-            ),
-        )
-        for i, entry in enumerate(files)
-    ]
+    # Create InputFileSpecs with final columns/filter.
+    # When max_shard_bytes is set, parquet files are split at row-group boundaries
+    # into multiple SourceItems, each covering a sub-range of rows.
+    source_items: list[SourceItem] = []
+    shard_idx = 0
+    for entry in files:
+        path = entry.path
+        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
+        if load_op.max_shard_bytes is not None and is_parquet:
+            for row_start, row_end in compute_parquet_splits(path, load_op.max_shard_bytes):
+                source_items.append(
+                    SourceItem(
+                        shard_idx=shard_idx,
+                        data=InputFileSpec(
+                            path=path,
+                            format=load_op.format,
+                            columns=select_columns,
+                            row_start=row_start,
+                            row_end=row_end,
+                            filter_expr=filter_expr,
+                        ),
+                    )
+                )
+                shard_idx += 1
+        else:
+            source_items.append(
+                SourceItem(
+                    shard_idx=shard_idx,
+                    data=InputFileSpec(
+                        path=path,
+                        format=load_op.format,
+                        columns=select_columns,
+                        filter_expr=filter_expr,
+                    ),
+                )
+            )
+            shard_idx += 1
 
     # Build final operations list: LoadFileOp + remaining ops
     final_ops = [load_op] + [op for i, op in enumerate(operations) if i not in ops_to_skip]

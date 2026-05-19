@@ -213,6 +213,42 @@ def open_file(file_path: str, mode: str = "rb"):
         yield f
 
 
+def compute_parquet_splits(path: str, max_shard_bytes: int) -> list[tuple[int, int]]:
+    """Compute row-range split points from Parquet footer metadata.
+
+    Reads only the file footer — no data is transferred. Returns a list of
+    (row_start, row_end) pairs aligned to row-group boundaries. Files whose
+    total compressed size is below max_shard_bytes return a single span.
+
+    Args:
+        path: Path to the Parquet file (local or remote via fsspec).
+        max_shard_bytes: Target split size in bytes.
+
+    Returns:
+        List of (row_start, row_end) tuples where row_end is exclusive.
+    """
+    metadata = pq.ParquetFile(path).metadata
+    splits: list[tuple[int, int]] = []
+    split_start = 0
+    split_bytes = 0
+    cumulative_rows = 0
+
+    for i in range(metadata.num_row_groups):
+        rg = metadata.row_group(i)
+        rg_bytes = rg.total_byte_size
+
+        if split_bytes > 0 and split_bytes + rg_bytes > max_shard_bytes:
+            splits.append((split_start, cumulative_rows))
+            split_start = cumulative_rows
+            split_bytes = 0
+
+        split_bytes += rg_bytes
+        cumulative_rows += rg.num_rows
+
+    splits.append((split_start, cumulative_rows))
+    return splits
+
+
 def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     """Load a JSONL file and yield parsed records as dictionaries.
 

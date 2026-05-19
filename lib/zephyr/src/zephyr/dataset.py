@@ -238,6 +238,7 @@ class LoadFileOp:
 
     format: Literal["auto", "parquet", "jsonl", "vortex"] = "auto"
     columns: list[str] | None = None
+    max_shard_bytes: int | None = None
 
     def __repr__(self):
         return f"LoadFileOp(format={self.format}, columns={self.columns})"
@@ -564,11 +565,13 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
-    def load_file(self, columns: list[str] | None = None) -> Dataset[dict]:
+    def load_file(self, columns: list[str] | None = None, max_shard_bytes: int | None = None) -> Dataset[dict]:
         """Load records from file sources, auto-detecting format.
 
         Args:
             columns: Optional column projection (for parquet files)
+            max_shard_bytes: If set, split parquet files into chunks of at most this
+                many bytes (aligned to row-group boundaries) for finer parallelism.
 
         Returns:
             Dataset yielding records as dictionaries
@@ -582,11 +585,17 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
+        return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns, max_shard_bytes)])
 
-    def load_parquet(self, columns: list[str] | None = None) -> Dataset[dict]:
-        """Load records from parquet files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("parquet", columns)])
+    def load_parquet(self, columns: list[str] | None = None, max_shard_bytes: int | None = None) -> Dataset[dict]:
+        """Load records from parquet files.
+
+        Args:
+            columns: Optional column projection.
+            max_shard_bytes: If set, split each file into chunks of at most this many
+                bytes (aligned to row-group boundaries) for finer parallelism.
+        """
+        return Dataset(self.source, [*self.operations, LoadFileOp("parquet", columns, max_shard_bytes)])
 
     def load_jsonl(self) -> Dataset[dict]:
         """Load records from JSONL files."""
