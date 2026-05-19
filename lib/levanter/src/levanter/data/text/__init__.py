@@ -18,12 +18,9 @@ from .datasets import (
     NamedLmDataset,
     TokenSeqDataset,
     TokenSeqDict,
-    TraceChatDataset,
     UrlDatasetSourceConfig,
     dataset_for_component,
-    dataset_for_trace_chat_format,
     count_corpus_sizes,
-    build_trace_chat_dataset_cache,
 )
 from .examples import (
     GrugAttentionMask,
@@ -51,8 +48,11 @@ from .formats import (
 )
 from .trace_chat import (
     ProcessedTraceChatDict,
+    TraceChatDataset,
     TraceChatEvaluationFormat,
     TraceChatProcessor,
+    build_trace_chat_dataset_cache,
+    dataset_for_trace_chat_format,
     loss_label_spec_for_trace_tags,
 )
 from .preference import (
