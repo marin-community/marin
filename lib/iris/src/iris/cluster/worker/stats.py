@@ -50,7 +50,12 @@ def _attr_string(metadata: job_pb2.WorkerMetadata, key: str) -> str:
 class IrisWorkerStat:
     """One row per worker heartbeat (host-level utilization + identity)."""
 
-    key_column: ClassVar[str] = "ts"
+    # Dashboard reads cluster heartbeats one worker at a time (worker detail page,
+    # per-worker task assignment lookups). Clustering by worker_id lets parquet
+    # row-group min/max prune scans to a handful of groups; the original ts
+    # ordering was correct for the workload but produced wide worker_id ranges
+    # in every row group.
+    key_column: ClassVar[str] = "worker_id"
 
     # identity
     worker_id: str
@@ -81,7 +86,12 @@ class IrisWorkerStat:
 class IrisTaskStat:
     """One row per attempt resource update."""
 
-    key_column: ClassVar[str] = "ts"
+    # Dashboard hot path is ``WHERE task_id IN (...) ORDER BY ts DESC LIMIT 1``
+    # per task. Sorting compacted segments by task_id (with seq as the
+    # secondary key, monotonic with ts because seq is allocated at the
+    # insertion lock) gives parquet row-group pruning on task_id while
+    # preserving in-task time order within each group.
+    key_column: ClassVar[str] = "task_id"
 
     task_id: str
     attempt_id: int

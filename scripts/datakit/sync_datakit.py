@@ -1,18 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sync every Datakit source's raw downloads between two MARIN-shaped prefixes.
+"""Sync every Datakit source's raw downloads + normalized output between two MARIN-shaped prefixes.
 
-Direction-agnostic: copies the raw downloads of each
-:class:`marin.datakit.sources.DatakitSource` from ``--src-prefix`` to
-``--dest-prefix`` while preserving the relative path layout below the prefix.
+Direction-agnostic: for each :class:`marin.datakit.sources.DatakitSource`,
+copies the leaf download directories (the DAG leaves of ``source.normalized``)
+AND the source's normalized output directory (``source.normalized.output_path``)
+from ``--src-prefix`` to ``--dest-prefix`` while preserving the relative path
+layout below the prefix. Intermediate preprocessing steps between download and
+normalize are NOT synced — downstream consumers only need the raw inputs and
+the canonical normalized artifact.
+
+Use ``--scope`` to widen or narrow the copy: ``normalized`` (default) syncs
+only the normalize output, ``raw`` syncs only the download leaves, ``all``
+syncs both. Per-scope shard markers and step-status are namespaced so
+different scopes never collide on cache state.
+
 Typical use is GCS -> R2 (e.g. ``gs://marin-us-central1`` to
 ``s3://marin-na/marin``); the reverse works too.
 
 For each source, this script builds a single :class:`StepSpec`. The step's
 ``fn`` runs a Zephyr pipeline that:
 
-* Lists every object under each leaf download path on the source side
+* Lists every object under each source path — both the leaf download
+  directories and the normalized output directory — on the source side
   (including files whose names start with ``.`` or ``_`` — S3/GCS treat
   these like any other key).
 * Sorts the file list and groups it into deterministic shards of
@@ -36,6 +47,10 @@ For each source, this script builds a single :class:`StepSpec`. The step's
   marker as a single follow-up op. Its presence on dst is what whole-source
   skip keys off — re-runs of an already-synced source short-circuit before
   any StepSpec is even built.
+* Finally, sweeps any ``.tmp.<uuid.hex>`` orphans under the dst leaf —
+  leftovers from prior interrupted ``atomic_rename`` runs (ours or
+  upstream). They're never legitimate content; deleting them after the
+  marker lands keeps the dst byte-identical to src.
 
 Per-shard JSONL and per-source executor status all live under
 ``status_prefix`` (default ``gs://marin-us-central1/data/datakit/sync``)
@@ -60,10 +75,12 @@ import argparse
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import StrEnum
 
 import fsspec
 from fray import ResourceConfig
 from marin.datakit.sources import DatakitSource, all_sources
+from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, StepAlreadyDone, step_lock
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_prefix
@@ -78,6 +95,22 @@ DEFAULT_FILES_PER_SHARD = 64
 DEFAULT_COPY_THREADS_PER_SHARD = 16
 DEFAULT_STATUS_PREFIX = "gs://marin-us-central1/data/datakit/sync"
 COPY_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+class SyncScope(StrEnum):
+    """Which subset of a source's paths to sync.
+
+    ``ALL`` copies both the raw-download leaves and the normalized output;
+    ``RAW`` copies only the leaves; ``NORMALIZED`` copies only
+    ``source.normalized.output_path``. Different scopes have disjoint
+    shard-marker and step-status namespaces so a ``raw``-only run can't
+    falsely satisfy a later ``normalized`` run's cache check.
+    """
+
+    ALL = "all"
+    RAW = "raw"
+    NORMALIZED = "normalized"
+
 
 # Matches the ``.tmp.<uuid.hex>`` suffix that ``zephyr.writers.atomic_rename``
 # uses for its intermediate write key. Used to filter orphan leftovers out
@@ -119,6 +152,22 @@ def _rebase(src_path: str, src_prefix: str, dst_prefix: str) -> str:
     if not src_path.startswith(s):
         raise ValueError(f"path {src_path!r} does not start with prefix {s!r}")
     return d + src_path[len(s) :]
+
+
+def _canonical_paths_for(source: DatakitSource, scope: SyncScope) -> list[str]:
+    """Return the canonical-prefixed source paths to sync under ``scope``.
+
+    ``RAW`` -> DAG leaves of ``source.normalized`` (the raw downloads).
+    ``NORMALIZED`` -> just ``source.normalized.output_path``.
+    ``ALL`` -> union of the two (deduped; a normalize step with no deps
+    appears in both sets and the ``set`` union folds it to one entry).
+    """
+    paths: set[str] = set()
+    if scope is SyncScope.RAW or scope is SyncScope.ALL:
+        paths.update(leaf.output_path for leaf in _leaf_downloads(source.normalized))
+    if scope is SyncScope.NORMALIZED or scope is SyncScope.ALL:
+        paths.add(source.normalized.output_path)
+    return sorted(paths)
 
 
 # ----------------------------------------------------------------------
@@ -299,10 +348,34 @@ def _finalize_executor_status(src_dir: str, dst_dir: str) -> None:
 
 
 def _leaf_already_synced(dst_dir: str) -> bool:
-    """True if ``<dst_dir>/.executor_status`` already exists on the destination."""
-    dst = _executor_status_path(dst_dir)
-    fs, _ = fsspec.core.url_to_fs(dst)
-    return fs.exists(dst)
+    """True iff ``<dst_dir>/.executor_status`` exists AND its content is ``SUCCESS``.
+
+    A non-``SUCCESS`` marker (``FAILED``/``DEP_FAILED``/``RUNNING``/legacy
+    log) means the prior writer didn't finish cleanly — re-sync instead of
+    trusting it. Reuses :class:`StatusFile` so the legacy JSON-lines format
+    still parses correctly.
+    """
+    return StatusFile(dst_dir, worker_id="datakit-sync-check").status == STATUS_SUCCESS
+
+
+def _remove_tmp_orphans(dst_dir: str) -> None:
+    """Delete ``.tmp.<uuid.hex>`` orphans anywhere under ``dst_dir``.
+
+    Runs once per leaf after ``.executor_status`` is published. The orphans
+    are interrupted ``atomic_rename`` writes from earlier runs (ours or
+    other producers); they never become legitimate content, and leaving
+    them around would make a byte-for-byte src/dst comparison fail despite
+    the real data matching.
+    """
+    dst_fs, _ = fsspec.core.url_to_fs(dst_dir)
+    if not dst_fs.exists(dst_dir):
+        return
+    orphans = [full for full in dst_fs.find(dst_dir) if _ATOMIC_RENAME_TMP_RE.search(full)]
+    if not orphans:
+        return
+    logger.info("Removing %d .tmp.<uuid> orphan(s) under %s", len(orphans), dst_dir)
+    dst_fs.rm(orphans)
+    counters.increment("upload/tmp_orphans_removed", len(orphans))
 
 
 def _shard(items: list[tuple[str, str]], shard_size: int) -> list[list[tuple[str, str]]]:
@@ -318,51 +391,67 @@ def _upload_dir(
     copy_threads: int,
     job_name: str,
 ) -> None:
-    """Drive the Zephyr pipeline that copies one source directory."""
-    rels = _list_relative_files(src_dir)
-    if not rels:
-        logger.warning("No files under %s — nothing to upload.", src_dir)
-        return
-    shards = _shard(rels, files_per_shard)
-    logger.info(
-        "Uploading %d files in %d shards (x%d copy threads/shard): %s -> %s",
-        len(rels),
-        len(shards),
-        copy_threads,
-        src_dir,
-        dst_dir,
-    )
+    """Drive the Zephyr pipeline that copies one source directory.
 
-    # Each shard's JSONL output is named after its content hash, so
-    # ``skip_existing=True`` doubles as the resume marker: if the source
-    # files haven't changed the hash matches an existing key and Zephyr
-    # short-circuits the whole shard. If any source file's fingerprint
-    # changes, the hash changes and the shard re-runs.
-    shard_paths = [f"{shard_prefix.rstrip('/')}/{_shard_hash(shard)}.jsonl.gz" for shard in shards]
-
-    pipeline = (
-        Dataset.from_list(shards)
-        .map(
-            lambda shard: _copy_shard(
-                shard,
-                src_dir=src_dir,
-                dst_dir=dst_dir,
-                copy_threads=copy_threads,
+    Serializes concurrent runs on the same leaf via :func:`step_lock` keyed
+    on ``dst_dir``. The lock writes ``RUNNING`` to ``<dst_dir>/.executor_status``
+    on acquisition; ``_finalize_executor_status`` overwrites it with the src
+    marker (``SUCCESS``) at the end. If another worker finalized the same leaf
+    while we waited for the lock, :class:`StepAlreadyDone` is raised — we
+    log and return without re-running.
+    """
+    try:
+        with step_lock(dst_dir, f"sync/{job_name}", force_run_failed=True):
+            rels = _list_relative_files(src_dir)
+            if not rels:
+                logger.warning("No files under %s — nothing to upload.", src_dir)
+                return
+            shards = _shard(rels, files_per_shard)
+            logger.info(
+                "Uploading %d files in %d shards (x%d copy threads/shard): %s -> %s",
+                len(rels),
+                len(shards),
+                copy_threads,
+                src_dir,
+                dst_dir,
             )
-        )
-        .write_jsonl(lambda shard_idx, _total: shard_paths[shard_idx], skip_existing=True)
-    )
-    # Each shard fans out into ``copy_threads`` blocking I/O threads, so the
-    # worker needs at least that many cores' worth of headroom.
-    ctx = ZephyrContext(
-        name=job_name,
-        resources=ResourceConfig(cpu=max(2, copy_threads // 4), ram="4g"),
-    )
-    ctx.execute(pipeline)
-    # Only now that every other file is at dst, publish ``.executor_status``
-    # — its presence is the canonical "this leaf is fully synced" signal that
-    # lets future runs skip the source entirely.
-    _finalize_executor_status(src_dir, dst_dir)
+
+            # Each shard's JSONL output is named after its content hash, so
+            # ``skip_existing=True`` doubles as the resume marker: if the source
+            # files haven't changed the hash matches an existing key and Zephyr
+            # short-circuits the whole shard. If any source file's fingerprint
+            # changes, the hash changes and the shard re-runs.
+            shard_paths = [f"{shard_prefix.rstrip('/')}/{_shard_hash(shard)}.jsonl.gz" for shard in shards]
+
+            pipeline = (
+                Dataset.from_list(shards)
+                .map(
+                    lambda shard: _copy_shard(
+                        shard,
+                        src_dir=src_dir,
+                        dst_dir=dst_dir,
+                        copy_threads=copy_threads,
+                    )
+                )
+                .write_jsonl(lambda shard_idx, _total: shard_paths[shard_idx], skip_existing=True)
+            )
+            # Each shard fans out into ``copy_threads`` blocking I/O threads, so the
+            # worker needs at least that many cores' worth of headroom.
+            ctx = ZephyrContext(
+                name=job_name,
+                resources=ResourceConfig(cpu=max(2, copy_threads // 4), ram="4g"),
+            )
+            ctx.execute(pipeline)
+            # Only now that every other file is at dst, publish ``.executor_status``
+            # — its presence is the canonical "this leaf is fully synced" signal that
+            # lets future runs skip the source entirely. Overwrites the ``RUNNING``
+            # marker that ``step_lock`` wrote on acquisition.
+            _finalize_executor_status(src_dir, dst_dir)
+            # With the marker in place, the leaf is canonical; any ``.tmp.<uuid>``
+            # debris under it is orphaned and can be removed.
+            _remove_tmp_orphans(dst_dir)
+    except StepAlreadyDone:
+        logger.info("Skip %s: another worker finalized it while we waited for the lock", dst_dir)
 
 
 # ----------------------------------------------------------------------
@@ -375,22 +464,26 @@ def sync_source_step(
     *,
     src_prefix: str,
     dest_prefix: str,
+    scope: SyncScope = SyncScope.NORMALIZED,
     files_per_shard: int = DEFAULT_FILES_PER_SHARD,
     copy_threads: int = DEFAULT_COPY_THREADS_PER_SHARD,
     status_prefix: str = DEFAULT_STATUS_PREFIX,
 ) -> StepSpec:
-    """Build a StepSpec that copies ``source``'s raw downloads between two prefixes.
+    """Build a StepSpec that copies ``source``'s paths under ``scope`` between two prefixes.
 
-    Leaf download paths are listed (canonically) against ``marin_prefix()``,
-    then re-anchored to both ``src_prefix`` and ``dest_prefix`` so the same
-    relative-under-prefix layout is preserved on either side. Pick the
-    direction by what you pass: ``src_prefix=gs://…`` + ``dest_prefix=s3://…``
-    pushes to R2, the swap pulls back.
+    The set of source paths is :func:`_canonical_paths_for` ``(source, scope)``:
+    raw-download leaves, the normalized output, or both. Each path is listed
+    canonically against ``marin_prefix()``, then re-anchored to both
+    ``src_prefix`` and ``dest_prefix`` so the same relative-under-prefix
+    layout is preserved on either side. Pick the direction by what you pass:
+    ``src_prefix=gs://…`` + ``dest_prefix=s3://…`` pushes to R2, the swap
+    pulls back.
 
     Args:
-        source: The DatakitSource whose raw downloads we want to copy.
+        source: The DatakitSource to copy.
         src_prefix: Source root to read from (e.g. ``gs://marin-us-central1``).
         dest_prefix: Destination root to write to (e.g. ``s3://marin-na/marin``).
+        scope: Which subset of ``source``'s paths to sync (default: NORMALIZED).
         files_per_shard: Files per Zephyr shard (default 64). The shard
             boundaries are deterministic; ``Dataset.from_list`` preserves
             ordering so the same input set always produces the same shards.
@@ -398,23 +491,24 @@ def sync_source_step(
         status_prefix: Where per-shard JSONLs and the executor status marker
             live (default ``gs://marin-us-central1/data/datakit/sync``). The
             shard and step namespaces are further qualified by a hash of
-            ``(src_prefix, dest_prefix)`` so different directions never
-            share markers (their fingerprints aren't comparable anyway).
+            ``(src_prefix, dest_prefix)`` and by ``scope`` so different
+            directions and scopes never share markers (their fingerprints
+            aren't comparable across directions anyway).
 
     Returns:
-        A StepSpec that, when run, copies every leaf download of ``source``
+        A StepSpec that, when run, copies the in-scope paths of ``source``
         from ``src_prefix`` to ``dest_prefix``.
     """
     canonical_prefix = marin_prefix()
-    canonical_leaves = sorted({leaf.output_path for leaf in _leaf_downloads(source.normalized)})
-    if not canonical_leaves:
-        raise ValueError(f"source {source.name!r} has no leaf downloads")
+    canonical_paths = _canonical_paths_for(source, scope)
+    if not canonical_paths:
+        raise ValueError(f"source {source.name!r} has no paths to sync under scope={scope.value!r}")
     pairs = [
         (
-            _rebase(leaf, canonical_prefix, src_prefix),
-            _rebase(leaf, canonical_prefix, dest_prefix),
+            _rebase(path, canonical_prefix, src_prefix),
+            _rebase(path, canonical_prefix, dest_prefix),
         )
-        for leaf in canonical_leaves
+        for path in canonical_paths
     ]
 
     safe = _safe_name(source.name)
@@ -426,31 +520,40 @@ def sync_source_step(
     def _run(output_path: str) -> None:
         del output_path  # the upload writes to ``dest_prefix``; status lives at status_prefix
         for src, dst in pairs:
-            # Namespace the shard markers per src leaf so two leaves whose
+            # Namespace the shard markers per src path so two paths whose
             # ``(rel_path, fingerprint)`` shards happen to collide can't
-            # cause the second leaf to be silently skipped by ``skip_existing``.
-            leaf_key = format(deterministic_hash(src), "016x")
+            # cause the second one to be silently skipped by ``skip_existing``.
+            path_key = format(deterministic_hash(src), "016x")
             _upload_dir(
                 src_dir=src,
                 dst_dir=dst,
-                shard_prefix=f"{status_root}/shards/{direction_key}/{safe}/{leaf_key}",
+                shard_prefix=f"{status_root}/shards/{direction_key}/{safe}/{path_key}",
                 files_per_shard=files_per_shard,
                 copy_threads=copy_threads,
                 job_name=f"sync-{safe}",
             )
 
+    # No deps: the source data already exists in ``src_prefix`` (R2 or GCS) and
+    # we want to *copy* it, not re-execute the upstream download leaves. Listing
+    # them as ``deps`` would make StepRunner re-materialize each leaf at
+    # ``dest_prefix`` from its original origin (Amazon S3, HF, etc.) before
+    # the sync step's ``fn`` even runs — which is both wasteful and defeats
+    # the point of pulling from the mirror.
     return StepSpec(
-        name=f"sync/{safe}",
-        deps=list(_leaf_downloads(source.normalized)),
+        name=f"sync/{safe}/{scope.value}",
         fn=_run,
         # Step status sits next to the shard sentinels so a single
-        # bucket-lifecycle rule manages the whole sync prefix.
-        override_output_path=f"{status_root}/step_status/{direction_key}/{safe}",
+        # bucket-lifecycle rule manages the whole sync prefix. The ``scope``
+        # segment keeps per-scope StepRunner cache state disjoint: a prior
+        # ``raw``-only success can't masquerade as a ``normalized`` success
+        # (StepRunner reads STATUS_SUCCESS at output_path before invoking fn).
+        override_output_path=f"{status_root}/step_status/{direction_key}/{safe}/{scope.value}",
         hash_attrs={
-            "version": "v1",
+            "version": "v2",
             "src_prefix": src_prefix.rstrip("/"),
             "dest_prefix": dest_prefix.rstrip("/"),
-            "src_paths": canonical_leaves,
+            "scope": scope.value,
+            "src_paths": canonical_paths,
         },
     )
 
@@ -477,6 +580,17 @@ def _parse_args() -> argparse.Namespace:
         action="append",
         default=None,
         help="Source name to sync (repeatable). Default: all registered sources.",
+    )
+    parser.add_argument(
+        "--scope",
+        type=SyncScope,
+        choices=list(SyncScope),
+        default=SyncScope.NORMALIZED,
+        help=(
+            "What to sync per source: 'normalized' (normalize output only), "
+            "'raw' (download leaves only), or 'all' (raw downloads + normalized output). "
+            "Default: normalized."
+        ),
     )
     parser.add_argument(
         "--files-per-shard",
@@ -512,20 +626,25 @@ def _select_sources(names: list[str] | None) -> list[DatakitSource]:
     return [all_src[n] for n in names]
 
 
-def _source_already_synced(source: DatakitSource, canonical_prefix: str, dest_prefix: str) -> bool:
-    """True if every leaf of ``source`` already has ``.executor_status`` on dst.
+def _source_already_synced(
+    source: DatakitSource,
+    canonical_prefix: str,
+    dest_prefix: str,
+    scope: SyncScope,
+) -> bool:
+    """True if every in-scope path of ``source`` already has ``.executor_status`` on dst.
 
-    Whole-source skip is the right granularity for our pipeline because (a)
-    ``.executor_status`` is only written by ``_finalize_executor_status``
-    after the entire batch completed, and (b) any partial-progress shard
-    markers still live under ``status_prefix`` and would handle in-leaf
-    resume on their own — but if all leaves have the final marker, there's
-    nothing to do for this source.
+    The in-scope path set comes from :func:`_canonical_paths_for`. Whole-source
+    skip is the right granularity here because (a) ``.executor_status`` is only
+    written by ``_finalize_executor_status`` after the entire batch completed,
+    and (b) any partial-progress shard markers still live under ``status_prefix``
+    and would handle in-path resume on their own — but if every in-scope path
+    has the final marker, there's nothing to do for this source under this scope.
     """
-    canonical_leaves = sorted({leaf.output_path for leaf in _leaf_downloads(source.normalized)})
-    if not canonical_leaves:
+    canonical_paths = _canonical_paths_for(source, scope)
+    if not canonical_paths:
         return False
-    return all(_leaf_already_synced(_rebase(leaf, canonical_prefix, dest_prefix)) for leaf in canonical_leaves)
+    return all(_leaf_already_synced(_rebase(path, canonical_prefix, dest_prefix)) for path in canonical_paths)
 
 
 def main() -> None:
@@ -540,25 +659,29 @@ def main() -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
     src_prefix = args.src_prefix or marin_prefix()
-    logger.info("Syncing %s -> %s", src_prefix, args.dest_prefix)
+    logger.info("Syncing %s -> %s (scope=%s)", src_prefix, args.dest_prefix, args.scope.value)
 
     sources = _select_sources(args.source)
 
     # Pre-flight: drop sources whose dst already has ``.executor_status`` on
-    # every leaf. Parallelized because each check is one ``fs.exists`` and
-    # the listing can have 100+ sources.
+    # every in-scope path. Parallelized because each check is one ``fs.exists``
+    # and the listing can have 100+ sources.
     canonical_prefix = marin_prefix()
     with ThreadPoolExecutor(max_workers=32) as pool:
         already_synced_flags = list(
             pool.map(
-                lambda s: _source_already_synced(s, canonical_prefix, args.dest_prefix),
+                lambda s: _source_already_synced(s, canonical_prefix, args.dest_prefix, args.scope),
                 sources,
             )
         )
     todo: list[DatakitSource] = []
     for src, done in zip(sources, already_synced_flags, strict=True):
         if done:
-            logger.info("Skipping %s: dst already has .executor_status on every leaf", src.name)
+            logger.info(
+                "Skipping %s: dst already has .executor_status on every in-scope path (scope=%s)",
+                src.name,
+                args.scope.value,
+            )
         else:
             todo.append(src)
     if len(todo) < len(sources):
@@ -569,6 +692,7 @@ def main() -> None:
             src,
             src_prefix=src_prefix,
             dest_prefix=args.dest_prefix,
+            scope=args.scope,
             files_per_shard=args.files_per_shard,
             copy_threads=args.copy_threads,
             status_prefix=args.status_prefix,

@@ -1,38 +1,55 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Namespace registry over the DuckDB-backed log store.
+"""Service-implementation layer above :class:`Catalog`.
 
-:class:`DuckDBLogStore` holds the global locks (insertion mutex +
-query-visibility rwlock) and the shared connection pool, and routes RPCs to
-per-namespace storage (:class:`LogNamespaceProtocol`). Schemas persist via
-:class:`Catalog` and are rehydrated on startup. The ``log`` namespace is
-upserted on first boot for back-compat with deployments whose registry DB
-pre-dates the namespace registry.
+:class:`DuckDBLogStore` is what the RPC handlers sit on top of. Catalog
+owns the namespace state — schemas, segment rows, the live
+``LogNamespaceProtocol`` dict, the in-flight drop set — behind a single
+mutex. This class owns the I/O machinery and the cross-component
+orchestration around it:
+
+* The read-side DuckDB :class:`ConnectionPool` that backs ``query()``.
+* The query-visibility :class:`RWLock`, held in read across queries
+  (DuckDB opens parquet files lazily during scan) and in write briefly
+  during ``drop_table``'s unlink phase.
+* The wire-format pipeline for ``write_rows`` (Arrow IPC decode, size
+  checks, schema validation).
+* The SQL-execution path in ``query`` (snapshot live namespaces, build
+  DuckDB views over their parquet + RAM Arrow tables, run the user's
+  SQL, tear views down).
+* The five-step ``drop_table`` sequence (Catalog ``begin_drop`` → bg
+  thread join → catalog row delete → rwlock-write + ``remove_local_storage``
+  → ``finish_drop``).
+* The factory that picks ``DiskLogNamespace`` vs ``MemoryLogNamespace``
+  and wires their dependencies.
+
+The ``log`` namespace is upserted on first boot for back-compat with
+deployments whose registry DB pre-dates the namespace registry.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Timer
 
 import duckdb
 import pyarrow as pa
 import pyarrow.ipc as paipc
 
 from finelog.rpc import logging_pb2
-from finelog.store.catalog import Catalog, NamespaceStats
+from finelog.store.catalog import Catalog
 from finelog.store.compactor import CompactionConfig
 from finelog.store.layout_migration import LOG_NAMESPACE_DIR
 from finelog.store.log_namespace import (
     LOG_REGISTERED_SCHEMA,
     DiskLogNamespace,
-    LogNamespaceProtocol,
     MemoryLogNamespace,
 )
 from finelog.store.rwlock import RWLock
@@ -40,7 +57,6 @@ from finelog.store.schema import (
     MAX_WRITE_ROWS_BYTES,
     MAX_WRITE_ROWS_ROWS,
     InvalidNamespaceError,
-    NamespaceNotFoundError,
     Schema,
     SchemaValidationError,
     duckdb_type_for,
@@ -50,6 +66,7 @@ from finelog.store.schema import (
     with_implicit_seq,
 )
 from finelog.store.sql_escape import quote_ident, quote_literal
+from finelog.store.types import LogNamespaceProtocol, NamespaceStats
 from finelog.types import LogReadResult
 
 logger = logging.getLogger(__name__)
@@ -57,19 +74,32 @@ logger = logging.getLogger(__name__)
 LOG_NAMESPACE_NAME = "log"
 
 SEGMENT_TARGET_BYTES = 100 * 1024 * 1024
-DEFAULT_FLUSH_INTERVAL_SEC = 60.0
+# Bounds the worst-case "in RAM but not on disk" window. Service handlers
+# block writers until their rows are persisted by polling
+# ``DiskLogNamespace.max_persisted_seq()``; the bg loop's wake cadence
+# combined with this interval determine the floor on observable WriteRows
+# latency under low load.
+DEFAULT_FLUSH_INTERVAL_SEC = 5.0
 
 # 4GB was the previous default but in practice finelog's read pattern
 # rarely needs more than tens of MB; the high cap mostly let mimalloc/DuckDB
 # retain pages indefinitely. 512MB on the read pool is plenty against 5
 # segments x ~50MB + zstd decompression scratch. Compaction tier-merges can
 # spill larger sort buffers, so it gets its own (still bounded) limit.
-_DEFAULT_DUCKDB_MEMORY_LIMIT = "2GB"
+_DEFAULT_DUCKDB_MEMORY_LIMIT = "512GB"
 # Sized for an L1 merge of ~256 MiB segments: DuckDB's working set during
 # COPY (... ORDER BY ...) is several x the output size, and the prod
 # 1 GB cap was OOMing.
-_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "4GB"
-_DEFAULT_DUCKDB_THREADS = "4"
+_DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT = "8GB"
+# Read-pool thread cap. Sized so a single query can't monopolize a small VM
+# and starve the namespace bg threads (flush + compaction). On a 4-vCPU host
+# we have 4 namespace bg threads + RPC handlers + per-namespace compaction
+# (each capped at 2 threads); leaving the read pool at host cpu_count
+# created multi-hundred-ms tail latency on parquet encode under flush bursts
+# because the read pool's threads competed for the same cores. 2 threads is
+# enough to keep large list_recent / range scans parallel without
+# co-monopolizing the box.
+_DEFAULT_DUCKDB_THREADS = "3"
 
 # Embedded mode (iris controller's bundled log-server) keeps VMS small so the
 # parent doesn't trip Linux's overcommit heuristic when forking subprocesses.
@@ -95,6 +125,51 @@ def _next_cursor_id() -> int:
 
 _DEFAULT_POOL_RECYCLE_SEC = 600.0
 
+# Wall-clock cap on a single read-pool cursor scope. DuckDB has no
+# statement_timeout pragma; we enforce it by arming a watchdog that calls
+# ``connection.interrupt()`` if the scope is still active when the timer
+# fires. Sized to be longer than any legitimate dashboard / list_recent
+# query but short enough that a runaway scan cannot pin the read pool's
+# single connection and starve other readers.
+_DEFAULT_DUCKDB_QUERY_TIMEOUT_SEC = 10.0
+
+
+class _QueryWatchdog:
+    """One-shot timer that calls ``cursor.interrupt()`` if not disarmed in time.
+
+    The interrupt target must be the cursor actually running the query —
+    ``parent_conn.interrupt()`` does not propagate down to a cursor obtained
+    via ``parent_conn.cursor()``.
+
+    ``threading.Timer.cancel`` does not prevent an already-running callback,
+    so we additionally guard the interrupt with a flag+lock: ``disarm`` marks
+    the watchdog dead, and the callback drops out if it sees that flag.
+    This keeps a late-firing timer from interrupting the cleanup queries
+    that run after the user's ``with cursor()`` block exits normally.
+    """
+
+    def __init__(self, cursor: duckdb.DuckDBPyConnection, timeout_sec: float) -> None:
+        self._cursor = cursor
+        self._lock = Lock()
+        self._done = False
+        self._timer = Timer(timeout_sec, self._fire)
+        self._timer.daemon = True
+
+    def start(self) -> None:
+        self._timer.start()
+
+    def _fire(self) -> None:
+        with self._lock:
+            if self._done:
+                return
+            self._cursor.interrupt()
+
+    def disarm(self) -> None:
+        self._timer.cancel()
+        with self._lock:
+            self._done = True
+        self._timer.join()
+
 
 class ConnectionPool:
     """Single DuckDB read connection shared across all read paths.
@@ -114,12 +189,14 @@ class ConnectionPool:
         threads: str = _DEFAULT_DUCKDB_THREADS,
         temp_directory: Path | None = None,
         recycle_sec: float = _DEFAULT_POOL_RECYCLE_SEC,
+        query_timeout_sec: float | None = _DEFAULT_DUCKDB_QUERY_TIMEOUT_SEC,
     ):
         self._config: dict[str, str] = {"memory_limit": memory_limit, "threads": threads}
         if temp_directory is not None:
             temp_directory.mkdir(parents=True, exist_ok=True)
             self._config["temp_directory"] = str(temp_directory)
         self._recycle_sec = recycle_sec
+        self._query_timeout_sec = query_timeout_sec
         self._conn = self._new_conn()
         self._conn_born = time.monotonic()
         self._lock = Lock()
@@ -157,6 +234,10 @@ class ConnectionPool:
             cur = self._conn.cursor()
             registered: list[str] = []
             views: list[str] = []
+            watchdog: _QueryWatchdog | None = None
+            if self._query_timeout_sec is not None and self._query_timeout_sec > 0:
+                watchdog = _QueryWatchdog(cur, self._query_timeout_sec)
+                watchdog.start()
             try:
                 for view_name, tables in (buffers or {}).items():
                     parts: list[str] = []
@@ -169,6 +250,10 @@ class ConnectionPool:
                     views.append(view_name)
                 yield cur
             finally:
+                # Disarm before running cleanup so a late-firing watchdog
+                # cannot interrupt the DROP VIEW / unregister calls below.
+                if watchdog is not None:
+                    watchdog.disarm()
                 for v in views:
                     cur.execute(f"DROP VIEW IF EXISTS {v}")
                 for r in registered:
@@ -199,12 +284,18 @@ def _validate_namespace_name(name: str, data_dir: Path | None) -> Path | None:
 
 
 class DuckDBLogStore:
-    """Namespace registry routing log + stats RPCs to per-namespace storage.
+    """RPC-handler-facing store wrapping :class:`Catalog` and namespaces.
 
-    Concurrency: the registry owns the global insertion mutex (held by every
-    write and every compaction's slow phase) and the query-visibility rwlock
-    (queries hold read for their full duration; commits and drops briefly
-    hold write).
+    Catalog is the data-and-coordination layer (persistent rows + live
+    registry under one mutex). This class wires it to the outside world:
+    the read-side connection pool, the query-visibility rwlock, the IPC
+    decoder, the namespace factory, and the multi-step drop sequence.
+    See the module docstring for the full breakdown.
+
+    The ``catalog`` attribute is part of this class's public surface — RPC
+    handlers and tests reach through it for live-registry introspection.
+    Per-namespace insertion mutexes live on each namespace and serialize
+    append/flush/compaction for that namespace.
 
     Layout: per-namespace under ``{log_dir}/{name}/``; schema sidecar at
     ``{log_dir}/_finelog_registry.duckdb``. ``log_dir=None`` selects
@@ -222,12 +313,12 @@ class DuckDBLogStore:
         duckdb_memory_limit: str = _DEFAULT_DUCKDB_MEMORY_LIMIT,
         duckdb_compaction_memory_limit: str = _DEFAULT_DUCKDB_COMPACTION_MEMORY_LIMIT,
         duckdb_threads: str = _DEFAULT_DUCKDB_THREADS,
+        duckdb_query_timeout_sec: float | None = _DEFAULT_DUCKDB_QUERY_TIMEOUT_SEC,
     ):
         self._data_dir: Path | None = log_dir
         if log_dir is not None:
             log_dir.mkdir(parents=True, exist_ok=True)
 
-        self._insertion_lock = Lock()
         self._query_visibility_lock = RWLock()
         # Spill into the data dir, not CWD — the prod container runs with a
         # read-only working directory.
@@ -236,19 +327,16 @@ class DuckDBLogStore:
             memory_limit=duckdb_memory_limit,
             threads=duckdb_threads,
             temp_directory=pool_tmp,
+            query_timeout_sec=duckdb_query_timeout_sec,
         )
-        self._catalog = Catalog(self._data_dir)
+        self.catalog = Catalog(self._data_dir)
 
-        self._namespace_registered_at: dict[str, int] = {}
-        self._namespaces: dict[str, LogNamespaceProtocol] = {}
-        # Names currently being dropped. ``drop_table`` reserves the name
-        # here under ``_insertion_lock`` so a concurrent ``register_table``
-        # cannot recreate the namespace in the window between popping
-        # ``_namespaces`` and the late ``catalog.delete`` /
-        # ``remove_local_storage``. Without this, the late steps would
-        # delete the freshly registered namespace's catalog row and wipe
-        # its on-disk directory.
-        self._dropping: set[str] = set()
+        # Serialize merge COPYs across namespaces: each per-namespace
+        # compaction conn is sized for one merge's worth of RAM, so N
+        # namespaces compacting simultaneously can multiply RSS Nx and
+        # blow past the pod cgroup limit. Level-bumps (rename only) are
+        # not gated by this — see ``DiskLogNamespace._apply_merge``.
+        self._merge_semaphore = threading.Semaphore(1)
 
         # Disk-only kwargs; ignored by memory namespaces. ``duckdb_memory_limit``
         # in this dict feeds the per-namespace compaction connection in
@@ -262,6 +350,7 @@ class DuckDBLogStore:
             compaction_config=compaction_config,
             segment_target_bytes=segment_target_bytes,
             duckdb_memory_limit=duckdb_compaction_memory_limit,
+            merge_semaphore=self._merge_semaphore,
         )
 
         self._rehydrate_from_registry()
@@ -272,7 +361,6 @@ class DuckDBLogStore:
             return MemoryLogNamespace(
                 name=name,
                 schema=schema,
-                insertion_lock=self._insertion_lock,
                 query_visibility_lock=self._query_visibility_lock,
                 read_pool=self._pool,
             )
@@ -282,31 +370,31 @@ class DuckDBLogStore:
             name=name,
             schema=schema,
             data_dir=namespace_dir,
-            insertion_lock=self._insertion_lock,
             query_visibility_lock=self._query_visibility_lock,
             read_pool=self._pool,
-            catalog=self._catalog,
+            catalog=self.catalog,
             **self._disk_namespace_kwargs,
         )
 
     def _rehydrate_from_registry(self) -> None:
-        for name, schema in self._catalog.list_all().items():
+        for name, schema in self.catalog.list_all().items():
             namespace_dir = self._namespace_dir(name)
-            self._namespaces[name] = self._make_namespace(name, schema, namespace_dir)
-            # Monotonic counter as the eviction tiebreak.
-            self._namespace_registered_at[name] = len(self._namespace_registered_at)
+            ns = self._make_namespace(name, schema, namespace_dir)
+            self.catalog.insert_live(name, ns)
 
     def _ensure_log_namespace_registered(self) -> None:
         """First-boot fixup: materialize the ``log`` registry row if missing."""
-        if LOG_NAMESPACE_NAME in self._namespaces:
+        if LOG_NAMESPACE_NAME in self.catalog:
             return
         log_dir = self._data_dir / LOG_NAMESPACE_DIR if self._data_dir is not None else None
         resolve_key_column(LOG_REGISTERED_SCHEMA)
         stored_schema = with_implicit_seq(LOG_REGISTERED_SCHEMA)
-        with self._insertion_lock:
-            self._catalog.upsert(LOG_NAMESPACE_NAME, stored_schema)
-            self._namespaces[LOG_NAMESPACE_NAME] = self._make_namespace(LOG_NAMESPACE_NAME, stored_schema, log_dir)
-            self._namespace_registered_at.setdefault(LOG_NAMESPACE_NAME, len(self._namespace_registered_at))
+        self.catalog.register_or_evolve(
+            LOG_NAMESPACE_NAME,
+            stored_schema,
+            lambda schema: self._make_namespace(LOG_NAMESPACE_NAME, schema, log_dir),
+            on_existing=lambda existing: existing.schema,
+        )
 
     def _namespace_dir(self, name: str) -> Path | None:
         if self._data_dir is None:
@@ -328,62 +416,38 @@ class DuckDBLogStore:
         resolve_key_column(schema)
         stored_schema = with_implicit_seq(schema)
 
-        with self._insertion_lock:
-            if name in self._dropping:
-                # A concurrent ``drop_table`` has already removed the
-                # namespace from ``_namespaces`` but has not yet finished
-                # its catalog/storage cleanup. Recreating the namespace
-                # now would let that cleanup wipe the new state. Surface
-                # this as a transient validation error; the caller can
-                # retry once the drop completes.
-                raise InvalidNamespaceError(
-                    f"namespace {name!r} is currently being dropped; retry once drop_table completes"
-                )
-            existing_ns = self._namespaces.get(name)
-            if existing_ns is None:
-                self._catalog.upsert(name, stored_schema)
-                self._namespaces[name] = self._make_namespace(name, stored_schema, namespace_dir)
-                self._namespace_registered_at[name] = len(self._namespace_registered_at)
-                return stored_schema
-
+        def on_existing(existing_ns: LogNamespaceProtocol) -> Schema:
             # merge_schemas raises SchemaConflictError on non-additive change.
             effective = merge_schemas(existing_ns.schema, stored_schema)
             if effective != existing_ns.schema:
-                self._catalog.upsert(name, effective)
+                self.catalog.upsert(name, effective)
                 existing_ns.update_schema(effective)
             return effective
 
-    def list_namespaces(self) -> list[tuple[str, Schema]]:
-        with self._insertion_lock:
-            items = sorted(
-                self._namespaces.items(),
-                key=lambda kv: self._namespace_registered_at.get(kv[0], 0),
-            )
-            return [(name, ns.schema) for name, ns in items]
+        return self.catalog.register_or_evolve(
+            name,
+            stored_schema,
+            lambda effective_schema: self._make_namespace(name, effective_schema, namespace_dir),
+            on_existing=on_existing,
+        )
 
     def list_namespaces_with_stats(self) -> list[tuple[str, Schema, NamespaceStats]]:
-        """Like :meth:`list_namespaces`, but also returns per-namespace stats.
+        """Return ``(name, schema, stats)`` for every live namespace.
 
-        Each entry's stats are read from the namespace's in-memory state,
-        which is held in lockstep with the on-disk segment catalog. This is
-        the read path that backs ``StatsService.ListNamespaces`` — the
-        dashboard relies on it to render the namespace summary table without
-        issuing per-namespace ``count(*)`` queries against parquet.
+        Backs ``StatsService.ListNamespaces`` — the dashboard relies on
+        it to render the summary table without issuing per-namespace
+        ``count(*)`` queries against parquet. Stats are read from the
+        namespace's in-memory state (kept in lockstep with the on-disk
+        segment catalog).
         """
-        with self._insertion_lock:
-            items = sorted(
-                self._namespaces.items(),
-                key=lambda kv: self._namespace_registered_at.get(kv[0], 0),
-            )
-            namespaces = [(name, ns) for name, ns in items]
+        # ns.stats() takes the per-namespace insertion lock; we want the
+        # registry snapshot to release the catalog lock before any stats()
+        # call so a slow namespace can't stall this call for every other.
+        namespaces = self.catalog.snapshot_live()
         return [(name, ns.schema, ns.stats()) for name, ns in namespaces]
 
     def get_table_schema(self, name: str) -> Schema:
-        with self._insertion_lock:
-            ns = self._namespaces.get(name)
-            if ns is None:
-                raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            return ns.schema
+        return self.catalog.require_live(name).schema
 
     def memory_summary(self) -> dict[str, int]:
         """Aggregate ram_bytes / chunk_count across namespaces, for diagnostics.
@@ -391,23 +455,24 @@ class DuckDBLogStore:
         Used by the periodic pool-diagnostics logger in the standalone server.
         ``MemoryLogNamespace`` reports zeros (no in-RAM segmented buffer).
         """
+        namespaces = self.catalog.live_values()
         total_ram_bytes = 0
         total_chunks = 0
-        with self._insertion_lock:
-            for ns in self._namespaces.values():
-                total_ram_bytes += ns.ram_bytes()
-                total_chunks += ns.chunk_count()
-            return {
-                "namespaces": len(self._namespaces),
-                "ram_bytes": total_ram_bytes,
-                "chunks": total_chunks,
-            }
+        for ns in namespaces:
+            total_ram_bytes += ns.ram_bytes()
+            total_chunks += ns.chunk_count()
+        return {
+            "namespaces": len(namespaces),
+            "ram_bytes": total_ram_bytes,
+            "chunks": total_chunks,
+        }
 
-    def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> int:
+    def write_rows(self, name: str, arrow_ipc_bytes: bytes) -> tuple[int, int]:
         """Validate ``arrow_ipc_bytes`` and append the rows to ``name``.
 
-        ``arrow_ipc_bytes`` carries exactly one RecordBatch. Returns the
-        number of rows appended.
+        ``arrow_ipc_bytes`` carries exactly one RecordBatch. Returns
+        ``(rows_written, last_seq)`` where ``last_seq`` is the durability
+        target the caller should wait on (``-1`` if the batch was empty).
         """
         if len(arrow_ipc_bytes) > MAX_WRITE_ROWS_BYTES:
             raise SchemaValidationError(
@@ -418,17 +483,40 @@ class DuckDBLogStore:
         if batch.num_rows > MAX_WRITE_ROWS_ROWS:
             raise SchemaValidationError(f"WriteRows batch {batch.num_rows} rows exceeds {MAX_WRITE_ROWS_ROWS} limit")
 
-        # The lookup must happen under the insertion mutex: drop_table
-        # removes the namespace from the dict under the same mutex, so
-        # any write that observes a namespace here is guaranteed to see
-        # it survive the subsequent append (which retakes the mutex).
-        with self._insertion_lock:
-            ns = self._namespaces.get(name)
-            if ns is None:
-                raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            aligned = validate_and_align_batch(batch, ns.schema)
-        ns.append_record_batch(aligned)
-        return aligned.num_rows
+        # Resolve the namespace + schema, then validate outside any lock:
+        # validate_and_align_batch is the bulk of the CPU work per WriteRows,
+        # and pinning it under the catalog lock would serialize every writer
+        # across every namespace. Schema is monotonic-additive — if it
+        # evolves between snapshot and append, the stamp step in the
+        # namespace NULL-fills the new columns at projection time.
+        ns = self.catalog.require_live(name)
+        schema = ns.schema
+        aligned = validate_and_align_batch(batch, schema)
+        last_seq = ns.append_aligned_batch(aligned)
+        return aligned.num_rows, last_seq
+
+    def max_persisted_seq(self, name: str) -> int:
+        """Highest seq durably persisted in namespace ``name``.
+
+        Service handlers use this cursor through ``is_persisted`` to gate
+        WriteRows / PushLogs replies until the bg flush thread has written
+        an L0 parquet segment covering the caller's rows.
+        """
+        return self.catalog.require_live(name).max_persisted_seq()
+
+    def is_persisted(self, name: str, target_seq: int) -> bool:
+        """Return whether ``target_seq`` is durable in namespace ``name``."""
+        return self.catalog.require_live(name).is_persisted(target_seq)
+
+    def request_persistance(self, name: str, target_seq: int | None = None, timeout: float = 10.0) -> int:
+        """Wait until ``name`` has durable rows.
+
+        If ``target_seq`` is supplied, wait for that seq. If omitted, wait
+        for the next unpersisted seq allocated in the namespace, then wait
+        until it is persisted. Disk namespaces wake their flush loop from
+        inside this wait after observing buffered rows.
+        """
+        return self.catalog.require_live(name).request_persistance(target_seq, timeout=timeout)
 
     def query(self, sql: str) -> pa.Table:
         """Execute ``sql`` against a DuckDB view of every registered namespace.
@@ -437,61 +525,56 @@ class DuckDBLogStore:
         opens Parquet files lazily during execution, so dropping the lock
         before fetch would let compaction unlink files mid-scan.
 
+        Every live namespace gets a view registered before the query runs.
+        Per-namespace setup is microseconds (a segment-list snapshot plus a
+        DuckDB catalog op) and deployments stay in the low-tens of
+        namespaces, so the cost is negligible. Registering everything
+        avoids the whole class of "user wrote ``log`` instead of ``"log"``"
+        false negatives that a substring-based fast path would produce.
+
         Unknown namespaces in the FROM clause surface as DuckDB
         ``CatalogException`` (the view doesn't exist).
         """
-        view_names: list[str] = []
         self._query_visibility_lock.read_acquire()
         try:
             with self._pool.cursor() as cursor:
-                # Snapshot under the insertion lock so a concurrent drop_table
-                # can't trigger "dictionary changed size during iteration".
-                with self._insertion_lock:
-                    ns_snapshot = list(self._namespaces.items())
+                # Snapshot the live registry under the catalog lock so a
+                # concurrent drop_table can't trigger "dictionary changed
+                # size during iteration".
+                ns_snapshot = self.catalog.snapshot_live()
 
-                extra_registered: list[str] = []
                 try:
                     for ns_name, ns in ns_snapshot:
                         ns_quoted = quote_ident(ns_name)
-                        view_names.append(ns_quoted)
-                        segments, ram_tables = ns.query_snapshot()
-                        if not segments and not ram_tables:
+                        segments = ns.query_snapshot()
+                        if not segments:
                             cols_sql = ", ".join(
                                 f"NULL::{duckdb_type_for(c)} AS {quote_ident(c.name)}" for c in ns.schema.columns
                             )
                             cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS SELECT {cols_sql} WHERE FALSE")
                             continue
 
-                        parts: list[str] = []
-                        if segments:
-                            paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
-                            parts.append(f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)")
-                        for table in ram_tables:
-                            reg_name = f"_q{_next_cursor_id()}_seg_{len(extra_registered)}"
-                            cursor.register(reg_name, table)
-                            extra_registered.append(reg_name)
-                            parts.append(f"SELECT * FROM {reg_name}")
-                        cursor.execute(f"CREATE OR REPLACE VIEW {ns_quoted} AS {' UNION ALL BY NAME '.join(parts)}")
+                        paths_literal = "[" + ", ".join(quote_literal(s.path) for s in segments) + "]"
+                        cursor.execute(
+                            f"CREATE OR REPLACE VIEW {ns_quoted} AS "
+                            f"SELECT * FROM read_parquet({paths_literal}, union_by_name=true)"
+                        )
                     return cursor.execute(sql).fetch_arrow_table()
                 finally:
-                    for name in extra_registered:
-                        cursor.unregister(name)
-                    for vname in view_names:
-                        cursor.execute(f"DROP VIEW IF EXISTS {vname}")
+                    for ns_name, _ in ns_snapshot:
+                        cursor.execute(f"DROP VIEW IF EXISTS {quote_ident(ns_name)}")
         finally:
             self._query_visibility_lock.read_release()
 
     def drop_table(self, name: str) -> None:
         """Remove ``name`` from the registry and delete its local segments.
 
-        We can't hold the insertion mutex end-to-end because the bg flush
-        thread itself takes it every iteration; joining under the mutex
-        would deadlock. The order is:
+        The order is:
 
-          1. Under the mutex: remove from the registry *and* mark ``name``
-             as ``_dropping`` (new ops fail fast — including a concurrent
-             ``register_table``, which would otherwise recreate the
-             namespace and have its state wiped by the cleanup steps
+          1. ``Catalog.begin_drop``: atomically pop from the live registry
+             and reserve the name in ``_dropping`` so new ops fail fast
+             (a concurrent ``register_table`` would otherwise recreate
+             the namespace and have its state wiped by the cleanup steps
              below).
           2. Stop and join the bg thread — *before* dropping catalog rows,
              because ``_sync_step`` would otherwise see an empty catalog
@@ -500,8 +583,8 @@ class DuckDBLogStore:
           3. Drop the catalog rows now that no concurrent reader can act
              on them.
           4. Take the rwlock write side and delete the segment directory.
-          5. Clear the ``_dropping`` reservation under the mutex; the name
-             is now free to be re-registered.
+          5. ``Catalog.finish_drop`` clears the reservation; the name is
+             now free to be re-registered.
 
         GCS-archived data is intentionally preserved; the bucket is the
         caller's to clean up.
@@ -509,19 +592,10 @@ class DuckDBLogStore:
         if name == LOG_NAMESPACE_NAME:
             raise InvalidNamespaceError(f"namespace {name!r} is privileged and cannot be dropped via DropTable")
 
-        with self._insertion_lock:
-            ns = self._namespaces.get(name)
-            if ns is None:
-                raise NamespaceNotFoundError(f"namespace {name!r} is not registered")
-            del self._namespaces[name]
-            self._namespace_registered_at.pop(name, None)
-            self._dropping.add(name)
-
+        ns = self.catalog.begin_drop(name)
         try:
             ns.stop_and_join()
-
-            with self._insertion_lock:
-                self._catalog.delete(name)
+            self.catalog.delete(name)
 
             self._query_visibility_lock.write_acquire()
             try:
@@ -529,16 +603,16 @@ class DuckDBLogStore:
             finally:
                 self._query_visibility_lock.write_release()
         finally:
-            with self._insertion_lock:
-                self._dropping.discard(name)
+            self.catalog.finish_drop(name)
 
-    def append(self, key: str, entries: list) -> None:
+    def append(self, key: str, entries: list) -> int:
         if not entries:
-            return
-        self.append_batch([(key, entries)])
+            return -1
+        return self.append_batch([(key, entries)])
 
-    def append_batch(self, items: list[tuple[str, list]]) -> None:
-        self._namespaces[LOG_NAMESPACE_NAME].append_log_batch(items)
+    def append_batch(self, items: list[tuple[str, list]]) -> int:
+        """Append log-namespace items; returns the last seq allocated (or -1)."""
+        return self.catalog[LOG_NAMESPACE_NAME].append_log_batch(items)
 
     def get_logs(
         self,
@@ -552,7 +626,7 @@ class DuckDBLogStore:
         tail: bool = False,
         min_level: str = "",
     ) -> LogReadResult:
-        return self._namespaces[LOG_NAMESPACE_NAME].get_logs(
+        return self.catalog[LOG_NAMESPACE_NAME].get_logs(
             key,
             match_scope=match_scope,
             since_ms=since_ms,
@@ -573,46 +647,28 @@ class DuckDBLogStore:
         return LogCursor(self, key)
 
     def close(self) -> None:
-        for ns in self._namespaces.values():
+        for ns in self.catalog.live_values():
             ns.close()
         self._pool.close()
-        self._catalog.close()
+        self.catalog.close()
 
     # Test hooks below; forward to the registered "log" namespace.
 
     @property
     def _log_namespace(self) -> DiskLogNamespace:
-        ns = self._namespaces[LOG_NAMESPACE_NAME]
+        ns = self.catalog[LOG_NAMESPACE_NAME]
         assert isinstance(ns, DiskLogNamespace), "test hook called on memory-mode store"
         return ns
 
     def _force_flush(self) -> None:
-        self._log_namespace._flush_step()
-
-    def _wait_for_flush(self, timeout: float = 10.0) -> None:
-        ns = self._log_namespace
-        start_gen = ns._flush_generation
-        deadline = time.monotonic() + timeout
-        with ns._flush_generation_cond:
-            while ns._flush_generation == start_gen:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("timed out waiting for flush")
-                ns._flush_generation_cond.wait(timeout=remaining)
+        self._log_namespace.flush()
 
     def _force_compaction(self) -> None:
-        self._log_namespace._force_compact_l0()
+        self._log_namespace.force_compact_l0()
 
-    def _wait_for_compaction(self, timeout: float = 10.0) -> None:
-        ns = self._log_namespace
-        start_gen = ns._compaction_generation
-        deadline = time.monotonic() + timeout
-        with ns._compaction_generation_cond:
-            while ns._compaction_generation == start_gen:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("timed out waiting for compaction")
-                ns._compaction_generation_cond.wait(timeout=remaining)
+    def _wait_persisted(self, name: str, target_seq: int, timeout: float = 10.0) -> None:
+        """Test helper: wait until ``max_persisted_seq(name) >= target_seq``."""
+        self.request_persistance(name, target_seq, timeout=timeout)
 
 
 def _decode_single_record_batch(arrow_ipc_bytes: bytes) -> pa.RecordBatch:

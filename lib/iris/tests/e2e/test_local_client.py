@@ -46,7 +46,7 @@ def test_command_entrypoint_preserves_env_vars(client):
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._store.transaction() as cur:
+    with client._db.transaction() as cur:
         client.submit_job(cur, job_id=job_id, entrypoint=entrypoint, resources=resources)
 
     # Wait for job completion
@@ -74,7 +74,7 @@ def test_log_streaming_captures_output_without_trailing_newline(client):
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._store.transaction() as cur:
+    with client._db.transaction() as cur:
         client.submit_job(cur, job_id=job_id, entrypoint=entrypoint, resources=resources)
 
     # Wait for job completion
@@ -102,7 +102,7 @@ def test_callable_entrypoint_succeeds(client):
 
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._store.transaction() as cur:
+    with client._db.transaction() as cur:
         client.submit_job(cur, job_id=job_id, entrypoint=entrypoint, resources=resources)
 
     status = client.wait_for_job(job_id, timeout=10.0, poll_interval=0.1)
@@ -120,7 +120,7 @@ def test_command_entrypoint_with_custom_env_var(client):
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
     environment = EnvironmentSpec(env_vars={"CUSTOM_VAR": "custom_value"}).to_proto()
 
-    with client._store.transaction() as cur:
+    with client._db.transaction() as cur:
         client.submit_job(
             cur,
             job_id=job_id,
@@ -151,7 +151,7 @@ def test_job_wait_with_stream_logs(client, iris_client, caplog):
     entrypoint = Entrypoint.from_command("sh", "-c", "echo 'hello from streaming'")
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._store.transaction() as cur:
+    with client._db.transaction() as cur:
         client.submit_job(cur, job_id=job_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, job_id)
 
@@ -225,7 +225,7 @@ def test_child_job_logs_sorted_by_timestamp(client):
     entrypoint = Entrypoint.from_callable(_parent_with_two_children)
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._store.transaction() as cur:
+    with client._db.transaction() as cur:
         client.submit_job(cur, job_id=parent_id, entrypoint=entrypoint, resources=resources)
 
     status = client.wait_for_job(parent_id, timeout=60.0, poll_interval=0.2)
@@ -248,7 +248,7 @@ def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):
     entrypoint = Entrypoint.from_callable(_parent_with_delayed_child)
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._store.transaction() as cur:
+    with client._db.transaction() as cur:
         client.submit_job(cur, job_id=parent_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, parent_id)
 
@@ -287,7 +287,7 @@ def test_stream_logs_surfaces_child_failure(client, iris_client):
     entrypoint = Entrypoint.from_callable(_parent_with_failing_child)
     resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3)
 
-    with client._store.transaction() as cur:
+    with client._db.transaction() as cur:
         client.submit_job(cur, job_id=parent_id, entrypoint=entrypoint, resources=resources)
     job = Job(iris, parent_id)
 

@@ -24,7 +24,7 @@ from zephyr.execution import ZephyrContext
 ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
 
 # Use Iris demo config as base
-IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "examples" / "test.yaml"
+IRIS_CONFIG = Path(__file__).resolve().parents[2] / "iris" / "config" / "test.yaml"
 
 
 @pytest.fixture(scope="module")
@@ -207,6 +207,11 @@ _INFRA_THREAD_PREFIXES = (
     # cluster fixture and torn down with the cluster.
     "task-/",
     "logs-/",
+    # Iris worker profiling thread and controller RPC thread pool — created
+    # lazily when the cluster handles its first job but torn down with the
+    # module-scoped iris_cluster fixture, not with individual tests.
+    "profile-loop",
+    "rpc-handler",
 )
 
 

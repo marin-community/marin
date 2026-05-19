@@ -1037,10 +1037,6 @@ _patch_autoconfig_for_gcs()
                 # Clean up vLLM state between tasks to release TPU devices
                 self._cleanup_vllm_between_tasks()
 
-        except Exception as e:
-            traceback.print_exc()
-            raise RuntimeError(f"Evalchemy evaluation failed: {e}") from e
-
         finally:
             if is_remote_path(output_path):
                 try:

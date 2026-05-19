@@ -3,6 +3,7 @@
 
 """Iris Controller logic for connecting state, scheduler and managing workers."""
 
+import asyncio
 import atexit
 import enum
 import logging
@@ -11,9 +12,10 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from finelog.client import LogClient, RemoteLogHandler
@@ -24,6 +26,7 @@ from finelog.server.stats_service import StatsServiceImpl
 from finelog.store.duckdb_store import EMBEDDED_DUCKDB_MEMORY_LIMIT, EMBEDDED_DUCKDB_THREADS, DuckDBLogStore
 from rigging.log_setup import slow_log
 from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timer, Timestamp, TokenBucket
+from sqlalchemy import bindparam, select
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
@@ -35,17 +38,16 @@ from iris.cluster.constraints import (
     constraints_from_resources,
     evaluate_constraint,
     extract_placement_requirements,
-    get_device_variant,
     merge_constraints,
 )
 from iris.cluster.constraints import (
     region_constraint as make_region_constraint,
 )
+from iris.cluster.controller import db, reads
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
-    UserBudgetDefaults,
     UserTask,
     compute_effective_band,
     compute_user_spend,
@@ -60,21 +62,27 @@ from iris.cluster.controller.checkpoint import (
 )
 from iris.cluster.controller.codec import (
     constraints_from_json,
+    device_counts_from_json,
+    device_variant_from_json,
     reservation_entries_from_json,
     resource_spec_from_scalars,
 )
 from iris.cluster.controller.dashboard import ControllerDashboard
-from iris.cluster.controller.db import (
-    ControllerDB,
-    SchedulableWorker,
-    healthy_active_workers_with_attributes,
-    job_scheduling_deadline,
-    running_tasks_by_worker,
-    task_row_can_be_scheduled,
-    timed_out_executing_tasks,
-)
+from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.projections import assert_owned_tables_not_externally_written
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.provider import TaskProvider
+from iris.cluster.controller.reads import SchedulableWorker
+from iris.cluster.controller.reconcile import (
+    ReconcileInputs,
+    ReconcileRow,
+    WorkerReconcilePlan,
+    reconcile_workers,
+)
 from iris.cluster.controller.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     JobRequirements,
     Scheduler,
     SchedulingContext,
@@ -83,22 +91,14 @@ from iris.cluster.controller.scheduler import (
     worker_snapshot_from_row,
 )
 from iris.cluster.controller.schema import (
-    ATTEMPT_PROJECTION,
-    JOB_CONFIG_JOIN,
-    JOB_RESERVATION_PROJECTION,
-    JOB_SCHEDULING_PROJECTION,
-    TASK_DETAIL_PROJECTION,
-    TASK_ROW_PROJECTION,
-    JobReservationRow,
-    JobRow,
-    JobSchedulingRow,
-    TaskDetailRow,
-    TaskRow,
-    proto_decoder,
-    tasks_with_attempts,
+    job_config_table,
+    jobs_table,
+    task_attempts_table,
+    tasks_table,
+    workers_table,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.controller.stores import ControllerStore, TaskAttemptStore
+from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.transitions import (
     DIRECT_PROVIDER_PROMOTION_RATE,
     RESERVATION_HOLDER_JOB_NAME,
@@ -107,37 +107,61 @@ from iris.cluster.controller.transitions import (
     ControllerTransitions,
     HeartbeatApplyRequest,
     ReservationClaim,
-    RunningTaskEntry,
     SchedulingEvent,
-    TaskUpdate,
     log_event,
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.controller.worker_provider import WorkerReconcilePlan
 from iris.cluster.log_store_helpers import CONTROLLER_LOG_KEY
 from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
     JobName,
+    PendingTask,
+    UserBudgetDefaults,
     WorkerId,
     WorkerStatus,
     WorkerStatusMap,
-    get_gpu_count,
-    get_tpu_count,
     is_job_finished,
 )
 from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat
 from iris.managed_thread import ManagedThread, ThreadContainer, get_thread_container
-from iris.rpc import controller_pb2, job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import AuthTokenInjector, NullAuthInterceptor, StaticTokenProvider, TokenVerifier
 
 logger = logging.getLogger(__name__)
 
-_RESOURCE_SPEC_DECODER = proto_decoder(job_pb2.ResourceSpecProto)
-
 # Sentinel for dry-run scheduling with per-worker limits disabled.
 _UNLIMITED = sys.maxsize
+
+# Sync Connect RPC handlers are dispatched via ``asyncio.to_thread``, which
+# uses the running loop's default executor. asyncio's default executor sizes
+# at ``min(32, os.cpu_count() + 4)`` — only 8 threads on a 4-vCPU controller
+# VM. A handful of slow handlers (e.g. ``launch_job`` blocking up to 120s in
+# ``_wait_until_job_drained``) saturates that pool and head-of-line blocks
+# every other RPC, including the worker heartbeats that would unblock the
+# drain. Install a wider, named pool so a burst of slow handlers cannot
+# starve the rest.
+_RPC_HANDLER_THREADS = 64
+
+
+def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
+    """Replace ``server.run`` with a variant that pins a sized default executor."""
+
+    def run_with_executor() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rpc-handler"))
+        try:
+            loop.run_until_complete(server.serve())
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
+    server.run = run_with_executor
 
 
 class SchedulingOutcome(enum.Enum):
@@ -167,7 +191,10 @@ class RunningTaskInfo:
     band_sort_key: int  # 1=production, 2=interactive, 3=batch
     resource_value: int
     is_coscheduled: bool
-    resources: job_pb2.ResourceSpecProto
+    cpu_millicores: int
+    memory_bytes: int
+    gpu_count: int
+    tpu_count: int
     # Device variant (e.g. "v5p-64") the task is running on, derived from the
     # task's own resource spec. Used to gate preemption to same-variant victims
     # so a v5p-64 request can never reclaim a v5p-256 slice and vice versa.
@@ -185,26 +212,18 @@ class PreemptionCandidate:
 
 
 @dataclass(frozen=True)
-class _SchedulingStateRead:
-    """Snapshot of pending tasks and workers read at the start of a scheduling cycle."""
-
-    pending_tasks: list[TaskRow]
-    workers: list[WorkerSnapshot]
-    state_read_ms: int
-
-
-@dataclass(frozen=True)
-class _GatedCandidates:
+class GatedCandidates:
     """Tasks that passed deadline, reservation, and per-job-cap gates."""
 
     schedulable_task_ids: list[JobName]
     jobs: dict[JobName, JobRequirements]
     has_reservation: set[JobName]
     has_direct_reservation: set[JobName]
+    expired_tasks: list["PendingTask"]
 
 
 @dataclass(frozen=True)
-class _SchedulingOrder:
+class SchedulingOrder:
     """Priority-ordered task list with budget context for preemption."""
 
     ordered_task_ids: list[JobName]
@@ -213,17 +232,23 @@ class _SchedulingOrder:
     user_budget_limits: dict[str, int]
 
 
-def _resource_spec_from_row(job: JobRow | JobSchedulingRow) -> job_pb2.ResourceSpecProto:
-    """Reconstruct a ResourceSpecProto from native job columns."""
-    return resource_spec_from_scalars(
-        job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
-    )
+@dataclass(frozen=True, slots=True)
+class _TimedOutTask:
+    """A running task that has exceeded its execution timeout."""
+
+    task_id: JobName
+    worker_id: WorkerId | None
 
 
-def job_requirements_from_job(job: JobSchedulingRow) -> JobRequirements:
+def job_requirements_from_job(job: PendingTask) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
+    dc = device_counts_from_json(job.res_device_json)
     return JobRequirements(
-        resources=_resource_spec_from_row(job),
+        req_cpu_millicores=job.res_cpu_millicores,
+        req_memory_bytes=job.res_memory_bytes,
+        req_gpu_count=dc.gpu,
+        req_tpu_count=dc.tpu,
+        device_variant=device_variant_from_json(job.res_device_json),
         constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
@@ -266,73 +291,84 @@ def compute_demand_entries(
     """
     demand_entries: list[DemandEntry] = []
 
-    # Collect all schedulable pending tasks, grouped by job.
-    tasks_by_job: dict[JobName, list[TaskRow]] = defaultdict(list)
-    all_schedulable: list[TaskRow] = []
-    pending = _schedulable_tasks(queries)
-    job_rows = list(_jobs_by_id(queries, {task.job_id for task in pending}).values()) if pending else []
-    jobs_by_id = {job.job_id: job for job in job_rows}
+    # Single combined query: each row carries task + job + job_config columns.
+    # task_row_can_be_scheduled() is already applied inside _pending_tasks_with_jobs.
+    tasks_by_job: dict[JobName, list[PendingTask]] = defaultdict(list)
+    all_schedulable: list[PendingTask] = []
+    with queries.read_snapshot() as tx:
+        pending = _pending_tasks_with_jobs(tx)
     for task in pending:
-        if not task_row_can_be_scheduled(task):
-            continue
-        if task.job_id not in jobs_by_id:
-            continue
         tasks_by_job[task.job_id].append(task)
         all_schedulable.append(task)
 
     # Build job requirements once, shared between dry-run and demand emission.
     # Also track which jobs have reservations so we can apply taint injection.
+    # Pre-fetch the reserved-job set once so the per-task ancestor walk is
+    # pure Python instead of one SQL round trip per unique pending job.
+    reserved_jobs = _reserved_job_ids(queries)
     jobs: dict[JobName, JobRequirements] = {}
     has_reservation: set[JobName] = set()
     has_direct_reservation: set[JobName] = set()
     for task in all_schedulable:
         if task.job_id in jobs:
             continue
-        job = jobs_by_id.get(task.job_id)
-        if job is None:
-            continue
-        jobs[task.job_id] = job_requirements_from_job(job)
-        if job.has_reservation:
+        jobs[task.job_id] = job_requirements_from_job(task)
+        if task.has_reservation:
             has_reservation.add(task.job_id)
             has_direct_reservation.add(task.job_id)
-        elif _find_reservation_ancestor(queries, task.job_id) is not None:
+        elif _find_reservation_ancestor(reserved_jobs, task.job_id) is not None:
             has_reservation.add(task.job_id)
 
     # Dry-run scheduling with building/assignment limits disabled.
     # All tasks participate — holders and real tasks alike.
     absorbed_task_ids: set[JobName] = set()
     if scheduler is not None and workers is not None and workers:
-        building_counts = _building_counts(queries, workers)
         with queries.read_snapshot() as snap:
-            usage_by_worker = TaskAttemptStore(queries).resource_usage_by_worker(snap)
+            building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
+            usage_by_worker = reads.resource_usage_by_worker(snap)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
         task_ids = [t.task_id for t in all_schedulable]
         claims = reservation_claims or {}
         dry_run_workers = _inject_reservation_taints(snapshots, claims)
         dry_run_jobs = _inject_taint_constraints(jobs, has_reservation, has_direct_reservation)
 
-        context = scheduler.create_scheduling_context(
-            dry_run_workers,
+        # Dry-run scheduling context — only the per-(task, worker) matching loop
+        # consumes capacities/jobs/pending_tasks, so the raw-read fields stay
+        # empty. Building/assignment limits are disabled so big workers can
+        # absorb multiple tasks (prevents false demand on idle clusters).
+        context = SchedulingContext(
+            workers=dry_run_workers,
             building_counts=building_counts,
-            pending_tasks=task_ids,
-            jobs=dry_run_jobs,
             max_building_tasks=_UNLIMITED,
             max_assignments_per_worker=_UNLIMITED,
+            pending_tasks=task_ids,
+            jobs=dry_run_jobs,
+            pending_task_rows=[],
+            user_spend={},
+            user_budget_limits={},
+            requested_bands={},
+            reserved_job_ids=frozenset(),
+            reservation_entry_counts={},
+            user_budget_defaults=UserBudgetDefaults(),
         )
         result = scheduler.find_assignments(context)
         for task_id, _ in result.assignments:
             absorbed_task_ids.add(task_id)
 
     # Emit demand for all unabsorbed tasks through a single path.
+    # Each task row carries job + job_config columns, so we read them from
+    # any task in the group (all share the same job).
     for job_id, tasks in tasks_by_job.items():
-        job = jobs_by_id.get(job_id)
-        if not job:
-            continue
-        if is_job_finished(job.state):
+        # Use the first task to source job-level columns.
+        job_row = tasks[0]
+        if is_job_finished(job_row.job_state):
             continue
 
-        job_constraints = constraints_from_json(job.constraints_json)
-        job_resources = _resource_spec_from_row(job)
+        job_constraints = constraints_from_json(job_row.constraints_json)
+        # Build the proto here — DemandEntry.resources is an autoscaler RPC field (legitimate boundary).
+        job_resources = resource_spec_from_scalars(
+            job_row.res_cpu_millicores, job_row.res_memory_bytes, job_row.res_disk_bytes, job_row.res_device_json
+        )
 
         invalid_reason: str | None = None
         try:
@@ -347,7 +383,7 @@ def compute_demand_entries(
                 required_zones=None,
             )
 
-        if job.has_coscheduling:
+        if job_row.has_coscheduling:
             remaining_ids = []
             for t in tasks:
                 if t.task_id in absorbed_task_ids:
@@ -357,7 +393,7 @@ def compute_demand_entries(
                 demand_entries.append(
                     DemandEntry(
                         task_ids=remaining_ids,
-                        coschedule_group_id=job.job_id.to_wire(),
+                        coschedule_group_id=job_id.to_wire(),
                         normalized=normalized,
                         constraints=job_constraints,
                         resources=job_resources,
@@ -385,52 +421,107 @@ def compute_demand_entries(
 
 def _read_reservation_claims(db: ControllerDB) -> dict[WorkerId, ReservationClaim]:
     """Read reservation claims from the canonical DB table."""
-    with db.read_snapshot() as snapshot:
-        rows = snapshot.raw(
-            "SELECT rc.worker_id, rc.job_id, rc.entry_idx FROM reservation_claims rc",
-            decoders={"worker_id": WorkerId},
+    with db.read_snapshot() as tx:
+        return reads.list_claims(tx)
+
+
+def _row_to_pending_task(row: Any) -> PendingTask:
+    return PendingTask(
+        task_id=row.task_id,
+        job_id=row.job_id,
+        state=int(row.state),
+        current_attempt_id=int(row.current_attempt_id),
+        failure_count=int(row.failure_count),
+        preemption_count=int(row.preemption_count),
+        max_retries_failure=int(row.max_retries_failure),
+        max_retries_preemption=int(row.max_retries_preemption),
+        submitted_at_ms=row.submitted_at_ms,
+        priority_band=int(row.priority_band),
+        priority_neg_depth=int(row.priority_neg_depth),
+        priority_root_submitted_ms=int(row.priority_root_submitted_ms),
+        priority_insertion=int(row.priority_insertion),
+        job_state=int(row.job_state),
+        scheduling_deadline_epoch_ms=row.scheduling_deadline_epoch_ms,
+        is_reservation_holder=bool(row.is_reservation_holder),
+        has_reservation=bool(row.has_reservation),
+        scheduling_timeout_ms=row.scheduling_timeout_ms,
+        has_coscheduling=bool(row.has_coscheduling),
+        coscheduling_group_by=row.coscheduling_group_by,
+        constraints_json=row.constraints_json,
+        res_cpu_millicores=int(row.res_cpu_millicores),
+        res_memory_bytes=int(row.res_memory_bytes),
+        res_disk_bytes=int(row.res_disk_bytes),
+        res_device_json=row.res_device_json,
+    )
+
+
+def _pending_tasks_with_jobs(tx: Tx) -> list[PendingTask]:
+    """Return scheduling inputs for pending tasks, joining task + job + job_config in one query."""
+    rows = tx.execute(
+        select(
+            tasks_table.c.task_id,
+            tasks_table.c.job_id,
+            tasks_table.c.state,
+            tasks_table.c.current_attempt_id,
+            tasks_table.c.failure_count,
+            tasks_table.c.preemption_count,
+            tasks_table.c.max_retries_failure,
+            tasks_table.c.max_retries_preemption,
+            tasks_table.c.submitted_at_ms,
+            tasks_table.c.priority_band,
+            tasks_table.c.priority_neg_depth,
+            tasks_table.c.priority_root_submitted_ms,
+            tasks_table.c.priority_insertion,
+            # job columns (label job_state to avoid clash with tasks.state)
+            jobs_table.c.state.label("job_state"),
+            jobs_table.c.scheduling_deadline_epoch_ms,
+            jobs_table.c.is_reservation_holder,
+            jobs_table.c.has_reservation,
+            # job_config columns
+            job_config_table.c.scheduling_timeout_ms,
+            job_config_table.c.has_coscheduling,
+            job_config_table.c.coscheduling_group_by,
+            job_config_table.c.constraints_json,
+            job_config_table.c.res_cpu_millicores,
+            job_config_table.c.res_memory_bytes,
+            job_config_table.c.res_disk_bytes,
+            job_config_table.c.res_device_json,
         )
-    return {
-        row.worker_id: ReservationClaim(
-            job_id=row.job_id,
-            entry_idx=row.entry_idx,
+        .select_from(
+            tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id).join(
+                job_config_table, job_config_table.c.job_id == tasks_table.c.job_id
+            )
         )
-        for row in rows
-    }
+        .where(tasks_table.c.state == bindparam("state"))
+        .order_by(
+            tasks_table.c.priority_neg_depth.asc(),
+            tasks_table.c.priority_root_submitted_ms.asc(),
+            tasks_table.c.submitted_at_ms.asc(),
+            tasks_table.c.priority_insertion.asc(),
+        ),
+        {"state": job_pb2.TASK_STATE_PENDING},
+    ).all()
+    pending_tasks = [_row_to_pending_task(row) for row in rows]
+    return [task for task in pending_tasks if task_row_can_be_scheduled(task)]
 
 
-def _jobs_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, JobSchedulingRow]:
-    if not job_ids:
-        return {}
-    wires = [job_id.to_wire() for job_id in job_ids]
-    placeholders = ",".join("?" for _ in wires)
-    with queries.read_snapshot() as snapshot:
-        jobs = JOB_SCHEDULING_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {JOB_SCHEDULING_PROJECTION.select_clause()} "
-                f"FROM jobs j {JOB_CONFIG_JOIN} WHERE j.job_id IN ({placeholders})",
-                tuple(wires),
-            ),
-        )
-    return {job.job_id: job for job in jobs}
-
-
-def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list[JobReservationRow]:
+def _jobs_with_reservations(queries: ControllerDB, states: tuple[int, ...]) -> list:
     """Fetch (job_id, reservation_json) for jobs that hold a reservation.
 
     Per-tick hot path: only decode what the reservation-claim recomputation
     reads. Filters via ``jobs.has_reservation`` (no scan of ``job_config``)
     and joins ``job_config`` solely to pull ``reservation_json``.
     """
-    placeholders = ",".join("?" for _ in states)
-    with queries.read_snapshot() as snapshot:
-        rows = snapshot._fetchall(
-            f"SELECT {JOB_RESERVATION_PROJECTION.select_clause()} "
-            f"FROM jobs j {JOB_CONFIG_JOIN} "
-            f"WHERE j.state IN ({placeholders}) AND j.has_reservation = 1",
-            list(states),
-        )
-    return JOB_RESERVATION_PROJECTION.decode(rows)
+    with db.read_snapshot(queries.sa_read_engine) as tx:
+        return tx.execute(
+            select(jobs_table.c.job_id, job_config_table.c.reservation_json)
+            .select_from(jobs_table.join(job_config_table, jobs_table.c.job_id == job_config_table.c.job_id))
+            .where(
+                jobs_table.c.state.in_(bindparam("states", expanding=True)),
+                jobs_table.c.has_reservation == True,  # noqa: E712 — SQLAlchemy requires == not `is`
+            ),
+            {"states": list(states)},
+        ).all()
 
 
 def _get_running_tasks_with_band_and_value(
@@ -443,51 +534,53 @@ def _get_running_tasks_with_band_and_value(
 
     The reported band is the value persisted in ``tasks.priority_band``, which
     is stamped at assignment time (see ``_commit_assignments`` and
-    ``TaskStore.mark_assigned``). The over-budget downgrade is applied at that
+    ``writes.tasks.assign_task``). The over-budget downgrade is applied at that
     stamping point, not on every scheduling tick, which prevents a running
     task from oscillating into BATCH and back as its own user crosses the
     budget cliff — the source of mutual same-band preemption between two
     users sitting at their limits.
     """
-    with db.read_snapshot() as q:
-        rows = q.raw(
-            "SELECT t.task_id, t.priority_band, t.current_worker_id AS worker_id, "
-            "jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json, "
-            "jc.has_coscheduling "
-            "FROM tasks t "
-            "JOIN job_config jc ON jc.job_id = t.job_id "
-            "WHERE t.state = ? AND t.current_worker_id IS NOT NULL",
-            (job_pb2.TASK_STATE_RUNNING,),
-            decoders={
-                "task_id": JobName.from_wire,
-                "priority_band": int,
-                "worker_id": WorkerId,
-            },
-        )
+    with db.read_snapshot() as tx:
+        rows = tx.execute(
+            select(
+                tasks_table.c.task_id,
+                tasks_table.c.priority_band,
+                tasks_table.c.current_worker_id.label("worker_id"),
+                job_config_table.c.res_cpu_millicores,
+                job_config_table.c.res_memory_bytes,
+                job_config_table.c.res_disk_bytes,
+                job_config_table.c.res_device_json,
+                job_config_table.c.has_coscheduling,
+            )
+            .select_from(tasks_table.join(job_config_table, tasks_table.c.job_id == job_config_table.c.job_id))
+            .where(
+                tasks_table.c.state == bindparam("state"),
+                tasks_table.c.current_worker_id.is_not(None),
+            ),
+            {"state": job_pb2.TASK_STATE_RUNNING},
+        ).all()
     result: list[RunningTaskInfo] = []
     for row in rows:
         wid = row.worker_id
         if wid in claimed_workers:
             continue
-        resources = resource_spec_from_scalars(
-            row.res_cpu_millicores,
-            row.res_memory_bytes,
-            row.res_disk_bytes,
-            row.res_device_json,
-        )
+        dc = device_counts_from_json(row.res_device_json)
         result.append(
             RunningTaskInfo(
                 task_id=row.task_id,
                 worker_id=wid,
                 band_sort_key=row.priority_band,
                 resource_value=resource_value(
-                    resources.cpu_millicores,
-                    resources.memory_bytes,
-                    get_gpu_count(resources.device) + get_tpu_count(resources.device),
+                    row.res_cpu_millicores,
+                    row.res_memory_bytes,
+                    dc.gpu + dc.tpu,
                 ),
                 is_coscheduled=bool(int(row.has_coscheduling)),
-                resources=resources,
-                device_variant=get_device_variant(resources.device),
+                cpu_millicores=row.res_cpu_millicores,
+                memory_bytes=row.res_memory_bytes,
+                gpu_count=dc.gpu,
+                tpu_count=dc.tpu,
+                device_variant=device_variant_from_json(row.res_device_json),
             )
         )
     return result
@@ -530,10 +623,10 @@ def _preempt_solo(
         # Would freeing this victim's resources create enough capacity?
         hypothetical = WorkerCapacity(
             worker_id=cap.worker_id,
-            available_cpu_millicores=cap.available_cpu_millicores + victim.resources.cpu_millicores,
-            available_memory=cap.available_memory + victim.resources.memory_bytes,
-            available_gpus=cap.available_gpus + get_gpu_count(victim.resources.device),
-            available_tpus=cap.available_tpus + get_tpu_count(victim.resources.device),
+            available_cpu_millicores=cap.available_cpu_millicores + victim.cpu_millicores,
+            available_memory=cap.available_memory + victim.memory_bytes,
+            available_gpus=cap.available_gpus + victim.gpu_count,
+            available_tpus=cap.available_tpus + victim.tpu_count,
             attributes=cap.attributes,
             building_task_count=max(0, cap.building_task_count - 1),
             max_building_tasks=cap.max_building_tasks,
@@ -643,7 +736,7 @@ def _run_preemption_pass(
         if parent is not None and parent in satisfied_preemptor_jobs:
             continue
 
-        wanted_variant = get_device_variant(candidate.requirements.resources.device)
+        wanted_variant = candidate.requirements.device_variant
 
         if not candidate.requirements.is_coscheduled:
             pair = _preempt_solo(candidate, wanted_variant, solo_victims, context)
@@ -661,86 +754,40 @@ def _run_preemption_pass(
     return preemptions
 
 
-def _schedulable_tasks(queries: ControllerDB) -> list[TaskRow]:
-    # Only PENDING tasks can pass can_be_scheduled(); no need to fetch ASSIGNED/BUILDING/RUNNING.
-    with queries.read_snapshot() as snapshot:
-        tasks = TASK_ROW_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {TASK_ROW_PROJECTION.select_clause()} FROM tasks t WHERE t.state = ? "
-                "ORDER BY t.priority_neg_depth ASC, t.priority_root_submitted_ms ASC, "
-                "t.submitted_at_ms ASC, t.priority_insertion ASC",
-                (job_pb2.TASK_STATE_PENDING,),
+def _job_state_by_id(queries: ControllerDB, job_ids: set[JobName]) -> dict[JobName, int]:
+    """Fetch only ``jobs.state`` for the given job IDs.
+
+    Intentionally narrow: only callers that need job state (not resources or
+    config) should use this to avoid over-fetching.
+    """
+    if not job_ids:
+        return {}
+    with queries.read_snapshot() as tx:
+        rows = tx.execute(
+            select(jobs_table.c.job_id, jobs_table.c.state).where(
+                jobs_table.c.job_id.in_(bindparam("job_ids", expanding=True))
             ),
-        )
-    return [task for task in tasks if task_row_can_be_scheduled(task)]
+            {"job_ids": list(job_ids)},
+        ).all()
+    return {row.job_id: int(row.state) for row in rows}
 
 
-def _sort_pending_tasks_by_resolved_band(store: ControllerStore, pending_tasks: list[TaskRow]) -> list[TaskRow]:
+def _sort_pending_tasks_by_resolved_band(
+    pending_tasks: list[PendingTask], requested_bands: dict[JobName, int]
+) -> list[PendingTask]:
     """Order pending rows using immutable job_config priority bands."""
     if not pending_tasks:
         return []
-    with store.read_snapshot() as snap:
-        requested_bands = store.jobs.get_priority_bands(snap, {task.job_id for task in pending_tasks})
     return sorted(
         pending_tasks,
         key=lambda task: (
             requested_bands.get(task.job_id, job_pb2.PRIORITY_BAND_INTERACTIVE),
             task.priority_neg_depth,
             task.priority_root_submitted_ms,
-            task.submitted_at.epoch_ms(),
+            task.submitted_at_ms.epoch_ms(),
             task.priority_insertion,
         ),
     )
-
-
-def _tasks_by_ids_with_attempts(queries: ControllerDB, task_ids: set[JobName]) -> dict[JobName, TaskDetailRow]:
-    if not task_ids:
-        return {}
-    task_wires = [task_id.to_wire() for task_id in task_ids]
-    placeholders = ",".join("?" for _ in task_wires)
-    with queries.read_snapshot() as snapshot:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {TASK_DETAIL_PROJECTION.select_clause()} "
-                f"FROM tasks t WHERE t.task_id IN ({placeholders}) ORDER BY t.task_id ASC",
-                tuple(task_wires),
-            ),
-        )
-        attempts = ATTEMPT_PROJECTION.decode(
-            snapshot.fetchall(
-                f"SELECT {ATTEMPT_PROJECTION.select_clause()} FROM task_attempts ta "
-                f"WHERE ta.task_id IN ({placeholders}) "
-                "ORDER BY ta.task_id ASC, ta.attempt_id ASC",
-                tuple(task_wires),
-            ),
-        )
-    return {task.task_id: task for task in tasks_with_attempts(tasks, attempts)}
-
-
-def _building_counts(
-    queries: ControllerDB,
-    workers: Sequence[SchedulableWorker] | Sequence[WorkerSnapshot],
-) -> dict[WorkerId, int]:
-    """Count tasks in BUILDING or ASSIGNED state per worker, excluding reservation-holder jobs."""
-    if not workers:
-        return {}
-    worker_ids = [str(w.worker_id) for w in workers]
-    placeholders = ",".join("?" for _ in worker_ids)
-    sql = (
-        "SELECT t.current_worker_id AS worker_id, COUNT(*) as cnt FROM tasks t "
-        "JOIN jobs j ON t.job_id = j.job_id "
-        f"WHERE t.current_worker_id IN ({placeholders}) "
-        "AND t.state IN (?, ?) "
-        "AND j.is_reservation_holder = 0 "
-        "GROUP BY t.current_worker_id"
-    )
-    with queries.read_snapshot() as q:
-        rows = q.raw(
-            sql,
-            (*worker_ids, job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED),
-            decoders={"worker_id": WorkerId, "cnt": int},
-        )
-    return {row.worker_id: row.cnt for row in rows}
 
 
 def _worker_matches_reservation_entry(
@@ -839,22 +886,30 @@ def _inject_taint_constraints(
     return modified
 
 
-def _find_reservation_ancestor(queries: ControllerDB, job_id: JobName) -> JobName | None:
+def _reserved_job_ids(queries: ControllerDB) -> set[JobName]:
+    """Return the set of job_ids with ``has_reservation = 1`` on the jobs table.
+
+    Callers use this to drive :func:`_find_reservation_ancestor` purely in
+    Python instead of issuing one SQL chain-walk per pending job.
+    """
+    with queries.read_snapshot() as tx:
+        rows = tx.execute(select(jobs_table.c.job_id).where(jobs_table.c.has_reservation == 1)).all()
+    return {row.job_id for row in rows}
+
+
+def _find_reservation_ancestor(reserved_jobs: set[JobName], job_id: JobName) -> JobName | None:
     """Walk up the job hierarchy to find the nearest ancestor with a reservation.
 
-    Returns the ancestor's JobName, or None if no ancestor has a reservation.
-    Uses the has_reservation column on the jobs table.
+    Pure Python walk against the pre-fetched ``reserved_jobs`` set. The old
+    SQL-per-call form opened a fresh ``read_snapshot`` and issued 1-3 round
+    trips per unique pending job, which dominated ``compute_demand_entries``
+    once the SA Core machinery became the per-call floor.
     """
     current = job_id.parent
-    with queries.read_snapshot() as q:
-        while current is not None:
-            row = q.execute_sql(
-                "SELECT has_reservation FROM jobs WHERE job_id = ?",
-                (current.to_wire(),),
-            ).fetchone()
-            if row is not None and row[0]:
-                return current
-            current = current.parent
+    while current is not None:
+        if current in reserved_jobs:
+            return current
+        current = current.parent
     return None
 
 
@@ -863,6 +918,7 @@ def _reservation_region_constraints(
     claims: dict[WorkerId, ReservationClaim],
     queries: ControllerDB,
     health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
     existing_constraints: list[Constraint],
 ) -> list[Constraint]:
     """Derive region constraints from claimed reservation workers.
@@ -877,11 +933,9 @@ def _reservation_region_constraints(
         return existing_constraints
 
     claimed_worker_ids = {worker_id for worker_id, claim in claims.items() if claim.job_id == job_id_wire}
-    workers_by_id = {
-        worker.worker_id: worker
-        for worker in healthy_active_workers_with_attributes(queries, health)
-        if worker.worker_id in claimed_worker_ids
-    }
+    with queries.read_snapshot() as tx:
+        _all_workers = reads.healthy_active_workers_with_attributes(tx, health, worker_attrs)
+    workers_by_id = {worker.worker_id: worker for worker in _all_workers if worker.worker_id in claimed_worker_ids}
     regions: set[str] = set()
     for worker in workers_by_id.values():
         if worker is None:
@@ -963,6 +1017,202 @@ def _preference_pass(
     return assignments
 
 
+def build_scheduling_context(
+    queries: ControllerDB,
+    health: WorkerHealthTracker,
+    worker_attrs: WorkerAttrsProjection,
+    defaults: UserBudgetDefaults,
+    max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+) -> SchedulingContext:
+    """Build a ``SchedulingContext`` from a single read snapshot.
+
+    All scheduling-tick DB I/O lives here. The returned context carries
+    un-tainted workers; ``_run_scheduler_pass`` applies reservation taints
+    for the assignment pass only.
+    """
+    with slow_log(logger, "scheduling tick context", threshold_ms=50):
+        with queries.read_snapshot() as snap:
+            pending = _pending_tasks_with_jobs(snap)
+            workers = reads.healthy_active_workers_with_attributes(snap, health, worker_attrs)
+            usage_by_worker = reads.resource_usage_by_worker(snap)
+            user_spend = compute_user_spend(snap)
+            user_budget_limits = reads.get_all_user_budget_limits(snap)
+            requested_bands = reads.get_priority_bands(snap, {t.job_id for t in pending})
+            reserved_jobs = {
+                row.job_id
+                for row in snap.execute(select(jobs_table.c.job_id).where(jobs_table.c.has_reservation == 1)).all()
+            }
+            reservation_entry_counts = _reservation_entry_counts_for_pending(snap, pending)
+            building_counts = reads.building_counts(snap, [w.worker_id for w in workers])
+
+    snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
+    sorted_pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
+    return SchedulingContext(
+        workers=snapshots,
+        building_counts=building_counts,
+        max_building_tasks=max_building_tasks,
+        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+        pending_tasks=[],
+        jobs={},
+        pending_task_rows=sorted_pending,
+        user_spend=user_spend,
+        user_budget_limits=user_budget_limits,
+        requested_bands=requested_bands,
+        reserved_job_ids=frozenset(reserved_jobs),
+        reservation_entry_counts=reservation_entry_counts,
+        user_budget_defaults=defaults,
+    )
+
+
+def _reservation_entry_counts_for_pending(tx: Tx, pending: list[PendingTask]) -> dict[JobName, int]:
+    """Return reservation entry counts for pending jobs that hold a reservation."""
+    job_ids = {t.job_id for t in pending if t.has_reservation}
+    if not job_ids:
+        return {}
+    rows = tx.execute(
+        select(job_config_table.c.job_id, job_config_table.c.reservation_json).where(
+            job_config_table.c.job_id.in_(bindparam("job_ids", expanding=True))
+        ),
+        {"job_ids": list(job_ids)},
+    ).all()
+    counts: dict[JobName, int] = {}
+    for row in rows:
+        if row.reservation_json is None:
+            continue
+        counts[row.job_id] = len(reservation_entries_from_json(row.reservation_json))
+    return counts
+
+
+def apply_scheduling_gates(
+    ctx: SchedulingContext,
+    claims: dict[WorkerId, ReservationClaim],
+    *,
+    max_tasks_per_job_per_cycle: int,
+    trace: bool = False,
+) -> GatedCandidates:
+    """Filter ``ctx.pending_task_rows`` by deadline, reservation, and per-job cap.
+
+    Expired tasks are returned in ``GatedCandidates.expired_tasks`` for the
+    caller to mark UNSCHEDULABLE; this function does no DB writes.
+    """
+    schedulable_task_ids: list[JobName] = []
+    expired_tasks: list[PendingTask] = []
+    jobs: dict[JobName, JobRequirements] = {}
+    has_reservation: set[JobName] = set()
+    has_direct_reservation: set[JobName] = set()
+    tasks_per_job: dict[JobName, int] = defaultdict(int)
+    filter_counts: dict[str, int] = defaultdict(int)
+
+    # Index claims by wire id so reservation-satisfaction is O(1) per check.
+    claims_by_job: dict[str, int] = defaultdict(int)
+    for claim in claims.values():
+        claims_by_job[claim.job_id] += 1
+
+    for task in ctx.pending_task_rows:
+        if not task_row_can_be_scheduled(task):
+            filter_counts["task_not_schedulable"] += 1
+            continue
+        deadline = job_scheduling_deadline(task.scheduling_deadline_epoch_ms)
+        if deadline is not None and deadline.expired():
+            filter_counts["deadline_expired"] += 1
+            expired_tasks.append(task)
+            continue
+        # Gate: skip real tasks whose job has an unsatisfied reservation.
+        # Holder tasks are always schedulable (they ARE the reservation).
+        if not task.is_reservation_holder and task.has_reservation:
+            wire_id = task.job_id.to_wire()
+            required = ctx.reservation_entry_counts.get(task.job_id, 0)
+            if claims_by_job.get(wire_id, 0) < required:
+                filter_counts["reservation_unsatisfied"] += 1
+                continue
+        if (
+            max_tasks_per_job_per_cycle > 0
+            and not task.has_coscheduling
+            and tasks_per_job[task.job_id] >= max_tasks_per_job_per_cycle
+        ):
+            filter_counts["per_job_cap"] += 1
+            continue
+        tasks_per_job[task.job_id] += 1
+        schedulable_task_ids.append(task.task_id)
+        if task.job_id not in jobs:
+            jobs[task.job_id] = job_requirements_from_job(task)
+            if task.has_reservation:
+                has_reservation.add(task.job_id)
+                has_direct_reservation.add(task.job_id)
+            elif _find_reservation_ancestor(set(ctx.reserved_job_ids), task.job_id) is not None:
+                has_reservation.add(task.job_id)
+    if trace:
+        logger.info(
+            "[TRACE] Phase 2 gates: %d/%d tasks passed, %d distinct jobs; filtered: %s",
+            len(schedulable_task_ids),
+            len(ctx.pending_task_rows),
+            len(jobs),
+            dict(filter_counts),
+        )
+    return GatedCandidates(
+        schedulable_task_ids=schedulable_task_ids,
+        jobs=jobs,
+        has_reservation=has_reservation,
+        has_direct_reservation=has_direct_reservation,
+        expired_tasks=expired_tasks,
+    )
+
+
+def compute_scheduling_order(
+    ctx: SchedulingContext,
+    gated: GatedCandidates,
+    *,
+    trace: bool = False,
+) -> SchedulingOrder:
+    """Compute priority-band interleaving order from gated candidates.
+
+    Uses ``ctx.requested_bands`` (sourced from immutable job_config), not
+    ``tasks.priority_band`` (overwritten at assign time), so a task demoted
+    to BATCH while its user was over budget can recover after preemption.
+    """
+    user_spend = ctx.user_spend
+    requested_bands = ctx.requested_bands
+    user_budget_limits = ctx.user_budget_limits
+    defaults = ctx.user_budget_defaults
+    task_band_map: dict[JobName, int] = {
+        task.task_id: compute_effective_band(
+            requested_bands.get(task.job_id, task.priority_band),
+            task.task_id.user,
+            user_spend,
+            user_budget_limits,
+            defaults,
+        )
+        for task in ctx.pending_task_rows
+    }
+    tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
+    for task_id in gated.schedulable_task_ids:
+        band = task_band_map.get(task_id, job_pb2.PRIORITY_BAND_INTERACTIVE)
+        tasks_by_band[band].append(task_id)
+
+    interleaved: list[JobName] = []
+    for band_key in sorted(tasks_by_band.keys()):
+        band_tasks = tasks_by_band[band_key]
+        user_tasks = [UserTask(user_id=tid.user, task=tid) for tid in band_tasks]
+        interleaved.extend(interleave_by_user(user_tasks, user_spend))
+
+    if trace:
+        band_summary = {band: len(tids) for band, tids in tasks_by_band.items()}
+        active_spend = {u: v for u, v in user_spend.items() if v > 0}
+        logger.info(
+            "[TRACE] Phase 3 order: %d tasks after interleaving+cap; bands=%s user_spend=%s budget_limits=%s",
+            len(interleaved),
+            band_summary,
+            active_spend,
+            user_budget_limits,
+        )
+    return SchedulingOrder(
+        ordered_task_ids=interleaved,
+        task_band_map=task_band_map,
+        user_spend=user_spend,
+        user_budget_limits=user_budget_limits,
+    )
+
+
 @dataclass
 class ControllerConfig:
     """Controller configuration."""
@@ -976,7 +1226,7 @@ class ControllerConfig:
     remote_state_dir: str = ""
     """Remote URI for controller checkpoints and worker profiles (e.g. gs://bucket/iris/state)."""
 
-    scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(1.0))
+    scheduler_min_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
     """Minimum scheduling loop interval (used when cluster is active)."""
 
     scheduler_max_interval: Duration = field(default_factory=lambda: Duration.from_seconds(10.0))
@@ -1046,6 +1296,11 @@ class ControllerConfig:
     """Resolved cluster endpoints: logical name -> concrete URL. Built from
     cluster_config.endpoints by the daemon entrypoint. Registered into the
     controller service's _system_endpoints during start()."""
+
+    reconcile_rpc_enabled: bool = False
+    """When True, the controller dispatches the Reconcile RPC instead of the
+    legacy StartTasks+PollTasks wire. Resolved once at startup from
+    ``IRIS_RECONCILE_RPC_ENABLED``."""
 
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
@@ -1125,7 +1380,11 @@ class Controller:
         else:
             self._db = ControllerDB(db_dir=config.local_state_dir / "db")
         self._health = WorkerHealthTracker()
-        self._store = ControllerStore(self._db, health=self._health)
+        self._endpoints = EndpointsProjection(self._db)
+        self._worker_attrs = WorkerAttrsProjection(self._db)
+        assert_owned_tables_not_externally_written()
+        self._seed_liveness_from_workers()
+        self._db.register_reopen_hook(self._seed_liveness_from_workers)
 
         # ThreadContainer must be initialized before the log service setup
         # because _start_local_log_server spawns a uvicorn thread.
@@ -1168,8 +1427,10 @@ class Controller:
         logging.getLogger("iris").addHandler(self._log_handler)
 
         self._transitions = ControllerTransitions(
-            store=self._store,
+            self._db,
             health=self._health,
+            endpoints=self._endpoints,
+            worker_attrs=self._worker_attrs,
         )
         self._scheduler = Scheduler()
 
@@ -1177,10 +1438,13 @@ class Controller:
 
         self._service = ControllerServiceImpl(
             self._transitions,
-            self._store,
             controller=self,
             bundle_store=self._bundle_store,
             log_client=self._log_client,
+            db=self._db,
+            health=self._health,
+            endpoints=self._endpoints,
+            worker_attrs=self._worker_attrs,
             auth=config.auth,
             system_endpoints={},
             user_budget_defaults=config.user_budget_defaults,
@@ -1227,6 +1491,12 @@ class Controller:
         self._scheduling_diagnostics: dict[str, str] = {}
         self._scheduling_round: int = 0
 
+        # Last completed scheduling context — None until the first tick runs.
+        # The dashboard diagnostics path reads this instead of rebuilding from
+        # the DB. This is the only ``| None`` attribute on Controller: it is
+        # genuinely None before the first scheduling tick has run.
+        self._last_scheduling_context: SchedulingContext | None = None
+
         # Set to True once start() is called. Used to gate operations that
         # are only valid before the controller loops begin (e.g. LoadCheckpoint).
         self._started = False
@@ -1256,6 +1526,20 @@ class Controller:
         """
         self._scheduling_wake.set()
         self._polling_wake.set()
+
+    def _seed_liveness_from_workers(self) -> None:
+        """Mark every persisted worker healthy so the scheduler sees them before they ping back.
+
+        Workers that fail to ping within the heartbeat window are timed out
+        by the ping loop. ``find_prunable`` relies on this seed to maintain
+        the invariant that every ``workers`` row has a tracker entry.
+        """
+        now_ms = Timestamp.now().epoch_ms()
+        with self._db.read_snapshot() as q:
+            rows = q.execute(select(workers_table.c.worker_id)).all()
+        worker_ids = [WorkerId(str(row.worker_id)) for row in rows]
+        if worker_ids:
+            self._health.heartbeat(worker_ids, now_ms)
 
     @property
     def started(self) -> bool:
@@ -1348,6 +1632,7 @@ class Controller:
             forwarded_allow_ips="*",
         )
         self._server = uvicorn.Server(server_config)
+        _install_rpc_executor(self._server, max_workers=_RPC_HANDLER_THREADS)
         self._threads.spawn_server(self._server, name="controller-server")
 
         # Register cluster endpoints BEFORE spawning the autoscaler. Otherwise the
@@ -1580,7 +1865,7 @@ class Controller:
         assert isinstance(self._provider, K8sTaskProvider)
         provider = self._provider
         max_promotions = self._promotion_bucket.available
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             batch = self._transitions.drain_for_direct_provider(
                 cur,
                 max_promotions=max_promotions,
@@ -1588,45 +1873,12 @@ class Controller:
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))
         result = provider.sync(batch)
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.apply_direct_provider_updates(cur, result.updates)
         self._provider_scheduling_events = list(result.scheduling_events) if result.scheduling_events else []
         self._provider_capacity = result.capacity
         # Worker-side kills are surfaced through the next K8s pod-diff sync;
         # no immediate RPC fan-out here.
-
-    def _is_reservation_satisfied(
-        self,
-        job: JobSchedulingRow,
-        claims: dict[WorkerId, ReservationClaim] | None = None,
-    ) -> bool:
-        """Check if a job's reservation is fully satisfied.
-
-        Returns True if the job has no reservation or if enough workers
-        have been claimed to cover every reservation entry.
-        """
-        if not job.has_reservation:
-            return True
-
-        claim_map = claims if claims is not None else _read_reservation_claims(self._db)
-        claimed = self._count_reservation_claims(job.job_id.to_wire(), claim_map)
-        entry_count = self._reservation_entry_count(job.job_id)
-        return claimed >= entry_count
-
-    def _count_reservation_claims(self, job_id_wire: str, claims: dict[WorkerId, ReservationClaim]) -> int:
-        """Count workers claimed for the given job."""
-        return sum(1 for c in claims.values() if c.job_id == job_id_wire)
-
-    def _reservation_entry_count(self, job_id: JobName) -> int:
-        """Get the number of reservation entries for a job from job_config.
-
-        Only called for the rare jobs that have reservations.
-        """
-        with self._db.read_snapshot() as q:
-            row = q.fetchone("SELECT reservation_json FROM job_config WHERE job_id = ?", (job_id.to_wire(),))
-        if row is None or row[0] is None:
-            return 0
-        return len(reservation_entries_from_json(row[0]))
 
     def _cleanup_stale_claims(self, claims: dict[WorkerId, ReservationClaim] | None = None) -> bool:
         """Remove claims for workers that disappeared or jobs that finished."""
@@ -1636,20 +1888,20 @@ class Controller:
             persisted = True
         active_worker_ids = {wid for wid, l in self._health.all().items() if l.active}
         claimed_job_ids = {JobName.from_wire(claim.job_id) for claim in claims.values()}
-        claimed_jobs = list(_jobs_by_id(self._db, claimed_job_ids).values()) if claimed_job_ids else []
-        jobs_by_id = {job.job_id.to_wire(): job for job in claimed_jobs}
+        # Only job.state is needed here; use the thin 2-column query.
+        job_states = _job_state_by_id(self._db, claimed_job_ids)
         stale: list[WorkerId] = []
         for worker_id, claim in claims.items():
             if worker_id not in active_worker_ids:
                 stale.append(worker_id)
                 continue
-            job = jobs_by_id.get(claim.job_id)
-            if job is None or is_job_finished(job.state):
+            job_state = job_states.get(JobName.from_wire(claim.job_id))
+            if job_state is None or is_job_finished(job_state):
                 stale.append(worker_id)
         for wid in stale:
             del claims[wid]
         if stale and persisted:
-            with self._store.transaction() as cur:
+            with self._db.transaction() as cur:
                 self._transitions.replace_reservation_claims(cur, claims)
             log_event("reservation_claims_cleaned", "controller", count=len(stale))
         return bool(stale)
@@ -1666,7 +1918,8 @@ class Controller:
             persisted = True
         claimed_entries: set[tuple[str, int]] = {(c.job_id, c.entry_idx) for c in claims.values()}
         claimed_worker_ids: set[WorkerId] = set(claims.keys())
-        all_workers = healthy_active_workers_with_attributes(self._db, self._health)
+        with self._db.read_snapshot() as tx:
+            all_workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         changed = False
 
         reservable_states = (
@@ -1696,7 +1949,7 @@ class Controller:
                     changed = True
                     break
         if changed and persisted:
-            with self._store.transaction() as cur:
+            with self._db.transaction() as cur:
                 self._transitions.replace_reservation_claims(cur, claims)
             log_event("reservation_claims_updated", "controller", total_claims=len(claims))
         return changed
@@ -1732,41 +1985,53 @@ class Controller:
         claims = self._refresh_reservation_claims()
 
         timer = Timer()
-        state = self._read_scheduling_state()
+        ctx = build_scheduling_context(
+            self._db,
+            self._health,
+            self._worker_attrs,
+            self._config.user_budget_defaults,
+        )
 
         if trace:
             logger.info(
                 "[TRACE round=%d] Phase 0: %d pending tasks, %d workers, %d reservation claims",
                 self._scheduling_round,
-                len(state.pending_tasks),
-                len(state.workers),
+                len(ctx.pending_task_rows),
+                len(ctx.workers),
                 len(claims),
             )
 
-        if not state.pending_tasks:
+        if not ctx.pending_task_rows:
             self._scheduling_diagnostics = {}
+            self._last_scheduling_context = ctx
             return SchedulingOutcome.NO_PENDING_TASKS
 
-        gated = self._apply_scheduling_gates(state.pending_tasks, claims, trace=trace)
+        gated = apply_scheduling_gates(
+            ctx,
+            claims,
+            max_tasks_per_job_per_cycle=self._config.max_tasks_per_job_per_cycle,
+            trace=trace,
+        )
+        # Mark deadline-expired tasks UNSCHEDULABLE — kept out of the pure
+        # gate evaluation so the gate stays free of DB writes.
+        for task in gated.expired_tasks:
+            self._mark_task_unschedulable(task)
 
         if not gated.schedulable_task_ids:
             self._scheduling_diagnostics = {}
+            self._last_scheduling_context = ctx
             return SchedulingOutcome.NO_PENDING_TASKS
 
-        order = self._compute_scheduling_order(
-            gated.schedulable_task_ids,
-            state.pending_tasks,
-            gated.jobs,
-            trace=trace,
-        )
+        order = compute_scheduling_order(ctx, gated, trace=trace)
 
-        all_assignments, context, tainted_jobs = self._run_scheduler_pass(
-            order, gated, state, claims, timer, trace=trace
-        )
+        all_assignments, context, tainted_jobs = self._run_scheduler_pass(order, gated, ctx, claims, timer, trace=trace)
 
         preemptions = self._apply_preemptions(order, tainted_jobs, all_assignments, claims, context)
 
         self._cache_scheduling_diagnostics(context, tainted_jobs, all_assignments, order.ordered_task_ids)
+        # Post-taint context (or the un-tainted ctx when no claims were active)
+        # — exposed via ``last_scheduling_context`` for dashboard diagnostics.
+        self._last_scheduling_context = context
 
         if all_assignments or preemptions:
             log_event(
@@ -1774,8 +2039,8 @@ class Controller:
                 "scheduler",
                 assignments=len(all_assignments),
                 preempted=len(preemptions),
-                pending=len(state.pending_tasks),
-                workers=len(state.workers),
+                pending=len(ctx.pending_task_rows),
+                workers=len(ctx.workers),
             )
             return SchedulingOutcome.ASSIGNMENTS_MADE
         return SchedulingOutcome.NO_ASSIGNMENTS
@@ -1793,174 +2058,41 @@ class Controller:
             if self._config.dry_run:
                 logger.info("[DRY-RUN] Would update %d reservation claims", len(claims))
             else:
-                with self._store.transaction() as cur:
+                with self._db.transaction() as cur:
                     self._transitions.replace_reservation_claims(cur, claims)
         return claims
 
-    def _read_scheduling_state(self) -> _SchedulingStateRead:
-        """Fetch pending tasks and healthy workers from the DB.
-
-        Projects worker rows + per-cycle held-resource usage (from
-        ``task_attempts``) into bundled ``WorkerSnapshot``s at the boundary so
-        downstream scheduling code only sees the scheduler's input type.
-        """
-        timer = Timer()
-        with slow_log(logger, "scheduling state reads", threshold_ms=50):
-            pending_tasks = _sort_pending_tasks_by_resolved_band(self._store, _schedulable_tasks(self._db))
-            workers = healthy_active_workers_with_attributes(self._db, self._health)
-            with self._db.read_snapshot() as snap:
-                usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
-            snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
-        return _SchedulingStateRead(
-            pending_tasks=pending_tasks,
-            workers=snapshots,
-            state_read_ms=timer.elapsed_ms(),
-        )
-
-    def _apply_scheduling_gates(
-        self,
-        pending_tasks: list[TaskRow],
-        claims: dict[WorkerId, ReservationClaim],
-        trace: bool = False,
-    ) -> _GatedCandidates:
-        """Filter tasks by deadline, reservation satisfaction, and per-job cap."""
-        schedulable_task_ids: list[JobName] = []
-        jobs: dict[JobName, JobRequirements] = {}
-        has_reservation: set[JobName] = set()
-        has_direct_reservation: set[JobName] = set()
-        tasks_per_job: dict[JobName, int] = defaultdict(int)
-        cap = self._config.max_tasks_per_job_per_cycle
-        filter_counts: dict[str, int] = defaultdict(int)
-        jobs_by_id = _jobs_by_id(self._db, {task.job_id for task in pending_tasks})
-        for task in pending_tasks:
-            if not task_row_can_be_scheduled(task):
-                filter_counts["task_not_schedulable"] += 1
-                continue
-            job = jobs_by_id.get(task.job_id)
-            if not job:
-                filter_counts["job_not_found"] += 1
-                continue
-            deadline = job_scheduling_deadline(job.scheduling_deadline_epoch_ms)
-            if deadline is not None and deadline.expired():
-                filter_counts["deadline_expired"] += 1
-                self._mark_task_unschedulable(task)
-                continue
-            # Gate: skip real tasks whose job has an unsatisfied reservation.
-            # Holder tasks are always schedulable (they ARE the reservation).
-            if not job.is_reservation_holder and not self._is_reservation_satisfied(job, claims):
-                filter_counts["reservation_unsatisfied"] += 1
-                continue
-            if cap > 0 and not job.has_coscheduling and tasks_per_job[task.job_id] >= cap:
-                filter_counts["per_job_cap"] += 1
-                continue
-            tasks_per_job[task.job_id] += 1
-            schedulable_task_ids.append(task.task_id)
-            if task.job_id not in jobs:
-                jobs[task.job_id] = job_requirements_from_job(job)
-                if job.has_reservation:
-                    has_reservation.add(task.job_id)
-                    has_direct_reservation.add(task.job_id)
-                elif _find_reservation_ancestor(self._db, task.job_id) is not None:
-                    has_reservation.add(task.job_id)
-        if trace:
-            logger.info(
-                "[TRACE] Phase 2 gates: %d/%d tasks passed, %d distinct jobs; filtered: %s",
-                len(schedulable_task_ids),
-                len(pending_tasks),
-                len(jobs),
-                dict(filter_counts),
-            )
-        return _GatedCandidates(
-            schedulable_task_ids=schedulable_task_ids,
-            jobs=jobs,
-            has_reservation=has_reservation,
-            has_direct_reservation=has_direct_reservation,
-        )
-
-    def _compute_scheduling_order(
-        self,
-        schedulable_task_ids: list[JobName],
-        pending_tasks: list[TaskRow],
-        jobs: dict[JobName, JobRequirements],
-        trace: bool = False,
-    ) -> _SchedulingOrder:
-        """Compute priority-band interleaving order.
-
-        Maps tasks to effective bands (down-weighting over-budget users) and
-        round-robins users within each band.
-        """
-        with self._db.read_snapshot() as budget_snapshot:
-            user_spend = compute_user_spend(budget_snapshot)
-            # Source the requested band from ``job_config`` (immutable since
-            # submission), not from ``tasks.priority_band`` (which is overwritten
-            # with the effective band at assign time). Otherwise a task that was
-            # downgraded to BATCH while its user was over budget would stay
-            # BATCH forever after preemption — ``compute_effective_band`` only
-            # demotes, never promotes back to the user's requested band.
-            requested_bands = self._store.jobs.get_priority_bands(
-                budget_snapshot, {task.job_id for task in pending_tasks}
-            )
-        user_budget_limits = self._db.get_all_user_budget_limits()
-        defaults = self._config.user_budget_defaults
-        task_band_map: dict[JobName, int] = {
-            task.task_id: compute_effective_band(
-                requested_bands.get(task.job_id, task.priority_band),
-                task.task_id.user,
-                user_spend,
-                user_budget_limits,
-                defaults,
-            )
-            for task in pending_tasks
-        }
-        tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
-        for task_id in schedulable_task_ids:
-            band = task_band_map.get(task_id, job_pb2.PRIORITY_BAND_INTERACTIVE)
-            tasks_by_band[band].append(task_id)
-
-        interleaved: list[JobName] = []
-        for band_key in sorted(tasks_by_band.keys()):
-            band_tasks = tasks_by_band[band_key]
-            user_tasks = [UserTask(user_id=tid.user, task=tid) for tid in band_tasks]
-            interleaved.extend(interleave_by_user(user_tasks, user_spend))
-
-        if trace:
-            band_summary = {band: len(tids) for band, tids in tasks_by_band.items()}
-            active_spend = {u: v for u, v in user_spend.items() if v > 0}
-            logger.info(
-                "[TRACE] Phase 3 order: %d tasks after interleaving+cap; bands=%s user_spend=%s budget_limits=%s",
-                len(interleaved),
-                band_summary,
-                active_spend,
-                user_budget_limits,
-            )
-        return _SchedulingOrder(
-            ordered_task_ids=interleaved,
-            task_band_map=task_band_map,
-            user_spend=user_spend,
-            user_budget_limits=user_budget_limits,
-        )
-
     def _run_scheduler_pass(
         self,
-        order: _SchedulingOrder,
-        gated: _GatedCandidates,
-        state: _SchedulingStateRead,
+        order: SchedulingOrder,
+        gated: GatedCandidates,
+        ctx: SchedulingContext,
         claims: dict[WorkerId, ReservationClaim],
         timer: Timer,
         trace: bool = False,
     ) -> tuple[list[tuple[JobName, WorkerId]], SchedulingContext, dict[JobName, JobRequirements]]:
-        """Run preference + normal assignment passes. Returns (assignments, context, taint-injected jobs)."""
-        modified_workers = _inject_reservation_taints(state.workers, claims)
+        """Run preference + normal assignment passes.
+
+        Reservation taints are injected here so gates/order/diagnostics see
+        un-tainted workers. When there are no claims we reuse ``ctx`` directly
+        to avoid an index rebuild.
+        """
         modified_jobs = _inject_taint_constraints(gated.jobs, gated.has_reservation, gated.has_direct_reservation)
 
-        with slow_log(logger, "building_counts", threshold_ms=50):
-            building_counts = _building_counts(self._db, workers=state.workers)
-        context = self._scheduler.create_scheduling_context(
-            modified_workers,
-            building_counts=building_counts,
-            pending_tasks=order.ordered_task_ids,
-            jobs=modified_jobs,
-        )
+        if claims:
+            modified_workers = _inject_reservation_taints(list(ctx.workers), claims)
+            building_counts = {wid: cap.building_task_count for wid, cap in ctx.capacities.items()}
+            ctx.pending_tasks = list(order.ordered_task_ids)
+            context = ctx.evolve_with_workers(
+                workers=modified_workers,
+                jobs=modified_jobs,
+                building_counts=building_counts,
+                max_building_tasks=self._scheduler.max_building_tasks_per_worker,
+            )
+        else:
+            ctx.pending_tasks = list(order.ordered_task_ids)
+            ctx.jobs = modified_jobs
+            context = ctx
 
         if trace:
             logger.info(
@@ -1987,12 +2119,11 @@ class Controller:
         if all_assignments:
             self._commit_assignments(all_assignments, order.task_band_map)
             logger.debug(
-                "Scheduling cycle: %d assignments (%d preferred, %d normal), %dms (state read: %dms)",
+                "Scheduling cycle: %d assignments (%d preferred, %d normal), %dms",
                 len(all_assignments),
                 len(preference_assignments),
                 len(result.assignments),
                 timer.elapsed_ms(),
-                state.state_read_ms,
             )
         return all_assignments, context, modified_jobs
 
@@ -2005,7 +2136,7 @@ class Controller:
 
         Each assignment carries the effective priority band from
         ``task_band_map`` (computed against the snapshot's user spend) so
-        ``mark_assigned`` can stamp it onto ``tasks.priority_band``. The
+        ``assign_task`` can stamp it onto ``tasks.priority_band``. The
         preemption pass then trusts that stamped value instead of
         recomputing from current spend on every tick.
 
@@ -2024,7 +2155,7 @@ class Controller:
             )
             for task_id, worker_id in assignments
         ]
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.queue_assignments(cur, command)
         # Wake the polling thread; every tick reconciles every healthy worker,
         # so the new ASSIGNED rows turn into StartTasks RPCs on the next tick.
@@ -2032,7 +2163,7 @@ class Controller:
 
     def _apply_preemptions(
         self,
-        order: _SchedulingOrder,
+        order: SchedulingOrder,
         jobs: dict[JobName, JobRequirements],
         all_assignments: list[tuple[JobName, WorkerId]],
         claims: dict[WorkerId, ReservationClaim],
@@ -2057,7 +2188,7 @@ class Controller:
             # Apply all preemptions in one transaction so slice evictions
             # (N siblings of a coscheduled preemptor) are all-or-nothing.
             if preemptions:
-                with self._store.transaction() as cur:
+                with self._db.transaction() as cur:
                     for preemptor_name, victim_id in preemptions:
                         self._transitions.preempt_task(cur, victim_id, reason=f"Preempted by {preemptor_name}")
                 # Killed-task RPCs land on the next polling tick via the
@@ -2123,74 +2254,120 @@ class Controller:
         if now_ms - self._last_timeout_check_ms < self._TIMEOUT_CHECK_INTERVAL_MS:
             return
         self._last_timeout_check_ms = now_ms
-        timed_out = timed_out_executing_tasks(self._db, now)
+        with self._db.read_snapshot() as tx:
+            _timeout_rows = tx.execute(
+                select(
+                    tasks_table.c.task_id,
+                    tasks_table.c.current_worker_id,
+                    task_attempts_table.c.started_at_ms,
+                    job_config_table.c.timeout_ms,
+                )
+                .select_from(
+                    tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id).join(
+                        task_attempts_table,
+                        (task_attempts_table.c.task_id == tasks_table.c.task_id)
+                        & (task_attempts_table.c.attempt_id == tasks_table.c.current_attempt_id),
+                    )
+                )
+                .where(
+                    tasks_table.c.state.in_(bindparam("executing_states", expanding=True)),
+                    job_config_table.c.timeout_ms.is_not(None),
+                    job_config_table.c.timeout_ms > 0,
+                    task_attempts_table.c.started_at_ms.is_not(None),
+                ),
+                {"executing_states": [int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING)]},
+            ).all()
+        timed_out = [
+            _TimedOutTask(task_id=row.task_id, worker_id=row.current_worker_id)
+            for row in _timeout_rows
+            if row.started_at_ms.epoch_ms() + int(row.timeout_ms) <= now_ms
+        ]
         if not timed_out:
             return
         for task in timed_out:
             logger.warning("Task %s exceeded execution timeout, killing", task.task_id)
         task_ids = {t.task_id for t in timed_out}
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.cancel_tasks_for_timeout(cur, task_ids, reason="Execution timeout exceeded")
 
-    def _mark_task_unschedulable(self, task: TaskRow) -> None:
-        """Mark a task as unschedulable due to timeout."""
+    def _mark_task_unschedulable(self, task: Any) -> None:
+        """Mark a task as unschedulable due to timeout.
+
+        ``task`` must be a row from ``_pending_tasks_with_jobs``; it carries
+        ``scheduling_timeout_ms`` so no secondary DB fetch is needed.
+        """
         if self._config.dry_run:
             logger.info("[DRY-RUN] Would mark task %s as unschedulable", task.task_id)
             return
-        job = _jobs_by_id(self._db, {task.job_id}).get(task.job_id)
-        if job and job.scheduling_timeout_ms is not None:
-            timeout = Duration.from_ms(job.scheduling_timeout_ms)
-        else:
-            timeout = None
+        timeout_ms = task.scheduling_timeout_ms
+        timeout = Duration.from_ms(timeout_ms) if timeout_ms is not None else None
         logger.warning(f"Task {task.task_id} exceeded scheduling timeout ({timeout}), marking as UNSCHEDULABLE")
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.mark_task_unschedulable(
                 cur,
                 task.task_id,
                 reason=f"Scheduling timeout exceeded ({timeout})",
             )
 
-    def create_scheduling_context(self, workers: list[SchedulableWorker]) -> SchedulingContext:
-        """Create a scheduling context for the given workers."""
-        building_counts = _building_counts(self._db, workers)
-        with self._db.read_snapshot() as snap:
-            usage_by_worker = self._store.attempts.resource_usage_by_worker(snap)
-        snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
-        return self._scheduler.create_scheduling_context(
-            snapshots,
-            building_counts=building_counts,
-        )
+    @property
+    def last_scheduling_context(self) -> "SchedulingContext | None":
+        """Return the most recent finalized scheduling context.
+
+        ``None`` before the first scheduling tick has run; otherwise the
+        post-taint context from the last completed ``_run_scheduling`` pass.
+        Consumed by dashboard diagnostics that need a snapshot of capacities
+        and pending tasks without rebuilding from the DB.
+        """
+        return self._last_scheduling_context
 
     # =========================================================================
     # Worker lifecycle RPC dispatch (Reconcile / Ping)
     # =========================================================================
 
-    def _reconcile_worker_batch(self) -> None:
-        """One polling-tick reconcile pass.
-
-        Phase 1 (snapshot read): pick the next batch of healthy workers
-        (priority lane first, then round-robin), and snapshot the
-        ``(worker, task, attempt)`` rows that drive their reconcile. ASSIGNED
-        rows produce StartTasks payloads; BUILDING/RUNNING rows populate the
-        worker's expected_tasks set; workers with no rows still receive an
-        empty Poll so they auto-kill any strays.
-
-        Phase 2 (no DB lock): fan out StartTasks and Poll RPCs concurrently.
-
-        Phase 3 (small write tx): apply Poll responses through the existing
-        heartbeat queue, and emit synthetic WORKER_FAILED for StartTasks
-        failures so the scheduler bounces ASSIGNED rows that never landed.
-        """
-        if self._config.dry_run:
-            return
-
-        # ── Phase 1: snapshot every healthy worker ───────────────────────
+    def _snapshot_reconcile_inputs(self) -> tuple[ReconcileInputs, dict[WorkerId, str]]:
+        """Snapshot the DB and assemble the reconcile inputs for one tick."""
         with self._db.read_snapshot() as snap:
-            addresses = self._store.workers.list_active_healthy(snap)
+            addresses = reads.list_active_healthy_workers(snap, self._health)
             if not addresses:
-                return
+                return ReconcileInputs(job_specs={}, worker_ids=[], rows_by_worker={}), {}
             worker_ids = list(addresses)
-            rows = self._store.attempts.reconcile_rows_for_workers(snap, worker_ids)
+            # Snapshot current attempts for ``worker_ids``. Workers not in
+            # ``worker_ids`` are filtered in Python so the partial index
+            # ``idx_task_attempts_live_workerbound`` remains active rather
+            # than falling back to a scan on a long IN list. We deliberately
+            # do NOT filter on task state: active rows (ASSIGNED/BUILDING/
+            # RUNNING) drive normal reconciliation; rows whose task has
+            # already moved to a terminal state but whose attempt is still
+            # worker-bound (worker_id set, finished_at_ms NULL) are stranded
+            # attempts whose terminal UpdateTaskStatus push was dropped.
+            # Including them in expected_tasks gives the worker a second
+            # chance to report -- either with the real terminal status or
+            # via _missing_task_status -- so the heartbeat path can stamp
+            # finished_at_ms. Without this, a single lost RPC strands the
+            # attempt forever, since no other code path polls about it.
+            target_ids: set[WorkerId] = set(worker_ids)
+            raw_rows = snap.execute(
+                select(
+                    task_attempts_table.c.worker_id,
+                    tasks_table.c.task_id,
+                    task_attempts_table.c.attempt_id,
+                    tasks_table.c.state.label("task_state"),
+                    task_attempts_table.c.state.label("attempt_state"),
+                    tasks_table.c.job_id,
+                )
+                .select_from(
+                    task_attempts_table.join(
+                        tasks_table,
+                        (tasks_table.c.task_id == task_attempts_table.c.task_id)
+                        & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
+                    )
+                )
+                .where(
+                    task_attempts_table.c.worker_id.is_not(None),
+                    task_attempts_table.c.finished_at_ms.is_(None),
+                ),
+            ).all()
+            rows = [row for row in raw_rows if row.worker_id in target_ids]
             templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
             for row in rows:
                 if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
@@ -2198,131 +2375,46 @@ class Controller:
                 if row.job_id not in templates_by_job:
                     templates_by_job[row.job_id] = self._transitions.run_request_template(snap, row.job_id)
 
-        expected: dict[WorkerId, list[RunningTaskEntry]] = {wid: [] for wid in worker_ids}
-        starts: dict[WorkerId, list[job_pb2.RunTaskRequest]] = {wid: [] for wid in worker_ids}
-        attempt_by_worker_task: dict[tuple[WorkerId, str], int] = {}
-
+        rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
         for row in rows:
-            if row.task_state == job_pb2.TASK_STATE_ASSIGNED:
-                template = templates_by_job.get(row.job_id)
-                if template is None:
-                    # Reservation-holder task or a job that disappeared mid-tick.
-                    continue
-                req = job_pb2.RunTaskRequest()
-                req.CopyFrom(template)
-                req.task_id = row.task_id.to_wire()
-                req.attempt_id = row.attempt_id
-                starts[row.worker_id].append(req)
-                attempt_by_worker_task[(row.worker_id, row.task_id.to_wire())] = row.attempt_id
-            # ASSIGNED rows go into ``expected`` too so PollTasks reports
-            # current state. The worker's BUILDING push is best-effort
-            # (worker.py:_on_state_change drops RPC failures); poll is the
-            # only resilient recovery channel for ASSIGNED -> BUILDING.
-            # Per-worker reconcile (see ``WorkerProvider._reconcile_one``)
-            # sends StartTasks then PollTasks under one stub, so by the time
-            # PollTasks lands the worker's task table already contains the
-            # rows we just dispatched and ``_missing_task_status`` cannot
-            # auto-kill them.
-            expected[row.worker_id].append(RunningTaskEntry(task_id=row.task_id, attempt_id=row.attempt_id))
+            rows_by_worker[row.worker_id].append(row)
 
-        # ── Phase 2: per-worker reconcile under a single asyncio loop ────
-        plans = [
-            WorkerReconcilePlan(
-                worker_id=wid,
-                address=addresses.get(wid),
-                start_tasks=starts.get(wid, []),
-                expected_tasks=expected.get(wid, []),
-            )
-            for wid in worker_ids
-        ]
-        results = self._provider.reconcile_workers(plans)
+        # ``templates_by_job`` can carry ``None`` for jobs the scheduler hasn't
+        # cached yet; reconcile_worker checks the dict membership so feeding it
+        # the raw map is harmless. Filter Nones to keep the type tight.
+        job_specs = {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
+        inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
+        return inputs, addresses
 
-        heartbeats: list[HeartbeatApplyRequest] = []
-        for result in results:
-            if result.start_error is not None or result.start_response is not None:
-                self._collect_start_tasks_result(
-                    heartbeats,
-                    result.worker_id,
-                    result.start_response,
-                    result.start_error,
-                    starts.get(result.worker_id, []),
-                    attempt_by_worker_task,
-                )
-            if result.poll_error is not None:
-                logger.debug("PollTasks failed for worker %s: %s", result.worker_id, result.poll_error)
-            elif result.poll_updates:
-                heartbeats.append(HeartbeatApplyRequest(worker_id=result.worker_id, updates=result.poll_updates))
-
-        # ── Phase 3: apply heartbeat-style results in one write txn ──────
-        if heartbeats:
-            self._process_heartbeat_updates(heartbeats)
-
-    def _collect_start_tasks_result(
-        self,
-        heartbeats: list[HeartbeatApplyRequest],
-        worker_id: WorkerId,
-        response: worker_pb2.Worker.StartTasksResponse | None,
-        error: str | None,
-        sent: list[job_pb2.RunTaskRequest],
-        attempt_by_worker_task: dict[tuple[WorkerId, str], int],
-    ) -> None:
-        """Convert StartTasks RPC failures and worker rejects into synthetic heartbeats.
-
-        ASSIGNED → WORKER_FAILED through the heartbeat path bounces the task
-        back to PENDING (without consuming a preemption retry; see
-        ``_apply_task_transitions``). The next scheduling tick re-places it.
-        """
-        if error is not None:
-            log_event(
-                "dispatch_failed",
-                str(worker_id),
-                trigger="start_tasks_rpc",
-                task_count=len(sent),
-                error=error,
-            )
-            heartbeats.append(
-                HeartbeatApplyRequest(
-                    worker_id=worker_id,
-                    updates=[
-                        TaskUpdate(
-                            task_id=JobName.from_wire(t.task_id),
-                            attempt_id=attempt_by_worker_task.get((worker_id, t.task_id), -1),
-                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                            error=f"StartTasks RPC failed: {error}",
-                        )
-                        for t in sent
-                    ],
-                )
-            )
+    def _reconcile_worker_batch(self) -> None:
+        """One polling-tick reconcile pass: snapshot, fan out, apply."""
+        if self._config.dry_run:
             return
-        assert response is not None
-        for ack in response.acks:
-            if ack.accepted:
-                continue
-            log_event(
-                "task_rejected",
-                ack.task_id,
-                trigger="start_tasks_ack",
-                worker=str(worker_id),
-                error=ack.error,
-            )
-            heartbeats.append(
-                HeartbeatApplyRequest(
-                    worker_id=worker_id,
-                    updates=[
-                        TaskUpdate(
-                            task_id=JobName.from_wire(ack.task_id),
-                            attempt_id=attempt_by_worker_task.get((worker_id, ack.task_id), -1),
-                            new_state=job_pb2.TASK_STATE_WORKER_FAILED,
-                            error=f"Worker rejected task: {ack.error}",
-                        )
-                    ],
-                )
-            )
+
+        inputs, addresses = self._snapshot_reconcile_inputs()
+        if not inputs.worker_ids:
+            return
+
+        plans = reconcile_workers(inputs)
+        now = Timestamp.now()
+        results = self._provider.reconcile_workers(
+            plans,
+            addresses,
+            use_reconcile_rpc=self._config.reconcile_rpc_enabled,
+        )
+
+        plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
+        with self._db.transaction() as cur:
+            for result in results:
+                plan = plan_by_worker[result.worker_id]
+                if result.error is not None:
+                    logger.debug("Reconcile failed for worker %s: %s", result.worker_id, result.error)
+                self._transitions.apply_reconcile_result(cur, plan, result, now)
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
-        workers = healthy_active_workers_with_attributes(self._db, self._health)
+        with self._db.read_snapshot() as tx:
+            workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         return [(w.worker_id, w.address) for w in workers]
 
     def _run_ping_loop(self, stop_event: threading.Event) -> None:
@@ -2382,7 +2474,7 @@ class Controller:
         on the heartbeat. Polling-thread heartbeats firing every tick used
         to short-circuit the backoff entirely.
         """
-        with self._store.transaction() as cur:
+        with self._db.transaction() as cur:
             self._transitions.apply_heartbeats_batch(cur, requests)
 
     def _terminate_workers(self, worker_ids: list[str], reason: str, sibling_reason: str) -> list[WorkerId]:
@@ -2432,7 +2524,9 @@ class Controller:
 
         worker_status_map = self._build_worker_status_map()
         self._autoscaler.refresh(worker_status_map)
-        workers = healthy_active_workers_with_attributes(self._db, self._health)
+        self._autoscaler.probe_health()
+        with self._db.read_snapshot() as tx:
+            workers = reads.healthy_active_workers_with_attributes(tx, self._health, self._worker_attrs)
         demand_entries = compute_demand_entries(
             self._db,
             self._scheduler,
@@ -2445,7 +2539,8 @@ class Controller:
         """Build a map of worker_id to worker status for autoscaler idle tracking."""
         result: WorkerStatusMap = {}
         worker_ids = {wid for wid, l in self._health.all().items() if l.active}
-        running_by_worker = running_tasks_by_worker(self._db, worker_ids)
+        with self._db.read_snapshot() as tx:
+            running_by_worker = reads.running_tasks_by_worker(tx, worker_ids)
         for wid in worker_ids:
             result[wid] = WorkerStatus(
                 worker_id=wid,

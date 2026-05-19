@@ -17,7 +17,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 
+from marin.datakit.canonical.safety_pretraining import safety_pretraining_normalize_steps
 from marin.datakit.download.biodiversity import biodiversity_normalize_steps
+from marin.datakit.download.climblab_ja import climblab_ja_normalize_steps
 from marin.datakit.download.coderforge import coderforge_normalize_steps
 from marin.datakit.download.common_pile import common_pile_normalize_steps
 from marin.datakit.download.davinci_dev import (
@@ -144,6 +146,7 @@ def all_sources() -> dict[str, DatakitSource]:
         # cp/biodiversity is carved out of common_pile (see common_pile.py)
         # because it needs page-stitching before normalize.
         ("cp/biodiversity", biodiversity_normalize_steps, 8.60),
+        ("climblab-ja", climblab_ja_normalize_steps, 371.92),
         ("coderforge", coderforge_normalize_steps, 10.29),
         ("davinci-dev/ctx-native", davinci_dev_ctx_native_normalize_steps, 57.57),
         ("davinci-dev/env-native", davinci_dev_env_native_normalize_steps, 2.58),
@@ -322,6 +325,25 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
+    # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
+    # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
+    # excluded to avoid double-counting that corpus). Token counts measured
+    # by tokenizing every subset with the marin-community tokenizer (see
+    # ``scripts/datakit/tokenize_safety_pt.py``).
+    safety_pretraining = _rows_flat(
+        safety_pretraining_normalize_steps,
+        {
+            "safety_pt/moral_education/score_4_morals": 4.41,
+            "safety_pt/moral_education/score_5_morals": 1.80,
+            "safety_pt/safeweb/score_1_rephrased": 6.04,
+            "safety_pt/safeweb/score_3_rephrased": 2.96,
+            "safety_pt/safeweb/score_4_rephrased": 4.20,
+            "safety_pt/safeweb/score_5_rephrased": 3.54,
+            "safety_pt/refuseweb/score_4_refusal": 3.03,
+            "safety_pt/refuseweb/score_5_refusal": 1.12,
+        },
+    )
+
     all_rows: tuple[_SourceRow, ...] = (
         *single_sources,
         *starcoder2_extras,
@@ -335,6 +357,7 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *safety_pretraining,
     )
 
     entries = {

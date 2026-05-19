@@ -189,14 +189,14 @@ Even for unchanged canary runs, ask the requester before launch unless they expl
 
 Launch (TPU):
 ```bash
-uv run iris --config=lib/iris/examples/marin.yaml \
+uv run iris --config=lib/iris/config/marin.yaml \
   job run --memory=16G --disk=16G --cpu=1 --extra=tpu \
   -- python -m experiments.ferries.canary_ferry
 ```
 
 Launch (GPU / CoreWeave):
 ```bash
-uv run iris --config=lib/iris/examples/coreweave.yaml \
+uv run iris --config=lib/iris/config/coreweave.yaml \
   job run --memory=16G --disk=16G --cpu=1 --extra=cpu \
   -e MARIN_PREFIX s3://marin-na/marin \
   -e CANARY_ACCELERATOR gpu \

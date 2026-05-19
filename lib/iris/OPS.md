@@ -2,7 +2,13 @@
 
 All subcommands have `--help`. Use it.
 
-Two connection modes: `--config=PATH` (auto-tunnels) or `--controller-url=URL` (manual tunnel).
+Connection selectors:
+
+- `--cluster=NAME` (preferred for known clusters): resolves a named config and auto-tunnels.
+- `--config=PATH`: pins an exact YAML config file and auto-tunnels.
+- `--controller-url=URL`: connects to a manually established tunnel.
+
+Use `iris cluster list` to see named clusters. Use `--config` when you mean a custom or pinned file path.
 
 ## Cluster Lifecycle
 
@@ -204,7 +210,8 @@ gcloud compute ssh iris-controller-marin --zone=us-central1-a \
   --project=hai-gcp-models --tunnel-through-iap -- -L 10000:localhost:10000 -N
 
 # Then: iris --controller-url=http://localhost:10000 ...
-# Or config-based auto-tunnel: iris --config=lib/iris/examples/marin.yaml ...
+# Or preferred named-cluster auto-tunnel: iris --cluster=marin ...
+# Exact-file form for custom or pinned configs: iris --config=lib/iris/config/marin.yaml ...
 ```
 
 Configs: `marin.yaml` (production), `marin-dev.yaml` (dev, smaller scale caps).
@@ -238,7 +245,7 @@ Only delete the specific bad node. If multiple nodes fail simultaneously or the 
 
 ### GCP State
 
-State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages), `controller-state/` (SQLite checkpoints), `logs/` (Parquet).
+State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/` (code packages) and `controller-state/` (SQLite checkpoints). Per-task log parquet segments are shipped separately by finelog under `<finelog.remote_log_dir>/log/` (see `lib/finelog/config/<cluster>.yaml`).
 
 ### GCP Gotchas
 
@@ -251,7 +258,7 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 ## CoreWeave (GPU) Operations
 
 Always read [`docs/coreweave.md`](docs/coreweave.md) before operating a
-GPU/CoreWeave cluster. Use `lib/iris/examples/coreweave-*.yaml` for CoreWeave
+GPU/CoreWeave cluster. Use `lib/iris/config/coreweave-*.yaml` for CoreWeave
 cluster configs.
 
 ## CI Workflows

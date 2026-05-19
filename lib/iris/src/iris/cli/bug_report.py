@@ -175,8 +175,7 @@ def _gather(
                     tail=True,
                 )
             )
-            lines = [entry.data for entry in log_resp.entries]
-            task_logs[task.task_id] = lines[-tail:]
+            task_logs[task.task_id] = [entry.data for entry in log_resp.entries]
         except Exception:
             logger.warning("Failed to fetch logs for task %s", task.task_id, exc_info=True)
             task_logs[task.task_id] = ["(failed to fetch logs)"]

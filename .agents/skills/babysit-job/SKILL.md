@@ -12,20 +12,20 @@ the execution backend.
 ## Required Info
 
 1. `job_id` — Iris job ID in canonical format `/<user>/<job>` (e.g., `/dlwh/iris-run-train_tiny_model_tpu-20260302-185630`)
-2. `config` — Iris config path (e.g., `lib/iris/examples/marin.yaml`). When the user
+2. `config` — Iris config path (e.g., `lib/iris/config/marin.yaml`). When the user
    refers to a cluster by shorthand name (e.g., "marin_dev", "marin-dev", "marin",
-   "coreweave"), resolve it to the matching config file under `lib/iris/examples/`.
+   "coreweave"), resolve it to the matching config file under `lib/iris/config/`.
    Common mappings:
-   - `marin` / `marin_prod` -> `lib/iris/examples/marin.yaml`
-   - `marin_dev` / `marin-dev` -> `lib/iris/examples/marin-dev.yaml`
-   - `coreweave` -> `lib/iris/examples/coreweave.yaml`
+   - `marin` / `marin_prod` -> `lib/iris/config/marin.yaml`
+   - `marin_dev` / `marin-dev` -> `lib/iris/config/marin-dev.yaml`
+   - `coreweave` -> `lib/iris/config/coreweave.yaml`
 3. `resubmit_command` — exact Iris submit command for resubmission; must include `--no-wait`
 4. For Marin TPU training jobs, use `--extra marin:tpu` (not `--extra marin:cpu`)
 5. For TPU jobs, the resubmit command must request TPU resources with `--tpu <variant>`.
    `--reserve <variant>` only holds capacity; it does not attach TPU devices to the task container.
 
 Example resubmit command:
-`uv run iris --config lib/iris/examples/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
+`uv run iris --config lib/iris/config/marin.yaml job run --no-wait --extra marin:tpu --tpu v5litepod-16 -- python experiments/tutorials/train_tiny_model_tpu.py`
 
 If any required field is missing, ask for it before proceeding.
 

@@ -164,7 +164,7 @@ Jobs in this directory are submitted to **Iris** on a **v5p-8**.
 ### Submission command
 
 ```bash
-.venv/bin/iris --config lib/iris/examples/marin.yaml job run \
+.venv/bin/iris --cluster=marin job run \
   --no-wait \
   --reserve v5p-8 \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
@@ -183,12 +183,12 @@ checking status — do not poll in a tight loop.
 
 Reconnect to logs:
 ```bash
-.venv/bin/iris --config lib/iris/examples/marin.yaml job logs -f JOB_ID
+.venv/bin/iris --cluster=marin job logs -f JOB_ID
 ```
 
 List your jobs:
 ```bash
-.venv/bin/iris --config lib/iris/examples/marin.yaml job list | grep "$(whoami)"
+.venv/bin/iris --cluster=marin job list | grep "$(whoami)"
 ```
 
 Check runs in wandb (match `<PREFIX>` to the run_id pattern in `launch.py`):

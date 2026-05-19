@@ -222,7 +222,7 @@ def main() -> int:
     parser.add_argument("--cwd", required=True, help="Path to a worktree at the PR head SHA.")
     parser.add_argument(
         "--iris-config",
-        default="lib/iris/examples/marin.yaml",
+        default="lib/iris/config/marin.yaml",
         help="Iris cluster config; resolved relative to --cwd.",
     )
     parser.add_argument(

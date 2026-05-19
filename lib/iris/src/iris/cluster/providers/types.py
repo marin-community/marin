@@ -222,7 +222,15 @@ class RemoteWorkerHandle(Protocol):
 
     @property
     def internal_address(self) -> str:
-        """Internal/private IP address for intra-cluster communication."""
+        """Internal/private IP address (host only, no port) for intra-cluster communication."""
+        ...
+
+    @property
+    def port(self) -> int | None:
+        """RPC port, or None when the worker serves on the cluster-configured port.
+
+        Only providers that auto-assign ports per worker (LOCAL) report this.
+        """
         ...
 
     @property
@@ -348,6 +356,14 @@ class SliceHandle(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ListedSlice:
+    """A handle paired with the cloud state observed when it was listed."""
+
+    handle: SliceHandle
+    state: CloudSliceState
+
+
 # ---------------------------------------------------------------------------
 # Default stop_all helper
 # ---------------------------------------------------------------------------
@@ -356,7 +372,7 @@ TERMINATE_TIMEOUT_SECONDS = 60
 
 
 def default_stop_all(
-    list_all_slices: Callable[[], list[SliceHandle]],
+    list_all_slices: Callable[[], list[ListedSlice]],
     stop_controller: Callable[[], None],
     dry_run: bool = False,
 ) -> list[str]:
@@ -372,9 +388,9 @@ def default_stop_all(
     """
     target_names: list[str] = ["controller"]
     all_slices = list_all_slices()
-    for s in all_slices:
-        logger.info("Found managed slice %s", s.slice_id)
-        target_names.append(f"slice:{s.slice_id}")
+    for listed in all_slices:
+        logger.info("Found managed slice %s (state=%s)", listed.handle.slice_id, listed.state)
+        target_names.append(f"slice:{listed.handle.slice_id}")
 
     if dry_run:
         return target_names
@@ -382,8 +398,8 @@ def default_stop_all(
     targets: list[tuple[str, Callable[[], None]]] = [
         ("controller", stop_controller),
     ]
-    for s in all_slices:
-        targets.append((f"slice:{s.slice_id}", s.terminate))
+    for listed in all_slices:
+        targets.append((f"slice:{listed.handle.slice_id}", listed.handle.terminate))
 
     logger.info("Terminating %d resource(s) in parallel", len(targets))
 

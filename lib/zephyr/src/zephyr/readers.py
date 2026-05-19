@@ -120,11 +120,18 @@ def iter_parquet_row_groups(
                 table = table.slice(local_start, local_end - local_start)
 
         if equality_predicates:
+            # Build a single combined AND mask so we filter once instead of
+            # copying the table N times for N predicates. Drop predicate-only
+            # columns before filtering — drop is metadata-only, so doing it
+            # first keeps the filter copy from materializing columns we are
+            # about to discard.
+            mask = None
             for col_name, value in equality_predicates.items():
-                mask = pa.compute.equal(table.column(col_name), value)
-                table = table.filter(mask)
+                col_mask = pa.compute.equal(table.column(col_name), value)
+                mask = col_mask if mask is None else pa.compute.and_(mask, col_mask)
             if drop_columns:
                 table = table.drop(drop_columns)
+            table = table.filter(mask)
 
         if len(table) > 0:
             yield table
@@ -210,10 +217,14 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     """Load a JSONL file and yield parsed records as dictionaries.
 
     If the input file is compressed (.gz, .zst, .xz), it will be automatically
-    decompressed during loading.
+    decompressed during loading. When given an InputFileSpec, ``filter_expr``
+    and ``columns`` are honored at read time (mirroring ``load_parquet`` /
+    ``load_vortex``); ``row_start`` / ``row_end`` are ignored because JSONL
+    has no random-access index.
 
     Args:
-        source: Path to JSONL file or InputFileSpec containing the path.
+        source: Path to JSONL file or InputFileSpec containing the path,
+            optional filter expression, and optional column projection.
             Supports: local paths, gs://, s3://, hf://datasets/{repo}@{rev}/{path}
 
     Yields:
@@ -236,13 +247,21 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
     """
     spec = _as_spec(source)
     decoder = msgspec.json.Decoder()
+    filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
+    columns = spec.columns
 
     with open_file(spec.path, "rt") as f:
         for line in f:
             line = line.strip()
-            if line:
-                counters.increment("zephyr/records_in")
-                yield decoder.decode(line)
+            if not line:
+                continue
+            record = decoder.decode(line)
+            if filter_fn is not None and not filter_fn(record):
+                continue
+            if columns is not None:
+                record = {k: record[k] for k in columns if k in record}
+            counters.increment("zephyr/records_in")
+            yield record
 
 
 def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
@@ -402,15 +421,7 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
     elif spec.path.endswith(".vortex"):
         yield from load_vortex(spec)
     else:
-        # For JSONL, apply filter and column selection manually
-        filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
-        for record in load_jsonl(spec):
-            if filter_fn is not None and not filter_fn(record):
-                continue
-            if spec.columns is not None:
-                yield {k: record[k] for k in spec.columns if k in record}
-            else:
-                yield record
+        yield from load_jsonl(spec)
 
 
 def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterator[dict]:

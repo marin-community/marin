@@ -643,6 +643,7 @@ def resolve_executor_step(
             original,
             deps=deps or list(original.deps),
             override_output_path=original.output_path,
+            resources=original.resources,
         )
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
@@ -685,6 +686,7 @@ def resolve_executor_step(
         deps=deps or [],
         override_output_path=output_path,
         fn=final_fn,
+        resources=step.resources,
     )
 
 

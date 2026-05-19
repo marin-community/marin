@@ -14,18 +14,21 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from iris.cluster.constraints import WellKnownAttribute
-from iris.cluster.controller.schema import EndpointRow
+from iris.cluster.controller.projections.endpoints import EndpointRow
+from iris.cluster.controller.reads import ReservationClaim
+from iris.cluster.controller.schema import jobs_table, tasks_table
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
     HeartbeatApplyRequest,
-    ReservationClaim,
     TaskUpdate,
 )
 from iris.cluster.types import JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging import timing
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import select
+from sqlalchemy import update as sa_update
 
 from tests.cluster.controller.replay.events import (
     AddEndpoint,
@@ -194,22 +197,22 @@ def _submit(
 
 
 def _task_ids(transitions: ControllerTransitions, job_id: JobName) -> list[JobName]:
-    with transitions._store.read_snapshot() as snap:
-        rows = snap.fetchall(
-            "SELECT task_id FROM tasks WHERE job_id = ? ORDER BY task_index ASC",
-            (job_id.to_wire(),),
-        )
-    return [JobName.from_wire(str(row["task_id"])) for row in rows]
+    with transitions._db.read_snapshot() as snap:
+        rows = snap.execute(
+            select(tasks_table.c.task_id)
+            .where(tasks_table.c.job_id == job_id.to_wire())
+            .order_by(tasks_table.c.task_index.asc())
+        ).all()
+    return [JobName.from_wire(str(row.task_id)) for row in rows]
 
 
 def _current_attempt(transitions: ControllerTransitions, task_id: JobName) -> int:
-    with transitions._store.read_snapshot() as snap:
-        row = snap.fetchone(
-            "SELECT current_attempt_id FROM tasks WHERE task_id = ?",
-            (task_id.to_wire(),),
-        )
+    with transitions._db.read_snapshot() as snap:
+        row = snap.execute(
+            select(tasks_table.c.current_attempt_id).where(tasks_table.c.task_id == task_id.to_wire())
+        ).first()
     assert row is not None, f"task missing: {task_id}"
-    return int(row["current_attempt_id"])
+    return int(row.current_attempt_id)
 
 
 # ---------------------------------------------------------------------------
@@ -466,11 +469,8 @@ def scenario_prune_old_data(transitions: ControllerTransitions, clock: FrozenClo
         ),
     )
     # Backdate finished_at so the prune sweep picks it up.
-    with transitions._store.transaction() as cur:
-        cur.execute(
-            "UPDATE jobs SET finished_at_ms = 1 WHERE job_id = ?",
-            (job_id.to_wire(),),
-        )
+    with transitions._db.transaction() as cur:
+        cur.execute(sa_update(jobs_table).where(jobs_table.c.job_id == job_id.to_wire()).values(finished_at_ms=1))
     # Advance the clock so retention math classifies the row as old.
     clock.advance_ms(10_000)
     # Direct call: prune_old_data is intentionally not an IrisEvent.
