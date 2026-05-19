@@ -457,7 +457,6 @@ class Dataset(Generic[T]):
             Dataset.from_list(ctx.sql(query).execute_stream_partitioned())
             .flat_map(_flatten_records)
          )
-        return Dataset.from_iterable(iter_records())
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
