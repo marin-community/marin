@@ -168,21 +168,15 @@ def test_lora_adapter_base_reference_requires_zero_initial_delta():
         _validate_dpo_config(config)
 
 
-def test_lora_adapter_base_reference_accepts_zero_init_b():
+@pytest.mark.parametrize(
+    "zero_init_b,a_init_mode",
+    [(True, "random"), (False, "zero")],
+)
+def test_lora_adapter_base_reference_accepts_one_zero_factor(zero_init_b, a_init_mode):
     config = TrainDpoConfig(
         model=_tiny_gpt2_config(),
         reference=AdapterBaseReferenceConfig(),
-        adapter=LoraAdaptationConfig(zero_init_b=True, a_init_mode="random"),
-    )
-
-    _validate_dpo_config(config)
-
-
-def test_lora_adapter_base_reference_accepts_zero_a_init():
-    config = TrainDpoConfig(
-        model=_tiny_gpt2_config(),
-        reference=AdapterBaseReferenceConfig(),
-        adapter=LoraAdaptationConfig(zero_init_b=False, a_init_mode="zero"),
+        adapter=LoraAdaptationConfig(zero_init_b=zero_init_b, a_init_mode=a_init_mode),
     )
 
     _validate_dpo_config(config)
