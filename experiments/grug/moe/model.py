@@ -72,6 +72,9 @@ class GrugModelConfig:
     router_z_loss_coef: float = 0.001
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Per-head RMSNorm on the attention context vector (post-XSA, pre-gate).
+    # Weight shape is [num_heads, head_dim], initialized to ones.
+    use_context_norm: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -113,18 +116,23 @@ class CausalSelfAttention(eqx.Module):
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
+    context_norm: Float[Array, "N H"] | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
+        context_norm: jax.Array | None = None
+        if cfg.use_context_norm:
+            context_norm = reshard(jnp.ones((n, h), dtype=jnp.float32), P("model", None))
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            context_norm=context_norm,
             cfg=cfg,
         )
 
@@ -149,6 +157,13 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
+        # Per-head context RMSNorm: normalize over head_dim, then learned scale [N, H].
+        if self.context_norm is not None:
+            dtype = attn_out.dtype
+            x_f32 = attn_out.astype(jnp.float32)
+            variance = jnp.mean(jnp.square(x_f32), axis=-1, keepdims=True)
+            normed = x_f32 * jax.lax.rsqrt(variance + self.cfg.layer_norm_eps)
+            attn_out = (normed * self.context_norm).astype(dtype)
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
