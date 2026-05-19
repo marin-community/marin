@@ -1,5 +1,15 @@
 # duplication — detector prompt
 
+## AGENTS.md anchor
+
+§ Code Reuse — search the codebase for existing implementations before
+writing helpers; do not create parallel implementations. § Code Style —
+prefer small concrete helpers over abstraction that adds indirection
+without reuse. Companion detector per `lint.md` precedence: `dead-code`
+owns parallel implementations where one path is flag-gated for removal;
+this detector owns the case where both paths are permanent and the right
+fix is a shared helper.
+
 ## What to look for
 
 Flag functions, blocks, or logic patterns that appear multiple times in the same file or across closely related call sites and could be consolidated into a helper. This includes copy-paste code blocks, identical error handling boilerplate, repeated test case structures (requesting parametrization), and configuration duplication across similar modules.

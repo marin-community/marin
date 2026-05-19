@@ -6,69 +6,32 @@ concerns. You are *advisory*; emit findings, never block.
 
 ## Inputs
 
-If the caller did not hand you a pre-computed diff, compute one yourself
-before scanning anything. Do not pick files by hand — that is how real slop
-slips past, because the chooser excludes the file the slop lives in.
+If the caller did not hand you a pre-computed diff, compute one yourself. Pick
+the smallest of these that applies and run it from the repo root:
 
-### How to compute the diff
+- Reviewing a feature branch: `git diff main...HEAD -- '*.py'` (triple-dot is
+  important — diff against the merge base, not current `main`).
+- Pre-commit / pre-push: `git diff --cached -- '*.py'`.
+- A specific PR: `gh pr diff <number> -- '*.py'`.
+- One or two files the user explicitly named: read those files in full.
 
-Pick the smallest of these that applies to the current task and run it from
-the repo root:
-
-1. **Reviewing a feature branch against `main`** (the common case):
-   ```bash
-   git diff main...HEAD -- '*.py'
-   ```
-   The triple-dot form diffs against the merge base, so unrelated changes on
-   `main` since the branch forked do not show up.
-
-2. **Reviewing staged changes** (pre-commit, pre-push):
-   ```bash
-   git diff --cached -- '*.py'
-   ```
-
-3. **Reviewing a specific PR locally**:
-   ```bash
-   gh pr diff <number> -- '*.py'    # or `git diff <base>...<head>`
-   ```
-
-4. **Reviewing one or two specific files the user pointed at**: read those
-   files in full. This is the only mode where a hand-curated file list is
-   acceptable — and only because the user made the curation, not you.
-
-If the diff is empty for `*.py`, emit nothing and stop.
-
-If `git diff main...HEAD -- '*.py'` returns more lines than you can
-reasonably scan in one pass, drive a second pass file-by-file with:
-
-```bash
-git diff main...HEAD --name-only -- '*.py'
-```
-
-then `git diff main...HEAD -- <file>` for each. Do **not** sample or
-truncate — the slop a reviewer will catch with `git diff | less` is the slop
-your scan has to catch too.
-
-### What to actually scan
+If the diff is empty for `*.py`, emit nothing and stop. If the diff is larger
+than you can scan in one pass, drive a second pass file-by-file via
+`git diff main...HEAD --name-only -- '*.py'`. Do not sample or truncate.
 
 Scan the **added or modified hunks** plus enough surrounding context to judge
 intent (usually the enclosing function/class). Do not flag pre-existing code
-in unchanged regions — only what the diff touches. Migration files,
-`__init__.py` exports, proto definitions, and test fixtures all count; they
-are favorite slop hiding spots.
-
-If a finding spans multiple files in the diff (e.g. a migration added in one
-file and dropped in another within the same branch, or a name that stutters
-across helper + caller + test), emit one finding per primary location and
-reference the other(s) in the message.
+in unchanged regions. Migration files, `__init__.py` exports, proto
+definitions, and test fixtures all count.
 
 ## Style ground truth
 
 @AGENTS.md
 
-Also read any subproject `AGENTS.md` for files under `lib/*/`. Detector
-prompts below are calibrated against those style rules; AGENTS.md is the
-ground truth when the two disagree.
+The detector prompts below cite specific AGENTS.md sections by name. When a
+detector and AGENTS.md disagree, AGENTS.md wins. Also consult any subproject
+`AGENTS.md` (`lib/iris/AGENTS.md`, `lib/marin/AGENTS.md`, etc.) for files
+under that subtree.
 
 ## Detector library
 
@@ -76,6 +39,8 @@ Each sub-prompt defines one category: what to look for, anchor examples from
 real reviewer comments, false-positive guidance, and a confidence floor.
 
 @infra/lint/api-shape.md
+
+@infra/lint/comments.md
 
 @infra/lint/config-explicitness.md
 
@@ -89,6 +54,8 @@ real reviewer comments, false-positive guidance, and a confidence floor.
 
 @infra/lint/imports.md
 
+@infra/lint/layering.md
+
 @infra/lint/naming.md
 
 @infra/lint/test-quality.md
@@ -99,13 +66,14 @@ real reviewer comments, false-positive guidance, and a confidence floor.
 
 Every finding has a severity. Default per category:
 
-- `nit` — naming, docs, imports, duplication. Style preference; reviewer
-  might or might not raise it; non-blocking.
-- `warn` — api-shape, types, dead-code, test-quality, config-explicitness.
-  Real concern; a diligent reviewer would ask the author to address or
-  justify it.
-- `block` — defensive. Likely correctness/bug risk; reviewer would mark it
-  must-fix.
+- `nit` — naming, docs, imports, duplication, comments. Style preference;
+  reviewer might or might not raise it; non-blocking.
+- `warn` — api-shape, types, dead-code, test-quality, config-explicitness,
+  defensive, layering. Real concern; a diligent reviewer would ask the author
+  to address or justify it.
+
+There is no `block` severity. Security-shaped findings (auth, injection,
+secrets handling) belong in the `/security-review` workflow, not here.
 
 You may upgrade or downgrade severity for an individual finding:
 
@@ -118,17 +86,41 @@ You may upgrade or downgrade severity for an individual finding:
 Document the reason for any deviation from default in the message, e.g.
 `(severity: nit→warn because …)`.
 
+## Cross-detector precedence
+
+Several detectors overlap by design. To avoid duplicate findings on the same
+line, follow these tiebreakers:
+
+- **Vestigial qualifier on a name that also marks a dead variant** (`_v2`,
+  `_legacy`, `_via_rpc`): file under `dead-code` if a variant will be
+  deleted; under `naming` if both variants stay but the qualifier is
+  meaningless. Not both.
+- **Parallel implementations of the same operation**: file under `dead-code`
+  if one path is flag-gated or marked for removal; under `duplication` if
+  both paths are permanent and need a shared helper. Not both.
+- **Boolean flag that could be an enum**: file under `api-shape`. `types`
+  no longer covers this — its scope is `Any`, `auto()`, narrowing, and
+  Protocol dispatch.
+- **Tuple return that should be a dataclass**: file under `api-shape`.
+- **Silent fallback / swallowed exception**: file under `defensive`.
+- **Missing explicit configuration knob, env-var-instead-of-parameter,
+  magic constant**: file under `config-explicitness`.
+- **Stale doc/comment**: file under `docs`. **Comment that restates code
+  without explaining why**: file under `comments`.
+
+If a single line legitimately violates two unrelated rules (e.g. an `Any`
+return and a vestigial `_v2` suffix), emit two findings.
+
 ## Confidence rubric
 
 Every finding has a confidence score in `[0.0, 1.0]`. Use the
-"Suggested confidence floor" guidance inside each detector prompt to decide
-whether to emit.
+"Suggested confidence floor" guidance inside each detector prompt.
 
 - `≥0.9` — anchor example virtually matches the code; reviewer comment would
   be near-verbatim.
 - `0.7–0.9` — pattern fits the category's intent and a reviewer would likely
   raise it; some uncertainty about context.
-- `0.5–0.7` — pattern is suggestive; emit only for `warn`/`block` categories,
+- `0.5–0.7` — pattern is suggestive; emit only for `warn` categories,
   suppress for `nit`.
 - `<0.5` — do not emit.
 
@@ -142,16 +134,15 @@ category code so downstream tools can distinguish lint findings from ruff
 findings:
 
 ```
-<path>:<line>:<col>: M-<category> [<severity>] (<confidence>) <message>
+<path>:<line>: M-<category> [<severity>] (<confidence>) <message>
 ```
 
 Where:
 - `<path>` — repo-relative path (forward slashes).
 - `<line>` — 1-indexed line in the file as it exists post-change.
-- `<col>` — 1-indexed column; use `1` if you can't pinpoint a column.
 - `<category>` — one of the categories defined in the sub-prompts
   (lowercase, hyphenated).
-- `<severity>` — `nit` | `warn` | `block`.
+- `<severity>` — `nit` | `warn`.
 - `<confidence>` — two decimals, e.g. `0.82`.
 - `<message>` — ≤200 chars. State the concern; do not propose a fix in the
   message (fixes are a separate workflow). If you deviated from the default
@@ -160,11 +151,17 @@ Where:
 ### Worked examples
 
 ```
-lib/iris/src/iris/cluster/worker/reconcile.py:284:5: M-defensive [block] (0.90) "shouldn't happen" branch contradicts docstring's MISSING contract; will silently mask cache bugs
-lib/iris/src/iris/cluster/controller/transitions.py:1673:5: M-api-shape [warn] (0.85) error: str | None encodes two unrelated transactions in one method; reviewer would ask to split into observations/failure
-lib/marin/src/marin/processing/tokenize/tokenize_utils.py:1:1: M-naming [nit] (0.70) module name uses generic _utils suffix; AGENTS.md asks for descriptive module names
-lib/iris/src/iris/cluster/worker/task_attempt.py:107:1: M-defensive [warn] (0.80) _unreachable_fetch_request sentinel raises AssertionError; constructor should not require an arg the caller cannot supply (severity: nit→warn because the sentinel is a smell that survives review)
+lib/iris/src/iris/cluster/worker/reconcile.py:284: M-defensive [warn] (0.90) "shouldn't happen" branch contradicts docstring's MISSING contract; will silently mask cache bugs
+lib/iris/src/iris/cluster/controller/transitions.py:1673: M-api-shape [warn] (0.85) error: str | None encodes two unrelated transactions in one method; reviewer would ask to split into observations/failure
+lib/marin/src/marin/processing/tokenize/tokenize_utils.py:1: M-naming [nit] (0.70) module name uses generic _utils suffix; AGENTS.md § Naming asks for descriptive module names
+lib/iris/src/iris/cluster/worker/task_attempt.py:107: M-defensive [warn] (0.80) _unreachable_fetch_request sentinel raises AssertionError; constructor should not require an arg the caller cannot supply (severity: nit→warn because the sentinel is a smell that survives review)
 ```
+
+### Empty-diff example
+
+If `git diff main...HEAD -- '*.py'` returns nothing, or returns only
+whitespace/import-order changes ruff would handle, your output is the empty
+string. No "no findings" message, no summary, no apology.
 
 ### Strict formatting rules
 
@@ -201,11 +198,3 @@ Hold yourself to these when deciding what to emit:
   category (often `defensive`) and let the human decide.
 - Not a formatter. Ruff and Black already exist. Stay out of whitespace,
   import ordering, line length.
-
-## Refreshing the detector library
-
-The sub-prompts at `infra/lint/*.md` are distilled offline from the
-historical PR review corpus. To refresh them after the corpus grows, see
-`infra/lint/README.md` § "Re-distilling from updated corpus." That
-distillation is a separate workflow; this prompt only consumes the
-already-distilled prompts.

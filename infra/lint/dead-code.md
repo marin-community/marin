@@ -1,5 +1,16 @@
 # dead-code — detector prompt
 
+## AGENTS.md anchor
+
+§ Code Style — "Delete dead code: unused parameters, stale options, old
+experiments." § Deprecation — "NO BACKWARD COMPATIBILITY: Update all call
+sites instead. Only add compatibility shims if the user explicitly requests
+it." § Code Style — avoid backwards-compatibility hacks like `// removed`
+comments, renamed `_unused` vars, etc. Companion detectors per `lint.md`
+precedence: `naming` owns vestigial qualifiers on the only surviving
+variant; `duplication` owns parallel implementations that are both meant to
+stay.
+
 ## What to look for
 
 Flag code that is unused, stale, or no longer necessary: dead imports and unused parameters; leftover scaffolding, commented-out code, and experiment markers; obsolete branches and stale configuration flags; test cases that no longer validate meaningful behavior after upstream changes.

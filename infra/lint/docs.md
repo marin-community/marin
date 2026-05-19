@@ -1,7 +1,15 @@
 # docs — detector prompt
 
+## AGENTS.md anchor
+
+§ Documentation — "Keep MkDocs content in sync with code." § Comments —
+"Delete stale comments immediately on discovery." Companion detector per
+`lint.md` precedence: `comments` owns vacuous comments that restate the
+code; this detector owns docs/comments that are *stale or contradictory*
+with the current behavior.
+
 ## What to look for
-Flag code with outdated, incomplete, or misleading documentation. This includes docstrings describing old behavior, comments that restate code without explaining why, and functions documented as read-only but mutating state.
+Flag code with outdated, incomplete, or misleading documentation. This includes docstrings describing old behavior and functions documented as read-only but mutating state. Vacuous "comment restates the line below" findings belong in `comments`, not here.
 
 ## Anchor examples
 

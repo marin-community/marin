@@ -5,28 +5,8 @@ point is `infra/lint.md`, which `@`-includes every file in this directory
 along with the severity / confidence rubric and output format.
 
 This is not a static rule catalog — each detector is a curated prompt
-distilled from real review comments in this repo's history.
-
-## Where the prompts came from
-
-Distilled offline from `pr_reviews.db` (a local export of historical PR
-review comments). The methodology:
-
-1. **Filter to humans.** Bot authors (`chatgpt-codex-connector[bot]`,
-   `claude[bot]`, `Copilot`, `github-advanced-security[bot]`,
-   `ravwojdyla-agent`) are excluded; they over-flag patterns existing tools
-   already catch and would dominate the corpus by raw count (~48%).
-2. **Carve the corpus by category.** Each category gets keyword-filtered
-   SQL queries to surface the relevant subset (~5-80 comments per category).
-3. **Distill with a Haiku sub-agent per category.** Each agent reads its
-   slice and produces:
-   - A "what to look for" intent paragraph.
-   - 5-8 anchor examples (quoted reviewer language + inferred code shape).
-   - False-positive guidance (when the pattern is acceptable).
-   - A confidence-floor recommendation.
-
-The distillation is offline + monthly-ish; runtime is just `prompt + diff
-→ findings`. No retrieval, no embeddings, no vector DB.
+that pairs an AGENTS.md style rule with anchor examples lifted from real
+PR review comments.
 
 ## How to run the detector
 
@@ -44,7 +24,7 @@ git diff main...HEAD | claude -p "$(cat infra/lint.md)" --add-dir .
 
 Output format (ruff-compatible, defined in `infra/lint.md`):
 ```
-<path>:<line>:<col>: M-<category> [<severity>] (<confidence>) <message>
+<path>:<line>: M-<category> [<severity>] (<confidence>) <message>
 ```
 
 Detector is *advisory*. It never blocks a push. A pre-push hook can surface
@@ -57,6 +37,10 @@ Each sub-prompt is plain Markdown with this structure:
 
 ```markdown
 # <category> — detector prompt
+
+## AGENTS.md anchor
+<one line citing the rule(s) this detector enforces, e.g.
+"AGENTS.md § API Design, § Types & Data Structures">
 
 ## What to look for
 <2-3 sentences. "Flag code that ...">
@@ -77,35 +61,31 @@ One sentence on when to raise the bar.
 Stay under ~500 words per file. `lint.md` `@`-includes all of them; the
 total system-prompt budget is ~6K tokens.
 
-Cross-prompt overlap is intentional — `types` and `api-shape` both flag
-bool→enum from different angles; `defensive` and `config-explicitness`
-both touch silent fallbacks. At runtime the model sees all relevant frames
-and picks one.
+Each detector should cite the AGENTS.md section it enforces by name, not
+re-paraphrase the rule. AGENTS.md is the single source of truth; if it
+changes, the detector inherits the change automatically. Detectors exist
+to add anchor examples and false-positive guidance the bare rule doesn't.
+
+## Cross-detector overlap
+
+Several categories touch adjacent surface — bool→enum sits between
+`api-shape` and `types`, silent fallback sits between `defensive` and
+`config-explicitness`, vestigial qualifiers sit between `naming` and
+`dead-code`. `infra/lint.md` § "Cross-detector precedence" assigns one
+canonical home per overlapping shape so the runtime doesn't emit duplicate
+findings. When adding a new category, update that section.
 
 ## Adding a new category
 
-1. Write `infra/lint/<category>.md` following the format above.
-2. Anchor with quoted reviewer language from real corpus comments. Don't
-   invent patterns the corpus doesn't show — false-positive cost is high.
-3. Add a corresponding `@infra/lint/<category>.md` line to `infra/lint.md`
+1. Write `infra/lint/<category>.md` following the format above. Cite the
+   AGENTS.md rule by section; anchor with quoted reviewer language; supply
+   false-positive guidance.
+2. Add a corresponding `@infra/lint/<category>.md` line to `infra/lint.md`
    under the "Detector library" section so the include picks it up.
-4. Update the severity rubric in `lint.md` to assign a default severity
-   (`nit` / `warn` / `block`) for the new category.
-
-## Re-distilling from updated corpus
-
-When `pr_reviews.db` is refreshed (monthly cadence is fine):
-
-```bash
-./scripts/distill_lint_prompts.py --category <name>  # re-run one category
-./scripts/distill_lint_prompts.py --all              # re-run all categories
-```
-
-The distillation script fans out one Haiku sub-agent per category, each
-with the same instructions used to bootstrap this library. Review the
-diffs before merging — distillations vary slightly across runs. *(Script
-not yet written; see `infra/lint.md` history for the agent template that
-seeded the current library.)*
+3. Assign a default severity (`nit` / `warn`) in the severity rubric in
+   `lint.md`.
+4. If the new category overlaps an existing one, add a tiebreaker bullet
+   under "Cross-detector precedence" in `lint.md`.
 
 ## Versioning
 
