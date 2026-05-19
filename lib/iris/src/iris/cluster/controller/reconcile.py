@@ -25,12 +25,12 @@ class ReconcileRow:
 
 
 @dataclass(frozen=True)
-class WorkerReconcileInputs:
-    """All state needed to decide one worker's next desired set."""
+class ReconcileInputs:
+    """Snapshot driving one reconcile tick across all active workers."""
 
-    worker_id: WorkerId
-    rows: list[ReconcileRow]
     job_specs: dict[JobName, job_pb2.RunTaskRequest]
+    worker_ids: list[WorkerId]
+    rows_by_worker: dict[WorkerId, list[ReconcileRow]]
 
 
 @dataclass(frozen=True)
@@ -62,14 +62,22 @@ _TERMINAL_EXPECTED_STATES: frozenset[int] = TERMINAL_TASK_STATES - {
 }
 
 
-def reconcile_worker(inputs: WorkerReconcileInputs) -> WorkerReconcilePlan:
-    """Pure function: compute the reconcile plan for one worker."""
+def reconcile_workers(inputs: ReconcileInputs) -> list[WorkerReconcilePlan]:
+    """Compute one reconcile plan per worker from a batch snapshot."""
+    return [_reconcile_worker(wid, inputs.rows_by_worker.get(wid, []), inputs.job_specs) for wid in inputs.worker_ids]
+
+
+def _reconcile_worker(
+    worker_id: WorkerId,
+    rows: list[ReconcileRow],
+    job_specs: dict[JobName, job_pb2.RunTaskRequest],
+) -> WorkerReconcilePlan:
     desired: list[worker_pb2.Worker.DesiredAttempt] = []
 
-    for row in inputs.rows:
+    for row in rows:
         wire_task_id = row.task_id.to_wire()
         if row.task_state in _ASSIGNED_STATES:
-            spec = inputs.job_specs.get(row.job_id)
+            spec = job_specs.get(row.job_id)
             if spec is None:
                 # Reservation holder or job disappeared mid-tick; the
                 # scheduler reissues on a subsequent tick.
@@ -125,9 +133,9 @@ def reconcile_worker(inputs: WorkerReconcileInputs) -> WorkerReconcilePlan:
         # Unrecognised states are omitted from desired.
 
     return WorkerReconcilePlan(
-        worker_id=inputs.worker_id,
+        worker_id=worker_id,
         request=worker_pb2.Worker.ReconcileRequest(
-            worker_id=inputs.worker_id,
+            worker_id=worker_id,
             desired=desired,
         ),
     )

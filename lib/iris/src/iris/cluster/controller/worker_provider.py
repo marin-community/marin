@@ -46,7 +46,7 @@ class _LegacyDispatch:
     """Legacy three-list wire payload derived from a reconcile plan."""
 
     worker_id: WorkerId
-    address: str | None
+    address: str
     start_tasks: list[job_pb2.RunTaskRequest]
     expected_tasks: list[RunningTaskEntry]
     stop_tasks: list[str] = field(default_factory=list)
@@ -206,16 +206,6 @@ class WorkerProvider:
     ) -> _LegacyResult:
         """Push StartTasks (if any) then PollTasks for one worker."""
         async with sem:
-            if not dispatch.address:
-                err = f"Worker {dispatch.worker_id} has no address"
-                return _LegacyResult(
-                    worker_id=dispatch.worker_id,
-                    start_response=None,
-                    start_error=err if dispatch.start_tasks else None,
-                    poll_updates=None,
-                    poll_error=err,
-                )
-
             stub = self.stub_factory.get_stub(dispatch.address)
             start_response: worker_pb2.Worker.StartTasksResponse | None = None
             start_error: str | None = None
@@ -260,16 +250,10 @@ class WorkerProvider:
         self,
         sem: asyncio.Semaphore,
         plan: WorkerReconcilePlan,
-        address: str | None,
+        address: str,
     ) -> ReconcileResult:
         """Issue a single Reconcile RPC to one worker under the shared semaphore."""
         async with sem:
-            if not address:
-                return ReconcileResult(
-                    worker_id=plan.worker_id,
-                    observations=[],
-                    error=f"Worker {plan.worker_id} has no address",
-                )
             try:
                 if rule := chaos("controller.reconcile"):
                     await asyncio.sleep(rule.delay_seconds)
@@ -287,14 +271,15 @@ class WorkerProvider:
     def reconcile_workers(
         self,
         plans: list[WorkerReconcilePlan],
-        addresses: dict[WorkerId, str | None],
+        addresses: dict[WorkerId, str],
         *,
         use_reconcile_rpc: bool,
     ) -> list[ReconcileResult]:
         """Fan out one reconcile pass across many workers under a single event loop.
 
-        Workers reconcile concurrently, capped at ``self.parallelism``. Dispatches
-        to the Reconcile RPC path or the legacy StartTasks+PollTasks path; both
+        Every ``plan.worker_id`` must be present in ``addresses``. Workers
+        reconcile concurrently, capped at ``self.parallelism``. Dispatches to
+        the Reconcile RPC path or the legacy StartTasks+PollTasks path; both
         branches return ``ReconcileResult``s directly.
         """
         if not plans:
@@ -306,14 +291,14 @@ class WorkerProvider:
     def _reconcile_all_via_rpc(
         self,
         plans: list[WorkerReconcilePlan],
-        addresses: dict[WorkerId, str | None],
+        addresses: dict[WorkerId, str],
     ) -> list[ReconcileResult]:
         """Fan out the Reconcile RPC across all workers."""
 
         async def _run() -> list[ReconcileResult]:
             sem = asyncio.Semaphore(self.parallelism)
             return await asyncio.gather(
-                *(self._reconcile_one_via_reconcile(sem, p, addresses.get(p.worker_id)) for p in plans)
+                *(self._reconcile_one_via_reconcile(sem, p, addresses[p.worker_id]) for p in plans)
             )
 
         return asyncio.run(_run())
@@ -321,7 +306,7 @@ class WorkerProvider:
     def _reconcile_all_via_legacy(
         self,
         plans: list[WorkerReconcilePlan],
-        addresses: dict[WorkerId, str | None],
+        addresses: dict[WorkerId, str],
     ) -> list[ReconcileResult]:
         """Fan out legacy StartTasks+PollTasks across all workers and synthesize
         proto observations from each per-worker result.
@@ -350,7 +335,7 @@ class WorkerProvider:
             dispatches.append(
                 _LegacyDispatch(
                     worker_id=plan.worker_id,
-                    address=addresses.get(plan.worker_id),
+                    address=addresses[plan.worker_id],
                     start_tasks=start_tasks,
                     expected_tasks=expected_tasks,
                     stop_tasks=stop_tasks,

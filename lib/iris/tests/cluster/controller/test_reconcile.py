@@ -5,8 +5,8 @@
 
 Three layers, exercised in order:
 
-1. **Pure compute** — ``reconcile_worker`` builds a ``ReconcileRequest`` proto
-   from a ``WorkerReconcileInputs`` snapshot. No DB.
+1. **Pure compute** — ``reconcile_workers`` builds one ``ReconcileRequest``
+   proto per worker from a ``ReconcileInputs`` snapshot. No DB.
 2. **Wire & dispatch** — ``WorkerProvider.reconcile_workers`` fans out via a
    fake stub factory and synthesizes ``ReconcileResult.observations`` for both
    the ``Reconcile`` RPC wire (``use_reconcile_rpc=True``) and the legacy
@@ -23,11 +23,11 @@ from typing import Any
 
 import pytest
 from iris.cluster.controller.reconcile import (
+    ReconcileInputs,
     ReconcileResult,
     ReconcileRow,
-    WorkerReconcileInputs,
     WorkerReconcilePlan,
-    reconcile_worker,
+    reconcile_workers,
 )
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -135,16 +135,19 @@ def _row(task_state: int, *, task_id: str = "task-a", attempt_id: int = 0, job: 
     )
 
 
-def _inputs(
+def _plan_for(
     rows: list[ReconcileRow],
     *,
     job_specs: dict[JobName, job_pb2.RunTaskRequest] | None = None,
-) -> WorkerReconcileInputs:
-    return WorkerReconcileInputs(
-        worker_id=WorkerId(_W1),
-        rows=list(rows),
+) -> WorkerReconcilePlan:
+    """Run the pure-compute layer for one worker and return its plan."""
+    wid = WorkerId(_W1)
+    inputs = ReconcileInputs(
         job_specs=dict(job_specs or {}),
+        worker_ids=[wid],
+        rows_by_worker={wid: list(rows)},
     )
+    return reconcile_workers(inputs)[0]
 
 
 def _spec(image: str = "spec-image") -> job_pb2.RunTaskRequest:
@@ -152,7 +155,7 @@ def _spec(image: str = "spec-image") -> job_pb2.RunTaskRequest:
 
 
 def test_reconcile_worker_empty_rows_yields_empty_plan():
-    plan = reconcile_worker(_inputs([]))
+    plan = _plan_for([])
     assert plan.worker_id == WorkerId(_W1)
     assert plan.request.worker_id == _W1
     assert list(plan.request.desired) == []
@@ -160,7 +163,7 @@ def test_reconcile_worker_empty_rows_yields_empty_plan():
 
 def test_reconcile_worker_assigned_with_spec_emits_run_with_inline_spec():
     row = _row(job_pb2.TASK_STATE_ASSIGNED, attempt_id=7, job="job-a", task_id="task-a")
-    plan = reconcile_worker(_inputs([row], job_specs={_job_id("job-a"): _spec("custom-image")}))
+    plan = _plan_for([row], job_specs={_job_id("job-a"): _spec("custom-image")})
 
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
@@ -176,7 +179,7 @@ def test_reconcile_worker_assigned_with_spec_emits_run_with_inline_spec():
 
 def test_reconcile_worker_assigned_without_spec_is_omitted():
     """ASSIGNED with no cached job spec is dropped (scheduler reissues later)."""
-    plan = reconcile_worker(_inputs([_row(job_pb2.TASK_STATE_ASSIGNED, job="job-missing")], job_specs={}))
+    plan = _plan_for([_row(job_pb2.TASK_STATE_ASSIGNED, job="job-missing")], job_specs={})
     assert list(plan.request.desired) == []
 
 
@@ -186,7 +189,7 @@ def test_reconcile_worker_assigned_without_spec_is_omitted():
 )
 def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_state):
     """BUILDING / RUNNING: run intent but no inline spec (cache-hit invariant)."""
-    plan = reconcile_worker(_inputs([_row(task_state, attempt_id=3)]))
+    plan = _plan_for([_row(task_state, attempt_id=3)])
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
     assert desired.HasField("run")
@@ -206,7 +209,7 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
 )
 def test_reconcile_worker_terminal_rows_emit_run_without_inline_spec(task_state):
     """Worker-bound terminal rows stay expected until their attempt is finalized."""
-    plan = reconcile_worker(_inputs([_row(task_state, attempt_id=4)]))
+    plan = _plan_for([_row(task_state, attempt_id=4)])
 
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
@@ -223,7 +226,7 @@ def test_reconcile_worker_terminal_rows_emit_run_without_inline_spec(task_state)
     ],
 )
 def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected_reason):
-    plan = reconcile_worker(_inputs([_row(task_state, attempt_id=2)]))
+    plan = _plan_for([_row(task_state, attempt_id=2)])
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
     assert desired.HasField("stop")
@@ -239,7 +242,7 @@ def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected
     ],
 )
 def test_reconcile_worker_unrecognised_states_are_omitted(task_state):
-    plan = reconcile_worker(_inputs([_row(task_state)]))
+    plan = _plan_for([_row(task_state)])
     assert list(plan.request.desired) == []
 
 
@@ -251,7 +254,7 @@ def test_reconcile_worker_mixed_rows_per_axis():
         _row(job_pb2.TASK_STATE_KILLED, task_id="c", attempt_id=3, job="j3"),
         _row(job_pb2.TASK_STATE_SUCCEEDED, task_id="d", attempt_id=4, job="j4"),
     ]
-    plan = reconcile_worker(_inputs(rows, job_specs={_job_id("j1"): _spec("img-j1")}))
+    plan = _plan_for(rows, job_specs={_job_id("j1"): _spec("img-j1")})
 
     by_task = {d.task_id: d for d in plan.request.desired}
     assert set(by_task) == {
@@ -337,7 +340,7 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[WorkerProv
     return WorkerProvider(stub_factory=factory), stub
 
 
-def _reconcile_one(provider: WorkerProvider, plan: WorkerReconcilePlan, *, rpc: bool, address: str | None = _W1_ADDR):
+def _reconcile_one(provider: WorkerProvider, plan: WorkerReconcilePlan, *, rpc: bool, address: str = _W1_ADDR):
     return provider.reconcile_workers([plan], {WorkerId(_W1): address}, use_reconcile_rpc=rpc)
 
 
@@ -379,21 +382,6 @@ def test_reconcile_rpc_failure_returns_error_and_empty_observations():
 
     assert results[0].error == "boom"
     assert list(results[0].observations) == []
-
-
-def test_reconcile_rpc_missing_address_yields_error_without_call():
-    """WorkerProvider defensively handles None addresses with a per-worker error.
-
-    The controller no longer passes None — it filters to active healthy workers
-    which always have addresses — but the provider keeps this guard so a bad
-    callsite cannot crash the fan-out.
-    """
-    provider, stub = _provider_with_stub()
-
-    results = _reconcile_one(provider, _make_plan(_W1), rpc=True, address=None)
-
-    assert stub.reconcile_calls == []
-    assert results[0].error is not None and "no address" in results[0].error
 
 
 # --- Legacy wire (use_reconcile_rpc=False) -----------------------------------

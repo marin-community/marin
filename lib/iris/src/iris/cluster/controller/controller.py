@@ -75,10 +75,10 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile import (
+    ReconcileInputs,
     ReconcileRow,
-    WorkerReconcileInputs,
     WorkerReconcilePlan,
-    reconcile_worker,
+    reconcile_workers,
 )
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -2324,12 +2324,12 @@ class Controller:
     # Worker lifecycle RPC dispatch (Reconcile / Ping)
     # =========================================================================
 
-    def _snapshot_reconcile_inputs(self) -> tuple[list[WorkerReconcilePlan], dict[WorkerId, str]]:
-        """Snapshot the DB and compute pure reconcile plans for one tick."""
+    def _snapshot_reconcile_inputs(self) -> tuple[ReconcileInputs, dict[WorkerId, str]]:
+        """Snapshot the DB and assemble the reconcile inputs for one tick."""
         with self._db.read_snapshot() as snap:
             addresses = reads.list_active_healthy_workers(snap, self._health)
             if not addresses:
-                return [], {}
+                return ReconcileInputs(job_specs={}, worker_ids=[], rows_by_worker={}), {}
             worker_ids = list(addresses)
             # Snapshot current attempts for ``worker_ids``. Workers not in
             # ``worker_ids`` are filtered in Python so the partial index
@@ -2379,25 +2379,23 @@ class Controller:
         for row in rows:
             rows_by_worker[row.worker_id].append(row)
 
-        plans: list[WorkerReconcilePlan] = []
-        for wid in worker_ids:
-            inputs = WorkerReconcileInputs(
-                worker_id=wid,
-                rows=rows_by_worker[wid],
-                job_specs=templates_by_job,
-            )
-            plans.append(reconcile_worker(inputs))
-        return plans, addresses
+        # ``templates_by_job`` can carry ``None`` for jobs the scheduler hasn't
+        # cached yet; reconcile_worker checks the dict membership so feeding it
+        # the raw map is harmless. Filter Nones to keep the type tight.
+        job_specs = {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
+        inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
+        return inputs, addresses
 
     def _reconcile_worker_batch(self) -> None:
         """One polling-tick reconcile pass: snapshot, fan out, apply."""
         if self._config.dry_run:
             return
 
-        plans, addresses = self._snapshot_reconcile_inputs()
-        if not plans:
+        inputs, addresses = self._snapshot_reconcile_inputs()
+        if not inputs.worker_ids:
             return
 
+        plans = reconcile_workers(inputs)
         now = Timestamp.now()
         results = self._provider.reconcile_workers(
             plans,
