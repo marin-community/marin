@@ -4,9 +4,13 @@
 import os
 import tempfile
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jax.random as jrandom
+from chex import assert_trees_all_close
 
+from haliax import Axis
 from haliax.quantization import QuantizationConfig
 
 import levanter.main.train_lm as train_lm
@@ -15,7 +19,13 @@ from levanter.adaptation import LoraAdaptationConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.distributed import DistributedConfig
+from levanter.trainer_state import trainables_only
 from levanter.tracker import NoopConfig
+from test_utils import arrays_only
+
+
+def _array_leaves(tree):
+    return jax.tree_util.tree_leaves(arrays_only(tree))
 
 
 def test_train_lm():
@@ -113,6 +123,35 @@ def test_train_lm_with_lora_adapter():
                 os.unlink("wandb")
             except Exception:
                 pass
+
+
+def test_restore_lm_model_from_partial_checkpoint_recovers_base_model():
+    config = train_lm.LlamaConfig(
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=2,
+        max_seq_len=16,
+        hidden_dim=16,
+        attn_backend=None,
+    )
+    Vocab = Axis("vocab", 32)
+    base_key, wrong_base_key, adapter_key, wrong_adapter_key = jrandom.split(jrandom.PRNGKey(0), 4)
+
+    adapter = LoraAdaptationConfig(r=4)
+    trained_model = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
+    wrong_resume_skeleton = adapter.apply(config.build(Vocab, key=wrong_base_key), key=wrong_adapter_key)
+    correct_source_skeleton = adapter.apply(config.build(Vocab, key=base_key), key=wrong_adapter_key)
+    trainable_filter = adapter.trainable_filter(trained_model)
+
+    checkpointed_trainables = trainables_only(trained_model, trainable_filter)
+    wrong_resumed_model = eqx.combine(checkpointed_trainables, wrong_resume_skeleton)
+    restored_model = train_lm._restore_lm_model_from_partial_checkpoint(
+        wrong_resumed_model,
+        correct_source_skeleton,
+        trainable_filter,
+    )
+
+    assert_trees_all_close(_array_leaves(restored_model), _array_leaves(trained_model))
 
 
 def test_train_lm_direct_dataset():

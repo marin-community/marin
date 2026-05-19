@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+import equinox as eqx
 import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -30,6 +31,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
+from levanter.trainer_state import trainables_only
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
@@ -80,6 +82,49 @@ class TrainLmConfig:
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
+
+
+def _restore_lm_model_from_partial_checkpoint(
+    checkpointed_model: LmHeadModel,
+    source_model: LmHeadModel,
+    trainable_filter,
+) -> LmHeadModel:
+    checkpointed_trainables = trainables_only(checkpointed_model, trainable_filter)
+    return eqx.combine(checkpointed_trainables, source_model)
+
+
+def _load_lm_model_from_configured_source(
+    *,
+    config: TrainLmConfig,
+    converter,
+    Vocab: Axis,
+    model_key,
+    adapter_key,
+    parameter_axis_mapping,
+    trainer: Trainer,
+) -> LmHeadModel:
+    if config.initialize_from_hf:
+        assert converter is not None
+        model = converter.load_pretrained(
+            config.model.model_type,
+            config=config.model if not config.use_hf_model_config else None,
+            axis_mapping=parameter_axis_mapping,
+            dtype=trainer.mp.compute_dtype,
+        )
+        model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+    elif config.initialize_from_checkpoint_path is not None:
+        checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
+        model = config.model.build(Vocab, key=model_key)
+        model = load_checkpoint(model, checkpoint_path, subpath="model")
+        model = hax.shard(model, parameter_axis_mapping)
+        model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+    else:
+        model = config.model.build(Vocab, key=model_key)
+
+    if not isinstance(config.adapter, NoAdaptationConfig):
+        model = config.adapter.apply(model, key=adapter_key, axis_mapping=parameter_axis_mapping)
+
+    return model
 
 
 def main(config: TrainLmConfig):
@@ -211,18 +256,40 @@ def main(config: TrainLmConfig):
                 # this is a bit gross, but we want to free up the memory from the model we just built
                 state = dataclasses.replace(state, model=None)
                 gc.collect()
-                model = converter.load_pretrained(
-                    config.model.model_type,
-                    config=config.model if not config.use_hf_model_config else None,
-                    axis_mapping=parameter_axis_mapping,
-                    dtype=trainer.mp.compute_dtype,
+                model = _load_lm_model_from_configured_source(
+                    config=config,
+                    converter=converter,
+                    Vocab=Vocab,
+                    model_key=model_key,
+                    adapter_key=adapter_key,
+                    parameter_axis_mapping=parameter_axis_mapping,
+                    trainer=trainer,
                 )
-                model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
-                if not isinstance(config.adapter, NoAdaptationConfig):
-                    model = config.adapter.apply(model, key=adapter_key, axis_mapping=parameter_axis_mapping)
                 state = dataclasses.replace(state, model=model)
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
+        elif not isinstance(config.adapter, NoAdaptationConfig):
+            logger.info(
+                "Adapter checkpoints only store trainable weights. Reconstructing the base LM model from the "
+                "configured source before overlaying resumed adapter parameters."
+            )
+            source_model = _load_lm_model_from_configured_source(
+                config=config,
+                converter=converter,
+                Vocab=Vocab,
+                model_key=model_key,
+                adapter_key=adapter_key,
+                parameter_axis_mapping=parameter_axis_mapping,
+                trainer=trainer,
+            )
+            state = dataclasses.replace(
+                state,
+                model=_restore_lm_model_from_partial_checkpoint(
+                    state.model,
+                    source_model,
+                    config.adapter.trainable_filter(source_model),
+                ),
+            )
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
 

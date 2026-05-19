@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class AdaptationExportConfig:
     hf_save_path: str | None = None
-    hf_upload: bool | str | RepoRef = False
+    hf_upload: bool | str | RepoRef | None = False
     hf_save_steps: int | None = None
     hf_save_dtype: str | None = None
     generation_config: GenerationConfigDict | None = None
@@ -132,7 +132,7 @@ class NoAdaptationConfig(AdaptationConfig):
             save_hf_checkpoint_callback(
                 full_save_path,
                 converter,
-                upload_to_hf=export.hf_upload,
+                upload_to_hf=export.hf_upload or False,
                 save_dtype=save_dtype,
                 generation_config=export.generation_config,
             ),
