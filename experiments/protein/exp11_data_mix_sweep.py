@@ -34,7 +34,7 @@ v5p-32 because LR is calibrated to batch=512).
 Smoke usage::
 
     uv run iris --cluster=marin job run --user $USERNAME --no-wait \\
-        --job-name exp11-smoke-$(date +%Y%m%d-%H%M) \\
+        --job-name prot-exp11-smoke-$(date +%Y%m%d-%H%M) \\
         --region us-east5 --memory=3.5GB \\
         -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
         -e COMMAND run_smoke \\
@@ -62,6 +62,7 @@ from marin.training.training import extras_for_resources, resolve_training_env
 from rigging.filesystem import marin_prefix
 
 from experiments.defaults import _run_training_on_worker, prepare_lm_train
+from experiments.llama import compute_num_parameters
 from experiments.protein.protein_train_common import (
     PROTEIN_TOKENIZER,
     distance_bin_only_loss_weight,
@@ -176,7 +177,7 @@ def _tokenize_main(cells: list[Cell]) -> None:
         handles.append(
             client.submit(
                 JobRequest(
-                    name=f"exp11-tok-{cell.suffix}-{DATA_VERSION}",
+                    name=f"prot-exp11-tok-{cell.suffix}-{DATA_VERSION}",
                     entrypoint=Entrypoint.from_callable(_tokenize_one_cell, args=[cell]),
                     resources=TOKENIZE_RESOURCES,
                     environment=env,
@@ -226,6 +227,12 @@ def scaled_lr(batch_size: int, hidden_size: int) -> float:
 # Per source recipe; unchanged across stages.
 WEIGHT_DECAY: float = 0.01
 WARMUP: float = 0.1
+
+# Vocab size for the legacy ``timodonnell/protein-docs-tokenizer@83f597d88e9b``
+# revision (pinned in PROTEIN_TOKENIZER). Hardcoded so it lands in run-config
+# hashes / wandb tags; bump if the tokenizer pin changes. Matches the value
+# used in eac-plm's quality-splits sweep, but for the legacy 2840-vocab.
+PROTEIN_VOCAB_SIZE: int = 2840
 
 # Sequences carved off each train cell as an IID held-out eval. Matches the
 # eac-plm sweep default; ~4096 sequences ≈ 33.5M tokens / cell / eval pass.
@@ -571,8 +578,8 @@ def _print_tokenize_preview(suffixes: list[str]) -> None:
 # below; the dispatch table (`STAGE_SPECS`) and the worker / launcher pick it
 # up automatically. Bump ``version`` to fork run names (and the sweep-root
 # lock dir) when a stage's recipe changes but its identity doesn't.
-SWEEP_ROOT_PREFIX = "gs://marin-us-east5/sweeps/exp11-data-mix"
-RUN_NAME_PREFIX = "exp11-dm"
+SWEEP_ROOT_PREFIX = "gs://marin-us-east5/sweeps/prot-exp11-data-mix"
+RUN_NAME_PREFIX = "prot-exp11-dm"
 
 
 @dataclass(frozen=True)
@@ -621,7 +628,8 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         data_seed=DATA_SEED,
         env_vars={"WANDB_ENTITY": "timodonnell"},
     )
-    tokens_str = _fmt_count(spec.batch_size * SEQ_LEN * spec.num_train_steps)
+    params = compute_num_parameters(spec.model_config, PROTEIN_VOCAB_SIZE)
+    tokens = spec.batch_size * SEQ_LEN * spec.num_train_steps
     return prepare_lm_train(
         name=_trial_name(spec, mixture_id),
         tokenized=data,
@@ -635,7 +643,10 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
             "llama",
             spec.model_tag,
             mixture_id,
-            f"tokens={tokens_str}",
+            f"params={_fmt_count(params)}",
+            f"params_exact={params}",
+            f"tokens={_fmt_count(tokens)}",
+            f"tokens_exact={tokens}",
             f"steps={spec.num_train_steps}",
         ],
         eval_harness_tasks=[],
