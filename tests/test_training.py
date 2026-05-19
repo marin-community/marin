@@ -234,7 +234,10 @@ def test_output_path_temp_checkpoint_path_is_run_scoped(trainer_config):
         output_path="gs://bucket/checkpoints/dpo/example-run",
     )
 
-    with patch("marin.training.training.marin_temp_bucket", return_value="gs://tmp/ttl=14d/checkpoints-temp"):
+    with patch(
+        "marin.training.training.marin_temp_bucket",
+        return_value="gs://tmp/ttl=14d/checkpoints-temp/example-run",
+    ):
         updated = _enforce_run_id(_update_config_to_use_out_path(config))
 
     checkpointer = updated.train_config.trainer.checkpointer
