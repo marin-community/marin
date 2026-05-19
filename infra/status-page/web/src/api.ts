@@ -124,6 +124,7 @@ export interface ServiceHealthResponse {
   samples: ServiceHealthHistorySample[];
   summarySamples: ServiceHealthSummarySample[];
   aggregationWindowMs: number;
+  summaryPointIntervalMs: number;
   windowMs: number;
   fetchedAt: string;
 }
