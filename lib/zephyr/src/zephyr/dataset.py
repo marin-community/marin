@@ -442,7 +442,8 @@ class Dataset(Generic[T]):
             A Dataset of records.
 
         Example:
-            >>> ctx = SessionContext().register_parquet("mytable", "/input")
+            >>> ctx = SessionContext()
+            >>> ctx.register_parquet("mytable", "/input/")
             >>> ds = (Dataset
             ...     .from_query(ctx, '''SELECT * from mytable''')
             ...     .map(lambda r: transform_record(r))
