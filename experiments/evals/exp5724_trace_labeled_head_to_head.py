@@ -348,5 +348,5 @@ if __name__ == "__main__":
             marin_8b_instruct_hf,
             *eval_steps,
         ],
-        description="Repeatable 8B trace-labeled head-to-head on Qwen2.5, Qwen3, Llama3.1, and Marin.",
+        description="8B trace-labeled head-to-head on Qwen2.5, Qwen3, Llama3.1, and Marin.",
     )

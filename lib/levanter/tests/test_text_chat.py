@@ -368,6 +368,26 @@ def test_trace_chat_processor_can_label_only_explicit_message_tags(tokenizer: Ma
     assert (labels == TRACE_LABEL_OBSERVATION).sum() == 0
 
 
+def test_trace_chat_processor_rejects_malformed_text_tool_calls(tokenizer: MarinTokenizer):
+    processor = TraceChatProcessor(
+        tokenizer,
+        chat_template=TOOL_TEMPLATE,
+        loss_tags=("tool_call",),
+    )
+
+    with pytest.raises(ValueError, match="function name"):
+        processor(
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Call a tool."},
+                        {"role": "assistant", "content": '<tool_call>{"arguments": {"a": 1}}</tool_call>'},
+                    ]
+                }
+            ]
+        )
+
+
 def test_tool_call_masking_behavior(tokenizer: MarinTokenizer):
     processor = ChatProcessor(tokenizer, chat_template=TOOL_TEMPLATE, mask_user_turns=True)
 

@@ -3,6 +3,7 @@
 
 import json
 
+import pytest
 from fray.cluster import ResourceConfig
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.data.text import HfDatasetSourceConfig, TraceChatEvaluationFormat, UrlDatasetSourceConfig
@@ -97,7 +98,7 @@ def test_trace_row_adapter_adds_patch_and_outcome_targets(tmp_path):
         "trajectory": [
             {"role": "system", "system_prompt": "You are a coding agent."},
             {"role": "user", "content": [{"type": "text", "text": "Fix the bug."}]},
-            {"role": "ai", "text": "I will inspect the repo."},
+            {"role": "ai", "text": "I will inspect the repo.", "thinking": "Need to inspect failing tests."},
         ],
         "test_result": {"git_patch": "diff --git a/a.py b/a.py"},
         "resolved": False,
@@ -127,6 +128,7 @@ def test_trace_row_adapter_adds_patch_and_outcome_targets(tmp_path):
     assert adapted_row["messages"][0]["content"] == "You are a coding agent."
     assert adapted_row["messages"][1]["content"] == "Fix the bug."
     assert adapted_row["messages"][2]["role"] == "assistant"
+    assert adapted_row["messages"][2]["reasoning_content"] == "Need to inspect failing tests."
     assert adapted_row["messages"][-2] == {
         "role": "user",
         "content": DEFAULT_OUTCOME_JUDGE_PROMPT,
@@ -146,3 +148,24 @@ def test_trace_row_adapter_adds_patch_and_outcome_targets(tmp_path):
     assert "Final Patch:" in patch_text
     assert "diff --git" in patch_text
     assert "INCORRECT" in outcome_text
+
+
+def test_trace_row_adapter_requires_content_or_tool_calls(tmp_path):
+    row = {
+        "trajectory": [{"role": "assistant"}],
+        "resolved": True,
+    }
+    path = tmp_path / "traces.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+
+    dataset_config = TraceLabeledEvalDatasetConfig(
+        source=UrlDatasetSourceConfig(train_urls=[str(path)]),
+        split="train",
+        row_adapter=TraceRowAdapterConfig(
+            input_messages_field="trajectory",
+            outcome_field="resolved",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Trace message must include content"):
+        next(iter(_source_for_dataset(dataset_config)))

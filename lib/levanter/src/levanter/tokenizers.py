@@ -154,8 +154,6 @@ _GENERATION_SENTINEL_END = "__MARIN_GEN_END_7f3a9c__"
 _MESSAGE_SENTINEL_START = "__MARIN_MSG_START_7f3a9c_"
 _MESSAGE_SENTINEL_END = "__MARIN_MSG_END_7f3a9c_"
 _MESSAGE_INDEX_ATTR = "marin_message_index"
-_CHAT_TEMPLATE_BLOCK_RE = re.compile(r"({%-?.*?-?%})", re.DOTALL)
-_MESSAGE_LOOP_RE = re.compile(r"for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+messages\b")
 _MESSAGE_SENTINEL_RE = re.compile(
     rf"{re.escape(_MESSAGE_SENTINEL_START)}\d+__|{re.escape(_MESSAGE_SENTINEL_END)}\d+__"
 )
@@ -209,13 +207,53 @@ def _raise_chat_template_exception(message: str) -> None:
     raise jinja2.exceptions.TemplateError(message)
 
 
-def _chat_template_block_contents(block: str) -> str:
-    contents = block[2:-2]
-    if contents.startswith("-"):
-        contents = contents[1:]
-    if contents.endswith("-"):
-        contents = contents[:-1]
-    return contents.strip()
+def _block_name(block_tokens: list[tuple[str, str]]) -> str | None:
+    for token_type, value in block_tokens:
+        if token_type == "whitespace":
+            continue
+        if token_type == "name":
+            return value
+        return None
+    return None
+
+
+def _message_loop_variable(block_tokens: list[tuple[str, str]]) -> str | None:
+    tokens = [(token_type, value) for token_type, value in block_tokens if token_type != "whitespace"]
+    if len(tokens) < 4:
+        return None
+    if tokens[0] != ("name", "for") or tokens[2] != ("name", "in") or tokens[3] != ("name", "messages"):
+        return None
+    token_type, variable = tokens[1]
+    if token_type != "name":
+        return None
+    return variable
+
+
+def _chat_template_parts(chat_template: str) -> list[tuple[str, str, list[tuple[str, str]]]]:
+    env = _make_jinja_env([])
+    parts: list[tuple[str, str, list[tuple[str, str]]]] = []
+    block_text: list[str] | None = None
+    block_tokens: list[tuple[str, str]] = []
+
+    for _, token_type, value in env.lex(chat_template):
+        if token_type == "block_begin":
+            block_text = [value]
+            block_tokens = []
+            continue
+
+        if block_text is not None:
+            block_text.append(value)
+            if token_type == "block_end":
+                parts.append(("block", "".join(block_text), block_tokens))
+                block_text = None
+                block_tokens = []
+            else:
+                block_tokens.append((token_type, value))
+            continue
+
+        parts.append(("text", value, []))
+
+    return parts
 
 
 def _message_sentinel_template(prefix: str, loop_variable: str) -> str:
@@ -236,31 +274,40 @@ def _append_message_end_sentinel(parts: list[str], loop_variable: str) -> None:
 
 
 def _instrument_message_loop(chat_template: str) -> str:
-    parts = _CHAT_TEMPLATE_BLOCK_RE.split(chat_template)
+    """Add per-message sentinels around the top-level `{% for message in messages %}` body.
+
+    Hugging Face exposes assistant masks via `{% generation %}` blocks, but it does not expose
+    token spans for each rendered chat message. Trace-labeled eval needs those spans so it can
+    map source-message labels onto tokens after the tokenizer's chat template has added role
+    headers, separators, and tool-call formatting. We use Jinja's lexer to identify block
+    boundaries instead of regex-parsing the template language, then insert inert string
+    sentinels that are removed after tokenization.
+    """
+
+    parts = _chat_template_parts(chat_template)
     instrumented: list[str] = []
     message_loop_depth: int | None = None
     message_loop_variable = ""
 
-    for part in parts:
-        if not part:
-            continue
-        if not part.startswith("{%"):
-            instrumented.append(part)
+    for part_type, part, block_tokens in parts:
+        if part_type != "block":
+            if part:
+                instrumented.append(part)
             continue
 
-        block_contents = _chat_template_block_contents(part)
         if message_loop_depth is None:
-            loop_match = _MESSAGE_LOOP_RE.match(block_contents)
-            if loop_match is not None:
-                message_loop_variable = loop_match.group(1)
+            loop_variable = _message_loop_variable(block_tokens)
+            if loop_variable is not None:
+                message_loop_variable = loop_variable
                 instrumented.append(part)
                 instrumented.append(_message_sentinel_template(_MESSAGE_SENTINEL_START, message_loop_variable))
                 message_loop_depth = 1
                 continue
         else:
-            if block_contents.startswith("for "):
+            block_name = _block_name(block_tokens)
+            if block_name == "for":
                 message_loop_depth += 1
-            elif block_contents.startswith("endfor"):
+            elif block_name == "endfor":
                 message_loop_depth -= 1
                 if message_loop_depth == 0:
                     _append_message_end_sentinel(instrumented, message_loop_variable)
@@ -309,11 +356,13 @@ def _apply_chat_template_with_masks(
     return_message_spans: bool = False,
     **kwargs,
 ) -> dict[str, Any]:
-    """Render chat template for batched conversations, returning input_ids and assistant_masks.
+    """Render chat templates for batched conversations and return token-level masks.
 
-    Uses a jinja2 extension to wrap {% generation %}...{% endgeneration %} block content
-    with sentinel strings, then uses the sentinel positions to determine which tokens
-    correspond to assistant content.
+    The returned `assistant_masks` mark tokens rendered inside `{% generation %}` blocks.
+    When `return_message_spans` is set, the returned `message_spans` list contains
+    half-open token spans `(start, end)` for each source message after chat-template rendering.
+    These spans are used by trace-labeled evals to project per-message labels onto the exact
+    rendered prompt tokens, including role headers and tool-call formatting.
     """
     template_str = chat_template or tokenizer.chat_template
     if template_str is None:

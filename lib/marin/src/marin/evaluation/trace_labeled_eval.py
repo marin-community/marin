@@ -10,7 +10,7 @@ import os
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypeVar
+from typing import Any, TypeVar
 
 import equinox as eqx
 import fsspec
@@ -62,6 +62,7 @@ DEFAULT_DATASET_EVAL_MAX_ATTEMPTS = 3
 DEFAULT_DATASET_EVAL_RETRY_INITIAL_DELAY = 30.0
 DEFAULT_DATASET_EVAL_RETRY_MAX_DELAY = 300.0
 DEFAULT_HF_HUB_TIMEOUT = "60"
+DEFAULT_TRACE_LABELED_EVAL_TOKENIZER = "marin-community/marin-tokenizer"
 HF_HUB_TIMEOUT_ENV_VARS = (
     "HF_HUB_ETAG_TIMEOUT",
     "HF_HUB_DOWNLOAD_TIMEOUT",
@@ -84,11 +85,6 @@ class TraceRowAdapterConfig:
     positive_outcome_label: str = CORRECT_OUTCOME_LABEL
     negative_outcome_label: str = INCORRECT_OUTCOME_LABEL
     outcome_prompt: str = DEFAULT_OUTCOME_JUDGE_PROMPT
-    max_trace_messages: int | None = None
-    preserve_initial_trace_messages: int = 0
-    max_message_chars: int | None = None
-    max_patch_chars: int | None = None
-    truncation_side: Literal["left", "right"] = "right"
 
 
 @dataclass(frozen=True)
@@ -110,7 +106,7 @@ class TraceLabeledEvalConfig:
     name: str | None = None
     checkpoint_path: str | None = None
     checkpoint_is_hf: bool = False
-    tokenizer: str = "gpt2"
+    tokenizer: str = DEFAULT_TRACE_LABELED_EVAL_TOKENIZER
     model: LmConfig = field(default_factory=LlamaConfig)
     datasets: dict[str, TraceLabeledEvalDatasetConfig] = field(default_factory=dict)
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(mp=jmp.get_policy("c=bf16")))
@@ -201,6 +197,14 @@ def _normalize_message_content(value: Any) -> str:
     return json.dumps(value, sort_keys=True)
 
 
+def _normalize_reasoning_content(raw_message: Mapping[str, Any]) -> str | None:
+    for field_name in ("reasoning_content", "thinking", "thought", "reasoning"):
+        value = raw_message.get(field_name)
+        if value is not None:
+            return _normalize_message_content(value)
+    return None
+
+
 def _canonical_trace_role(role: Any) -> str:
     role_text = str(role or "user").strip().lower()
     if role_text in {"ai", "agent", "assistant"}:
@@ -229,12 +233,17 @@ def _normalize_trace_messages(raw_messages: Any) -> list[dict[str, Any]]:
             content = raw_message.get("text")
         if content is None and role == "system":
             content = raw_message.get("system_prompt")
+        if content is None and not raw_message.get("tool_calls"):
+            raise ValueError("Trace message must include content, text, system_prompt, or tool_calls.")
 
         message: dict[str, Any] = {
             "role": role,
             "content": _normalize_message_content(content),
         }
-        for key in ("name", "tool_call_id", "tool_calls", "reasoning_content", "loss_tags"):
+        reasoning_content = _normalize_reasoning_content(raw_message)
+        if reasoning_content:
+            message["reasoning_content"] = reasoning_content
+        for key in ("name", "tool_call_id", "tool_calls", "loss_tags"):
             value = raw_message.get(key)
             if value is not None:
                 message[key] = value
@@ -243,71 +252,6 @@ def _normalize_trace_messages(raw_messages: Any) -> list[dict[str, Any]]:
             normalized.append(message)
 
     return normalized
-
-
-def _limited_text(value: str, max_chars: int | None, side: Literal["left", "right"]) -> str:
-    if max_chars is None or len(value) <= max_chars:
-        return value
-    if max_chars <= 0:
-        raise ValueError("max_chars must be positive when set")
-    if side == "left":
-        return value[:max_chars]
-    if side == "right":
-        return value[-max_chars:]
-    raise ValueError(f"Unsupported truncation side {side!r}.")
-
-
-def _limited_message(
-    message: Mapping[str, Any], max_chars: int | None, side: Literal["left", "right"]
-) -> dict[str, Any]:
-    if max_chars is None:
-        return dict(message)
-
-    limited = dict(message)
-    for field_name in ("content", "reasoning_content"):
-        value = limited.get(field_name)
-        if isinstance(value, str):
-            limited[field_name] = _limited_text(value, max_chars, side)
-    return limited
-
-
-def _limited_trace_messages(
-    messages: Sequence[Mapping[str, Any]],
-    row_adapter: TraceRowAdapterConfig,
-) -> list[dict[str, Any]]:
-    if row_adapter.truncation_side not in {"left", "right"}:
-        raise ValueError(f"Unsupported truncation_side {row_adapter.truncation_side!r}.")
-    if row_adapter.max_message_chars is not None and row_adapter.max_message_chars <= 0:
-        raise ValueError("max_message_chars must be positive when set")
-    if row_adapter.max_patch_chars is not None and row_adapter.max_patch_chars <= 0:
-        raise ValueError("max_patch_chars must be positive when set")
-    if row_adapter.preserve_initial_trace_messages < 0:
-        raise ValueError("preserve_initial_trace_messages must be non-negative")
-    if row_adapter.max_trace_messages is not None and row_adapter.max_trace_messages <= 0:
-        raise ValueError("max_trace_messages must be positive when set")
-    if (
-        row_adapter.max_trace_messages is not None
-        and row_adapter.preserve_initial_trace_messages > row_adapter.max_trace_messages
-    ):
-        raise ValueError("preserve_initial_trace_messages cannot exceed max_trace_messages")
-
-    limited_messages = [
-        _limited_message(message, row_adapter.max_message_chars, row_adapter.truncation_side) for message in messages
-    ]
-    max_trace_messages = row_adapter.max_trace_messages
-    if max_trace_messages is None or len(limited_messages) <= max_trace_messages:
-        return limited_messages
-
-    if row_adapter.truncation_side == "left":
-        return limited_messages[:max_trace_messages]
-
-    preserve_initial = row_adapter.preserve_initial_trace_messages
-    tail_count = max_trace_messages - preserve_initial
-    if tail_count == 0:
-        return limited_messages[:preserve_initial]
-    if preserve_initial == 0:
-        return limited_messages[-tail_count:]
-    return [*limited_messages[:preserve_initial], *limited_messages[-tail_count:]]
 
 
 def _prefixed_trace_messages(
@@ -361,16 +305,11 @@ def _adapt_trace_row(
 ) -> dict[str, Any]:
     input_messages_field = row_adapter.input_messages_field or trace_format.messages_field
     messages = _normalize_trace_messages(_lookup_field(row, input_messages_field))
-    messages = _limited_trace_messages(messages, row_adapter)
     messages = _prefixed_trace_messages(messages, prefix_fraction)
 
     patch = _lookup_field(row, row_adapter.patch_field) if row_adapter.patch_field is not None else None
     patch_text = _normalize_message_content(patch)
     if patch_text:
-        max_patch_chars = row_adapter.max_patch_chars
-        if max_patch_chars is None:
-            max_patch_chars = row_adapter.max_message_chars
-        patch_text = _limited_text(patch_text, max_patch_chars, row_adapter.truncation_side)
         messages.append(
             {
                 "role": "assistant",
@@ -445,11 +384,6 @@ def _dataset_metadata(dataset_config: TraceLabeledEvalDatasetConfig) -> dict[str
             "patch_loss_tag": dataset_config.row_adapter.patch_loss_tag,
             "outcome_loss_tag": dataset_config.row_adapter.outcome_loss_tag,
             "outcome_prompt": dataset_config.row_adapter.outcome_prompt,
-            "max_trace_messages": dataset_config.row_adapter.max_trace_messages,
-            "preserve_initial_trace_messages": dataset_config.row_adapter.preserve_initial_trace_messages,
-            "max_message_chars": dataset_config.row_adapter.max_message_chars,
-            "max_patch_chars": dataset_config.row_adapter.max_patch_chars,
-            "truncation_side": dataset_config.row_adapter.truncation_side,
         }
     for field_name in ("id", "name", "stream", "splits"):
         if hasattr(source, field_name):

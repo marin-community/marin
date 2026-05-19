@@ -1,6 +1,13 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+"""Trace chat preprocessing for per-span-type language-model evaluation.
+
+This module keeps the trace-specific labeled evaluation path together: it renders chat
+templates, recovers token spans for each source message, assigns exclusive integer labels
+to trace regions, and builds packed `LabeledLmExample` batches for `LabeledEvaluator`.
+"""
+
 import ast
 import functools
 import json
@@ -56,17 +63,17 @@ def _normalize_chat_message(message: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _parsed_text_tool_call(text: str) -> dict[str, Any] | None:
+def _parsed_text_tool_call(text: str) -> dict[str, Any]:
     try:
         payload = json.loads(text.strip())
     except json.JSONDecodeError:
         try:
             payload = ast.literal_eval(text.strip())
-        except (SyntaxError, ValueError):
-            return None
+        except (SyntaxError, ValueError) as e:
+            raise ValueError(f"Could not parse <tool_call> payload: {text!r}") from e
 
     if not isinstance(payload, Mapping):
-        return None
+        raise ValueError(f"<tool_call> payload must be a mapping, got {type(payload).__name__}.")
 
     function_payload = payload.get("function")
     if isinstance(function_payload, Mapping):
@@ -76,8 +83,10 @@ def _parsed_text_tool_call(text: str) -> dict[str, Any] | None:
         name = payload.get("name")
         arguments = payload.get("arguments", payload.get("args"))
 
-    if not isinstance(name, str) or arguments is None:
-        return None
+    if not isinstance(name, str):
+        raise ValueError("<tool_call> payload must include a string function name.")
+    if arguments is None:
+        raise ValueError("<tool_call> payload must include function arguments.")
 
     tool_call: dict[str, Any] = {
         "type": "function",
@@ -117,11 +126,9 @@ def _split_text_tool_call_message(message: Mapping[str, Any]) -> list[dict[str, 
             split_messages.append(_message_without_tool_calls(message, prefix))
 
         tool_call = _parsed_text_tool_call(match.group(1))
-        if tool_call is None:
-            split_messages.append(_message_without_tool_calls(message, match.group(0)))
-        else:
-            split_messages.append({"role": "assistant", "content": "", "tool_calls": [tool_call]})
-            parsed_any = True
+        # Prefix/suffix text stays in adjacent assistant messages; this chunk represents only the structured call.
+        split_messages.append({"role": "assistant", "content": "", "tool_calls": [tool_call]})
+        parsed_any = True
         cursor = match.end()
 
     suffix = content[cursor:]
