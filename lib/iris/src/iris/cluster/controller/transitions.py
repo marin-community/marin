@@ -989,12 +989,12 @@ class ControllerTransitions:
             job.res_disk_bytes,
             job.res_device_json,
         )
-        entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
-        for filename, data in reads.get_workdir_files(snap, job_id).items():
-            entrypoint.workdir_files[filename] = data
+        # proto_from_json returns shared cached instances — set via constructor
+        # kwarg so RunTaskRequest copies, then mutate the copy's workdir_files
+        # (never the cached source) to add inline files.
         template = job_pb2.RunTaskRequest(
             num_tasks=job.num_tasks,
-            entrypoint=entrypoint,
+            entrypoint=proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint),
             environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
             bundle_id=job.bundle_id,
             resources=resources,
@@ -1002,6 +1002,8 @@ class ControllerTransitions:
             constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
             task_image=job.task_image,
         )
+        for filename, data in reads.get_workdir_files(snap, job_id).items():
+            template.entrypoint.workdir_files[filename] = data
         return self._run_template_cache.put(wire, template)
 
     def _recompute_job_state(self, cur: Tx, job_id: JobName) -> int | None:
@@ -2873,15 +2875,13 @@ class ControllerTransitions:
         attempt_id: int,
     ) -> job_pb2.RunTaskRequest:
         """Assemble a RunTaskRequest for a direct-provider dispatch row."""
-        entrypoint = proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint)
-        # Load inline workdir files from the job_workdir_files table.
-        for filename, data in reads.get_workdir_files(cur, row.job_id).items():
-            entrypoint.workdir_files[filename] = data
-
+        # proto_from_json returns shared cached instances — set via constructor
+        # kwarg so RunTaskRequest copies, then mutate the copy's workdir_files
+        # (never the cached source) to add inline files.
         run_req = job_pb2.RunTaskRequest(
             task_id=row.task_id.to_wire(),
             num_tasks=row.num_tasks,
-            entrypoint=entrypoint,
+            entrypoint=proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint),
             environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
             bundle_id=row.bundle_id,
             resources=row.resources,
@@ -2890,6 +2890,9 @@ class ControllerTransitions:
             constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
             task_image=row.task_image,
         )
+        # Load inline workdir files from the job_workdir_files table.
+        for filename, data in reads.get_workdir_files(cur, row.job_id).items():
+            run_req.entrypoint.workdir_files[filename] = data
         # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
         if row.timeout_ms is not None and row.timeout_ms > 0:
             run_req.timeout.milliseconds = row.timeout_ms

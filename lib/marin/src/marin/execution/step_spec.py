@@ -137,6 +137,7 @@ class StepSpec:
             fn=self.fn,
             config=config,
             override_output_path=self.output_path,
+            resources=self.resources,
         )
         # ExecutorStep is frozen; object.__setattr__ stashes the original
         # StepSpec for round-trip recovery in resolve_executor_step.
