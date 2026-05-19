@@ -201,13 +201,12 @@ def _update_config_to_use_out_path(pod_config: TrainOnPodConfigT) -> TrainOnPodC
     from levanter.adaptation import NoAdaptationConfig
     from levanter.main.train_dpo import TrainDpoConfig
 
-    # LoRA-DPO: the bare adapter is not a runnable HF checkpoint; export the merged
-    # adapter+base instead. bake_output_path put the HF path on hf_save_path.
+    # Adapter DPO exports PEFT by default; merged HF export is explicit.
     if isinstance(config, TrainDpoConfig) and not isinstance(config.adapter, NoAdaptationConfig):
-        merged_hf_save_path = config.merged_hf_save_path
-        if merged_hf_save_path is None and config.hf_save_steps is not None:
-            merged_hf_save_path = config.hf_save_path
-        config = replace(config, hf_save_path=None, merged_hf_save_path=merged_hf_save_path)
+        peft_save_path = config.peft_save_path
+        if peft_save_path is None and config.hf_save_steps is not None:
+            peft_save_path = config.hf_save_path
+        config = replace(config, hf_save_path=None, peft_save_path=peft_save_path)
 
     return replace(pod_config, train_config=config)
 
