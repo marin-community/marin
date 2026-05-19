@@ -5,7 +5,7 @@
 
 from zephyr import Dataset, compute_plan
 from zephyr.dataset import FilterOp, MapOp, ReshardOp, TakePerShardOp
-from zephyr.plan import Map, PhysicalStage, Reshard
+from zephyr.plan import Map, PhysicalStage, Reshard, StageType
 
 
 def test_optimize_consecutive_maps():
@@ -119,7 +119,7 @@ def test_stage_name():
 
 def test_stage_name_truncation():
     """PhysicalStage.stage_name() truncates long names."""
-    stage = PhysicalStage(operations=[Map(fn=lambda x: x) for _ in range(20)])
+    stage = PhysicalStage(operations=[Map(fn=lambda x: x) for _ in range(20)], stage_type=StageType.MAP_WORKER)
     name = stage.stage_name(max_length=20)
     assert len(name) <= 20
     assert name.endswith("...")

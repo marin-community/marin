@@ -46,12 +46,10 @@ from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.dataset import Dataset
 from zephyr.plan import (
-    Fold,
     Join,
     PhysicalOp,
     PhysicalPlan,
     PhysicalStage,
-    Reduce,
     Scatter,
     Shard,
     SourceItem,
@@ -412,20 +410,6 @@ def _default_stage_runner_factory_for(client: Client) -> Callable[[int], StageRu
     return lambda n: SubprocessRunner(num_workers=n)
 
 
-def _classify_stage(stage: PhysicalStage) -> str:
-    """Return ``'reduce'`` if the stage contains shuffle/reduce/fold/join ops, else ``'map'``.
-
-    Reduce-type stages (produced by GroupByOp, ReduceOp, JoinOp) are
-    memory-intensive due to scatter buffers or merge-sort scratch space.
-    Map-type stages (produced by MapOp, FilterOp, WriteOp, etc.) are
-    typically CPU-bound with lower per-task memory.
-    """
-    for op in stage.operations:
-        if isinstance(op, (Scatter, Reduce, Fold, Join)):
-            return "reduce"
-    return "map"
-
-
 # ---------------------------------------------------------------------------
 # ZephyrCoordinator
 # ---------------------------------------------------------------------------
@@ -466,6 +450,7 @@ class ZephyrCoordinator:
         self._total_shards: int = 0
         self._completed_shards: int = 0
         self._retries: int = 0
+        self._stage_epoch: int = 0
         self._in_flight: dict[str, tuple[ShardTask, int]] = {}
         # _task_attempts: monotonic generation for stale-result rejection (bumps on every
         # requeue). _task_error_attempts: TASK-only counter, bounded by MAX_SHARD_FAILURES.
@@ -490,12 +475,11 @@ class ZephyrCoordinator:
         # Set when a stage may have completed (result, failure, or abort) so
         # ``_wait_for_stage`` wakes immediately instead of sleeping out its backoff.
         self._stage_done = threading.Event()
-        self._is_last_stage: bool = False
         # When True, pull_task returns SHUTDOWN to idle workers (stage complete).
         self._stage_complete: bool = False
         # Stage type for the currently running stage; workers poll this to know
         # how many subprocess slots to create.
-        self._current_stage_type: str | None = None
+        self._current_stage_type: StageType | None = None
         self._initialized: bool = False
         self._pipeline_running: bool = False
 
@@ -545,11 +529,14 @@ class ZephyrCoordinator:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
         self._worker_group = worker_group
 
-    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> None:
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> int:
         """Called by workers when they come online to register with coordinator.
 
         Handles re-registration from reconstructed workers (e.g. after node
         preemption) by updating the stale handle and resetting worker state.
+
+        Returns the current stage epoch so the caller can bind its poll loop
+        to this stage and detect when it has been superseded.
         """
         with self._lock:
             if worker_id in self._worker_handles:
@@ -561,12 +548,13 @@ class ZephyrCoordinator:
                 # the worker as unhealthy via heartbeat and re-registration. If we do not requeue we may silently
                 # lose tasks.
                 self._maybe_requeue_worker_task(worker_id)
-                return
+                return self._stage_epoch
 
             self._worker_handles[worker_id] = worker_handle
             self._worker_states[worker_id] = WorkerState.READY
             self._last_seen[worker_id] = time.monotonic()
             logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+            return self._stage_epoch
 
     def deregister_worker(self, worker_id: str) -> None:
         """Remove a sub-worker that has finished its stage pool."""
@@ -575,7 +563,7 @@ class ZephyrCoordinator:
             self._worker_states.pop(worker_id, None)
             self._last_seen.pop(worker_id, None)
 
-    def get_current_stage_type(self) -> str | None:
+    def get_current_stage_type(self) -> StageType | None:
         """Return the stage type currently running, or ``None`` if between stages.
 
         Workers poll this between stages to discover the next stage type and
@@ -840,12 +828,18 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.FAILED
                 self._maybe_requeue_worker_task(worker_id)
 
-    def pull_task(self, worker_id: str) -> tuple[ShardTask, int, dict] | str | None:
+    def pull_task(self, worker_id: str, epoch: int | None = None) -> tuple[ShardTask, int, dict] | str | None:
         """Called by workers to get next task.
+
+        Args:
+            worker_id: Unique ID for this worker slot.
+            epoch: Stage epoch the slot was registered under. If provided and it
+                no longer matches the coordinator's current epoch, the slot has
+                survived into a later stage and receives SHUTDOWN immediately.
 
         Returns:
             - (task, attempt, config) tuple if task available
-            - "SHUTDOWN" string if coordinator is shutting down
+            - "SHUTDOWN" string if coordinator is shutting down or epoch is stale
             - None if no task available (worker should backoff and retry)
         """
         with self._lock:
@@ -856,11 +850,18 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.DEAD
                 return "SHUTDOWN"
 
+            if epoch is not None and epoch != self._stage_epoch:
+                # This slot was created for an earlier stage and missed its SHUTDOWN
+                # (e.g. it was sleeping through the _mark_stage_complete window).
+                # Send SHUTDOWN now so it exits before picking up next-stage tasks.
+                self._worker_states[worker_id] = WorkerState.DEAD
+                return "SHUTDOWN"
+
             if self._fatal_error:
                 return None
 
             if not self._task_queue:
-                if self._is_last_stage or self._stage_complete:
+                if self._stage_complete:
                     # No more work to hand out — exit immediately.  If an
                     # in-flight worker crashes and its shard is requeued, Iris
                     # restarts the worker which re-registers and picks it up.
@@ -1005,7 +1006,6 @@ class ZephyrCoordinator:
         stage_name: str,
         current_stage_index: int,
         tasks: list[ShardTask],
-        is_last_stage: bool = False,
     ) -> None:
         """Load a new stage's tasks into the queue."""
         with self._lock:
@@ -1026,8 +1026,8 @@ class ZephyrCoordinator:
             self._task_infra_attempts = {task.shard_idx: 0 for task in tasks}
             self._shard_errors = {}
             self._fatal_error = None
-            self._is_last_stage = is_last_stage
             self._stage_complete = False
+            self._stage_epoch += 1
             # Only reset in-flight worker snapshots; completed snapshots
             # accumulate across stages for full pipeline visibility.
             self._worker_counters = {}
@@ -1112,15 +1112,6 @@ class ZephyrCoordinator:
             if not shards:
                 return []
 
-            # Identify the last stage that dispatches work to workers (non-RESHARD).
-            # On that stage, idle workers receive SHUTDOWN once all tasks are
-            # in-flight, so they exit eagerly instead of polling until
-            # coordinator.shutdown().
-            last_worker_stage_idx = max(
-                (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
-                default=-1,
-            )
-
             with self._lock:
                 self._current_stage_index = 0
                 self._plan_stages = list(plan.stages)
@@ -1137,7 +1128,6 @@ class ZephyrCoordinator:
                     stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
                     stage_index_for_state=stage_idx,
                     aux_per_shard=aux_per_shard,
-                    is_last_stage=(stage_idx == last_worker_stage_idx),
                 )
 
             # Flatten final results — each shard may involve I/O (unpickling from
@@ -1165,7 +1155,6 @@ class ZephyrCoordinator:
         stage_label: str,
         stage_index_for_state: int,
         aux_per_shard: list[dict[int, Shard]] | None = None,
-        is_last_stage: bool = False,
     ) -> list[Shard]:
         """Submit a worker stage, wait for completion, return regrouped output shards.
 
@@ -1173,13 +1162,14 @@ class ZephyrCoordinator:
         UI/logging — for join right-sub-stages this is the *parent* stage index
         so progress reports stay attached to the user-visible stage.
         """
-        stage_type = _classify_stage(stage)
         with self._lock:
-            self._current_stage_type = stage_type
+            self._current_stage_type = stage.stage_type
 
         tasks = _compute_tasks_from_shards(shards, stage, stage_name=stage_label, aux_per_shard=aux_per_shard)
-        logger.info("[%s] Starting stage %s (%s) with %d tasks", self._execution_id, stage_label, stage_type, len(tasks))
-        self._start_stage(stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
+        logger.info(
+            "[%s] Starting stage %s (%s) with %d tasks", self._execution_id, stage_label, stage.stage_type, len(tasks)
+        )
+        self._start_stage(stage_label, stage_index_for_state, tasks)
         self._wait_for_stage()
 
         # Signal idle workers to exit their per-stage thread pools. Workers poll
@@ -1351,7 +1341,7 @@ class ZephyrWorker:
 
         while not self._shutdown_event.is_set():
             try:
-                stage_type = self._coordinator.get_current_stage_type.remote().result(timeout=10.0)
+                stage_type = self._coordinator.get_current_stage_type.remote().result(timeout=5.0)
             except Exception as e:
                 logger.debug("[%s] get_current_stage_type failed: %s", self._worker_id, e)
                 self._shutdown_event.wait(timeout=1.0)
@@ -1362,29 +1352,38 @@ class ZephyrWorker:
                 continue
 
             backoff.reset()
-            n = self._num_map_workers if stage_type == "map" else self._num_reduce_workers
-            logger.info("[%s] Stage '%s' starting, %d slot(s)", self._worker_id, stage_type, n)
+            num_workers = self._num_map_workers if stage_type == StageType.MAP_WORKER else self._num_reduce_workers
+            logger.info("[%s] Stage '%s' starting, %d slot(s)", self._worker_id, stage_type, num_workers)
 
-            runners = [self._stage_runner_factory(n) for _ in range(n)]
-            sub_ids = [f"{self._worker_id}:{i}" for i in range(n)]
+            sub_ids = set(f"{self._worker_id}:{i}" for i in range(num_workers))
 
+            stage_epoch: int | None = None
+            failed_workers: set[str] = set()
             for sub_id in sub_ids:
                 try:
-                    self._coordinator.register_worker.remote(sub_id, self._actor_handle).result(timeout=30.0)
+                    epoch = self._coordinator.register_worker.remote(sub_id, self._actor_handle).result(timeout=30.0)
+                    if stage_epoch is not None and stage_epoch != epoch:
+                        raise RuntimeError(
+                            f"Received different stage epochs when registering workers within a stage. "
+                            f"Got {epoch} (expected {stage_epoch})"
+                        )
+                    stage_epoch = epoch
                 except Exception:
+                    failed_workers.add(sub_id)
                     logger.warning("[%s] Failed to register sub-worker %s", self._worker_id, sub_id, exc_info=True)
 
-            self._active_runners = runners
-            self._active_sub_ids = sub_ids
+            self._active_sub_ids = list(sub_ids - failed_workers)
+            num_active_workers = len(self._active_sub_ids)
+            self._active_runners = [self._stage_runner_factory(num_active_workers) for _ in range(num_active_workers)]
 
             threads = [
                 threading.Thread(
                     target=self._poll_loop,
-                    args=(self._coordinator, sub_id, runner),
+                    args=(self._coordinator, sub_id, runner, stage_epoch),
                     daemon=True,
                     name=f"zephyr-poll-{sub_id}",
                 )
-                for sub_id, runner in zip(sub_ids, runners, strict=True)
+                for sub_id, runner in zip(self._active_sub_ids, self._active_runners, strict=True)
             ]
             for t in threads:
                 t.start()
@@ -1486,8 +1485,13 @@ class ZephyrWorker:
             self._shutdown_event.wait(timeout=interval)
         logger.debug("[%s] Heartbeat loop exiting after %d beats", self._worker_id, heartbeat_count)
 
-    def _poll_loop(self, coordinator: ActorHandle, worker_id: str, stage_runner: StageRunner) -> None:
-        """Single-slot polling loop. Exits on SHUTDOWN signal or coordinator death."""
+    def _poll_loop(self, coordinator: ActorHandle, worker_id: str, stage_runner: StageRunner, epoch: int = 0) -> None:
+        """Single-slot polling loop. Exits on SHUTDOWN signal or coordinator death.
+
+        ``epoch`` is the stage epoch returned by ``register_worker``; it is passed
+        on every ``pull_task`` call so the coordinator can detect slots that survived
+        past stage completion and send them SHUTDOWN before they pick up next-stage tasks.
+        """
         task_count = 0
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
         future: ActorFuture | None = None
@@ -1496,7 +1500,7 @@ class ZephyrWorker:
 
         while not self._shutdown_event.is_set():
             if future is None:
-                future = coordinator.pull_task.remote(worker_id)
+                future = coordinator.pull_task.remote(worker_id, epoch)
                 future_start = time.monotonic()
                 warned = False
 
