@@ -40,7 +40,6 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 
-from marin.evaluation.trace_labeled_artifacts import TraceLabeledEvalOutput
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
 
@@ -121,6 +120,13 @@ class TraceLabeledEvalConfig:
     dataset_eval_retry_initial_delay: float = DEFAULT_DATASET_EVAL_RETRY_INITIAL_DELAY
     dataset_eval_retry_max_delay: float = DEFAULT_DATASET_EVAL_RETRY_MAX_DELAY
     job_failure_max_retries: int = 1
+
+
+@dataclass(frozen=True)
+class TraceLabeledEvalOutput:
+    """Executor artifact produced by a completed trace-labeled evaluation step."""
+
+    results_path: str
 
 
 @dataclass(frozen=True)
