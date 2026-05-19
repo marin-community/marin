@@ -92,12 +92,6 @@ def _parse_hf_save_dtype(hf_save_dtype: str | None) -> jnp.dtype | None:
         return None
 
 
-def _policy_model_for_adapter_export(model: DpoModel | LmHeadModel) -> LmHeadModel:
-    if isinstance(model, DpoModel):
-        return model.policy
-    return model
-
-
 @AdaptationConfig.register_subclass("none")
 @dataclass(frozen=True)
 class NoAdaptationConfig(AdaptationConfig):
@@ -186,6 +180,10 @@ class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
         if export.hf_save_steps is None:
             raise ValueError("LoRA checkpoint export requires hf_save_steps to be set.")
 
+        def export_model(step):
+            model = step.eval_model
+            return model.policy if isinstance(model, DpoModel) else model
+
         if export.peft_save_path is not None:
             full_save_path = _expanded_export_path(export.peft_save_path, trainer)
             trainer.add_hook(
@@ -195,7 +193,7 @@ class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
                     converter.reference_checkpoint,
                     tokenizer,
                     export.peft_hf_upload,
-                    model_getter=lambda step: _policy_model_for_adapter_export(step.eval_model),
+                    model_getter=export_model,
                 ),
                 every=export.hf_save_steps,
             )
@@ -208,7 +206,7 @@ class LoraAdaptationConfig(LoraConfig, AdaptationConfig):
                     converter,
                     export.merged_hf_upload,
                     generation_config=export.generation_config,
-                    model_getter=lambda step: _policy_model_for_adapter_export(step.eval_model),
+                    model_getter=export_model,
                 ),
                 every=export.hf_save_steps,
             )
