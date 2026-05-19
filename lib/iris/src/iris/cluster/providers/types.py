@@ -226,10 +226,10 @@ class RemoteWorkerHandle(Protocol):
         ...
 
     @property
-    def port(self) -> int | None:
-        """RPC port, or None when the worker serves on the cluster-configured port.
+    def worker_url(self) -> str:
+        """Internal HTTP base URL (``http://host:port``) for the worker's RPC and /health endpoints.
 
-        Only providers that auto-assign ports per worker (LOCAL) report this.
+        Empty string when the worker has no internal address yet (mid-boot).
         """
         ...
 

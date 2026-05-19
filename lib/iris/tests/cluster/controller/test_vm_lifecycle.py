@@ -89,8 +89,10 @@ class FakeWorkerHandle:
         return self._internal_address
 
     @property
-    def port(self) -> int | None:
-        return None
+    def worker_url(self) -> str:
+        if not self._internal_address:
+            return ""
+        return f"http://{self._internal_address}:10001"
 
     @property
     def external_address(self) -> str | None:

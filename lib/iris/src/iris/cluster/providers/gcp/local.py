@@ -60,8 +60,10 @@ class _LocalWorkerHandle:
         return self._internal_address
 
     @property
-    def port(self) -> int:
-        return self._port
+    def worker_url(self) -> str:
+        if not self._internal_address:
+            return ""
+        return f"http://{self._internal_address}:{self._port}"
 
     @property
     def external_address(self) -> str | None:

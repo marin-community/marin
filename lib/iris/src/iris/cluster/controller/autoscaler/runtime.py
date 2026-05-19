@@ -81,14 +81,14 @@ _HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({
 _HEALTH_PROBE_MAX_WORKERS = 64
 
 
-def _probe_worker_health(endpoint: str) -> bool:
-    """Probe a worker's /health endpoint. ``endpoint`` is a ``host:port`` pair.
+def _probe_worker_health(worker_url: str) -> bool:
+    """Probe a worker's /health endpoint. ``worker_url`` is an ``http://host:port`` base URL.
 
     Returns True iff the response is 2xx.
     """
     try:
         resp = _HEALTH_PROBE_OPENER.open(
-            f"http://{endpoint}/health",
+            f"{worker_url}/health",
             timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
         )
         return 200 <= resp.status < 300
@@ -456,8 +456,8 @@ class Autoscaler:
 
                 if status.state == CloudSliceState.READY:
                     worker_ids = [w.worker_id for w in status.workers]
-                    worker_addresses = self._worker_endpoints(status.workers)
-                    group.mark_slice_ready(slice_id, worker_ids, worker_addresses=worker_addresses)
+                    worker_urls = self._worker_urls(status.workers)
+                    group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
                     self._register_slice_workers(status.workers, slice_id, group.name)
                     self._log_action(
                         "slice_ready",
@@ -523,7 +523,7 @@ class Autoscaler:
 
         Per-worker counters live on SliceState. PING_FAILURE_THRESHOLD
         consecutive failures (~100s at the default 10s evaluation interval,
-        matching the heartbeat-path threshold) trip termination. Addresses
+        matching the heartbeat-path threshold) trip termination. Worker URLs
         come from the slice handle, refreshed lazily via ``handle.describe()``
         when SliceState has none cached (e.g. after a controller restart).
         Probes are fanned out across a thread pool so a partitioned AZ
@@ -531,19 +531,17 @@ class Autoscaler:
         timeout. Slice teardown runs serially after all probes complete.
         """
         timestamp = timestamp or Timestamp.now()
-        if self._base_worker_config is None:
-            return  # autoscaler built without a worker config (unit tests); nothing to probe
 
-        # Phase 1: collect every (group, slice_id, worker_id, endpoint) probe target.
+        # Phase 1: collect every (group, slice_id, worker_id, worker_url) probe target.
         probes: list[tuple[ScalingGroup, str, str, str]] = []
         for group in self._groups.values():
-            for slice_id, handle, addresses in group.ready_slice_probe_targets():
-                if not addresses:
-                    addresses = self._refresh_slice_addresses(group, slice_id, handle)
-                    if not addresses:
+            for slice_id, handle, worker_urls in group.ready_slice_probe_targets():
+                if not worker_urls:
+                    worker_urls = self._refresh_slice_worker_urls(group, slice_id, handle)
+                    if not worker_urls:
                         continue  # describe() failed or partial; retry next tick
-                for worker_id, endpoint in addresses.items():
-                    probes.append((group, slice_id, worker_id, endpoint))
+                for worker_id, worker_url in worker_urls.items():
+                    probes.append((group, slice_id, worker_id, worker_url))
         if not probes:
             return
 
@@ -554,7 +552,7 @@ class Autoscaler:
 
         # Phase 3: record results and collect slices that tripped the threshold.
         tripped: dict[str, tuple[ScalingGroup, str]] = {}  # slice_id -> (group, reason)
-        for (group, slice_id, worker_id, _addr), healthy in zip(probes, results, strict=True):
+        for (group, slice_id, worker_id, _url), healthy in zip(probes, results, strict=True):
             count = group.record_health_probe_result(slice_id, worker_id, healthy)
             if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
                 reason = f"worker {worker_id} failed /health {count}x"
@@ -576,39 +574,33 @@ class Autoscaler:
                 status="failed",
             )
 
-    def _worker_endpoints(self, workers: Sequence[RemoteWorkerHandle]) -> dict[str, str]:
-        """Map worker_id to a reachable ``host:port`` endpoint.
+    def _worker_urls(self, workers: Sequence[RemoteWorkerHandle]) -> dict[str, str]:
+        """Map worker_id to the worker's reachable ``http://host:port`` URL.
 
-        Workers that auto-assign ports (LOCAL) report ``handle.port``; others
-        fall back to the cluster-configured worker port. Workers without an
-        ``internal_address`` are skipped.
+        Workers with no internal address yet (mid-boot) report an empty
+        ``worker_url`` and are skipped.
         """
-        default_port = self._base_worker_config.port if self._base_worker_config else 0
-        return {
-            w.worker_id: f"{w.internal_address}:{w.port if w.port is not None else default_port}"
-            for w in workers
-            if w.internal_address
-        }
+        return {w.worker_id: w.worker_url for w in workers if w.worker_url}
 
-    def _refresh_slice_addresses(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> dict[str, str]:
-        """Resolve worker endpoints for a slice by calling handle.describe().
+    def _refresh_slice_worker_urls(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> dict[str, str]:
+        """Resolve worker URLs for a slice by calling handle.describe().
 
-        Returns the full endpoint map only when every worker has an
-        ``internal_address``. A partial set is dropped: caching it would
-        permanently exclude the missing workers from probing, and probing
-        the incomplete set risks terminating a slice for a worker that
-        simply hasn't published its IP yet. Next tick re-describes.
+        Returns the full map only when every worker has a URL. A partial set
+        is dropped: caching it would permanently exclude the missing workers
+        from probing, and probing the incomplete set risks terminating a
+        slice for a worker that simply hasn't published its IP yet. Next tick
+        re-describes.
         """
         try:
             status = handle.describe()
         except Exception as e:
             logger.warning("Failed to describe slice %s for health probe: %s", slice_id, e)
             return {}
-        addresses = self._worker_endpoints(status.workers)
-        if len(addresses) != len(status.workers):
+        worker_urls = self._worker_urls(status.workers)
+        if len(worker_urls) != len(status.workers):
             return {}
-        group.set_worker_addresses(slice_id, addresses)
-        return addresses
+        group.set_worker_urls(slice_id, worker_urls)
+        return worker_urls
 
     def update(
         self,

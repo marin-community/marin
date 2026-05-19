@@ -22,9 +22,10 @@ from iris.rpc import vm_pb2
 class _RestoredWorkerHandle:
     """Minimal handle placeholder used for restored tracked workers."""
 
-    def __init__(self, worker_id: str, internal_address: str) -> None:
+    def __init__(self, worker_id: str, internal_address: str, port: int) -> None:
         self._worker_id = worker_id
         self._internal_address = internal_address
+        self._port = port
 
     @property
     def worker_id(self) -> str:
@@ -39,8 +40,8 @@ class _RestoredWorkerHandle:
         return self._internal_address
 
     @property
-    def port(self) -> int | None:
-        return None
+    def worker_url(self) -> str:
+        return f"http://{self._internal_address}:{self._port}"
 
     @property
     def external_address(self) -> str | None:
@@ -165,11 +166,18 @@ class WorkerRegistry:
 
 
 def restore_tracked_workers(rows: list[TrackedWorkerRow]) -> dict[str, TrackedWorker]:
-    """Restore tracked workers from DB rows."""
+    """Restore tracked workers from DB rows.
+
+    ``row.address`` is the ``host:port`` the worker self-reported at
+    registration; it is split into the host/port pair the handle carries.
+    """
 
     workers: dict[str, TrackedWorker] = {}
     for row in rows:
-        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=row.address)
+        host, sep, port = row.address.rpartition(":")
+        if not sep or not host or not port.isdigit():
+            raise ValueError(f"restored worker {row.worker_id} has malformed address: {row.address!r}")
+        handle = _RestoredWorkerHandle(worker_id=row.worker_id, internal_address=host, port=int(port))
         workers[row.worker_id] = TrackedWorker(
             worker_id=row.worker_id,
             slice_id=row.slice_id,
