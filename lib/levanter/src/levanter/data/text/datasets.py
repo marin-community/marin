@@ -47,9 +47,8 @@ from levanter.data.text.formats import (
     SupervisedLmDatasetFormat,
     SupervisedTextProcessor,
     TextLmDatasetFormat,
-    TraceChatEvaluationFormat,
 )
-from levanter.data.text.trace_chat import ProcessedTraceChatDict
+from levanter.data.text.trace_chat import ProcessedTraceChatDict, TraceChatEvaluationFormat
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheOptions, TreeCache

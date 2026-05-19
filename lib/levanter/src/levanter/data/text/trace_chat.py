@@ -5,7 +5,8 @@ import ast
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, TypedDict
+from dataclasses import dataclass
+from typing import Any, Literal, TypedDict
 
 import numpy as np
 
@@ -176,6 +177,51 @@ def loss_label_spec_for_trace_tags(loss_tags: Sequence[str]) -> LossLabelSpec:
             aggregates[tag] = (custom_label_ids[tag],)
 
     return LossLabelSpec(id_to_name=id_to_name, aggregates=aggregates)
+
+
+@dataclass(frozen=True)
+class TraceChatEvaluationFormat:
+    """Evaluation-only config for agent traces with exclusive token labels."""
+
+    messages_field: str = "messages"
+    chat_template: str | None = None
+    system_prompt: str | None = None
+    chat_template_kwargs: str | None = "chat_template_kwargs"
+    pack: bool | int | Literal["pad"] | None = None
+    loss_tags: tuple[str, ...] = (
+        "assistant",
+        "assistant_text",
+        "tool_call",
+        "observation",
+        "patch",
+        "final_assistant",
+        "outcome",
+    )
+    message_loss_tags_field: str | None = "loss_tags"
+    include_role_tags: bool = True
+    include_final_assistant_tag: bool = True
+    parse_text_tool_calls: bool = True
+    slice_strategy: Literal["left", "right", "raise"] = "left"
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        del enforce_eos, enforce_bos
+        return TraceChatProcessor(
+            tokenizer,
+            messages_field=self.messages_field,
+            chat_template=self.chat_template,
+            system_prompt_field=self.system_prompt,
+            chat_template_kwargs_field=self.chat_template_kwargs,
+            loss_tags=self.loss_tags,
+            message_loss_tags_field=self.message_loss_tags_field,
+            include_role_tags=self.include_role_tags,
+            include_final_assistant_tag=self.include_final_assistant_tag,
+            parse_text_tool_calls=self.parse_text_tool_calls,
+        )
+
+    def loss_label_spec(self) -> LossLabelSpec:
+        return loss_label_spec_for_trace_tags(self.loss_tags)
 
 
 class TraceChatProcessor(BatchProcessor[dict, dict]):

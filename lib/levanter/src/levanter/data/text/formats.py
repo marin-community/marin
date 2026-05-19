@@ -10,7 +10,6 @@ import numpy as np
 from draccus import ChoiceRegistry
 
 from levanter.data._preprocessor import BatchProcessor
-from levanter.data.text.trace_chat import TraceChatProcessor, loss_label_spec_for_trace_tags
 from levanter.tokenizers import MarinTokenizer
 
 from ._batch_tokenizer import BatchTokenizer
@@ -179,51 +178,6 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
             chat_template_kwargs_field=self.chat_template_kwargs,
             mask_user_turns=self.mask_user_turns,
         )
-
-
-@dataclass(frozen=True)
-class TraceChatEvaluationFormat:
-    """Evaluation-only config for agent traces with exclusive token labels."""
-
-    messages_field: str = "messages"
-    chat_template: str | None = None
-    system_prompt: str | None = None
-    chat_template_kwargs: str | None = "chat_template_kwargs"
-    pack: bool | int | Literal["pad"] | None = None
-    loss_tags: tuple[str, ...] = (
-        "assistant",
-        "assistant_text",
-        "tool_call",
-        "observation",
-        "patch",
-        "final_assistant",
-        "outcome",
-    )
-    message_loss_tags_field: str | None = "loss_tags"
-    include_role_tags: bool = True
-    include_final_assistant_tag: bool = True
-    parse_text_tool_calls: bool = True
-    slice_strategy: Literal["left", "right", "raise"] = "left"
-
-    def build_preprocessor(
-        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
-    ) -> BatchProcessor[dict, dict]:
-        del enforce_eos, enforce_bos
-        return TraceChatProcessor(
-            tokenizer,
-            messages_field=self.messages_field,
-            chat_template=self.chat_template,
-            system_prompt_field=self.system_prompt,
-            chat_template_kwargs_field=self.chat_template_kwargs,
-            loss_tags=self.loss_tags,
-            message_loss_tags_field=self.message_loss_tags_field,
-            include_role_tags=self.include_role_tags,
-            include_final_assistant_tag=self.include_final_assistant_tag,
-            parse_text_tool_calls=self.parse_text_tool_calls,
-        )
-
-    def loss_label_spec(self):
-        return loss_label_spec_for_trace_tags(self.loss_tags)
 
 
 @LmDatasetFormatBase.register_subclass("prebuilt")

@@ -47,10 +47,14 @@ from .formats import (
     ProcessedChatDict,
     SupervisedLmDatasetFormat,
     TextLmDatasetFormat,
-    TraceChatEvaluationFormat,
     preprocessor_for_format,
 )
-from .trace_chat import ProcessedTraceChatDict, TraceChatProcessor, loss_label_spec_for_trace_tags
+from .trace_chat import (
+    ProcessedTraceChatDict,
+    TraceChatEvaluationFormat,
+    TraceChatProcessor,
+    loss_label_spec_for_trace_tags,
+)
 from .preference import (
     DpoExample,
     PreferenceChatLmDatasetFormat,
