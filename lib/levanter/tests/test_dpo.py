@@ -20,6 +20,7 @@ from haliax.partitioning import ResourceAxis, set_mesh
 from haliax.quantization import apply_updates, partition_for_grad_overwrite
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
+from safetensors import safe_open
 
 from levanter.data.loader import DataLoader
 from levanter.data.dataset import ListAsyncDataset
@@ -747,6 +748,37 @@ def test_separate_reference_lora_merged_export_saves_policy_model():
     assert len(converter.calls) == 1
     saved_model, _, _ = converter.calls[0]
     assert isinstance(saved_model, Gpt2LMHeadModel)
+
+
+def test_separate_reference_lora_peft_export_saves_policy_adapter(tmp_path):
+    config = _tiny_gpt2_config()
+    Vocab = Axis("vocab", 32)
+    base_key, reference_key, adapter_key = jrandom.split(jrandom.PRNGKey(0), 3)
+
+    adapter = LoraAdaptationConfig(r=4)
+    policy = adapter.apply(config.build(Vocab, key=base_key), key=adapter_key)
+    reference = config.build(Vocab, key=reference_key)
+    trainer = _CapturingTrainer()
+
+    adapter.install_export_hooks(
+        trainer=trainer,
+        converter=_CapturingConverter(),
+        tokenizer=None,
+        export=AdaptationExportConfig(
+            hf_save_steps=1,
+            peft_save_path=str(tmp_path),
+        ),
+    )
+
+    hook, _ = trainer.hooks[0]
+    hook(SimpleNamespace(step=1, eval_model=DpoModel(policy=policy, reference=reference)))
+
+    with safe_open(tmp_path / "step-1" / "adapter_model.safetensors", framework="numpy") as tensors:
+        keys = list(tensors.keys())
+
+    assert keys
+    assert all(".policy." not in key for key in keys)
+    assert all(".reference." not in key for key in keys)
 
 
 def test_separate_reference_hf_export_passes_generation_config():
