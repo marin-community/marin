@@ -1422,3 +1422,42 @@ def test_sorted_merge_join_after_group_by_integration(integration_ctx):
     assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
     assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
     assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}
+
+
+def test_include_file_paths_parquet(tmp_path, zephyr_ctx):
+    """Parquet records loaded with include_file_paths get the source file path injected."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    file_a = str(tmp_path / "a.parquet")
+    file_b = str(tmp_path / "b.parquet")
+    pq.write_table(pa.Table.from_pylist([{"id": 1}, {"id": 2}]), file_a)
+    pq.write_table(pa.Table.from_pylist([{"id": 3}]), file_b)
+
+    ds = Dataset.from_list([file_a, file_b]).load_parquet(include_file_paths="source")
+    results = zephyr_ctx.execute(ds).results
+
+    assert len(results) == 3
+    for r in results:
+        assert "source" in r
+    sources_by_id = {r["id"]: r["source"] for r in results}
+    assert sources_by_id[1] == file_a
+    assert sources_by_id[2] == file_a
+    assert sources_by_id[3] == file_b
+
+
+def test_include_file_paths_jsonl(tmp_path, zephyr_ctx):
+    """JSONL records loaded with include_file_paths get the source file path injected."""
+    file_a = str(tmp_path / "a.jsonl")
+    file_b = str(tmp_path / "b.jsonl")
+    Path(file_a).write_text(json.dumps({"id": 1}) + "\n" + json.dumps({"id": 2}) + "\n")
+    Path(file_b).write_text(json.dumps({"id": 3}) + "\n")
+
+    ds = Dataset.from_list([file_a, file_b]).load_jsonl(include_file_paths="source")
+    results = zephyr_ctx.execute(ds).results
+
+    assert len(results) == 3
+    sources_by_id = {r["id"]: r["source"] for r in results}
+    assert sources_by_id[1] == file_a
+    assert sources_by_id[2] == file_a
+    assert sources_by_id[3] == file_b

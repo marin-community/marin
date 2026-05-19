@@ -194,10 +194,15 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
-def _load_file_gen(stream: Iterator) -> Iterator:
+def _load_file_gen(stream: Iterator, *, include_file_paths: str | None = None) -> Iterator:
     for spec in stream:
         try:
-            yield from load_file(spec)
+            if include_file_paths is not None:
+                for record in load_file(spec):
+                    record[include_file_paths] = spec.path
+                    yield record
+            else:
+                yield from load_file(spec)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
@@ -217,7 +222,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
-                stream = _load_file_gen(stream)
+                stream = _load_file_gen(stream, include_file_paths=op.include_file_paths)
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):

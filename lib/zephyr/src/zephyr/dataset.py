@@ -239,6 +239,7 @@ class LoadFileOp:
     format: Literal["auto", "parquet", "jsonl", "vortex"] = "auto"
     columns: list[str] | None = None
     max_shard_bytes: int | None = None
+    include_file_paths: str | None = None
 
     def __repr__(self):
         return f"LoadFileOp(format={self.format}, columns={self.columns})"
@@ -565,13 +566,20 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
-    def load_file(self, columns: list[str] | None = None, max_shard_bytes: int | None = None) -> Dataset[dict]:
+    def load_file(
+        self,
+        columns: list[str] | None = None,
+        max_shard_bytes: int | None = None,
+        include_file_paths: str | None = None,
+    ) -> Dataset[dict]:
         """Load records from file sources, auto-detecting format.
 
         Args:
             columns: Optional column projection (for parquet files)
             max_shard_bytes: If set, split parquet files into chunks of at most this
                 many bytes (aligned to row-group boundaries) for finer parallelism.
+            include_file_paths: If set, add a column with this name containing the
+                source file path for each record.
 
         Returns:
             Dataset yielding records as dictionaries
@@ -585,25 +593,45 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns, max_shard_bytes)])
+        return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns, max_shard_bytes, include_file_paths)])
 
-    def load_parquet(self, columns: list[str] | None = None, max_shard_bytes: int | None = None) -> Dataset[dict]:
+    def load_parquet(
+        self,
+        columns: list[str] | None = None,
+        max_shard_bytes: int | None = None,
+        include_file_paths: str | None = None,
+    ) -> Dataset[dict]:
         """Load records from parquet files.
 
         Args:
             columns: Optional column projection.
             max_shard_bytes: If set, split each file into chunks of at most this many
                 bytes (aligned to row-group boundaries) for finer parallelism.
+            include_file_paths: If set, add a column with this name containing the
+                source file path for each record.
         """
-        return Dataset(self.source, [*self.operations, LoadFileOp("parquet", columns, max_shard_bytes)])
+        return Dataset(
+            self.source, [*self.operations, LoadFileOp("parquet", columns, max_shard_bytes, include_file_paths)]
+        )
 
-    def load_jsonl(self) -> Dataset[dict]:
-        """Load records from JSONL files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("jsonl", None)])
+    def load_jsonl(self, include_file_paths: str | None = None) -> Dataset[dict]:
+        """Load records from JSONL files.
 
-    def load_vortex(self, columns: list[str] | None = None) -> Dataset[dict]:
-        """Load records from Vortex files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns)])
+        Args:
+            include_file_paths: If set, add a column with this name containing the
+                source file path for each record.
+        """
+        return Dataset(self.source, [*self.operations, LoadFileOp("jsonl", None, None, include_file_paths)])
+
+    def load_vortex(self, columns: list[str] | None = None, include_file_paths: str | None = None) -> Dataset[dict]:
+        """Load records from Vortex files.
+
+        Args:
+            columns: Optional column projection.
+            include_file_paths: If set, add a column with this name containing the
+                source file path for each record.
+        """
+        return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns, None, include_file_paths)])
 
     def map_shard(
         self,
