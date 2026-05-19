@@ -329,6 +329,7 @@ class WorkerProvider:
                         req.CopyFrom(desired.run.request)
                         req.task_id = desired.task_id
                         req.attempt_id = desired.attempt_id
+                        req.attempt_uid = desired.attempt_uid
                         start_tasks.append(req)
                 elif desired.HasField("stop"):
                     stop_tasks.append(desired.task_id)

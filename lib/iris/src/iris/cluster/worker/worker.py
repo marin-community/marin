@@ -28,7 +28,7 @@ from iris.cluster.runtime.profile import (
     profile_local_process,
 )
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
-from iris.cluster.types import JobName
+from iris.cluster.types import AttemptUid, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
@@ -204,18 +204,19 @@ class Worker:
                 worker_attributes=config.worker_attributes,
             )
 
-        # Task state: maps (task_id, attempt_id) -> TaskAttempt.
-        # Preserves all attempts so logs for historical attempts remain accessible.
-        self._tasks: dict[tuple[str, int], TaskAttempt] = {}
+        # Task state: a flat list of TaskAttempt. Each attempt is
+        # self-describing — it carries its own task_id / attempt_id /
+        # attempt_uid — so the store needs no key. It is not keyed by UID
+        # because a worker booting mid-rollover adopts pre-upgrade containers
+        # that have no UID yet. Preserves all attempts so logs for historical
+        # attempts remain accessible. O(10) elements; linear scans are cheap.
+        self._tasks: list[TaskAttempt] = []
         # Freshly-submitted tasks -> monotonic submission time. Used by
         # reconciliation to grant a grace period before a task becomes
         # eligible for "unexpected, kill" if the controller hasn't yet
         # listed it in expected_tasks. See _RECENT_SUBMISSION_GRACE_SECONDS.
         self._recent_submissions: dict[tuple[str, int], float] = {}
         self._lock = threading.Lock()
-        # In-memory spec cache for the Reconcile RPC. Lost on worker restart;
-        # the controller fails affected attempts forward via worker_lost_spec.
-        self._spec_cache: dict[tuple[str, int], job_pb2.RunTaskRequest] = {}
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
@@ -384,9 +385,11 @@ class Worker:
             )
             attempt.on_state_change = self._make_state_change_callback(attempt)
 
-            key = (container.task_id, container.attempt_id)
+            # Containers created by a pre-upgrade worker carry no iris.attempt_uid
+            # label; the resulting attempt enters the list with an empty UID and
+            # is stamped by the first Reconcile tick that composite-matches it.
             with self._lock:
-                self._tasks[key] = attempt
+                self._tasks.append(attempt)
 
             # Spawn monitoring thread
             def _run_adopted(stop_event: threading.Event, a: TaskAttempt = attempt) -> None:
@@ -675,20 +678,44 @@ class Worker:
 
     def _get_current_attempt(self, task_id_wire: str) -> TaskAttempt | None:
         """Get the most recent attempt for a task, or None if no attempts exist."""
-        # Find all attempts for this task and return the one with highest attempt_id
-        matching = [(key, task) for key, task in self._tasks.items() if key[0] == task_id_wire]
+        matching = [t for t in self._tasks if t.task_id.to_wire() == task_id_wire]
         if not matching:
             return None
-        # Return the attempt with the highest attempt_id
-        matching.sort(key=lambda x: x[0][1], reverse=True)
-        return matching[0][1]
+        return max(matching, key=lambda t: t.attempt_id)
+
+    def task_by_uid(self, uid: AttemptUid) -> TaskAttempt | None:
+        """Resolve an attempt by its controller-minted UID.
+
+        Returns None for an empty UID — an empty UID never identifies an
+        attempt, even though pre-upgrade attempts carry one until stamped.
+        """
+        if not uid:
+            return None
+        for task in self._tasks:
+            if task.attempt_uid == uid:
+                return task
+        return None
+
+    def task_by_composite(self, task_id: str, attempt_id: int) -> TaskAttempt | None:
+        """Resolve an attempt by the legacy (task_id, attempt_id) composite key."""
+        for task in self._tasks:
+            if task.task_id.to_wire() == task_id and task.attempt_id == attempt_id:
+                return task
+        return None
 
     def submit_task(self, request: job_pb2.RunTaskRequest) -> str:
         """Submit a new task for execution.
 
-        If a non-terminal task with the same task_id already exists:
-        - Same or older attempt_id: rejected as duplicate
-        - Newer attempt_id: old attempt is killed and new one starts
+        Identity is the controller-minted ``attempt_uid``: a request whose UID
+        already names a known attempt is rejected as a duplicate. A re-submitted
+        ``(task_id, attempt_id)`` with a *fresh* UID is a distinct attempt and
+        runs even though a terminal attempt with that composite is retained.
+
+        When the UID is empty (legacy controller), identity falls back to the
+        ``(task_id, attempt_id)`` composite.
+
+        A higher-attempt-id submission supersedes a non-terminal current
+        attempt for the same task — the old attempt is killed.
 
         Raises:
             RuntimeError: If a non-terminal attempt already exists (sanity check)
@@ -699,13 +726,15 @@ class Worker:
         task_id_wire = request.task_id
         task_id = JobName.from_wire(task_id_wire)
         attempt_id = request.attempt_id
-        key = (task_id_wire, attempt_id)
+        attempt_uid = AttemptUid(request.attempt_uid)
 
         should_kill_existing = False
         with self._lock:
-            # Check if this exact (task_id, attempt_id) already exists
-            if key in self._tasks:
-                existing = self._tasks[key]
+            # Reject an exact duplicate. With a UID, identity is the UID; a
+            # re-submitted composite carrying a fresh UID is therefore a new
+            # attempt. Without a UID, fall back to composite identity.
+            existing = self.task_by_uid(attempt_uid) if attempt_uid else self.task_by_composite(task_id_wire, attempt_id)
+            if existing is not None:
                 logger.info(
                     "Rejecting duplicate task %s attempt %d (status=%s)",
                     task_id,
@@ -748,6 +777,7 @@ class Worker:
             num_tasks=request.num_tasks,
             request=request,
             cache_dir=self._cache_dir,
+            attempt_uid=attempt_uid,
         )
 
         attempt = TaskAttempt(
@@ -767,8 +797,8 @@ class Worker:
         attempt.on_state_change = self._make_state_change_callback(attempt)
 
         with self._lock:
-            self._tasks[key] = attempt
-            self._recent_submissions[key] = time.monotonic()
+            self._tasks.append(attempt)
+            self._recent_submissions[(task_id_wire, attempt_id)] = time.monotonic()
 
         # Start execution in a monitored non-daemon thread. When stop() is called,
         # the on_stop callback kills the container so attempt.run() exits promptly.
@@ -798,7 +828,7 @@ class Worker:
             from execution internals.
         """
         if attempt_id >= 0:
-            return self._tasks.get((task_id, attempt_id))
+            return self.task_by_composite(task_id, attempt_id)
         return self._get_current_attempt(task_id)
 
     def list_tasks(self) -> list[TaskInfo]:
@@ -807,7 +837,7 @@ class Worker:
         Returns TaskInfo views (implemented by TaskAttempt) to decouple callers
         from execution internals. Returns all attempts, not just current ones.
         """
-        return list(self._tasks.values())
+        return list(self._tasks)
 
     def list_current_tasks(self) -> list[TaskInfo]:
         """List only the most recent attempt for each task.
@@ -816,9 +846,10 @@ class Worker:
         """
         # Group by task_id and return only the highest attempt_id for each
         by_task: dict[str, TaskAttempt] = {}
-        for (task_id, attempt_id), task in self._tasks.items():
+        for task in self._tasks:
+            task_id = task.task_id.to_wire()
             existing = by_task.get(task_id)
-            if existing is None or attempt_id > existing.attempt_id:
+            if existing is None or task.attempt_id > existing.attempt_id:
                 by_task[task_id] = task
         return list(by_task.values())
 
@@ -890,16 +921,16 @@ class Worker:
         for expected_entry in expected_entries:
             task_id = expected_entry.task_id
             expected_attempt_id = expected_entry.attempt_id
-            key = (task_id, expected_attempt_id)
-            expected_keys.add(key)
-            task = self._tasks.get(key)
+            expected_keys.add((task_id, expected_attempt_id))
+            task = self.task_by_composite(task_id, expected_attempt_id)
             if task is None:
                 tasks.append(self._missing_task_status(task_id, expected_attempt_id))
             else:
                 tasks.append(self._encode_task_status(task, task_id))
         expected_keys |= self._prune_and_get_recent_submission_keys()
         tasks_to_kill: list[tuple[str, int]] = []
-        for key, task in self._tasks.items():
+        for task in self._tasks:
+            key = (task.task_id.to_wire(), task.attempt_id)
             if key not in expected_keys and task.status not in self._TERMINAL_STATES:
                 tasks_to_kill.append(key)
         return tasks, tasks_to_kill
@@ -910,7 +941,7 @@ class Worker:
         running_count = 0
         total_processes = 0
         with self._lock:
-            for task in self._tasks.values():
+            for task in self._tasks:
                 if task.status == job_pb2.TASK_STATE_RUNNING:
                     running_count += 1
                     total_processes += task.process_count
@@ -1000,66 +1031,61 @@ class Worker:
 
     def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse:
         """Process desired state from the controller and return observed state."""
-        # Tracked separately: desired_run_keys drives MISSING synthesis for
-        # entries the controller wants running but we have no record of.
-        desired_run_keys: set[tuple[str, int]] = set()
-        desired_keys: set[tuple[str, int]] = set()
-
         for desired in request.desired:
-            task_id = desired.task_id
-            attempt_id = desired.attempt_id
-            key = (task_id, attempt_id)
-
-            is_run = desired.HasField("run")
-            if is_run:
-                desired_run_keys.add(key)
-                desired_keys.add(key)
-                self._process_run_intent(task_id, attempt_id, desired.attempt_uid, desired.run)
-            else:
-                desired_keys.add(key)
-                self._process_stop_intent(task_id, attempt_id, desired.attempt_uid)
-
-        with self._lock:
-            local_keys = list(self._tasks.keys())
-
-        for key in local_keys:
-            task_id, attempt_id = key
-            with self._lock:
-                task = self._tasks.get(key)
-                if task is None:
-                    continue
-                is_terminal = task.status in self._TERMINAL_STATES
-            if key not in desired_keys and not is_terminal:
-                logger.info(
-                    "Reconcile: killing zombie attempt %s/%d (not in desired set)",
-                    task_id,
-                    attempt_id,
+            if desired.HasField("run"):
+                self._process_run_intent(
+                    desired.task_id, desired.attempt_id, AttemptUid(desired.attempt_uid), desired.run
                 )
-                self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+            else:
+                self._process_stop_intent(desired.task_id, desired.attempt_id, AttemptUid(desired.attempt_uid))
+
+        # An attempt is desired if a DesiredAttempt resolves to it. Resolve by
+        # UID first, then by the composite key — the same order routing uses,
+        # so a label-less adopted attempt stamped by a run intent above is now
+        # found by UID. Composite resolution covers attempts the worker created
+        # before any UID reached it (legacy controller).
+        with self._lock:
+            desired_attempts: set[int] = set()
+            for desired in request.desired:
+                match = self.task_by_uid(AttemptUid(desired.attempt_uid)) or self.task_by_composite(
+                    desired.task_id, desired.attempt_id
+                )
+                if match is not None:
+                    desired_attempts.add(id(match))
+            snapshot = list(self._tasks)
+
+        for task in snapshot:
+            if id(task) in desired_attempts or task.status in self._TERMINAL_STATES:
+                continue
+            logger.info(
+                "Reconcile: killing zombie attempt %s/%d (not in desired set)",
+                task.task_id,
+                task.attempt_id,
+            )
+            self._kill_task_attempt(task.task_id.to_wire(), task.attempt_id, async_kill=True)
 
         observations: list[worker_pb2.Worker.AttemptObservation] = []
         with self._lock:
-            snapshot = list(self._tasks.items())
+            snapshot = list(self._tasks)
+            for task in snapshot:
+                observations.append(self._build_observation(task))
 
-        known_keys: set[tuple[str, int]] = set()
-        for key, task in snapshot:
-            task_id, attempt_id = key
-            known_keys.add(key)
-            observations.append(self._build_observation(task_id, attempt_id, task))
-
-            # Evict terminal entries from the spec cache so it stays bounded.
-            if task.status in self._TERMINAL_STATES:
-                self._spec_cache.pop((task_id, attempt_id), None)
-
-        for task_id, attempt_id in desired_run_keys:
-            if (task_id, attempt_id) not in known_keys:
-                observations.append(
-                    worker_pb2.Worker.AttemptObservation(
-                        task_id=task_id,
-                        attempt_id=attempt_id,
-                        state=job_pb2.TASK_STATE_MISSING,
-                    )
+            # Synthesize MISSING for run intents that resolved to no local attempt.
+            for desired in request.desired:
+                if not desired.HasField("run"):
+                    continue
+                match = self.task_by_uid(AttemptUid(desired.attempt_uid)) or self.task_by_composite(
+                    desired.task_id, desired.attempt_id
                 )
+                if match is None:
+                    observations.append(
+                        worker_pb2.Worker.AttemptObservation(
+                            attempt_uid=desired.attempt_uid,
+                            task_id=desired.task_id,
+                            attempt_id=desired.attempt_id,
+                            state=job_pb2.TASK_STATE_MISSING,
+                        )
+                    )
 
         resource_snapshot = self._collect_resource_metrics()
         health = check_worker_health(disk_path=str(self._cache_dir))
@@ -1082,31 +1108,40 @@ class Worker:
         self,
         task_id: str,
         attempt_id: int,
-        attempt_uid: str,
+        attempt_uid: AttemptUid,
         attempt_spec: worker_pb2.Worker.AttemptSpec,
     ) -> None:
         """Handle a single DesiredAttempt with intent=run.
 
-        If the worker already knows the attempt, no-op. Otherwise enqueue
-        when an inline spec is provided; without a spec, leave the attempt
-        absent so the observation loop reports MISSING.
+        Resolves the target attempt by ``attempt_uid``. On a UID miss, falls
+        back once to the ``(task_id, attempt_id)`` composite — this adopts a
+        label-less attempt left by a pre-upgrade worker, stamping the UID onto
+        it so later ticks resolve directly. If the worker already holds the
+        attempt by either route, this is a no-op. Otherwise enqueue when an
+        inline spec is provided; without a spec, leave the attempt absent so
+        the observation loop reports MISSING.
         """
-        # attempt_uid honored if set; composite key is the routing fallback while migrations land
-        del attempt_uid
-        key = (task_id, attempt_id)
-
         with self._lock:
-            task = self._tasks.get(key)
+            task = self.task_by_uid(attempt_uid)
+            if task is None:
+                task = self.task_by_composite(task_id, attempt_id)
+                if task is not None and attempt_uid and not task.attempt_uid:
+                    # Adopted (label-less) attempt — stamp the UID so later
+                    # ticks route directly by it.
+                    logger.info(
+                        "Reconcile: stamping attempt_uid %s onto attempt %s/%d (composite match)",
+                        attempt_uid,
+                        task_id,
+                        attempt_id,
+                    )
+                    task.attempt_uid = attempt_uid
 
         if task is not None:
             return
 
-        spec_has_request = attempt_spec.HasField("request")
-        if spec_has_request:
-            run_request = attempt_spec.request
-            self._spec_cache[(task_id, attempt_id)] = run_request
+        if attempt_spec.HasField("request"):
             logger.info("Reconcile: enqueuing attempt %s/%d (spec inline)", task_id, attempt_id)
-            self.submit_task(run_request)
+            self.submit_task(attempt_spec.request)
         else:
             logger.info(
                 "Reconcile: attempt %s/%d unknown and no spec; will report MISSING",
@@ -1114,16 +1149,15 @@ class Worker:
                 attempt_id,
             )
 
-    def _process_stop_intent(self, task_id: str, attempt_id: int, attempt_uid: str) -> None:
+    def _process_stop_intent(self, task_id: str, attempt_id: int, attempt_uid: AttemptUid) -> None:
         """Handle a single DesiredAttempt with intent=stop.
 
-        Idempotent: silently does nothing if the attempt is already terminal or
-        not present locally.
+        Resolves the target attempt by ``attempt_uid``, falling back to the
+        ``(task_id, attempt_id)`` composite. Idempotent: silently does nothing
+        if the attempt is already terminal or not present locally.
         """
-        # attempt_uid honored if set; composite key is the routing fallback while migrations land
-        del attempt_uid
         with self._lock:
-            task = self._tasks.get((task_id, attempt_id))
+            task = self.task_by_uid(attempt_uid) or self.task_by_composite(task_id, attempt_id)
             if task is None:
                 return
             is_terminal = task.status in self._TERMINAL_STATES
@@ -1132,23 +1166,29 @@ class Worker:
             return
 
         logger.info("Reconcile: stopping attempt %s/%d (stop intent)", task_id, attempt_id)
-        self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+        self._kill_task_attempt(task.task_id.to_wire(), task.attempt_id, async_kill=True)
 
     def _build_observation(
         self,
-        task_id: str,
-        attempt_id: int,
-        task: TaskInfo,
+        task: TaskAttempt,
     ) -> worker_pb2.Worker.AttemptObservation:
-        """Build an AttemptObservation from a local TaskAttempt."""
+        """Build an AttemptObservation from a local TaskAttempt.
+
+        Reports ``attempt_uid`` for UID routing and keeps the composite
+        ``task_id`` / ``attempt_id`` populated for the controller's fallback.
+        ``attempt_uid`` is empty for an adopted attempt not yet stamped by a
+        Reconcile tick — the controller then routes that observation by
+        composite, which is exactly the rollover case.
+        """
         state = task.status
         # Workers never report PENDING to the controller; map it to BUILDING.
         if state == job_pb2.TASK_STATE_PENDING:
             state = job_pb2.TASK_STATE_BUILDING
 
         obs = worker_pb2.Worker.AttemptObservation(
-            task_id=task_id,
-            attempt_id=attempt_id,
+            attempt_uid=task.attempt_uid,
+            task_id=task.task_id.to_wire(),
+            attempt_id=task.attempt_id,
             state=state,
             exit_code=task.exit_code or 0,
             error=task.error or "",
@@ -1175,7 +1215,7 @@ class Worker:
                 container stop/wait/force-kill sequence in a daemon thread.
                 Used by heartbeat to avoid blocking the RPC response.
         """
-        task = self._tasks.get((task_id, attempt_id))
+        task = self.task_by_composite(task_id, attempt_id)
         if not task:
             return False
 
@@ -1254,7 +1294,7 @@ class Worker:
                 break
             limiter.mark_run()
             with self._lock:
-                running = [a for a in self._tasks.values() if a.status == job_pb2.TASK_STATE_RUNNING]
+                running = [a for a in self._tasks if a.status == job_pb2.TASK_STATE_RUNNING]
             for attempt in running:
                 if stop_event.is_set():
                     break
@@ -1306,7 +1346,7 @@ class Worker:
                 if current is None:
                     raise RuntimeError(f"no attempts for task {task_id_wire}")
                 resolved_attempt_id = current.attempt_id
-            attempt = self._tasks.get((task_id_wire, resolved_attempt_id))
+            attempt = self.task_by_composite(task_id_wire, resolved_attempt_id)
             if attempt is None or attempt.status != job_pb2.TASK_STATE_RUNNING:
                 raise RuntimeError("attempt no longer running")
             data = attempt.profile(duration, request.profile_type)

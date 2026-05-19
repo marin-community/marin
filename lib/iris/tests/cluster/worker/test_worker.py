@@ -425,6 +425,113 @@ def test_duplicate_attempt_rejected(mock_worker, mock_runtime):
     task.thread.join(timeout=15.0)
 
 
+def test_resubmit_same_composite_fresh_uid_is_distinct_attempt(mock_worker, mock_runtime):
+    """A resubmit of (task_id, attempt_id=0) with a fresh UID is a distinct attempt.
+
+    Regression: the worker retains the terminal attempt for log access. A
+    re-submitted composite carrying a *new* UID is a new incarnation and must
+    run, not be rejected as a duplicate of the retained terminal attempt.
+    """
+    # Container exits immediately so the first attempt becomes terminal.
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=0)],
+        )
+    )
+    task_id = JobName.root("test-user", "resubmit-task").task(0).to_wire()
+
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-first"))
+    first = mock_worker.task_by_uid("uid-first")
+    assert first is not None
+    first.thread.join(timeout=15.0)
+    assert first.status == job_pb2.TASK_STATE_SUCCEEDED
+
+    # Resubmit the same (task_id, attempt_id=0) with a fresh UID.
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-second"))
+
+    second = mock_worker.task_by_uid("uid-second")
+    assert second is not None, "Resubmit with a fresh UID must produce a new attempt"
+    assert second is not first, "New incarnation must be a distinct TaskAttempt"
+    # Both incarnations coexist in the worker's list.
+    assert first in mock_worker._tasks
+    assert second in mock_worker._tasks
+
+    if second.thread:
+        second.thread.join(timeout=15.0)
+
+
+def test_resubmit_same_uid_is_rejected_as_duplicate(mock_worker, mock_runtime):
+    """A resubmit carrying the *same* UID is still rejected as a true duplicate."""
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+        )
+    )
+    task_id = JobName.root("test-user", "dup-uid-task").task(0).to_wire()
+
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-dup"))
+    task = mock_worker.task_by_uid("uid-dup")
+    assert task is not None
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    # Resubmit with the identical UID — must be rejected, list unchanged.
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-dup"))
+    assert [t for t in mock_worker._tasks if t.attempt_uid == "uid-dup"] == [task]
+
+    mock_worker.kill_task(task_id)
+    task.thread.join(timeout=15.0)
+
+
+def test_resubmit_empty_uid_rejected_on_composite(mock_worker, mock_runtime):
+    """With no UID (legacy controller), identity falls back to the composite key.
+
+    A resubmit of the same (task_id, attempt_id) with an empty UID is rejected
+    as a duplicate — the legacy path is preserved.
+    """
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+        )
+    )
+    task_id = JobName.root("test-user", "legacy-task").task(0).to_wire()
+
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0))
+    task = mock_worker.get_task(task_id, attempt_id=0)
+    assert task is not None
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    # Resubmit with empty UID — composite identity rejects it.
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0))
+    assert mock_worker.get_task(task_id, attempt_id=0) is task
+    assert len(mock_worker._tasks) == 1
+
+    mock_worker.kill_task(task_id)
+    task.thread.join(timeout=15.0)
+
+
+def test_task_by_uid_and_composite_resolution(mock_worker, mock_runtime):
+    """task_by_uid / task_by_composite resolve correctly; empty UID resolves to None."""
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+        )
+    )
+    task_id = JobName.root("test-user", "resolve-task").task(0).to_wire()
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-resolve"))
+
+    task = mock_worker.task_by_uid("uid-resolve")
+    assert task is not None
+    assert mock_worker.task_by_composite(task_id, 0) is task
+    # An empty UID never identifies an attempt, even though one is tracked.
+    assert mock_worker.task_by_uid("") is None
+    # An unknown UID / composite resolves to None.
+    assert mock_worker.task_by_uid("uid-nope") is None
+    assert mock_worker.task_by_composite(task_id, 99) is None
+
+    mock_worker.kill_task(task_id)
+    task.thread.join(timeout=15.0)
+
+
 def test_stop_tasks_initiates_async_kill(mock_worker, mock_runtime):
     """StopTasks signals the task to stop and returns without waiting for the kill to complete."""
     mock_handle = create_mock_container_handle(status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000)
@@ -1045,6 +1152,7 @@ class TestWorkerServiceIntegration:
 def _make_discovered_container(
     task_id: str = JobName.root("test-user", "test-job").task(0).to_wire(),
     attempt_id: int = 0,
+    attempt_uid: str = "",
     worker_id: str = "",
     phase: ExecutionStage = ExecutionStage.RUN,
     running: bool = True,
@@ -1054,6 +1162,7 @@ def _make_discovered_container(
         container_id="abc123def456",
         task_id=task_id,
         attempt_id=attempt_id,
+        attempt_uid=attempt_uid,
         job_id=JobName.root("test-user", "test-job").to_wire(),
         worker_id=worker_id,
         phase=phase,
@@ -1118,6 +1227,65 @@ def test_adopt_accepts_matching_worker_id(mock_worker, mock_runtime):
     adopted = mock_worker.adopt_running_containers()
 
     assert adopted == 1
+
+
+def test_adopt_with_uid_label_carries_uid(mock_worker, mock_runtime):
+    """A discovered container WITH an iris.attempt_uid label yields an attempt carrying that UID."""
+    container = _make_discovered_container(attempt_uid="uid-adopted")
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    adopted = mock_worker.adopt_running_containers()
+
+    assert adopted == 1
+    task = mock_worker.task_by_uid("uid-adopted")
+    assert task is not None
+    assert task.attempt_uid == "uid-adopted"
+
+
+def test_adopt_without_uid_label_has_empty_uid(mock_worker, mock_runtime):
+    """A discovered container WITHOUT the label yields an attempt with an empty UID."""
+    container = _make_discovered_container(attempt_uid="")
+    mock_runtime.discover_containers = Mock(return_value=[container])
+
+    adopted = mock_worker.adopt_running_containers()
+
+    assert adopted == 1
+    task = mock_worker.get_task(container.task_id, container.attempt_id)
+    assert task is not None
+    assert task.attempt_uid == ""
+    # An empty UID never resolves via task_by_uid.
+    assert mock_worker.task_by_uid("") is None
+
+
+def test_reconcile_run_intent_stamps_uid_onto_label_less_adopted_attempt(mock_worker, mock_runtime):
+    """A run intent composite-matches a label-less adopted attempt and stamps its UID.
+
+    Models the rollover case: a worker boots onto the new binary and adopts a
+    container created by a pre-upgrade worker (no iris.attempt_uid label). The
+    first reconcile tick carrying a UID for that composite stamps it, so a
+    later task_by_uid resolves the attempt directly.
+    """
+    container = _make_discovered_container(attempt_uid="")
+    mock_runtime.discover_containers = Mock(return_value=[container])
+    mock_worker.adopt_running_containers()
+
+    task = mock_worker.get_task(container.task_id, container.attempt_id)
+    assert task is not None
+    assert task.attempt_uid == ""
+    assert mock_worker.task_by_uid("uid-rollover") is None
+
+    # Reconcile tick: run intent carries the UID for this composite, no inline spec.
+    desired = worker_pb2.Worker.DesiredAttempt(
+        attempt_uid="uid-rollover",
+        task_id=container.task_id,
+        attempt_id=container.attempt_id,
+        run=worker_pb2.Worker.AttemptSpec(),
+    )
+    mock_worker.handle_reconcile(worker_pb2.Worker.ReconcileRequest(desired=[desired]))
+
+    # The UID is now stamped onto the adopted attempt.
+    assert task.attempt_uid == "uid-rollover"
+    assert mock_worker.task_by_uid("uid-rollover") is task
 
 
 def test_poll_tasks_after_adoption_reports_running(mock_worker, mock_runtime):
@@ -1422,6 +1590,7 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
         workdir_host_path=workdir,
         task_id="/test-user/test-job/0",
         attempt_id=3,
+        attempt_uid="abcd1234abcd1234",
         job_id="/test-user/test-job",
         worker_id="worker-42",
     )
@@ -1445,6 +1614,7 @@ def test_docker_container_has_adoption_labels(docker_runtime, tmp_path):
         assert labels["iris.managed"] == "true"
         assert labels["iris.task_id"] == "/test-user/test-job/0"
         assert labels["iris.attempt_id"] == "3"
+        assert labels["iris.attempt_uid"] == "abcd1234abcd1234"
         assert labels["iris.worker_id"] == "worker-42"
         assert labels["iris.phase"] == "run"
         assert labels["iris.job_id"] == "/test-user/test-job"
@@ -1470,6 +1640,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
         workdir_host_path=workdir,
         task_id="/test-user/discover-job/0",
         attempt_id=5,
+        attempt_uid="cafe9999cafe9999",
         job_id="/test-user/discover-job",
         worker_id="worker-99",
     )
@@ -1484,6 +1655,7 @@ def test_docker_discover_containers(docker_runtime, tmp_path):
 
         d = matching[0]
         assert d.attempt_id == 5
+        assert d.attempt_uid == "cafe9999cafe9999"
         assert d.worker_id == "worker-99"
         assert d.phase == "run"
         assert d.running is True

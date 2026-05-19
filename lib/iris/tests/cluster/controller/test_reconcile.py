@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from iris.cluster.controller import writes
 from iris.cluster.controller.reconcile import (
     ReconcileInputs,
     ReconcileResult,
@@ -29,6 +30,7 @@ from iris.cluster.controller.reconcile import (
     WorkerReconcilePlan,
     reconcile_workers,
 )
+from iris.cluster.controller.schema import task_attempts_table
 from iris.cluster.controller.transitions import (
     Assignment,
     ControllerTransitions,
@@ -36,9 +38,10 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.controller.worker_provider import WorkerProvider
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Timestamp
+from sqlalchemy import select
 
 from .conftest import (
     dispatch_task,
@@ -120,11 +123,126 @@ def _desired_stop(task_id: JobName, attempt_id: int, *, reason=worker_pb2.Worker
 
 
 # ===========================================================================
+# Section 0: attempt_uid minting (writes.insert_attempt)
+# ===========================================================================
+#
+# insert_attempt is the single task_attempts INSERT chokepoint: it mints the
+# controller-side attempt_uid, writes the row, and returns the uid. A
+# UNIQUE-index collision on attempt_uid is re-minted; any other integrity
+# error propagates.
+
+
+def _submit_pending_task(state: ControllerTransitions, job: str = "mint-job") -> JobName:
+    """Submit a one-task job and return its task_id (task stays PENDING, no attempt)."""
+    tasks = submit_job(state, job, make_job_request(name=job))
+    return tasks[0].task_id
+
+
+def _insert_attempt(state: ControllerTransitions, task_id: JobName, attempt_id: int) -> str:
+    with state._db.transaction() as cur:
+        return writes.insert_attempt(
+            cur,
+            task_id=task_id,
+            attempt_id=attempt_id,
+            worker_id=None,
+            state=job_pb2.TASK_STATE_ASSIGNED,
+            created_at_ms=1_000,
+        )
+
+
+def test_insert_attempt_mints_16_hex_uid_and_persists_it():
+    """insert_attempt returns a 16-hex attempt_uid and stores it on the row."""
+    with make_controller_state() as state:
+        task_id = _submit_pending_task(state)
+        uid = _insert_attempt(state, task_id, attempt_id=0)
+
+        assert len(uid) == 16
+        assert all(c in "0123456789abcdef" for c in uid)
+        # Returned uid is exactly what landed in the row.
+        assert _attempt_uid(state, task_id, 0) == uid
+
+
+def test_insert_attempt_mints_distinct_uids_for_distinct_attempts():
+    """Distinct insert_attempt calls yield distinct attempt_uids."""
+    with make_controller_state() as state:
+        task_a = _submit_pending_task(state, job="mint-a")
+        task_b = _submit_pending_task(state, job="mint-b")
+
+        uid_a = _insert_attempt(state, task_a, attempt_id=0)
+        uid_b = _insert_attempt(state, task_b, attempt_id=0)
+
+        assert uid_a != uid_b
+
+
+def test_insert_attempt_remints_on_uid_collision(monkeypatch):
+    """A UNIQUE collision on attempt_uid is re-minted; the row lands with the fresh value.
+
+    secrets.token_hex is the mint seam. Force it to hand back an
+    already-stored uid once, then a fresh value, and assert the second attempt
+    row lands with the fresh uid rather than aborting the transaction.
+    """
+    with make_controller_state() as state:
+        task_a = _submit_pending_task(state, job="collide-a")
+        task_b = _submit_pending_task(state, job="collide-b")
+
+        first_uid = _insert_attempt(state, task_a, attempt_id=0)
+
+        # token_hex hands back the existing uid (collision), then a fresh one.
+        scripted = iter([first_uid, "cafebabecafebabe"])
+        monkeypatch.setattr("iris.cluster.controller.writes.secrets.token_hex", lambda _n: next(scripted))
+
+        second_uid = _insert_attempt(state, task_b, attempt_id=0)
+
+        assert second_uid == "cafebabecafebabe"
+        assert _attempt_uid(state, task_b, 0) == "cafebabecafebabe"
+        # The collided first value still belongs to task_a, untouched.
+        assert _attempt_uid(state, task_a, 0) == first_uid
+
+
+def test_insert_attempt_exhausts_retries_when_every_mint_collides(monkeypatch):
+    """If every minted uid collides, insert_attempt raises rather than looping forever."""
+    with make_controller_state() as state:
+        task_a = _submit_pending_task(state, job="exhaust-a")
+        task_b = _submit_pending_task(state, job="exhaust-b")
+
+        first_uid = _insert_attempt(state, task_a, attempt_id=0)
+        # Every mint returns the already-stored uid.
+        monkeypatch.setattr("iris.cluster.controller.writes.secrets.token_hex", lambda _n: first_uid)
+
+        with pytest.raises(RuntimeError, match="exhausted attempt_uid retries"):
+            _insert_attempt(state, task_b, attempt_id=0)
+
+
+def test_insert_attempt_propagates_non_uid_integrity_error():
+    """A composite-PK collision (same task_id, attempt_id) is a real bug — it must propagate.
+
+    The retry loop is scoped to attempt_uid collisions only; re-inserting an
+    existing (task_id, attempt_id) trips the PRIMARY KEY constraint and must
+    raise instead of being silently retried.
+    """
+    with make_controller_state() as state:
+        task_id = _submit_pending_task(state, job="pk-collide")
+        _insert_attempt(state, task_id, attempt_id=0)
+
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises(IntegrityError):
+            _insert_attempt(state, task_id, attempt_id=0)
+
+
+# ===========================================================================
 # Section 1: pure-compute (reconcile_worker)
 # ===========================================================================
 
 
-def _row(task_state: int, *, task_id: str = "task-a", attempt_id: int = 0, job: str = "job-a") -> ReconcileRow:
+def _row(
+    task_state: int,
+    *,
+    task_id: str = "task-a",
+    attempt_id: int = 0,
+    job: str = "job-a",
+    attempt_uid: str = "deadbeefdeadbeef",
+) -> ReconcileRow:
     return ReconcileRow(
         worker_id=WorkerId(_W1),
         task_id=_task_id(task_id),
@@ -132,6 +250,7 @@ def _row(task_state: int, *, task_id: str = "task-a", attempt_id: int = 0, job: 
         task_state=task_state,
         attempt_state=job_pb2.TASK_STATE_PENDING,  # unused by reconcile_worker today
         job_id=_job_id(job),
+        attempt_uid=AttemptUid(attempt_uid),
     )
 
 
@@ -267,6 +386,55 @@ def test_reconcile_worker_mixed_rows_per_axis():
     assert not by_task[_task_id("b").to_wire()].run.HasField("request")
     assert by_task[_task_id("c").to_wire()].stop == worker_pb2.Worker.STOP_REASON_CANCELLED
     assert not by_task[_task_id("d").to_wire()].run.HasField("request")
+
+
+# --- attempt_uid is stamped on every emit site ------------------------------
+
+
+@pytest.mark.parametrize(
+    "task_state",
+    [
+        job_pb2.TASK_STATE_ASSIGNED,  # assign/run emit site
+        job_pb2.TASK_STATE_BUILDING,  # executing emit site
+        job_pb2.TASK_STATE_RUNNING,  # executing emit site
+        job_pb2.TASK_STATE_KILLED,  # killed → stop emit site
+        job_pb2.TASK_STATE_PREEMPTED,  # preempted → stop emit site
+        job_pb2.TASK_STATE_SUCCEEDED,  # terminal-expected emit site
+        job_pb2.TASK_STATE_FAILED,  # terminal-expected emit site
+    ],
+)
+def test_reconcile_worker_stamps_attempt_uid_on_every_emit_site(task_state):
+    """Every ``DesiredAttempt`` _reconcile_worker emits carries the row's attempt_uid.
+
+    All five emit branches (assign/run, executing, killed, preempted,
+    terminal-expected) used to hardcode ``attempt_uid=""``; Phase 2 fills them
+    from ``ReconcileRow.attempt_uid``.
+    """
+    uid = "00112233aabbccdd"
+    row = _row(task_state, attempt_id=9, job="job-uid", attempt_uid=uid)
+    # ASSIGNED needs a cached spec or the row is dropped before any emit.
+    job_specs = {_job_id("job-uid"): _spec()} if task_state == job_pb2.TASK_STATE_ASSIGNED else None
+    plan = _plan_for([row], job_specs=job_specs)
+
+    assert len(plan.request.desired) == 1
+    assert plan.request.desired[0].attempt_uid == uid
+
+
+def test_reconcile_worker_emits_distinct_uids_for_distinct_rows():
+    """Each row's own attempt_uid lands on its own DesiredAttempt — no cross-talk."""
+    rows = [
+        _row(job_pb2.TASK_STATE_ASSIGNED, task_id="a", attempt_id=1, job="j1", attempt_uid="1111111111111111"),
+        _row(job_pb2.TASK_STATE_RUNNING, task_id="b", attempt_id=2, job="j2", attempt_uid="2222222222222222"),
+        _row(job_pb2.TASK_STATE_KILLED, task_id="c", attempt_id=3, job="j3", attempt_uid="3333333333333333"),
+    ]
+    plan = _plan_for(rows, job_specs={_job_id("j1"): _spec()})
+
+    uid_by_task = {d.task_id: d.attempt_uid for d in plan.request.desired}
+    assert uid_by_task == {
+        _task_id("a").to_wire(): "1111111111111111",
+        _task_id("b").to_wire(): "2222222222222222",
+        _task_id("c").to_wire(): "3333333333333333",
+    }
 
 
 # ===========================================================================
@@ -715,6 +883,129 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
         ), f"sibling state should have cascaded, got {sibling_state}"
 
 
+# --- UID routing in _observations_to_updates --------------------------------
+
+
+def _attempt_uid(state: ControllerTransitions, task_id: JobName, attempt_id: int) -> str:
+    """Read the controller-minted attempt_uid for one attempt row."""
+    with state._db.read_snapshot() as tx:
+        row = tx.execute(
+            select(task_attempts_table.c.attempt_uid).where(
+                task_attempts_table.c.task_id == task_id,
+                task_attempts_table.c.attempt_id == attempt_id,
+            )
+        ).first()
+    assert row is not None
+    return row.attempt_uid
+
+
+def _observations_to_updates(
+    state: ControllerTransitions,
+    observations: list[worker_pb2.Worker.AttemptObservation],
+) -> list[TaskUpdate]:
+    with state._db.transaction() as cur:
+        return state._observations_to_updates(cur, observations)
+
+
+def test_observation_routed_by_attempt_uid_overrides_disagreeing_composite():
+    """A resolvable attempt_uid wins even when the observation's composite disagrees.
+
+    The worker echoes the controller-minted UID; the controller resolves it to
+    the true ``(task_id, attempt_id)`` regardless of the (here deliberately
+    wrong) composite fields on the same observation.
+    """
+    with make_controller_state() as state:
+        task_id, attempt_id = _setup_running_task(state)
+        uid = _attempt_uid(state, task_id, attempt_id)
+
+        # Observation carries the right UID but a bogus composite.
+        bogus = _task_id("not-the-real-task")
+        obs = worker_pb2.Worker.AttemptObservation(
+            attempt_uid=uid,
+            state=job_pb2.TASK_STATE_SUCCEEDED,
+            task_id=bogus.to_wire(),
+            attempt_id=attempt_id + 99,
+            exit_code=0,
+        )
+        updates = _observations_to_updates(state, [obs])
+
+        assert len(updates) == 1
+        # Routed by UID to the real attempt, not the bogus composite.
+        assert updates[0].task_id == task_id
+        assert updates[0].attempt_id == attempt_id
+        assert updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
+
+
+def test_observation_with_empty_uid_falls_back_to_reported_composite():
+    """An empty attempt_uid (pre-UID worker) routes by the worker-reported composite."""
+    with make_controller_state() as state:
+        task_id, attempt_id = _setup_running_task(state)
+
+        obs = _obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+        assert obs.attempt_uid == ""
+        updates = _observations_to_updates(state, [obs])
+
+        assert len(updates) == 1
+        assert updates[0].task_id == task_id
+        assert updates[0].attempt_id == attempt_id
+
+
+def test_observation_with_unresolvable_uid_falls_back_to_reported_composite():
+    """A UID that resolves to nothing falls back to the reported composite."""
+    with make_controller_state() as state:
+        task_id, attempt_id = _setup_running_task(state)
+
+        obs = worker_pb2.Worker.AttemptObservation(
+            attempt_uid="ffffffffffffffff",  # never minted — resolves to nothing
+            state=job_pb2.TASK_STATE_RUNNING,
+            task_id=task_id.to_wire(),
+            attempt_id=attempt_id,
+        )
+        updates = _observations_to_updates(state, [obs])
+
+        assert len(updates) == 1
+        assert updates[0].task_id == task_id
+        assert updates[0].attempt_id == attempt_id
+        assert updates[0].new_state == job_pb2.TASK_STATE_RUNNING
+
+
+def _setup_running_task_named(state: ControllerTransitions, job: str, worker_id: str) -> tuple[JobName, int]:
+    """Register a worker, submit a uniquely-named job, dispatch, drive to RUNNING."""
+    wid = WorkerId(worker_id)
+    register_worker(state, worker_id, f"{worker_id}:8080", make_worker_metadata())
+    tasks = submit_job(state, job, make_job_request(name=job))
+    dispatch_task(state, tasks[0], wid)
+    refreshed = query_task(state, tasks[0].task_id)
+    assert refreshed is not None
+    return tasks[0].task_id, refreshed.current_attempt_id
+
+
+def test_observations_to_updates_routes_mixed_uid_and_composite_batch():
+    """A batch mixing a UID-routed and a composite-routed observation routes each correctly."""
+    with make_controller_state() as state:
+        task_a, attempt_a = _setup_running_task_named(state, "mixed-a", _W1)
+        task_b, attempt_b = _setup_running_task_named(state, "mixed-b", _W2)
+        uid_a = _attempt_uid(state, task_a, attempt_a)
+
+        # task_a observed by UID (composite deliberately wrong); task_b by composite (empty UID).
+        obs_a = worker_pb2.Worker.AttemptObservation(
+            attempt_uid=uid_a,
+            state=job_pb2.TASK_STATE_SUCCEEDED,
+            task_id=_task_id("wrong").to_wire(),
+            attempt_id=attempt_a + 7,
+            exit_code=0,
+        )
+        obs_b = _obs(task_b, attempt_b, job_pb2.TASK_STATE_FAILED, error="oom")
+        updates = _observations_to_updates(state, [obs_a, obs_b])
+
+        by_task = {u.task_id: u for u in updates}
+        assert set(by_task) == {task_a, task_b}
+        assert by_task[task_a].attempt_id == attempt_a
+        assert by_task[task_a].new_state == job_pb2.TASK_STATE_SUCCEEDED
+        assert by_task[task_b].attempt_id == attempt_b
+        assert by_task[task_b].new_state == job_pb2.TASK_STATE_FAILED
+
+
 # --- End-to-end: full controller tick over both wires ----------------------
 
 
@@ -836,3 +1127,66 @@ def test_e2e_missing_observation_fails_attempt_with_worker_lost_spec(make_contro
     task = query_task(state, task_id)
     assert task.state == job_pb2.TASK_STATE_FAILED
     assert task.error == "worker_lost_spec"
+
+
+def _observation_for_all_run_uid_only(plan: WorkerReconcilePlan, state: int, **kwargs):
+    """Build one observation per run-intent that the controller can route *only* by UID.
+
+    Each observation echoes the controller-minted ``attempt_uid`` but carries a
+    deliberately wrong ``(task_id, attempt_id)`` composite. A real new-binary
+    worker would echo the correct composite too; feeding a wrong one forces
+    convergence through the UID path, proving it works end to end (the e2e
+    analog of ``test_observations_to_updates_routes_mixed_uid_and_composite_batch``).
+    ``_observation_for_all_run`` is the opposite end — empty UID, old-binary worker.
+    """
+    return [
+        worker_pb2.Worker.AttemptObservation(
+            attempt_uid=d.attempt_uid,
+            state=state,
+            task_id=_task_id("wrong-composite").to_wire(),
+            attempt_id=d.attempt_id + 999,
+            **kwargs,
+        )
+        for d in plan.request.desired
+        if d.HasField("run")
+    ]
+
+
+def test_e2e_converges_with_uid_echoing_worker(make_controller):
+    """Full ASSIGNED → RUNNING → SUCCEEDED convergence routed solely by attempt_uid.
+
+    The new-binary half of a mixed fleet: ``test_e2e_converges_to_succeeded_through_both_wires``
+    drives an old-binary worker (empty attempt_uid, composite-key routing); here every
+    observation carries the controller-minted UID and a wrong composite, so convergence
+    is only possible if the controller routes by UID.
+    """
+    script = [
+        lambda _plan: [],  # tick 1: ASSIGNED dispatch
+        lambda plan: _observation_for_all_run_uid_only(plan, job_pb2.TASK_STATE_RUNNING),
+        lambda plan: _observation_for_all_run_uid_only(plan, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0),
+    ]
+    provider = _ScriptedProvider(use_reconcile_rpc_expected=True, script=script)
+    ctrl = make_controller(provider=provider, reconcile_rpc_enabled=True)
+    state = ctrl._transitions
+
+    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    tasks = submit_job(state, "uid-e2e-job", make_job_request(name="uid-e2e-job"))
+    task_id = tasks[0].task_id
+
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+
+    # Tick 1: ASSIGNED dispatch — the controller emits a non-empty attempt_uid.
+    ctrl._reconcile_worker_batch()
+    tick1_desired = list(provider.calls[0][0][0].request.desired)
+    assert tick1_desired and tick1_desired[0].attempt_uid, "controller must emit a non-empty attempt_uid"
+
+    # Tick 2: worker reports RUNNING with the UID echoed back.
+    ctrl._reconcile_worker_batch()
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    # Tick 3: worker reports SUCCEEDED — routed by UID to completion.
+    ctrl._reconcile_worker_batch()
+    task_final = query_task(state, task_id)
+    assert task_final.state == job_pb2.TASK_STATE_SUCCEEDED
+    assert query_job(state, task_final.job_id).state == job_pb2.JOB_STATE_SUCCEEDED

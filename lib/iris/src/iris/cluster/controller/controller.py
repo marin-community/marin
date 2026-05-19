@@ -2354,6 +2354,7 @@ class Controller:
                     tasks_table.c.state.label("task_state"),
                     task_attempts_table.c.state.label("attempt_state"),
                     tasks_table.c.job_id,
+                    task_attempts_table.c.attempt_uid,
                 )
                 .select_from(
                     task_attempts_table.join(

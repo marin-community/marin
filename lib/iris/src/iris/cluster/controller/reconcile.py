@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, EXECUTING_TASK_STATES
-from iris.cluster.types import TERMINAL_TASK_STATES, JobName, WorkerId
+from iris.cluster.types import TERMINAL_TASK_STATES, AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 
 
@@ -22,6 +22,7 @@ class ReconcileRow:
     task_state: int
     attempt_state: int
     job_id: JobName
+    attempt_uid: AttemptUid
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ def _reconcile_worker(
             req.attempt_id = row.attempt_id
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid="",
+                    attempt_uid=row.attempt_uid,
                     run=worker_pb2.Worker.AttemptSpec(request=req),
                     task_id=wire_task_id,
                     attempt_id=row.attempt_id,
@@ -97,7 +98,7 @@ def _reconcile_worker(
         elif row.task_state in EXECUTING_TASK_STATES:
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid="",
+                    attempt_uid=row.attempt_uid,
                     run=worker_pb2.Worker.AttemptSpec(),
                     task_id=wire_task_id,
                     attempt_id=row.attempt_id,
@@ -106,7 +107,7 @@ def _reconcile_worker(
         elif row.task_state == job_pb2.TASK_STATE_KILLED:
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid="",
+                    attempt_uid=row.attempt_uid,
                     stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
                     task_id=wire_task_id,
                     attempt_id=row.attempt_id,
@@ -115,7 +116,7 @@ def _reconcile_worker(
         elif row.task_state == job_pb2.TASK_STATE_PREEMPTED:
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid="",
+                    attempt_uid=row.attempt_uid,
                     stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
                     task_id=wire_task_id,
                     attempt_id=row.attempt_id,
@@ -124,7 +125,7 @@ def _reconcile_worker(
         elif row.task_state in _TERMINAL_EXPECTED_STATES:
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
-                    attempt_uid="",
+                    attempt_uid=row.attempt_uid,
                     run=worker_pb2.Worker.AttemptSpec(),
                     task_id=wire_task_id,
                     attempt_id=row.attempt_id,

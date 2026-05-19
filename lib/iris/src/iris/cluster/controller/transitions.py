@@ -64,6 +64,7 @@ from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
+    AttemptUid,
     JobName,
     WorkerId,
     get_gpu_count,
@@ -2013,7 +2014,7 @@ class ControllerTransitions:
             return TxResult()
         self._health.heartbeat([worker_id], now_ms)
 
-        all_updates = self._observations_to_updates(result.observations)
+        all_updates = self._observations_to_updates(cur, result.observations)
         if not all_updates:
             return TxResult()
 
@@ -2071,24 +2072,35 @@ class ControllerTransitions:
 
     def _observations_to_updates(
         self,
+        cur: Tx,
         observations: list[worker_pb2.Worker.AttemptObservation],
     ) -> list[TaskUpdate]:
         """Translate ``AttemptObservation`` protos into ``TaskUpdate`` list.
 
         MISSING becomes ``FAILED("worker_lost_spec")``. Routing prefers the
-        ``attempt_uid`` when set; otherwise it falls back to the legacy
-        ``(task_id, attempt_id)`` composite key. UIDs are currently always
-        empty, so the composite path is the one in use.
+        ``attempt_uid`` when set: the UID is resolved to its ``(task_id,
+        attempt_id)`` composite through the ``idx_task_attempts_uid`` index.
+        Observations from pre-UID workers carry an empty ``attempt_uid`` and
+        fall back to the composite key the worker reports directly. A UID that
+        resolves to nothing (e.g. its attempt row was deleted) likewise falls
+        back to the reported composite.
         """
+        uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
+        uid_to_composite = reads.resolve_attempt_uids(cur, uids)
+
         updates: list[TaskUpdate] = []
         for obs in observations:
-            if obs.attempt_uid:
-                # UID routing will resolve to a (task_id, attempt_id) pair
-                # once worker-side UID assignment lands; for now no consumer
-                # emits a non-empty UID and falling through to the composite
-                # branch is the only correct behaviour.
-                logger.debug("AttemptObservation carries uid=%s; falling back to composite key", obs.attempt_uid)
-            task_id = JobName.from_wire(obs.task_id)
+            resolved = uid_to_composite.get(AttemptUid(obs.attempt_uid)) if obs.attempt_uid else None
+            if resolved is not None:
+                task_id, attempt_id = resolved
+            else:
+                if obs.attempt_uid:
+                    logger.debug(
+                        "AttemptObservation uid=%s did not resolve; falling back to composite key",
+                        obs.attempt_uid,
+                    )
+                task_id = JobName.from_wire(obs.task_id)
+                attempt_id = obs.attempt_id
             exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
             error: str | None = obs.error or None
             container_id: str | None = obs.container_id or None
@@ -2096,7 +2108,7 @@ class ControllerTransitions:
                 updates.append(
                     TaskUpdate(
                         task_id=task_id,
-                        attempt_id=obs.attempt_id,
+                        attempt_id=attempt_id,
                         new_state=job_pb2.TASK_STATE_FAILED,
                         error="worker_lost_spec",
                     )
@@ -2105,7 +2117,7 @@ class ControllerTransitions:
                 updates.append(
                     TaskUpdate(
                         task_id=task_id,
-                        attempt_id=obs.attempt_id,
+                        attempt_id=attempt_id,
                         new_state=obs.state,
                         error=error,
                         exit_code=exit_code,

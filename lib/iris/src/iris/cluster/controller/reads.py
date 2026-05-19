@@ -39,7 +39,7 @@ from iris.cluster.controller.schema import (
     users_table,
     workers_table,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 
 # ---------------------------------------------------------------------------
@@ -758,6 +758,7 @@ ATTEMPT_COLS = (
     task_attempts_table.c.finished_at_ms,
     task_attempts_table.c.exit_code,
     task_attempts_table.c.error,
+    task_attempts_table.c.attempt_uid,
 )
 
 _BULK_GET_CHUNK_SIZE = 450
@@ -786,6 +787,35 @@ def bulk_get_attempts(
         rows = tx.execute(_BULK_GET_ATTEMPTS_STMT, {"keys": chunk}).all()
         for row in rows:
             result[(row.task_id, row.attempt_id)] = row
+    return result
+
+
+_RESOLVE_ATTEMPT_UIDS_STMT = select(
+    task_attempts_table.c.attempt_uid,
+    task_attempts_table.c.task_id,
+    task_attempts_table.c.attempt_id,
+).where(task_attempts_table.c.attempt_uid.in_(bindparam("uids", expanding=True)))
+
+
+def resolve_attempt_uids(
+    tx: Tx,
+    uids: Sequence[AttemptUid],
+) -> dict[AttemptUid, tuple[JobName, int]]:
+    """Return ``{attempt_uid: (task_id, attempt_id)}`` for the requested UIDs.
+
+    Drives the worker-routing path: an ``AttemptObservation`` carrying an
+    ``attempt_uid`` is resolved to its composite key through the
+    ``idx_task_attempts_uid`` unique index. Missing UIDs are silently absent.
+    """
+    if not uids:
+        return {}
+    unique = list(dict.fromkeys(uids))
+    result: dict[AttemptUid, tuple[JobName, int]] = {}
+    for chunk_start in range(0, len(unique), _BULK_GET_CHUNK_SIZE):
+        chunk = unique[chunk_start : chunk_start + _BULK_GET_CHUNK_SIZE]
+        rows = tx.execute(_RESOLVE_ATTEMPT_UIDS_STMT, {"uids": chunk}).all()
+        for row in rows:
+            result[AttemptUid(row.attempt_uid)] = (row.task_id, row.attempt_id)
     return result
 
 

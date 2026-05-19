@@ -43,6 +43,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.types import (
+    AttemptUid,
     JobName,
     is_task_finished,
 )
@@ -121,6 +122,11 @@ class TaskAttemptConfig:
     num_tasks: int
     request: job_pb2.RunTaskRequest
     cache_dir: Path
+    # Controller-minted routing key. Empty (``AttemptUid("")``) when set by an
+    # older controller, or when the attempt is adopted from a container that
+    # predates the iris.attempt_uid label. Required: both call sites
+    # (Worker.submit_task and TaskAttempt.adopt) always know the value.
+    attempt_uid: AttemptUid
 
     @property
     def task_id(self) -> JobName:
@@ -273,6 +279,10 @@ class TaskAttempt:
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
+        # Controller-minted routing key. Mutable: an attempt adopted from a
+        # pre-upgrade container starts with "" and is stamped on the first
+        # Reconcile tick that composite-matches it.
+        self.attempt_uid: AttemptUid = config.attempt_uid
         self.request: job_pb2.RunTaskRequest = config.request
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
@@ -335,6 +345,7 @@ class TaskAttempt:
             num_tasks=1,
             request=request,
             cache_dir=Path(discovered.workdir_host_path).parent.parent if discovered.workdir_host_path else Path("/tmp"),
+            attempt_uid=AttemptUid(discovered.attempt_uid),
         )
 
         instance = cls(
@@ -744,6 +755,7 @@ class TaskAttempt:
             workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
+            attempt_uid=self.attempt_uid,
             job_id=job_id.to_wire(),
             worker_id=self._worker_id,
             worker_metadata=self._worker_metadata,
