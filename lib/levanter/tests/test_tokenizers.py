@@ -8,6 +8,7 @@ installed are skipped gracefully. The test model is meta-llama/Llama-3.1-8B,
 which requires HF authentication (tests skip if auth is missing).
 """
 
+import ast
 import json
 import os
 import pathlib
@@ -18,9 +19,6 @@ from unittest.mock import patch
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
 
-from experiments.chat_templates.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
-from experiments.chat_templates.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
-from experiments.marin_models import MARIN_CHAT_TEMPLATE
 from levanter.tokenizers import (
     MarinTokenizer,
     TokenizerBackend,
@@ -57,6 +55,43 @@ def _can_load_model() -> bool:
 _MODEL_AVAILABLE = _can_load_model()
 
 requires_model = pytest.mark.skipif(not _MODEL_AVAILABLE, reason="HF auth or network unavailable for gated model")
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
+
+def _load_repo_string_constant(relative_path: str, constant_name: str) -> str:
+    def string_value(node: ast.expr) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "strip"
+            and not node.args
+            and not node.keywords
+        ):
+            return string_value(node.func.value).strip()
+        raise TypeError(f"{constant_name} in {relative_path} is not a string constant")
+
+    module = ast.parse((_REPO_ROOT / relative_path).read_text())
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == constant_name for target in node.targets):
+            continue
+
+        return string_value(node.value)
+
+    raise ValueError(f"{constant_name} not found in {relative_path}")
+
+
+MARIN_CHAT_TEMPLATE = _load_repo_string_constant("experiments/marin_models.py", "MARIN_CHAT_TEMPLATE")
+LLAMA_3_1_CHAT_TEMPLATE = _load_repo_string_constant(
+    "experiments/chat_templates/llama3pt1_chat_template.py", "LLAMA_3_1_CHAT_TEMPLATE"
+)
+QWEN_3_CHAT_TEMPLATE = _load_repo_string_constant(
+    "experiments/chat_templates/qwen3_chat_template.py", "QWEN_3_CHAT_TEMPLATE"
+)
 
 
 # ---------------------------------------------------------------------------
