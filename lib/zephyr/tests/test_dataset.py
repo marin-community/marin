@@ -83,6 +83,7 @@ def test_from_query(zephyr_ctx, sample_datafusion_ctx):
     )
     assert list(zephyr_ctx.execute(ds)) == [1, 2, 3, 6]
 
+
 def test_from_query__agg(zephyr_ctx, sample_datafusion_ctx):
     ds = (
         Dataset
