@@ -20,6 +20,7 @@ from itertools import groupby, islice
 from typing import Any, Protocol
 
 import msgspec
+import pyarrow as pa
 import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
@@ -47,7 +48,7 @@ from zephyr.dataset import (
 )
 from zephyr.expr import Expr
 from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
-from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file
+from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,21 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
+def _load_file_batch_gen(stream: Iterator, *, include_file_paths: str | None = None) -> Iterator:
+    for spec in stream:
+        try:
+            for batch in load_file_batch(spec):
+                if include_file_paths is not None:
+                    batch = batch.append_column(
+                        include_file_paths,
+                        pa.array([spec.path] * len(batch), type=pa.string()),
+                    )
+                yield batch
+        except Exception as e:
+            e.add_note(f"While loading from {spec}")
+            raise
+
+
 def _load_file_gen(stream: Iterator, *, include_file_paths: str | None = None) -> Iterator:
     for spec in stream:
         try:
@@ -222,7 +238,10 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
-                stream = _load_file_gen(stream, include_file_paths=op.include_file_paths)
+                if op.batch_mode:
+                    stream = _load_file_batch_gen(stream, include_file_paths=op.include_file_paths)
+                else:
+                    stream = _load_file_gen(stream, include_file_paths=op.include_file_paths)
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):

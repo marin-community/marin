@@ -240,6 +240,7 @@ class LoadFileOp:
     columns: list[str] | None = None
     max_shard_bytes: int | None = None
     include_file_paths: str | None = None
+    batch_mode: bool = False
 
     def __repr__(self):
         return f"LoadFileOp(format={self.format}, columns={self.columns})"
@@ -613,6 +614,30 @@ class Dataset(Generic[T]):
         return Dataset(
             self.source, [*self.operations, LoadFileOp("parquet", columns, max_shard_bytes, include_file_paths)]
         )
+
+    def load_parquet_batch(
+        self,
+        columns: list[str] | None = None,
+        max_shard_bytes: int | None = None,
+        include_file_paths: str | None = None,
+    ) -> Dataset:
+        """Load records from parquet files as ``pa.RecordBatch`` objects.
+
+        Args:
+            columns: Optional column projection.
+            max_shard_bytes: If set, split each file into chunks of at most this many
+                bytes (aligned to row-group boundaries) for finer parallelism.
+            include_file_paths: If set, add a column with this name containing the
+                source file path for each batch.
+        """
+        op = LoadFileOp(
+            format="parquet",
+            columns=columns,
+            max_shard_bytes=max_shard_bytes,
+            include_file_paths=include_file_paths,
+            batch_mode=True,
+        )
+        return Dataset(self.source, [*self.operations, op])
 
     def load_jsonl(self, include_file_paths: str | None = None) -> Dataset[dict]:
         """Load records from JSONL files.

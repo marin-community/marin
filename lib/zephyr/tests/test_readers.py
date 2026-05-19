@@ -9,7 +9,13 @@ import itertools
 import pyarrow as pa
 import pyarrow.parquet as pq
 from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr
-from zephyr.readers import InputFileSpec, compute_parquet_splits, iter_parquet_row_groups, load_parquet
+from zephyr.readers import (
+    InputFileSpec,
+    compute_parquet_splits,
+    iter_parquet_row_groups,
+    load_parquet,
+    load_parquet_batch,
+)
 
 
 def _write_test_parquet(path: str, records: list[dict], row_group_size: int = 2) -> None:
@@ -240,3 +246,25 @@ def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
     # Should succeed without pyarrow.dataset
     result = list(load_parquet(path))
     assert len(result) == len(RECORDS)
+
+
+def test_load_parquet_batch_returns_record_batches(tmp_path):
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS, row_group_size=4)
+
+    batches = list(load_parquet_batch(path))
+    assert all(isinstance(b, pa.RecordBatch) for b in batches)
+    # All rows present across batches
+    all_rows = [row for b in batches for row in b.to_pylist()]
+    assert sorted(all_rows, key=lambda r: r["id"]) == RECORDS
+
+
+def test_load_parquet_batch_consistent_with_load_parquet(tmp_path):
+    """load_parquet_batch + to_pylist must equal load_parquet."""
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS, row_group_size=3)
+
+    spec = InputFileSpec(path=path, row_start=2, row_end=8)
+    via_batch = [row for b in load_parquet_batch(spec) for row in b.to_pylist()]
+    via_dict = list(load_parquet(spec))
+    assert via_batch == via_dict

@@ -1424,6 +1424,47 @@ def test_sorted_merge_join_after_group_by_integration(integration_ctx):
     assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}
 
 
+def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
+    """Dataset.load_parquet_batch yields pa.RecordBatch objects."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = str(tmp_path / "data.parquet")
+    records = [{"id": i, "val": float(i)} for i in range(6)]
+    pq.write_table(pa.Table.from_pylist(records), path, row_group_size=2)
+
+    ds = Dataset.from_list([path]).load_parquet_batch()
+    results = zephyr_ctx.execute(ds).results
+
+    assert all(isinstance(b, pa.RecordBatch) for b in results)
+    all_rows = [row for b in results for row in b.to_pylist()]
+    assert sorted(all_rows, key=lambda r: r["id"]) == records
+
+
+def test_dataset_load_parquet_batch_include_file_paths(tmp_path, zephyr_ctx):
+    """include_file_paths adds a string column to each RecordBatch via PyArrow, not per-row dicts."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    file_a = str(tmp_path / "a.parquet")
+    file_b = str(tmp_path / "b.parquet")
+    pq.write_table(pa.Table.from_pylist([{"id": 1}, {"id": 2}]), file_a)
+    pq.write_table(pa.Table.from_pylist([{"id": 3}]), file_b)
+
+    ds = Dataset.from_list([file_a, file_b]).load_parquet_batch(include_file_paths="source")
+    results = zephyr_ctx.execute(ds).results
+
+    assert all(isinstance(b, pa.RecordBatch) for b in results)
+    assert all("source" in b.schema.names for b in results)
+    assert all(b.schema.field("source").type == pa.string() for b in results)
+
+    rows = [row for b in results for row in b.to_pylist()]
+    sources_by_id = {r["id"]: r["source"] for r in rows}
+    assert sources_by_id[1] == file_a
+    assert sources_by_id[2] == file_a
+    assert sources_by_id[3] == file_b
+
+
 def test_include_file_paths_parquet(tmp_path, zephyr_ctx):
     """Parquet records loaded with include_file_paths get the source file path injected."""
     import pyarrow as pa

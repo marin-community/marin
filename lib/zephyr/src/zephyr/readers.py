@@ -300,29 +300,19 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
             yield record
 
 
-def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
-    """Load Parquet file and yield records as dicts.
+def load_parquet_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
+    """Load a Parquet file and yield one ``pa.RecordBatch`` per row group.
 
-    When given an InputFileSpec with row_start/row_end, reads only the exact rows
-    in that range. Row groups are read efficiently (only overlapping groups are loaded),
-    then rows are filtered to the precise range. When filter_expr is provided, the filter
-    is pushed down to PyArrow for efficient filtering at read time.
+    Applies the same column projection, row-range slicing, and filter pushdown
+    as ``load_parquet``, but returns Arrow batches rather than Python dicts so
+    callers can stay in the columnar world.
 
     Args:
         source: Path to Parquet file or InputFileSpec containing the path, columns,
             row range, and filter expression.
 
     Yields:
-        Records as dictionaries
-
-    Example:
-        >>> ds = (Dataset
-        ...     .from_files("/input", "**/*.parquet")
-        ...     .load_parquet()
-        ...     .map(lambda r: transform_record(r))
-        ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
-        ... )
-        >>> output_files = ctx.execute(ds).results
+        One ``pa.RecordBatch`` per qualifying row group.
     """
     spec = _as_spec(source)
     logger.info("Loading: %s", spec.path)
@@ -352,7 +342,35 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         if need_project:
             table = table.select(spec.columns)
         counters.increment("zephyr/records_in", len(table))
-        yield from table.to_pylist()
+        yield from table.to_batches()
+
+
+def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
+    """Load Parquet file and yield records as dicts.
+
+    When given an InputFileSpec with row_start/row_end, reads only the exact rows
+    in that range. Row groups are read efficiently (only overlapping groups are loaded),
+    then rows are filtered to the precise range. When filter_expr is provided, the filter
+    is pushed down to PyArrow for efficient filtering at read time.
+
+    Args:
+        source: Path to Parquet file or InputFileSpec containing the path, columns,
+            row range, and filter expression.
+
+    Yields:
+        Records as dictionaries
+
+    Example:
+        >>> ds = (Dataset
+        ...     .from_files("/input", "**/*.parquet")
+        ...     .load_parquet()
+        ...     .map(lambda r: transform_record(r))
+        ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
+        ... )
+        >>> output_files = ctx.execute(ds).results
+    """
+    for batch in load_parquet_batch(source):
+        yield from batch.to_pylist()
 
 
 def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
@@ -458,6 +476,28 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
         yield from load_vortex(spec)
     else:
         yield from load_jsonl(spec)
+
+
+def load_file_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
+    """Load a Parquet file and yield ``pa.RecordBatch`` objects.
+
+    Only Parquet files are supported. Raises ``RuntimeError`` for any other
+    file type so callers get a clear error rather than silent dict conversion.
+
+    Args:
+        source: Path to Parquet file or InputFileSpec containing the path, columns,
+            row range, and filter expression.
+
+    Yields:
+        One ``pa.RecordBatch`` per qualifying row group.
+
+    Raises:
+        RuntimeError: If the file is not a Parquet file.
+    """
+    spec = _as_spec(source)
+    if not spec.path.endswith(".parquet"):
+        raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
+    yield from load_parquet_batch(spec)
 
 
 def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterator[dict]:
