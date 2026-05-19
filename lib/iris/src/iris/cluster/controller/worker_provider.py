@@ -13,7 +13,7 @@ from rigging.timing import Duration
 
 from iris.chaos import chaos
 from iris.cluster.controller.provider import ProviderError
-from iris.cluster.controller.reconcile import WorkerReconcilePlan
+from iris.cluster.controller.reconcile import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.transitions import (
     TaskUpdate,
@@ -42,20 +42,6 @@ class PingResult:
 
 
 @dataclass(frozen=True)
-class ReconcileResult:
-    """Unified per-worker reconcile outcome.
-
-    ``observations`` is the (possibly empty) list of proto observations the
-    apply layer should consume. ``error`` is set when the reconcile RPC
-    outright failed; ``observations`` is then empty.
-    """
-
-    worker_id: WorkerId
-    observations: list[worker_pb2.Worker.AttemptObservation]
-    error: str | None = None
-
-
-@dataclass(frozen=True)
 class _LegacyDispatch:
     """Legacy three-list wire payload derived from a reconcile plan."""
 
@@ -75,90 +61,6 @@ class _LegacyResult:
     start_error: str | None
     poll_updates: list[TaskUpdate] | None
     poll_error: str | None
-
-
-def _legacy_request_from_plan(plan: WorkerReconcilePlan, address: str | None) -> _LegacyDispatch:
-    """Translate a reconcile plan into the legacy three-list dispatch payload."""
-    start_tasks: list[job_pb2.RunTaskRequest] = []
-    expected_tasks: list[RunningTaskEntry] = []
-    stop_tasks: list[str] = []
-
-    for desired in plan.request.desired:
-        if desired.HasField("run"):
-            expected_tasks.append(
-                RunningTaskEntry(
-                    task_id=JobName.from_wire(desired.task_id),
-                    attempt_id=desired.attempt_id,
-                )
-            )
-            if desired.run.HasField("request"):
-                req = job_pb2.RunTaskRequest()
-                req.CopyFrom(desired.run.request)
-                req.task_id = desired.task_id
-                req.attempt_id = desired.attempt_id
-                start_tasks.append(req)
-        elif desired.HasField("stop"):
-            stop_tasks.append(desired.task_id)
-
-    return _LegacyDispatch(
-        worker_id=plan.worker_id,
-        address=address,
-        start_tasks=start_tasks,
-        expected_tasks=expected_tasks,
-        stop_tasks=stop_tasks,
-    )
-
-
-def _observations_from_legacy_result(
-    plan: WorkerReconcilePlan,
-    result: _LegacyResult,
-) -> list[worker_pb2.Worker.AttemptObservation]:
-    """Synthesize proto observations from a legacy StartTasks+PollTasks result.
-
-    Forwards poll updates and emits a ``WORKER_FAILED`` observation for any
-    task the worker explicitly rejected via a non-accepted ack.
-    """
-    observations: list[worker_pb2.Worker.AttemptObservation] = []
-
-    if result.poll_error is None and result.poll_updates:
-        for update in result.poll_updates:
-            kwargs: dict = {
-                "attempt_uid": "",
-                "state": update.new_state,
-                "task_id": update.task_id.to_wire(),
-                "attempt_id": update.attempt_id,
-            }
-            if update.exit_code is not None:
-                kwargs["exit_code"] = update.exit_code
-            if update.error is not None:
-                kwargs["error"] = update.error
-            if update.container_id is not None:
-                kwargs["container_id"] = update.container_id
-            observations.append(worker_pb2.Worker.AttemptObservation(**kwargs))
-
-    if result.start_response is not None:
-        attempt_by_task: dict[str, int] = {d.task_id: d.attempt_id for d in plan.request.desired if d.HasField("run")}
-        for ack in result.start_response.acks:
-            if ack.accepted:
-                continue
-            log_event(
-                "task_rejected",
-                ack.task_id,
-                trigger="start_tasks_ack",
-                worker=str(result.worker_id),
-                error=ack.error,
-            )
-            observations.append(
-                worker_pb2.Worker.AttemptObservation(
-                    attempt_uid="",
-                    state=job_pb2.TASK_STATE_WORKER_FAILED,
-                    error=f"Worker rejected task: {ack.error}",
-                    task_id=ack.task_id,
-                    attempt_id=attempt_by_task.get(ack.task_id, -1),
-                )
-            )
-
-    return observations
 
 
 class WorkerStubFactory(Protocol):
@@ -391,36 +293,78 @@ class WorkerProvider:
     ) -> list[ReconcileResult]:
         """Fan out one reconcile pass across many workers under a single event loop.
 
-        Workers reconcile concurrently, capped at ``self.parallelism``.
-        Branches internally on ``use_reconcile_rpc``: the new branch sends
-        the ``Reconcile`` RPC; the legacy branch issues StartTasks+PollTasks
-        and synthesizes proto observations from the results.
+        Workers reconcile concurrently, capped at ``self.parallelism``. Dispatches
+        to the Reconcile RPC path or the legacy StartTasks+PollTasks path; both
+        branches return ``ReconcileResult``s directly.
         """
         if not plans:
             return []
-
         if use_reconcile_rpc:
+            return self._reconcile_all_via_rpc(plans, addresses)
+        return self._reconcile_all_via_legacy(plans, addresses)
 
-            async def _run_reconcile() -> list[ReconcileResult]:
-                sem = asyncio.Semaphore(self.parallelism)
-                return await asyncio.gather(
-                    *(self._reconcile_one_via_reconcile(sem, p, addresses.get(p.worker_id)) for p in plans)
+    def _reconcile_all_via_rpc(
+        self,
+        plans: list[WorkerReconcilePlan],
+        addresses: dict[WorkerId, str | None],
+    ) -> list[ReconcileResult]:
+        """Fan out the Reconcile RPC across all workers."""
+
+        async def _run() -> list[ReconcileResult]:
+            sem = asyncio.Semaphore(self.parallelism)
+            return await asyncio.gather(
+                *(self._reconcile_one_via_reconcile(sem, p, addresses.get(p.worker_id)) for p in plans)
+            )
+
+        return asyncio.run(_run())
+
+    def _reconcile_all_via_legacy(
+        self,
+        plans: list[WorkerReconcilePlan],
+        addresses: dict[WorkerId, str | None],
+    ) -> list[ReconcileResult]:
+        """Fan out legacy StartTasks+PollTasks across all workers and synthesize
+        proto observations from each per-worker result.
+        """
+        dispatches: list[_LegacyDispatch] = []
+        for plan in plans:
+            start_tasks: list[job_pb2.RunTaskRequest] = []
+            expected_tasks: list[RunningTaskEntry] = []
+            stop_tasks: list[str] = []
+            for desired in plan.request.desired:
+                if desired.HasField("run"):
+                    expected_tasks.append(
+                        RunningTaskEntry(
+                            task_id=JobName.from_wire(desired.task_id),
+                            attempt_id=desired.attempt_id,
+                        )
+                    )
+                    if desired.run.HasField("request"):
+                        req = job_pb2.RunTaskRequest()
+                        req.CopyFrom(desired.run.request)
+                        req.task_id = desired.task_id
+                        req.attempt_id = desired.attempt_id
+                        start_tasks.append(req)
+                elif desired.HasField("stop"):
+                    stop_tasks.append(desired.task_id)
+            dispatches.append(
+                _LegacyDispatch(
+                    worker_id=plan.worker_id,
+                    address=addresses.get(plan.worker_id),
+                    start_tasks=start_tasks,
+                    expected_tasks=expected_tasks,
+                    stop_tasks=stop_tasks,
                 )
+            )
 
-            return asyncio.run(_run_reconcile())
-
-        dispatches = [_legacy_request_from_plan(p, addresses.get(p.worker_id)) for p in plans]
-
-        async def _run_legacy() -> list[_LegacyResult]:
+        async def _run() -> list[_LegacyResult]:
             sem = asyncio.Semaphore(self.parallelism)
             return await asyncio.gather(*(self._reconcile_one_legacy(sem, d) for d in dispatches))
 
-        legacy_results = asyncio.run(_run_legacy())
+        legacy_results = asyncio.run(_run())
 
-        plan_by_worker = {p.worker_id: p for p in plans}
         out: list[ReconcileResult] = []
-        for legacy in legacy_results:
-            plan = plan_by_worker[legacy.worker_id]
+        for plan, legacy in zip(plans, legacy_results, strict=True):
             if legacy.start_error is not None:
                 out.append(
                     ReconcileResult(
@@ -432,7 +376,48 @@ class WorkerProvider:
                 continue
             if legacy.poll_error is not None:
                 logger.debug("PollTasks failed for worker %s: %s", legacy.worker_id, legacy.poll_error)
-            observations = _observations_from_legacy_result(plan, legacy)
+
+            observations: list[worker_pb2.Worker.AttemptObservation] = []
+            if legacy.poll_error is None and legacy.poll_updates:
+                for update in legacy.poll_updates:
+                    kwargs: dict = {
+                        "attempt_uid": "",
+                        "state": update.new_state,
+                        "task_id": update.task_id.to_wire(),
+                        "attempt_id": update.attempt_id,
+                    }
+                    if update.exit_code is not None:
+                        kwargs["exit_code"] = update.exit_code
+                    if update.error is not None:
+                        kwargs["error"] = update.error
+                    if update.container_id is not None:
+                        kwargs["container_id"] = update.container_id
+                    observations.append(worker_pb2.Worker.AttemptObservation(**kwargs))
+
+            if legacy.start_response is not None:
+                attempt_by_task: dict[str, int] = {
+                    d.task_id: d.attempt_id for d in plan.request.desired if d.HasField("run")
+                }
+                for ack in legacy.start_response.acks:
+                    if ack.accepted:
+                        continue
+                    log_event(
+                        "task_rejected",
+                        ack.task_id,
+                        trigger="start_tasks_ack",
+                        worker=str(legacy.worker_id),
+                        error=ack.error,
+                    )
+                    observations.append(
+                        worker_pb2.Worker.AttemptObservation(
+                            attempt_uid="",
+                            state=job_pb2.TASK_STATE_WORKER_FAILED,
+                            error=f"Worker rejected task: {ack.error}",
+                            task_id=ack.task_id,
+                            attempt_id=attempt_by_task.get(ack.task_id, -1),
+                        )
+                    )
+
             out.append(
                 ReconcileResult(
                     worker_id=legacy.worker_id,

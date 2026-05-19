@@ -78,7 +78,6 @@ from iris.cluster.controller.reconcile import (
     ReconcileRow,
     WorkerReconcileInputs,
     WorkerReconcilePlan,
-    WorkerRow,
     reconcile_worker,
 )
 from iris.cluster.controller.scheduler import (
@@ -2325,20 +2324,12 @@ class Controller:
     # Worker lifecycle RPC dispatch (Reconcile / Ping)
     # =========================================================================
 
-    def _reconcile_worker_batch(self) -> None:
-        """One polling-tick reconcile pass.
-
-        Snapshots active workers + their attempts, computes per-worker
-        plans in pure Python, fans out RPCs concurrently outside the DB
-        lock, then applies all results in a single write transaction.
-        """
-        if self._config.dry_run:
-            return
-
+    def _snapshot_reconcile_inputs(self) -> tuple[list[WorkerReconcilePlan], dict[WorkerId, str]]:
+        """Snapshot the DB and compute pure reconcile plans for one tick."""
         with self._db.read_snapshot() as snap:
             addresses = reads.list_active_healthy_workers(snap, self._health)
             if not addresses:
-                return
+                return [], {}
             worker_ids = list(addresses)
             # Snapshot current attempts for ``worker_ids``. Workers not in
             # ``worker_ids`` are filtered in Python so the partial index
@@ -2388,35 +2379,39 @@ class Controller:
         for row in rows:
             rows_by_worker[row.worker_id].append(row)
 
-        now = Timestamp.now()
-        pure_plans: list[WorkerReconcilePlan] = []
+        plans: list[WorkerReconcilePlan] = []
         for wid in worker_ids:
             inputs = WorkerReconcileInputs(
-                worker=WorkerRow(
-                    worker_id=wid,
-                    address=addresses.get(wid, ""),
-                ),
+                worker_id=wid,
                 rows=rows_by_worker[wid],
                 job_specs=templates_by_job,
             )
-            pure_plans.append(reconcile_worker(inputs))
+            plans.append(reconcile_worker(inputs))
+        return plans, addresses
 
-        plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in pure_plans}
-        provider_addresses: dict[WorkerId, str | None] = {wid: addresses.get(wid) for wid in worker_ids}
+    def _reconcile_worker_batch(self) -> None:
+        """One polling-tick reconcile pass: snapshot, fan out, apply."""
+        if self._config.dry_run:
+            return
+
+        plans, addresses = self._snapshot_reconcile_inputs()
+        if not plans:
+            return
+
+        now = Timestamp.now()
         results = self._provider.reconcile_workers(
-            pure_plans,
-            provider_addresses,
+            plans,
+            addresses,
             use_reconcile_rpc=self._config.reconcile_rpc_enabled,
         )
 
+        plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in plans}
         with self._db.transaction() as cur:
             for result in results:
                 plan = plan_by_worker[result.worker_id]
                 if result.error is not None:
                     logger.debug("Reconcile failed for worker %s: %s", result.worker_id, result.error)
-                    self._transitions.apply_reconcile_failure(cur, plan, result.error, now)
-                else:
-                    self._transitions.apply_reconcile_observations(cur, plan, result.observations, now)
+                self._transitions.apply_reconcile_result(cur, plan, result, now)
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""

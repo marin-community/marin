@@ -40,7 +40,7 @@ from iris.cluster.controller.reads import (
     TaskDetailRow,
     TaskScope,
 )
-from iris.cluster.controller.reconcile import WorkerReconcilePlan
+from iris.cluster.controller.reconcile import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
@@ -1968,33 +1968,52 @@ class ControllerTransitions:
         attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
         return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
 
-    def apply_reconcile_observations(
+    def apply_reconcile_result(
         self,
         cur: Tx,
         plan: WorkerReconcilePlan,
-        observations: list[worker_pb2.Worker.AttemptObservation],
+        result: ReconcileResult,
         now: Timestamp,
     ) -> TxResult:
-        """Apply observations from a successful Reconcile RPC within the caller's transaction.
+        """Apply one worker's reconcile outcome within the caller's transaction.
 
-        Heartbeats the worker, translates observations to updates (MISSING
-        becomes ``FAILED("worker_lost_spec")``), and runs the standard
-        transition pipeline.
+        On RPC failure, bounces only the rows the controller intended to
+        dispatch this tick (ASSIGNED with inline spec); the outcome for
+        already-running attempts is unknown and is left to the next pass.
+        On success, heartbeats the worker, translates observations to
+        updates (MISSING becomes ``FAILED("worker_lost_spec")``), and runs
+        the standard transition pipeline.
         """
         worker_id = plan.worker_id
         now_ms = now.epoch_ms()
 
+        if result.error is not None:
+            log_event(
+                "reconcile_rpc_failed",
+                str(worker_id),
+                error=result.error,
+            )
+            assigned_updates = self._assigned_updates_from_plan(plan, result.error, cur)
+            if not assigned_updates:
+                return TxResult()
+            task_ids = [u.task_id for u in assigned_updates]
+            task_map = reads.bulk_get_task_detail(cur, task_ids)
+            attempt_keys = [(u.task_id, u.attempt_id) for u in assigned_updates]
+            attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+            req = HeartbeatApplyRequest(worker_id=worker_id, updates=assigned_updates)
+            return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
         existing = reads.filter_existing_workers(cur, [worker_id])
         if str(worker_id) not in existing:
             logger.warning(
-                "apply_reconcile_observations: worker %s no longer present; dropping %d observations",
+                "apply_reconcile_result: worker %s no longer present; dropping %d observations",
                 worker_id,
-                len(observations),
+                len(result.observations),
             )
             return TxResult()
         self._health.heartbeat([worker_id], now_ms)
 
-        all_updates = self._observations_to_updates(observations)
+        all_updates = self._observations_to_updates(result.observations)
         if not all_updates:
             return TxResult()
 
@@ -2009,37 +2028,6 @@ class ControllerTransitions:
         attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
 
         req = HeartbeatApplyRequest(worker_id=worker_id, updates=all_updates)
-        return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
-
-    def apply_reconcile_failure(
-        self,
-        cur: Tx,
-        plan: WorkerReconcilePlan,
-        error: str,
-        now: Timestamp,
-    ) -> TxResult:
-        """Apply synthetic WORKER_FAILED updates for ASSIGNED attempts after an RPC failure.
-
-        Bounces only the rows the controller intended to dispatch this tick
-        (ASSIGNED with inline spec); the RPC outcome for already-running
-        attempts is unknown and is left to the next reconcile pass.
-        """
-        worker_id = plan.worker_id
-        now_ms = now.epoch_ms()
-
-        log_event(
-            "reconcile_rpc_failed",
-            str(worker_id),
-            error=error,
-        )
-        assigned_updates = self._assigned_updates_from_plan(plan, error, cur)
-        if not assigned_updates:
-            return TxResult()
-        task_ids = [u.task_id for u in assigned_updates]
-        task_map = reads.bulk_get_task_detail(cur, task_ids)
-        attempt_keys = [(u.task_id, u.attempt_id) for u in assigned_updates]
-        attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
-        req = HeartbeatApplyRequest(worker_id=worker_id, updates=assigned_updates)
         return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
 
     def _assigned_updates_from_plan(
@@ -2100,9 +2088,6 @@ class ControllerTransitions:
                 # emits a non-empty UID and falling through to the composite
                 # branch is the only correct behaviour.
                 logger.debug("AttemptObservation carries uid=%s; falling back to composite key", obs.attempt_uid)
-            if not obs.task_id:
-                logger.warning("AttemptObservation missing task_id compat field; skipping uid=%s", obs.attempt_uid)
-                continue
             task_id = JobName.from_wire(obs.task_id)
             exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
             error: str | None = obs.error or None
