@@ -19,9 +19,10 @@ import levanter.callbacks
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
+from levanter.adaptation import AdaptationConfig, AdaptationExportConfig, NoAdaptationConfig
 from levanter.callbacks.tensorstore_callbacks import install_tensorstore_metrics_hook_if_enabled
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config, save_hf_checkpoint_callback
+from levanter.compat.hf_checkpoints import HFCompatConfig, build_generation_config
 from levanter.data.mixture import MixtureDataset
 from levanter.data.text import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
@@ -61,6 +62,12 @@ class TrainLmConfig:
     hf_save_steps: int = 10000
     hf_save_dtype: Optional[str] = None
     hf_generation_eos_token_ids: Optional[list[int]] = None
+
+    adapter: AdaptationConfig = field(default_factory=NoAdaptationConfig)
+    peft_save_path: Optional[str] = None
+    peft_hf_upload: Optional[str] = None
+    merged_hf_save_path: Optional[str] = None
+    merged_hf_upload: Optional[str] = None
 
     data_seed: Optional[int] = None  # if provided, will override the data seed from the trainer
     initialize_from_checkpoint_path: Optional[str] = None
@@ -171,7 +178,20 @@ def main(config: TrainLmConfig):
         # Get the tagged evaluation datasets
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
 
-        state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
+        adapter_key = jrandom.fold_in(model_key, ord("a"))
+        if isinstance(config.adapter, NoAdaptationConfig):
+            state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
+        else:
+            initial_model = config.adapter.apply(
+                config.model.build(Vocab, key=model_key),
+                key=adapter_key,
+                axis_mapping=parameter_axis_mapping,
+            )
+            state = trainer.initial_state(
+                training_key,
+                model=initial_model,
+                is_trainable=config.adapter.trainable_filter(initial_model),
+            )
 
         if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
             checkpoint_path = latest_checkpoint_path(config.initialize_from_checkpoint_path)
@@ -198,6 +218,8 @@ def main(config: TrainLmConfig):
                     dtype=trainer.mp.compute_dtype,
                 )
                 model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
+                if not isinstance(config.adapter, NoAdaptationConfig):
+                    model = config.adapter.apply(model, key=adapter_key, axis_mapping=parameter_axis_mapping)
                 state = dataclasses.replace(state, model=model)
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
@@ -251,33 +273,22 @@ def main(config: TrainLmConfig):
 
             trainer.add_hook(log_mixture_weights, every=1)
 
-        if config.hf_save_path is not None and config.hf_save_steps is not None:
-            # bit gross to reach this far into the config, but it's fine
-            assert converter is not None, "converter must be set when saving HF checkpoints"
-            if config.trainer.checkpointer.append_run_id_to_base_path:
-                full_save_path = os.path.join(config.hf_save_path, trainer.run_id)
-            else:
-                full_save_path = config.hf_save_path
-
-            save_dtype: Optional[jnp.dtype] = None
-            if config.hf_save_dtype is not None:
-                try:
-                    save_dtype = jnp.dtype(config.hf_save_dtype)
-                except TypeError:
-                    logger.warning(f"Invalid hf_save_dtype: {config.hf_save_dtype}. Defaulting to None.")
-
-            _generation_config = build_generation_config(tokenizer, config.hf_generation_eos_token_ids)
-
-            trainer.add_hook(
-                save_hf_checkpoint_callback(
-                    full_save_path,
-                    converter,
-                    upload_to_hf=config.hf_upload or False,
-                    save_dtype=save_dtype,
-                    generation_config=_generation_config,
-                ),
-                every=config.hf_save_steps,
-            )
+        config.adapter.install_export_hooks(
+            trainer=trainer,
+            converter=converter,
+            tokenizer=tokenizer,
+            export=AdaptationExportConfig(
+                hf_save_path=config.hf_save_path,
+                hf_upload=config.hf_upload,
+                hf_save_steps=config.hf_save_steps,
+                hf_save_dtype=config.hf_save_dtype,
+                generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
+                peft_save_path=config.peft_save_path,
+                peft_hf_upload=config.peft_hf_upload,
+                merged_hf_save_path=config.merged_hf_save_path,
+                merged_hf_upload=config.merged_hf_upload,
+            ),
+        )
 
         if config.eval_harness is not None:
             eval_harness = config.eval_harness

@@ -19,7 +19,7 @@ from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from haliax.partitioning import ResourceAxis
 from haliax.quantization import QuantizationConfig
-from levanter.adaptation import LoraAdaptationConfig, NoAdaptationConfig
+from levanter.adaptation import AdaptationConfig, LoraAdaptationConfig, NoAdaptationConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import (
     DEFAULT_LM_DATA_SHUFFLE,
@@ -436,6 +436,7 @@ def _build_train_lm_config(
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
+    adapter: AdaptationConfig | None = None,
 ) -> tuple[str, TrainLmConfig]:
     """Build the shared ``TrainLmConfig`` body used by ``default_train`` and ``prepare_lm_train``.
 
@@ -556,6 +557,7 @@ def _build_train_lm_config(
         data_seed=train_config.data_seed,
         eval_harness_steps=train_config.steps_per_task_eval or 10000,
         eval_harness=harness_config,
+        adapter=adapter if adapter is not None else NoAdaptationConfig(),
     )
 
     return name, inner_config
@@ -572,6 +574,7 @@ def default_train(
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     override_output_path: str | None = None,
+    adapter: AdaptationConfig | None = None,
 ) -> ExecutorStep:
     """
     Train a language model using the default configuration.
@@ -597,6 +600,7 @@ def default_train(
         eval_harness_tasks=eval_harness_tasks,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
+        adapter=adapter,
     )
 
     pretraining_data = inner_config.data
@@ -812,6 +816,7 @@ def default_sft(
     model_config: LlamaConfig,
     sft_config: SimpleSFTConfig,
     tags: Sequence[str] = (),
+    adapter: AdaptationConfig | None = None,
 ) -> ExecutorStep:
     """
     Creates an ExecutorStep for supervised fine-tuning of a language model.
@@ -875,6 +880,7 @@ def default_sft(
         tags=tags,
         eval_harness_tasks=[],
         use_default_validation=False,
+        adapter=adapter,
     )
 
 

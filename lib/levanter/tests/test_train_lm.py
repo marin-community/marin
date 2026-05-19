@@ -11,6 +11,7 @@ from haliax.quantization import QuantizationConfig
 
 import levanter.main.train_lm as train_lm
 import tiny_test_corpus
+from levanter.adaptation import LoraAdaptationConfig
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text import DirectDatasetComponent, GrugLmExample, LmDataConfig
 from levanter.distributed import DistributedConfig
@@ -73,6 +74,38 @@ def test_train_lm_fp8():
                     require_accelerator=False,
                     distributed=DistributedConfig(initialize_jax_distributed=False),
                 ),
+            )
+            train_lm.main(config)
+        finally:
+            try:
+                os.unlink("wandb")
+            except Exception:
+                pass
+
+
+def test_train_lm_with_lora_adapter():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_config, _ = tiny_test_corpus.construct_small_data_cache(tmpdir)
+        try:
+            config = train_lm.TrainLmConfig(
+                data=data_config,
+                model=train_lm.LlamaConfig(
+                    num_layers=2,
+                    num_heads=2,
+                    num_kv_heads=2,
+                    max_seq_len=64,
+                    hidden_dim=32,
+                    attn_backend=None,
+                ),
+                trainer=train_lm.TrainerConfig(
+                    num_train_steps=2,
+                    train_batch_size=len(jax.devices()),
+                    max_eval_batches=1,
+                    tracker=NoopConfig(),
+                    require_accelerator=False,
+                    distributed=DistributedConfig(initialize_jax_distributed=False),
+                ),
+                adapter=LoraAdaptationConfig(r=4),
             )
             train_lm.main(config)
         finally:
