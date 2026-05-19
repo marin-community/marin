@@ -10,6 +10,7 @@ They focus on:
 - Final state verification rather than intermediate steps
 """
 
+import asyncio
 import threading
 
 from finelog.rpc import logging_pb2
@@ -25,7 +26,13 @@ from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
 from iris.cluster.controller.reads import WorkerResourceUsage
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
+from iris.cluster.controller.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    worker_snapshot_from_row,
+)
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table, workers_table
 from iris.cluster.controller.task_state import attempt_is_terminal
 from iris.cluster.controller.transitions import (
@@ -36,7 +43,7 @@ from iris.cluster.controller.transitions import (
     PruneResult,
     TaskUpdate,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select, text
@@ -121,11 +128,20 @@ def _build_scheduling_context(scheduler: Scheduler, state: ControllerTransitions
     with state._db.read_snapshot() as snap:
         usage = reads.resource_usage_by_worker(snap)
     snapshots = [worker_snapshot_from_row(w, usage.get(w.worker_id)) for w in workers]
-    return scheduler.create_scheduling_context(
-        snapshots,
+    return SchedulingContext(
+        workers=snapshots,
         building_counts=_building_counts(state),
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+        max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
         pending_tasks=task_ids,
         jobs=jobs,
+        pending_task_rows=[],
+        user_spend={},
+        user_budget_limits={},
+        requested_bands={},
+        reserved_job_ids=frozenset(),
+        reservation_entry_counts={},
+        user_budget_defaults=UserBudgetDefaults(),
     )
 
 
@@ -1673,9 +1689,9 @@ def test_log_service_direct_push(state, log_service):
     log_entry = logging_pb2.LogEntry(source="stdout", data="hello world")
     log_entry.timestamp.epoch_ms = 1000
     push_req = logging_pb2.PushLogsRequest(key=log_key, entries=[log_entry])
-    log_service.push_logs(push_req, None)
+    asyncio.run(log_service.push_logs(push_req, None))
 
-    fetch_resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None)
+    fetch_resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None))
     assert len(fetch_resp.entries) == 1
     assert fetch_resp.entries[0].data == "hello world"
 
@@ -1698,9 +1714,9 @@ def test_log_service_accumulates_pushes(state, log_service):
     for i in range(3):
         entry = logging_pb2.LogEntry(source="stdout", data=f"line {i}")
         entry.timestamp.epoch_ms = 1000 + i
-        log_service.push_logs(logging_pb2.PushLogsRequest(key=log_key, entries=[entry]), None)
+        asyncio.run(log_service.push_logs(logging_pb2.PushLogsRequest(key=log_key, entries=[entry]), None))
 
-    fetch_resp = log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None)
+    fetch_resp = asyncio.run(log_service.fetch_logs(logging_pb2.FetchLogsRequest(source=log_key), None))
     assert len(fetch_resp.entries) == 3
     assert [e.data for e in fetch_resp.entries] == ["line 0", "line 1", "line 2"]
 
@@ -3433,6 +3449,37 @@ def test_dispatch_propagates_task_image(state):
         template = state.run_request_template(snap, job_id)
     assert template is not None
     assert template.task_image == "custom/swetrace:dev"
+
+
+def test_run_request_template_does_not_leak_workdir_files_across_jobs(state):
+    """Two jobs with identical entrypoint_json must get independent workdir_files.
+
+    proto_from_json caches parsed protos by JSON string; two jobs with the same
+    serialized RuntimeEntrypoint (same setup_commands + run_command) share the
+    cached instance. Mutating the cached instance to attach per-job
+    workdir_files would leak files from one job's template into another's.
+    Regression test for the cached-proto mutation bug.
+    """
+    register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    # Two jobs with identical entrypoint (so the cache key collides) but
+    # different inline workdir files.
+    req_a = make_job_request("job-a")
+    req_a.entrypoint.workdir_files["a.txt"] = b"A"
+    req_b = make_job_request("job-b")
+    req_b.entrypoint.workdir_files["b.txt"] = b"B"
+
+    tasks_a = submit_job(state, "job-a", req_a)
+    tasks_b = submit_job(state, "job-b", req_b)
+
+    with state._db.read_snapshot() as snap:
+        template_a = state.run_request_template(snap, tasks_a[0].job_id)
+        template_b = state.run_request_template(snap, tasks_b[0].job_id)
+
+    assert template_a is not None
+    assert template_b is not None
+    assert dict(template_a.entrypoint.workdir_files) == {"a.txt": b"A"}
+    assert dict(template_b.entrypoint.workdir_files) == {"b.txt": b"B"}
 
 
 def test_prune_old_data_short_circuits_when_nothing_prunable(state):

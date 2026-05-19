@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from typing import Any
 
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import bindparam, case, delete, func, insert, select, text
@@ -40,6 +40,7 @@ from iris.cluster.controller.reads import (
     TaskDetailRow,
     TaskScope,
 )
+from iris.cluster.controller.reconcile import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
@@ -52,7 +53,13 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import (
+    ACTIVE_TASK_STATES,
+    EXECUTING_TASK_STATES,
+    RunningTaskEntry,
+    task_is_finished,
+    task_row_can_be_scheduled,
+)
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
@@ -62,18 +69,11 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
-# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
-EXECUTING_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
-    }
-)
 
 # All non-terminal task states (ACTIVE plus PENDING).
 NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {job_pb2.TASK_STATE_PENDING}
@@ -416,13 +416,6 @@ class WorkerFailureBatchResult(TxResult):
 
     removed_workers: list[tuple[WorkerId, str | None]] = field(default_factory=list)
     results: list[WorkerFailureResult] = field(default_factory=list)
-
-
-class RunningTaskEntry(NamedTuple):
-    """Task ID and attempt ID pair captured at snapshot time."""
-
-    task_id: JobName
-    attempt_id: int
 
 
 @dataclass(frozen=True)
@@ -989,12 +982,12 @@ class ControllerTransitions:
             job.res_disk_bytes,
             job.res_device_json,
         )
-        entrypoint = proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint)
-        for filename, data in reads.get_workdir_files(snap, job_id).items():
-            entrypoint.workdir_files[filename] = data
+        # proto_from_json returns shared cached instances — set via constructor
+        # kwarg so RunTaskRequest copies, then mutate the copy's workdir_files
+        # (never the cached source) to add inline files.
         template = job_pb2.RunTaskRequest(
             num_tasks=job.num_tasks,
-            entrypoint=entrypoint,
+            entrypoint=proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint),
             environment=proto_from_json(job.environment_json, job_pb2.EnvironmentConfig),
             bundle_id=job.bundle_id,
             resources=resources,
@@ -1002,6 +995,8 @@ class ControllerTransitions:
             constraints=[c.to_proto() for c in constraints_from_json(job.constraints_json)],
             task_image=job.task_image,
         )
+        for filename, data in reads.get_workdir_files(snap, job_id).items():
+            template.entrypoint.workdir_files[filename] = data
         return self._run_template_cache.put(wire, template)
 
     def _recompute_job_state(self, cur: Tx, job_id: JobName) -> int | None:
@@ -1430,7 +1425,7 @@ class ControllerTransitions:
             cur.execute(
                 sa_update(tasks_table)
                 .where(
-                    tasks_table.c.job_id.in_(subtree),
+                    tasks_table.c.job_id.in_(bindparam("subtree_ids", expanding=True)),
                     tasks_table.c.state.not_in(TERMINAL_TASK_STATES),
                 )
                 .values(
@@ -1439,7 +1434,8 @@ class ControllerTransitions:
                     finished_at_ms=func.coalesce(tasks_table.c.finished_at_ms, now_ms),
                     current_worker_id=None,
                     current_worker_address=None,
-                )
+                ),
+                {"subtree_ids": list(subtree)},
             )
         # Roll the attempt to KILLED for dashboard accuracy; leave
         # ``finished_at_ms`` NULL so the scheduler counts the worker's
@@ -1449,14 +1445,17 @@ class ControllerTransitions:
                 sa_update(task_attempts_table)
                 .where(
                     task_attempts_table.c.task_id.in_(
-                        select(tasks_table.c.task_id).where(tasks_table.c.job_id.in_(subtree))
+                        select(tasks_table.c.task_id).where(
+                            tasks_table.c.job_id.in_(bindparam("subtree_ids", expanding=True))
+                        )
                     ),
-                    task_attempts_table.c.state.in_(set(ACTIVE_TASK_STATES)),
+                    task_attempts_table.c.state.in_(bindparam("active_states", expanding=True)),
                 )
                 .values(
                     state=job_pb2.TASK_STATE_KILLED,
                     error=func.coalesce(task_attempts_table.c.error, reason),
-                )
+                ),
+                {"subtree_ids": list(subtree), "active_states": list(ACTIVE_TASK_STATES)},
             )
         # Allow worker-failed jobs to transition to KILLED on cancel —
         # exclude that state from the cancel guard.
@@ -1465,14 +1464,15 @@ class ControllerTransitions:
             cur.execute(
                 sa_update(jobs_table)
                 .where(
-                    jobs_table.c.job_id.in_(subtree),
-                    jobs_table.c.state.not_in(list(cancel_guard_states)),
+                    jobs_table.c.job_id.in_(bindparam("subtree_ids", expanding=True)),
+                    jobs_table.c.state.not_in(bindparam("guard_states", expanding=True)),
                 )
                 .values(
                     state=job_pb2.JOB_STATE_KILLED,
                     error=reason,
                     finished_at_ms=func.coalesce(jobs_table.c.finished_at_ms, now_ms),
-                )
+                ),
+                {"subtree_ids": list(subtree), "guard_states": list(cancel_guard_states)},
             )
         self._endpoints.remove_by_job_ids(cur, subtree)
         log_event("job_cancelled", job_id.to_wire(), reason=reason)
@@ -1967,6 +1967,152 @@ class ControllerTransitions:
                 attempt_keys.append((update.task_id, task.current_attempt_id))
         attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
         return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+    def apply_reconcile_result(
+        self,
+        cur: Tx,
+        plan: WorkerReconcilePlan,
+        result: ReconcileResult,
+        now: Timestamp,
+    ) -> TxResult:
+        """Apply one worker's reconcile outcome within the caller's transaction.
+
+        On RPC failure, bounces only the rows the controller intended to
+        dispatch this tick (ASSIGNED with inline spec); the outcome for
+        already-running attempts is unknown and is left to the next pass.
+        On success, heartbeats the worker, translates observations to
+        updates (MISSING becomes ``FAILED("worker_lost_spec")``), and runs
+        the standard transition pipeline.
+        """
+        worker_id = plan.worker_id
+        now_ms = now.epoch_ms()
+
+        if result.error is not None:
+            log_event(
+                "reconcile_rpc_failed",
+                str(worker_id),
+                error=result.error,
+            )
+            assigned_updates = self._assigned_updates_from_plan(plan, result.error, cur)
+            if not assigned_updates:
+                return TxResult()
+            task_ids = [u.task_id for u in assigned_updates]
+            task_map = reads.bulk_get_task_detail(cur, task_ids)
+            attempt_keys = [(u.task_id, u.attempt_id) for u in assigned_updates]
+            attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+            req = HeartbeatApplyRequest(worker_id=worker_id, updates=assigned_updates)
+            return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+        existing = reads.filter_existing_workers(cur, [worker_id])
+        if str(worker_id) not in existing:
+            logger.warning(
+                "apply_reconcile_result: worker %s no longer present; dropping %d observations",
+                worker_id,
+                len(result.observations),
+            )
+            return TxResult()
+        self._health.heartbeat([worker_id], now_ms)
+
+        all_updates = self._observations_to_updates(result.observations)
+        if not all_updates:
+            return TxResult()
+
+        all_task_ids = [u.task_id for u in all_updates]
+        task_map = reads.bulk_get_task_detail(cur, all_task_ids)
+        attempt_keys: list[tuple[JobName, int]] = []
+        for u in all_updates:
+            attempt_keys.append((u.task_id, u.attempt_id))
+            task = task_map.get(u.task_id)
+            if task is not None and task.current_attempt_id != u.attempt_id:
+                attempt_keys.append((u.task_id, task.current_attempt_id))
+        attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+
+        req = HeartbeatApplyRequest(worker_id=worker_id, updates=all_updates)
+        return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+    def _assigned_updates_from_plan(
+        self,
+        plan: WorkerReconcilePlan,
+        error: str,
+        cur: Tx,
+    ) -> list[TaskUpdate]:
+        """Return synthetic WORKER_FAILED updates for ASSIGNED attempts in the plan.
+
+        Rows whose attempt has already moved out of ASSIGNED (concurrent
+        state changes) are skipped.
+        """
+        candidates: list[tuple[JobName, int]] = []
+        for desired in plan.request.desired:
+            if not desired.HasField("run") or not desired.run.HasField("request"):
+                continue
+            candidates.append((JobName.from_wire(desired.task_id), desired.attempt_id))
+
+        if not candidates:
+            return []
+
+        task_map = reads.bulk_get_task_detail(cur, [task_id for task_id, _ in candidates])
+
+        updates: list[TaskUpdate] = []
+        for task_id, attempt_id in candidates:
+            task = task_map.get(task_id)
+            if task is None:
+                continue
+            if task.state != job_pb2.TASK_STATE_ASSIGNED:
+                continue
+            updates.append(
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                    error=f"Reconcile RPC failed: {error}",
+                )
+            )
+        return updates
+
+    def _observations_to_updates(
+        self,
+        observations: list[worker_pb2.Worker.AttemptObservation],
+    ) -> list[TaskUpdate]:
+        """Translate ``AttemptObservation`` protos into ``TaskUpdate`` list.
+
+        MISSING becomes ``FAILED("worker_lost_spec")``. Routing prefers the
+        ``attempt_uid`` when set; otherwise it falls back to the legacy
+        ``(task_id, attempt_id)`` composite key. UIDs are currently always
+        empty, so the composite path is the one in use.
+        """
+        updates: list[TaskUpdate] = []
+        for obs in observations:
+            if obs.attempt_uid:
+                # UID routing will resolve to a (task_id, attempt_id) pair
+                # once worker-side UID assignment lands; for now no consumer
+                # emits a non-empty UID and falling through to the composite
+                # branch is the only correct behaviour.
+                logger.debug("AttemptObservation carries uid=%s; falling back to composite key", obs.attempt_uid)
+            task_id = JobName.from_wire(obs.task_id)
+            exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
+            error: str | None = obs.error or None
+            container_id: str | None = obs.container_id or None
+            if obs.state == job_pb2.TASK_STATE_MISSING:
+                updates.append(
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=obs.attempt_id,
+                        new_state=job_pb2.TASK_STATE_FAILED,
+                        error="worker_lost_spec",
+                    )
+                )
+            else:
+                updates.append(
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=obs.attempt_id,
+                        new_state=obs.state,
+                        error=error,
+                        exit_code=exit_code,
+                        container_id=container_id,
+                    )
+                )
+        return updates
 
     def apply_heartbeats_batch(self, cur: Tx, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.
@@ -2868,15 +3014,13 @@ class ControllerTransitions:
         attempt_id: int,
     ) -> job_pb2.RunTaskRequest:
         """Assemble a RunTaskRequest for a direct-provider dispatch row."""
-        entrypoint = proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint)
-        # Load inline workdir files from the job_workdir_files table.
-        for filename, data in reads.get_workdir_files(cur, row.job_id).items():
-            entrypoint.workdir_files[filename] = data
-
+        # proto_from_json returns shared cached instances — set via constructor
+        # kwarg so RunTaskRequest copies, then mutate the copy's workdir_files
+        # (never the cached source) to add inline files.
         run_req = job_pb2.RunTaskRequest(
             task_id=row.task_id.to_wire(),
             num_tasks=row.num_tasks,
-            entrypoint=entrypoint,
+            entrypoint=proto_from_json(row.entrypoint_json, job_pb2.RuntimeEntrypoint),
             environment=proto_from_json(row.environment_json, job_pb2.EnvironmentConfig),
             bundle_id=row.bundle_id,
             resources=row.resources,
@@ -2885,6 +3029,9 @@ class ControllerTransitions:
             constraints=[c.to_proto() for c in constraints_from_json(row.constraints_json)],
             task_image=row.task_image,
         )
+        # Load inline workdir files from the job_workdir_files table.
+        for filename, data in reads.get_workdir_files(cur, row.job_id).items():
+            run_req.entrypoint.workdir_files[filename] = data
         # Propagate timeout for K8s activeDeadlineSeconds (Kubernetes-native enforcement).
         if row.timeout_ms is not None and row.timeout_ms > 0:
             run_req.timeout.milliseconds = row.timeout_ms

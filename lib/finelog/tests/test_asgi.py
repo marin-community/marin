@@ -12,7 +12,7 @@ from finelog.server.service import LogServiceImpl
 from finelog.server.stats_service import StatsServiceImpl
 from starlette.testclient import TestClient
 
-from tests.conftest import _ipc_bytes, _ipc_to_table, _worker_batch
+from tests.conftest import _ipc_bytes, _ipc_to_table, _post_and_request_persistance, _worker_batch
 
 
 def _worker_schema_proto() -> stats_pb2.Schema:
@@ -57,10 +57,14 @@ def test_stats_service_register_and_write_via_asgi(tmp_path: Path):
                 ),
             )
             write_req = stats_pb2.WriteRowsRequest(namespace="iris.worker", arrow_ipc=_ipc_bytes(batch))
-            resp = client.post(
-                "/finelog.stats.StatsService/WriteRows",
-                content=write_req.SerializeToString(),
-                headers={"Content-Type": "application/proto"},
+            resp = _post_and_request_persistance(
+                log_service.log_store,
+                "iris.worker",
+                lambda: client.post(
+                    "/finelog.stats.StatsService/WriteRows",
+                    content=write_req.SerializeToString(),
+                    headers={"Content-Type": "application/proto"},
+                ),
             )
             assert resp.status_code == 200, resp.text
             write_resp = stats_pb2.WriteRowsResponse.FromString(resp.content)
@@ -86,18 +90,21 @@ def test_query_and_drop_via_asgi(tmp_path: Path):
             assert resp.status_code == 200, resp.text
 
             batch = _worker_batch(["w-1", "w-2"], [100, 200], [1, 2])
-            resp = client.post(
-                "/finelog.stats.StatsService/WriteRows",
-                content=stats_pb2.WriteRowsRequest(
-                    namespace="iris.worker", arrow_ipc=_ipc_bytes(batch)
-                ).SerializeToString(),
-                headers={"Content-Type": "application/proto"},
+            write_req = stats_pb2.WriteRowsRequest(namespace="iris.worker", arrow_ipc=_ipc_bytes(batch))
+            resp = _post_and_request_persistance(
+                log_service.log_store,
+                "iris.worker",
+                lambda: client.post(
+                    "/finelog.stats.StatsService/WriteRows",
+                    content=write_req.SerializeToString(),
+                    headers={"Content-Type": "application/proto"},
+                ),
             )
             assert resp.status_code == 200, resp.text
 
-            ns = log_service.log_store._namespaces["iris.worker"]
-            ns._flush_step()
-            ns._force_compact_l0()
+            ns = log_service.log_store.catalog["iris.worker"]
+            ns.flush()
+            ns.force_compact_l0()
 
             resp = client.post(
                 "/finelog.stats.StatsService/Query",

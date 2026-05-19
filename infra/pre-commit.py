@@ -84,37 +84,70 @@ def run_cmd(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=ROOT_DIR, capture_output=True, text=True, check=check)
 
 
-def get_all_files(all_files: bool, file_args: list[str]) -> list[pathlib.Path]:
-    """Get list of files to check, excluding deleted files."""
-    if file_args:
-        files = []
-        for f in file_args:
-            path = ROOT_DIR / f
-            if not path.exists():
-                click.echo(f"Warning: Skipping non-existent file: {f}")
-                continue
-            files.append(path)
-        return files
-    if all_files:
-        result = subprocess.run(
-            ["git", "ls-files"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    else:
-        # Use ACM filter to only get Added, Copied, Modified files (not Deleted)
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+def get_staged_files() -> list[pathlib.Path]:
+    """Get list of staged changes."""
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
 
+
+def get_unstaged_files() -> list[pathlib.Path]:
+    """Get list of unstaged (tracked) changes."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=ACM"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
+
+
+def get_branch_files() -> list[pathlib.Path]:
+    """Get list of branch-specific changes (compared to merge-base with origin/main)."""
+    base_result = subprocess.run(
+        ["git", "merge-base", "origin/main", "HEAD"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    merge_base = base_result.stdout.strip()
+
+    result = subprocess.run(
+        ["git", "diff", f"{merge_base}...HEAD", "--name-only", "--diff-filter=ACM"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
+
+
+def get_changed_files() -> list[pathlib.Path]:
+    """Get list of staged, unstaged (tracked), and branch-specific changes."""
+    files: set[pathlib.Path] = set()
+    files.update(get_staged_files())
+    files.update(get_unstaged_files())
+    files.update(get_branch_files())
+    return [f for f in files if f.exists()]
+
+
+def get_all_files() -> list[pathlib.Path]:
+    """Get list of all tracked files in the repository."""
+    result = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     files = [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
-    # Filter to only include files that exist on disk
     return [f for f in files if f.exists()]
 
 
@@ -690,12 +723,48 @@ PRECOMMIT_CONFIGS = [
 
 @click.command()
 @click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
-@click.option("--all-files", is_flag=True, help="Run checks on all files, not just staged")
+@click.option("--all-files", is_flag=True, help="Run checks on all files, not just changed")
+@click.option(
+    "--changed-files",
+    "changed_files",
+    is_flag=True,
+    help="Run checks on uncommitted and branch-specific changes",
+)
+@click.option(
+    "--pre-commit",
+    is_flag=True,
+    help="Run checks on staged changes only (for git pre-commit hook)",
+)
 @click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
 @click.argument("files", nargs=-1)
-def main(fix: bool, all_files: bool, files_opt: tuple[str, ...], files: tuple[str, ...]):
-    files = files_opt + files
-    all_files_list = get_all_files(all_files, list(files))
+def main(
+    fix: bool,
+    all_files: bool,
+    changed_files: bool,
+    pre_commit: bool,
+    files_opt: tuple[str, ...],
+    files: tuple[str, ...],
+):
+    all_files_set: set[pathlib.Path] = set()
+    input_files = files_opt + files
+
+    if all_files:
+        all_files_set.update(get_all_files())
+    elif pre_commit:
+        all_files_set.update(get_staged_files())
+    elif changed_files or not input_files:
+        # This is the default behavior if no arguments are provided.
+        all_files_set.update(get_changed_files())
+
+    if input_files:
+        for f in input_files:
+            path = ROOT_DIR / f
+            if path.exists():
+                all_files_set.add(path)
+            else:
+                click.echo(f"Warning: Skipping non-existent file: {f}")
+
+    all_files_list = sorted(list(all_files_set))
     exit_codes = []
 
     for config in PRECOMMIT_CONFIGS:

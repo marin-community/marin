@@ -19,12 +19,19 @@ from iris.cluster.controller.codec import constraints_from_json, device_counts_f
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.reads import healthy_active_workers_with_attributes
-from iris.cluster.controller.scheduler import JobRequirements, Scheduler, worker_snapshot_from_row
+from iris.cluster.controller.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    JobRequirements,
+    Scheduler,
+    SchedulingContext,
+    worker_snapshot_from_row,
+)
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
 from iris.cluster.providers.k8s.types import K8sResource
-from iris.cluster.types import JobName
+from iris.cluster.types import JobName, UserBudgetDefaults
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.timing import Timestamp
@@ -108,12 +115,14 @@ def scheduler():
 def _make_controller_mock(state, scheduler, autoscaler=None):
     """Build a mock that implements the ControllerProtocol for testing.
 
-    The mock delegates create_scheduling_context to the scheduler and computes
-    scheduling diagnostics on the fly, mirroring how the real controller caches
-    diagnostics per scheduling cycle.
+    Computes scheduling diagnostics on the fly when the service asks, mirroring
+    how the real controller caches diagnostics per scheduling cycle. The
+    on-the-fly path constructs a fresh ``SchedulingContext`` from the test DB
+    state — the raw-read fields are not consumed by ``get_job_scheduling_diagnostics``
+    so they are passed empty.
     """
 
-    def _create_scheduling_context(workers):
+    def _build_diagnostics_context():
         with state._db.read_snapshot() as tx:
             bc_rows = tx.execute(
                 select(task_attempts_table.c.worker_id, func.count().label("c"))
@@ -132,8 +141,23 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
             ).all()
             building_counts = {row.worker_id: int(row.c) for row in bc_rows}
             usage_by_worker = reads.resource_usage_by_worker(tx)
+            workers = healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
         snapshots = [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
-        return scheduler.create_scheduling_context(snapshots, building_counts=building_counts)
+        return SchedulingContext(
+            workers=snapshots,
+            building_counts=building_counts,
+            max_building_tasks=DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+            max_assignments_per_worker=DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+            pending_tasks=[],
+            jobs={},
+            pending_task_rows=[],
+            user_spend={},
+            user_budget_limits={},
+            requested_bands={},
+            reserved_job_ids=frozenset(),
+            reservation_entry_counts={},
+            user_budget_defaults=UserBudgetDefaults(),
+        )
 
     def _get_job_scheduling_diagnostics(job_wire_id):
         """Compute diagnostics on the fly for tests (mirrors real controller cache)."""
@@ -157,15 +181,13 @@ def _make_controller_mock(state, scheduler, autoscaler=None):
         )
         tasks = _query_tasks_with_attempts(state, job.job_id)
         schedulable_task_id = next((t.task_id for t in tasks if check_task_can_be_scheduled(t)), None)
-        with state._db.read_snapshot() as tx:
-            workers = healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
-        context = _create_scheduling_context(workers)
+        context = _build_diagnostics_context()
         return scheduler.get_job_scheduling_diagnostics(req, context, schedulable_task_id, num_tasks=len(tasks))
 
     controller_mock = Mock()
     controller_mock.wake = Mock()
-    controller_mock.create_scheduling_context = _create_scheduling_context
     controller_mock.get_job_scheduling_diagnostics = _get_job_scheduling_diagnostics
+    controller_mock.last_scheduling_context = None
     controller_mock.autoscaler = autoscaler
     controller_mock.provider = Mock()
     controller_mock.has_direct_provider = False

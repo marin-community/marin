@@ -7,11 +7,13 @@
 // "Known limitations" for the follow-up plan (persist to GCS or grow a
 // worker_count_history table in the controller).
 
+import type { IrisPingSample } from "./sources/iris.js";
+import type { ServiceHealthHistorySample } from "./sources/serviceHealth.js";
 import type { WorkerSample } from "./sources/workers.js";
 
-export class WorkerHistory {
+export class RingBuffer<T> {
   private readonly capacity: number;
-  private readonly buffer: (WorkerSample | undefined)[];
+  private readonly buffer: (T | undefined)[];
   private head = 0;
   private size = 0;
 
@@ -20,7 +22,7 @@ export class WorkerHistory {
     this.buffer = new Array(capacity);
   }
 
-  push(sample: WorkerSample): void {
+  push(sample: T): void {
     this.buffer[this.head] = sample;
     this.head = (this.head + 1) % this.capacity;
     if (this.size < this.capacity) {
@@ -29,8 +31,8 @@ export class WorkerHistory {
   }
 
   /** Snapshot of samples in chronological order. */
-  samples(): WorkerSample[] {
-    const out: WorkerSample[] = [];
+  samples(): T[] {
+    const out: T[] = [];
     const start = this.size < this.capacity ? 0 : this.head;
     for (let i = 0; i < this.size; i++) {
       const sample = this.buffer[(start + i) % this.capacity];
@@ -41,3 +43,9 @@ export class WorkerHistory {
     return out;
   }
 }
+
+export class WorkerHistory extends RingBuffer<WorkerSample> {}
+
+export class IrisPingHistory extends RingBuffer<IrisPingSample> {}
+
+export class ServiceHealthHistory extends RingBuffer<ServiceHealthHistorySample> {}

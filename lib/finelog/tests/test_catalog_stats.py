@@ -17,8 +17,9 @@ from pathlib import Path
 
 import pytest
 from finelog.rpc import logging_pb2
-from finelog.store.catalog import Catalog, NamespaceStats, SegmentLocation
+from finelog.store.catalog import Catalog
 from finelog.store.duckdb_store import DuckDBLogStore
+from finelog.store.types import NamespaceStats, SegmentLocation
 
 from tests.conftest import _ipc_bytes, _seal, _worker_batch, _worker_schema
 
@@ -31,10 +32,8 @@ def _stats(store: DuckDBLogStore, namespace: str) -> NamespaceStats:
 
 
 def _segments(store: DuckDBLogStore, namespace: str):
-    # DuckDB conns aren't thread-safe; catalog reads serialize on the
-    # store's insertion lock, same contract as the production code.
-    with store._insertion_lock:
-        return store._catalog.list_segments(namespace)
+    # Catalog is internally thread-safe.
+    return store.catalog.list_segments(namespace)
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +61,7 @@ def test_stats_after_flush_match_segments_table(store):
     batch = _worker_batch(["w-0", "w-1"], [1, 2], [10, 20])
     store.write_rows("iris.worker", _ipc_bytes(batch))
 
-    store._namespaces["iris.worker"]._flush_step()
+    store.catalog["iris.worker"].flush()
 
     stats = _stats(store, "iris.worker")
     assert stats.row_count == 2
@@ -83,14 +82,14 @@ def test_compaction_replaces_l0_rows_atomically(store):
     for i in range(3):
         batch = _worker_batch([f"w-{i}"], [i], [i])
         store.write_rows("iris.worker", _ipc_bytes(batch))
-        store._namespaces["iris.worker"]._flush_step()
+        store.catalog["iris.worker"].flush()
 
     # Three L0 segments before compaction.
     pre = _segments(store, "iris.worker")
     assert len(pre) == 3
     assert all(s.level == 0 for s in pre)
 
-    store._namespaces["iris.worker"]._force_compact_l0()
+    store.catalog["iris.worker"].force_compact_l0()
 
     post = _segments(store, "iris.worker")
     assert len(post) == 1
@@ -117,7 +116,7 @@ def test_eviction_local_only_drops_row(store):
     path = segs[0].path
     assert segs[0].location is SegmentLocation.LOCAL
 
-    store._namespaces["iris.worker"].evict_segment(path)
+    store.catalog["iris.worker"].evict_segment(path)
 
     assert _segments(store, "iris.worker") == []
     stats = _stats(store, "iris.worker")
@@ -135,8 +134,8 @@ def test_eviction_flips_remote_durable_segment(tmp_path):
         store.register_table("iris.worker", _worker_schema())
         store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-0"], [1], [1])))
         _seal(store, "iris.worker")
-        ns = store._namespaces["iris.worker"]
-        ns._sync_step()
+        ns = store.catalog["iris.worker"]
+        ns.compact()
         segs = _segments(store, "iris.worker")
         assert len(segs) == 1
         path = segs[0].path
@@ -215,7 +214,7 @@ def test_reconcile_preserves_location(tmp_path):
     _seal(s1, "iris.worker")
     seg = _segments(s1, "iris.worker")[0]
     # Simulate a successful copy via the catalog's public API.
-    s1._namespaces["iris.worker"]._mark_uploaded(seg.path)
+    s1.catalog["iris.worker"]._mark_uploaded(seg.path)
     assert _segments(s1, "iris.worker")[0].location is SegmentLocation.BOTH
     s1.close()
 
@@ -284,7 +283,7 @@ def test_log_namespace_stats_count_pushed_logs(store):
 
 
 def _flush_one(store: DuckDBLogStore, namespace: str) -> None:
-    store._namespaces[namespace]._flush_step()
+    store.catalog[namespace].flush()
 
 
 def test_key_value_bounds_populated_for_log_namespace(store):
@@ -323,7 +322,7 @@ def test_key_value_bounds_survive_compaction(store):
     pre = _segments(store, "log")
     assert {s.min_key_value for s in pre} == {"/system/aaa", "/system/zzz"}
 
-    store._namespaces["log"]._force_compact_l0()
+    store.catalog["log"].force_compact_l0()
 
     post = _segments(store, "log")
     assert len(post) == 1
@@ -374,7 +373,7 @@ def test_registry_replace_segments_is_atomic(tmp_path):
     """A failing upsert mid-replace must roll the whole swap back."""
     db = Catalog(tmp_path)
     db.upsert("ns", _worker_schema())
-    from finelog.store.catalog import SegmentRow
+    from finelog.store.types import SegmentRow
 
     initial = SegmentRow(
         namespace="ns",
@@ -402,14 +401,17 @@ def test_registry_replace_segments_is_atomic(tmp_path):
         created_at_ms=0,
     )
 
-    real_upsert = db.upsert_segment
+    # ``replace_segments`` calls ``_upsert_segment_locked`` to avoid
+    # re-acquiring the catalog mutex per row; monkey-patch that so the
+    # injected failure is observed mid-transaction.
+    real_locked = db._upsert_segment_locked
 
     def boom(seg):
         if seg.path == "/new.parquet":
             raise RuntimeError("simulated insert failure")
-        real_upsert(seg)
+        real_locked(seg)
 
-    db.upsert_segment = boom  # type: ignore[method-assign]
+    db._upsert_segment_locked = boom  # type: ignore[method-assign]
     with pytest.raises(RuntimeError):
         db.replace_segments("ns", removed_paths=["/old.parquet"], added=[bad])
 

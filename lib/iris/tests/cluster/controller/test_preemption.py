@@ -4,7 +4,7 @@
 """Tests for the preemption loop — higher-priority tasks evict lower-priority running tasks."""
 
 from iris.cluster.controller import reads
-from iris.cluster.controller.budget import UserBudgetDefaults, compute_effective_band
+from iris.cluster.controller.budget import compute_effective_band
 from iris.cluster.controller.controller import (
     PreemptionCandidate,
     RunningTaskInfo,
@@ -21,7 +21,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
     _resolve_task_failure_state,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
@@ -825,7 +825,10 @@ def test_pending_child_order_uses_parent_job_config_not_stamped_task_band():
         child_task = query_tasks_for_job(state, child_id)[0]
         assert child_task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
-        ordered = _sort_pending_tasks_by_resolved_band(state._db, _pending_tasks_with_jobs(state._db))
+        with state._db.read_snapshot() as tx:
+            pending = _pending_tasks_with_jobs(tx)
+            bands = reads.get_priority_bands(tx, {t.job_id for t in pending})
+        ordered = _sort_pending_tasks_by_resolved_band(pending, bands)
         ordered_ids = [task.task_id for task in ordered]
 
         assert ordered_ids.index(child_task.task_id) < ordered_ids.index(interactive_tasks[0].task_id)

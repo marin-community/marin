@@ -61,15 +61,11 @@ __all__ = [
     "HfTokenizeConfig",
     "TokenizeConfig",
     "TokenizeConfigBase",
-    "_bundle_files_by_size",
-    "_compute_target_group_bytes",
+    "bundle_files_by_size",
+    "compute_target_group_bytes",
     "main",
     "tokenize",
 ]
-
-# Backward-compatible aliases — kept because tests import these names.
-_bundle_files_by_size = bundle_files_by_size
-_compute_target_group_bytes = compute_target_group_bytes
 
 
 @dataclasses.dataclass(frozen=True)
@@ -266,9 +262,25 @@ def _exemplar_for(
     The exemplar still carries ``id`` (because the shared tokenize pipeline emits
     ``{id, input_ids, ...}``); :func:`build_from_datasets` strips it before
     writing the cache.
+
+    Scans input files in order until one yields a record. Tolerates sparse
+    inputs (e.g. filtered ``write_parquet`` output where leading shards happen
+    to be empty) instead of failing on ``results[0]``.
     """
     sample_path = parquet_window_hint(file_groups)
-    ds = Dataset.from_list(file_groups[0][0:1]).flat_map(load_file)
+    candidates = [path for group in file_groups for path in group]
+    if not candidates:
+        raise ValueError("_exemplar_for: file_groups is empty")
+
+    first_non_empty: str | None = None
+    for path in candidates:
+        if next(iter(load_file(path)), None) is not None:
+            first_non_empty = path
+            break
+    if first_non_empty is None:
+        raise ValueError(f"_exemplar_for: no records found across {len(candidates)} input files")
+
+    ds = Dataset.from_list([first_non_empty]).flat_map(load_file)
     pipeline, _ = tokenize_pipeline(
         ds,
         data_format=config.format,

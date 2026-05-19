@@ -67,7 +67,7 @@ class LevanterStoreData(BaseModel):
     """Outcome of :func:`build_levanter_store`: a Levanter cache per split.
 
     Persisted as the step's ``.artifact``. Load via
-    ``Artifact.load(step, LevanterStoreData)``.
+    ``Artifact.from_path(step, LevanterStoreData)``.
 
     Attributes:
         version: Schema version.
@@ -354,7 +354,7 @@ def build_levanter_store_step(
 
     def _fn(output_path: str) -> LevanterStoreData:
         kwargs: dict = {
-            "sources": [Artifact.load(s, TokenizedAttrData) for s in tokenize_steps],
+            "sources": [Artifact.from_path(s, TokenizedAttrData) for s in tokenize_steps],
             "cache_path": output_path,
             "max_workers": max_workers,
             "levanter_batch_size": levanter_batch_size,
