@@ -329,8 +329,8 @@ def test_flag_off_legacy_wire_full_lifecycle(make_controller, worker_instance, c
     This is the regression baseline for the rollout.
 
     We drive the worker's state via simulated heartbeat updates (as B.4 tests do),
-    not by running an actual container, because the legacy wire's PollTasks path
-    requires GetTaskAttemptInfo which needs a live controller gRPC server.
+    not by running an actual container, because driving a real container needs a
+    live controller gRPC server.
     The regression value here is that:
       1. The controller routes through legacy reconcile_workers (not Reconcile RPC).
       2. Simulated observations flow through apply_reconcile_observations correctly.

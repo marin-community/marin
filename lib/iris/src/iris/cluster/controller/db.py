@@ -113,6 +113,7 @@ def _make_engine(
 def _make_write_engine(db_path: Path, auth_db_path: Path | None) -> Engine:
     return _make_engine(db_path, read_only=False, pool_size=1, max_overflow=0, auth_db_path=auth_db_path)
 
+
 # States that require a stop-intent in the Reconcile desired set.
 # KILLED corresponds to user-cancelled tasks; PREEMPTED is set by the scheduler.
 # These are not in ACTIVE_TASK_STATES but the reconcile loop may still see rows

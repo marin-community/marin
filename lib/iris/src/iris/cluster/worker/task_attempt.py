@@ -220,7 +220,6 @@ class TaskAttempt:
         *,
         container_handle: ContainerHandle | None = None,
         initial_status: TaskState | None = None,
-        fetch_request: Callable[[str, int], job_pb2.RunTaskRequest] | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -306,12 +305,6 @@ class TaskAttempt:
         self.cleanup_done: bool = False
         self.should_stop: bool = False
         self.on_state_change: Callable[[TaskState], None] | None = None
-        # Called at the top of ``run()`` to obtain the full ``RunTaskRequest``.
-        # Worker uses this to fetch the spec from the controller via
-        # GetTaskAttemptInfo; tests / direct submits pass a constant lambda.
-        # Failure raises ``ContainerInfraError`` so the existing handler
-        # routes it to WORKER_FAILED.
-        self._fetch_request: Callable[[str, int], job_pb2.RunTaskRequest] | None = fetch_request
 
     @classmethod
     def adopt(
@@ -595,10 +588,6 @@ class TaskAttempt:
         """
         if self._bundle_store is None or self._runtime is None:
             raise RuntimeError("Cannot run() an adopted TaskAttempt — use resume_monitoring()")
-        assert self._fetch_request is not None, (
-            f"run() called on an adopted TaskAttempt ({self.task_id}/{self.attempt_id}); "
-            "adopted attempts have no fetch_request and cannot be re-run"
-        )
         logger.info(
             "TaskAttempt starting: task_id=%s attempt=%s num_tasks=%s",
             self.task_id,
@@ -606,13 +595,6 @@ class TaskAttempt:
             self.num_tasks,
         )
         try:
-            self._check_cancelled()
-            try:
-                fetched = self._fetch_request(self.task_id.to_wire(), self.attempt_id)
-            except Exception as e:
-                raise ContainerInfraError(f"GetTaskAttemptInfo failed: {e}") from e
-            self.request = fetched
-            self.num_tasks = fetched.num_tasks
             self._check_cancelled()
             self._setup()
             self._check_cancelled()

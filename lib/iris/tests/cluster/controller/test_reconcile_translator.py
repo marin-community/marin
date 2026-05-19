@@ -323,11 +323,8 @@ def test_multiple_updates_all_converted() -> None:
 
 
 def test_absent_expected_entry_produces_no_observation() -> None:
-    """Worker doesn't return status for an expected entry → no observation.
-
-    This is the Phase-A MISSING quirk: the legacy PollTasks wire has no
-    MISSING state. The worker learns about the attempt on the next tick via
-    the GetTaskAttemptInfo pull path. No observation is fabricated here.
+    """Translator does not fabricate observations for entries the worker
+    didn't return status for; the legacy PollTasks wire has no MISSING state.
     """
     # Plan has TASK1 in expected, but poll_updates only has TASK2.
     building = _desired_run_no_spec(_TASK1, attempt_id=1)

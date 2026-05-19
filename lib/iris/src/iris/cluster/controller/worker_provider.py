@@ -209,10 +209,9 @@ class WorkerProvider:
         sem: asyncio.Semaphore,
         plan: "WorkerReconcileDispatch",
     ) -> "WorkerReconcileResult":
-        """Per-worker reconcile: StartTasks (compat no-op stub) followed by
-        PollTasks, which is where the worker actually fetches and submits
-        expected tasks via GetTaskAttemptInfo. Workers run concurrently
-        under the shared semaphore.
+        """Per-worker reconcile: push specs via StartTasks, then reconcile
+        observed state via PollTasks. Workers run concurrently under the
+        shared semaphore.
         """
         async with sem:
             if not plan.address:

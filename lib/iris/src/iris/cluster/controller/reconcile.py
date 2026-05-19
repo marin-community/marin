@@ -358,13 +358,9 @@ def legacy_translator_request(plan: WorkerReconcilePlan, address: str | None) ->
     - ``stop_tasks``: task_id wire strings for each stop-intent entry
       (CANCELLED / PREEMPTED rows).
 
-    The legacy ``PollTasks`` wire has no ``MISSING`` state: when the worker
-    returns no status for an entry in ``expected_tasks``, the controller
-    receives no observation for it on this tick. The worker learns about the
-    attempt on the next tick when it fetches the spec via
-    ``GetTaskAttemptInfo`` and enqueues it itself, reporting BUILDING via the
-    existing pull path. The MISSING→FAILED spec-loss path is only reachable
-    via the ``Reconcile`` RPC.
+    The legacy wire reports ``WORKER_FAILED`` for any expected entry the
+    worker has no record of (see ``Worker._missing_task_status``); the
+    explicit ``MISSING`` state is only carried over the ``Reconcile`` RPC.
     """
     # TODO(Reconcile-RPC-default): collapse once StartTasks/PollTasks retire (kata 5hzc).
     worker_id = WorkerId(plan.request.worker_id)
@@ -422,7 +418,7 @@ def reconcile_request_from_plan(plan: WorkerReconcilePlan) -> worker_pb2.Worker.
 
     The composite-key compat fields ``task_id`` and ``attempt_id`` on
     ``DesiredAttempt`` are forwarded verbatim so the worker-side handler can
-    resolve the spec from ``GetTaskAttemptInfo`` using the same routing keys.
+    route the entry against its local task table and ``SpecCache``.
     """
     desired_protos: list[worker_pb2.Worker.DesiredAttempt] = []
     for da in plan.request.desired:
