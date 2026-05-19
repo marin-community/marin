@@ -210,6 +210,11 @@ enum TaskState {
   // "user killed my job" tickets, and from WORKER_FAILED (real worker death)
   // avoids polluting the preemption counter.
   TASK_STATE_COSCHED_FAILED = 11;
+  // Reconcile-protocol sentinel: worker received a run directive for an
+  // attempt_uid but has no cached spec and cannot start it. The controller
+  // treats this as a terminal failure (worker_lost_spec) and re-queues the
+  // task under a fresh uid. Not a valid persistent DB state.
+  TASK_STATE_MISSING = 12;
 }
 
 // Status of a single task within a job

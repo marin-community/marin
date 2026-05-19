@@ -1553,7 +1553,7 @@ class ControllerServiceImpl:
         Worker registers once, then waits for heartbeats from the controller.
         """
         if self._auth.provider is not None:
-            authorize(AuthzAction.REGISTER_WORKER)
+            authorize(AuthzAction.ACT_AS_WORKER)
 
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
