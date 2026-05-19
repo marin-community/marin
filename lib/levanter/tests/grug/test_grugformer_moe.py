@@ -20,6 +20,7 @@ from levanter.grug.grug_moe import (
     _shard_a2a_params,
     interleave_moe_w13,
     moe_mlp,
+    split_moe_w13_output,
 )
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -87,7 +88,8 @@ def _make_inputs(
 
 def _interleave_concat_w13(w_up_gate: jax.Array) -> jax.Array:
     intermediate = w_up_gate.shape[-1] // 2
-    return interleave_moe_w13(w_up_gate[..., :intermediate], w_up_gate[..., intermediate:])
+    gate, up = split_moe_w13_output(w_up_gate, intermediate_dim=intermediate, interleaved=False)
+    return interleave_moe_w13(gate, up)
 
 
 def _skip_small_ragged_dot_grad_on_tpu() -> None:
@@ -262,7 +264,7 @@ def test_moe_mlp_sonic_xla_interleaved_reference_matches_concat_values_and_gradi
         np.testing.assert_allclose(np.asarray(interleaved_grad), np.asarray(concat_grad), rtol=1e-5, atol=1e-5)
 
 
-def test_moe_expert_mlp_init_hides_interleaved_w13_layout():
+def test_moe_expert_mlp_init_produces_same_output_for_concat_and_interleaved_w13():
     k_x, k_sel, k_logits, k_mlp = jax.random.split(jax.random.key(26), 4)
     tokens = 20
     hidden_dim = 16
@@ -312,8 +314,8 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
             pspecs=pspecs,
         )
 
-    assert getattr(mlp.w_gate_up.sharding, "spec", None) == P(None, "data", "model")
-    assert getattr(mlp.w_down.sharding, "spec", None) == P(None, "model", "data")
+    assert mlp.w_gate_up.sharding.spec == P(None, "data", "model")
+    assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
 def test_moe_mlp_sonic_xla_interleaved_matches_reference_values_and_gradients():

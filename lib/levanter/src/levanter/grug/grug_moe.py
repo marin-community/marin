@@ -29,14 +29,7 @@ from levanter.grug._moe.common import (
     _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS,
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
-    _batch_spec_from_x,
-    _current_mesh,
     _init_weight,
-    _mesh_axis_size,
-    _mesh_has_axis,
-    _reshard_for_init,
-    _reshard_for_shard_map,
-    _value_spec_or_default,
     interleave_moe_w13,
     moe_implementation_uses_interleaved_w13,
     MoEExpertMlpPspecs,
@@ -55,6 +48,15 @@ from levanter.grug._moe.ep_common import (
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
 from levanter.grug._moe.local import _moe_mlp_local
+from levanter.grug._moe.mesh import (
+    _batch_spec_from_x,
+    _current_mesh,
+    _mesh_axis_size,
+    _mesh_has_axis,
+    _reshard_for_init,
+    _reshard_for_shard_map,
+    _value_spec_or_default,
+)
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -149,7 +151,10 @@ def moe_mlp(
     """
     resolved_implementation = resolve_moe_implementation(implementation)
     if resolved_implementation in _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS and activation != ActivationFunctionEnum.silu:
-        raise ValueError("sonic_xla_interleaved only supports silu/SwiGLU activation")
+        raise ValueError(
+            "sonic_xla_interleaved only supports silu/SwiGLU activation because its custom VJP hard-codes "
+            "the SwiGLU activation pullback"
+        )
 
     if mesh is None:
         mesh = _current_mesh()
@@ -203,7 +208,8 @@ def moe_mlp(
     if has_expert_axis and expert_axis_size > 1:
         if resolved_implementation not in _EP_MOE_IMPLEMENTATIONS:
             raise ValueError(
-                "Sonic local MoE implementations are only supported for the non-EP local Grug MoE path; "
+                "Sonic local MoE implementations do not yet support expert-parallel collectives; adding EP support "
+                "requires a Sonic-style dispatch/combine schedule inside each expert shard plus cross-shard routing. "
                 f"got implementation={resolved_implementation!r} with expert axis size={expert_axis_size}"
             )
         if num_experts % expert_axis_size != 0:

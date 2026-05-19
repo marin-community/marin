@@ -10,7 +10,7 @@ from typing import Literal, TypeAlias, cast, get_args
 import jax
 import jax.numpy as jnp
 from haliax.jax_utils import named_call
-from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh, get_mesh, reshard
+from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 
 from levanter.utils.activation import ActivationFunctionEnum
@@ -21,14 +21,16 @@ _DEFAULT_EP_CAPACITY_FACTOR = 1.25
 PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
-    "ring",
-    "ragged_all_to_all",
-    "scatter",
-    "sonic_xla",
-    "sonic_xla_interleaved",
+    "ring",  # Expert-parallel all-gather + psum-scatter backend.
+    "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
+    "scatter",  # Single-process grouped GMM with scatter-add combine.
+    "sonic_xla",  # Single-process Sonic-style metadata/combine in JAX/XLA.
+    "sonic_xla_interleaved",  # Sonic-style W13 layout plus custom-VJP down/gather.
 ]
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = ("ring", "ragged_all_to_all")
+# Local means no collectives over an expert axis. These backends can still run
+# under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
     "scatter",
     "sonic_xla",
@@ -36,6 +38,11 @@ _LOCAL_MOE_IMPLEMENTATIONS = (
 )
 _INTERLEAVED_W13_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved",)
 _CUSTOM_VJP_DOWN_MOE_IMPLEMENTATIONS = ("sonic_xla_interleaved",)
+
+_CHECKPOINT_DISPATCH_INPUT = "grug_moe_dispatch_input"
+_CHECKPOINT_EXPERT_HIDDEN = "grug_moe_expert_hidden"
+_CHECKPOINT_DISPATCH_OUTPUT = "grug_moe_dispatch_output"
+_CHECKPOINT_MOE_OUTPUT = "grug_moe_output"
 
 
 @dataclass(frozen=True)
@@ -53,67 +60,6 @@ class MoEExpertMlpPspecs:
     @property
     def w_down(self) -> P:
         return P(self.expert, self.intermediate, self.hidden)
-
-
-def _current_mesh() -> Mesh | jax.sharding.AbstractMesh:
-    try:
-        mesh = get_mesh()
-    except ValueError:
-        mesh = None
-    if mesh is not None and not mesh.empty:
-        return mesh
-    return get_abstract_mesh()
-
-
-def _mesh_has_axis(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: str) -> bool:
-    if mesh is None or mesh.empty:
-        return False
-    return axis_name in mesh.shape
-
-
-def _mesh_axis_size(mesh: Mesh | jax.sharding.AbstractMesh | None, axis_name: str) -> int:
-    if mesh is None or mesh.empty:
-        return 1
-    return int(mesh.shape.get(axis_name, 1))
-
-
-def _batch_spec(mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
-    if _mesh_has_axis(mesh, "expert"):
-        return P(("data", "expert"))
-    return P(("data",))
-
-
-def _batch_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> P:
-    sharding = getattr(x, "sharding", None)
-    spec = getattr(sharding, "spec", None)
-    if spec is not None and len(spec) > 0 and spec[0] is not None:
-        return P(spec[0])
-    return _batch_spec(mesh)
-
-
-def _is_replicated_spec(spec: P) -> bool:
-    return all(axis is None for axis in spec)
-
-
-def _value_spec_or_default(x: jax.Array, default: P, *, replace_replicated: bool = False) -> P:
-    sharding = getattr(x, "sharding", None)
-    spec = getattr(sharding, "spec", None)
-    if spec is not None and not (replace_replicated and _is_replicated_spec(spec)):
-        return spec
-    return default
-
-
-def _reshard_for_init(x: jax.Array, spec: P) -> jax.Array:
-    mesh = _current_mesh()
-    if mesh is None or mesh.empty:
-        return x
-    return reshard(x, NamedSharding(mesh, spec))
-
-
-def _reshard_for_shard_map(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None, spec: P) -> jax.Array:
-    if mesh is not None and not mesh.empty:
-        return reshard(x, NamedSharding(mesh, spec))
-    return x
 
 
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
