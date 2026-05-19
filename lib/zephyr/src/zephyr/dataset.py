@@ -450,12 +450,13 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = list(ctx.execute(ds))
         """
-        # TODO(alxmrs): There are all sorts of kwargs we could add to batch/chunk
-        #  this iterable efficiently.
-        def iter_records():
-            for stream in ctx.sql(query).execute_stream_partitioned():
-                for batch in stream:
-                    yield from batch.to_pylist()
+        def _flatten_records(stream) -> Iterable[dict]:
+            for batch in stream:
+                yield from batch.to_pylist()
+        return (
+            Dataset.from_list(ctx.sql(query).execute_stream_partitioned())
+            .flat_map(_flatten_records)
+         )
         return Dataset.from_iterable(iter_records())
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
