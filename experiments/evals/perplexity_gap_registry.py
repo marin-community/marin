@@ -29,6 +29,7 @@ from experiments.bio_chem_notation import bio_chem_raw_validation_sets
 from experiments.defaults import default_raw_validation_sets
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
 from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
+from experiments.evals.oeis_integer_sequences import oeis_integer_sequence_raw_validation_sets
 from experiments.marin_models import marin_tokenizer
 
 DEFAULT_MAX_EVAL_LENGTH = 4096
@@ -101,12 +102,21 @@ def bio_chem_bundle() -> PerplexityGapBundle:
     )
 
 
+def oeis_integer_sequences_bundle() -> PerplexityGapBundle:
+    return PerplexityGapBundle(
+        key="oeis_integer_sequences",
+        description="Eval-only OEIS integer sequences from stripped.gz and names.gz.",
+        datasets_factory=oeis_integer_sequence_raw_validation_sets,
+    )
+
+
 def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
     return (
         base_raw_bundle(),
         multilingual_bundle(),
         runnable_long_tail_bundle(),
         bio_chem_bundle(),
+        oeis_integer_sequences_bundle(),
     )
 
 
