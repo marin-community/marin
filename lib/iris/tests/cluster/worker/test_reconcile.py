@@ -1,25 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the handle_reconcile free function and SpecCache.
+"""Tests for ``Worker.handle_reconcile``.
 
-These tests exercise the Reconcile RPC handler introduced in Phase B without
-spinning up a full gRPC server. Most tests use the `mock_worker` fixture from
-conftest (which satisfies the ReconcileContext Protocol) and call
-`worker.handle_reconcile(request)` directly. A handful of tests construct a
-fresh SpecCache explicitly to verify eviction semantics in isolation.
-
-Scenario mapping to the kata spec:
-  1. Spec-inline + BUILDING on first call, cache hit (no re-enqueue) on second.
-  2. No-spec steady state: first call populates cache + enqueues, second call
-     (no inline spec, attempt already in _tasks) returns current state.
-  3. No spec and no cache: controller sent run intent but forgot to include spec
-     and the worker has no cached copy -> TASK_STATE_MISSING in response.
-  4. intent=stop: worker kills the attempt asynchronously; response reflects
-     the in-progress state at the time of the call.
-  5. Zombie kill: local attempt absent from desired set -> worker kills it.
-  6. Terminal eviction: after an attempt reaches a terminal state, the next
-     reconcile tick evicts it from SpecCache so the cache stays bounded.
+These exercise the Reconcile RPC handler in-process by calling
+``worker.handle_reconcile(request)`` directly on a real Worker instance.
 """
 
 from unittest.mock import Mock
@@ -27,7 +12,6 @@ from unittest.mock import Mock
 import pytest
 from iris.cluster.runtime.types import ContainerPhase, ContainerStatus
 from iris.cluster.types import JobName
-from iris.cluster.worker.reconcile import SpecCache
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
@@ -36,8 +20,6 @@ from rigging.timing import Duration
 from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
 
 pytestmark = pytest.mark.timeout(10)
-
-# ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -51,9 +33,6 @@ def worker(mock_bundle_store, mock_runtime, tmp_path) -> Worker:
         worker_id="w-reconcile-test",
     )
     return Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _task_id(name: str = "reconcile-task") -> str:
@@ -99,11 +78,8 @@ def _observations_by_key(
     return {(obs.task_id, obs.attempt_id): obs for obs in response.observed}
 
 
-# ── Scenario 1: spec-inline enqueue + cache hit ───────────────────────────────
-
-
 def test_inline_spec_enqueues_and_reports_building(worker, mock_runtime):
-    """First reconcile with spec inline enqueues the attempt; response is BUILDING."""
+    """First reconcile with an inline spec enqueues the attempt; response is BUILDING."""
     task_id = _task_id("inline-spec")
     run_req = create_run_task_request(task_id=task_id, attempt_id=0)
 
@@ -126,7 +102,7 @@ def test_inline_spec_enqueues_and_reports_building(worker, mock_runtime):
     ), f"Unexpected state {obs[key].state} — expected BUILDING or RUNNING"
 
     # Spec must be cached now.
-    assert worker._spec_cache.lookup(task_id, 0) is not None
+    assert worker._spec_cache.get((task_id, 0)) is not None
 
     # Clean up.
     worker.kill_task(task_id)
@@ -136,11 +112,10 @@ def test_inline_spec_enqueues_and_reports_building(worker, mock_runtime):
 
 
 def test_second_reconcile_without_spec_is_cache_hit(worker, mock_runtime):
-    """Second reconcile call with no inline spec must NOT re-enqueue (cache hit).
+    """A follow-up reconcile with no inline spec must not re-enqueue the attempt.
 
-    After the first call with an inline spec the attempt is in `_tasks`, so
-    `_process_run_intent` takes the early-return path. The observed state is
-    reported from the local task record, not as MISSING.
+    After the first call enqueues the attempt, the second call observes the
+    locally-tracked task and reports its current state instead of MISSING.
     """
     task_id = _task_id("cache-hit")
     run_req = create_run_task_request(task_id=task_id, attempt_id=0)
@@ -174,15 +149,12 @@ def test_second_reconcile_without_spec_is_cache_hit(worker, mock_runtime):
         task.thread.join(timeout=5.0)
 
 
-# ── Scenario 3: no spec and no cache → TASK_STATE_MISSING ────────────────────
-
-
 def test_no_spec_no_cache_reports_missing(worker):
     """intent=run with neither inline spec nor cached spec → TASK_STATE_MISSING."""
     task_id = _task_id("missing")
 
     # Worker has no prior knowledge of this attempt.
-    assert worker._spec_cache.lookup(task_id, 0) is None
+    assert worker._spec_cache.get((task_id, 0)) is None
     assert worker.get_task(task_id) is None
 
     response = _reconcile(worker, [_run_desired(task_id, 0, run_request=None)])
@@ -193,9 +165,6 @@ def test_no_spec_no_cache_reports_missing(worker):
 
     # Nothing should have been enqueued.
     assert worker.get_task(task_id) is None
-
-
-# ── Scenario 4: intent=stop kills non-terminal attempt ───────────────────────
 
 
 def test_stop_intent_kills_running_attempt(worker, mock_runtime):
@@ -222,14 +191,11 @@ def test_stop_intent_kills_running_attempt(worker, mock_runtime):
     obs = _observations_by_key(response)
     assert (task_id, 0) in obs
 
-    # should_stop is set synchronously by _process_stop_intent.
+    # should_stop is set synchronously before handle_reconcile returns.
     assert task.should_stop is True
 
     task.thread.join(timeout=5.0)
     assert task.status == job_pb2.TASK_STATE_KILLED
-
-
-# ── Scenario 5: zombie kill (local attempt absent from desired) ───────────────
 
 
 def test_zombie_attempt_is_killed(worker, mock_runtime):
@@ -281,11 +247,8 @@ def test_zombie_kill_skips_terminal_tasks(worker, mock_runtime):
     assert task.status == job_pb2.TASK_STATE_SUCCEEDED
 
 
-# ── Scenario 6: SpecCache evicts on terminal observation ─────────────────────
-
-
 def test_spec_cache_evicts_after_terminal_state(worker, mock_runtime):
-    """After an attempt becomes terminal, the next reconcile tick evicts it from SpecCache."""
+    """After an attempt becomes terminal, the next reconcile tick drops it from the spec cache."""
     task_id = _task_id("evict")
     run_req = create_run_task_request(task_id=task_id, attempt_id=0)
 
@@ -298,7 +261,7 @@ def test_spec_cache_evicts_after_terminal_state(worker, mock_runtime):
 
     # First reconcile: spec inline → enqueues and caches.
     _reconcile(worker, [_run_desired(task_id, 0, run_request=run_req)])
-    assert worker._spec_cache.lookup(task_id, 0) is not None
+    assert worker._spec_cache.get((task_id, 0)) is not None
 
     # Wait for the task to terminate.
     task = worker.get_task(task_id, attempt_id=0)
@@ -306,59 +269,11 @@ def test_spec_cache_evicts_after_terminal_state(worker, mock_runtime):
     task.thread.join(timeout=5.0)
     assert task.status == job_pb2.TASK_STATE_SUCCEEDED
 
-    # Second reconcile tick: _build_observation sees terminal status → evict.
+    # Second reconcile tick: observing a terminal state evicts the cached spec.
     _reconcile(worker, [_run_desired(task_id, 0, run_request=None)])
 
     # Cache entry must be gone.
-    assert worker._spec_cache.lookup(task_id, 0) is None
-
-
-# ── Standalone SpecCache unit tests ───────────────────────────────────────────
-
-
-def test_spec_cache_add_and_lookup():
-    cache = SpecCache()
-    req = create_run_task_request()
-    cache.add(req.task_id, req.attempt_id, req)
-    assert cache.lookup(req.task_id, req.attempt_id) is req
-    assert len(cache) == 1
-
-
-def test_spec_cache_lookup_miss_returns_none():
-    cache = SpecCache()
-    assert cache.lookup("nonexistent", 0) is None
-
-
-def test_spec_cache_evict_removes_entry():
-    cache = SpecCache()
-    req = create_run_task_request()
-    cache.add(req.task_id, req.attempt_id, req)
-    cache.evict(req.task_id, req.attempt_id)
-    assert cache.lookup(req.task_id, req.attempt_id) is None
-    assert len(cache) == 0
-
-
-def test_spec_cache_evict_is_idempotent():
-    cache = SpecCache()
-    # Evicting a key that was never added must not raise.
-    cache.evict("ghost", 99)
-    assert len(cache) == 0
-
-
-def test_spec_cache_multiple_keys_independent():
-    cache = SpecCache()
-    task_id_a = _task_id("cache-a")
-    task_id_b = _task_id("cache-b")
-    req_a = create_run_task_request(task_id=task_id_a, attempt_id=0)
-    req_b = create_run_task_request(task_id=task_id_b, attempt_id=0)
-    cache.add(task_id_a, 0, req_a)
-    cache.add(task_id_b, 0, req_b)
-    cache.evict(task_id_a, 0)
-    assert cache.lookup(task_id_a, 0) is None
-    assert cache.lookup(task_id_b, 0) is req_b
-
-
-# ── Response shape tests ───────────────────────────────────────────────────────
+    assert worker._spec_cache.get((task_id, 0)) is None
 
 
 def test_reconcile_response_includes_worker_id(worker):

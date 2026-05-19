@@ -40,7 +40,7 @@ from iris.cluster.controller.reads import (
     TaskDetailRow,
     TaskScope,
 )
-from iris.cluster.controller.reconcile import AttemptObservation, WorkerReconcilePlan
+from iris.cluster.controller.reconcile import WorkerReconcilePlan
 from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
@@ -69,7 +69,7 @@ from iris.cluster.types import (
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
@@ -1972,23 +1972,25 @@ class ControllerTransitions:
         self,
         cur: Tx,
         plan: WorkerReconcilePlan,
-        observations: list[AttemptObservation],
+        observations: list[worker_pb2.Worker.AttemptObservation],
         now: Timestamp,
     ) -> TxResult:
         """Apply observations from a successful Reconcile RPC within the caller's transaction.
 
-        Updates worker health, then processes each observation. MISSING
-        observations are converted to ``FAILED("worker_lost_spec")`` updates
-        that fire the standard cascades. All other observations are routed
-        through ``_apply_task_transitions`` so the existing state-machine
-        guards (idempotency, stale-attempt checks, retry logic, cascade firing)
-        apply unchanged.
+        Heartbeats the worker, translates observations to updates (MISSING
+        becomes ``FAILED("worker_lost_spec")``), and runs the standard
+        transition pipeline.
         """
-        worker_id = WorkerId(plan.request.worker_id)
+        worker_id = plan.worker_id
         now_ms = now.epoch_ms()
 
         existing = reads.filter_existing_workers(cur, [worker_id])
         if str(worker_id) not in existing:
+            logger.warning(
+                "apply_reconcile_observations: worker %s no longer present; dropping %d observations",
+                worker_id,
+                len(observations),
+            )
             return TxResult()
         self._health.heartbeat([worker_id], now_ms)
 
@@ -2018,11 +2020,11 @@ class ControllerTransitions:
     ) -> TxResult:
         """Apply synthetic WORKER_FAILED updates for ASSIGNED attempts after an RPC failure.
 
-        Logs and applies synthetic WORKER_FAILED for any ASSIGNED-state attempts
-        in the plan, mirroring today's StartTasks-failure behavior. No
-        observation processing happens here; this is the failure-only path.
+        Bounces only the rows the controller intended to dispatch this tick
+        (ASSIGNED with inline spec); the RPC outcome for already-running
+        attempts is unknown and is left to the next reconcile pass.
         """
-        worker_id = WorkerId(plan.request.worker_id)
+        worker_id = plan.worker_id
         now_ms = now.epoch_ms()
 
         log_event(
@@ -2048,18 +2050,23 @@ class ControllerTransitions:
     ) -> list[TaskUpdate]:
         """Return synthetic WORKER_FAILED updates for ASSIGNED attempts in the plan.
 
-        Used when the Reconcile RPC failed: we don't know if the worker received
-        the desired set, so we bounce only the rows that the controller intended
-        to start this tick (intent_run with an inline spec, i.e. ASSIGNED rows)
-        back via WORKER_FAILED. Rows whose attempt is no longer ASSIGNED in the
-        DB by the time we look (e.g. concurrent state changes) are skipped.
+        Rows whose attempt has already moved out of ASSIGNED (concurrent
+        state changes) are skipped.
         """
-        updates: list[TaskUpdate] = []
+        candidates: list[tuple[JobName, int]] = []
         for desired in plan.request.desired:
-            if desired.intent_run is None or desired.intent_run.request is None:
+            if not desired.HasField("run") or not desired.run.HasField("request"):
                 continue
-            task_id = JobName.from_wire(desired.task_id)
-            task = reads.get_task_detail(cur, task_id)
+            candidates.append((JobName.from_wire(desired.task_id), desired.attempt_id))
+
+        if not candidates:
+            return []
+
+        task_map = reads.bulk_get_task_detail(cur, [task_id for task_id, _ in candidates])
+
+        updates: list[TaskUpdate] = []
+        for task_id, attempt_id in candidates:
+            task = task_map.get(task_id)
             if task is None:
                 continue
             if task.state != job_pb2.TASK_STATE_ASSIGNED:
@@ -2067,7 +2074,7 @@ class ControllerTransitions:
             updates.append(
                 TaskUpdate(
                     task_id=task_id,
-                    attempt_id=desired.attempt_id,
+                    attempt_id=attempt_id,
                     new_state=job_pb2.TASK_STATE_WORKER_FAILED,
                     error=f"Reconcile RPC failed: {error}",
                 )
@@ -2076,26 +2083,35 @@ class ControllerTransitions:
 
     def _observations_to_updates(
         self,
-        observations: list[AttemptObservation],
+        observations: list[worker_pb2.Worker.AttemptObservation],
     ) -> list[TaskUpdate]:
-        """Translate ``AttemptObservation`` list into ``TaskUpdate`` list.
+        """Translate ``AttemptObservation`` protos into ``TaskUpdate`` list.
 
-        MISSING observations become ``FAILED("worker_lost_spec")`` updates.
-        All others map directly to a ``TaskUpdate`` with the reported state.
-        Observations with no ``task_id`` compat field are skipped (uid-only
-        routing is a Phase C+ concern).
+        MISSING becomes ``FAILED("worker_lost_spec")``. Routing prefers the
+        ``attempt_uid`` when set; otherwise it falls back to the legacy
+        ``(task_id, attempt_id)`` composite key. UIDs are currently always
+        empty, so the composite path is the one in use.
         """
         updates: list[TaskUpdate] = []
         for obs in observations:
+            if obs.attempt_uid:
+                # UID routing will resolve to a (task_id, attempt_id) pair
+                # once worker-side UID assignment lands; for now no consumer
+                # emits a non-empty UID and falling through to the composite
+                # branch is the only correct behaviour.
+                logger.debug("AttemptObservation carries uid=%s; falling back to composite key", obs.attempt_uid)
             if not obs.task_id:
                 logger.warning("AttemptObservation missing task_id compat field; skipping uid=%s", obs.attempt_uid)
                 continue
             task_id = JobName.from_wire(obs.task_id)
+            exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
+            error: str | None = obs.error or None
+            container_id: str | None = obs.container_id or None
             if obs.state == job_pb2.TASK_STATE_MISSING:
                 updates.append(
                     TaskUpdate(
                         task_id=task_id,
-                        attempt_id=obs.attempt_id_compat,
+                        attempt_id=obs.attempt_id,
                         new_state=job_pb2.TASK_STATE_FAILED,
                         error="worker_lost_spec",
                     )
@@ -2104,11 +2120,11 @@ class ControllerTransitions:
                 updates.append(
                     TaskUpdate(
                         task_id=task_id,
-                        attempt_id=obs.attempt_id_compat,
+                        attempt_id=obs.attempt_id,
                         new_state=obs.state,
-                        error=obs.error,
-                        exit_code=obs.exit_code,
-                        container_id=obs.container_id,
+                        error=error,
+                        exit_code=exit_code,
+                        container_id=container_id,
                     )
                 )
         return updates

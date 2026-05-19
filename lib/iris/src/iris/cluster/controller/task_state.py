@@ -18,7 +18,7 @@ ACTIVE_TASK_STATES: frozenset[int] = frozenset(
     }
 )
 
-# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
+# Subset of ACTIVE that excludes ASSIGNED — i.e. tasks already on a worker.
 EXECUTING_TASK_STATES: frozenset[int] = frozenset(
     {
         job_pb2.TASK_STATE_BUILDING,

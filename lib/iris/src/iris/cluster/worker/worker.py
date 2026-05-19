@@ -43,8 +43,6 @@ from iris.cluster.worker.env_probe import (
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.reconcile import SpecCache
-from iris.cluster.worker.reconcile import handle_reconcile as _handle_reconcile
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.stats import (
     TASK_STATS_NAMESPACE,
@@ -215,9 +213,9 @@ class Worker:
         # listed it in expected_tasks. See _RECENT_SUBMISSION_GRACE_SECONDS.
         self._recent_submissions: dict[tuple[str, int], float] = {}
         self._lock = threading.Lock()
-        # In-memory spec cache for the Reconcile RPC. Keyed by composite
-        # (task_id, attempt_id); see kata h9r9 for the attempt_uid migration.
-        self._spec_cache = SpecCache()
+        # In-memory spec cache for the Reconcile RPC. Lost on worker restart;
+        # the controller fails affected attempts forward via worker_lost_spec.
+        self._spec_cache: dict[tuple[str, int], job_pb2.RunTaskRequest] = {}
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
@@ -1001,13 +999,164 @@ class Worker:
         return worker_pb2.Worker.PollTasksResponse(tasks=tasks)
 
     def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse:
-        """Reconcile handler: process desired state from the controller and return observed state.
+        """Process desired state from the controller and return observed state."""
+        # Tracked separately: desired_run_keys drives MISSING synthesis for
+        # entries the controller wants running but we have no record of.
+        desired_run_keys: set[tuple[str, int]] = set()
+        desired_keys: set[tuple[str, int]] = set()
 
-        Delegates to the module-level ``handle_reconcile as _handle_reconcile`` function which
-        contains the logic. The ``SpecCache`` lives on the Worker so it persists
-        across calls for the lifetime of the worker process.
+        for desired in request.desired:
+            task_id = desired.task_id
+            attempt_id = desired.attempt_id
+            key = (task_id, attempt_id)
+
+            is_run = desired.HasField("run")
+            if is_run:
+                desired_run_keys.add(key)
+                desired_keys.add(key)
+                self._process_run_intent(task_id, attempt_id, desired.attempt_uid, desired.run)
+            else:
+                desired_keys.add(key)
+                self._process_stop_intent(task_id, attempt_id, desired.attempt_uid)
+
+        with self._lock:
+            local_keys = list(self._tasks.keys())
+
+        for key in local_keys:
+            task_id, attempt_id = key
+            with self._lock:
+                task = self._tasks.get(key)
+                if task is None:
+                    continue
+                is_terminal = task.status in self._TERMINAL_STATES
+            if key not in desired_keys and not is_terminal:
+                logger.info(
+                    "Reconcile: killing zombie attempt %s/%d (not in desired set)",
+                    task_id,
+                    attempt_id,
+                )
+                self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+
+        observations: list[worker_pb2.Worker.AttemptObservation] = []
+        with self._lock:
+            snapshot = list(self._tasks.items())
+
+        known_keys: set[tuple[str, int]] = set()
+        for key, task in snapshot:
+            task_id, attempt_id = key
+            known_keys.add(key)
+            observations.append(self._build_observation(task_id, attempt_id, task))
+
+            # Evict terminal entries from the spec cache so it stays bounded.
+            if task.status in self._TERMINAL_STATES:
+                self._spec_cache.pop((task_id, attempt_id), None)
+
+        for task_id, attempt_id in desired_run_keys:
+            if (task_id, attempt_id) not in known_keys:
+                observations.append(
+                    worker_pb2.Worker.AttemptObservation(
+                        task_id=task_id,
+                        attempt_id=attempt_id,
+                        state=job_pb2.TASK_STATE_MISSING,
+                    )
+                )
+
+        resource_snapshot = self._collect_resource_metrics()
+        health = check_worker_health(disk_path=str(self._cache_dir))
+        if not health.healthy:
+            logger.warning("Reconcile: worker health check failed: %s", health.error)
+
+        worker_health = worker_pb2.Worker.WorkerHealth(
+            healthy=health.healthy,
+            health_error=health.error,
+            resources=resource_snapshot,
+        )
+
+        return worker_pb2.Worker.ReconcileResponse(
+            worker_id=self._worker_id or "",
+            observed=observations,
+            health=worker_health,
+        )
+
+    def _process_run_intent(
+        self,
+        task_id: str,
+        attempt_id: int,
+        attempt_uid: str,
+        attempt_spec: worker_pb2.Worker.AttemptSpec,
+    ) -> None:
+        """Handle a single DesiredAttempt with intent=run.
+
+        If the worker already knows the attempt, no-op. Otherwise enqueue
+        when an inline spec is provided; without a spec, leave the attempt
+        absent so the observation loop reports MISSING.
         """
-        return _handle_reconcile(self, self._spec_cache, request)
+        # attempt_uid honored if set; composite key is the routing fallback while migrations land
+        del attempt_uid
+        key = (task_id, attempt_id)
+
+        with self._lock:
+            task = self._tasks.get(key)
+
+        if task is not None:
+            return
+
+        spec_has_request = attempt_spec.HasField("request")
+        if spec_has_request:
+            run_request = attempt_spec.request
+            self._spec_cache[(task_id, attempt_id)] = run_request
+            logger.info("Reconcile: enqueuing attempt %s/%d (spec inline)", task_id, attempt_id)
+            self.submit_task(run_request)
+        else:
+            logger.info(
+                "Reconcile: attempt %s/%d unknown and no spec; will report MISSING",
+                task_id,
+                attempt_id,
+            )
+
+    def _process_stop_intent(self, task_id: str, attempt_id: int, attempt_uid: str) -> None:
+        """Handle a single DesiredAttempt with intent=stop.
+
+        Idempotent: silently does nothing if the attempt is already terminal or
+        not present locally.
+        """
+        # attempt_uid honored if set; composite key is the routing fallback while migrations land
+        del attempt_uid
+        with self._lock:
+            task = self._tasks.get((task_id, attempt_id))
+            if task is None:
+                return
+            is_terminal = task.status in self._TERMINAL_STATES
+
+        if is_terminal:
+            return
+
+        logger.info("Reconcile: stopping attempt %s/%d (stop intent)", task_id, attempt_id)
+        self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+
+    def _build_observation(
+        self,
+        task_id: str,
+        attempt_id: int,
+        task: TaskInfo,
+    ) -> worker_pb2.Worker.AttemptObservation:
+        """Build an AttemptObservation from a local TaskAttempt."""
+        state = task.status
+        # Workers never report PENDING to the controller; map it to BUILDING.
+        if state == job_pb2.TASK_STATE_PENDING:
+            state = job_pb2.TASK_STATE_BUILDING
+
+        obs = worker_pb2.Worker.AttemptObservation(
+            task_id=task_id,
+            attempt_id=attempt_id,
+            state=state,
+            exit_code=task.exit_code or 0,
+            error=task.error or "",
+            container_id=task.platform_container_id or "",
+        )
+        if task.status in self._TERMINAL_STATES and task.finished_at is not None:
+            obs.finished_at.CopyFrom(timestamp_to_proto(task.finished_at))
+        return obs
 
     def _kill_task_attempt(
         self,

@@ -75,15 +75,10 @@ from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjecti
 from iris.cluster.controller.provider import TaskProvider
 from iris.cluster.controller.reads import SchedulableWorker
 from iris.cluster.controller.reconcile import (
-    AttemptObservation,
     ReconcileRow,
     WorkerReconcileInputs,
     WorkerReconcilePlan,
     WorkerRow,
-    legacy_translator_request,
-    legacy_translator_response,
-    observations_from_reconcile_response,
-    reconcile_request_from_plan,
     reconcile_worker,
 )
 from iris.cluster.controller.scheduler import (
@@ -122,7 +117,6 @@ from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.cluster.providers.types import find_free_port, resolve_external_host
 from iris.cluster.runtime.profile import PROFILE_NAMESPACE, IrisProfile
 from iris.cluster.types import (
-    AttemptUid,
     JobName,
     PendingTask,
     UserBudgetDefaults,
@@ -1306,9 +1300,8 @@ class ControllerConfig:
 
     reconcile_rpc_enabled: bool = False
     """When True, the controller dispatches the Reconcile RPC instead of the
-    legacy StartTasks+PollTasks wire. Resolved once at startup from the
-    environment variable ``IRIS_RECONCILE_RPC_ENABLED``. Default False keeps
-    production behavior unchanged until the flag-flip in Phase C."""
+    legacy StartTasks+PollTasks wire. Resolved once at startup from
+    ``IRIS_RECONCILE_RPC_ENABLED``."""
 
 
 def _log_client_interceptors(config: "ControllerConfig") -> tuple:
@@ -2335,28 +2328,13 @@ class Controller:
     def _reconcile_worker_batch(self) -> None:
         """One polling-tick reconcile pass.
 
-        Phase 1 (snapshot read): snapshot healthy workers and the
-        ``(worker, task, attempt)`` rows that drive reconcile decisions.
-        Build per-job spec templates for ASSIGNED rows.
-
-        Phase 2 (pure compute, no DB lock): for each worker, call
-        ``reconcile_worker`` to produce a ``WorkerReconcilePlan`` describing
-        the desired set and any DB writes to apply on RPC success.
-
-        Phase 3 (no DB lock): fan out RPCs to workers concurrently.
-        When ``config.reconcile_rpc_enabled`` is True, dispatch the Reconcile
-        RPC (one call per worker). Otherwise dispatch the legacy
-        StartTasks+PollTasks wire via ``WorkerProvider.reconcile_workers``.
-
-        Phase 4 (single write tx): translate each result and apply via
-        ``apply_reconcile_observations`` (success) or ``apply_reconcile_failure``
-        (RPC error). ASSIGNED rows whose RPC failed bounce back to PENDING;
-        observations are applied in the same transaction.
+        Snapshots active workers + their attempts, computes per-worker
+        plans in pure Python, fans out RPCs concurrently outside the DB
+        lock, then applies all results in a single write transaction.
         """
         if self._config.dry_run:
             return
 
-        # ── Phase 1: read snapshot ─────────────────────────────────────────
         with self._db.read_snapshot() as snap:
             addresses = reads.list_active_healthy_workers(snap, self._health)
             if not addresses:
@@ -2406,7 +2384,6 @@ class Controller:
                 if row.job_id not in templates_by_job:
                     templates_by_job[row.job_id] = self._transitions.run_request_template(snap, row.job_id)
 
-        # ── Phase 2: per-worker pure compute ──────────────────────────────
         rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
         for row in rows:
             rows_by_worker[row.worker_id].append(row)
@@ -2424,77 +2401,22 @@ class Controller:
             )
             pure_plans.append(reconcile_worker(inputs))
 
-        # ── Phase 3: fan out RPCs (no DB lock) ────────────────────────────
-        plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {WorkerId(p.request.worker_id): p for p in pure_plans}
+        plan_by_worker: dict[WorkerId, WorkerReconcilePlan] = {p.worker_id: p for p in pure_plans}
+        provider_addresses: dict[WorkerId, str | None] = {wid: addresses.get(wid) for wid in worker_ids}
+        results = self._provider.reconcile_workers(
+            pure_plans,
+            provider_addresses,
+            use_reconcile_rpc=self._config.reconcile_rpc_enabled,
+        )
 
-        if self._config.reconcile_rpc_enabled:
-            # New Reconcile wire: one RPC per worker replacing StartTasks+PollTasks.
-            plans_with_addresses = [
-                (
-                    plan,
-                    addresses.get(WorkerId(plan.request.worker_id)),
-                    reconcile_request_from_plan(plan),
-                )
-                for plan in pure_plans
-            ]
-            reconcile_results = self._provider.reconcile_workers_via_reconcile(plans_with_addresses)
-
-            # ── Phase 4 (Reconcile wire): batched apply in one write txn ──────
-            with self._db.transaction() as cur:
-                for rr in reconcile_results:
-                    plan = plan_by_worker[rr.worker_id]
-                    if rr.error is not None:
-                        logger.debug("Reconcile RPC failed for worker %s: %s", rr.worker_id, rr.error)
-                        self._transitions.apply_reconcile_failure(cur, plan, rr.error, now)
-                    else:
-                        observations = (
-                            observations_from_reconcile_response(rr.response) if rr.response is not None else []
-                        )
-                        self._transitions.apply_reconcile_observations(cur, plan, observations, now)
-        else:
-            # Legacy wire: StartTasks + PollTasks.
-            dispatches = [
-                legacy_translator_request(plan, addresses.get(WorkerId(plan.request.worker_id))) for plan in pure_plans
-            ]
-            results = self._provider.reconcile_workers(dispatches)
-
-            # ── Phase 4 (legacy wire): batched apply in one write txn ─────────
-            with self._db.transaction() as cur:
-                for result in results:
-                    plan = plan_by_worker[result.worker_id]
-                    error: str | None = result.start_error
-                    observations = legacy_translator_response(plan, result)
-                    if result.start_response is not None:
-                        # Append synthetic WORKER_FAILED observations for any
-                        # tasks the worker explicitly rejected.
-                        attempt_by_task = {
-                            d.task_id: d.attempt_id for d in plan.request.desired if d.intent_run is not None
-                        }
-                        for ack in result.start_response.acks:
-                            if ack.accepted:
-                                continue
-                            log_event(
-                                "task_rejected",
-                                ack.task_id,
-                                trigger="start_tasks_ack",
-                                worker=str(result.worker_id),
-                                error=ack.error,
-                            )
-                            observations.append(
-                                AttemptObservation(
-                                    attempt_uid=AttemptUid(""),
-                                    state=job_pb2.TASK_STATE_WORKER_FAILED,
-                                    error=f"Worker rejected task: {ack.error}",
-                                    task_id=ack.task_id,
-                                    attempt_id_compat=attempt_by_task.get(ack.task_id, -1),
-                                )
-                            )
-                    if result.poll_error is not None:
-                        logger.debug("PollTasks failed for worker %s: %s", result.worker_id, result.poll_error)
-                    if error is not None:
-                        self._transitions.apply_reconcile_failure(cur, plan, error, now)
-                    else:
-                        self._transitions.apply_reconcile_observations(cur, plan, observations, now)
+        with self._db.transaction() as cur:
+            for result in results:
+                plan = plan_by_worker[result.worker_id]
+                if result.error is not None:
+                    logger.debug("Reconcile failed for worker %s: %s", result.worker_id, result.error)
+                    self._transitions.apply_reconcile_failure(cur, plan, result.error, now)
+                else:
+                    self._transitions.apply_reconcile_observations(cur, plan, result.observations, now)
 
     def _get_active_worker_addresses(self) -> list[tuple[WorkerId, str | None]]:
         """Get healthy active workers as (worker_id, address) tuples for ping."""
