@@ -290,10 +290,12 @@ def test_reconcile_worker_assigned_with_spec_emits_run_with_inline_spec():
     assert desired.attempt_id == 7
     assert desired.HasField("run")
     assert desired.run.HasField("request")
-    # Spec is stamped with the routing key.
+    # The inline RunTaskRequest is stamped with the routing key: the worker's
+    # submit_task reads attempt_uid from the request, not from DesiredAttempt.
     assert desired.run.request.task_image == "custom-image"
     assert desired.run.request.task_id == row.task_id.to_wire()
     assert desired.run.request.attempt_id == 7
+    assert desired.run.request.attempt_uid == row.attempt_uid
 
 
 def test_reconcile_worker_assigned_without_spec_is_omitted():

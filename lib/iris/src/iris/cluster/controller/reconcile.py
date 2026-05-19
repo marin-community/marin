@@ -87,6 +87,7 @@ def _reconcile_worker(
             req.CopyFrom(spec)
             req.task_id = wire_task_id
             req.attempt_id = row.attempt_id
+            req.attempt_uid = row.attempt_uid
             desired.append(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
