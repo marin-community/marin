@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from levanter.data.text import TextLmDatasetFormat
 from marin.datakit.download.huggingface import DownloadConfig, download_hf
 from marin.execution import versioned
 from marin.execution.executor import ExecutorStep, this_output_path
@@ -110,6 +111,70 @@ megamath_real_only = lm_mixture_data_config(
         "megamath/web_pro": megamath_token_counts["megamath/web_pro"],
     },
 )
+
+
+swallow_math_v2_source = default_download(
+    name="raw/tokyotech/swallow-math-v2",
+    hf_dataset_id="tokyotech-llm/swallow-math-v2",
+    revision=versioned("b59a686bca9bb92e290f558ea7dcd73ec707b602"),
+    override_output_path="raw/tokyotech/swallow-math-v2",
+    hf_urls_glob=["stage3-qa/**/*.jsonl", "stage3-textbook/**/*.jsonl", "*.md"],
+)
+
+swallow_math_v2_tokenized = {
+    "swallow_math_v2/qa": default_tokenize(
+        name="swallow_math_v2/qa",
+        dataset=swallow_math_v2_source / "stage3-qa/**/*.jsonl",
+        tokenizer=llama3_tokenizer,
+    ),
+    "swallow_math_v2/textbook": default_tokenize(
+        name="swallow_math_v2/textbook",
+        dataset=swallow_math_v2_source / "stage3-textbook/**/*.jsonl",
+        tokenizer=llama3_tokenizer,
+    ),
+}
+
+
+ultradata_math_source = default_download(
+    name="raw/openbmb/ultradata-math",
+    hf_dataset_id="openbmb/UltraData-Math",
+    revision=versioned("fe10db8efd35597fd7fcff8ff576b5ec4ea5ff87"),
+    override_output_path="raw/openbmb/ultradata-math",
+    hf_urls_glob=[
+        "data/UltraData-Math-L2-preview/**/*.parquet",
+        "data/UltraData-Math-L3/Conversation-Synthetic/**/*.parquet",
+        "data/UltraData-Math-L3/QA-Synthetic/**/*.parquet",
+        "data/UltraData-Math-L3/Textbook-Exercise-Synthetic/**/*.parquet",
+        "*.md",
+    ],
+)
+
+ultradata_math_tokenized = {
+    "ultradata_math/l2_preview": default_tokenize(
+        name="ultradata_math/l2_preview",
+        dataset=ultradata_math_source / "data/UltraData-Math-L2-preview/**/*.parquet",
+        tokenizer=llama3_tokenizer,
+        format=TextLmDatasetFormat(text_key="content"),
+    ),
+    "ultradata_math/l3_conversation": default_tokenize(
+        name="ultradata_math/l3_conversation",
+        dataset=ultradata_math_source / "data/UltraData-Math-L3/Conversation-Synthetic/**/*.parquet",
+        tokenizer=llama3_tokenizer,
+        format=TextLmDatasetFormat(text_key="content"),
+    ),
+    "ultradata_math/l3_qa": default_tokenize(
+        name="ultradata_math/l3_qa",
+        dataset=ultradata_math_source / "data/UltraData-Math-L3/QA-Synthetic/**/*.parquet",
+        tokenizer=llama3_tokenizer,
+        format=TextLmDatasetFormat(text_key="content"),
+    ),
+    "ultradata_math/l3_textbook_exercise": default_tokenize(
+        name="ultradata_math/l3_textbook_exercise",
+        dataset=ultradata_math_source / "data/UltraData-Math-L3/Textbook-Exercise-Synthetic/**/*.parquet",
+        tokenizer=llama3_tokenizer,
+        format=TextLmDatasetFormat(text_key="content"),
+    ),
+}
 
 
 pile_pubmed_abstracts_validation = default_download(
