@@ -743,10 +743,10 @@ class ScalingGroup:
     def ready_slice_probe_targets(self) -> list[tuple[str, SliceHandle, dict[str, str]]]:
         """Snapshot READY slices for the health probe.
 
-        Returns ``(slice_id, handle, worker_urls_copy)`` tuples. URLs may be
-        empty (e.g. on a controller restart for a checkpointed READY slice) —
-        callers should lazy-fetch via ``handle.describe()`` and publish back
-        via :meth:`set_worker_urls`.
+        Returns ``(slice_id, handle, worker_urls)`` tuples, where ``worker_urls``
+        is a copy. URLs may be empty (e.g. on a controller restart for a
+        checkpointed READY slice) — callers should lazy-fetch via
+        ``handle.describe()`` and publish back via :meth:`set_worker_urls`.
         """
         with self._slices_lock:
             return [
