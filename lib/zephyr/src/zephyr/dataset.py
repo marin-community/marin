@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
+from datafusion import SessionContext
 import fsspec
 from braceexpand import braceexpand
 from pyarrow import RecordBatch
@@ -237,7 +238,7 @@ class FlatMapOp:
 class LoadFileOp:
     """Load records from files (parquet, jsonl, vortex, etc.)."""
 
-    format: Literal["auto", "parquet", "jsonl", "vortex"] = "auto"
+    format: Literal["auto", "parquet", "jsonl", "vortex", "datafusion"] = "auto"
     columns: list[str] | None = None
     approx_shard_bytes: int | None = None
     include_file_paths: bool = False
@@ -421,6 +422,41 @@ class Dataset(Generic[T]):
             >>> output_files = ctx.execute(ds).results
         """
         return Dataset(GlobSource(pattern, empty_glob_ok))
+
+    # TODO(alxmrs): If we can _read_ from DataFusion, then we probably would want to
+    #  _write_ to it, too.
+    @staticmethod
+    def from_query(ctx: SessionContext, query: str) -> Dataset[dict]:
+        """Create a dataset from a DataFusion SQL query.
+
+        Instead of directly loading files, we can perform filters and aggregations on
+         them with DataFusion via a SQL query. This will then return an iterable of records
+        as dictionaries. This interface gets the best of both worlds: DataFusion and
+        Zephyr predicate and filter pushdowns.
+
+        Args:
+            ctx: A DataFusion context that's configured and has pre-registered SQL tables.
+            query: A well-formed Apache Calcite-dialect SQL query.
+
+        Returns
+            A Dataset of records.
+
+        Example:
+            >>> ctx = SessionContext().register_parquet("mytable", "/input")
+            >>> ds = (Dataset
+            ...     .from_query(ctx, '''SELECT * from mytable''')
+            ...     .map(lambda r: transform_record(r))
+            ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
+            ... )
+            >>> output_files = list(ctx.execute(ds))
+        """
+        # TODO(alxmrs): There are all sorts of kwargs we could add to batch/chunk
+        #  this iterable efficiently.
+        def iter_records():
+            for stream in ctx.sql(query).execute_stream_partitioned():
+                for batch in stream:
+                    yield from batch.to_pylist()
+        return Dataset.from_iterable(iter_records())
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
@@ -692,6 +728,7 @@ class Dataset(Generic[T]):
             self.source,
             [*self.operations, LoadFileOp("vortex", columns, None, include_file_paths, file_path_column)],
         )
+
 
     def map_shard(
         self,
