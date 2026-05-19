@@ -35,7 +35,7 @@ Smoke usage::
 
     uv run iris --cluster=marin job run --user $USERNAME --no-wait \\
         --job-name prot-exp11-smoke-$(date +%Y%m%d-%H%M) \\
-        --region us-east5 --memory=3.5GB \\
+        --region us-east5 --memory=1GB \\
         -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
         -e COMMAND run_smoke \\
         -- python -m experiments.protein.exp11_data_mix_sweep
@@ -46,11 +46,13 @@ Preview without submitting::
         uv run python -m experiments.protein.exp11_data_mix_sweep
 """
 
+import dataclasses
 import logging
 import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 
 from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
@@ -233,6 +235,11 @@ WARMUP: float = 0.1
 # the smoke/mix/scale runs are directly comparable.
 LR_SCHEDULE: str = "linear"
 DECAY: float = 0.2
+
+# Rolling temp-checkpoint cadence. Overrides defaults.py's 10-minute default
+# (Levanter's underlying default is 15) so preemption/host-loss survives with
+# at most ~8 min of lost progress on these short runs.
+TEMP_CHECKPOINT_INTERVAL = timedelta(minutes=8)
 
 # Vocab size for the legacy ``timodonnell/protein-docs-tokenizer@83f597d88e9b``
 # revision (pinned in PROTEIN_TOKENIZER). Hardcoded so it lands in run-config
@@ -661,7 +668,7 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
     )
     params = compute_num_parameters(spec.model_config, PROTEIN_VOCAB_SIZE)
     tokens = spec.batch_size * SEQ_LEN * spec.num_train_steps
-    return prepare_lm_train(
+    job_name, raw_config = prepare_lm_train(
         name=_trial_name(spec, mixture_id),
         tokenized=data,
         model_config=spec.model_config,
@@ -684,6 +691,18 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         use_default_validation=False,
         wandb_group="exp11-data-mix",
     )
+    # Override the defaults.py 10-min temp-checkpoint cadence (see TEMP_CHECKPOINT_INTERVAL).
+    raw_config = dataclasses.replace(
+        raw_config,
+        trainer=dataclasses.replace(
+            raw_config.trainer,
+            checkpointer=dataclasses.replace(
+                raw_config.trainer.checkpointer,
+                save_interval=TEMP_CHECKPOINT_INTERVAL,
+            ),
+        ),
+    )
+    return job_name, raw_config
 
 
 def _make_stage_specs() -> dict[str, StageSpec]:
