@@ -131,8 +131,8 @@ class SliceState:
     quiet_since: Timestamp | None = None
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     worker_ids: list[str] = field(default_factory=list)
-    # worker_id -> internal IP. Populated at READY transition from the
-    # slice handle's worker info. Empty after a controller restart for
+    # worker_id -> reachable host:port endpoint. Populated at READY transition
+    # from the slice handle's worker info. Empty after a controller restart for
     # already-READY slices — the health probe lazy-fetches via
     # handle.describe() in that case. Memory-only.
     worker_addresses: dict[str, str] = field(default_factory=dict)
@@ -561,10 +561,10 @@ class ScalingGroup:
         """Mark a slice READY with its worker IDs. ``quiet_since`` is left None so the next
         autoscaler tick decides idle/active afresh.
 
-        ``worker_addresses`` (worker_id -> internal IP) seeds the slice health
-        probe so it doesn't need to call ``handle.describe()`` on the first
-        tick. Optional: tests that don't exercise the probe path can omit it,
-        and the probe will lazy-fetch from the handle.
+        ``worker_addresses`` (worker_id -> host:port endpoint) seeds the slice
+        health probe so it doesn't need to call ``handle.describe()`` on the
+        first tick. Optional: tests that don't exercise the probe path can omit
+        it, and the probe will lazy-fetch from the handle.
         """
         del timestamp
         with self._slices_lock:

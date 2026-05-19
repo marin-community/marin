@@ -81,11 +81,14 @@ _HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({
 _HEALTH_PROBE_MAX_WORKERS = 64
 
 
-def _probe_worker_health(address: str, port: int) -> bool:
-    """Probe a worker's /health endpoint. Returns True iff response is 2xx."""
+def _probe_worker_health(endpoint: str) -> bool:
+    """Probe a worker's /health endpoint. ``endpoint`` is a ``host:port`` pair.
+
+    Returns True iff the response is 2xx.
+    """
     try:
         resp = _HEALTH_PROBE_OPENER.open(
-            f"http://{address}:{port}/health",
+            f"http://{endpoint}/health",
             timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
         )
         return 200 <= resp.status < 300
@@ -453,7 +456,7 @@ class Autoscaler:
 
                 if status.state == CloudSliceState.READY:
                     worker_ids = [w.worker_id for w in status.workers]
-                    worker_addresses = {w.worker_id: w.internal_address for w in status.workers}
+                    worker_addresses = self._worker_endpoints(status.workers)
                     group.mark_slice_ready(slice_id, worker_ids, worker_addresses=worker_addresses)
                     self._register_slice_workers(status.workers, slice_id, group.name)
                     self._log_action(
@@ -529,12 +532,9 @@ class Autoscaler:
         """
         timestamp = timestamp or Timestamp.now()
         if self._base_worker_config is None:
-            return  # test/local mode without bootstrap; nothing to probe
-        port = self._base_worker_config.port
-        if port <= 0:
-            return
+            return  # autoscaler built without a worker config (unit tests); nothing to probe
 
-        # Phase 1: collect every (group, slice_id, worker_id, addr) probe target.
+        # Phase 1: collect every (group, slice_id, worker_id, endpoint) probe target.
         probes: list[tuple[ScalingGroup, str, str, str]] = []
         for group in self._groups.values():
             for slice_id, handle, addresses in group.ready_slice_probe_targets():
@@ -542,15 +542,15 @@ class Autoscaler:
                     addresses = self._refresh_slice_addresses(group, slice_id, handle)
                     if not addresses:
                         continue  # describe() failed or partial; retry next tick
-                for worker_id, addr in addresses.items():
-                    probes.append((group, slice_id, worker_id, addr))
+                for worker_id, endpoint in addresses.items():
+                    probes.append((group, slice_id, worker_id, endpoint))
         if not probes:
             return
 
         # Phase 2: fan out probes. Bound the pool so we don't melt the controller.
         workers = min(_HEALTH_PROBE_MAX_WORKERS, len(probes))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="health-probe") as pool:
-            results = list(pool.map(lambda p: _probe_worker_health(p[3], port), probes))
+            results = list(pool.map(lambda p: _probe_worker_health(p[3]), probes))
 
         # Phase 3: record results and collect slices that tripped the threshold.
         tripped: dict[str, tuple[ScalingGroup, str]] = {}  # slice_id -> (group, reason)
@@ -576,10 +576,24 @@ class Autoscaler:
                 status="failed",
             )
 
-    def _refresh_slice_addresses(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> dict[str, str]:
-        """Resolve worker addresses for a slice by calling handle.describe().
+    def _worker_endpoints(self, workers: Sequence[RemoteWorkerHandle]) -> dict[str, str]:
+        """Map worker_id to a reachable ``host:port`` endpoint.
 
-        Returns the full address map only when every worker has an
+        Workers that auto-assign ports (LOCAL) report ``handle.port``; others
+        fall back to the cluster-configured worker port. Workers without an
+        ``internal_address`` are skipped.
+        """
+        default_port = self._base_worker_config.port if self._base_worker_config else 0
+        return {
+            w.worker_id: f"{w.internal_address}:{w.port if w.port is not None else default_port}"
+            for w in workers
+            if w.internal_address
+        }
+
+    def _refresh_slice_addresses(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> dict[str, str]:
+        """Resolve worker endpoints for a slice by calling handle.describe().
+
+        Returns the full endpoint map only when every worker has an
         ``internal_address``. A partial set is dropped: caching it would
         permanently exclude the missing workers from probing, and probing
         the incomplete set risks terminating a slice for a worker that
@@ -590,7 +604,7 @@ class Autoscaler:
         except Exception as e:
             logger.warning("Failed to describe slice %s for health probe: %s", slice_id, e)
             return {}
-        addresses = {w.worker_id: w.internal_address for w in status.workers if w.internal_address}
+        addresses = self._worker_endpoints(status.workers)
         if len(addresses) != len(status.workers):
             return {}
         group.set_worker_addresses(slice_id, addresses)

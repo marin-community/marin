@@ -46,6 +46,7 @@ class FakeWorkerHandle:
     _internal_address: str
     _state: CloudWorkerState = CloudWorkerState.RUNNING
     _bootstrap_log: str = ""
+    _port: int | None = None
 
     @property
     def worker_id(self) -> str:
@@ -58,6 +59,10 @@ class FakeWorkerHandle:
     @property
     def internal_address(self) -> str:
         return self._internal_address
+
+    @property
+    def port(self) -> int | None:
+        return self._port
 
     @property
     def external_address(self) -> str | None:

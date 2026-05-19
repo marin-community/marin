@@ -30,6 +30,7 @@ from rigging.timing import Duration, Timestamp
 
 from tests.cluster.providers.conftest import (
     FakeSliceHandle,
+    FakeWorkerHandle,
     make_mock_platform,
     make_mock_slice_handle,
     make_mock_worker_handle,
@@ -1591,10 +1592,9 @@ class TestAutoscalerHealthProbe:
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
-        # Seed worker_addresses since reconcile() bypasses the refresh() path.
-        addrs = {w.worker_id: w.internal_address for w in handle.describe().workers}
-        group.set_worker_addresses(handle.slice_id, addrs)
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+        # Seed worker_addresses since reconcile() bypasses the refresh() path.
+        group.set_worker_addresses(handle.slice_id, autoscaler._worker_endpoints(handle.describe().workers))
         return autoscaler, group, handle
 
     def test_healthy_probes_keep_slice_alive(
@@ -1607,7 +1607,7 @@ class TestAutoscalerHealthProbe:
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
         monkeypatch.setattr(
             "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda addr, port: True,
+            lambda endpoint: True,
         )
 
         for _ in range(20):
@@ -1628,7 +1628,7 @@ class TestAutoscalerHealthProbe:
         autoscaler, group, _ = self._setup_ready_group(scale_group_config, base_worker_config)
         monkeypatch.setattr(
             "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda addr, port: False,
+            lambda endpoint: False,
         )
 
         # One probe per tick — need PING_FAILURE_THRESHOLD ticks to trip.
@@ -1655,7 +1655,7 @@ class TestAutoscalerHealthProbe:
         # consecutive failures even after many ticks.
         toggle = {"healthy": False}
 
-        def _probe(addr: str, port: int) -> bool:
+        def _probe(endpoint: str) -> bool:
             toggle["healthy"] = not toggle["healthy"]
             return toggle["healthy"]
 
@@ -1682,18 +1682,18 @@ class TestAutoscalerHealthProbe:
         # Deliberately do NOT call set_worker_addresses — simulate post-restart.
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
 
-        seen_addresses: list[str] = []
+        seen_endpoints: list[str] = []
 
-        def _probe(addr: str, port: int) -> bool:
-            seen_addresses.append(addr)
+        def _probe(endpoint: str) -> bool:
+            seen_endpoints.append(endpoint)
             return True
 
         monkeypatch.setattr("iris.cluster.controller.autoscaler.runtime._probe_worker_health", _probe)
 
         autoscaler.probe_health(Timestamp.from_ms(1_000))
 
-        expected = [w.internal_address for w in handle.describe().workers]
-        assert sorted(seen_addresses) == sorted(expected), "probe should hit each worker's described address"
+        expected = list(autoscaler._worker_endpoints(handle.describe().workers).values())
+        assert sorted(seen_endpoints) == sorted(expected), "probe should hit each worker's described endpoint"
         autoscaler.shutdown()
 
     def test_per_worker_counter_isolates_one_dead_worker(
@@ -1713,15 +1713,15 @@ class TestAutoscalerHealthProbe:
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
-        addrs = {w.worker_id: w.internal_address for w in handle.describe().workers}
-        group.set_worker_addresses(handle.slice_id, addrs)
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+        endpoints = autoscaler._worker_endpoints(handle.describe().workers)
+        group.set_worker_addresses(handle.slice_id, endpoints)
 
         dead_worker = handle.describe().workers[1]
-        dead_addr = dead_worker.internal_address
+        dead_endpoint = endpoints[dead_worker.worker_id]
         monkeypatch.setattr(
             "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda addr, port: addr != dead_addr,
+            lambda endpoint: endpoint != dead_endpoint,
         )
 
         for _ in range(PING_FAILURE_THRESHOLD):
@@ -1740,13 +1740,13 @@ class TestAutoscalerHealthProbe:
         from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 
         handle = make_mock_slice_handle("slice-001", all_ready=True)
-        good_addresses = {w.worker_id: w.internal_address for w in handle.describe().workers}
         platform = make_mock_platform(slices_to_discover=[handle])
         group = ScalingGroup(scale_group_config, platform)
         group.reconcile()
         _mark_discovered_ready(group, [handle])
         # No cached addresses; describe() will be called.
         autoscaler = make_autoscaler({"test-group": group}, base_worker_config=base_worker_config)
+        good_addresses = autoscaler._worker_endpoints(handle.describe().workers)
 
         raising = {"on": True}
         original_describe = handle.describe
@@ -1759,7 +1759,7 @@ class TestAutoscalerHealthProbe:
         monkeypatch.setattr(handle, "describe", _maybe_raise)
         monkeypatch.setattr(
             "iris.cluster.controller.autoscaler.runtime._probe_worker_health",
-            lambda addr, port: True,
+            lambda endpoint: True,
         )
 
         # PING_FAILURE_THRESHOLD ticks while describe() raises must not terminate.
@@ -1774,4 +1774,19 @@ class TestAutoscalerHealthProbe:
         autoscaler.probe_health(Timestamp.from_ms(2_000))
         cached = group.ready_slice_probe_targets()[0][2]
         assert cached == good_addresses
+        autoscaler.shutdown()
+
+    def test_endpoint_prefers_handle_port_over_cluster_default(
+        self,
+        base_worker_config: config_pb2.WorkerConfig,
+    ):
+        """Workers that auto-assign ports (LOCAL) probe their own port; others
+        fall back to the cluster-configured worker port."""
+        autoscaler = make_autoscaler({}, base_worker_config=base_worker_config)
+        gcp_style = make_mock_worker_handle("w-gcp", "10.0.0.1", vm_pb2.VM_STATE_READY)
+        local_style = FakeWorkerHandle(_vm_id="w-local", _internal_address="127.0.0.1", _port=54321)
+
+        endpoints = autoscaler._worker_endpoints([gcp_style, local_style])
+
+        assert endpoints == {"w-gcp": "10.0.0.1:10001", "w-local": "127.0.0.1:54321"}
         autoscaler.shutdown()
