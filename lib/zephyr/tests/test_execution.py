@@ -1071,8 +1071,8 @@ def test_stage_index_correct_with_join(local_client, tmp_path):
     stage_calls: list[tuple[str, int]] = []
     original_start_stage = ZephyrCoordinator._start_stage
 
-    def recording_start_stage(self, stage_name, current_stage_index, tasks):
-        original_start_stage(self, stage_name, current_stage_index, tasks)
+    def recording_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage=False):
+        original_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage)
         stage_calls.append((stage_name, self._current_stage_index))
 
     ctx = ZephyrContext(

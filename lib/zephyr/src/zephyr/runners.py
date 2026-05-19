@@ -89,7 +89,7 @@ class _InProcessWorkerContext:
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, int] = {}
         self._generation = 0
-        self._num_workers = num_workers
+        self.num_workers = num_workers
 
     def get_shared(self, name: str) -> Any:
         if name not in self._shared_data_cache:
@@ -105,10 +105,6 @@ class _InProcessWorkerContext:
     def get_counter_snapshot(self) -> CounterSnapshot:
         self._generation += 1
         return CounterSnapshot(counters=dict(self._counters), generation=self._generation)
-
-    @property
-    def num_workers(self) -> int:
-        return self._num_workers
 
 
 _T = TypeVar("_T")
@@ -295,10 +291,9 @@ class SubprocessRunner:
             # faulthandler traceback reaches the parent's log before the
             # process dies.
             proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr.runners", task_file, result_file],
+                [sys.executable, "-u", "-m", "zephyr.runners", task_file, result_file, str(self._num_workers)],
                 stdout=sys.stdout,
                 stderr=sys.stderr,
-                env={**os.environ, "ZEPHYR_NUM_WORKERS_PER_ACTOR": str(self._num_workers)},
             )
 
             if proc.returncode != 0:
@@ -352,7 +347,7 @@ class SubprocessRunner:
 # ---------------------------------------------------------------------------
 
 
-def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
+def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int) -> None:
     """Subprocess child body: runs one ShardTask and writes the result file."""
     # Each shard already runs in its own subprocess; redundant Arrow thread
     # pools just compete with the parent's shard-level parallelism.
@@ -363,8 +358,6 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
     # / SIGFPE / SIGILL in a C extension produces a Python traceback on
     # stderr instead of a bare ``returncode < 0``.
     configure_logging(level=logging.INFO)
-
-    num_workers = int(os.environ.get("ZEPHYR_NUM_WORKERS_PER_ACTOR", "1"))
 
     counter_file = f"{result_file}.counters"
     stop_event = threading.Event()
@@ -428,8 +421,8 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
 
 
 def _subprocess_main() -> None:
-    if len(sys.argv) != 3:
-        print("Usage: python -m zephyr.runners <task_file> <result_file>", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print("Usage: python -m zephyr.runners <task_file> <result_file> <num_workers>", file=sys.stderr)
         os._exit(1)
     # Bypass interpreter shutdown: PyArrow GCS/Azure filesystem background
     # threads can race with module GC and fire ``std::terminate`` → SIGABRT,
@@ -438,7 +431,7 @@ def _subprocess_main() -> None:
     # one-shot child needs ``atexit`` / ``__del__`` to run.
     exit_code = 0
     try:
-        _execute_shard_subprocess(sys.argv[1], sys.argv[2])
+        _execute_shard_subprocess(sys.argv[1], sys.argv[2], int(sys.argv[3]))
     except BaseException:
         traceback.print_exc()
         exit_code = 1

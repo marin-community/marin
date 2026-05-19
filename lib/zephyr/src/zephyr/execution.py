@@ -477,9 +477,13 @@ class ZephyrCoordinator:
         self._stage_done = threading.Event()
         # When True, pull_task returns SHUTDOWN to idle workers (stage complete).
         self._stage_complete: bool = False
+        # When True, idle workers on the last stage receive SHUTDOWN once all
+        # tasks are in-flight, so they exit eagerly instead of polling until
+        # coordinator.shutdown().
+        self._is_last_stage: bool = False
         # Stage type for the currently running stage; workers poll this to know
         # how many subprocess slots to create.
-        self._current_stage_type: StageType | None = None
+        self._current_stage: PhysicalStage | None = None
         self._initialized: bool = False
         self._pipeline_running: bool = False
 
@@ -570,12 +574,12 @@ class ZephyrCoordinator:
         spin up the right number of subprocess slots.
         """
         with self._lock:
-            return self._current_stage_type
+            return self._current_stage.stage_type if self._current_stage is not None else None
 
     def _mark_stage_complete(self) -> None:
         with self._lock:
             self._stage_complete = True
-            self._current_stage_type = None
+            self._current_stage = None
 
     def _coordinator_loop(self) -> None:
         """Background loop for heartbeat checking and worker job monitoring."""
@@ -861,7 +865,7 @@ class ZephyrCoordinator:
                 return None
 
             if not self._task_queue:
-                if self._stage_complete:
+                if self._is_last_stage or self._stage_complete:
                     # No more work to hand out — exit immediately.  If an
                     # in-flight worker crashes and its shard is requeued, Iris
                     # restarts the worker which re-registers and picks it up.
@@ -1006,6 +1010,7 @@ class ZephyrCoordinator:
         stage_name: str,
         current_stage_index: int,
         tasks: list[ShardTask],
+        is_last_stage: bool = False,
     ) -> None:
         """Load a new stage's tasks into the queue."""
         with self._lock:
@@ -1026,6 +1031,7 @@ class ZephyrCoordinator:
             self._task_infra_attempts = {task.shard_idx: 0 for task in tasks}
             self._shard_errors = {}
             self._fatal_error = None
+            self._is_last_stage = is_last_stage
             self._stage_complete = False
             self._stage_epoch += 1
             # Only reset in-flight worker snapshots; completed snapshots
@@ -1112,6 +1118,11 @@ class ZephyrCoordinator:
             if not shards:
                 return []
 
+            last_worker_stage_idx = max(
+                (i for i, s in enumerate(plan.stages) if s.stage_type != StageType.RESHARD),
+                default=-1,
+            )
+
             with self._lock:
                 self._current_stage_index = 0
                 self._plan_stages = list(plan.stages)
@@ -1128,6 +1139,7 @@ class ZephyrCoordinator:
                     stage_label=f"stage{stage_idx}-{stage.stage_name(max_length=40)}",
                     stage_index_for_state=stage_idx,
                     aux_per_shard=aux_per_shard,
+                    is_last_stage=(stage_idx == last_worker_stage_idx),
                 )
 
             # Flatten final results — each shard may involve I/O (unpickling from
@@ -1155,6 +1167,7 @@ class ZephyrCoordinator:
         stage_label: str,
         stage_index_for_state: int,
         aux_per_shard: list[dict[int, Shard]] | None = None,
+        is_last_stage: bool = False,
     ) -> list[Shard]:
         """Submit a worker stage, wait for completion, return regrouped output shards.
 
@@ -1163,17 +1176,15 @@ class ZephyrCoordinator:
         so progress reports stay attached to the user-visible stage.
         """
         with self._lock:
-            self._current_stage_type = stage.stage_type
+            self._current_stage = stage
 
         tasks = _compute_tasks_from_shards(shards, stage, stage_name=stage_label, aux_per_shard=aux_per_shard)
         logger.info(
             "[%s] Starting stage %s (%s) with %d tasks", self._execution_id, stage_label, stage.stage_type, len(tasks)
         )
-        self._start_stage(stage_label, stage_index_for_state, tasks)
+        self._start_stage(stage_label, stage_index_for_state, tasks, is_last_stage=is_last_stage)
         self._wait_for_stage()
 
-        # Signal idle workers to exit their per-stage thread pools. Workers poll
-        # get_current_stage_type() for the next stage after their threads exit.
         self._mark_stage_complete()
 
         result_refs = self._collect_results()
@@ -1362,15 +1373,17 @@ class ZephyrWorker:
             for sub_id in sub_ids:
                 try:
                     epoch = self._coordinator.register_worker.remote(sub_id, self._actor_handle).result(timeout=30.0)
-                    if stage_epoch is not None and stage_epoch != epoch:
-                        raise RuntimeError(
-                            f"Received different stage epochs when registering workers within a stage. "
-                            f"Got {epoch} (expected {stage_epoch})"
-                        )
-                    stage_epoch = epoch
                 except Exception:
                     failed_workers.add(sub_id)
                     logger.warning("[%s] Failed to register sub-worker %s", self._worker_id, sub_id, exc_info=True)
+                    continue
+
+                if stage_epoch is not None and stage_epoch != epoch:
+                    raise RuntimeError(
+                        f"Received different stage epochs when registering workers within a stage. "
+                        f"Got {epoch} (expected {stage_epoch})"
+                    )
+                stage_epoch = epoch
 
             self._active_sub_ids = list(sub_ids - failed_workers)
             num_active_workers = len(self._active_sub_ids)
@@ -1398,7 +1411,7 @@ class ZephyrWorker:
                 try:
                     self._coordinator.deregister_worker.remote(sub_id).result(timeout=10.0)
                 except Exception:
-                    logger.debug("[%s] deregister_worker failed for %s (ignored)", self._worker_id, sub_id)
+                    logger.warning("[%s] deregister_worker failed for %s (ignoring)", self._worker_id, sub_id)
 
         logger.info("[%s] Stage manager exiting", self._worker_id)
         if self._host_shutdown_event is not None:
