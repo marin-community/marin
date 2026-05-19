@@ -5,7 +5,7 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 ## Key Docs
 
 - `README.md` — overview + quick start
-- `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug-infra`, `restart-iris-controller`)
+- `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug`, `restart-iris`)
 - `TESTING.md` — testing policy, markers, and commands
 - `docs/task-states.md` — task state machine + retry semantics
 - `docs/coreweave.md` — CoreWeave platform + `runtime=kubernetes` behavior

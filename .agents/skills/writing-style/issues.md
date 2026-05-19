@@ -32,7 +32,7 @@ more on what should be included rather than tone.
 
 Treat experiment issues as part of Marin's scientific record. Use them as a summary layer, a coordination surface, and a long-lived artifact.
 
-They are frequently created using the [agent-research](../agent-research/SKILL.md) skill.
+They are frequently created using the [run-research](../run-research/SKILL.md) skill.
 
 ### Assume This Reader
 
@@ -70,5 +70,5 @@ They are frequently created using the [agent-research](../agent-research/SKILL.m
 - Do not let the issue become a chat log.
 - Do not forget to update the TL;DR or conclusion.
 - Do not lose the baseline.
-- Do not overly clutter the issue. The log book from the agent-research skill should be the full log.
+- Do not overly clutter the issue. The log book from the run-research skill should be the full log.
 - Do not assume knowledge of the conversation/thread or the logbook. Each comment should be understandable in the context of the issue.
