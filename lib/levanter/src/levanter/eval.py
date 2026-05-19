@@ -134,8 +134,6 @@ class LabeledEvalResult:
 class DomainTaggedDataset(AsyncDataset[tuple[T, TagArray]]):
     """Holds multiple datasets, each with its own domain tag. Also indexes the tags to enable easier aggregation."""
 
-    tag_index: Mapping[str, int]
-
     @property
     def tags(self):
         return self.tag_to_index.keys()
@@ -238,12 +236,12 @@ def _calculate_bytes_per_token_type(tokenizer: MarinTokenizer) -> Optional[Int[A
         return None
 
     vocab_size = len(tokenizer.get_vocab())
-    bytes = np.ndarray((vocab_size,), dtype=np.int32)
+    byte_lengths = np.empty((vocab_size,), dtype=np.int32)
 
     for i in range(vocab_size):
-        bytes[i] = byte_length_of_token(tokenizer, i)
+        byte_lengths[i] = byte_length_of_token(tokenizer, i)
 
-    return jnp.array(bytes)
+    return jnp.array(byte_lengths)
 
 
 def _ensure_named_lm_example(batch: LmEvalExample, *, EvalBatch: hax.Axis, model_pos: hax.Axis) -> LmExample:
