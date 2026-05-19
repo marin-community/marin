@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
@@ -154,6 +155,7 @@ _GENERATION_SENTINEL_END = "__MARIN_GEN_END_7f3a9c__"
 _MESSAGE_SENTINEL_START = "__MARIN_MSG_START_7f3a9c_"
 _MESSAGE_SENTINEL_END = "__MARIN_MSG_END_7f3a9c_"
 _MESSAGE_INDEX_ATTR = "marin_message_index"
+_MESSAGE_LOOP_COLLECTIONS = {"messages", "loop_messages"}
 _MESSAGE_SENTINEL_RE = re.compile(
     rf"{re.escape(_MESSAGE_SENTINEL_START)}\d+__|{re.escape(_MESSAGE_SENTINEL_END)}\d+__"
 )
@@ -200,6 +202,7 @@ def _make_jinja_env(extensions: list[type]) -> jinja2.Environment:
         extensions=extensions,
     )
     env.globals["raise_exception"] = _raise_chat_template_exception
+    env.globals["strftime_now"] = lambda fmt: time.strftime(fmt)
     return env
 
 
@@ -219,9 +222,11 @@ def _block_name(block_tokens: list[tuple[str, str]]) -> str | None:
 
 def _message_loop_variable(block_tokens: list[tuple[str, str]]) -> str | None:
     tokens = [(token_type, value) for token_type, value in block_tokens if token_type != "whitespace"]
-    if len(tokens) < 4:
+    if len(tokens) != 4:
         return None
-    if tokens[0] != ("name", "for") or tokens[2] != ("name", "in") or tokens[3] != ("name", "messages"):
+    if tokens[0] != ("name", "for") or tokens[2] != ("name", "in"):
+        return None
+    if tokens[3][0] != "name" or tokens[3][1] not in _MESSAGE_LOOP_COLLECTIONS:
         return None
     token_type, variable = tokens[1]
     if token_type != "name":
