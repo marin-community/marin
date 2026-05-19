@@ -1,43 +1,36 @@
 ---
-name: github-pr-review
-description: Review a pull request for correctness and behavioral regressions. Use when asked to review a PR in marin-community/marin.
+name: review-pr
+description: Multi-agent correctness review of a pull request.
 allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), mcp__github_inline_comment__create_inline_comment
 ---
 
 Provide a code review for the given pull request.
 
 **Agent assumptions (applies to all agents and subagents):**
-- All tools are functional and will work without error. Do not test tools or make exploratory calls. Make sure this is clear to every subagent that is launched.
-- Only call a tool if it is required to complete the task. Every tool call should have a clear purpose.
+- All tools are functional. Do not test tools or make exploratory calls.
+- Only call a tool if it is required to complete the task.
 
-To do this, follow these steps precisely:
+Follow these steps precisely:
 
 1. Launch a haiku agent to check if any of the following are true:
-   - The pull request is closed
-   - The pull request is a draft
-   - The pull request does not need code review (e.g. automated PR, trivial change that is obviously correct)
-   - Claude has already commented on this PR (check `gh pr view <PR> --comments` for comments left by claude) AND the review was NOT explicitly requested via comment (e.g. "claude review this"). When a maintainer explicitly requests a re-review, always proceed even if a prior review exists.
+   - The PR is closed
+   - The PR is a draft
+   - The PR does not need code review (e.g. automated PR, trivial obviously-correct change)
+   - Claude has already commented on this PR (check `gh pr view <PR> --comments`) AND the review was NOT explicitly requested via comment (e.g. "claude review this"). When a maintainer explicitly requests a re-review, always proceed even if a prior review exists.
 
-   If any condition is true, stop and do not proceed.
+   If any condition is true, stop. Note: still review Claude-generated PRs.
 
-   Note: Still review Claude generated PR's.
-
-2. Launch a haiku agent to return a list of file paths (not their contents) for all relevant CLAUDE.md and AGENTS.md files including:
+2. Launch a haiku agent to return file paths (not contents) for all relevant CLAUDE.md and AGENTS.md files:
    - The root CLAUDE.md and AGENTS.md files, if they exist
-   - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the pull request
+   - Any CLAUDE.md or AGENTS.md files in directories (and parent directories) containing files modified by the PR
 
-3. Launch a sonnet agent to view the pull request and return a summary of the changes
+3. Launch a sonnet agent to view the PR and return a summary of the changes.
 
-4. Launch 4 agents in parallel to independently review the changes. Each agent should return the list of issues, where each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug"). The agents should do the following:
+4. Launch 4 agents in parallel to independently review the changes. Each returns a list of issues; each issue includes a description and the reason it was flagged (e.g. "CLAUDE.md adherence", "bug").
 
-   Agents 1 + 2: CLAUDE.md/AGENTS.md compliance sonnet agents
-   Audit changes for CLAUDE.md and AGENTS.md compliance in parallel. Note: When evaluating compliance for a file, you should only consider CLAUDE.md and AGENTS.md files that share a file path with the file or parents.
+   Agents 1 + 2: CLAUDE.md/AGENTS.md compliance sonnet agents. Audit changes for compliance. When evaluating a file, only consider CLAUDE.md/AGENTS.md files that share its path or are parents.
 
-   Agent 3: Opus bug agent (parallel subagent with agent 4)
-   Scan for obvious bugs. Focus only on the diff itself without reading extra context. Flag only significant bugs; ignore nitpicks and likely false positives. Do not flag issues that you cannot validate without looking at context outside of the git diff.
-
-   Agent 4: Opus bug agent (parallel subagent with agent 3)
-   Look for problems that exist in the introduced code. This could be security issues, incorrect logic, etc. Only look for issues that fall within the changed code.
+   Agents 3 + 4: Opus bug agents (parallel). Scan for obvious bugs, security issues, and incorrect logic within the changed code. Focus only on the diff without reading extra context. Flag only significant bugs you can validate from the diff alone; ignore nitpicks and likely false positives.
 
    **CRITICAL: We only want HIGH SIGNAL issues.** Flag issues where:
    - The code will fail to compile or parse (syntax errors, type errors, missing imports, unresolved references)
@@ -49,15 +42,15 @@ To do this, follow these steps precisely:
    - Potential issues that depend on specific inputs or state
    - Subjective suggestions or improvements
 
-   If you are not certain an issue is real, do not flag it. False positives erode trust and waste reviewer time.
+   If you are not certain an issue is real, do not flag it. False positives erode trust.
 
-   In addition to the above, each subagent should be told the PR title and description. This will help provide context regarding the author's intent.
+   Tell each subagent the PR title and description for author-intent context.
 
    **Marin-specific:** In `experiments/grug`, duplication is often intentional for high-velocity research iteration. Do not flag copy/paste or DRY concerns if behavior/contracts are correct.
 
-5. For each issue found in the previous step by agents 3 and 4, launch parallel subagents to validate the issue. These subagents should get the PR title and description along with a description of the issue. The agent's job is to review the issue to validate that the stated issue is truly an issue with high confidence. For example, if an issue such as "variable is not defined" was flagged, the subagent's job would be to validate that is actually true in the code. Another example would be CLAUDE.md issues. The agent should validate that the CLAUDE.md rule that was violated is scoped for this file and is actually violated. Use Opus subagents for bugs and logic issues, and sonnet agents for CLAUDE.md violations.
+5. For each issue from agents 3 and 4, launch a parallel subagent to validate it. Give the subagent the PR title, description, and issue description. It must confirm with high confidence that the issue is real — e.g. for "variable is not defined", verify that in the code; for a CLAUDE.md issue, verify the rule is scoped to this file and actually violated. Use Opus subagents for bugs/logic, sonnet for CLAUDE.md violations.
 
-6. Filter out any issues that were not validated in step 5. This step will give us our list of high signal issues for our review.
+6. Filter out any issues not validated in step 5. The remainder is the high-signal review list.
 
 7. Output a summary of the review findings to the terminal:
    - If issues were found, list each issue with a brief description.
@@ -69,7 +62,7 @@ To do this, follow these steps precisely:
 
    If `--comment` argument IS provided and issues were found, continue to step 8.
 
-8. Create a list of all comments that you plan on leaving. This is only for you to make sure you are comfortable with the comments. Do not post this list anywhere.
+8. Draft the list of comments you plan to leave. For your own review only — do not post it anywhere.
 
 9. Post inline comments for each issue using `mcp__github_inline_comment__create_inline_comment` with `confirmed: true`. For each comment:
    - Provide a brief description of the issue

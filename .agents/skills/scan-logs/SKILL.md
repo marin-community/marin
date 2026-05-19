@@ -1,30 +1,29 @@
 ---
-name: logscan
-description: Scan large log files using Gemini to find errors, patterns, and anomalies. Use when confronted with large log files that are too big to read directly.
+name: scan-logs
+description: Scan logs too large to read directly, using Gemini (scripts/logscan.py).
 ---
 
-# Skill: Logscan
+# Skill: Scan Logs
 
 Use `scripts/logscan.py` to analyze large log files. Two composable modes —
-`grep` (find matching lines) and `summarize` (produce a markdown report) — can
-be used independently or piped together.
+`grep` (find matching lines) and `summarize` (produce a markdown report) — used
+independently or piped together.
 
 ## When to Use
 
 - Log files too large to read in context (>1000 lines)
 - Searching for errors, anomalies, or patterns in job/worker/controller logs
 - Triaging failures from Iris, Zephyr, or training jobs
-- Any time you need to understand what happened in a big log file
 
 ## Prerequisites
 
-The `GEMINI_API_KEY` environment variable must be set.
+`GEMINI_API_KEY` must be set.
 
 ## Modes
 
 ### grep — find matching lines
 
-Returns the original log lines (with line numbers) that match a natural-language
+Returns original log lines (with line numbers) matching a natural-language
 query. Uses small chunks (~5k tokens) for precision.
 
 ```bash
@@ -36,8 +35,8 @@ Output goes to stdout as `<line_number>: <line>`, one per match.
 ### summarize — produce a markdown report
 
 Summarizes the log into a coherent narrative focused on the query. Uses larger
-chunks (~50k tokens) and hierarchically reduces per-chunk summaries into a
-final report.
+chunks (~50k tokens) and hierarchically reduces per-chunk summaries into a final
+report.
 
 ```bash
 uv run scripts/logscan.py summarize <logfile> "<query>"
@@ -47,14 +46,13 @@ Output is a markdown report on stdout.
 
 ### Piping modes together
 
-grep's stdout feeds directly into summarize via `--stdin`:
+grep's stdout feeds directly into summarize via `--stdin` — narrow to relevant
+lines first, then summarize:
 
 ```bash
 uv run scripts/logscan.py grep log.txt "errors" \
   | uv run scripts/logscan.py summarize --stdin "summarize these errors"
 ```
-
-This is useful to first narrow down to relevant lines, then get a summary.
 
 ## Arguments
 
@@ -95,13 +93,12 @@ Both modes print token usage stats to stderr when complete.
 
 ## Integration with Other Skills
 
-- **babysit-\***: Use logscan to analyze logs from failed jobs before deciding on recovery
-- **debug-\***: Use `grep` to find the failure region, then `Read` specific line ranges
-- **canary-triage**: Use `summarize` to scan canary ferry logs for the root cause
+- **babysit-\***: analyze logs from failed jobs before deciding on recovery
+- **debug**: use `grep` to find the failure region, then `Read` specific line ranges
+- **triage-canary**: use `summarize` to scan canary ferry logs for the root cause
 
 ## Tips
 
-- Use `grep` first to narrow down, then `summarize` the filtered output via `--stdin`
+- `grep` first to narrow down, then `summarize` the filtered output via `--stdin`
 - For very large files (>100k lines), `summarize` handles hierarchical reduction automatically
-- `grep` uses small chunks (5k tokens) for precision; `summarize` uses large chunks (50k) for context
 - Add `-v` to see per-chunk results as they complete

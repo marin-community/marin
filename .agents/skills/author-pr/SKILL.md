@@ -1,26 +1,20 @@
 ---
-name: pull-request
-description: Authoring pull requests in Marin. Use when creating or updating a PR, and whenever changing a branch that is already associated with a PR.
+name: author-pr
+description: Author or update a Marin PR in the required plain-text format. Use when creating or updating a PR.
 ---
 
 # Skill: Author a Pull Request
 
-This skill defines the exact output format for pull requests. Follow it
-literally when creating or updating a PR. Also apply it whenever you make
-changes to a branch that already has an associated PR.
-
-When a branch is already associated with a PR, check the current PR title and
-description after your code changes. Keep them aligned with the actual scope of
-the branch, and update them if they are no longer correct or sufficient.
+The exact output format for pull requests. Follow it literally when creating or
+updating a PR, including any time you change a branch that already has one — keep
+the PR title and description aligned with the branch's actual scope.
 
 ## PR Description Format
 
-The PR description becomes the squash-merge commit message. Write it as
-plain text — no markdown.
+The PR description becomes the squash-merge commit message. Write it as plain text.
 
 **Title:** Short imperative sentence. Optional scope tag in brackets.
-
-**Body:** 1-3 sentences stating what changed and why. End with issue link if one exists.
+**Body:** 1-3 sentences stating what changed and why. End with an issue link if one exists.
 
 **Hard rules — violations will be rejected:**
 
@@ -47,36 +41,27 @@ Fixes #1234
 
 ## Issue Linking
 
-If the work originated from a GitHub issue, reference it:
-
-- `Fixes #NNNN` — auto-closes the issue on merge.
-- `Part of #NNNN` — for partial work.
-
-Do not create an issue solely to satisfy this rule. When there is no
-pre-existing issue (e.g., user-directed work in a conversation), omit the
-issue link.
+If the work originated from a GitHub issue, reference it: `Fixes #NNNN`
+(auto-closes on merge) or `Part of #NNNN` (partial work). Do not create an issue
+just to satisfy this rule — omit the link when there is no pre-existing issue.
 
 ## Pre-Push Checklist
 
-Run these before pushing. Do not skip any step.
+Run these before pushing; do not skip any step.
 
 1. `./infra/pre-commit.py --changed --fix` — resolve all issues. Do not substitute `uv run pre-commit ...`.
 2. `uv run pytest -m 'not slow'` — relevant test directories.
 3. If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`
 4. If docs-heavy: `uv run mkdocs build --strict`
 
-After pushing, monitor CI: `gh pr view <number> --json statusCheckRollup`.
-Fix failures before considering the PR complete.
+After pushing, monitor CI with `gh pr view <number> --json statusCheckRollup`;
+fix failures before considering the PR complete.
 
 ## Specifications (>500 LOC)
 
-PRs over ~500 lines must include a specification. Put it in (preferred order):
-
-1. The associated GitHub issue
-2. First PR comment after the description
-3. `docs/design/<topic>.md` or `.agents/projects/<topic>.md`
-
-A specification contains:
+PRs over ~500 lines must include a specification, placed (preferred order) in the
+associated GitHub issue, the first PR comment, or `docs/design/<topic>.md` /
+`.agents/projects/<topic>.md`. It contains:
 
 1. **Problem** — what is broken or missing, with file/line references.
 2. **Approach** — which modules change, what gets added/removed.
@@ -85,12 +70,9 @@ A specification contains:
 
 ## Creating the PR
 
-Unless the user says otherwise, and when permissions allow, push directly to a
-branch on the main repository and open the PR from that branch. Do not default
-to pushing to a fork. Use a fork only when direct push to the main repository
-is not available or the user explicitly asks for it.
-
-Use `gh pr create` with these flags:
+Unless the user says otherwise and permissions allow, push directly to a branch
+on the main repository and open the PR from that branch — use a fork only when
+direct push is unavailable or the user asks for it.
 
 ```bash
 gh pr create \
@@ -105,6 +87,6 @@ gh pr create \
 
 ## See Also
 
-- `.agents/skills/github-pr-review/` — PR review skill (separate concern)
+- `.agents/skills/review-pr/` — PR review skill (separate concern)
 - `.agents/skills/fix-issue/` — end-to-end issue fix workflow
 - `AGENTS.md` — coding guidelines
