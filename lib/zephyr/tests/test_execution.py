@@ -854,62 +854,6 @@ def test_pipeline_id_increments(local_client, tmp_path):
     assert ctx._pipeline_id == 1
 
 
-def test_pull_task_returns_shutdown_on_last_stage_empty_queue(actor_context, tmp_path):
-    """When the last stage's tasks are all in-flight or done, pull_task returns SHUTDOWN."""
-    coord = ZephyrCoordinator()
-    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
-
-    task = ShardTask(
-        shard_idx=0,
-        total_shards=1,
-        shard=ListShard(refs=[]),
-        operations=[],
-        stage_name="test",
-    )
-
-    # Non-last stage: empty queue returns None
-    coord._start_stage("stage-0", 0, [task], is_last_stage=False)
-    pulled = coord.pull_task("worker-A")
-    assert pulled is not None and pulled != "SHUTDOWN"
-    _task, attempt, _config = pulled
-    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
-
-    # Queue empty, but not last stage -> None
-    result = coord.pull_task("worker-A")
-    assert result is None
-
-    # Last stage: single task, worker completes it, queue empty -> SHUTDOWN
-    task2 = ShardTask(
-        shard_idx=0,
-        total_shards=1,
-        shard=ListShard(refs=[]),
-        operations=[],
-        stage_name="test-last",
-    )
-    coord._start_stage("stage-1", 1, [task2], is_last_stage=True)
-    pulled = coord.pull_task("worker-A")
-    assert pulled is not None and pulled != "SHUTDOWN"
-    _task, attempt, _config = pulled
-    coord.report_result("worker-A", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
-
-    # Queue empty on last stage, nothing in-flight -> SHUTDOWN
-    result = coord.pull_task("worker-A")
-    assert result == "SHUTDOWN"
-
-    # Last stage with in-flight tasks: idle workers still get SHUTDOWN
-    tasks_2 = [
-        ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test-last2")
-        for i in range(2)
-    ]
-    coord._start_stage("stage-2", 2, tasks_2, is_last_stage=True)
-    coord.pull_task("worker-A")  # task 0 in-flight
-    # Queue has one task left; worker-B takes it
-    coord.pull_task("worker-B")  # task 1 in-flight
-    # Queue empty, tasks in-flight -> SHUTDOWN (workers exit immediately)
-    result = coord.pull_task("worker-C")
-    assert result == "SHUTDOWN"
-
-
 def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_path):
     """Coordinator aborts if the worker job dies while last-stage work is outstanding."""
     coord = ZephyrCoordinator()
@@ -919,7 +863,7 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_pa
         ShardTask(shard_idx=i, total_shards=2, shard=ListShard(refs=[]), operations=[], stage_name="test")
         for i in range(2)
     ]
-    coord._start_stage("last-stage", 0, tasks, is_last_stage=True)
+    coord._start_stage("last-stage", 0, tasks)
 
     # Set up a mock worker group so _check_worker_group can query it.
     mock_group = MagicMock()
@@ -932,12 +876,11 @@ def test_last_stage_deadlock_detected_when_worker_job_dies(actor_context, tmp_pa
     pulled_a = coord.pull_task("worker-A")
     coord.pull_task("worker-B")
 
-    # Worker A finishes → gets SHUTDOWN (queue empty, last stage).
+    # Worker A finishes its task.
     _task_a, attempt_a, _ = pulled_a
     coord.report_result(
         "worker-A", _task_a.shard_idx, attempt_a, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty()
     )
-    assert coord.pull_task("worker-A") == "SHUTDOWN"
 
     # Worker B crashes → heartbeat timeout → shard 1 requeued.
     coord._last_seen["worker-B"] = coord._last_seen["worker-B"] - 200
@@ -1129,7 +1072,7 @@ def test_stage_index_correct_with_join(local_client, tmp_path):
     original_start_stage = ZephyrCoordinator._start_stage
 
     def recording_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage=False):
-        original_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage=is_last_stage)
+        original_start_stage(self, stage_name, current_stage_index, tasks, is_last_stage)
         stage_calls.append((stage_name, self._current_stage_index))
 
     ctx = ZephyrContext(
