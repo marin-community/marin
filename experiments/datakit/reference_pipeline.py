@@ -151,7 +151,6 @@ def build_steps(
     domain_centroids_dir: str,
     quality_model_bin: str,
     output_prefix: str,
-    inference_name: str = "reference",
 ) -> list[StepSpec]:
     """Build the full DAG of StepSpecs.
 
@@ -161,8 +160,6 @@ def build_steps(
         quality_model_bin: GCS path to the trained fasttext quality ``.bin``.
         output_prefix: GCS prefix for every step's output (e.g.
             ``gs://marin-eu-west4/datakit/reference/<run-id>``).
-        inference_name: Sub-namespace under ``quality-llm/`` for the model
-            wrapper step (so different model versions don't collide).
     """
     sources = all_sources()
     logger.info("Reference pipeline: %d sources", len(sources))
@@ -174,7 +171,7 @@ def build_steps(
     # Quality model wrapper: emits a FastTextModel artifact pointing at the
     # already-staged .bin (no download/training).
     quality_model_step = _register_model_step(
-        name=f"datakit/quality_model/{inference_name}",
+        name="datakit/quality_model/reference",
         model_bin_path=quality_model_bin,
         output_path_prefix=output_prefix,
     )
@@ -363,11 +360,6 @@ def main() -> None:
         required=True,
         help="GCS prefix for all step outputs from this run",
     )
-    parser.add_argument(
-        "--inference-name",
-        default="reference",
-        help="Sub-namespace for the quality model wrapper step (defaults to 'reference')",
-    )
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
@@ -375,7 +367,6 @@ def main() -> None:
         domain_centroids_dir=args.domain_centroids,
         quality_model_bin=args.quality_model_bin,
         output_prefix=args.output_prefix,
-        inference_name=args.inference_name,
     )
     StepRunner().run(steps)
 
