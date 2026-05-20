@@ -28,9 +28,9 @@ The main implementation points are:
 - `lib/levanter/src/levanter/main/perplexity_gap.py`
 - `lib/levanter/src/levanter/analysis/model_perplexity.py`
 - `lib/levanter/src/levanter/analysis/perplexity_gap.py`
+- `experiments/evals/model_perplexity_gap_suite.py`
 - `experiments/evals/perplexity_gap_registry.py`
 - `experiments/exp_model_perplexity_gap_coverage_matrix.py`
-- `experiments/exp_model_perplexity_gap_long_tail_runnable.py`
 - `analysis/perplexity-gap/` in `marin-community.github.io`
 
 ## 1. Register the dataset provider
@@ -156,17 +156,24 @@ include at least a small local fixture test for filtering and output schema.
 
 Use one of two patterns.
 
-For durable coverage, register a bundle in
+For the dashboard suite, wire committed providers into
+`experiments/evals/model_perplexity_gap_suite.py`. Import the provider, add it
+to `suite_raw_validation_sets()`, and keep any temporary broken slices in
+`SKIPPED_DATASETS_FOR_THIS_RUN` with a specific comment. The suite defines the
+run key, dataset composition, Marin/Qwen score steps, report resource config,
+and final pairwise gap step.
+
+For reusable model and bundle coverage, register a bundle in
 `experiments/evals/perplexity_gap_registry.py` and include it from
 `registered_perplexity_gap_bundles()`. The coverage matrix entrypoint
 `experiments/exp_model_perplexity_gap_coverage_matrix.py` expands the registered
 bundles and models into score and pairwise gap steps.
 
-For a one-off exploratory run, create an experiment shaped like
-`experiments/exp_model_perplexity_gap_long_tail_runnable.py`: define `DATASETS`,
-model configs, score steps, gap steps, and an `executor_main(...)` block. Keep
-`MAX_DOCS_PER_DATASET` and `MAX_DOC_BYTES` explicit. Pick descriptive step names
-so output paths can be traced back to the run.
+For a one-off exploratory run that should not enter the dashboard suite, define
+`DATASETS`, model configs, score steps, gap steps, and an `executor_main(...)`
+block in a dedicated experiment file. Keep `MAX_DOCS_PER_DATASET` and
+`MAX_DOC_BYTES` explicit. Pick descriptive step names so output paths can be
+traced back to the run.
 
 The one-off pattern builds two score steps and one report step:
 
@@ -194,16 +201,18 @@ errors without launching TPU scoring.
 ```bash
 cd "$MARIN_REPO"
 uv run python - <<'PY'
-import experiments.exp_model_perplexity_gap_long_tail_runnable as exp
+import experiments.evals.model_perplexity_gap_suite as exp
 
+print("run key:", exp.RUN_KEY)
 print("datasets:", len(exp.DATASETS))
 print("marin step:", exp.MARIN_SCORES.name)
 print("qwen step:", exp.QWEN3_SCORES.name)
-print("gap steps:", exp.MARIN_VS_LLAMA.name, exp.MARIN_VS_QWEN3.name)
+print("gap step:", exp.GAP.name)
+print("skipped:", sorted(exp.SKIPPED_DATASETS_FOR_THIS_RUN))
 PY
 ```
 
-For the registry-backed coverage matrix, inspect the expanded plan:
+For the registry-backed coverage matrix, inspect the expanded plan separately:
 
 ```bash
 cd "$MARIN_REPO"
@@ -230,7 +239,7 @@ artifacts are available.
 cd "$MARIN_REPO"
 uv run iris --config lib/iris/examples/marin.yaml job run \
   --no-wait \
-  --job-name model-perplexity-gap-<short-run-name> \
+  --job-name model-perplexity-gap-suite \
   --priority production \
   --region us-central1 \
   --cpu 1 \
@@ -239,12 +248,14 @@ uv run iris --config lib/iris/examples/marin.yaml job run \
   --enable-extra-resources \
   --extra marin:tpu \
   --no-preemptible \
-  -- python experiments/exp_model_perplexity_gap_long_tail_runnable.py
+  -- python experiments/evals/model_perplexity_gap_suite.py
 ```
 
 Use production priority only for runs that are important enough to preempt
 lower-priority work. The parent should stay CPU-only; do not request a TPU on
-the parent unless the parent itself needs one.
+the parent unless the parent itself needs one. Score steps launch TPU child jobs
+from their `RESOURCE_CONFIG`; the report step should use CPU resources through
+`model_perplexity_gap_from_scores(..., resource_config=...)`.
 
 ## 6. Monitor and recover
 
@@ -285,11 +296,12 @@ Each completed gap directory should contain at least:
 - `report.md`
 - `worst_documents.jsonl`
 
-If the report child OOMs after both model score children have succeeded, do not
+If the report step OOMs after both model score children have succeeded, do not
 rerun scoring. Create `experiments/exp_model_perplexity_gap_<run>_report_retry.py`
 that calls `model_perplexity_gap_from_scores` directly with the completed score
-artifact paths. If memory still fails, improve the report comparison path to
-stream more aggressively before raising memory again.
+artifact paths, a larger CPU `resource_config`, and a fresh `retry_key`. If
+memory still fails, improve the report comparison path to stream more
+aggressively before raising memory again.
 
 If a data source fails, fix or skip only the broken component. Relaunch with a
 fresh run key and document the skipped slice in the experiment.
@@ -303,7 +315,7 @@ intermediates into the website repo.
 
 ```bash
 cd "$WEBSITE_REPO"
-GAP_STEP_NAME=long-tail-runnable-marin-8b-base-vs-qwen3-8b-base-doccap256
+GAP_STEP_NAME=model_perplexity_gap_suite_v1/marin_32b-vs-qwen3_32b
 GAP_ID=${GAP_STEP_NAME}-...
 REMOTE=gs://marin-us-central1/analysis/perplexity_gap/${GAP_ID}
 LOCAL=analysis/perplexity-gap/artifacts/${GAP_ID}
@@ -465,8 +477,8 @@ separate PRs:
 This keeps dataset generation and result publication reviewable independently.
 For synthetic or archival datasets that should not enter the regular eval
 suite, keep their generation code on a long-lived research branch and link it
-from the relevant issue. Only add them to the all-available dashboard when they
-are useful for diagnosis.
+from the relevant issue. Only add them to the model-perplexity gap suite
+dashboard when they are useful for diagnosis.
 
 ## Common failure modes
 
