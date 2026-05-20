@@ -425,7 +425,44 @@ def merge_lora_modules(module: M) -> M:
 
 SAFETENSORS_WEIGHTS_NAME = "adapter_model.safetensors"
 CONFIG_NAME = "adapter_config.json"
-DEFAULT_DICT_PREFIX = "base_model.model.transformer"
+PEFT_BASE_MODEL_PREFIX = "base_model.model"
+GPT2_PEFT_BASE_MODEL_PREFIX = f"{PEFT_BASE_MODEL_PREFIX}.transformer"
+DEFAULT_DICT_PREFIX = None
+COMMON_LORA_TARGET_MODULE_ORDER = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
+LORA_TARGET_MODULE_RE = re.compile(r"\.([^.]+)\.lora_[AB]\.weight$")
+
+
+def _default_peft_state_dict_prefix(model: PyTree) -> str:
+    key_map = getattr(model, "_state_dict_key_map", lambda: {})()
+    missing = object()
+    if key_map.get("transformer", missing) is None:
+        return GPT2_PEFT_BASE_MODEL_PREFIX
+    return PEFT_BASE_MODEL_PREFIX
+
+
+def _infer_target_modules_from_state_dict(state_dict: StateDict) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for key in state_dict:
+        match = LORA_TARGET_MODULE_RE.search(key)
+        if match is None:
+            continue
+        target = match.group(1)
+        if target in seen:
+            continue
+        targets.append(target)
+        seen.add(target)
+
+    order = {target: i for i, target in enumerate(COMMON_LORA_TARGET_MODULE_ORDER)}
+    return sorted(targets, key=lambda target: (order.get(target, len(order)), target))
 
 
 def save_peft_pretrained(
@@ -446,16 +483,21 @@ def save_peft_pretrained(
         lora_model: the LoRA model to save
         path: the path to save the model to. May be a url, in which case we will use fsspec to save to that url.
         tokenizer: if provided, will save the tokenizer to the checkpoint
-        prefix: the prefix to use for the LoRA parameters. Defaults to "base_model.model.transformer", which is what
-            Peft seems to expect.
+        prefix: the prefix to use for the LoRA parameters. Defaults to the PEFT base-model prefix for the model's HF
+            state-dict layout.
         upload_to: if provided, will upload the saved model to the given hf hub repo. If a string, will be interpreted
             as a repo name + branch
         upload_kwargs: kwargs to pass to the upload function
     """
     os.makedirs(path, exist_ok=True)
     base_ref = str(base_model_name_or_path) if base_model_name_or_path is not None else None
-    hf_config = to_hf_config(config, base_model_name_or_path=base_ref)
+    if prefix is None:
+        prefix = _default_peft_state_dict_prefix(lora_model)
     state_dict = lora_state_dict(lora_model, prefix=prefix)
+    target_modules = config.target_modules
+    if target_modules is None:
+        target_modules = _infer_target_modules_from_state_dict(state_dict)
+    hf_config = to_hf_config(config, base_model_name_or_path=base_ref, target_modules=target_modules)
 
     with temp_dir_before_upload(path) as local_path:
         save_state_dict(state_dict, f"{local_path}/{SAFETENSORS_WEIGHTS_NAME}")
@@ -603,7 +645,12 @@ def save_merged_hf_model(
     )
 
 
-def to_hf_config(config: LoraConfig, base_model_name_or_path: Optional[str] = None, **kwargs) -> dict:
+def to_hf_config(
+    config: LoraConfig,
+    base_model_name_or_path: Optional[str] = None,
+    target_modules: Optional[Union[List[str], str]] = None,
+    **kwargs,
+) -> dict:
     """
     Converts a LoraConfig to a HuggingFace config.
     """
@@ -628,18 +675,24 @@ def to_hf_config(config: LoraConfig, base_model_name_or_path: Optional[str] = No
     #   ],
     #   "task_type": "CAUSAL_LM"
     # }
+    if target_modules is None:
+        target_modules = config.target_modules
+
     return {
         "base_model_name_or_path": base_model_name_or_path,
         "bias": "none",  # TODO: support bias
         "fan_in_fan_out": False,  # TODO: support fan_in_fan_out
+        "init_lora_weights": True,
         "inference_mode": True,  # TODO: support inference_mode
         "lora_alpha": config.alpha,
-        "lora_dropout": 0.00,  # TODO: support dropout
+        "lora_dropout": config.dropout,
         "modules_to_save": None,  # TODO: support modules_to_save?
         "peft_type": "LORA",
         "r": config.r,
-        "target_modules": config.target_modules,
+        "target_modules": target_modules,
         "task_type": "CAUSAL_LM",  # TODO: support task_type
+        "use_dora": False,
+        "use_rslora": False,
         **kwargs,
     }
 
@@ -649,5 +702,7 @@ def lora_state_dict(model: M, prefix: Optional[str] = DEFAULT_DICT_PREFIX) -> St
     Returns a state dict of the LoRA parameters of the given model without other parameters.
     This method attempts to return a state dict compatible with PEFT's import method.
     """
+    if prefix is None:
+        prefix = _default_peft_state_dict_prefix(model)
     state_dict = to_torch_compatible_state_dict(filter_lora_params(model), prefix=prefix)
     return {k: v for k, v in state_dict.items() if v is not None}

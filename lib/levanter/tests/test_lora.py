@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import tempfile
 
 import equinox as eqx
@@ -11,6 +12,7 @@ import numpy as np
 import optax
 from chex import assert_trees_all_close
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
+from safetensors import safe_open
 from test_utils import skip_if_hf_model_not_accessible, skip_if_module_missing, skip_if_no_torch, use_test_mesh
 from transformers import AutoModelForCausalLM
 
@@ -296,6 +298,44 @@ def test_lora_merged_load_in_hf_llama():
         hf_lora_out = hf_lora_model(torch_input).logits[0].detach().numpy()
 
         np.testing.assert_allclose(lev_lora_out, hf_lora_out, rtol=1e-4, atol=1e-4)
+
+
+def test_lora_peft_export_uses_hf_llama_keys_and_target_modules(tmp_path):
+    config = LlamaConfig(
+        max_seq_len=32,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+    )
+    vocab = hax.Axis("vocab", 128)
+    model = LlamaLMHeadModel.init(vocab, config=config, key=jax.random.PRNGKey(0))
+    lora_config = LoraConfig(r=8)
+
+    loraized = loraize(model, lora_config, key=jax.random.PRNGKey(1))
+    save_peft_pretrained(loraized, lora_config, "marin-community/marin-8b-base", str(tmp_path))
+
+    with open(tmp_path / "adapter_config.json") as f:
+        adapter_config = json.load(f)
+
+    assert adapter_config["target_modules"] == [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ]
+
+    with safe_open(tmp_path / "adapter_model.safetensors", framework="numpy") as tensors:
+        keys = list(tensors.keys())
+
+    assert "base_model.model.model.layers.0.self_attn.q_proj.lora_A.weight" in keys
+    assert all("base_model.model.transformer." not in key for key in keys)
 
 
 def test_lora_works_with_checkpointer():
