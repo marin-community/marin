@@ -1,5 +1,5 @@
 name: Claude Canary Triage
-description: Run the canary-triage skill against a failed Iris job. Centralizes the claude-code-action SHA, prompt, and tool allowlist.
+description: Run the triage-canary skill against a failed Iris job. Centralizes the claude-code-action SHA, prompt, and tool allowlist.
 
 inputs:
   oauth-token:
@@ -51,7 +51,7 @@ runs:
       with:
         claude_code_oauth_token: ${{ inputs.oauth-token }}
         prompt: |
-          Read .agents/skills/canary-triage/SKILL.md and follow it.
+          Read .agents/skills/triage-canary/SKILL.md and follow it.
         claude_args: |
           --model opus
           --max-turns ${{ inputs.max-turns }}

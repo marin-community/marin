@@ -167,7 +167,7 @@ def _make_gcp_worker_provider(project_id: str = "my-proj"):
 
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id=project_id)
     gcp_config = config_pb2.GcpPlatformConfig(project_id=project_id)
-    return GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    return GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
 
 def test_gcp_provider_resolve_image_rewrites_ghcr() -> None:

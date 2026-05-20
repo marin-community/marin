@@ -3,6 +3,7 @@
 
 """Shared fixtures for controller unit tests."""
 
+import asyncio
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
+from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
@@ -110,20 +112,10 @@ class FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans):
-        from iris.cluster.controller.worker_provider import WorkerReconcileResult
-        from iris.rpc import worker_pb2
+    def reconcile_workers(self, plans, addresses, *, use_reconcile_rpc):
+        from iris.cluster.controller.reconcile import ReconcileResult
 
-        return [
-            WorkerReconcileResult(
-                worker_id=plan.worker_id,
-                start_response=worker_pb2.Worker.StartTasksResponse() if plan.start_tasks else None,
-                start_error=None,
-                poll_updates=[],
-                poll_error=None,
-            )
-            for plan in plans
-        ]
+        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self) -> None:
         pass
@@ -157,20 +149,33 @@ def mock_controller() -> MockController:
 def log_service(state, tmp_path) -> LogServiceImpl:
     """LogServiceImpl with its own internal log store.
 
-    Wraps ``fetch_logs`` to run the bg compact step first so push→fetch in
-    the same test is synchronously visible. The production path relies on the
-    1s bg tick; tests can't afford that wait.
+    Wraps ``push_logs`` / ``fetch_logs`` to force flush (and compact on read)
+    so push→fetch in the same test is synchronously visible. The production
+    path relies on the bg flush tick (5s default); tests can't afford that
+    wait — without the push wrapper, each push's ``await_persisted`` blocks
+    for one flush interval, making N sequential pushes take ~N*5s.
     """
     svc = LogServiceImpl(log_dir=tmp_path / "log_service_logs")
     original_fetch = svc.fetch_logs
 
+    async def push_logs(request, ctx):
+        # Append, then force-flush before returning. Bypasses the original
+        # ``await_persisted`` poll-wait that otherwise blocks for one bg
+        # flush tick (5s by default) on every push.
+        if not request.entries:
+            return logging_pb2.PushLogsResponse()
+        await asyncio.to_thread(svc._log_store.append, request.key, list(request.entries))
+        svc._log_store._force_flush()
+        return logging_pb2.PushLogsResponse()
+
     def fetch_logs(request, ctx):
         # Force a flush + compaction so just-pushed data is queryable
-        # within the same test, bypassing the production 1s bg tick.
+        # within the same test, bypassing the production bg tick.
         svc._log_store._force_flush()
         svc._log_store._force_compaction()
         return original_fetch(request, ctx)
 
+    svc.push_logs = push_logs  # type: ignore[method-assign]
     svc.fetch_logs = fetch_logs  # type: ignore[method-assign]
     yield svc
     svc.close()
@@ -1014,7 +1019,7 @@ def make_gcp_provider(
     """
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project", label_prefix="iris")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=[zone])
-    provider = GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", gcp_service=service)
+    provider = GcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=service)
     return provider, service
 
 

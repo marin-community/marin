@@ -48,6 +48,9 @@ class WorkerService(Protocol):
     async def poll_tasks(self, request: worker__pb2.Worker.PollTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.PollTasksResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def reconcile(self, request: worker__pb2.Worker.ReconcileRequest, ctx: RequestContext) -> worker__pb2.Worker.ReconcileResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
     def __init__(self, service: WorkerService | AsyncGenerator[WorkerService], *, interceptors: Iterable[Interceptor]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
@@ -153,6 +156,16 @@ class WorkerServiceASGIApplication(ConnectASGIApplication[WorkerService]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.poll_tasks,
+                ),
+                "/iris.cluster.WorkerService/Reconcile": Endpoint.unary(
+                    method=MethodInfo(
+                        name="Reconcile",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.ReconcileRequest,
+                        output=worker__pb2.Worker.ReconcileResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.reconcile,
                 ),
             },
             interceptors=interceptors,
@@ -367,6 +380,26 @@ class WorkerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def reconcile(
+        self,
+        request: worker__pb2.Worker.ReconcileRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.ReconcileResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Reconcile",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.ReconcileRequest,
+                output=worker__pb2.Worker.ReconcileResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class WorkerServiceSync(Protocol):
     def get_task_status(self, request: worker__pb2.Worker.GetTaskStatusRequest, ctx: RequestContext) -> job__pb2.TaskStatus:
@@ -388,6 +421,8 @@ class WorkerServiceSync(Protocol):
     def stop_tasks(self, request: worker__pb2.Worker.StopTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.StopTasksResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def poll_tasks(self, request: worker__pb2.Worker.PollTasksRequest, ctx: RequestContext) -> worker__pb2.Worker.PollTasksResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def reconcile(self, request: worker__pb2.Worker.ReconcileRequest, ctx: RequestContext) -> worker__pb2.Worker.ReconcileResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -494,6 +529,16 @@ class WorkerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.poll_tasks,
+                ),
+                "/iris.cluster.WorkerService/Reconcile": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="Reconcile",
+                        service_name="iris.cluster.WorkerService",
+                        input=worker__pb2.Worker.ReconcileRequest,
+                        output=worker__pb2.Worker.ReconcileResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.reconcile,
                 ),
             },
             interceptors=interceptors,
@@ -702,6 +747,26 @@ class WorkerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.WorkerService",
                 input=worker__pb2.Worker.PollTasksRequest,
                 output=worker__pb2.Worker.PollTasksResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def reconcile(
+        self,
+        request: worker__pb2.Worker.ReconcileRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> worker__pb2.Worker.ReconcileResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Reconcile",
+                service_name="iris.cluster.WorkerService",
+                input=worker__pb2.Worker.ReconcileRequest,
+                output=worker__pb2.Worker.ReconcileResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

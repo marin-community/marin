@@ -1,10 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
+import jax.numpy as jnp
 import numpy as np
 import pytest
-from marin.rl.rl_losses import RLOOLoss, compute_ppo_loss_objective, compute_rloo_advantages
+from marin.rl.rl_losses import (
+    RLOOLoss,
+    compute_ppo_loss_objective,
+    compute_rloo_advantages,
+    rloo_loss_with_importance_sampling,
+)
 from marin.rl.types import Rollout
+
+
+class DummyNamedArray:
+    def __init__(self, array):
+        self.array = jnp.asarray(array)
 
 
 def create_test_rollout(
@@ -31,6 +44,22 @@ def create_test_rollout(
         temperature=1.0,
         top_k=None,
         is_truncated=False,
+    )
+
+
+def create_test_training_batch():
+    policy_logprobs = jnp.array([[0.0, 0.0, 0.0]], dtype=jnp.float32)
+    loss_weights = jnp.array([[0.0, 1.0, 1.0]], dtype=jnp.float32)
+    loss_masks = jnp.array([[0.0, 1.0, 1.0]], dtype=jnp.float32)
+
+    return SimpleNamespace(
+        policy_logprobs=DummyNamedArray(policy_logprobs),
+        loss_weights=DummyNamedArray(loss_weights),
+        loss_masks=DummyNamedArray(loss_masks),
+        temperature=DummyNamedArray(jnp.array([1.0], dtype=jnp.float32)),
+        top_k=DummyNamedArray(jnp.array([0], dtype=jnp.int32)),
+        truncated=jnp.array([0], dtype=jnp.float32),
+        max_output_tokens=3,
     )
 
 
@@ -141,3 +170,130 @@ def test_rloo_loss_needs_reference_model_only_when_kl_enabled():
 def test_rloo_loss_rejects_missing_reference_model_when_kl_enabled():
     with pytest.raises(ValueError, match="reference_model is required"):
         RLOOLoss(kl_coef=0.01).create_loss_fn(reference_model=None, train_model=None)
+
+
+def test_rloo_loss_policy_entropy_metric_is_opt_in_and_loss_neutral():
+    batch = create_test_training_batch()
+    current_logprobs = jnp.array([[0.0, 0.0, 0.0]], dtype=jnp.float32)
+    current_policy_entropy = jnp.array([[100.0, 0.25, 0.75]], dtype=jnp.float32)
+
+    def compute_policy_stats_fn(_model, _batch, _key, *, compute_entropy: bool):
+        assert compute_entropy
+        return current_logprobs, current_policy_entropy
+
+    loss, metrics = rloo_loss_with_importance_sampling(
+        model=None,
+        reference_model=None,
+        batch=batch,
+        key=None,
+        kl_coef=0.0,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        tis_importance_sampling_ratio_max=2.0,
+        log_policy_entropy=True,
+        compute_policy_stats_fn=compute_policy_stats_fn,
+    )
+
+    assert loss == pytest.approx(-1.0)
+    assert metrics["current_policy_entropy"].value() == pytest.approx(0.5)
+    assert "current_entropy" in metrics
+    assert "policy_entropy" in metrics
+    assert metrics["current_policy_entropy"].value() != pytest.approx(metrics["current_entropy"].value())
+
+
+def test_rloo_loss_skips_policy_entropy_when_metric_disabled():
+    batch = create_test_training_batch()
+    current_logprobs = jnp.array([[0.0, 0.0, 0.0]], dtype=jnp.float32)
+
+    def compute_policy_stats_fn(_model, _batch, _key, *, compute_entropy: bool):
+        assert not compute_entropy
+        return current_logprobs, None
+
+    loss, metrics = rloo_loss_with_importance_sampling(
+        model=None,
+        reference_model=None,
+        batch=batch,
+        key=None,
+        kl_coef=0.0,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        tis_importance_sampling_ratio_max=2.0,
+        log_policy_entropy=False,
+        compute_policy_stats_fn=compute_policy_stats_fn,
+    )
+
+    assert loss == pytest.approx(-1.0)
+    assert "current_policy_entropy" not in metrics
+    assert "current_entropy" in metrics
+    assert "policy_entropy" in metrics
+
+
+def test_rloo_loss_policy_entropy_does_not_request_reference_entropy():
+    batch = create_test_training_batch()
+    current_model = object()
+    reference_model = object()
+    current_logprobs = jnp.array([[0.0, 0.0, 0.0]], dtype=jnp.float32)
+    current_policy_entropy = jnp.array([[100.0, 0.25, 0.75]], dtype=jnp.float32)
+    calls = []
+
+    def compute_policy_stats_fn(model, _batch, _key, *, compute_entropy: bool):
+        calls.append((model, compute_entropy))
+        if model is reference_model:
+            assert not compute_entropy
+            return current_logprobs, None
+        assert model is current_model
+        assert compute_entropy
+        return current_logprobs, current_policy_entropy
+
+    loss, metrics = rloo_loss_with_importance_sampling(
+        model=current_model,
+        reference_model=reference_model,
+        batch=batch,
+        key=None,
+        kl_coef=0.1,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        tis_importance_sampling_ratio_max=2.0,
+        log_policy_entropy=True,
+        compute_policy_stats_fn=compute_policy_stats_fn,
+    )
+
+    assert loss == pytest.approx(-1.0)
+    assert metrics["current_policy_entropy"].value() == pytest.approx(0.5)
+    assert metrics["kl_loss"].value() == pytest.approx(0.0)
+    assert calls == [(current_model, True), (reference_model, False)]
+
+
+def test_rloo_loss_rejects_missing_policy_entropy_when_metric_enabled():
+    batch = create_test_training_batch()
+
+    def compute_policy_stats_fn(_model, _batch, _key, *, compute_entropy: bool):
+        assert compute_entropy
+        return jnp.array([[0.0, 0.0, 0.0]], dtype=jnp.float32), None
+
+    with pytest.raises(ValueError, match="must return entropy"):
+        rloo_loss_with_importance_sampling(
+            model=None,
+            reference_model=None,
+            batch=batch,
+            key=None,
+            kl_coef=0.0,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            tis_importance_sampling_ratio_max=2.0,
+            log_policy_entropy=True,
+            compute_policy_stats_fn=compute_policy_stats_fn,
+        )
+
+
+def test_rloo_loss_module_rejects_policy_entropy_with_vocab_tiling():
+    with pytest.raises(ValueError, match="not supported with vocab_tile_size"):
+        RLOOLoss(kl_coef=0.0, log_policy_entropy=True, vocab_tile_size=1024).create_loss_fn(
+            reference_model=None, train_model=None
+        )
+
+
+def test_rloo_loss_module_allows_vocab_tiling_when_policy_entropy_disabled():
+    RLOOLoss(kl_coef=0.0, log_policy_entropy=False, vocab_tile_size=1024).create_loss_fn(
+        reference_model=None, train_model=None
+    )

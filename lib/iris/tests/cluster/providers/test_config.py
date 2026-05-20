@@ -352,6 +352,7 @@ scale_groups:
         config = load_config(config_path)
         bundle = create_provider_bundle(
             platform_config=config.platform,
+            worker_port=config.defaults.worker.port,
             ssh_config=config.defaults.ssh,
         )
         autoscaler = create_autoscaler(
@@ -399,6 +400,7 @@ scale_groups:
         config = load_config(config_path)
         bundle = create_provider_bundle(
             platform_config=config.platform,
+            worker_port=config.defaults.worker.port,
             ssh_config=config.defaults.ssh,
         )
         autoscaler = create_autoscaler(
@@ -457,6 +459,7 @@ scale_groups:
         # Should be able to create autoscaler from round-tripped config
         bundle = create_provider_bundle(
             platform_config=loaded_config.platform,
+            worker_port=loaded_config.defaults.worker.port,
             ssh_config=loaded_config.defaults.ssh,
         )
         autoscaler = create_autoscaler(

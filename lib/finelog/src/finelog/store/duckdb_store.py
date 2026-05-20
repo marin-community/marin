@@ -525,17 +525,16 @@ class DuckDBLogStore:
         opens Parquet files lazily during execution, so dropping the lock
         before fetch would let compaction unlink files mid-scan.
 
-        Only namespaces whose quoted identifier appears in ``sql`` get their
-        view rebuilt — for a typical single-namespace query this cuts the
-        per-call setup from O(all namespaces) to O(1). A false positive
-        (literal string containing a quoted name) just rebuilds an unused
-        view; a false negative would surface as a ``CatalogException`` so
-        the substring check is intentionally permissive.
+        Every live namespace gets a view registered before the query runs.
+        Per-namespace setup is microseconds (a segment-list snapshot plus a
+        DuckDB catalog op) and deployments stay in the low-tens of
+        namespaces, so the cost is negligible. Registering everything
+        avoids the whole class of "user wrote ``log`` instead of ``"log"``"
+        false negatives that a substring-based fast path would produce.
 
         Unknown namespaces in the FROM clause surface as DuckDB
         ``CatalogException`` (the view doesn't exist).
         """
-        view_names: list[str] = []
         self._query_visibility_lock.read_acquire()
         try:
             with self._pool.cursor() as cursor:
@@ -547,9 +546,6 @@ class DuckDBLogStore:
                 try:
                     for ns_name, ns in ns_snapshot:
                         ns_quoted = quote_ident(ns_name)
-                        if ns_quoted not in sql:
-                            continue
-                        view_names.append(ns_quoted)
                         segments = ns.query_snapshot()
                         if not segments:
                             cols_sql = ", ".join(
@@ -565,8 +561,8 @@ class DuckDBLogStore:
                         )
                     return cursor.execute(sql).fetch_arrow_table()
                 finally:
-                    for vname in view_names:
-                        cursor.execute(f"DROP VIEW IF EXISTS {vname}")
+                    for ns_name, _ in ns_snapshot:
+                        cursor.execute(f"DROP VIEW IF EXISTS {quote_ident(ns_name)}")
         finally:
             self._query_visibility_lock.read_release()
 

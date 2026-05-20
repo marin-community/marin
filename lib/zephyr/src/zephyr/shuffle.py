@@ -132,12 +132,17 @@ def _default_scatter_write_buffer_bytes() -> int:
     """Return the scatter write buffer budget based on the cgroup memory limit.
 
     Uses 25% of the container memory limit so the budget scales with the
-    worker size. Falls back to 256 MB when the limit cannot be read.
+    worker size, divided by the number of concurrent workers sharing this
+    actor's RAM. Falls back to 256 MB (divided by the same factor) when the
+    cgroup limit cannot be read.
     """
+    from zephyr.execution import _worker_ctx_var  # local import breaks the shuffle↔execution cycle
+
+    num_workers = _worker_ctx_var.get().num_workers
     memory = TaskResources.from_environment().memory_bytes
     if memory > 0:
-        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION)
-    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK
+        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION / num_workers)
+    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK // max(1, num_workers)
 
 
 # ---------------------------------------------------------------------------

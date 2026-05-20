@@ -98,6 +98,74 @@ message Worker {
   message PollTasksResponse {
     repeated iris.job.WorkerTaskStatus tasks = 1;
   }
+
+  // ============================================================
+  // RECONCILE RPC (controller -> worker, unary)
+  // ============================================================
+
+  message ReconcileRequest {
+    string worker_id = 1;
+    repeated DesiredAttempt desired = 2;        // complete expected set
+  }
+
+  message ReconcileResponse {
+    string worker_id = 1;
+    repeated AttemptObservation observed = 2;   // complete observed set
+    WorkerHealth health = 3;
+  }
+
+  message DesiredAttempt {
+    // Routing key. 16 hex chars (128-bit random). Set in Phase C+;
+    // empty in Phase B (recipient routes by task_id+attempt_id then).
+    string attempt_uid = 1;
+
+    oneof intent {
+      AttemptSpec run = 10;
+      StopReason stop = 11;
+    }
+
+    // Phase-B compat: legacy composite key.
+    string task_id = 100;
+    int32 attempt_id = 101;
+  }
+
+  message AttemptSpec {
+    // Populated only when the DB attempt state is ASSIGNED (the one
+    // dispatch tick that hands the worker the spec). Omitted on every
+    // subsequent tick — the worker is expected to have it cached.
+    iris.job.RunTaskRequest request = 1;
+  }
+
+  message AttemptObservation {
+    string attempt_uid = 1;
+
+    iris.job.TaskState state = 2;
+    int32 exit_code = 3;
+    string error = 4;
+    string container_id = 5;
+    iris.time.Timestamp finished_at = 6;
+    iris.job.ResourceUsage resource_usage = 7;
+
+    // Phase-B compat: legacy composite key.
+    string task_id = 100;
+    int32 attempt_id = 101;
+  }
+
+  enum StopReason {
+    STOP_REASON_UNSPECIFIED = 0;
+    STOP_REASON_CANCELLED = 1;
+    STOP_REASON_PREEMPTED = 2;
+    STOP_REASON_SUPERSEDED = 3;
+    STOP_REASON_JOB_TERMINATED = 4;
+    STOP_REASON_TASK_TIMEOUT = 5;
+    STOP_REASON_WORKER_DRAIN = 6;
+  }
+
+  message WorkerHealth {
+    bool healthy = 1;
+    string health_error = 2;
+    iris.job.WorkerResourceSnapshot resources = 3;
+  }
 }
 
 // ============================================================================
@@ -121,4 +189,7 @@ service WorkerService {
   rpc StartTasks(Worker.StartTasksRequest) returns (Worker.StartTasksResponse);
   rpc StopTasks(Worker.StopTasksRequest) returns (Worker.StopTasksResponse);
   rpc PollTasks(Worker.PollTasksRequest) returns (Worker.PollTasksResponse);
+  // Reconcile RPC (Phase B+): controller -> worker, unary.
+  // Legacy RPCs (StartTasks / StopTasks / PollTasks / Ping) kept through Phase D.
+  rpc Reconcile(Worker.ReconcileRequest) returns (Worker.ReconcileResponse);
 }

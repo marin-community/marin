@@ -241,6 +241,7 @@ class GcpSliceHandle:
         _labels: dict[str, str],
         _created_at: Timestamp,
         _label_prefix: str,
+        _worker_port: int,
         _accelerator_variant: str,
         _gcp_service: GcpService,
         _ssh_config: config_pb2.SshConfig | None = None,
@@ -255,6 +256,7 @@ class GcpSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._worker_port = _worker_port
         self._iris_labels = Labels(_label_prefix)
         self._accelerator_variant = _accelerator_variant
         self._ssh_config = _ssh_config
@@ -371,6 +373,7 @@ class GcpSliceHandle:
                 GcpWorkerHandle(
                     _vm_id=f"{self._slice_id}-worker-{i}",
                     _internal_address=internal_ip,
+                    _port=self._worker_port,
                     _external_address=external_ip,
                     _remote_exec=remote_exec,
                 )
@@ -415,6 +418,7 @@ class GcpVmSliceHandle:
         _labels: dict[str, str],
         _created_at: Timestamp,
         _label_prefix: str,
+        _worker_port: int,
         _gcp_service: GcpService,
         _ssh_config: config_pb2.SshConfig | None = None,
         _service_account: str | None = None,
@@ -428,6 +432,7 @@ class GcpVmSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._worker_port = _worker_port
         self._iris_labels = Labels(_label_prefix)
         self._ssh_config = _ssh_config
         self._service_account = _service_account
@@ -495,6 +500,7 @@ class GcpVmSliceHandle:
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",
             _internal_address=vm_info.internal_ip,
+            _port=self._worker_port,
             _external_address=vm_info.external_ip,
             _gce_vm_name=self._vm_name,
             _zone=self._zone,

@@ -40,40 +40,41 @@ from scripts.ops.storage.constants import (
 
 
 def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:
-    """Mirror all *.parquet files from gcs_dir to local_dir using gcloud.
+    """Mirror all *.parquet files from gcs_dir to local_dir via fsspec.
 
-    Uses `--delete-unmatched-destination-objects` so files that have been
-    removed at the source (e.g. when `distributed_scan.py` truncates its
-    staging dir before a new run) are also removed from the local cache.
-    Without this, parquet segments from prior scans accumulate locally and
-    the report ends up reading a stale union of every historical scan —
-    paths that have been deleted from GCS still appear in the report.
+    Deletes local parquets that no longer exist at the source — without
+    this, segments from prior scans accumulate locally and the report ends
+    up reading a stale union of every historical scan.
 
     Returns the local directory.
     """
-    import subprocess
+    import fsspec
 
     local_dir.mkdir(parents=True, exist_ok=True)
-    src = gcs_dir.rstrip("/") + "/*.parquet"
-    print(f"Mirroring {src} -> {local_dir} ...")
-    result = subprocess.run(
-        [
-            "gcloud",
-            "storage",
-            "rsync",
-            "--recursive",
-            "--delete-unmatched-destination-objects",
-            gcs_dir.rstrip("/"),
-            str(local_dir),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"gcloud rsync failed: {result.stderr}")
-    file_count = len(list(local_dir.glob("*.parquet")))
-    print(f"  {file_count} parquet files local")
+    fs, _ = fsspec.core.url_to_fs(gcs_dir)
+    pattern = f"{gcs_dir.rstrip('/')}/*.parquet"
+    remote_paths = fs.glob(pattern)
+    remote_basenames = {Path(p).name for p in remote_paths}
+
+    pruned = 0
+    for existing in local_dir.glob("*.parquet"):
+        if existing.name not in remote_basenames:
+            existing.unlink()
+            pruned += 1
+    if pruned:
+        print(f"  pruned {pruned} stale local parquets")
+
+    print(f"Mirroring {len(remote_paths)} parquets {gcs_dir} -> {local_dir} ...")
+    pbar = tqdm(remote_paths, unit="file", dynamic_ncols=True)
+    for remote in pbar:
+        name = Path(remote).name
+        local = local_dir / name
+        if local.exists() and local.stat().st_size == fs.info(remote)["size"]:
+            continue
+        with fs.open(remote, "rb") as src, open(local, "wb") as dst:
+            while chunk := src.read(8 * 1024 * 1024):
+                dst.write(chunk)
+    print(f"  {len(remote_paths)} parquet files local")
     return local_dir
 
 
@@ -744,14 +745,13 @@ def generate_report(conn: duckdb.DuckDBPyConnection) -> str:
 @click.option(
     "--output",
     "-o",
-    type=click.Path(),
-    help="Write markdown report to file (default: stdout).",
+    help="Write markdown report to file (local path or gs:// URL; default: stdout).",
 )
 def main(parquet_dir: str, output: str | None) -> None:
     """Generate a storage usage report from parquet output of a scan.
 
     PARQUET_DIR may be a local directory or a gs:// path (auto-downloaded
-    to /tmp/storage-scan-cache via gcloud rsync).
+    to /tmp/storage-scan-cache via fsspec).
 
     Examples:
         uv run scripts/ops/storage/report.py gs://marin-us-central2/tmp/storage-scan-v7
@@ -760,7 +760,13 @@ def main(parquet_dir: str, output: str | None) -> None:
     conn = load_parquet_db(parquet_dir)
     report = generate_report(conn)
     if output:
-        Path(output).write_text(report)
+        if output.startswith("gs://"):
+            import fsspec
+
+            with fsspec.open(output, "w") as f:
+                f.write(report)
+        else:
+            Path(output).write_text(report)
         print(f"Report written to {output}", file=sys.stderr)
     else:
         print(report)
