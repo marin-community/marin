@@ -19,10 +19,6 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
-# datasets.load_dataset returns one of these four shapes depending on whether a
-# split is pinned and whether streaming is enabled.
-DatasetLike = datasets.Dataset | datasets.DatasetDict | datasets.IterableDataset | datasets.IterableDatasetDict
-
 
 def fsspec_exists(file_path: str) -> bool:
     """
@@ -123,7 +119,7 @@ def load_dataset_with_backoff(
     initial_delay: float = 2.0,
     max_delay: float = 120.0,
     **dataset_kwargs: Any,
-) -> DatasetLike:
+):
     """Call ``datasets.load_dataset`` with exponential backoff tuned for HF rate limits."""
     return retry_with_backoff(
         lambda: datasets.load_dataset(**dataset_kwargs),
@@ -214,7 +210,7 @@ def remove_tpu_lockfile_on_exit() -> Iterator[None]:
         _hacky_remove_tpu_lockfile()
 
 
-def _hacky_remove_tpu_lockfile() -> None:
+def _hacky_remove_tpu_lockfile():
     """
     This is a hack to remove the lockfile that TPU pods create on the host filesystem.
 
