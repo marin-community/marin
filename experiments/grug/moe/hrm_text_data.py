@@ -543,11 +543,13 @@ def _make_tokenize_from_clean(name: str, clean_step: ExecutorStep) -> ExecutorSt
             tokenizer=versioned(llama3_tokenizer),
             format=_FORMAT,
             tags=["hrm_text", name],
-            # num_shards=1 bundles all input parquet files into a single tokenize
-            # worker. Trades parallelism for a much smaller scheduling footprint
-            # (one 0.1-core worker per source instead of N) — useful when the
-            # iris cluster is heavily contended.
-            num_shards=1,
+            # num_shards=4: split tokenize across 4 zephyr workers, each writing
+            # its own cache part. The previous num_shards=1 setup had a single
+            # ~5-hour worker that kept getting preempted before commit, losing
+            # all progress each time. With 4 parts, each part commits
+            # independently (~75 min each); a preemption costs at most ~1/4 of
+            # the work to redo.
+            num_shards=4,
         ),
     )
 
