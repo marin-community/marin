@@ -3,15 +3,14 @@
 
 """Run a fasttext classifier over datakit-normalized data.
 
-Reads datakit-normalized Parquet (``id``, ``text``, ``partition_id``), runs a
-fasttext ``.bin`` model over each record's text, and emits a co-partitioned
-Parquet attributes dataset with the predicted label distribution.
+Reads datakit-normalized Parquet (``id``, ``text``), runs a fasttext ``.bin``
+model over each record's text, and emits a co-partitioned Parquet attributes
+dataset with the predicted label distribution.
 
 Schema of the emitted Parquet attributes (datakit ``{id, attributes}`` convention,
 consumable by :func:`marin.processing.classification.consolidate.consolidate`):
 
     id                       : string         — matches source document id
-    partition_id             : int            — matches source partition
     attributes               : struct
         top_label            : string         — fasttext top-1 label (``__label__`` stripped)
         top_score            : float          — top-1 probability
@@ -202,7 +201,6 @@ def _output_schema(score_target_label: str | None) -> pa.Schema:
     return pa.schema(
         [
             pa.field("id", pa.string()),
-            pa.field("partition_id", pa.int64()),
             pa.field("attributes", attrs),
         ]
     )
@@ -324,7 +322,6 @@ def _predict_batch(
             attrs = _empty_attrs(score_target_label)
         yield {
             "id": record["id"],
-            "partition_id": record["partition_id"],
             "attributes": attrs,
         }
 
@@ -349,7 +346,7 @@ def classify_fasttext_to_parquet(
         normalized_data: Upstream :class:`NormalizedData` artifact. Reads from
             ``normalized_data.main_output_dir`` (the flat, co-partitioned
             Parquet directory produced by datakit normalize). Records must
-            have ``id``, ``text``, and ``partition_id`` columns.
+            have ``id`` and ``text`` columns.
         model: :class:`FastTextModel` artifact pointing at a staged
             ``.bin``. Workers stream the bin from GCS to a per-process
             tempfile once via :func:`_load_fasttext_model`.
