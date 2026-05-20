@@ -95,6 +95,8 @@ TRAIN_DATASETS = {
     "cds": "bolinas-dna/genomes-v5-genome_set-animals-intervals-v5_255_128",
     "upstream": "bolinas-dna/genomes-v5-genome_set-animals-intervals-v1_255_128",
     "downstream": "bolinas-dna/genomes-v5-genome_set-animals-intervals-v15_255_128",
+    "ncrna_exon": "bolinas-dna/zoonomia-v1-v3_ncrna_exon",
+    "ccre_non_promoter": "bolinas-dna/zoonomia-v1-v3_ccre_non_promoter",
 }
 VALIDATION_DATASETS = {
     "val_cds": "bolinas-dna/genomes-v5-validation-intervals-v5_255_255",
@@ -241,6 +243,10 @@ class MixConfig:
     overrides only the data shuffle / mixture sampling key. Model init and
     training noise are unaffected. Useful for continuation runs that share an
     HF init but want a distinct data ordering.
+
+    ``checkpoints_per_run``, when set, overrides the module-level
+    ``CHECKPOINTS_PER_RUN`` for this mix and controls how many permanent
+    checkpoints are kept (one every ``num_train_steps // checkpoints_per_run``).
     """
 
     name: str
@@ -248,6 +254,7 @@ class MixConfig:
     max_train_examples: int | None = None
     initialize_from_hf: str | None = None
     data_seed: int | None = None
+    checkpoints_per_run: int | None = None
 
     def __post_init__(self):
         unknown = set(self.weights) - set(TRAIN_DATASETS)
@@ -257,6 +264,8 @@ class MixConfig:
             raise ValueError(f"{self.name}: at least one weight must be > 0")
         if self.max_train_examples is not None and self.max_train_examples <= 0:
             raise ValueError(f"{self.name}: max_train_examples must be positive, got {self.max_train_examples}")
+        if self.checkpoints_per_run is not None and self.checkpoints_per_run <= 0:
+            raise ValueError(f"{self.name}: checkpoints_per_run must be positive, got {self.checkpoints_per_run}")
 
     @property
     def active_regions(self) -> tuple[str, ...]:
@@ -443,6 +452,43 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         ),
         data_seed=14,
     ),
+    # Uniform 1/5 mix over the three genome regions plus two zoonomia tracks
+    # (ncrna_exon, ccre_non_promoter). Sized to the cds dataset (~242M examples,
+    # ~62B tokens); each component gets a ~48.4M slice and smaller datasets
+    # cycle via RESTART. Zoonomia tracks have no validation sets. Five
+    # permanent checkpoints (every 20% of steps) for downstream-eval cadence.
+    MixConfig(
+        name="exp135-zoonomia-m1",
+        weights={
+            "cds": 1 / 5,
+            "upstream": 1 / 5,
+            "downstream": 1 / 5,
+            "ncrna_exon": 1 / 5,
+            "ccre_non_promoter": 1 / 5,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        data_seed=15,
+        checkpoints_per_run=5,
+    ),
+    # Continuation of exp135-zoonomia-m1 warm-started from the uniform_to_uniform_1
+    # step-20000 HF checkpoint (does not yet exist at definition time). Sized to
+    # the upstream dataset (~68.3M examples, ~17.5B tokens).
+    MixConfig(
+        name="exp135-zoonomia-m2",
+        weights={
+            "cds": 1 / 5,
+            "upstream": 1 / 5,
+            "downstream": 1 / 5,
+            "ncrna_exon": 1 / 5,
+            "ccre_non_promoter": 1 / 5,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["upstream"],
+        initialize_from_hf=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i18-uniform_to_uniform_1-84cd83/hf/step-20000/"
+        ),
+        data_seed=16,
+        checkpoints_per_run=5,
+    ),
 )
 
 
@@ -620,10 +666,10 @@ def _eval_harness_config() -> LmEvalHarnessConfig:
     )
 
 
-def _checkpointer(num_train_steps: int) -> CheckpointerConfig:
+def _checkpointer(num_train_steps: int, checkpoints_per_run: int) -> CheckpointerConfig:
     return CheckpointerConfig(
         save_interval=CHECKPOINT_TIME_INTERVAL,
-        keep=[dict(every=max(1, num_train_steps // CHECKPOINTS_PER_RUN))],
+        keep=[dict(every=max(1, num_train_steps // checkpoints_per_run))],
     )
 
 
@@ -682,7 +728,7 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
             train_batch_size=BATCH_SIZE,
             num_train_steps=num_train_steps,
             steps_per_eval=steps_per_eval,
-            checkpointer=_checkpointer(num_train_steps),
+            checkpointer=_checkpointer(num_train_steps, mix.checkpoints_per_run or CHECKPOINTS_PER_RUN),
             mesh=MeshConfig(axes={"replica": 1, "data": -1, "model": 1}),
             allow_nondivisible_batch_size=True,
             per_device_parallelism=PER_DEVICE_PARALLELISM,
