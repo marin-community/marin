@@ -111,6 +111,14 @@ TOKENIZE_NAME = "bolinas-v5-{key}-char-bos-5149"
 # Training mask: 1% loss weight on lowercase positions.
 TRAIN_FORMAT = DNALmDatasetFormat(lowercase_weight=0.01)
 
+# Per-region text_key override. DNALmDatasetFormat defaults to "seq" (used by
+# the genomes-v5 datasets); the zoonomia-v1-v3 datasets store DNA under
+# "sequence" instead.
+TRAIN_TEXT_KEYS: dict[str, str] = {
+    "ncrna_exon": "sequence",
+    "ccre_non_promoter": "sequence",
+}
+
 # Architecture: hidden=1920 -> ~1.12B params. Matches exp109's
 # ``TRANSFER_HIDDEN_SIZES[-1]`` so this study anchors directly on the
 # hparam-validated regime. The heuristic derives intermediate/heads/layers.
@@ -489,6 +497,21 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         data_seed=16,
         checkpoints_per_run=5,
     ),
+    # Same as exp135-zoonomia-m1 but slightly upstream-heavy: upstream=0.25,
+    # others=0.1875 each (each non-upstream weight = upstream * 0.75).
+    MixConfig(
+        name="exp135-zoonomia-m3",
+        weights={
+            "cds": 0.1875,
+            "upstream": 0.25,
+            "downstream": 0.1875,
+            "ncrna_exon": 0.1875,
+            "ccre_non_promoter": 0.1875,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        data_seed=17,
+        checkpoints_per_run=5,
+    ),
 )
 
 
@@ -640,7 +663,14 @@ def _steps_per_eval(num_train_steps: int) -> int:
 
 def _build_data_mixture(mix: MixConfig):
     """Tokenize active train regions + cross-product of validation regions x specs."""
-    components = {region: _tokenize(region, TRAIN_DATASETS[region], TRAIN_FORMAT) for region in mix.active_regions}
+    components = {
+        region: _tokenize(
+            region,
+            TRAIN_DATASETS[region],
+            replace(TRAIN_FORMAT, text_key=TRAIN_TEXT_KEYS.get(region, TRAIN_FORMAT.text_key)),
+        )
+        for region in mix.active_regions
+    }
     for region_key, dataset in VALIDATION_DATASETS.items():
         for spec in VAL_SPECS:
             key = f"{region_key}_{spec.suffix}" if spec.suffix else region_key
