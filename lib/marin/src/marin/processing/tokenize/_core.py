@@ -44,11 +44,6 @@ _MAX_WINDOW_SIZE = 64
 
 _TOKENIZE_EXTENSIONS = ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet"]
 
-# NOTE(chris): Marin's `default_download` writes a `provenance.json` sidecar next to
-# downloaded HF data. Downstream tokenize jobs glob those directories and must
-# exclude sidecars so we don't train on provenance records.
-_MARIN_SIDECAR_NAMES = frozenset({"provenance.json"})
-
 
 def avg_parquet_row_group_rows(path: str) -> int | None:
     """Return the mean rows-per-row-group from ``path``.
@@ -72,7 +67,9 @@ def compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
 
 
 def drop_sidecars(files: list[FileEntry]) -> list[FileEntry]:
-    return [f for f in files if os.path.basename(f.path) not in _MARIN_SIDECAR_NAMES]
+    """Drop dot-prefixed files — Marin metadata sidecars (``.provenance.json``,
+    ``.artifact.json``, …), never training data even with a data extension."""
+    return [f for f in files if not os.path.basename(f.path).startswith(".")]
 
 
 def glob_with_sizes(patterns: list[str]) -> list[FileEntry]:

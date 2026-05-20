@@ -306,7 +306,7 @@ def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
     # Common sidecar files that would crash load_file:
     (eval_dir / "README.md").write_text("# Eval corpus\nA description.\n")
     (eval_dir / "_SUCCESS").write_text("")
-    (eval_dir / "provenance.json").write_text('{"source": "wherever"}')
+    (eval_dir / ".provenance.json").write_text('{"source": "wherever"}')
     # Hidden directory with stuff inside (.metrics/, .executor_info/, etc.)
     (eval_dir / ".metrics").mkdir()
     (eval_dir / ".metrics" / "stats.json").write_text('{"records": 1}')

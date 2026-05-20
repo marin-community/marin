@@ -15,7 +15,10 @@ T = TypeVar("T")
 
 
 class Artifact:
-    __artifact_file_name = "artifact.json"
+    # Dot-prefix keeps the sidecar out of data-discovery passes that match by
+    # extension (e.g. ``normalize._discover_files`` would otherwise read
+    # ``artifact.json`` as JSONL — see #5864).
+    __artifact_file_name = ".artifact.json"
     # Legacy filename written before the rename; read-only fallback so historical
     # GCS outputs remain loadable. Safe to remove once those prefixes are gone.
     __legacy_artifact_file_name = ".artifact"
@@ -37,7 +40,7 @@ class Artifact:
         If ``base_path`` is a relative path (no URL scheme, doesn't start with ``/``),
         it is resolved against ``marin_prefix()``.
 
-        If ``base_path`` has no ``artifact.json`` (or legacy ``.artifact``) file but
+        If ``base_path`` has no ``.artifact.json`` (or legacy ``.artifact``) file but
         its ``.executor_status`` file contains ``SUCCESS``, returns a
         :class:`PathMetadata` pointing at ``base_path`` — provided the caller asked
         for no specific type or for ``PathMetadata``.
