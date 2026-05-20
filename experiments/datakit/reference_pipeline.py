@@ -32,8 +32,10 @@ Region-agnostic: every worker resource is unpinned, so iris's ``--region``
 flag drives scheduling. ``MARIN_PREFIX`` is resolved by
 :func:`rigging.filesystem.marin_prefix` -- when unset (the normal iris-
 worker case) it falls back to ``gs://marin-<region>`` from GCS metadata,
-so the upstream source artifacts and every step's output land in-region
-automatically. Override by exporting ``MARIN_PREFIX`` or passing it via
+so the upstream source artifacts, the eval-corpus path
+(``EVAL_ROOT`` in :mod:`decontam.all_sources_decon`, also derived from
+``marin_prefix()``), and every step's output land in-region automatically.
+Override by exporting ``MARIN_PREFIX`` or passing it via
 ``iris job run --env-vars MARIN_PREFIX <bucket>``.
 ``EVAL_ROOT`` is hardcoded to ``gs://marin-eu-west4/.../evals``: the eval
 corpus is read once to build the decontam bloom, after which workers read

@@ -41,18 +41,22 @@ from marin.datakit.decon import build_eval_bloom_step, decon_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from rigging.filesystem import marin_prefix
 from rigging.log_setup import configure_logging
 
 logger = logging.getLogger(__name__)
 
 
-# Combined eval corpus written by ``prepare_eval_corpus.py``. Bloom build
-# walks this tree recursively for ``.parquet`` files (zephyr handles
-# listing). Two top-level subtrees:
+# Combined eval corpus written by ``prepare_eval_corpus.py``. Resolves to the
+# in-region bucket via ``marin_prefix()`` (auto-detected from GCS metadata on
+# iris workers), so a worker in eu-west4 reads from gs://marin-eu-west4/... and
+# a worker in us-central2 reads from gs://marin-us-central2/.... The corpus
+# must be staged in the region you're running -- copy once with
+# ``gsutil -m cp -r`` if it's not there yet. Two top-level subtrees:
 #
 #   aa/<eval>/<split>.parquet     (8 evals, AA Intelligence Index v4.0)
 #   lmh/<task>/eval.parquet       (lm-eval-harness leaf tasks, ~850)
-EVAL_ROOT = "gs://marin-eu-west4/datakit/decontam/evals"
+EVAL_ROOT = f"{marin_prefix()}/datakit/decontam/evals"
 
 # Bloom capacity — unique ngram hashes the filter must hold. Sized from
 # ``count_docs.py`` against the parquet eval corpus (2026-05-17 run):
