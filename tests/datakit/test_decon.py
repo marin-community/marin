@@ -307,6 +307,9 @@ def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
     (eval_dir / "README.md").write_text("# Eval corpus\nA description.\n")
     (eval_dir / "_SUCCESS").write_text("")
     (eval_dir / "provenance.json").write_text('{"source": "wherever"}')
+    # Marin executor artifact sidecar; literal ``null`` is what
+    # ``Artifact.save(None, ...)`` writes (regression for #5864).
+    (eval_dir / "artifact.json").write_text("null")
     # Hidden directory with stuff inside (.metrics/, .executor_info/, etc.)
     (eval_dir / ".metrics").mkdir()
     (eval_dir / ".metrics" / "stats.json").write_text('{"records": 1}')

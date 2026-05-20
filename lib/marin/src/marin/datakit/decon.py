@@ -41,7 +41,7 @@ from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 
-from marin.datakit.normalize import NormalizedData
+from marin.datakit.normalize import SIDECAR_FILENAMES, NormalizedData
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
 
@@ -180,9 +180,11 @@ def _discover_eval_files(eval_paths: list[str]) -> Iterator[str]:
     """Walk all *eval_paths* recursively and yield zephyr-readable data files.
 
     Filters by ``zephyr.readers.SUPPORTED_EXTENSIONS`` so common sidecars
-    (``README``, ``_SUCCESS``, ``provenance.json``, ``.executor_info``, …)
-    that live alongside eval data don't kill the whole decon step when
-    ``load_file`` later rejects their extension. Mirrors ``normalize._discover_files``.
+    (``README``, ``_SUCCESS``, ``.executor_info``, …) that live alongside eval
+    data don't kill the whole decon step when ``load_file`` later rejects their
+    extension. Marin sidecars (``artifact.json``, ``provenance.json``) share an
+    extension with eval data and are filtered by basename. Mirrors
+    ``normalize._discover_files``.
     """
     for source in eval_paths:
         fs, resolved = url_to_fs(source)
@@ -192,6 +194,8 @@ def _discover_eval_files(eval_paths: list[str]) -> Iterator[str]:
                 continue
             for fname in files:
                 if fname.startswith(".") or not fname.endswith(SUPPORTED_EXTENSIONS):
+                    continue
+                if fname in SIDECAR_FILENAMES:
                     continue
                 full = os.path.join(root, fname)
                 yield f"{protocol}://{full}" if protocol else full

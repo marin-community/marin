@@ -349,3 +349,28 @@ def test_no_input_files_raises(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+
+def test_marin_sidecars_skipped(tmp_path: Path, write_jsonl_gz):
+    """Marin executor/download sidecars co-located with data are skipped by discovery.
+
+    Regression for #5864: after #5732 renamed the executor sidecar from
+    ``.artifact`` to ``artifact.json``, ``_discover_files`` (extension+dotfile
+    filter only) picked it up as input. An upstream ``fn`` returning ``None``
+    leaves ``artifact.json`` containing the literal ``null``, which the JSONL
+    reader decodes to a ``None`` record and ``has_text`` crashes on with
+    ``AttributeError: 'NoneType' object has no attribute 'get'``.
+    """
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    write_jsonl_gz(input_dir / "data.jsonl.gz", [{"text": "real document"}])
+    # The exact byte sequence that ``Artifact.save(None, output_path)`` writes.
+    (input_dir / "artifact.json").write_text("null")
+    # Dataset download sidecar written by ``write_provenance_json``.
+    (input_dir / "provenance.json").write_text('{"source": "wherever"}')
+
+    normalize_to_parquet(input_path=str(input_dir), output_path=str(output_dir))
+
+    results = _read_all_parquet(output_dir)
+    assert len(results) == 1
+    assert results[0]["text"] == "real document"

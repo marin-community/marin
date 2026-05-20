@@ -161,6 +161,13 @@ def _make_normalize_fn(
 # file list to that many files. Any other value raises.
 _FERRY_TEST_MAX_FILES_ENV = "FERRY_TEST_MAX_FILES"
 
+# Sidecar basenames marin writes alongside step outputs / dataset dumps.
+# Skipped by datakit discovery regardless of extension so they aren't mistaken
+# for input data: ``artifact.json`` (executor artifact, ``null`` when the
+# step's ``fn`` returns ``None`` — see #5864) and ``provenance.json`` (dataset
+# download provenance, see ``marin.utilities.validation_utils``).
+SIDECAR_FILENAMES: frozenset[str] = frozenset({"artifact.json", "provenance.json"})
+
 
 def _ferry_test_max_files() -> int | None:
     raw = os.environ.get(_FERRY_TEST_MAX_FILES_ENV)
@@ -181,11 +188,12 @@ def _discover_files(
 ) -> list[str]:
     """Walk *input_path* recursively and return a sorted flat list of data files.
 
-    Only files with matching extensions are included; dotfiles and hidden
-    directories are skipped. When the ``FERRY_TEST_MAX_FILES`` env var is set
-    to a positive integer, the sorted list is truncated to that many entries —
-    a smoke/test-only knob that bypasses any caller's intent, used by the
-    canary ferries to bound oversized staged dumps.
+    Only files with matching extensions are included; dotfiles, hidden
+    directories, and marin sidecars (see ``SIDECAR_FILENAMES``) are skipped.
+    When the ``FERRY_TEST_MAX_FILES`` env var is set to a positive integer, the
+    sorted list is truncated to that many entries — a smoke/test-only knob that
+    bypasses any caller's intent, used by the canary ferries to bound
+    oversized staged dumps.
     """
     extensions = file_extensions or SUPPORTED_EXTENSIONS
     fs, resolved = url_to_fs(input_path)
@@ -202,6 +210,8 @@ def _discover_files(
             continue
         for fname in files:
             if fname.startswith("."):
+                continue
+            if fname in SIDECAR_FILENAMES:
                 continue
             if not fname.endswith(extensions):
                 continue
