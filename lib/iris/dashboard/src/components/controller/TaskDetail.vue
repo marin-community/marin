@@ -382,6 +382,9 @@ watch(() => props.taskId, async () => {
                   Attempt
                 </th>
                 <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
+                  UID
+                </th>
+                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
                   State
                 </th>
                 <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
@@ -409,6 +412,9 @@ watch(() => props.taskId, async () => {
                 <td class="px-3 py-2 text-[13px] font-mono">
                   {{ attempt.attemptId }}
                   <span v-if="attempt.attemptId === task.currentAttemptId" class="ml-1 text-xs text-accent font-semibold">current</span>
+                </td>
+                <td class="px-3 py-2 text-[13px] font-mono text-text-muted">
+                  {{ attempt.attemptUid ? attempt.attemptUid.slice(0, 8) : '-' }}
                 </td>
                 <td class="px-3 py-2 text-[13px]">
                   <StatusBadge :status="attempt.state" size="sm" />

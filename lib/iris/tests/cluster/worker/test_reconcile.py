@@ -43,6 +43,7 @@ def _run_desired(
     task_id: str,
     attempt_id: int,
     run_request: job_pb2.RunTaskRequest | None = None,
+    attempt_uid: str = "",
 ) -> worker_pb2.Worker.DesiredAttempt:
     """Build a DesiredAttempt with intent=run, optionally with inline spec."""
     spec = (
@@ -51,14 +52,16 @@ def _run_desired(
         else worker_pb2.Worker.AttemptSpec()
     )
     return worker_pb2.Worker.DesiredAttempt(
+        attempt_uid=attempt_uid,
         task_id=task_id,
         attempt_id=attempt_id,
         run=spec,
     )
 
 
-def _stop_desired(task_id: str, attempt_id: int) -> worker_pb2.Worker.DesiredAttempt:
+def _stop_desired(task_id: str, attempt_id: int, attempt_uid: str = "") -> worker_pb2.Worker.DesiredAttempt:
     return worker_pb2.Worker.DesiredAttempt(
+        attempt_uid=attempt_uid,
         task_id=task_id,
         attempt_id=attempt_id,
         stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
@@ -101,8 +104,8 @@ def test_inline_spec_enqueues_and_reports_building(worker, mock_runtime):
         job_pb2.TASK_STATE_RUNNING,
     ), f"Unexpected state {obs[key].state} — expected BUILDING or RUNNING"
 
-    # Spec must be cached now.
-    assert worker._spec_cache.get((task_id, 0)) is not None
+    # The attempt must now be tracked locally.
+    assert worker.get_task(task_id, attempt_id=0) is not None
 
     # Clean up.
     worker.kill_task(task_id)
@@ -149,12 +152,11 @@ def test_second_reconcile_without_spec_is_cache_hit(worker, mock_runtime):
         task.thread.join(timeout=5.0)
 
 
-def test_no_spec_no_cache_reports_missing(worker):
-    """intent=run with neither inline spec nor cached spec → TASK_STATE_MISSING."""
+def test_no_spec_unknown_attempt_reports_missing(worker):
+    """intent=run for an unknown attempt with no inline spec → TASK_STATE_MISSING."""
     task_id = _task_id("missing")
 
     # Worker has no prior knowledge of this attempt.
-    assert worker._spec_cache.get((task_id, 0)) is None
     assert worker.get_task(task_id) is None
 
     response = _reconcile(worker, [_run_desired(task_id, 0, run_request=None)])
@@ -247,9 +249,13 @@ def test_zombie_kill_skips_terminal_tasks(worker, mock_runtime):
     assert task.status == job_pb2.TASK_STATE_SUCCEEDED
 
 
-def test_spec_cache_evicts_after_terminal_state(worker, mock_runtime):
-    """After an attempt becomes terminal, the next reconcile tick drops it from the spec cache."""
-    task_id = _task_id("evict")
+def test_terminal_attempt_retained_and_observed_on_later_reconcile(worker, mock_runtime):
+    """A terminal attempt stays in the worker's list and is still observed.
+
+    Terminal attempts are retained so their logs remain accessible; a follow-up
+    reconcile with no inline spec must report the terminal state, not MISSING.
+    """
+    task_id = _task_id("retain")
     run_req = create_run_task_request(task_id=task_id, attempt_id=0)
 
     # Container exits immediately with success.
@@ -259,9 +265,8 @@ def test_spec_cache_evicts_after_terminal_state(worker, mock_runtime):
         )
     )
 
-    # First reconcile: spec inline → enqueues and caches.
+    # First reconcile: spec inline → enqueues the attempt.
     _reconcile(worker, [_run_desired(task_id, 0, run_request=run_req)])
-    assert worker._spec_cache.get((task_id, 0)) is not None
 
     # Wait for the task to terminate.
     task = worker.get_task(task_id, attempt_id=0)
@@ -269,11 +274,13 @@ def test_spec_cache_evicts_after_terminal_state(worker, mock_runtime):
     task.thread.join(timeout=5.0)
     assert task.status == job_pb2.TASK_STATE_SUCCEEDED
 
-    # Second reconcile tick: observing a terminal state evicts the cached spec.
-    _reconcile(worker, [_run_desired(task_id, 0, run_request=None)])
-
-    # Cache entry must be gone.
-    assert worker._spec_cache.get((task_id, 0)) is None
+    # Second reconcile tick with no inline spec: the terminal attempt is still
+    # tracked and observed (retained for log access), not synthesized as MISSING.
+    response = _reconcile(worker, [_run_desired(task_id, 0, run_request=None)])
+    assert worker.get_task(task_id, attempt_id=0) is task
+    obs = _observations_by_key(response)
+    assert (task_id, 0) in obs
+    assert obs[(task_id, 0)].state == job_pb2.TASK_STATE_SUCCEEDED
 
 
 def test_reconcile_response_includes_worker_id(worker):
@@ -320,3 +327,97 @@ def test_reconcile_pending_state_reported_as_building(worker, mock_runtime):
     task = worker.get_task(task_id, attempt_id=0)
     if task and task.thread:
         task.thread.join(timeout=5.0)
+
+
+# ============================================================================
+# UID routing
+# ============================================================================
+
+
+def test_observation_carries_attempt_uid(worker, mock_runtime):
+    """An observation built for an attempt reports that attempt's UID."""
+    task_id = _task_id("obs-uid")
+    run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-obs-1")
+
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+        )
+    )
+    worker.submit_task(run_req)
+
+    response = _reconcile(worker, [_run_desired(task_id, 0, attempt_uid="uid-obs-1")])
+
+    obs = _observations_by_key(response)
+    assert (task_id, 0) in obs
+    assert obs[(task_id, 0)].attempt_uid == "uid-obs-1"
+
+    worker.kill_task(task_id)
+    task = worker.get_task(task_id, attempt_id=0)
+    if task and task.thread:
+        task.thread.join(timeout=5.0)
+
+
+def test_run_intent_routes_to_attempt_by_uid(worker, mock_runtime):
+    """A run intent carrying a known UID resolves to that attempt — no re-enqueue."""
+    task_id = _task_id("route-uid")
+    run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-route-1")
+
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+        )
+    )
+    worker.submit_task(run_req)
+    submit_spy = Mock(wraps=worker.submit_task)
+    worker.submit_task = submit_spy  # type: ignore[method-assign]
+
+    # Run intent with the same UID but no inline spec: must resolve by UID, no re-enqueue.
+    response = _reconcile(worker, [_run_desired(task_id, 0, run_request=None, attempt_uid="uid-route-1")])
+
+    assert submit_spy.call_count == 0, "Run intent matching by UID must not re-enqueue"
+    obs = _observations_by_key(response)
+    assert (task_id, 0) in obs
+    assert obs[(task_id, 0)].state != job_pb2.TASK_STATE_MISSING
+
+    worker.kill_task(task_id)
+    task = worker.get_task(task_id, attempt_id=0)
+    if task and task.thread:
+        task.thread.join(timeout=5.0)
+
+
+def test_run_intent_unknown_attempt_no_spec_reports_missing(worker):
+    """A run intent with a UID matching no attempt and no inline spec → MISSING."""
+    task_id = _task_id("uid-missing")
+
+    response = _reconcile(worker, [_run_desired(task_id, 0, run_request=None, attempt_uid="uid-unknown")])
+
+    obs = _observations_by_key(response)
+    assert (task_id, 0) in obs
+    missing = obs[(task_id, 0)]
+    assert missing.state == job_pb2.TASK_STATE_MISSING
+    # MISSING observation echoes the UID so the controller can route it.
+    assert missing.attempt_uid == "uid-unknown"
+    assert worker.get_task(task_id) is None
+
+
+def test_stop_intent_routes_to_attempt_by_uid(worker, mock_runtime):
+    """A stop intent carrying a known UID kills that attempt."""
+    task_id = _task_id("stop-uid")
+    run_req = create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-stop-1")
+
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+        )
+    )
+    worker.submit_task(run_req)
+    task = worker.get_task(task_id, attempt_id=0)
+    assert task is not None
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    _reconcile(worker, [_stop_desired(task_id, 0, attempt_uid="uid-stop-1")])
+
+    assert task.should_stop is True
+    task.thread.join(timeout=5.0)
+    assert task.status == job_pb2.TASK_STATE_KILLED
