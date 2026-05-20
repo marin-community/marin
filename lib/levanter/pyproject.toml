@@ -10,7 +10,7 @@ module-name = "levanter"
 
 [project]
 name = "marin-levanter"
-version = "0.99"
+version = "0.2.0"
 description = "Scalable Training for Foundation Models with Named Tensors and JAX"
 readme = "README.md"
 requires-python = ">=3.11"
