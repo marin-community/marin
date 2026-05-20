@@ -898,6 +898,105 @@ def test_get_worker_status_recent_attempts_separates_retries(client, state):
     assert all(a["taskId"] == task_id.to_wire() for a in attempts)
 
 
+def test_get_worker_status_recent_attempts_carry_attempt_uid(client, state, job_request):
+    """GetWorkerStatus per-attempt rows surface the controller-minted
+    attempt_uid (the operator-visible UID-routing rollout signal).
+
+    Covers ``_attempts_for_worker``: the projection reads ``attempt_uid``
+    from ``ATTEMPT_COLS`` and stamps it onto each ``TaskAttempt`` proto. The
+    UID is minted by ``insert_attempt`` when the attempt row is placed, so it
+    must be a non-empty 16-hex-char string on every attempt.
+    """
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    job_id = submit_job(state, "uid-worker-job", job_request)
+    task_id = job_id.task(0)
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._db.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
+        )
+
+    # The minted UID lives on the attempt row; read it directly to compare.
+    with state._db.read_snapshot() as tx:
+        db_uid = tx.execute(
+            select(task_attempts_table.c.attempt_uid).where(
+                task_attempts_table.c.task_id == task_id,
+                task_attempts_table.c.attempt_id == 0,
+            )
+        ).scalar_one()
+    assert len(db_uid) == 16 and all(c in "0123456789abcdef" for c in db_uid)
+
+    resp = rpc_post(client, "GetWorkerStatus", {"id": "w1"})
+    attempts = resp.get("recentAttempts", [])
+    assert len(attempts) == 1
+    attempt = attempts[0]["attempt"]
+    assert attempt.get("attemptUid") == db_uid
+
+
+def test_get_task_status_attempts_carry_attempt_uid(client, state, job_request):
+    """GetTaskStatus attempts surface attempt_uid via ``task_to_proto``.
+
+    Each retry mints its own UID, so a task with two attempts yields two
+    ``TaskAttempt`` protos with distinct, non-empty UIDs matching the rows.
+    """
+    wid = register_worker(state, "w1", "h1:8080", make_worker_metadata())
+    request = controller_pb2.Controller.LaunchJobRequest(
+        name=JobName.root("test-user", "uid-task-job").to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=2000, memory_bytes=4 * 1024**3),
+        environment=job_pb2.EnvironmentConfig(),
+        replicas=1,
+        max_retries_preemption=2,
+    )
+    job_id = submit_job(state, "uid-task-job", request)
+    task_id = job_id.task(0)
+
+    # Attempt 0: placed then WORKER_FAILED so it retries to a fresh attempt.
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._db.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=0, new_state=job_pb2.TASK_STATE_WORKER_FAILED)],
+            ),
+        )
+    # Attempt 1: re-placed and RUNNING.
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+    with state._db.transaction() as cur:
+        state.apply_task_updates(
+            cur,
+            HeartbeatApplyRequest(
+                worker_id=wid,
+                updates=[TaskUpdate(task_id=task_id, attempt_id=1, new_state=job_pb2.TASK_STATE_RUNNING)],
+            ),
+        )
+
+    with state._db.read_snapshot() as tx:
+        db_uids = dict(
+            tx.execute(
+                select(task_attempts_table.c.attempt_id, task_attempts_table.c.attempt_uid).where(
+                    task_attempts_table.c.task_id == task_id
+                )
+            ).all()
+        )
+    assert set(db_uids) == {0, 1}
+    assert db_uids[0] != db_uids[1]
+
+    resp = rpc_post(client, "GetTaskStatus", {"taskId": task_id.to_wire()})
+    attempts = resp.get("task", resp).get("attempts", [])
+    assert len(attempts) == 2
+    proto_uids = {a["attemptId"]: a.get("attemptUid") for a in attempts}
+    assert proto_uids == db_uids
+
+
 def test_get_worker_status_by_worker_id(client, state):
     """GetWorkerStatus looks up purely by worker ID — no autoscaler cross-referencing."""
     register_worker(state, "w1", "10.0.0.5:8080", make_worker_metadata())

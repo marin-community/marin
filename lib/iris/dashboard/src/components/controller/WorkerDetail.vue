@@ -168,6 +168,7 @@ const diskFreePercent = computed(() => {
 const taskColumns: Column[] = [
   { key: 'taskId', label: 'Task ID', mono: true },
   { key: 'attempt', label: 'Attempt', align: 'right' },
+  { key: 'uid', label: 'UID', mono: true },
   { key: 'state', label: 'State' },
   { key: 'duration', label: 'Duration', align: 'right' },
 ]
@@ -420,6 +421,11 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             </template>
             <template #cell-attempt="{ row }">
               <span class="font-mono text-xs">{{ (row as WorkerTaskAttempt).attempt?.attemptId ?? '-' }}</span>
+            </template>
+            <template #cell-uid="{ row }">
+              <span class="font-mono text-xs text-text-muted">
+                {{ (row as WorkerTaskAttempt).attempt?.attemptUid?.slice(0, 8) ?? '-' }}
+              </span>
             </template>
             <template #cell-state="{ row }">
               <StatusBadge :status="(row as WorkerTaskAttempt).attempt?.state ?? 0" size="sm" />

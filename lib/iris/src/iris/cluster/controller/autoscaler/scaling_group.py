@@ -131,6 +131,15 @@ class SliceState:
     quiet_since: Timestamp | None = None
     lifecycle: SliceLifecycleState = SliceLifecycleState.BOOTING
     worker_ids: list[str] = field(default_factory=list)
+    # worker_id -> reachable http://host:port URL. Populated at READY transition
+    # from the slice handle's worker info. Empty after a controller restart for
+    # already-READY slices — the health probe lazy-fetches via
+    # handle.describe() in that case. Memory-only.
+    worker_urls: dict[str, str] = field(default_factory=dict)
+    # worker_id -> consecutive /health probe failures since the last
+    # success. Reset on a healthy response; once any worker crosses
+    # PING_FAILURE_THRESHOLD the slice is terminated. Memory-only.
+    ping_failures: dict[str, int] = field(default_factory=dict)
     error_message: str = ""
 
 
@@ -542,15 +551,29 @@ class ScalingGroup:
         with self._slices_lock:
             self._pending_scale_ups = max(0, self._pending_scale_ups - 1)
 
-    def mark_slice_ready(self, slice_id: str, worker_ids: list[str], timestamp: Timestamp | None = None) -> None:
+    def mark_slice_ready(
+        self,
+        slice_id: str,
+        worker_ids: list[str],
+        worker_urls: dict[str, str] | None = None,
+        timestamp: Timestamp | None = None,
+    ) -> None:
         """Mark a slice READY with its worker IDs. ``quiet_since`` is left None so the next
-        autoscaler tick decides idle/active afresh."""
+        autoscaler tick decides idle/active afresh.
+
+        ``worker_urls`` (worker_id -> http://host:port URL) seeds the slice
+        health probe so it doesn't need to call ``handle.describe()`` on the
+        first tick. Optional: tests that don't exercise the probe path can omit
+        it, and the probe will lazy-fetch from the handle.
+        """
         del timestamp
         with self._slices_lock:
             state = self._slices.get(slice_id)
             if state is not None:
                 state.lifecycle = SliceLifecycleState.READY
                 state.worker_ids = worker_ids
+                state.worker_urls = dict(worker_urls or {})
+                state.ping_failures = {}
                 state.quiet_since = None
         if state is not None:
             self._db_upsert_slice(slice_id, state)
@@ -716,6 +739,45 @@ class ScalingGroup:
         """Count of slices where all VMs are ready."""
         with self._slices_lock:
             return sum(1 for s in self._slices.values() if s.lifecycle == SliceLifecycleState.READY)
+
+    def ready_slice_probe_targets(self) -> list[tuple[str, SliceHandle, dict[str, str]]]:
+        """Snapshot READY slices for the health probe.
+
+        Returns ``(slice_id, handle, worker_urls)`` tuples, where ``worker_urls``
+        is a copy. URLs may be empty (e.g. on a controller restart for a
+        checkpointed READY slice) — callers should lazy-fetch via
+        ``handle.describe()`` and publish back via :meth:`set_worker_urls`.
+        """
+        with self._slices_lock:
+            return [
+                (slice_id, state.handle, dict(state.worker_urls))
+                for slice_id, state in self._slices.items()
+                if state.lifecycle == SliceLifecycleState.READY
+            ]
+
+    def set_worker_urls(self, slice_id: str, worker_urls: dict[str, str]) -> None:
+        """Publish freshly-resolved worker URLs (typically from handle.describe()) back to state."""
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is not None:
+                state.worker_urls = dict(worker_urls)
+
+    def record_health_probe_result(self, slice_id: str, worker_id: str, healthy: bool) -> int:
+        """Update the per-worker ping_failures counter and return the new count.
+
+        Returns 0 on success (counter reset) and the incremented count on
+        failure. A counter that reaches PING_FAILURE_THRESHOLD signals the
+        slice should be terminated (the runtime owns that decision).
+        """
+        with self._slices_lock:
+            state = self._slices.get(slice_id)
+            if state is None:
+                return 0
+            if healthy:
+                state.ping_failures.pop(worker_id, None)
+                return 0
+            state.ping_failures[worker_id] = state.ping_failures.get(worker_id, 0) + 1
+            return state.ping_failures[worker_id]
 
     def get_slice(self, slice_id: str) -> SliceHandle | None:
         """Get a specific slice handle by ID."""

@@ -677,6 +677,8 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
         if config.attempt_id is not None:
             cmd.extend(["--label", f"iris.attempt_id={config.attempt_id}"])
+        if config.attempt_uid:
+            cmd.extend(["--label", f"iris.attempt_uid={config.attempt_uid}"])
         if config.worker_id:
             cmd.extend(["--label", f"iris.worker_id={config.worker_id}"])
         # Phase label: used during adoption to distinguish adoptable run
@@ -1045,6 +1047,7 @@ class DockerRuntime:
                     container_id=info["Id"],
                     task_id=task_id,
                     attempt_id=int(attempt_id_str),
+                    attempt_uid=labels.get("iris.attempt_uid", ""),
                     job_id=labels.get("iris.job_id", ""),
                     worker_id=labels.get("iris.worker_id", ""),
                     phase=ExecutionStage(labels.get("iris.phase", "run")),

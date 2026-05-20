@@ -3451,6 +3451,37 @@ def test_dispatch_propagates_task_image(state):
     assert template.task_image == "custom/swetrace:dev"
 
 
+def test_run_request_template_does_not_leak_workdir_files_across_jobs(state):
+    """Two jobs with identical entrypoint_json must get independent workdir_files.
+
+    proto_from_json caches parsed protos by JSON string; two jobs with the same
+    serialized RuntimeEntrypoint (same setup_commands + run_command) share the
+    cached instance. Mutating the cached instance to attach per-job
+    workdir_files would leak files from one job's template into another's.
+    Regression test for the cached-proto mutation bug.
+    """
+    register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    # Two jobs with identical entrypoint (so the cache key collides) but
+    # different inline workdir files.
+    req_a = make_job_request("job-a")
+    req_a.entrypoint.workdir_files["a.txt"] = b"A"
+    req_b = make_job_request("job-b")
+    req_b.entrypoint.workdir_files["b.txt"] = b"B"
+
+    tasks_a = submit_job(state, "job-a", req_a)
+    tasks_b = submit_job(state, "job-b", req_b)
+
+    with state._db.read_snapshot() as snap:
+        template_a = state.run_request_template(snap, tasks_a[0].job_id)
+        template_b = state.run_request_template(snap, tasks_b[0].job_id)
+
+    assert template_a is not None
+    assert template_b is not None
+    assert dict(template_a.entrypoint.workdir_files) == {"a.txt": b"A"}
+    assert dict(template_b.entrypoint.workdir_files) == {"b.txt": b"B"}
+
+
 def test_prune_old_data_short_circuits_when_nothing_prunable(state):
     """prune_old_data skips the write lock when a read_snapshot shows nothing to prune."""
     wid = register_worker(state, "w1", "host:8080", make_worker_metadata())
