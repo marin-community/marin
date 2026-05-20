@@ -24,7 +24,7 @@ ctx.execute(pipeline)
 **Dataset Creation:**
 - `Dataset.from_files(path, pattern)` - glob files
 - `Dataset.from_list(items)` - explicit list
-- `Dataset.from_iterables(iters)` - explicit iterable
+- `Dataset.from_iterable(iters)` - explicit iterable
 - `Dataset.from_query(ctx, query)` - results of a [DataFusion](https://datafusion.apache.org/) SQL query.
 
 **Loading Files**
