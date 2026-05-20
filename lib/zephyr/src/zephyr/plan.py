@@ -20,7 +20,6 @@ from itertools import groupby, islice
 from typing import Any, Protocol
 
 import msgspec
-import pyarrow as pa
 import xxhash
 from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
@@ -46,7 +45,7 @@ from zephyr.dataset import (
     WriteOp,
     resolve_glob,
 )
-from zephyr.expr import Expr
+from zephyr.expr import Expr, referenced_columns
 from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
 from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
 
@@ -195,30 +194,19 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
-def _load_file_batch_gen(stream: Iterator, *, include_file_paths: str | None = None) -> Iterator:
+def _load_file_batch_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            for batch in load_file_batch(spec):
-                if include_file_paths is not None:
-                    batch = batch.append_column(
-                        include_file_paths,
-                        pa.array([spec.path] * len(batch), type=pa.string()),
-                    )
-                yield batch
+            yield from load_file_batch(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
 
 
-def _load_file_gen(stream: Iterator, *, include_file_paths: str | None = None) -> Iterator:
+def _load_file_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            if include_file_paths is not None:
-                for record in load_file(spec):
-                    record[include_file_paths] = spec.path
-                    yield record
-            else:
-                yield from load_file(spec)
+            yield from load_file(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
@@ -239,9 +227,13 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
         for op in operations:
             if isinstance(op, LoadFileOp):
                 if op.batch_mode:
-                    stream = _load_file_batch_gen(stream, include_file_paths=op.include_file_paths)
+                    stream = _load_file_batch_gen(
+                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
+                    )
                 else:
-                    stream = _load_file_gen(stream, include_file_paths=op.include_file_paths)
+                    stream = _load_file_gen(
+                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
+                    )
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):
@@ -520,6 +512,11 @@ def _compute_file_pushdown(
 
     for i, op in enumerate(operations):
         if isinstance(op, FilterOp) and op.expr is not None and filter_expr is None:
+            if load_op.include_file_paths and load_op.file_path_column in referenced_columns(op.expr):
+                # The filter references the injected file path column, which doesn't
+                # exist in the source files. Stop pushdown so the filter runs normally
+                # in the pipeline after the column has been injected.
+                break
             filter_expr = op.expr
             ops_to_skip.add(i)
         elif isinstance(op, SelectOp) and select_columns is None:
@@ -536,15 +533,16 @@ def _compute_file_pushdown(
             break
 
     # Create InputFileSpecs with final columns/filter.
-    # When max_shard_bytes is set, parquet files are split at row-group boundaries
-    # into multiple SourceItems, each covering a sub-range of rows.
+    # When approx_shard_bytes is set, parquet files are split at row-group boundaries
+    # into multiple SourceItems. Splits are best-effort: a row group is never divided,
+    # so a shard can exceed approx_shard_bytes when a single row group is larger.
     source_items: list[SourceItem] = []
     shard_idx = 0
     for entry in files:
         path = entry.path
         is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
-        if load_op.max_shard_bytes is not None and is_parquet:
-            for row_start, row_end in compute_parquet_splits(path, load_op.max_shard_bytes):
+        if load_op.approx_shard_bytes is not None and is_parquet:
+            for row_start, row_end in compute_parquet_splits(path, load_op.approx_shard_bytes):
                 source_items.append(
                     SourceItem(
                         shard_idx=shard_idx,

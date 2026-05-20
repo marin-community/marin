@@ -14,6 +14,7 @@ from zephyr import Dataset, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, GlobSource, MapOp, WindowOp, resolve_glob
 from zephyr.execution import ZephyrContext
+from zephyr.readers import DEFAULT_FILE_PATH_COLUMN
 from zephyr.writers import write_parquet_file
 
 
@@ -1425,7 +1426,7 @@ def test_sorted_merge_join_after_group_by_integration(integration_ctx):
 
 
 def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
-    """Dataset.load_parquet_batch yields pa.RecordBatch objects."""
+    """load_parquet(batch_mode=True) yields pa.RecordBatch objects."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -1433,7 +1434,7 @@ def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
     records = [{"id": i, "val": float(i)} for i in range(6)]
     pq.write_table(pa.Table.from_pylist(records), path, row_group_size=2)
 
-    ds = Dataset.from_list([path]).load_parquet_batch()
+    ds = Dataset.from_list([path]).load_parquet(batch_mode=True)
     results = zephyr_ctx.execute(ds).results
 
     assert all(isinstance(b, pa.RecordBatch) for b in results)
@@ -1442,7 +1443,7 @@ def test_dataset_load_parquet_batch(tmp_path, zephyr_ctx):
 
 
 def test_dataset_load_parquet_batch_include_file_paths(tmp_path, zephyr_ctx):
-    """include_file_paths adds a string column to each RecordBatch via PyArrow, not per-row dicts."""
+    """load_parquet(batch_mode=True) with include_file_paths adds a string column to each RecordBatch."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -1451,7 +1452,9 @@ def test_dataset_load_parquet_batch_include_file_paths(tmp_path, zephyr_ctx):
     pq.write_table(pa.Table.from_pylist([{"id": 1}, {"id": 2}]), file_a)
     pq.write_table(pa.Table.from_pylist([{"id": 3}]), file_b)
 
-    ds = Dataset.from_list([file_a, file_b]).load_parquet_batch(include_file_paths="source")
+    ds = Dataset.from_list([file_a, file_b]).load_parquet(
+        include_file_paths=True, file_path_column="source", batch_mode=True
+    )
     results = zephyr_ctx.execute(ds).results
 
     assert all(isinstance(b, pa.RecordBatch) for b in results)
@@ -1475,7 +1478,7 @@ def test_include_file_paths_parquet(tmp_path, zephyr_ctx):
     pq.write_table(pa.Table.from_pylist([{"id": 1}, {"id": 2}]), file_a)
     pq.write_table(pa.Table.from_pylist([{"id": 3}]), file_b)
 
-    ds = Dataset.from_list([file_a, file_b]).load_parquet(include_file_paths="source")
+    ds = Dataset.from_list([file_a, file_b]).load_parquet(include_file_paths=True, file_path_column="source")
     results = zephyr_ctx.execute(ds).results
 
     assert len(results) == 3
@@ -1494,7 +1497,7 @@ def test_include_file_paths_jsonl(tmp_path, zephyr_ctx):
     Path(file_a).write_text(json.dumps({"id": 1}) + "\n" + json.dumps({"id": 2}) + "\n")
     Path(file_b).write_text(json.dumps({"id": 3}) + "\n")
 
-    ds = Dataset.from_list([file_a, file_b]).load_jsonl(include_file_paths="source")
+    ds = Dataset.from_list([file_a, file_b]).load_jsonl(include_file_paths=True, file_path_column="source")
     results = zephyr_ctx.execute(ds).results
 
     assert len(results) == 3
@@ -1502,3 +1505,37 @@ def test_include_file_paths_jsonl(tmp_path, zephyr_ctx):
     assert sources_by_id[1] == file_a
     assert sources_by_id[2] == file_a
     assert sources_by_id[3] == file_b
+
+
+def test_include_file_paths_select_excludes_path_column_raises(tmp_path, zephyr_ctx):
+    """select() that omits the file path column when include_file_paths=True must raise.
+
+    The planner pushes down the SelectOp, removing it from the pipeline. The reader
+    then detects that the column filter doesn't include the injected column and raises
+    rather than silently leaking it into the output.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = str(tmp_path / "data.parquet")
+    pq.write_table(pa.Table.from_pylist([{"id": 1}]), path)
+
+    ds = Dataset.from_list([path]).load_parquet(include_file_paths=True).select("id")
+    with pytest.raises(RuntimeError, match=f"Column filter must include file path column '{DEFAULT_FILE_PATH_COLUMN}'"):
+        zephyr_ctx.execute(ds)
+
+
+def test_include_file_paths_select_includes_path_column(tmp_path, zephyr_ctx):
+    """select() that explicitly includes the file path column works correctly."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = str(tmp_path / "data.parquet")
+    pq.write_table(pa.Table.from_pylist([{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]), path)
+
+    ds = Dataset.from_list([path]).load_parquet(include_file_paths=True).select("id", DEFAULT_FILE_PATH_COLUMN)
+    results = zephyr_ctx.execute(ds).results
+
+    assert len(results) == 2
+    assert all(set(r.keys()) == {"id", DEFAULT_FILE_PATH_COLUMN} for r in results)
+    assert all(r[DEFAULT_FILE_PATH_COLUMN] == path for r in results)

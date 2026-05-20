@@ -183,16 +183,16 @@ def test_iter_parquet_row_groups_predicate_columns_dropped(tmp_path):
 
 
 def test_compute_parquet_splits_single(tmp_path):
-    """File smaller than max_shard_bytes returns one split covering all rows."""
+    """File smaller than approx_shard_bytes returns one split covering all rows."""
     path = str(tmp_path / "data.parquet")
     _write_test_parquet(path, RECORDS, row_group_size=5)
 
-    splits = compute_parquet_splits(path, max_shard_bytes=256 * 1024 * 1024)
+    splits = compute_parquet_splits(path, approx_shard_bytes=256 * 1024 * 1024)
     assert splits == [(0, len(RECORDS))]
 
 
 def test_compute_parquet_splits_multiple(tmp_path):
-    """File whose row groups exceed max_shard_bytes returns multiple splits."""
+    """File whose row groups exceed approx_shard_bytes returns multiple splits."""
     path = str(tmp_path / "data.parquet")
     # Write 10 row groups of 1 row each with a large-ish payload so we can
     # force splits at a small byte threshold.
@@ -205,7 +205,7 @@ def test_compute_parquet_splits_multiple(tmp_path):
     # Threshold just above one row group forces a split after every row group.
     threshold = single_rg_bytes + 1
 
-    splits = compute_parquet_splits(path, max_shard_bytes=threshold)
+    splits = compute_parquet_splits(path, approx_shard_bytes=threshold)
     assert len(splits) > 1
     # Splits must be contiguous and cover all rows.
     assert splits[0][0] == 0
@@ -222,7 +222,7 @@ def test_compute_parquet_splits_row_ranges_are_readable(tmp_path):
 
     pf = pq.ParquetFile(path)
     single_rg_bytes = pf.metadata.row_group(0).total_byte_size
-    splits = compute_parquet_splits(path, max_shard_bytes=single_rg_bytes * 3 + 1)
+    splits = compute_parquet_splits(path, approx_shard_bytes=single_rg_bytes * 3 + 1)
 
     all_ids = []
     for row_start, row_end in splits:

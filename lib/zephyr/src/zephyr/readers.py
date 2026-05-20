@@ -13,7 +13,7 @@ import logging
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import fsspec
@@ -28,6 +28,8 @@ from zephyr import counters
 from zephyr.expr import Expr, referenced_columns, to_pyarrow_expr
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_FILE_PATH_COLUMN = "__file_path"
 
 
 # ---------------------------------------------------------------------------
@@ -213,16 +215,18 @@ def open_file(file_path: str, mode: str = "rb"):
         yield f
 
 
-def compute_parquet_splits(path: str, max_shard_bytes: int) -> list[tuple[int, int]]:
+def compute_parquet_splits(path: str, approx_shard_bytes: int) -> list[tuple[int, int]]:
     """Compute row-range split points from Parquet footer metadata.
 
-    Reads only the file footer — no data is transferred. Returns a list of
-    (row_start, row_end) pairs aligned to row-group boundaries. Files whose
-    total compressed size is below max_shard_bytes return a single span.
+    Reads only the file footer — no data is transferred. Splits are aligned to
+    row-group boundaries, so actual shard sizes may exceed approx_shard_bytes when
+    a single row group is larger than the target. Files whose total compressed size
+    is below approx_shard_bytes return a single span.
 
     Args:
         path: Path to the Parquet file (local or remote via fsspec).
-        max_shard_bytes: Target split size in bytes.
+        approx_shard_bytes: Approximate target split size in bytes. Best-effort:
+            a row group will never be split, so individual shards may be larger.
 
     Returns:
         List of (row_start, row_end) tuples where row_end is exclusive.
@@ -237,7 +241,7 @@ def compute_parquet_splits(path: str, max_shard_bytes: int) -> list[tuple[int, i
         rg = metadata.row_group(i)
         rg_bytes = rg.total_byte_size
 
-        if split_bytes > 0 and split_bytes + rg_bytes > max_shard_bytes:
+        if split_bytes > 0 and split_bytes + rg_bytes > approx_shard_bytes:
             splits.append((split_start, cumulative_rows))
             split_start = cumulative_rows
             split_bytes = 0
@@ -442,18 +446,26 @@ SUPPORTED_EXTENSIONS = tuple(
 )
 
 
-def load_file(source: str | InputFileSpec) -> Iterator[dict]:
+def load_file(
+    source: str | InputFileSpec,
+    include_file_paths: bool = False,
+    file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+) -> Iterator[dict]:
     """Load records from file, auto-detecting JSONL, Parquet, or Vortex format.
 
     Args:
         source: Path to file or InputFileSpec containing the path, columns,
             row range, and filter expression.
+        include_file_paths: If True, inject the source file path into each record
+            under file_path_column.
+        file_path_column: Key to add when include_file_paths is True.
 
     Yields:
         Parsed records as dictionaries
 
     Raises:
         ValueError: If file extension is not supported
+        RuntimeError: If file_path_column already exists in a record.
 
     Example:
         >>> ds = (Dataset
@@ -470,15 +482,36 @@ def load_file(source: str | InputFileSpec) -> Iterator[dict]:
     if not spec.path.endswith(SUPPORTED_EXTENSIONS):
         raise ValueError(f"Unsupported extension: {spec.path}.")
 
+    if include_file_paths and spec.columns is not None:
+        if file_path_column not in spec.columns:
+            raise RuntimeError(f"Column filter must include file path column '{file_path_column}'.")
+        # Strip the injected column from the reader projection — it isn't in the file.
+        reader_columns = [c for c in spec.columns if c != file_path_column]
+        spec = replace(spec, columns=reader_columns or None)
+
     if spec.path.endswith(".parquet"):
-        yield from load_parquet(spec)
+        records = load_parquet(spec)
     elif spec.path.endswith(".vortex"):
-        yield from load_vortex(spec)
+        records = load_vortex(spec)
     else:
-        yield from load_jsonl(spec)
+        records = load_jsonl(spec)
+
+    if not include_file_paths:
+        yield from records
+        return
+
+    for record in records:
+        if file_path_column in record:
+            raise RuntimeError(f"Cannot add file path column '{file_path_column}': key already exists in record")
+        record[file_path_column] = spec.path
+        yield record
 
 
-def load_file_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
+def load_file_batch(
+    source: str | InputFileSpec,
+    include_file_paths: bool = False,
+    file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+) -> Iterator[pa.RecordBatch]:
     """Load a Parquet file and yield ``pa.RecordBatch`` objects.
 
     Only Parquet files are supported. Raises ``RuntimeError`` for any other
@@ -487,17 +520,37 @@ def load_file_batch(source: str | InputFileSpec) -> Iterator[pa.RecordBatch]:
     Args:
         source: Path to Parquet file or InputFileSpec containing the path, columns,
             row range, and filter expression.
+        include_file_paths: If True, append a string column named file_path_column
+            containing the source file path to each batch.
+        file_path_column: Name of the column to add when include_file_paths is True.
 
     Yields:
         One ``pa.RecordBatch`` per qualifying row group.
 
     Raises:
-        RuntimeError: If the file is not a Parquet file.
+        RuntimeError: If the file is not a Parquet file, or if file_path_column
+            already exists in the batch schema.
     """
     spec = _as_spec(source)
     if not spec.path.endswith(".parquet"):
         raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
-    yield from load_parquet_batch(spec)
+    if include_file_paths and spec.columns is not None:
+        if file_path_column not in spec.columns:
+            raise RuntimeError(f"Column filter does not include the file path column '{file_path_column}'.")
+        # Strip the injected column from the parquet projection — it isn't in the file.
+        parquet_columns = [c for c in spec.columns if c != file_path_column]
+        spec = replace(spec, columns=parquet_columns or None)
+    for batch in load_parquet_batch(spec):
+        if include_file_paths:
+            if file_path_column in batch.schema.names:
+                raise RuntimeError(
+                    f"Cannot add file path column '{file_path_column}': column already exists in batch schema"
+                )
+            batch = batch.append_column(
+                file_path_column,
+                pa.array([spec.path] * len(batch), type=pa.string()),
+            )
+        yield batch
 
 
 def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Iterator[dict]:

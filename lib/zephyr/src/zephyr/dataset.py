@@ -14,10 +14,11 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
 from braceexpand import braceexpand
+from pyarrow import RecordBatch
 from rigging.filesystem import url_to_fs
 
 from zephyr.expr import Expr
-from zephyr.readers import InputFileSpec
+from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
 
@@ -238,8 +239,9 @@ class LoadFileOp:
 
     format: Literal["auto", "parquet", "jsonl", "vortex"] = "auto"
     columns: list[str] | None = None
-    max_shard_bytes: int | None = None
-    include_file_paths: str | None = None
+    approx_shard_bytes: int | None = None
+    include_file_paths: bool = False
+    file_path_column: str = DEFAULT_FILE_PATH_COLUMN
     batch_mode: bool = False
 
     def __repr__(self):
@@ -570,17 +572,20 @@ class Dataset(Generic[T]):
     def load_file(
         self,
         columns: list[str] | None = None,
-        max_shard_bytes: int | None = None,
-        include_file_paths: str | None = None,
+        approx_shard_bytes: int | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
     ) -> Dataset[dict]:
         """Load records from file sources, auto-detecting format.
 
         Args:
             columns: Optional column projection (for parquet files)
-            max_shard_bytes: If set, split parquet files into chunks of at most this
-                many bytes (aligned to row-group boundaries) for finer parallelism.
-            include_file_paths: If set, add a column with this name containing the
-                source file path for each record.
+            approx_shard_bytes: If set, split parquet files into approximately this many
+                bytes per shard, aligned to row-group boundaries. Best-effort: a single
+                row group will never be split, so shards may exceed this size.
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
 
         Returns:
             Dataset yielding records as dictionaries
@@ -594,69 +599,99 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns, max_shard_bytes, include_file_paths)])
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("auto", columns, approx_shard_bytes, include_file_paths, file_path_column)],
+        )
+
+    @overload
+    def load_parquet(
+        self,
+        columns: list[str] | None = ...,
+        approx_shard_bytes: int | None = ...,
+        include_file_paths: bool = ...,
+        file_path_column: str = ...,
+        *,
+        batch_mode: Literal[False] = ...,
+    ) -> Dataset[dict]: ...
+
+    @overload
+    def load_parquet(
+        self,
+        columns: list[str] | None = ...,
+        approx_shard_bytes: int | None = ...,
+        include_file_paths: bool = ...,
+        file_path_column: str = ...,
+        *,
+        batch_mode: Literal[True],
+    ) -> Dataset[RecordBatch]: ...
 
     def load_parquet(
         self,
         columns: list[str] | None = None,
-        max_shard_bytes: int | None = None,
-        include_file_paths: str | None = None,
-    ) -> Dataset[dict]:
+        approx_shard_bytes: int | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+        *,
+        batch_mode: bool = False,
+    ) -> Dataset[dict] | Dataset[RecordBatch]:
         """Load records from parquet files.
 
         Args:
             columns: Optional column projection.
-            max_shard_bytes: If set, split each file into chunks of at most this many
-                bytes (aligned to row-group boundaries) for finer parallelism.
-            include_file_paths: If set, add a column with this name containing the
-                source file path for each record.
-        """
-        return Dataset(
-            self.source, [*self.operations, LoadFileOp("parquet", columns, max_shard_bytes, include_file_paths)]
-        )
-
-    def load_parquet_batch(
-        self,
-        columns: list[str] | None = None,
-        max_shard_bytes: int | None = None,
-        include_file_paths: str | None = None,
-    ) -> Dataset:
-        """Load records from parquet files as ``pa.RecordBatch`` objects.
-
-        Args:
-            columns: Optional column projection.
-            max_shard_bytes: If set, split each file into chunks of at most this many
-                bytes (aligned to row-group boundaries) for finer parallelism.
-            include_file_paths: If set, add a column with this name containing the
-                source file path for each batch.
+            approx_shard_bytes: If set, split each file into approximately this many
+                bytes per shard, aligned to row-group boundaries. Best-effort: a single
+                row group will never be split, so shards may exceed this size.
+            include_file_paths: If True, add a column containing the source file path
+                for each record or batch.
+            file_path_column: Name of the column to add when include_file_paths is True.
+            batch_mode: If True, yield ``pa.RecordBatch`` objects instead of dicts.
         """
         op = LoadFileOp(
             format="parquet",
             columns=columns,
-            max_shard_bytes=max_shard_bytes,
+            approx_shard_bytes=approx_shard_bytes,
             include_file_paths=include_file_paths,
-            batch_mode=True,
+            file_path_column=file_path_column,
+            batch_mode=batch_mode,
         )
         return Dataset(self.source, [*self.operations, op])
 
-    def load_jsonl(self, include_file_paths: str | None = None) -> Dataset[dict]:
+    def load_jsonl(
+        self,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+    ) -> Dataset[dict]:
         """Load records from JSONL files.
 
         Args:
-            include_file_paths: If set, add a column with this name containing the
-                source file path for each record.
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
         """
-        return Dataset(self.source, [*self.operations, LoadFileOp("jsonl", None, None, include_file_paths)])
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("jsonl", None, None, include_file_paths, file_path_column)],
+        )
 
-    def load_vortex(self, columns: list[str] | None = None, include_file_paths: str | None = None) -> Dataset[dict]:
+    def load_vortex(
+        self,
+        columns: list[str] | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+    ) -> Dataset[dict]:
         """Load records from Vortex files.
 
         Args:
             columns: Optional column projection.
-            include_file_paths: If set, add a column with this name containing the
-                source file path for each record.
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
         """
-        return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns, None, include_file_paths)])
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("vortex", columns, None, include_file_paths, file_path_column)],
+        )
 
     def map_shard(
         self,
