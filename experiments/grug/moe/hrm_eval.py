@@ -39,7 +39,7 @@ import jax.numpy as jnp
 import numpy as np
 from fray.cluster import ResourceConfig
 from levanter.checkpoint import load_checkpoint
-from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.execution.remote import remote
 
 from experiments.evals.task_configs import EvalTaskConfig
@@ -60,8 +60,14 @@ class HrmEvalConfig:
     model: GrugModelConfig
     """Architecture (must match the one trained)."""
 
-    checkpoint_path: str
-    """GCS path to a Grug checkpoint directory (e.g. ``gs://.../checkpoints/step-9537``)."""
+    checkpoint_path: str | InputName
+    """GCS path to a Grug checkpoint directory (e.g. ``gs://.../checkpoints/step-9537``).
+
+    When this is an ``InputName`` pointing at the training step's checkpoint
+    subdirectory, the executor automatically:
+      (a) blocks this step until the training step succeeds, and
+      (b) resolves the InputName to the concrete GCS path before ``fn`` runs.
+    """
 
     tokenizer_name: str
     """HF tokenizer id used during training (e.g. ``meta-llama/Meta-Llama-3.1-8B``)."""
@@ -378,30 +384,42 @@ def hrm_eval_step(
     *,
     name: str,
     model: GrugModelConfig,
-    checkpoint_path: str,
+    checkpoint_path: str | InputName,
     tokenizer_name: str,
     tasks: Sequence[EvalTaskConfig] = HRM_TEXT_BENCHMARKS_DEFAULT,
     batch_size: int = 16,
     max_examples: int | None = None,
 ) -> ExecutorStep:
-    """Post-training HRM-Text eval step. Depends on the train step's checkpoint."""
+    """Post-training HRM-Text eval step.
+
+    When ``checkpoint_path`` is an ``InputName`` produced by ``train_step.cd(...)``,
+    the executor discovers the train step as a dependency (via ``walk_config``
+    descending into the dataclass) and blocks this step until train succeeds.
+    The ``InputName`` is also resolved to a concrete GCS path before ``fn`` runs.
+
+    Individual fields are wrapped with ``versioned()`` to affect the version
+    hash — the full ``HrmEvalConfig`` is **not** wrapped because that would
+    stop the walker descending into it, hiding the ``InputName`` dependency.
+    """
     config = HrmEvalConfig(
-        model=model,
+        model=versioned(model),
         checkpoint_path=checkpoint_path,
-        tokenizer_name=tokenizer_name,
+        tokenizer_name=versioned(tokenizer_name),
         output_path=this_output_path(),
-        tasks=tuple(tasks),
-        batch_size=batch_size,
-        max_examples=max_examples,
+        tasks=versioned(tuple(tasks)),
+        batch_size=versioned(batch_size),
+        max_examples=versioned(max_examples),
     )
     return ExecutorStep(
         name=os.path.join("grug/hrm_repro", name, "eval"),
         fn=remote(
             _run_hrm_eval_local,
             resources=_HRM_EVAL_RESOURCES,
-            pip_dependency_groups=["lm_eval"],
+            # torch_test provides torch for lm_eval's type-annotated APIs;
+            # tpu provides JAX/libtpu for the Grug forward pass.
+            pip_dependency_groups=["lm_eval", "torch_test", "tpu"],
         ),
-        config=versioned(config),
+        config=config,
     )
 
 
