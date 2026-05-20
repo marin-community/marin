@@ -9,7 +9,7 @@ well under an hour. Verifies:
 
 - HF model fetch + GCS staging via :func:`prepare_fasttext_model_step`
 - Co-partitioned attributes parquet writes against datakit-normalized input
-- The datakit ``{id, partition_id, attributes}`` schema downstream consolidate consumes
+- The flat ``{id, high_score}`` output schema downstream consolidate consumes
 - That the staged ``.bin`` is reachable from a Zephyr classify worker in eu-west4
 
 Submit:
@@ -32,7 +32,13 @@ from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
 from rigging.filesystem import marin_temp_bucket  # noqa: E402
 
-from experiments.datakit.fasttext import classify_fasttext_step, prepare_fasttext_model_step  # noqa: E402
+from experiments.datakit.cluster.dolma3_quality.all_sources_quality import (  # noqa: E402
+    MODEL_HF_FILENAME,
+    MODEL_HF_REPO,
+    MODEL_REVISION,
+    classify_dolma3_quality_step,
+)
+from experiments.datakit.fasttext import prepare_fasttext_model_step  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -41,23 +47,10 @@ logger = logging.getLogger(__name__)
 # informative.
 SOURCE_NAME = "nsf_awards"
 
-# Same model + revision as all_sources_quality.py. Smoke and prod share a
-# cache slot, so once the .bin is staged by either path the other reuses it.
-MODEL_HF_REPO = "allenai/dolma3-fasttext-quality-classifier"
-MODEL_HF_FILENAME = "model.bin"
-MODEL_REVISION = "bb89085994fef638ca8dc2ca25169db328e314bb"
-
-K = -1
-THRESHOLD = 0.0
-MAX_TEXT_CHARS = 100_000
-# Binary classifier: collapse output to a single ``attributes.high_score``
-# = ``P(label == "1")``. See all_sources_quality.py for rationale.
-SCORE_TARGET_LABEL = "1"
-
-# Dolma3 quality model.bin is ~4 GiB on disk and ~6-8 GiB resident after
-# fasttext.load_model. 16 GiB worker RAM gives enough headroom for the model
-# plus per-shard parquet I/O buffers; 8 GiB OOMs (observed on the sibling
-# weborganizer-topic smoke run 20260517-184843).
+# Pin worker to eu-west4 for the smoke run; production
+# (all_sources_quality.py) leaves region open since it's already running with
+# MARIN_PREFIX pointed at eu-west4. 16 GiB matches the production cap (8 GiB
+# OOMs on the sibling weborganizer-topic smoke run 20260517-184843).
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", regions=[DATA_REGION])
 
 # Pin to eu-west4 explicitly via source_prefix so the output doesn't drift to a
@@ -82,16 +75,12 @@ def _build_steps() -> list[StepSpec]:
         output_path_prefix=_OUTPUT_PREFIX,
     )
 
-    classify_step = classify_fasttext_step(
+    classify_step = classify_dolma3_quality_step(
         name=f"datakit/classify/quality/{SOURCE_NAME}",
         normalized=source.normalized,
         model_step=model_step,
-        max_text_chars=MAX_TEXT_CHARS,
-        k=K,
-        threshold=THRESHOLD,
-        score_target_label=SCORE_TARGET_LABEL,
-        worker_resources=WORKER_RESOURCES,
         output_path_prefix=_OUTPUT_PREFIX,
+        worker_resources=WORKER_RESOURCES,
     )
 
     return [*source.normalize_steps, model_step, classify_step]

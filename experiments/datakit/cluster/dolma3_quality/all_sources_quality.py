@@ -7,9 +7,8 @@ Applies AllenAI's Dolma3 fasttext quality classifier
 (``allenai/dolma3-fasttext-quality-classifier``) to every normalized source in
 :func:`marin.datakit.sources.all_sources` (minus the standard ``safety_pt/*`` /
 ``climblab-ja`` carve-outs -- see ``_EXCLUDE_PREFIXES``), producing one
-co-partitioned Parquet attributes dataset per source. The output schema is the
-datakit ``{id, partition_id, attributes}`` convention -- see
-:mod:`experiments.datakit.fasttext` for the struct layout.
+co-partitioned Parquet attributes dataset per source. Output records are
+``{id, high_score}`` (binary classifier collapsed via ``score_target_label``).
 
 DAG shape::
 
@@ -18,7 +17,7 @@ DAG shape::
         ▼ prepare_fasttext_model_step  (_model/dolma3-quality_<hash>/)
         │     stages model.bin (~4 GiB) to GCS once
         │
-        ▼ one classify_fasttext_step per Datakit source
+        ▼ one classify_dolma3_quality_step per Datakit source
               (quality/<source>_<hash>/)
               workers read the .bin from in-region GCS, scan the source's
               normalized parquet, and emit co-partitioned attributes.
@@ -40,14 +39,26 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 """
 
 import logging
+from typing import Any
 
 from fray import ResourceConfig
+from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
+from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_glob
+from pydantic import BaseModel
 from rigging.log_setup import configure_logging
+from zephyr import Dataset, ZephyrContext
 
-from experiments.datakit.fasttext import classify_fasttext_step, prepare_fasttext_model_step
+from experiments.datakit.fasttext import (
+    FastTextModel,
+    classify_fasttext,
+    load_with_source,
+    output_schema,
+    prepare_fasttext_model_step,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +73,13 @@ MODEL_HF_FILENAME = "model.bin"
 MODEL_REVISION = "bb89085994fef638ca8dc2ca25169db328e314bb"
 
 # Classifier inference knobs. ``K = -1`` is what fasttext returns the full
-# label distribution at — needed so the classify_fasttext shim can pluck out
+# label distribution at — needed so the score_target_label shim can pluck out
 # ``P(label == "1")``. ``MAX_TEXT_CHARS = 100 KiB`` caps the predict-call cost
 # on pathologically long documents (matches the Dolma3 upstream pipeline).
-# ``SCORE_TARGET_LABEL = "1"`` collapses the output to a single
-# ``attributes.high_score`` field = ``P(high-quality)`` -- the Dolma3
-# fasttext-quality model is binary {0=low, 1=high}, so storing the full label
-# list on every row duplicates 2 strings ~10^10 times for no benefit.
+# ``SCORE_TARGET_LABEL = "1"`` collapses the output to a single ``high_score``
+# field = ``P(high-quality)`` -- the Dolma3 fasttext-quality model is binary
+# {0=low, 1=high}, so storing the full label list on every row duplicates 2
+# strings ~10^10 times for no benefit.
 # All four feed ``hash_attrs`` so changing them invalidates the cache.
 K = -1
 THRESHOLD = 0.0
@@ -110,6 +121,99 @@ _EXCLUDE_PREFIXES: tuple[str, ...] = (
 )
 
 
+class DolmaQualityOutput(BaseModel):
+    """Step artifact for one source's Dolma3 quality classification.
+
+    Output parquets live at ``<output_dir>/data-NNNNN-of-MMMMM.parquet``, each
+    row ``{id, high_score: float64}`` where ``high_score = P(label == "1")``.
+    """
+
+    version: str = "v1"
+    output_dir: str
+    model_path: str
+    counters: dict[str, int]
+
+
+def _run_one_source(
+    *,
+    normalized: NormalizedData,
+    model_path: str,
+    output_path: str,
+    source_name: str,
+    worker_resources: ResourceConfig,
+    max_workers: int,
+) -> DolmaQualityOutput:
+    files = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"{source_name}: no .parquet files under {normalized.main_output_dir}")
+    output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"
+    pipeline = Dataset.from_list(files).flat_map(load_with_source)
+    pipeline = classify_fasttext(
+        pipeline,
+        model_path=model_path,
+        max_text_chars=MAX_TEXT_CHARS,
+        k=K,
+        threshold=THRESHOLD,
+        score_target_label=SCORE_TARGET_LABEL,
+    )
+    pipeline = pipeline.write_parquet(
+        output_pattern,
+        schema=output_schema(SCORE_TARGET_LABEL),
+        skip_existing=True,
+    )
+    ctx = ZephyrContext(
+        name=f"dolma3-quality-{source_name}",
+        resources=worker_resources,
+        max_workers=max_workers,
+    )
+    outcome = ctx.execute(pipeline)
+    return DolmaQualityOutput(
+        output_dir=output_path,
+        model_path=model_path,
+        counters=dict(outcome.counters),
+    )
+
+
+def classify_dolma3_quality_step(
+    *,
+    name: str,
+    normalized: StepSpec,
+    model_step: StepSpec,
+    output_path_prefix: str,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+) -> StepSpec:
+    """StepSpec factory for one source's Dolma3-quality classification.
+
+    ``worker_resources`` and ``max_workers`` are execution policy -- not in
+    ``hash_attrs`` -- so changing them does not invalidate already-classified
+    sources.
+    """
+    hash_attrs: dict[str, Any] = {
+        "max_text_chars": MAX_TEXT_CHARS,
+        "k": K,
+        "threshold": THRESHOLD,
+        "score_target_label": SCORE_TARGET_LABEL,
+    }
+    resources = worker_resources or WORKER_RESOURCES
+    workers = max_workers if max_workers is not None else PER_SOURCE_MAX_WORKERS
+    source_name = name.removeprefix("quality/")
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: _run_one_source(
+            normalized=Artifact.from_path(normalized, NormalizedData),
+            model_path=Artifact.from_path(model_step, FastTextModel).model_path,
+            output_path=output_path,
+            source_name=source_name,
+            worker_resources=resources,
+            max_workers=workers,
+        ),
+        deps=[normalized, model_step],
+        hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
+    )
+
+
 def build_classify_steps() -> list[StepSpec]:
     # Model prep: stage the .bin to GCS exactly once. The artifact's path is
     # then a dep on every per-source classify step, so all 100+ workers read
@@ -127,16 +231,10 @@ def build_classify_steps() -> list[StepSpec]:
         if any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES):
             continue
         classify_steps.append(
-            classify_fasttext_step(
+            classify_dolma3_quality_step(
                 name=f"quality/{name}",
                 normalized=src.normalized,
                 model_step=model_step,
-                max_text_chars=MAX_TEXT_CHARS,
-                k=K,
-                threshold=THRESHOLD,
-                score_target_label=SCORE_TARGET_LABEL,
-                worker_resources=WORKER_RESOURCES,
-                max_workers=PER_SOURCE_MAX_WORKERS,
                 output_path_prefix=_OUTPUT_PREFIX,
             )
         )
