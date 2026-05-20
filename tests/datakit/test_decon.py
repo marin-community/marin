@@ -22,7 +22,7 @@ def flow_backend_ctx():
 
 
 def _write_input_parquet(path: Path, records: list[dict]) -> None:
-    """Write datakit-normalized-shaped Parquet (id, text, partition_id)."""
+    """Write datakit-normalized-shaped Parquet (id, text)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(records), str(path))
 
@@ -43,12 +43,11 @@ def _read_attributes(output_dir: Path) -> dict[str, dict]:
     return rows
 
 
-def _as_source(input_dir: Path, num_partitions: int) -> NormalizedData:
+def _as_source(input_dir: Path) -> NormalizedData:
     """Wrap a flat directory of test Parquet files as a NormalizedData artifact."""
     return NormalizedData(
         main_output_dir=str(input_dir),
         dup_output_dir=str(input_dir / "_dups_unused"),
-        num_partitions=num_partitions,
         counters={},
     )
 
@@ -113,7 +112,7 @@ def fox_corpus(tmp_path: Path):
 def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
     """n=3 with threshold=0.5: verbatim and high-overlap records flagged; low-overlap and unique gated out."""
     attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, stride=0, overlap_threshold=0.5),
@@ -138,7 +137,7 @@ def test_decon_ngram_flags_high_overlap_and_gates_low(fox_corpus):
 def test_decon_exact_paragraph_match(fox_corpus):
     """ngram=None: whole-paragraph match. Verbatim records flagged; near-match gated out (different bytes)."""
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=None,
@@ -159,7 +158,7 @@ def test_decon_exact_paragraph_match(fox_corpus):
 def test_decon_preserves_partition_filenames(fox_corpus):
     """Output partition filenames mirror input filenames 1:1 (co-partitioning invariant)."""
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -174,7 +173,7 @@ def test_decon_preserves_partition_filenames(fox_corpus):
 def test_decon_output_schema(fox_corpus):
     """Output Parquet has exactly {id, partition_id, contaminated, max_overlap, matched_hashes}."""
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -197,7 +196,7 @@ def test_decon_output_schema(fox_corpus):
 def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
     """Build writes a hash → eval_id Parquet sidecar with the expected schema."""
     attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -220,7 +219,7 @@ def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
 def test_decon_matched_hashes_join_recovers_eval_id(fox_corpus):
     """A contaminated record's matched_hashes joined with the sidecar attributes back to its eval."""
     attrs = decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -257,7 +256,7 @@ def test_decon_overlap_threshold_gates(fox_corpus, threshold, expect_high_flagge
     It's flagged at thresholds ≤ 0.89 and gated above; pin the gate behavior across thresholds.
     """
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=fox_corpus["output_dir"],
         ngram=NGramConfig(ngram_length=3, overlap_threshold=threshold),
@@ -280,7 +279,7 @@ def test_decon_empty_input_raises(tmp_path: Path):
 
     with pytest.raises(FileNotFoundError):
         decon_to_parquet(
-            normalized_data=_as_source(input_dir, num_partitions=1),
+            normalized_data=_as_source(input_dir),
             eval_data_sources=str(eval_dir),
             output_path=str(output_dir),
             ngram=NGramConfig(ngram_length=3),
@@ -318,7 +317,7 @@ def test_decon_eval_dir_with_sidecar_files_is_safe(tmp_path: Path):
 
     # Must not raise.
     decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=1),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -353,7 +352,7 @@ def test_decon_fallback_eval_id_uses_full_path_for_uniqueness(tmp_path: Path):
     )
 
     attrs = decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=1),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -371,13 +370,12 @@ def test_decon_fallback_eval_id_uses_full_path_for_uniqueness(tmp_path: Path):
     assert any("/b/" in e for e in eval_ids)
 
 
-def test_decon_v1_input_without_partition_id_column(tmp_path: Path):
-    """Legacy v1 NormalizedData (pre-partition_id) is supported via shard.shard_idx fallback.
+def test_decon_synthesizes_partition_id_from_shard_index(tmp_path: Path):
+    """Decon synthesizes partition_id from shard.shard_idx (sorted-file order).
 
-    Datasets normalized before the v2 partition_id stamp don't carry the column.
-    Decon should still produce co-partitioned output with synthesized partition_id
-    derived from the shard index (matches the input's part-NNNNN-of-MMMMM naming
-    when files are processed in sorted order).
+    Input records carry only id and text; the output's partition_id column is
+    derived at read time from the shard index, matching the input's
+    part-NNNNN-of-MMMMM naming.
     """
     eval_dir = tmp_path / "eval"
     input_dir = tmp_path / "input"
@@ -396,7 +394,7 @@ def test_decon_v1_input_without_partition_id_column(tmp_path: Path):
     )
 
     decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=2),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -438,7 +436,7 @@ def test_decon_short_paragraphs_below_ngram_length_contribute_nothing(tmp_path: 
     )
 
     decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=1),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=NGramConfig(ngram_length=8, overlap_threshold=0.5),
@@ -476,7 +474,7 @@ def _run_decon_one_shot(
     _write_eval_jsonl(eval_dir / "eval.jsonl.gz", eval_records)
     _write_input_parquet(input_dir / "part-00000-of-00001.parquet", input_records)
     decon_to_parquet(
-        normalized_data=_as_source(input_dir, num_partitions=1),
+        normalized_data=_as_source(input_dir),
         eval_data_sources=str(eval_dir),
         output_path=str(output_dir),
         ngram=ngram,
