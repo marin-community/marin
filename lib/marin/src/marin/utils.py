@@ -4,6 +4,7 @@
 import logging
 import os
 import subprocess
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
@@ -18,8 +19,12 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
+# datasets.load_dataset returns one of these four shapes depending on whether a
+# split is pinned and whether streaming is enabled.
+DatasetLike = datasets.Dataset | datasets.DatasetDict | datasets.IterableDataset | datasets.IterableDatasetDict
 
-def fsspec_exists(file_path):
+
+def fsspec_exists(file_path: str) -> bool:
     """
     Check if a file exists in a fsspec filesystem.
 
@@ -35,7 +40,7 @@ def fsspec_exists(file_path):
     return fs.exists(file_path)
 
 
-def fsspec_glob(file_path):
+def fsspec_glob(file_path: str) -> list[str]:
     """
     Get a list of files in a fsspec filesystem that match a pattern.
 
@@ -45,19 +50,19 @@ def fsspec_glob(file_path):
         file_path (str): a file path or pattern, possibly with *, **, ?, or {}'s
 
     Returns:
-        list: A list of files that match the pattern. returned files have the protocol prepended to them.
+        list[str]: A list of files that match the pattern. returned files have the protocol prepended to them.
     """
 
     # Use fsspec to get a list of files
     fs = url_to_fs(file_path)[0]
     protocol = fsspec.core.split_protocol(file_path)[0]
 
-    def join_protocol(file):
+    def join_protocol(file: str) -> str:
         if protocol:
             return f"{protocol}://{file}"
         return file
 
-    out = []
+    out: list[str] = []
 
     # glob has to come after braceexpand
     for file in braceexpand.braceexpand(file_path):
@@ -66,7 +71,7 @@ def fsspec_glob(file_path):
     return out
 
 
-def fsspec_mkdirs(dir_path, exist_ok=True):
+def fsspec_mkdirs(dir_path: str, exist_ok: bool = True) -> None:
     """
     Create a directory in a fsspec filesystem.
 
@@ -79,7 +84,7 @@ def fsspec_mkdirs(dir_path, exist_ok=True):
     fs.makedirs(dir_path, exist_ok=exist_ok)
 
 
-def fsspec_isdir(dir_path):
+def fsspec_isdir(dir_path: str) -> bool:
     """
     Check if a path is a directory in fsspec filesystem.
     """
@@ -118,7 +123,7 @@ def load_dataset_with_backoff(
     initial_delay: float = 2.0,
     max_delay: float = 120.0,
     **dataset_kwargs: Any,
-):
+) -> DatasetLike:
     """Call ``datasets.load_dataset`` with exponential backoff tuned for HF rate limits."""
     return retry_with_backoff(
         lambda: datasets.load_dataset(**dataset_kwargs),
@@ -154,7 +159,13 @@ def is_path_like(path: str) -> bool:
     return os.path.exists(path)
 
 
-def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None, old_extension=None):
+def rebase_file_path(
+    base_in_path: str,
+    file_path: str,
+    base_out_path: str,
+    new_extension: str | None = None,
+    old_extension: str | None = None,
+) -> str:
     """
     Rebase a file path from one directory to another, with an option to change the file extension.
 
@@ -195,7 +206,7 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
 
 
 @contextmanager
-def remove_tpu_lockfile_on_exit():
+def remove_tpu_lockfile_on_exit() -> Iterator[None]:
     """Context manager that removes the TPU lockfile when the block exits."""
     try:
         yield
@@ -203,7 +214,7 @@ def remove_tpu_lockfile_on_exit():
         _hacky_remove_tpu_lockfile()
 
 
-def _hacky_remove_tpu_lockfile():
+def _hacky_remove_tpu_lockfile() -> None:
     """
     This is a hack to remove the lockfile that TPU pods create on the host filesystem.
 
