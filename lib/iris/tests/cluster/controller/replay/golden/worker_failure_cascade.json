@@ -68,6 +68,7 @@
   "task_attempts": [
     {
       "attempt_id": 0,
+      "attempt_uid": "<masked-0>",
       "created_at_ms": 1704067200000,
       "error": "Worker w-doomed failed: node lost",
       "exit_code": null,

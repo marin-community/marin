@@ -265,6 +265,9 @@ message TaskAttempt {
   iris.time.Timestamp started_at = 6;
   iris.time.Timestamp finished_at = 7;
   bool is_worker_failure = 8;
+  // Controller-minted 16-hex-char routing key for this attempt. Surfaced to
+  // operators (dashboard) so the UID-routing rollout can be watched.
+  string attempt_uid = 9;
 }
 
 message ResourceUsage {
@@ -603,6 +606,12 @@ message RunTaskRequest {
   // custom runtime (e.g. an image with runsc/skopeo for sandboxing
   // untrusted child workloads).
   string task_image = 11;
+
+  // Controller-minted attempt routing key (16 hex chars). The worker echoes
+  // it back on observations so the controller can route by UID instead of
+  // the (task_id, attempt_id) composite. Empty when sent by an older
+  // controller that does not mint UIDs; the worker then routes by composite.
+  string attempt_uid = 12;
 }
 
 // Lean task status reported by the worker via PollTasks / UpdateTaskStatus.

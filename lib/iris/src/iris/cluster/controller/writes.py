@@ -17,11 +17,13 @@ Areas covered (previously split across writes/<entity>.py):
   budgets        — users, user_budgets (previously db.py methods)
 """
 
+import secrets
 from collections.abc import Callable
 
 from rigging.timing import Timestamp
 from sqlalchemy import Table, delete, func, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 
 from iris.cluster.controller.db import Tx
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
@@ -38,7 +40,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2
 
 REGISTERED_WRITE_FUNCTIONS: list[Callable] = []
@@ -231,6 +233,9 @@ def reserve_priority_insertion_base(tx: Tx) -> int:
 # ---------------------------------------------------------------------------
 
 
+_ATTEMPT_UID_MINT_ATTEMPTS = 4
+
+
 @writes_to(task_attempts_table)
 def insert_attempt(
     tx: Tx,
@@ -240,17 +245,40 @@ def insert_attempt(
     worker_id: WorkerId | None,
     state: int,
     created_at_ms: int,
-) -> None:
-    """Insert one row into ``task_attempts``."""
-    tx.execute(
-        insert(task_attempts_table).values(
-            task_id=task_id,
-            attempt_id=attempt_id,
-            worker_id=worker_id,
-            state=state,
-            created_at_ms=created_at_ms,
-        )
-    )
+) -> AttemptUid:
+    """Insert one row into ``task_attempts``, minting its ``attempt_uid``.
+
+    Every attempt gets a controller-minted 16 hex-char ``attempt_uid`` — the
+    routing key workers echo back on observations. It is generated here, the
+    single ``task_attempts`` insert chokepoint, so the ``NOT NULL UNIQUE``
+    column is always populated. The minted value is returned to the caller.
+
+    A UNIQUE-index collision on ``attempt_uid`` (astronomically unlikely with
+    64 bits of entropy) re-mints and retries rather than aborting the
+    transition. SQLite rolls back only the failed statement, so retrying the
+    INSERT within the same ``tx`` is safe.
+    """
+    for _ in range(_ATTEMPT_UID_MINT_ATTEMPTS):
+        attempt_uid = AttemptUid(secrets.token_hex(8))
+        try:
+            tx.execute(
+                insert(task_attempts_table).values(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    worker_id=worker_id,
+                    state=state,
+                    created_at_ms=created_at_ms,
+                    attempt_uid=attempt_uid,
+                )
+            )
+            return attempt_uid
+        except IntegrityError as exc:
+            # Re-mint only on an attempt_uid collision; any other constraint
+            # violation (e.g. the (task_id, attempt_id) PK) is a real bug and
+            # must propagate.
+            if "attempt_uid" not in str(exc.orig):
+                raise
+    raise RuntimeError(f"insert_attempt: exhausted attempt_uid retries for task {task_id} attempt {attempt_id}")
 
 
 @writes_to(task_attempts_table)
