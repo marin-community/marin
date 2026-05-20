@@ -1341,6 +1341,7 @@ def test_input_file_spec_with_columns_and_row_range(tmp_path):
 # --- Integration tests (all backends) ---
 
 
+@pytest.mark.slow
 def test_reshard_integration(integration_ctx):
     ds = Dataset.from_list([list(range(50))]).flat_map(lambda x: x).reshard(5).map(lambda x: x * 2)
     result = sorted(integration_ctx.execute(ds).results)
@@ -1393,6 +1394,7 @@ def test_sorted_merge_join_left_integration(integration_ctx):
     assert results[1] == {"id": 2, "text": "world", "score": 0.0}
 
 
+@pytest.mark.slow
 def test_sorted_merge_join_after_group_by_integration(integration_ctx):
     docs = Dataset.from_list(
         [
