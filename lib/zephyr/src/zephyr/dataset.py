@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
+import pyarrow as pa
 from braceexpand import braceexpand
 from pyarrow import RecordBatch
 from datafusion import SessionContext
@@ -39,15 +40,23 @@ class GlobSource:
 @dataclass(frozen=True)
 class DataFusionSource:
     """Re-iterable source that runs a DataFusion query and yields one
-    materialized partition (list of records) per iteration step.
+    ``pa.Table`` per partition.
     """
 
     ctx: SessionContext
     query: str
 
-    def __iter__(self) -> Iterator[list[dict]]:
+    def __iter__(self) -> Iterator[pa.Table]:
         for stream in self.ctx.sql(self.query).execute_stream_partitioned():
-            yield [record for batch in stream for record in batch.to_pyarrow().to_pylist()]
+            # PyArrow tables are pickable via Arrow IPC.
+            # We only ever load one batch at a time.
+            yield pa.Table.from_batches(batch.to_pyarrow() for batch in stream)
+
+
+def _table_to_records(table: pa.Table) -> Iterator[dict]:
+    """Stream rows from a ``pa.Table`` one batch at a time as dicts."""
+    for batch in table.to_batches():
+        yield from batch.to_pylist()
 
 
 @dataclass(frozen=True)
@@ -465,7 +474,7 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(DataFusionSource(ctx, query)).flat_map(lambda records: records)
+        return Dataset(DataFusionSource(ctx, query)).flat_map(_table_to_records)
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
