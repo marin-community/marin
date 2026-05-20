@@ -39,6 +39,8 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 import aiofiles
@@ -48,6 +50,7 @@ from contree_sdk._internals.utils.wrapper import coro_sync
 from datasets import load_dataset
 from fray import ResourceConfig
 from rigging.filesystem import marin_prefix
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from zephyr import Dataset, ZephyrContext, counters
 
 logger = logging.getLogger(__name__)
@@ -79,13 +82,18 @@ _ensure_sdk_patched()
 PYTRACER_DIR = Path(__file__).resolve().parent / "pytracer"
 TRACER_MOUNT = "/pytracer"
 TRACE_META_MARKER = "::TRACE_META::"
-RATE_LIMIT_BACKOFFS = (3, 6, 12, 24, 48)
+# Retry on ConTree 429s: 3s → 48s over 6 attempts.
+RATE_LIMIT_MAX_ATTEMPTS = 6
+RATE_LIMIT_BACKOFF = ExponentialBackoff(initial=3.0, maximum=48.0, factor=2.0)
 BROAD_CHUNK_SIZE = 20
 BROAD_PYTEST_FLAGS = (
     "--continue-on-collection-errors --no-header -rA --tb=line --color=no "
     "-p no:cacheprovider -W ignore::DeprecationWarning"
 )
 DEFAULT_TIMEOUT_S = 600.0  # First-pass: cut heavy-tail shards short, recover via deferred-status follow-up.
+# Source dataset, pinned to a revision for reproducible re-runs.
+DATASET_ID = "nebius/SWE-rebench-V2"
+DATASET_REVISION = "475dd5e8703bb5fb22dd3c60b5d038b019eba1e0"
 # Output goes under MARIN_PREFIX (set on Iris workers; falls back to /tmp/marin
 # locally). Convention follows datakit: <prefix>/raw/<dataset-name>/.
 DEFAULT_OUTPUT_NAME = "raw/swe-rebench-contree-traces"
@@ -109,7 +117,37 @@ OUTPUT_SCHEMA = pa.schema(
 )
 
 
-def _deferred_row(instance_id: str, status: str) -> dict:
+@dataclass(frozen=True)
+class ImageRow:
+    """One SWE-rebench-V2 row, shaped for :func:`contree_trace_one`."""
+
+    instance_id: str
+    image_name: str
+    test_cmd: str
+    test_patch: str = ""
+    patch: str = ""
+
+
+@dataclass
+class TraceRow:
+    """One output record. Field order/types mirror :data:`OUTPUT_SCHEMA`."""
+
+    instance_id: str
+    test_id: str
+    file: str
+    function: str
+    affected: bool
+    text: str
+    pre_event_count: int
+    post_event_count: int
+    pre_depth_cap: int
+    post_depth_cap: int
+    post_patch_applied: bool
+    broad_complete: bool
+    status: str
+
+
+def _deferred_row(instance_id: str, status: str) -> TraceRow:
     """Sentinel row emitted when a phase fails before producing any traces.
 
     Without this, an instance that times out on pre-phase would just disappear
@@ -117,21 +155,21 @@ def _deferred_row(instance_id: str, status: str) -> dict:
     pipeline can recover the deferred instance_ids by querying the parquet
     for ``status IN ('pre_failed', 'session_failed', ...)``.
     """
-    return {
-        "instance_id": instance_id,
-        "test_id": "",
-        "file": "",
-        "function": "",
-        "affected": False,
-        "text": "",
-        "pre_event_count": 0,
-        "post_event_count": 0,
-        "pre_depth_cap": -1,
-        "post_depth_cap": -1,
-        "post_patch_applied": False,
-        "broad_complete": False,
-        "status": status,
-    }
+    return TraceRow(
+        instance_id=instance_id,
+        test_id="",
+        file="",
+        function="",
+        affected=False,
+        text="",
+        pre_event_count=0,
+        post_event_count=0,
+        pre_depth_cap=-1,
+        post_depth_cap=-1,
+        post_patch_applied=False,
+        broad_complete=False,
+        status=status,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -195,30 +233,31 @@ def _jsonl_to_rows(jsonl_path: Path) -> dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# ContreeSync client — cached per-worker (per-process) so the auth token + HTTP
-# pool persists across map calls on the same worker actor.
+# ContreeSync client — cached per-worker process. The cache key is the pid
+# because ContreeSync holds an httpx connection pool and a daemon-thread event
+# loop, neither of which survives a fork: a Zephyr worker that forks must build
+# its own client rather than reuse the parent's. ``@cache`` keyed on pid gives
+# one client per live process and rebuilds after a fork.
 # ---------------------------------------------------------------------------
 
-_CLIENT_CACHE: dict[int, object] = {}
 
-
-def _client():
+@cache
+def _client_for_pid(_pid: int):
     _ensure_sdk_patched()
     from contree_sdk import ContreeSync
     from contree_sdk.auth import JWTAuth
     from contree_sdk.config import ContreeConfig
 
-    pid = os.getpid()
-    client = _CLIENT_CACHE.get(pid)
-    if client is None:
-        base_url = os.environ.get("CONTREE_BASE_URL")
-        token = os.environ.get("CONTREE_TOKEN")
-        if not base_url or not token:
-            raise RuntimeError("CONTREE_BASE_URL and CONTREE_TOKEN must be set in the worker env")
-        config = ContreeConfig(auth=JWTAuth(token=token, base_url=base_url))
-        client = ContreeSync(config=config)
-        _CLIENT_CACHE[pid] = client
-    return client
+    base_url = os.environ.get("CONTREE_BASE_URL")
+    token = os.environ.get("CONTREE_TOKEN")
+    if not base_url or not token:
+        raise RuntimeError("CONTREE_BASE_URL and CONTREE_TOKEN must be set in the worker env")
+    config = ContreeConfig(auth=JWTAuth(token=token, base_url=base_url))
+    return ContreeSync(config=config)
+
+
+def _client():
+    return _client_for_pid(os.getpid())
 
 
 # ---------------------------------------------------------------------------
@@ -228,14 +267,13 @@ def _client():
 
 def _run_with_retry(session, **kwargs):
     """session.run(**kwargs).wait() with exponential backoff on 429s."""
-    for sleep_s in (*RATE_LIMIT_BACKOFFS, None):
-        try:
-            return session.run(**kwargs).wait()
-        except Exception as e:
-            if "TooManyRequests" in type(e).__name__ and sleep_s is not None:
-                time.sleep(sleep_s)
-                continue
-            raise
+    return retry_with_backoff(
+        lambda: session.run(**kwargs).wait(),
+        retryable=lambda e: "TooManyRequests" in type(e).__name__,
+        max_attempts=RATE_LIMIT_MAX_ATTEMPTS,
+        backoff=RATE_LIMIT_BACKOFF,
+        operation="contree session.run",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -260,9 +298,43 @@ def _tracer_injection() -> tuple[dict[str, str], dict[str, str]]:
 
 # ---------------------------------------------------------------------------
 # Phase helpers — each runs one of the three trace phases and returns the
-# parsed-row dict plus per-phase status flags. ``contree_trace_one`` chains
-# them together, threading the same session.
+# parsed rows plus per-phase status flags. ``contree_trace_one`` chains them
+# together, threading the same session.
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class PrePhaseResult:
+    """Outcome of the pre-patch phase. ``rows`` maps test_id -> parsed record."""
+
+    rows: dict[str, dict]
+    stdout: str
+    download_failed: bool
+
+
+@dataclass
+class PostPhaseResult:
+    """Outcome of the post-patch phase.
+
+    ``post_patch_ok=False`` means the fix patch didn't apply cleanly — the
+    broad phase is then skipped.
+    """
+
+    rows: dict[str, dict]
+    post_patch_ok: bool
+    download_failed: bool
+
+
+@dataclass
+class BroadPhaseResult:
+    """Outcome of the broad (full-suite) phase.
+
+    ``complete=True`` means every chunk both ran and downloaded successfully.
+    """
+
+    rows: dict[str, dict]
+    complete: bool
+    download_failed: bool
 
 
 def _phase_cmd(test_cmd: str, trace_path: str, apply_patch_path: str | None) -> str:
@@ -293,11 +365,11 @@ def _run_pre_phase(
     files: dict[str, str],
     workdir_path: Path,
     timeout: float,
-) -> tuple[dict[str, dict], str, bool] | None:
+) -> PrePhaseResult | None:
     """Phase 1: apply ``test_patch`` and run ``test_cmd`` traced.
 
-    Returns ``(rows, stdout, download_failed)`` or ``None`` on a hard failure
-    that means we should give up on this instance entirely.
+    Returns a :class:`PrePhaseResult`, or ``None`` on a hard failure that means
+    we should give up on this instance entirely.
     """
     try:
         _run_with_retry(
@@ -319,11 +391,11 @@ def _run_pre_phase(
         session.download(pre_trace_path, pre_jsonl)
         rows = _jsonl_to_rows(pre_jsonl)
         pre_jsonl.unlink(missing_ok=True)
-        return rows, stdout, False
+        return PrePhaseResult(rows=rows, stdout=stdout, download_failed=False)
     except Exception as e:
         logger.warning("pre download failed for %s: %s", instance_id, e)
         counters.increment("pre_download_failed")
-        return {}, stdout, True
+        return PrePhaseResult(rows={}, stdout=stdout, download_failed=True)
 
 
 def _run_post_phase(
@@ -337,12 +409,8 @@ def _run_post_phase(
     common_env: dict[str, str],
     workdir_path: Path,
     timeout: float,
-) -> tuple[dict[str, dict], bool, bool]:
-    """Phase 2: apply ``fix_patch`` and rerun ``test_cmd`` traced.
-
-    Returns ``(rows, post_patch_ok, download_failed)``. ``post_patch_ok=False``
-    means the fix patch didn't apply cleanly — broad phase is then skipped.
-    """
+) -> PostPhaseResult:
+    """Phase 2: apply ``fix_patch`` and rerun ``test_cmd`` traced."""
     post_patch_ok = False
     try:
         _run_with_retry(
@@ -358,18 +426,18 @@ def _run_post_phase(
         logger.warning("post-phase failed for %s: %s", instance_id, e)
 
     if not post_patch_ok:
-        return {}, False, False
+        return PostPhaseResult(rows={}, post_patch_ok=False, download_failed=False)
 
     post_jsonl = workdir_path / "post.jsonl"
     try:
         session.download(post_trace_path, post_jsonl)
         rows = _jsonl_to_rows(post_jsonl)
         post_jsonl.unlink(missing_ok=True)
-        return rows, True, False
+        return PostPhaseResult(rows=rows, post_patch_ok=True, download_failed=False)
     except Exception as e:
         logger.warning("post download failed for %s: %s", instance_id, e)
         counters.increment("post_download_failed")
-        return {}, True, True
+        return PostPhaseResult(rows={}, post_patch_ok=True, download_failed=True)
 
 
 def _download_broad_chunk(
@@ -453,12 +521,8 @@ def _run_broad_phase(
     broad_trace_prefix: str,
     workdir_path: Path,
     timeout: float,
-) -> tuple[dict[str, dict], bool, bool]:
-    """Phase 3: discover all repo tests and trace them in fixed-size chunks.
-
-    Returns ``(rows, complete, download_failed)``. ``complete=True`` means
-    every chunk both ran and downloaded successfully.
-    """
+) -> BroadPhaseResult:
+    """Phase 3: discover all repo tests and trace them in fixed-size chunks."""
     try:
         session.run(
             shell="find . -name 'test_*.py' -o -name '*_test.py' | sort",
@@ -470,7 +534,7 @@ def _run_broad_phase(
     except Exception as e:
         logger.warning("broad discovery failed for %s: %s", instance_id, e)
         counters.increment("broad_discovery_failed")
-        return {}, False, False
+        return BroadPhaseResult(rows={}, complete=False, download_failed=False)
 
     rows: dict[str, dict] = {}
     download_failed = False
@@ -543,7 +607,7 @@ def _run_broad_phase(
             download_failed = True
 
     complete = completed == len(chunks) and not download_failed
-    return rows, complete, download_failed
+    return BroadPhaseResult(rows=rows, complete=complete, download_failed=download_failed)
 
 
 def _determine_status(
@@ -563,17 +627,18 @@ def _determine_status(
     return "ok"
 
 
-def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Iterator[dict]:
+def contree_trace_one(img: ImageRow, *, timeout: float = DEFAULT_TIMEOUT_S) -> Iterator[TraceRow]:
     """Pull, sandbox, and trace one SWE-rebench-V2 row via ConTree.
 
-    Yields one dict per (instance_id, test_id) combination. Calls
-    ``zephyr.counters.increment`` for visibility into the live run.
+    Yields one :class:`TraceRow` per (instance_id, test_id) combination —
+    ``write_parquet`` converts dataclass records to the parquet schema. Calls
+    ``zephyr.counters.increment`` for live-run visibility.
     """
-    instance_id = img["instance_id"]
-    image_name = img["image_name"]
-    test_cmd = img["test_cmd"]
-    test_patch = img.get("test_patch") or ""
-    fix_patch = img.get("patch") or ""
+    instance_id = img.instance_id
+    image_name = img.image_name
+    test_cmd = img.test_cmd
+    test_patch = img.test_patch
+    fix_patch = img.patch
 
     counters.increment("instances_started")
 
@@ -641,13 +706,12 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
         if pre_result is None:
             yield _deferred_row(instance_id, "pre_failed")
             return
-        pre_rows, pre_stdout, pre_download_failed = pre_result
-        if "::PATCH_FAILED::" in pre_stdout:
+        if "::PATCH_FAILED::" in pre_result.stdout:
             counters.increment("instances_failed_test_patch")
             yield _deferred_row(instance_id, "test_patch_failed")
             return
 
-        post_rows, post_patch_ok, post_download_failed = _run_post_phase(
+        post_result = _run_post_phase(
             session,
             instance_id=instance_id,
             test_cmd=test_cmd,
@@ -659,11 +723,9 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
             timeout=timeout,
         )
 
-        broad_rows: dict[str, dict] = {}
-        broad_complete = False
-        broad_download_failed = False
-        if post_patch_ok:
-            broad_rows, broad_complete, broad_download_failed = _run_broad_phase(
+        broad_result = BroadPhaseResult(rows={}, complete=False, download_failed=False)
+        if post_result.post_patch_ok:
+            broad_result = _run_broad_phase(
                 session,
                 image,
                 client,
@@ -680,19 +742,19 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
             )
 
         status = _determine_status(
-            post_patch_ok=post_patch_ok,
-            pre_download_failed=pre_download_failed,
-            post_download_failed=post_download_failed,
-            broad_download_failed=broad_download_failed,
-            broad_complete=broad_complete,
+            post_patch_ok=post_result.post_patch_ok,
+            pre_download_failed=pre_result.download_failed,
+            post_download_failed=post_result.download_failed,
+            broad_download_failed=broad_result.download_failed,
+            broad_complete=broad_result.complete,
         )
         counters.increment(f"status_{status}")
 
         # Affected rows: tests touched by either pre or post phase.
-        affected_ids = sorted(set(pre_rows) | set(post_rows))
+        affected_ids = sorted(set(pre_result.rows) | set(post_result.rows))
         for tid in affected_ids:
-            pr = pre_rows.get(tid) or {}
-            po = post_rows.get(tid) or {}
+            pr = pre_result.rows.get(tid) or {}
+            po = post_result.rows.get(tid) or {}
             any_row = pr or po
             test_source, _ = _split_trace(any_row.get("trace", ""))
             _, pre_trace = _split_trace(pr.get("trace", "")) if pr else ("", "")
@@ -700,46 +762,46 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
             text = _format_affected_row(test_source, pre_trace, fix_patch, post_trace)
             counters.increment("affected_rows")
             counters.increment("chars", len(text))
-            yield {
-                "instance_id": instance_id,
-                "test_id": tid,
-                "file": any_row.get("file", ""),
-                "function": any_row.get("function", ""),
-                "affected": True,
-                "text": text,
-                "pre_event_count": int(pr.get("event_count", 0)),
-                "post_event_count": int(po.get("event_count", 0)),
-                "pre_depth_cap": int(pr.get("final_depth_cap", -1)),
-                "post_depth_cap": int(po.get("final_depth_cap", -1)),
-                "post_patch_applied": post_patch_ok,
-                "broad_complete": broad_complete,
-                "status": status,
-            }
+            yield TraceRow(
+                instance_id=instance_id,
+                test_id=tid,
+                file=any_row.get("file", ""),
+                function=any_row.get("function", ""),
+                affected=True,
+                text=text,
+                pre_event_count=int(pr.get("event_count", 0)),
+                post_event_count=int(po.get("event_count", 0)),
+                pre_depth_cap=int(pr.get("final_depth_cap", -1)),
+                post_depth_cap=int(po.get("final_depth_cap", -1)),
+                post_patch_applied=post_result.post_patch_ok,
+                broad_complete=broad_result.complete,
+                status=status,
+            )
 
         # Broad rows: every other test in the repo, post-patch only.
         affected_set = set(affected_ids)
-        for tid, rec in sorted(broad_rows.items()):
+        for tid, rec in sorted(broad_result.rows.items()):
             if tid in affected_set:
                 continue
             test_source, trace = _split_trace(rec.get("trace", ""))
             text = _format_broad_row(test_source, trace)
             counters.increment("broad_rows")
             counters.increment("chars", len(text))
-            yield {
-                "instance_id": instance_id,
-                "test_id": tid,
-                "file": rec.get("file", ""),
-                "function": rec.get("function", ""),
-                "affected": False,
-                "text": text,
-                "pre_event_count": 0,
-                "post_event_count": int(rec.get("event_count", 0)),
-                "pre_depth_cap": -1,
-                "post_depth_cap": int(rec.get("final_depth_cap", -1)),
-                "post_patch_applied": post_patch_ok,
-                "broad_complete": broad_complete,
-                "status": status,
-            }
+            yield TraceRow(
+                instance_id=instance_id,
+                test_id=tid,
+                file=rec.get("file", ""),
+                function=rec.get("function", ""),
+                affected=False,
+                text=text,
+                pre_event_count=0,
+                post_event_count=int(rec.get("event_count", 0)),
+                pre_depth_cap=-1,
+                post_depth_cap=int(rec.get("final_depth_cap", -1)),
+                post_patch_applied=post_result.post_patch_ok,
+                broad_complete=broad_result.complete,
+                status=status,
+            )
 
         counters.increment("instances_completed")
     finally:
@@ -752,10 +814,10 @@ def contree_trace_one(img: dict, *, timeout: float = DEFAULT_TIMEOUT_S) -> Itera
             logger.info("workdir cleanup failed for %s: %s", workdir_path, cleanup_err)
 
 
-def _load_images(language: str = "python", limit: int | None = None) -> list[dict]:
+def _load_images(language: str = "python", limit: int | None = None) -> list[ImageRow]:
     """Stream Python rows out of the HF dataset and shape them for the map fn."""
-    ds = load_dataset("nebius/SWE-rebench-V2", split="train", streaming=True)
-    out: list[dict] = []
+    ds = load_dataset(DATASET_ID, split="train", streaming=True, revision=DATASET_REVISION)
+    out: list[ImageRow] = []
     for row in ds:
         if row.get("language") != language:
             continue
@@ -764,13 +826,13 @@ def _load_images(language: str = "python", limit: int | None = None) -> list[dic
         if not test_cmd or not row.get("image_name"):
             continue
         out.append(
-            {
-                "instance_id": row["instance_id"],
-                "image_name": row["image_name"],
-                "test_cmd": test_cmd,
-                "test_patch": row.get("test_patch") or "",
-                "patch": row.get("patch") or "",
-            }
+            ImageRow(
+                instance_id=row["instance_id"],
+                image_name=row["image_name"],
+                test_cmd=test_cmd,
+                test_patch=row.get("test_patch") or "",
+                patch=row.get("patch") or "",
+            )
         )
         if limit is not None and len(out) >= limit:
             break
@@ -786,10 +848,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     output = f"{marin_prefix().rstrip('/')}/{DEFAULT_OUTPUT_NAME}"
-    output_pattern = f"{output}/traces-{{shard:05d}}.parquet"
+    output_pattern = f"{output}/traces-{{shard:05d}}-of-{{total:05d}}.parquet"
 
     images = _load_images(limit=LIMIT)
-    logger.info("Loaded %d Python rows from nebius/SWE-rebench-V2", len(images))
+    logger.info("Loaded %d Python rows from %s", len(images), DATASET_ID)
 
     pipeline: Dataset = (
         Dataset.from_list(images)
