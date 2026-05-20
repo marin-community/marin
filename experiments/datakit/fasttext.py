@@ -245,6 +245,7 @@ def _load_fasttext_model(model_path_str: str) -> Any:
 
 def _load_with_source(path: str) -> Iterator[dict[str, Any]]:
     """Load records from *path* and tag each with its ``_source_path``."""
+    counters.increment("classify/files_in")
     for record in load_file(path):
         record["_source_path"] = path
         yield record
@@ -292,16 +293,26 @@ def _predict_batch(
 ) -> Iterator[dict[str, Any]]:
     """One fasttext.predict call per batch; yield per-record output dicts in input order."""
     model = _load_fasttext_model(model_path_str)
+    counters.increment("classify/batches_in")
+    counters.increment("classify/docs_in", len(batch))
 
     # Split: non-empty docs feed one batched predict; empty docs get a fixed
     # empty_attrs without ever touching the model.
     texts: list[str] = []
     text_idx: list[int] = []
+    bytes_in = 0
+    truncated = 0
     for i, record in enumerate(batch):
         raw = str(record.get(text_field, "") or "")
         if raw:
+            bytes_in += len(raw)
+            if max_text_chars is not None and len(raw) > max_text_chars:
+                truncated += 1
             texts.append(_normalize_for_fasttext(raw, max_text_chars))
             text_idx.append(i)
+    counters.increment("classify/bytes_in", bytes_in)
+    if truncated:
+        counters.increment("classify/docs_truncated", truncated)
 
     if texts:
         labels_list, probs_list = model.predict(texts, k=k, threshold=threshold)
