@@ -84,6 +84,49 @@ Override knobs:
   preemptible). Submitted 2026-05-20 02:56 UTC. Reservation pending behind
   the other two in-flight runs (`context_norm_no_xsa_gate1` d512 + d768).
 
+## Update 2026-05-20: full HRM-Text mix ported as 13 per-source cleaners
+
+After the dmmath-only mix turned out to be ~5% of HRM XL's training data,
+ported the rest of `sapientinc/data_io`'s cleaners as marin ExecutorSteps in
+`experiments/grug/moe/hrm_text_data.py`. Each source streams the upstream HF
+dataset, applies the same filter/transform as the data_io cleaner, and writes
+`(instruction, response, condition)` parquet to GCS. Streaming + chunked
+`pyarrow.ParquetWriter` means even AceReason (93 GB on Hub) runs with only
+32 GB RAM / 64 GB disk per worker.
+
+| Source                | HF id                                | Notes                       |
+|-----------------------|--------------------------------------|-----------------------------|
+| openmathinstruct2     | nvidia/OpenMathInstruct-2            | cot + direct (single pass)  |
+| acereason             | nvidia/AceReason-1.1-SFT             | filter category=math, strip `<think>` |
+| openthoughts2         | open-thoughts/OpenThoughts2-1M       | drop code-heavy sources     |
+| sudoku_extreme        | sapientinc/sudoku-extreme            | "Solve the Sudoku" prompt   |
+| textbookreasoning     | MegaScience/TextbookReasoning        | cot + direct                |
+| gsm8k_train           | openai/gsm8k                          | split on "#### "            |
+| math_train            | EleutherAI/hendrycks_math             | all subsets                 |
+| omnimath              | KbsdJames/Omni-MATH                   | cot + direct                |
+| numinamath            | AI-MO/NuminaMath-1.5                  | filter synthetic / invalid  |
+| natural_reasoning     | facebook/natural_reasoning            | filter proofs               |
+| principia             | facebook/principia-collection         | direct                       |
+| webinstruct_verified  | TIGER-Lab/WebInstruct-verified        | direct                       |
+| no_robots             | HuggingFaceH4/no_robots               | concat system+user          |
+| dmmath                | sapientinc/HRM-Text-data-io-cleaned-20260515 | already cleaned on HF |
+
+Mixture weights are taken directly from `data_io/prefix_config.yaml`
+(`max_per_file × repeat`), so each source's share of one HRM-Text epoch is
+preserved in the marin mixture. After normalization the breakdown is:
+
+- dmmath 67%, openmathinstruct2 / acereason / webinstruct_verified 8% each,
+  sudoku 4%, openthoughts2 2%, textbookreasoning / numinamath /
+  natural_reasoning / principia / no_robots ~0.4% each, math_train /
+  gsm8k_train / omnimath the rest.
+
+**Skipped** (need raw downloads or heavier transforms; logged as follow-ups
+in code docstring): amps_khan, ampsmathematica, Platypus/scibench, SYNTH,
+tasksource (297-line subset allowlist), Platypus/ARB, openbookqa, reclor.
+
+Resubmitted at d768 with the full mix as
+`/kaiyue/iris-run-job-20260520-032117`.
+
 ## Caveat: HF "cleaned" dataset is a subset of HRM XL's actual training mix
 
 Inspecting `sapientinc/HRM-Text-data-io-cleaned-20260515` directly:
