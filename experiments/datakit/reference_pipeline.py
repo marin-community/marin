@@ -28,9 +28,18 @@ not train either:
   ``--quality-model-bin``   A trained fasttext quality ``.bin`` from
                             :mod:`experiments.datakit.cluster.quality.v0.train`.
 
-Submit on iris (eu-west4 pinned via ``MARIN_PREFIX``)::
+Region-agnostic: every worker resource is unpinned, so iris's ``--region``
+flag drives scheduling. Set ``MARIN_PREFIX`` to the in-region GCS bucket
+(e.g. ``gs://marin-us-central2`` when running with ``--region us-central2``)
+so the upstream source artifacts and every step's output land in-region.
+``EVAL_ROOT`` is hardcoded to ``gs://marin-eu-west4/.../evals``: the eval
+corpus is read once to build the decontam bloom, after which workers read
+the bloom in-region -- the cross-region cost is one bloom build, not
+per-shard.
 
-    uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
+Submit on iris::
+
+    uv run iris --cluster=marin job run --region <region> --extra=cpu \\
         --priority production --cpu 2 --memory 8GB \\
         -- python -m experiments.datakit.reference_pipeline \\
             --domain-centroids gs://.../cluster/train_centroids_<hash> \\
@@ -42,59 +51,58 @@ import argparse
 import logging
 import os
 
-DATA_REGION = "europe-west4"
 os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 
-from fray import ResourceConfig  # noqa: E402
-from levanter.tokenizers import TokenizerBackend  # noqa: E402
-from marin.datakit.decon import (  # noqa: E402
+from fray import ResourceConfig
+from levanter.tokenizers import TokenizerBackend
+from marin.datakit.decon import (
     DeconAttributes,
     build_eval_bloom_step,
     decon_step,
 )
-from marin.datakit.normalize import NormalizedData  # noqa: E402
-from marin.datakit.sources import all_sources  # noqa: E402
-from marin.execution.artifact import Artifact  # noqa: E402
-from marin.execution.remote import remote  # noqa: E402
-from marin.execution.step_runner import StepRunner  # noqa: E402
-from marin.execution.step_spec import StepSpec  # noqa: E402
-from marin.processing.classification.deduplication.fuzzy_dups import (  # noqa: E402
+from marin.datakit.normalize import NormalizedData
+from marin.datakit.sources import all_sources
+from marin.execution.artifact import Artifact
+from marin.execution.remote import remote
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.fuzzy_dups import (
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
-from marin.processing.classification.deduplication.fuzzy_minhash import (  # noqa: E402
+from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
-from marin.processing.tokenize.attributes import (  # noqa: E402
+from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
     tokenize_attributes_step,
 )
-from rigging.log_setup import configure_logging  # noqa: E402
+from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.domain.v0.assign import (  # noqa: E402
+from experiments.datakit.cluster.domain.v0.assign import (
     AssignmentAttrData,
     assign_source,
 )
-from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import (  # noqa: E402
+from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import (
     LlmQualityOutput,
     _register_model_step,
     classify_llm_quality_step,
 )
-from experiments.datakit.decontam.all_sources_decon import (  # noqa: E402
+from experiments.datakit.decontam.all_sources_decon import (
     ESTIMATED_DOC_COUNT,
     EVAL_ROOT,
     FALSE_POSITIVE_RATE,
     NGRAM_LENGTH,
     OVERLAP_THRESHOLD,
 )
-from experiments.datakit.embeddings.luxical.pipeline import (  # noqa: E402
+from experiments.datakit.embeddings.luxical.pipeline import (
     LUXICAL_REPO,
     LUXICAL_WEIGHTS_FILE,
     EmbeddingAttrData,
     embed_source,
 )
-from experiments.datakit.store.datakit_store import (  # noqa: E402
+from experiments.datakit.store.datakit_store import (
     ClusteredStoreData,
     build_clustered_store,
 )
@@ -115,10 +123,11 @@ TOKENIZER_BACKEND = TokenizerBackend.HF
 TOKENIZE_WORKER_RESOURCES = ResourceConfig(ram="10g", disk="5g")
 TOKENIZE_MAX_WORKERS = 1024
 
-# Embed / assign resource shapes mirror exp_full_clusters defaults.
-EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="16g", regions=[DATA_REGION])
-ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="8g", regions=[DATA_REGION])
-COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g", regions=[DATA_REGION])
+# Embed / assign resource shapes mirror exp_full_clusters defaults
+# (region is unpinned -- iris's --region flag drives scheduling).
+EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="16g")
+ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="8g")
+COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g")
 EMBED_MAX_WORKERS_PER_SOURCE = 128
 ASSIGN_MAX_WORKERS_PER_SOURCE = 128
 
@@ -132,7 +141,7 @@ DEDUP_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="3.5g", preemptible=Fals
 DECONTAM_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 
 # Store.
-STORE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", regions=[DATA_REGION])
+STORE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 STORE_MAX_WORKERS = 2048
 SPLIT = "train"
 
