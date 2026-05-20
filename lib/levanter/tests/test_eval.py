@@ -27,6 +27,7 @@ from levanter.eval import (
     LossFnOutput,
     LossLabelSpec,
     TaggedEvaluator,
+    cb_labeled_lm_evaluate,
     cb_tagged_evaluate,
 )
 from levanter.models.lm_model import LmExample
@@ -339,3 +340,51 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
     assert "eval/ema/loss" in log_events[1]["metrics"]
     assert "eval/loss" in log_events[2]["metrics"]
     assert "eval/ema/loss" in log_events[3]["metrics"]
+
+
+def test_cb_labeled_lm_evaluate_logs_current_and_eval_model(caplog):
+    cfg = ToyLmConfig(max_seq_len=8, embed_dim=16)
+    Vocab = Axis("vocab", 32)
+    model = ToyLmHeadModel.init(Vocab, cfg, key=jax.random.PRNGKey(0))
+
+    EvalBatch = Axis("batch", len(jax.devices()))
+    examples = []
+    for i in range(EvalBatch.size):
+        tokens = jnp.mod(jnp.arange(cfg.max_seq_len, dtype=jnp.int32) + i, Vocab.size)
+        loss_labels = jnp.ones_like(tokens)
+        loss_labels = loss_labels.at[-1].set(0)
+        examples.append(LabeledLmExample(tokens=tokens, loss_labels=loss_labels))
+
+    label_spec = LossLabelSpec(id_to_name={0: "dont_score", 1: "assistant"})
+
+    logger_name = "test.cb_labeled_lm_evaluate"
+    tracker = JsonLoggerConfig(logger_name=logger_name).init(run_id=None)
+    caplog.set_level(logging.INFO, logger=logger_name)
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        callback = cb_labeled_lm_evaluate(
+            EvalBatch=EvalBatch,
+            eval_set=ListAsyncDataset(examples),
+            label_spec=label_spec,
+            tokenizer=None,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            prefix="trace_eval",
+        )
+
+        with current_tracker(tracker):
+            step0 = SimpleNamespace(step=0, model=model, eval_model=model)
+            callback(step0)
+            callback(step0, force=True)
+
+    log_events = []
+    for record in caplog.records:
+        if record.name != logger_name:
+            continue
+        payload = json.loads(record.message)
+        if payload.get("event") == "log":
+            log_events.append(payload)
+
+    assert len(log_events) == 2
+    assert "trace_eval/assistant/loss" in log_events[0]["metrics"]
+    assert "trace_eval/eval_model/assistant/loss" in log_events[1]["metrics"]

@@ -437,6 +437,37 @@ def cb_labeled_evaluate(
     return eval_callback
 
 
+def cb_labeled_lm_evaluate(
+    EvalBatch: hax.Axis,
+    eval_set: AsyncDataset[LabeledLmExample],
+    label_spec: LossLabelSpec,
+    tokenizer: Optional[MarinTokenizer] = None,
+    device_mesh: Optional[Mesh] = None,
+    axis_mapping: ResourceMapping | None = None,
+    *,
+    prefix: str = "labeled_eval",
+    eval_current: bool = True,
+    eval_model: bool = True,
+    mp: jmp.Policy = None,
+) -> Callable[[StepInfo], None]:
+    """Build a training callback for periodic labeled LM loss evaluation."""
+    evaluator = LabeledEvaluator.for_labeled_examples(
+        EvalBatch=EvalBatch,
+        eval_set=eval_set,
+        label_spec=label_spec,
+        tokenizer=tokenizer,
+        device_mesh=device_mesh,
+        axis_mapping=axis_mapping,
+        mp=mp,
+    )
+    return cb_labeled_evaluate(
+        evaluator,
+        prefix=prefix,
+        eval_current=eval_current,
+        eval_model=eval_model,
+    )
+
+
 def eval_model(evaluator, model, prefix: str = "") -> dict[str, float]:
     with levanter.tracker.capture_time() as time_fn:
         result = evaluator.evaluate(model)

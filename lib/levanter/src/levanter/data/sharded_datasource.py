@@ -128,6 +128,36 @@ class ShardedDataSource(Generic[T_co]):
         )
 
 
+class FirstRowsShardedDataSource(ShardedDataSource[T]):
+    """A single-shard view over the first rows of another sharded source."""
+
+    def __init__(self, source: ShardedDataSource[T], max_rows: int):
+        if max_rows <= 0:
+            raise ValueError("max_rows must be positive")
+        self.source = source
+        self.max_rows = max_rows
+
+    @property
+    def shard_names(self) -> Sequence[str]:
+        return ["data"]
+
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T]:
+        if shard_name != "data":
+            raise ValueError(f"Unknown shard {shard_name!r}")
+        if row >= self.max_rows:
+            return
+
+        emitted = 0
+        for item in self.source:
+            if emitted >= row:
+                emitted += 1
+                yield item
+                if emitted >= self.max_rows:
+                    return
+            else:
+                emitted += 1
+
+
 class UrlBackedShardedDataSource(ShardedDataSource[T_co], abc.ABC):
     """
     A base class ShardedDataset that is backed by a list of URLs. This is useful for datasets that are stored in a cloud storage

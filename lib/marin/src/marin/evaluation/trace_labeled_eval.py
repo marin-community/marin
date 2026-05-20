@@ -8,7 +8,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -24,7 +24,7 @@ from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
-from levanter.data.sharded_datasource import ShardedDataSource
+from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
 from levanter.data.text import (
     LmDatasetSourceConfigBase,
     TraceChatEvaluationFormat,
@@ -131,36 +131,6 @@ class TraceLabeledEvalOnPodConfig:
 
     trace_labeled_eval_config: TraceLabeledEvalConfig
     resources: ResourceConfig
-
-
-class FirstRowsShardedDataSource(ShardedDataSource[T]):
-    """A single-shard view over the first rows of another sharded source."""
-
-    def __init__(self, source: ShardedDataSource[T], max_rows: int):
-        if max_rows <= 0:
-            raise ValueError("max_rows must be positive")
-        self.source = source
-        self.max_rows = max_rows
-
-    @property
-    def shard_names(self) -> Sequence[str]:
-        return ["data"]
-
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T]:
-        if shard_name != "data":
-            raise ValueError(f"Unknown shard {shard_name!r}")
-        if row >= self.max_rows:
-            return
-
-        emitted = 0
-        for item in self.source:
-            if emitted >= row:
-                emitted += 1
-                yield item
-                if emitted >= self.max_rows:
-                    return
-            else:
-                emitted += 1
 
 
 def _lookup_field(row: Mapping[str, Any], field_path: str) -> Any:
