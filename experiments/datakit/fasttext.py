@@ -46,6 +46,7 @@ from fray import ResourceConfig
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_glob
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, atomic_rename, counters, write_parquet_file
@@ -200,28 +201,6 @@ def _output_schema(score_target_label: str | None) -> pa.Schema:
     )
 
 
-def _discover_parquet_partitions(input_path: str) -> list[str]:
-    """Walk *input_path* recursively, return sorted list of .parquet files.
-
-    Mirrors :func:`marin.datakit.decon._discover_parquet_partitions`: caller must
-    point at the flat datakit-normalize output dir (``NormalizedData.main_output_dir``).
-    """
-    fs, resolved = url_to_fs(input_path)
-    protocol = input_path.split("://")[0] if "://" in input_path else ""
-    discovered: list[str] = []
-    for root, _dirs, files in fs.walk(resolved):
-        rel = os.path.relpath(root, resolved)
-        if rel != "." and any(p.startswith(".") for p in rel.split(os.sep)):
-            continue
-        for fname in files:
-            if fname.startswith(".") or not fname.endswith(".parquet"):
-                continue
-            full = os.path.join(root, fname)
-            discovered.append(f"{protocol}://{full}" if protocol else full)
-    discovered.sort()
-    return discovered
-
-
 def _make_classifier(
     model_path_str: str,
     output_dir: str,
@@ -365,7 +344,7 @@ def classify_fasttext_to_parquet(
         :class:`FastTextAttributes` describing the output dataset and counters.
     """
     input_path = normalized_data.main_output_dir
-    files = _discover_parquet_partitions(input_path)
+    files = sorted(fsspec_glob(f"{input_path.rstrip('/')}/**/*.parquet"))
     if not files:
         raise FileNotFoundError(f"No .parquet files found under {input_path}")
     num_partitions = len(files)

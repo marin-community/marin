@@ -52,6 +52,7 @@ from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
 from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_glob
 
 logger = logging.getLogger(__name__)
 
@@ -207,30 +208,6 @@ def _is_hidden_dir(root: str, resolved: str) -> bool:
     if rel == ".":
         return False
     return any(p.startswith(".") for p in rel.split(os.sep))
-
-
-def _discover_parquet_partitions(input_path: str) -> list[str]:
-    """Walk *input_path* recursively, return sorted list of .parquet files.
-
-    Caller must point at a flat partition directory (the datakit invariant —
-    e.g. a :class:`NormalizedData.main_output_dir`). Output filenames mirror
-    input basenames, so callers passing a nested layout would risk basename
-    collisions. Hidden directories (e.g. ``.metrics/``) are skipped.
-    """
-    fs, resolved = url_to_fs(input_path)
-    protocol = input_path.split("://")[0] if "://" in input_path else ""
-
-    discovered: list[str] = []
-    for root, _dirs, files in fs.walk(resolved):
-        if _is_hidden_dir(root, resolved):
-            continue
-        for fname in files:
-            if fname.startswith(".") or not fname.endswith(".parquet"):
-                continue
-            full = os.path.join(root, fname)
-            discovered.append(f"{protocol}://{full}" if protocol else full)
-    discovered.sort()
-    return discovered
 
 
 def _discover_eval_files(eval_paths: list[str]) -> Iterator[str]:
@@ -472,7 +449,7 @@ def decon_to_parquet(
         raise ValueError("provide exactly one of eval_data_sources or prebuilt_bloom_dir")
 
     input_path = normalized_data.main_output_dir
-    files = _discover_parquet_partitions(input_path)
+    files = sorted(fsspec_glob(f"{input_path.rstrip('/')}/**/*.parquet"))
     if not files:
         raise FileNotFoundError(f"No .parquet files found under {input_path}")
     num_partitions = len(files)
