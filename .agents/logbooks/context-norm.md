@@ -61,6 +61,18 @@ Code refs:
 - Launch: `experiments/grug/moe/context_norm_no_xsa_gate1.py`.
 - Iris job: `/kaiyue/iris-run-job-20260520-023742` (preemptible v5p-8).
 - W&B group: `context-norm-no-xsa-gate1` (`-v1-d{512,768}-...`).
-- Result: pending.
-- Next action: babysit; on completion compute effective speedup vs. v16
-  baselines at both scales.
+- Result: **gate-1 PASS at both scales** (L∞=1.6, α=0.0941):
+  - d512: variant_loss=3.8293, variant_tps=449,488 → speedup **1.0124** (baseline 3.8104 / 405,630)
+  - d768: variant_loss=3.4478, variant_tps=312,981 → speedup **1.0558** (baseline 3.4339 / 273,532)
+- Interpretation: variant has slightly worse macro_loss but enough faster
+  throughput (1.108× at d512, 1.144× at d768) to win wall-clock. Removing
+  XSA's per-head projection + subtraction is the throughput source.
+- Next action: launch gate-2 at d1024 (9.00e18) and d1280 (2.83e19); fit
+  scaling law on four points; compare projection at 1e21 / 1e23 to baseline.
+
+### 2026-05-20 - Gate-2 kickoff
+- Launch: `experiments/grug/moe/context_norm_no_xsa_gate2.py`.
+- Configs: d1024 (L=11, batch=128, steps=12649), d1280 (L=13, batch=256,
+  steps=11807). Same `use_context_norm=True, use_xsa=False`.
+- W&B group: `context-norm-no-xsa-gate2`.
+- Result: pending (d1024 ~10.5h baseline; d1280 ~26.8h baseline).
