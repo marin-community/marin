@@ -205,8 +205,6 @@ def _value_from_prediction(
     with the full label distribution.
     """
     if score_target_label is not None:
-        # Linear scan: K=-1 typical, but even full binary/multi-class outputs
-        # are only 2-24 elements.
         for label, prob in zip(stripped, probs, strict=False):
             if label == score_target_label:
                 return float(prob)
@@ -234,6 +232,7 @@ def _predict_batch(
     threshold: float,
     score_target_label: str | None,
     output_field_name: str,
+    model_load_fn: Callable[[str], Any],
 ) -> Iterator[dict[str, Any]]:
     """One fasttext.predict call per batch; yield each non-empty record with the prediction annotated.
 
@@ -245,8 +244,8 @@ def _predict_batch(
     ``id``, so absence is the correct signal that the classifier had nothing
     to score).
     """
-    model = _load_fasttext_model(model_path_str)
-    counters.increment("classify/batches_in")
+    model = model_load_fn(model_path_str)
+    counters.increment(name="classify/batches_in")
     counters.increment("classify/docs_in", len(batch))
 
     texts: list[str] = []
@@ -290,6 +289,7 @@ def get_fasttext_batch_predict(
     threshold: float = 0.0,
     score_target_label: str | None = None,
     output_field_name: str = "fasttext_result",
+    model_load_fn: Callable[[str], Any] | None = None,
 ) -> Callable[[list[dict[str, Any]]], Iterator[dict[str, Any]]]:
     """Bind classifier knobs and return a ``flat_map`` callable that annotates each input record.
 
@@ -322,6 +322,10 @@ def get_fasttext_batch_predict(
             struct as the annotation value.
         output_field_name: Field name added to each output record. Existing
             input fields are preserved alongside it.
+        model_load_fn: Override the (cached) model loader. Defaults to
+            :func:`_load_fasttext_model`, which streams the ``.bin`` from
+            GCS once per worker process. Tests inject a fake loader here
+            to avoid GCS / real fasttext at test time.
 
     Returns:
         A ``(list[dict] -> Iterator[dict])`` callable suitable for
@@ -337,6 +341,7 @@ def get_fasttext_batch_predict(
         threshold=threshold,
         score_target_label=score_target_label,
         output_field_name=output_field_name,
+        model_load_fn=model_load_fn or _load_fasttext_model,
     )
 
 
