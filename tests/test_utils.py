@@ -100,3 +100,61 @@ def test_rebase_file_path_with_matching_extension(tmp_path):
     )
 
     assert rebased == os.path.join(str(base_out), "nested", "sample.parquet")
+
+
+def test_rebase_file_path_old_extension_mismatch_raises(tmp_path):
+    """A mismatched old_extension must error, not silently truncate the path."""
+    base_in = tmp_path / "input"
+    base_out = tmp_path / "out"
+    base_in.mkdir()
+    base_out.mkdir()
+    file_path = base_in / "sample.jsonl"
+    file_path.write_text("data")
+
+    with pytest.raises(ValueError, match="does not end with old_extension"):
+        rebase_file_path(
+            str(base_in),
+            str(file_path),
+            str(base_out),
+            new_extension=".parquet",
+            old_extension=".jsonl.gz",
+        )
+
+
+def test_rebase_file_path_replaces_full_compound_extension(tmp_path):
+    """When old_extension contains dots, the whole suffix is replaced (not just the trailing chunk)."""
+    base_in = tmp_path / "input"
+    base_out = tmp_path / "out"
+    base_in.mkdir()
+    base_out.mkdir()
+    file_path = base_in / "sample.jsonl.gz"
+    file_path.write_text("data")
+
+    rebased = rebase_file_path(
+        str(base_in),
+        str(file_path),
+        str(base_out),
+        new_extension=".parquet",
+        old_extension=".jsonl.gz",
+    )
+
+    assert rebased == os.path.join(str(base_out), "sample.parquet")
+
+
+def test_rebase_file_path_without_extension_no_dot_appends(tmp_path):
+    """Without old_extension, files lacking a dot get new_extension appended, not their last char stripped."""
+    base_in = tmp_path / "input"
+    base_out = tmp_path / "out"
+    base_in.mkdir()
+    base_out.mkdir()
+    file_path = base_in / "noext"
+    file_path.write_text("data")
+
+    rebased = rebase_file_path(
+        str(base_in),
+        str(file_path),
+        str(base_out),
+        new_extension=".txt",
+    )
+
+    assert rebased == os.path.join(str(base_out), "noext.txt")
