@@ -57,8 +57,9 @@ Run these before pushing; do not skip any step.
 After pushing, monitor CI with `gh pr view <number> --json statusCheckRollup`;
 fix failures before considering the PR complete.
 
-When opening a new PR, also use the harness automation feature to schedule
-follow-up checks for automated reviews and review comments. The automation
+When opening a new PR, also use the Codex app automation feature
+(`codex_app.automation_update`) to schedule follow-up checks for automated
+reviews and review comments. The automation
 should inspect the PR, address comments automatically only when the fix is
 unobjectionable and certainly correct, run the relevant checks, and push the
 follow-up commit. Defer anything that needs human judgment, design choice, or
