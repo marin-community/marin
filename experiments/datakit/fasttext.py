@@ -324,8 +324,7 @@ def get_fasttext_batch_predict(
             input fields are preserved alongside it.
         model_load_fn: Override the (cached) model loader. Defaults to
             :func:`_load_fasttext_model`, which streams the ``.bin`` from
-            GCS once per worker process. Tests inject a fake loader here
-            to avoid GCS / real fasttext at test time.
+            GCS once per worker process.
 
     Returns:
         A ``(list[dict] -> Iterator[dict])`` callable suitable for
