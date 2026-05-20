@@ -43,8 +43,7 @@ Submit on iris::
         --priority production --cpu 2 --memory 8GB \\
         -- python -m experiments.datakit.reference_pipeline \\
             --domain-centroids gs://.../cluster/train_centroids_<hash> \\
-            --quality-model-bin gs://.../quality/model.bin \\
-            --output-prefix gs://.../datakit/reference/<run-id>
+            --quality-model-bin gs://.../quality/model.bin
 """
 
 import argparse
@@ -150,16 +149,18 @@ def build_steps(
     *,
     domain_centroids_dir: str,
     quality_model_bin: str,
-    output_prefix: str,
 ) -> list[StepSpec]:
     """Build the full DAG of StepSpecs.
+
+    Every step's output lands at ``<MARIN_PREFIX>/<step_name>_<hash>/`` via
+    the default StepSpec routing -- this pipeline never sets
+    ``output_path_prefix``, so changing the deploy region is just a matter
+    of changing ``MARIN_PREFIX``.
 
     Args:
         domain_centroids_dir: GCS directory holding ``centroids_<K_TRAIN>.npy``
             and ``lookup_<K_TRAIN>_to_<k>.npy`` for each K in ``K_VIEWS``.
         quality_model_bin: GCS path to the trained fasttext quality ``.bin``.
-        output_prefix: GCS prefix for every step's output (e.g.
-            ``gs://marin-eu-west4/datakit/reference/<run-id>``).
     """
     sources = all_sources()
     logger.info("Reference pipeline: %d sources", len(sources))
@@ -173,7 +174,6 @@ def build_steps(
     quality_model_step = _register_model_step(
         name="datakit/quality_model/reference",
         model_bin_path=quality_model_bin,
-        output_path_prefix=output_prefix,
     )
 
     # One combined decontam bloom (no merge step); every per-source decon
@@ -205,7 +205,6 @@ def build_steps(
 
         embed = StepSpec(
             name=f"datakit/embed/{name}",
-            output_path_prefix=output_prefix,
             deps=[normalize_step],
             hash_attrs={
                 "luxical_repo": LUXICAL_REPO,
@@ -231,7 +230,6 @@ def build_steps(
         # invalidates already-assigned outputs.
         assign = StepSpec(
             name=f"datakit/cluster_assign/{name}",
-            output_path_prefix=output_prefix,
             deps=[embed],
             hash_attrs={
                 "centroids_dir": domain_centroids_dir,
@@ -259,7 +257,6 @@ def build_steps(
             name=f"datakit/quality/{name}",
             normalized=normalize_step,
             model_step=quality_model_step,
-            output_path_prefix=output_prefix,
         )
 
         decontam = decon_step(
@@ -275,7 +272,6 @@ def build_steps(
 
         minhash = StepSpec(
             name=f"datakit/minhash/{name}",
-            output_path_prefix=output_prefix,
             deps=[normalize_step],
             fn=lambda op, n=normalize_step: compute_minhash_attrs(
                 source=Artifact.from_path(n, NormalizedData),
@@ -297,7 +293,6 @@ def build_steps(
     # ---- Cross-source dedup ----------------------------------------------------
     dedup = StepSpec(
         name="datakit/dedup",
-        output_path_prefix=output_prefix,
         deps=minhash_steps,
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[Artifact.from_path(s, MinHashAttrData) for s in minhash_steps],
@@ -331,7 +326,6 @@ def build_steps(
 
     store = StepSpec(
         name="datakit/store",
-        output_path_prefix=output_prefix,
         deps=store_deps,
         fn=_store_fn,
     )
@@ -355,18 +349,12 @@ def main() -> None:
         required=True,
         help="GCS path to the trained fasttext quality model.bin from cluster/quality/v0",
     )
-    parser.add_argument(
-        "--output-prefix",
-        required=True,
-        help="GCS prefix for all step outputs from this run",
-    )
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
     steps = build_steps(
         domain_centroids_dir=args.domain_centroids,
         quality_model_bin=args.quality_model_bin,
-        output_prefix=args.output_prefix,
     )
     StepRunner().run(steps)
 

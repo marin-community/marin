@@ -109,7 +109,7 @@ class LlmQualityOutput(BaseModel):
     counters: dict[str, int]
 
 
-def _register_model_step(name: str, model_bin_path: str, output_path_prefix: str) -> StepSpec:
+def _register_model_step(name: str, model_bin_path: str, output_path_prefix: str | None = None) -> StepSpec:
     """Tiny StepSpec that just emits a FastTextModel artifact pointing at *model_bin_path*.
 
     :func:`classify_llm_quality_step` consumes its ``model_step`` via
@@ -193,7 +193,7 @@ def classify_llm_quality_step(
     name: str,
     normalized: StepSpec,
     model_step: StepSpec,
-    output_path_prefix: str,
+    output_path_prefix: str | None = None,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> StepSpec:
