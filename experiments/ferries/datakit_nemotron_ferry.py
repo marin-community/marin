@@ -48,8 +48,7 @@ logger = logging.getLogger(__name__)
 
 # Canonical, region-pinned location of the staged Nemotron-CC raw dump. The
 # dump was populated by a one-off download into marin-eu-west4; the ferry only
-# reads from it and will fail-fast if it isn't there. Matches the path used in
-# ``experiments/datakit/dedup/poc_nemotron.py``.
+# reads from it and will fail-fast if it isn't there.
 NEMOTRON_RAW_PATH = "gs://marin-eu-west4/raw/nemotro-cc-eeb783"
 NEMOTRON_DATA_SUBDIR = "contrib/Nemotron/Nemotron-CC/data-jsonl"
 NEMOTRON_QUALITY_DIR = "quality=high"
