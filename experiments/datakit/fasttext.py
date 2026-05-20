@@ -251,13 +251,6 @@ def _load_with_source(path: str) -> Iterator[dict[str, Any]]:
         yield record
 
 
-def _empty_attrs(score_target_label: str | None) -> dict[str, Any]:
-    """Empty-text placeholder matching :func:`_output_schema`."""
-    if score_target_label is not None:
-        return {"high_score": 0.0}
-    return {"top_label": "", "top_score": 0.0, "labels": [], "scores": []}
-
-
 def _attrs_from_prediction(
     stripped: list[str],
     probs: Any,
@@ -291,49 +284,43 @@ def _predict_batch(
     threshold: float,
     score_target_label: str | None,
 ) -> Iterator[dict[str, Any]]:
-    """One fasttext.predict call per batch; yield per-record output dicts in input order."""
+    """One fasttext.predict call per batch; yield per-record output dicts for non-empty docs.
+
+    Empty-text records are skipped (consolidate joins by id, so absence is the
+    correct signal that the classifier had nothing to score).
+    """
     model = _load_fasttext_model(model_path_str)
     counters.increment("classify/batches_in")
     counters.increment("classify/docs_in", len(batch))
 
-    # Split: non-empty docs feed one batched predict; empty docs get a fixed
-    # empty_attrs without ever touching the model.
     texts: list[str] = []
-    text_idx: list[int] = []
+    records_to_predict: list[dict[str, Any]] = []
     bytes_in = 0
     truncated = 0
-    for i, record in enumerate(batch):
+    for record in batch:
         raw = str(record.get(text_field, "") or "")
-        if raw:
-            bytes_in += len(raw)
-            if max_text_chars is not None and len(raw) > max_text_chars:
-                truncated += 1
-            texts.append(_normalize_for_fasttext(raw, max_text_chars))
-            text_idx.append(i)
+        if not raw:
+            continue
+        bytes_in += len(raw)
+        if max_text_chars is not None and len(raw) > max_text_chars:
+            truncated += 1
+        texts.append(_normalize_for_fasttext(raw, max_text_chars))
+        records_to_predict.append(record)
     counters.increment("classify/bytes_in", bytes_in)
+    counters.increment("classify/empty_text", len(batch) - len(texts))
     if truncated:
         counters.increment("classify/docs_truncated", truncated)
 
-    if texts:
-        labels_list, probs_list = model.predict(texts, k=k, threshold=threshold)
-    else:
-        labels_list, probs_list = [], []
+    if not texts:
+        return
 
-    predicted: dict[int, dict[str, Any]] = {}
-    for j, i in enumerate(text_idx):
-        stripped = [_strip_label_prefix(label) for label in labels_list[j]]
-        predicted[i] = _attrs_from_prediction(stripped, probs_list[j], score_target_label)
-
-    for i, record in enumerate(batch):
-        if i in predicted:
-            counters.increment("classify/predicted")
-            attrs = predicted[i]
-        else:
-            counters.increment("classify/empty_text")
-            attrs = _empty_attrs(score_target_label)
+    labels_list, probs_list = model.predict(texts, k=k, threshold=threshold)
+    for record, labels, probs in zip(records_to_predict, labels_list, probs_list, strict=True):
+        stripped = [_strip_label_prefix(label) for label in labels]
+        counters.increment("classify/predicted")
         yield {
             "id": record["id"],
-            "attributes": attrs,
+            "attributes": _attrs_from_prediction(stripped, probs, score_target_label),
         }
 
 
