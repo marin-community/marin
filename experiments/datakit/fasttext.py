@@ -230,7 +230,10 @@ def _attrs_from_prediction(
         for label, prob in zip(stripped, probs, strict=False):
             if label == score_target_label:
                 return {"high_score": float(prob)}
-        return {"high_score": 0.0}
+        raise ValueError(
+            f"score_target_label={score_target_label!r} not in predicted labels {stripped!r}; "
+            f"check the label spelling, or relax k/threshold so the target label survives."
+        )
     top_label = stripped[0] if stripped else ""
     top_score = float(probs[0]) if len(probs) > 0 else 0.0
     return {
