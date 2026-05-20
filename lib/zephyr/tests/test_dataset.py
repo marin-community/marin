@@ -81,7 +81,7 @@ def test_from_query(zephyr_ctx, sample_datafusion_ctx):
         )
         .map(lambda x: x["id"])
     )
-    assert list(zephyr_ctx.execute(ds)) == [1, 2, 3, 6]
+    assert set(zephyr_ctx.execute(ds).results) == {1, 2, 3, 6}
 
 
 def test_from_query__agg(zephyr_ctx, sample_datafusion_ctx):
@@ -89,17 +89,32 @@ def test_from_query__agg(zephyr_ctx, sample_datafusion_ctx):
         Dataset
         .from_query(
             sample_datafusion_ctx,
-            """SELECT version, AVG(rating) as avg_rating 
-                     from mytable 
-                     GROUP BY version 
+            """SELECT version, AVG(rating) as avg_rating
+                     from mytable
+                     GROUP BY version
                      ORDER BY version"""
         )
     )
-    assert list(zephyr_ctx.execute(ds)) == [
+    assert zephyr_ctx.execute(ds).results == [
         {"version": 1, "avg_rating": 2.5},
         {"version": 2, "avg_rating": 3.5},
         {"version": 3, "avg_rating": 0.0},
     ]
+
+
+def test_from_query__reexecutable(zephyr_ctx, sample_datafusion_ctx):
+    """A Dataset built from from_query must produce the same results across
+    repeated executions — the source has to be re-iterable, not a one-shot
+    generator."""
+    ds = (
+        Dataset.from_query(
+            sample_datafusion_ctx,
+            "SELECT id from mytable WHERE version = 1"
+        )
+        .map(lambda x: x["id"]))
+    first = set(zephyr_ctx.execute(ds).results)
+    second = set(zephyr_ctx.execute(ds).results)
+    assert first == second == {1, 2, 3, 6}
 
 
 

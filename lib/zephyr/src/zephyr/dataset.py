@@ -38,6 +38,22 @@ class GlobSource:
 
 
 @dataclass(frozen=True)
+class DataFusionPartitionsSource:
+    """Re-iterable source that runs a DataFusion query and yields one
+    materialized partition (list of records) per iteration step.
+
+    This class is robust to retries.
+    """
+
+    ctx: SessionContext
+    query: str
+
+    def __iter__(self) -> Iterator[list[dict]]:
+        for stream in self.ctx.sql(self.query).execute_stream_partitioned():
+            yield [record for batch in stream for record in batch.to_pyarrow().to_pylist()]
+
+
+@dataclass(frozen=True)
 class FileEntry:
     """A discovered input file: read-spec plus metadata from the bulk listing.
 
@@ -452,13 +468,7 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = list(ctx.execute(ds))
         """
-        def _flatten_records(stream: datafusion.RecordBatchStream) -> Iterable[dict]:
-            for batch in stream:
-                yield from batch.to_pyarrow().to_pylist()
-        return (
-            Dataset.from_list(ctx.sql(query).execute_stream_partitioned())
-            .flat_map(_flatten_records)
-         )
+        return Dataset(DataFusionPartitionsSource(ctx, query)).flat_map(lambda records: records)
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
