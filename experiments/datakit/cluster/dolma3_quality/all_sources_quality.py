@@ -51,11 +51,11 @@ from marin.utils import fsspec_glob
 from pydantic import BaseModel
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
+from zephyr.readers import load_file
 
 from experiments.datakit.fasttext import (
     FastTextModel,
     classify_fasttext,
-    load_with_source,
     output_schema,
     prepare_fasttext_model_step,
 )
@@ -147,7 +147,7 @@ def _run_one_source(
     if not files:
         raise FileNotFoundError(f"{source_name}: no .parquet files under {normalized.main_output_dir}")
     output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"
-    pipeline = Dataset.from_list(files).flat_map(load_with_source)
+    pipeline = Dataset.from_list(files).flat_map(load_file)
     pipeline = classify_fasttext(
         pipeline,
         model_path=model_path,

@@ -14,7 +14,7 @@ Provides three composable pieces:
   records into batches and runs one ``fasttext.predict`` call per batch.
   Returns a Dataset of per-record output dicts; the caller composes it into
   whatever surrounding pipeline they need (typically
-  ``.write_parquet(...)``).
+  ``.flat_map(load_file)`` upstream + ``.write_parquet(...)`` downstream).
 
 * :func:`output_schema` — the pyarrow schema for the per-record outputs,
   for callers that want to pass an explicit schema to
@@ -50,7 +50,6 @@ from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, atomic_rename, counters
-from zephyr.readers import load_file
 
 logger = logging.getLogger(__name__)
 
@@ -219,19 +218,6 @@ def _load_fasttext_model(model_path_str: str) -> Any:
     return fasttext.load_model(local)
 
 
-def load_with_source(path: str) -> Iterator[dict[str, Any]]:
-    """Load records from *path* and tag each with its ``_source_path``.
-
-    A small ``flat_map`` helper for the common ``Dataset.from_list(paths)``
-    layout; tagging the source lets downstream stages distinguish
-    same-id records that came from different input shards.
-    """
-    counters.increment("classify/files_in")
-    for record in load_file(path):
-        record["_source_path"] = path
-        yield record
-
-
 def _attrs_from_prediction(
     stripped: list[str],
     probs: Any,
@@ -323,7 +309,7 @@ def classify_fasttext(
     Args:
         dataset: Upstream Dataset whose items are record dicts with at least an
             ``id`` and a text column (named *text_field*). Typically built from
-            ``Dataset.from_list(files).flat_map(load_with_source)``.
+            ``Dataset.from_list(files).flat_map(load_file)``.
         model_path: GCS path to the staged fasttext ``.bin`` (the
             ``model_path`` field of a :class:`FastTextModel` artifact produced
             by :func:`prepare_fasttext_model_step`).
