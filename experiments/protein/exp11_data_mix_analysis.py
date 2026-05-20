@@ -384,8 +384,8 @@ def render_heatmap(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) ->
     fig.tight_layout()
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = out_dir / "heatmap_loss.pdf"
-    png_path = out_dir / "heatmap_loss.png"
+    pdf_path = out_dir / "val_test_loss_by_mixture.pdf"
+    png_path = out_dir / "val_test_loss_by_mixture.png"
     fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -444,8 +444,8 @@ def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path)
     fig.tight_layout()
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = out_dir / "cdval_bars.pdf"
-    png_path = out_dir / "cdval_bars.png"
+    pdf_path = out_dir / "cdval_loss_by_mixture.pdf"
+    png_path = out_dir / "cdval_loss_by_mixture.png"
     fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
