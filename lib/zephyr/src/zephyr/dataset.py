@@ -456,14 +456,14 @@ class Dataset(Generic[T]):
             A Dataset of records.
 
         Example:
-            >>> ctx = SessionContext()
-            >>> ctx.register_parquet("mytable", "/input/")
+            >>> df_ctx = SessionContext()
+            >>> df_ctx.register_parquet("mytable", "/input/")
             >>> ds = (Dataset
-            ...     .from_query(ctx, '''SELECT * from mytable''')
+            ...     .from_query(df_ctx, '''SELECT * from mytable''')
             ...     .map(lambda r: transform_record(r))
             ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = list(ctx.execute(ds))
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(DataFusionSource(ctx, query)).flat_map(lambda records: records)
 
