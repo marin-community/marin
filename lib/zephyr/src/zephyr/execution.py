@@ -980,14 +980,12 @@ class ZephyrCoordinator:
                 snap = self._worker_counters.get(worker_id)
                 return dict(snap.counters) if snap is not None else {}
 
-            totals: dict[str, int] = {}
+            totals: Counter[str] = Counter()
             for snap in self._completed_counters:
-                for name, value in snap.counters.items():
-                    totals[name] = totals.get(name, 0) + value
+                totals.update(snap.counters)
             for snap in self._worker_counters.values():
-                for name, value in snap.counters.items():
-                    totals[name] = totals.get(name, 0) + value
-            return totals
+                totals.update(snap.counters)
+            return dict(totals)
 
     def get_fatal_error(self) -> str | None:
         with self._lock:
@@ -1443,15 +1441,14 @@ class ZephyrWorker:
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Aggregate live counters from all active runners; return None if unchanged."""
         runners = list(self._active_runners)  # GIL-safe snapshot
-        current: dict[str, int] = {}
+        current: Counter[str] = Counter()
         for r in runners:
-            for k, v in r.live_counters().items():
-                current[k] = current.get(k, 0) + v
+            current.update(r.live_counters())
         if current == self._last_reported_counters:
             return None
-        self._last_reported_counters = current
+        self._last_reported_counters = dict(current)
         self._counter_generation += 1
-        return CounterSnapshot(counters=current, generation=self._counter_generation)
+        return CounterSnapshot(counters=dict(current), generation=self._counter_generation)
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
