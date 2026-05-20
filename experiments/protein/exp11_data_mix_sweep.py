@@ -8,19 +8,20 @@ quality-bucketed re-publication ``eczech/marinfold-exp11-protein-docs``
 (H=round0, M=round1, L=round2..4), loss-masked to match
 ``protein_train_common.distance_masked_components()``.
 
-Hyperparameters trace back to ``train_protein_1_5b_distance_masked.py``
-(source of truth): batch=128, seq=8192, lr=3.5e-4, weight_decay=0.01,
-warmup=0.1. Other (batch, hidden) pairs rescale via
-``scaled_lr(b, h) = LR_CONSTANT * sqrt(b) / h``.
+Hyperparameter reference recipe (from ``train_protein_1_5b_distance_masked.py``):
+batch=128, seq=8192, lr=3.5e-4, weight_decay=0.01, warmup=0.1. Current runs
+use ``BATCH_SIZE`` (set below) with LR rescaled via
+``scaled_lr(b, h) = LR_CONSTANT * sqrt(b) / h`` and
+``beta2 = 0.98 ** (BATCH_SIZE / 128)``.
 
 Subcommands (``COMMAND`` env var):
 
 * ``tokenize`` — one Fray job per (quality, split) cell.
-* ``run_smoke`` — single trial: m9 (staged), 100M, ~200M tokens; m9
+* ``run_smoke`` — single trial: m9 (staged), 100M, ~400M tokens; m9
   exercises the staged-mixture path.
 * ``run_mix_sweep`` — all 9 mix mixtures (m1..m9) at 100M, ~4.3B tokens each.
 * ``run_scale_sweep`` — 4 scale mixtures (m10..m13) at 1.5B on v5p-8,
-  batch=128, ~43.3B tokens each (one job per mixture).
+  ~43.3B tokens each (one job per mixture).
 
 Env vars: ``COMMAND`` (required), ``RUNS`` (CSV substring filter on target
 ids), ``PREVIEW=yes`` (list targets, submit nothing), ``NUM_WORKERS``
@@ -207,13 +208,22 @@ def scaled_lr(batch_size: int, hidden_size: int) -> float:
     return LR_CONSTANT * math.sqrt(batch_size) / hidden_size
 
 
+# Operating point for all sweeps. LR scales by sqrt(BATCH_SIZE/128) via
+# scaled_lr; beta2 follows the noise-scale heuristic
+# beta2 = 0.98 ** (BATCH_SIZE / 128). At BATCH_SIZE=256 these resolve to:
+#   smoke/mix (HIDDEN_100M=768):  lr = 1.32e-3
+#   scale     (HIDDEN_1_5B=2048): lr = 4.95e-4
+#   beta2 (all sweeps): 0.9604
+BATCH_SIZE: int = 256
+BETA2: float = 0.98 ** (BATCH_SIZE / 128)
+
 WEIGHT_DECAY: float = 0.01
 WARMUP: float = 0.1
 
-# Linear decay to ``DECAY * peak`` post-warmup. Overrides Levanter's cosine
+# Linear decay to ``LR_DECAY * peak`` post-warmup. Overrides Levanter's cosine
 # default so smoke/mix/scale runs are directly comparable.
 LR_SCHEDULE: str = "linear"
-DECAY: float = 0.2
+LR_DECAY: float = 0.2
 
 # Rolling temp-checkpoint cadence. Overrides defaults.py's 10-min default so
 # preemption/host-loss costs ≤8 min of progress.
@@ -230,8 +240,8 @@ PROTEIN_VOCAB_SIZE: int = 2840
 # IID held-out sequences carved per train cell; ~4096 ≈ 33.5M tokens / cell.
 IID_EVAL_SEQS_PER_TRAIN: int = 4096
 
-# At batch=128, seq=8192 this caps eval at ~33.6M tokens / component.
-MAX_EVAL_BATCHES: int = 32
+# At BATCH_SIZE=256, seq=8192: 16 * 256 = 4096 examples, ~33.6M tokens / component.
+MAX_EVAL_BATCHES: int = 16
 
 # Pinned so cross-run comparisons share the same data permutation.
 DATA_SEED: int = 1729
@@ -252,7 +262,7 @@ MIXTURE_BLOCK_SIZE: int = 2048
 # us-east5-a co-locates TPUs with the ``marin-us-east5`` checkpoint bucket.
 PROTEIN_ZONE = "us-east5-a"
 
-# All stages run batch=128 with ``scaled_lr`` so v5p-8 fits.
+# All stages run BATCH_SIZE with ``scaled_lr`` so v5p-8 fits.
 _DEFAULT_TPU = "v5p-8"
 
 
@@ -574,7 +584,7 @@ def _describe_target(spec: "StageSpec", target: SweepTarget) -> str:
         f"  {target.target_id}",
         f"    model={spec.model_tag} batch={spec.batch_size} steps={spec.num_train_steps} "
         f"steps_per_eval={spec.steps_per_eval} lr={spec.learning_rate:.4g} tokens={tokens_str} "
-        f"lr_schedule={LR_SCHEDULE} decay={DECAY}",
+        f"lr_schedule={LR_SCHEDULE} decay={LR_DECAY}",
     ]
     if isinstance(quality_weights, dict):
         lines.append(f"    mixture (static): {_format_weights(quality_weights)}")
@@ -656,8 +666,9 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         num_train_steps=spec.num_train_steps,
         learning_rate=versioned(spec.learning_rate),
         weight_decay=WEIGHT_DECAY,
+        beta2=BETA2,
         warmup=WARMUP,
-        decay=DECAY,
+        decay=LR_DECAY,
         lr_schedule=LR_SCHEDULE,
         train_seq_len=SEQ_LEN,
         steps_per_eval=spec.steps_per_eval,
@@ -707,9 +718,9 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
 
 def _make_stage_specs() -> dict[str, StageSpec]:
     # cd train = 43.301B packed tokens (user-confirmed face value, no recount).
-    smoke_steps, smoke_spe = _schedule(200_000_000, num_evals=2, batch_size=128)
-    mix_steps, mix_spe = _schedule(4_300_000_000, num_evals=8, batch_size=128)
-    scale_steps, scale_spe = _schedule(43_301_511_168, num_evals=32, batch_size=128)
+    smoke_steps, smoke_spe = _schedule(400_000_000, num_evals=2, batch_size=BATCH_SIZE)
+    mix_steps, mix_spe = _schedule(4_300_000_000, num_evals=8, batch_size=BATCH_SIZE)
+    scale_steps, scale_spe = _schedule(43_301_511_168, num_evals=32, batch_size=BATCH_SIZE)
     return {
         # m9 exercises MixtureDataset's weight_stages path (alignment + rescaling).
         "run_smoke": StageSpec(
@@ -719,11 +730,11 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             model_config=protein_llama_100m,
             resources_fn=_resources,
             mixture_ids=("m9",),
-            batch_size=128,
+            batch_size=BATCH_SIZE,
             num_train_steps=smoke_steps,
             steps_per_eval=smoke_spe,
-            learning_rate=scaled_lr(128, HIDDEN_100M),
-            version="v5",
+            learning_rate=scaled_lr(BATCH_SIZE, HIDDEN_100M),
+            version="v6",
             num_workers=1,
         ),
         "run_mix_sweep": StageSpec(
@@ -733,11 +744,11 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             model_config=protein_llama_100m,
             resources_fn=_resources,
             mixture_ids=tuple(m.id for m in MIX_MIXTURES),
-            batch_size=128,
+            batch_size=BATCH_SIZE,
             num_train_steps=mix_steps,
             steps_per_eval=mix_spe,
-            learning_rate=scaled_lr(128, HIDDEN_100M),
-            version="v2",
+            learning_rate=scaled_lr(BATCH_SIZE, HIDDEN_100M),
+            version="v3",
             # 9 trials, one v5p-8 per worker; 9 workers ⇒ one trial each.
             num_workers=9,
         ),
@@ -748,11 +759,11 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             model_config=protein_llama_1_5b,
             resources_fn=_resources,
             mixture_ids=tuple(m.id for m in SCALE_MIXTURES),
-            batch_size=128,
+            batch_size=BATCH_SIZE,
             num_train_steps=scale_steps,
             steps_per_eval=scale_spe,
-            learning_rate=scaled_lr(128, HIDDEN_1_5B),
-            version="v2",
+            learning_rate=scaled_lr(BATCH_SIZE, HIDDEN_1_5B),
+            version="v3",
             # 4 trials, one v5p-8 per worker → 1 trial each.
             num_workers=4,
             heldout_cells=(Cell("H", "val"), Cell("H", "test")),
