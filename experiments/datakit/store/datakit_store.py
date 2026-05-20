@@ -9,7 +9,7 @@ for the datakit attribute datasets that the global pipelines produce:
     tokenize        per-source ``{id, input_ids}``, dense, sorted by id
     decontam        per-source ``{id, attributes: {contaminated, ...}}``, dense
     cluster_assign  per-source ``{id, cluster_<K>, ...}``, dense
-    quality         per-source ``{id, attributes: {high_score: float}}``, dense
+    quality         per-source ``{id, attributes: {score: float}}``, dense
                     (dolma3 fasttext-quality classifier output)
     dedup           per-source ``{id, attributes: {is_cluster_canonical, ...}}``,
                     SPARSE -- singletons omitted by ``compute_fuzzy_dups_attrs``
@@ -23,7 +23,7 @@ a single map-side pass joins them per shard with no shuffle. The pass:
    with the three dense attribute tables (sanity-asserts id alignment).
 4. Drops contaminated rows; drops dedup-cluster non-canonicals (rows missing
    from dedup are singletons -> kept).
-5. Maps each surviving doc's ``high_score`` into one of ``len(_QUALITY_THRESHOLDS) + 1``
+5. Maps each surviving doc's ``score`` into one of ``len(_QUALITY_THRESHOLDS) + 1``
    quality buckets (default 5; fixed cutoffs ``[0.2, 0.4, 0.6, 0.8]``), then
    routes the row by ``(cluster_<view>, quality_bucket)`` directly into one
    of up to ``K_clusters * K_quality`` lazily-opened ``SerialCacheWriter``
@@ -81,7 +81,7 @@ from experiments.datakit.cluster.v0.assign import AssignmentAttrData
 logger = logging.getLogger(__name__)
 
 
-# Fixed quality-bucket thresholds: high_score is bucketed via bisect_right
+# Fixed quality-bucket thresholds: score is bucketed via bisect_right
 # against these cutoffs, yielding 0..(len(thresholds)) inclusive. With the
 # default below: bucket 0 = [0, 0.2), 1 = [0.2, 0.4), 2 = [0.4, 0.6),
 # 3 = [0.6, 0.8), 4 = [0.8, 1.0].
@@ -111,7 +111,7 @@ class ClusteredStoreData(BaseModel):
             ``cache_path/cluster=<C>/quality=<Q>/``.
         cluster_view: Cluster-K used to partition the store
             (column name ``cluster_<view>`` read from the assignment shards).
-        quality_thresholds: Cutoffs used to bucket ``high_score`` via
+        quality_thresholds: Cutoffs used to bucket ``score`` via
             ``bisect_right``. Length == ``N_QUALITY_BUCKETS - 1``.
         split: Tokenize split fed into the store (e.g. ``"train"``).
         buckets: List of per-(cluster, quality) stats. Buckets that
@@ -219,14 +219,14 @@ def _load_cluster_table(path: str, cluster_col: str) -> tuple[pa.Array, np.ndarr
 
 
 def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
-    """Return ``(ids, high_score)`` for one quality shard. ids is pyarrow, scores are float64 numpy."""
+    """Return ``(ids, score)`` for one quality shard. ids is pyarrow, scores are float64 numpy."""
     table = pq.read_table(path, columns=["id", "attributes"])
     ids = table.column("id").combine_chunks()
-    high_score = np.asarray(
-        table.column("attributes").combine_chunks().field("high_score"),
+    score = np.asarray(
+        table.column("attributes").combine_chunks().field("score"),
         dtype=np.float64,
     )
-    return ids, high_score
+    return ids, score
 
 
 def _load_dedup_canonical(path: str) -> dict[str, bool]:
@@ -318,7 +318,7 @@ _TOKENIZE_BATCH_SIZE = 8192
 
 
 def _quality_bucket(score: float) -> int:
-    """Map a fasttext ``high_score`` (float in [0, 1]) to a bucket index 0..N_QUALITY_BUCKETS-1."""
+    """Map a fasttext ``score`` (float in [0, 1]) to a bucket index 0..N_QUALITY_BUCKETS-1."""
     return bisect.bisect_right(_QUALITY_THRESHOLDS, score)
 
 
@@ -364,7 +364,7 @@ def _join_filter_stream_shard(
 
     decon_ids, contaminated = _load_decon_table(decon_path)
     cluster_ids, cluster_vals = _load_cluster_table(cluster_path, cluster_col)
-    quality_ids, high_scores = _load_quality_table(quality_path)
+    quality_ids, scores = _load_quality_table(quality_path)
     n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
     if not (n_decon == n_cluster == n_quality):
         raise RuntimeError(
@@ -437,7 +437,7 @@ def _join_filter_stream_shard(
                 # Numpy slices -- O(0) views, not copies.
                 decon_slice = contaminated[row_idx : row_idx + batch_len]
                 cluster_slice = cluster_vals[row_idx : row_idx + batch_len]
-                quality_slice = high_scores[row_idx : row_idx + batch_len]
+                quality_slice = scores[row_idx : row_idx + batch_len]
                 row_idx += batch_len
 
                 for i, doc_id in enumerate(tok_ids):

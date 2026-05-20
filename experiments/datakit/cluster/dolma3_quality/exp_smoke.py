@@ -9,7 +9,7 @@ well under an hour. Verifies:
 
 - HF model fetch + GCS staging via :func:`prepare_fasttext_model_step`
 - Co-partitioned attributes parquet writes against datakit-normalized input
-- The flat ``{id, high_score}`` output schema downstream consolidate consumes
+- The flat ``{id, score}`` output schema downstream consolidate consumes
 - That the staged ``.bin`` is reachable from a Zephyr classify worker in eu-west4
 
 Submit:

@@ -31,7 +31,7 @@ Output record shape (one dict per non-empty input record, keyed by ``id``):
     Full distribution (default)        Binary (``score_target_label`` set)
     ───────────────────────────        ───────────────────────────────────
     id        : string                 id         : string
-    top_label : string                 high_score : float64
+    top_label : string                 score : float64
     top_score : float64
     labels    : list[string]
     scores    : list[float64]
@@ -173,7 +173,7 @@ def output_schema(score_target_label: str | None) -> pa.Schema:
         return pa.schema(
             [
                 pa.field("id", pa.string()),
-                pa.field("high_score", pa.float64()),
+                pa.field("score", pa.float64()),
             ]
         )
     return pa.schema(
@@ -235,7 +235,7 @@ def _attrs_from_prediction(
         # are only 2-24 elements.
         for label, prob in zip(stripped, probs, strict=False):
             if label == score_target_label:
-                return {"high_score": float(prob)}
+                return {"score": float(prob)}
         raise ValueError(
             f"score_target_label={score_target_label!r} not in predicted labels {stripped!r}; "
             f"check the label spelling, or relax k/threshold so the target label survives."
@@ -335,7 +335,7 @@ def get_fasttext_batch_predict(
             label distribution.
         threshold: Minimum probability for a label to be kept.
         score_target_label: If set, the output collapses to a single
-            ``high_score: float64`` field equal to
+            ``score: float64`` field equal to
             ``P(label == score_target_label)``. Use for binary classifiers.
             ``None`` keeps the full ``{top_label, top_score, labels, scores}``
             field set.

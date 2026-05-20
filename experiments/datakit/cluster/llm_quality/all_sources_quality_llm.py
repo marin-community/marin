@@ -6,8 +6,8 @@
 Mirrors :mod:`experiments.datakit.cluster.dolma3_quality.all_sources_quality`
 but points the classify fan-out at our locally-trained ``model.bin``
 (produced by :mod:`experiments.datakit.cluster.llm_quality.train`) instead
-of the AllenAI HuggingFace model. Output records are ``{id, high_score}``
-where ``high_score = P(label == "1") = P(quality >= threshold)``,
+of the AllenAI HuggingFace model. Output records are ``{id, score}``
+where ``score = P(label == "1") = P(quality >= threshold)``,
 co-partitioned with each source's normalized parquet.
 
 DAG shape::
@@ -73,7 +73,7 @@ logger = logging.getLogger(__name__)
 _OUTPUT_PREFIX = "gs://marin-eu-west4/datakit/llm-quality-classifier/inference"
 
 # Inference knobs mirror dolma3-quality (binary classifier, P(label="1")
-# collapsed to ``high_score``) so consumers can swap classifiers without
+# collapsed to ``score``) so consumers can swap classifiers without
 # changing downstream consolidate code.
 K = -1
 THRESHOLD = 0.0
@@ -101,7 +101,7 @@ class LlmQualityOutput(BaseModel):
     """Step artifact for one source's LLM-quality classification.
 
     Output parquets live at ``<output_dir>/data-NNNNN-of-MMMMM.parquet``, each
-    row ``{id, high_score: float64}`` where ``high_score = P(label == "1")``.
+    row ``{id, score: float64}`` where ``score = P(label == "1")``.
     """
 
     version: str = "v1"

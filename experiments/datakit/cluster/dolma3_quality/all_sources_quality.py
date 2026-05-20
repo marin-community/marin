@@ -8,7 +8,7 @@ Applies AllenAI's Dolma3 fasttext quality classifier
 :func:`marin.datakit.sources.all_sources` (minus the standard ``safety_pt/*`` /
 ``climblab-ja`` carve-outs -- see ``_EXCLUDE_PREFIXES``), producing one
 co-partitioned Parquet attributes dataset per source. Output records are
-``{id, high_score}`` (binary classifier collapsed via ``score_target_label``).
+``{id, score}`` (binary classifier collapsed via ``score_target_label``).
 
 DAG shape::
 
@@ -78,7 +78,7 @@ MODEL_REVISION = "bb89085994fef638ca8dc2ca25169db328e314bb"
 # label distribution at — needed so the score_target_label shim can pluck out
 # ``P(label == "1")``. ``MAX_TEXT_CHARS = 100 KiB`` caps the predict-call cost
 # on pathologically long documents (matches the Dolma3 upstream pipeline).
-# ``SCORE_TARGET_LABEL = "1"`` collapses the output to a single ``high_score``
+# ``SCORE_TARGET_LABEL = "1"`` collapses the output to a single ``score``
 # field = ``P(high-quality)`` -- the Dolma3 fasttext-quality model is binary
 # {0=low, 1=high}, so storing the full label list on every row duplicates 2
 # strings ~10^10 times for no benefit.
@@ -127,7 +127,7 @@ class DolmaQualityOutput(BaseModel):
     """Step artifact for one source's Dolma3 quality classification.
 
     Output parquets live at ``<output_dir>/data-NNNNN-of-MMMMM.parquet``, each
-    row ``{id, high_score: float64}`` where ``high_score = P(label == "1")``.
+    row ``{id, score: float64}`` where ``score = P(label == "1")``.
     """
 
     version: str = "v1"

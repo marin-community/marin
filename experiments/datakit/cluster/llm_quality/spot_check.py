@@ -5,7 +5,7 @@
 
 For each active Datakit source, samples one random shard from
 ``inference/<name>/quality-llm/<source>_<hash>/`` and aggregates the
-classifier's ``attributes.high_score`` (= ``P(label == '1')``):
+classifier's ``attributes.score`` (= ``P(label == '1')``):
 
   * Mean, median, std, fraction of docs above ``--threshold``
   * Top-K and bottom-K docs by P(high), joined back to the normalized
@@ -127,7 +127,7 @@ def _read_attr_shard(path: str) -> list[tuple[str, int, float]]:
             for doc_id, pid, attr in zip(ids, pids, attrs, strict=True):
                 if not attr:
                     continue
-                score = attr.get("high_score")
+                score = attr.get("score")
                 if score is None:
                     continue
                 rows.append((str(doc_id), int(pid), float(score)))

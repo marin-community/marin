@@ -110,7 +110,7 @@ def _verify_shard(
     basename = spec["basename"]
     decon_ids, contaminated = _load_decon_table(spec["decontam"])
     cluster_ids, cluster_vals = _load_cluster_table(spec["cluster"], cluster_col)
-    quality_ids, high_scores = _load_quality_table(spec["quality"])
+    quality_ids, scores = _load_quality_table(spec["quality"])
     n_decon, n_cluster, n_quality = len(decon_ids), len(cluster_ids), len(quality_ids)
     if not (n_decon == n_cluster == n_quality):
         raise RuntimeError(
@@ -133,7 +133,7 @@ def _verify_shard(
     per_bucket: dict[str, int] = defaultdict(int)
     n_contam = 0
     n_dedup_drop = 0
-    for did, contam, cval, qscore in zip(decon_id_list, contaminated, cluster_vals, high_scores, strict=True):
+    for did, contam, cval, qscore in zip(decon_id_list, contaminated, cluster_vals, scores, strict=True):
         if contam:
             n_contam += 1
             continue
