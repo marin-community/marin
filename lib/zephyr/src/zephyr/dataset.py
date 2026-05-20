@@ -40,8 +40,6 @@ class GlobSource:
 class DataFusionSource:
     """Re-iterable source that runs a DataFusion query and yields one
     materialized partition (list of records) per iteration step.
-
-    This class is robust to retries.
     """
 
     ctx: SessionContext
