@@ -507,7 +507,7 @@ def _make_clean_step(
     *,
     resources: ResourceConfig = _CLEAN_RESOURCES,
 ) -> ExecutorStep:
-    fn = remote(cleaner, resources=resources, pip_dependency_groups=["datasets"])
+    fn = remote(cleaner, resources=resources)
     return ExecutorStep(
         name=os.path.join("hrm_text_cleaned", name),
         fn=fn,
