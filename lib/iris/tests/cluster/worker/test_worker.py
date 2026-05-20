@@ -460,6 +460,73 @@ def test_resubmit_same_composite_fresh_uid_is_distinct_attempt(mock_worker, mock
         second.thread.join(timeout=15.0)
 
 
+def _terminal_and_live_twins(mock_worker, mock_runtime):
+    """Submit two attempts sharing (task_id, attempt_id=0), distinguished by UID.
+
+    The first attempt's container exits immediately (terminal, retained for
+    log access); the second stays running. Returns ``(task_id, terminal, live)``.
+    The terminal twin is appended to ``_tasks`` first — the order in which the
+    composite-lookup bug surfaces.
+    """
+    terminal_handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=0)],
+    )
+    live_handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 1000,
+    )
+    # Respond to SIGTERM promptly so kill() need not wait out the term timeout.
+    live_handle.stop_hook = lambda force: setattr(live_handle, "_killed", True)
+    mock_runtime.create_container = Mock(side_effect=[terminal_handle, live_handle])
+
+    task_id = JobName.root("test-user", "twin-task").task(0).to_wire()
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-terminal"))
+    terminal = mock_worker.task_by_uid("uid-terminal")
+    assert terminal is not None
+    terminal.thread.join(timeout=15.0)
+    assert terminal.status == job_pb2.TASK_STATE_SUCCEEDED
+
+    mock_worker.submit_task(create_run_task_request(task_id=task_id, attempt_id=0, attempt_uid="uid-live"))
+    live = mock_worker.task_by_uid("uid-live")
+    assert live is not None and live is not terminal
+    wait_for_condition(lambda: live.status == job_pb2.TASK_STATE_RUNNING)
+    assert mock_worker._tasks.index(terminal) < mock_worker._tasks.index(live)
+    return task_id, terminal, live
+
+
+def test_composite_lookups_prefer_live_twin(mock_worker, mock_runtime):
+    """Composite resolution returns the live attempt, not a retained terminal twin.
+
+    Regression (#5862 review): task_by_attempt / current_attempt returned the
+    first matching list entry — the terminal attempt appended first — so kill
+    and status paths acted on the wrong incarnation.
+    """
+    task_id, _terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
+
+    assert mock_worker.task_by_attempt(task_id, 0) is live
+    assert mock_worker.current_attempt(task_id) is live
+    assert mock_worker.get_task(task_id, attempt_id=0) is live
+
+    mock_worker.kill_task(task_id)
+    live.thread.join(timeout=15.0)
+
+
+def test_stop_intent_by_uid_kills_live_twin(mock_worker, mock_runtime):
+    """A reconcile stop intent routed by the live attempt's UID kills that
+    attempt, leaving the retained terminal twin untouched.
+
+    Regression (#5862 review by yonromai): _process_stop_intent resolved the
+    live attempt by UID, then re-resolved by composite when killing — landing
+    on the terminal twin, so the live attempt kept running.
+    """
+    task_id, terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
+
+    mock_worker._process_stop_intent(task_id, 0, "uid-live")
+
+    wait_for_condition(lambda: live.status == job_pb2.TASK_STATE_KILLED)
+    live.thread.join(timeout=15.0)
+    assert terminal.status == job_pb2.TASK_STATE_SUCCEEDED
+
+
 def test_resubmit_same_uid_is_rejected_as_duplicate(mock_worker, mock_runtime):
     """A resubmit carrying the *same* UID is still rejected as a true duplicate."""
     mock_runtime.create_container = Mock(
@@ -509,8 +576,8 @@ def test_resubmit_empty_uid_rejected_on_composite(mock_worker, mock_runtime):
     task.thread.join(timeout=15.0)
 
 
-def test_task_by_uid_and_composite_resolution(mock_worker, mock_runtime):
-    """task_by_uid / task_by_composite resolve correctly; empty UID resolves to None."""
+def test_task_by_uid_and_attempt_resolution(mock_worker, mock_runtime):
+    """task_by_uid / task_by_attempt resolve correctly; empty UID resolves to None."""
     mock_runtime.create_container = Mock(
         return_value=create_mock_container_handle(
             status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
@@ -521,12 +588,12 @@ def test_task_by_uid_and_composite_resolution(mock_worker, mock_runtime):
 
     task = mock_worker.task_by_uid("uid-resolve")
     assert task is not None
-    assert mock_worker.task_by_composite(task_id, 0) is task
+    assert mock_worker.task_by_attempt(task_id, 0) is task
     # An empty UID never identifies an attempt, even though one is tracked.
     assert mock_worker.task_by_uid("") is None
     # An unknown UID / composite resolves to None.
     assert mock_worker.task_by_uid("uid-nope") is None
-    assert mock_worker.task_by_composite(task_id, 99) is None
+    assert mock_worker.task_by_attempt(task_id, 99) is None
 
     mock_worker.kill_task(task_id)
     task.thread.join(timeout=15.0)
