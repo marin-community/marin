@@ -604,6 +604,84 @@ def test_repeated_infra_failures_on_same_shard_eventually_abort(actor_context, t
     assert "crashed its worker" in coord._fatal_error
 
 
+def test_max_shard_failures_override_via_initialize(actor_context, tmp_path):
+    """``initialize(max_shard_failures=N)`` makes the coordinator abort after N task errors.
+
+    Sets the per-shard task-error cap to 2 (vs. the default ``MAX_SHARD_FAILURES=3``);
+    a fresh shard must survive 1 failure and abort on the 2nd.
+    """
+    coord = ZephyrCoordinator()
+    coord.initialize(
+        chunk_prefix=str(tmp_path / "chunks"),
+        coordinator_handle=MagicMock(),
+        max_shard_failures=2,
+    )
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # First failure: re-queues, no abort.
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord.report_error("worker-0", 0, "error-1")
+    assert coord._fatal_error is None
+
+    # Second failure: hits the custom cap of 2 → abort.
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord.report_error("worker-0", 0, "error-2")
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "error-2" in coord._fatal_error
+
+
+def test_max_shard_infra_failures_override_via_initialize(actor_context, tmp_path):
+    """``initialize(max_shard_infra_failures=N)`` makes the coordinator abort after N
+    infra failures on the same shard.
+
+    Sets the per-shard infra-failure cap to 2 (vs. the default ``MAX_SHARD_INFRA_FAILURES=20``).
+    """
+    coord = ZephyrCoordinator()
+    coord.initialize(
+        chunk_prefix=str(tmp_path / "chunks"),
+        coordinator_handle=MagicMock(),
+        max_shard_infra_failures=2,
+    )
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # First infra failure: re-queues, no abort.
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+    assert coord._fatal_error is None
+
+    # Second infra failure: hits the custom cap of 2 → abort.
+    pulled = coord.pull_task("worker-0")
+    assert pulled is not None and pulled != "SHUTDOWN"
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "crashed its worker" in coord._fatal_error
+
+
 def test_worker_reregistration_does_not_count_toward_shard_failures(actor_context, tmp_path):
     """Preemption-driven worker re-registration requeues without burning MAX_SHARD_FAILURES."""
     coord = ZephyrCoordinator()
