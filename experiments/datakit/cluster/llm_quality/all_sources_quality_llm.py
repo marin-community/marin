@@ -62,7 +62,6 @@ from experiments.datakit.fasttext import (
     DEFAULT_BATCH_SIZE,
     FastTextModel,
     get_fasttext_batch_predict,
-    output_schema,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,13 +164,11 @@ def _run_one_source(
                 k=K,
                 threshold=THRESHOLD,
                 score_target_label=SCORE_TARGET_LABEL,
+                output_field_name="score",
             )
         )
-        .write_parquet(
-            output_pattern,
-            schema=output_schema(SCORE_TARGET_LABEL),
-            skip_existing=True,
-        )
+        .select("id", "score")
+        .write_parquet(output_pattern, skip_existing=True)
     )
     # InlineRunner: required so the per-process @cache on _load_fasttext_model
     # survives across shards in the same worker.

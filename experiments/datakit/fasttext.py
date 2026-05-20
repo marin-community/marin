@@ -3,7 +3,7 @@
 
 """Building blocks for running a fasttext classifier in a Zephyr pipeline.
 
-Provides three composable pieces:
+Provides two composable pieces:
 
 * :func:`prepare_fasttext_model_step` — a StepSpec that pulls a fasttext
   ``.bin`` from HuggingFace and stages it on GCS. The bin is materialized
@@ -12,7 +12,10 @@ Provides three composable pieces:
 
 * :func:`get_fasttext_batch_predict` — bind the caller's classifier knobs
   (model path, max_text_chars, k, threshold, ...) and return a
-  ``flat_map``-shaped callable. Plug into a pipeline as::
+  ``flat_map``-shaped callable that **annotates** each input record with
+  one new field (name configurable via ``output_field_name``, default
+  ``"fasttext_result"``). All original fields are preserved. Plug into a
+  pipeline as::
 
       .window(batch_size).flat_map(get_fasttext_batch_predict(...))
 
@@ -22,24 +25,17 @@ Provides three composable pieces:
   default ``SubprocessRunner`` every shard is a fresh process and the
   cache buys nothing.
 
-* :func:`output_schema` — the pyarrow schema for the per-record outputs,
-  for callers that want to pass an explicit schema to
-  ``Dataset.write_parquet``.
+Annotation value shape (also what pyarrow infers for the parquet field type
+under ``Dataset.write_parquet``, so callers typically don't need to pass an
+explicit schema):
 
-Output record shape (one dict per non-empty input record, keyed by ``id``):
-
-    Full distribution (default)        Binary (``score_target_label`` set)
-    ───────────────────────────        ───────────────────────────────────
-    id        : string                 id         : string
-    top_label : string                 score : float64
-    top_score : float64
-    labels    : list[string]
-    scores    : list[float64]
+    score_target_label set      → float64  (``P(label == score_target_label)``)
+    score_target_label is None  → struct {top_label, top_score, labels, scores}
 
 Empty-text and whitespace-only records are skipped — consolidate joins by
 ``id``, so absence is the right signal that the classifier had nothing to
 score. Individual classifiers wire their own input discovery, output
-naming, hash_attrs, and downstream artifact shape.
+naming, hash_attrs, projection, and downstream artifact shape.
 """
 
 from __future__ import annotations
@@ -51,7 +47,6 @@ from collections.abc import Callable, Iterator
 from functools import cache, partial
 from typing import Any
 
-import pyarrow as pa
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
@@ -162,31 +157,6 @@ def _strip_label_prefix(label: str) -> str:
     return label.removeprefix(_LABEL_PREFIX)
 
 
-def output_schema(score_target_label: str | None) -> pa.Schema:
-    """Pyarrow schema for the per-record output of :func:`get_fasttext_batch_predict`.
-
-    Use as the ``schema=`` argument to ``Dataset.write_parquet`` so the writer
-    doesn't have to infer from the first record (fragile when the first record
-    happens to be missing fields).
-    """
-    if score_target_label is not None:
-        return pa.schema(
-            [
-                pa.field("id", pa.string()),
-                pa.field("score", pa.float64()),
-            ]
-        )
-    return pa.schema(
-        [
-            pa.field("id", pa.string()),
-            pa.field("top_label", pa.string()),
-            pa.field("top_score", pa.float64()),
-            pa.field("labels", pa.list_(pa.string())),
-            pa.field("scores", pa.list_(pa.float64())),
-        ]
-    )
-
-
 # Per-process model cache — survives across map_shard calls under InlineRunner,
 # so a worker loads the .bin exactly once regardless of how many shards it handles.
 @cache
@@ -224,18 +194,22 @@ def _load_fasttext_model(model_path_str: str) -> Any:
     return fasttext.load_model(local)
 
 
-def _attrs_from_prediction(
+def _value_from_prediction(
     stripped: list[str],
     probs: Any,
     score_target_label: str | None,
-) -> dict[str, Any]:
-    """Project a single fasttext (labels, probs) pair into the output attribute fields."""
+) -> Any:
+    """Project a single fasttext (labels, probs) pair into the annotation value.
+
+    Returns a float when ``score_target_label`` is set, otherwise a dict
+    with the full label distribution.
+    """
     if score_target_label is not None:
         # Linear scan: K=-1 typical, but even full binary/multi-class outputs
         # are only 2-24 elements.
         for label, prob in zip(stripped, probs, strict=False):
             if label == score_target_label:
-                return {"score": float(prob)}
+                return float(prob)
         raise ValueError(
             f"score_target_label={score_target_label!r} not in predicted labels {stripped!r}; "
             f"check the label spelling, or relax k/threshold so the target label survives."
@@ -259,11 +233,16 @@ def _predict_batch(
     k: int,
     threshold: float,
     score_target_label: str | None,
+    output_field_name: str,
 ) -> Iterator[dict[str, Any]]:
-    """One fasttext.predict call per batch; yield per-record output dicts for non-empty docs.
+    """One fasttext.predict call per batch; yield each non-empty record with the prediction annotated.
+
+    The output record is ``{**record, output_field_name: value}`` -- input
+    fields are preserved, with one extra field carrying the prediction
+    (float when ``score_target_label`` is set, otherwise a struct dict).
 
     Empty-text and whitespace-only records are skipped (consolidate joins by
-    id, so absence is the correct signal that the classifier had nothing
+    ``id``, so absence is the correct signal that the classifier had nothing
     to score).
     """
     model = _load_fasttext_model(model_path_str)
@@ -299,7 +278,7 @@ def _predict_batch(
     for record, labels, probs in zip(records_to_predict, labels_list, probs_list, strict=True):
         stripped = [_strip_label_prefix(label) for label in labels]
         counters.increment("classify/predicted")
-        yield {"id": record["id"], **_attrs_from_prediction(stripped, probs, score_target_label)}
+        yield {**record, output_field_name: _value_from_prediction(stripped, probs, score_target_label)}
 
 
 def get_fasttext_batch_predict(
@@ -310,8 +289,9 @@ def get_fasttext_batch_predict(
     k: int = -1,
     threshold: float = 0.0,
     score_target_label: str | None = None,
+    output_field_name: str = "fasttext_result",
 ) -> Callable[[list[dict[str, Any]]], Iterator[dict[str, Any]]]:
-    """Bind classifier knobs and return a ``flat_map`` callable for batched predict.
+    """Bind classifier knobs and return a ``flat_map`` callable that annotates each input record.
 
     Usage::
 
@@ -320,8 +300,10 @@ def get_fasttext_batch_predict(
             Dataset.from_list(files)
             .flat_map(load_file)
             .window(batch_size)
-            .flat_map(get_fasttext_batch_predict(model_path=..., ...))
-            .write_parquet(pattern, schema=output_schema(...), skip_existing=True)
+            .flat_map(get_fasttext_batch_predict(
+                model_path=..., score_target_label="1", output_field_name="score"))
+            .select("id", "score")  # drop input fields we don't want to persist
+            .write_parquet(pattern, skip_existing=True)
         )
 
     Args:
@@ -334,16 +316,17 @@ def get_fasttext_batch_predict(
         k: Top-K labels to keep from each prediction. ``-1`` keeps the full
             label distribution.
         threshold: Minimum probability for a label to be kept.
-        score_target_label: If set, the output collapses to a single
-            ``score: float64`` field equal to
+        score_target_label: If set, the annotation value is the float
             ``P(label == score_target_label)``. Use for binary classifiers.
             ``None`` keeps the full ``{top_label, top_score, labels, scores}``
-            field set.
+            struct as the annotation value.
+        output_field_name: Field name added to each output record. Existing
+            input fields are preserved alongside it.
 
     Returns:
         A ``(list[dict] -> Iterator[dict])`` callable suitable for
-        ``.flat_map(...)`` after ``.window(batch_size)``. See
-        :func:`output_schema` for the exact per-record output shape.
+        ``.flat_map(...)`` after ``.window(batch_size)``. Each output record
+        is ``{**input_record, output_field_name: <prediction>}``.
     """
     return partial(
         _predict_batch,
@@ -353,6 +336,7 @@ def get_fasttext_batch_predict(
         k=k,
         threshold=threshold,
         score_target_label=score_target_label,
+        output_field_name=output_field_name,
     )
 
 

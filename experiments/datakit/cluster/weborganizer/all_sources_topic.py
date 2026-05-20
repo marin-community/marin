@@ -58,7 +58,6 @@ from experiments.datakit.fasttext import (
     DEFAULT_BATCH_SIZE,
     FastTextModel,
     get_fasttext_batch_predict,
-    output_schema,
     prepare_fasttext_model_step,
 )
 
@@ -147,13 +146,11 @@ def _run_one_source(
                 max_text_chars=MAX_TEXT_CHARS,
                 k=K,
                 threshold=THRESHOLD,
+                output_field_name="topic",
             )
         )
-        .write_parquet(
-            output_pattern,
-            schema=output_schema(None),
-            skip_existing=True,
-        )
+        .select("id", "topic")
+        .write_parquet(output_pattern, skip_existing=True)
     )
     # InlineRunner: required so the per-process @cache on _load_fasttext_model
     # survives across shards in the same worker.

@@ -83,10 +83,10 @@ def _count_labels_one_source(*, source_name: str, attrs: WeborgTopicOutput) -> S
     for path in paths:
         full = f"{protocol}://{path}" if protocol and not path.startswith(f"{protocol}://") else path
         with fs.open(full, "rb") as f:
-            # Column projection: skip ``id`` (largest col); only top_label
+            # Column projection: skip ``id`` (largest col); only ``topic.top_label``
             # feeds the histogram.
-            table = pq.read_table(f, columns=["top_label"])
-        top_labels = table["top_label"].to_pylist()
+            table = pq.read_table(f, columns=["topic"])
+        top_labels = table["topic"].combine_chunks().field("top_label").to_pylist()
         n_docs += len(top_labels)
         counts.update(top_labels)
     logger.info("aggregated %s: %d docs across %d shard(s)", source_name, n_docs, len(paths))
