@@ -453,7 +453,8 @@ def save_peft_pretrained(
         upload_kwargs: kwargs to pass to the upload function
     """
     os.makedirs(path, exist_ok=True)
-    hf_config = to_hf_config(config, base_model_name_or_path=base_model_name_or_path)
+    base_ref = str(base_model_name_or_path) if base_model_name_or_path is not None else None
+    hf_config = to_hf_config(config, base_model_name_or_path=base_ref)
     state_dict = lora_state_dict(lora_model, prefix=prefix)
 
     with temp_dir_before_upload(path) as local_path:
