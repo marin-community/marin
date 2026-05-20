@@ -22,6 +22,7 @@ import os
 import socket
 import threading
 import time
+import urllib.request
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -81,8 +82,6 @@ def _resolve_advertise_host() -> str:
     """
     # Try GCP metadata server first (works on TPU VMs)
     try:
-        import urllib.request
-
         req = urllib.request.Request(
             "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
             headers={"Metadata-Flavor": "Google"},

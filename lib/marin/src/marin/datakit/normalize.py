@@ -64,7 +64,7 @@ class NormalizedData(BaseModel):
 
     Persisted as the step's ``.artifact`` so counters and output paths are
     available to downstream consumers without re-running the pipeline. Load
-    via ``Artifact.load(step, NormalizedData)``.
+    via ``Artifact.from_path(step, NormalizedData)``.
 
     Attributes:
         main_output_dir: Directory containing the main output Parquet files.
@@ -90,6 +90,7 @@ def generate_id(text: str) -> str:
 def _make_normalize_fn(
     text_field: str,
     id_field: str,
+    bare: bool = False,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Return a record-level transform function.
 
@@ -97,7 +98,15 @@ def _make_normalize_fn(
     1. Extracts ``text`` from *text_field*.
     2. Generates a deterministic ``id`` via xxh3_128.
     3. If *id_field* exists in the record, preserves it as ``source_id``.
-    4. Keeps all other columns.
+    4. Keeps all other columns unless *bare* is set (see below).
+
+    *bare* takes the strict path: drop every column that isn't ``id``,
+    ``text``, or ``source_id``. Use this for sources whose extra columns
+    vary across shards (e.g. starcoderdata's 87 language subdirs each
+    ship a different set of GitHub-meta columns, or proof-pile-2's
+    nested ``meta`` dict with optional-typed fields); the parquet writer
+    can't add columns mid-write and the reduce stage can't widen
+    null-vs-typed, so a uniform schema is the only safe option.
 
     Records with missing or blank text must be filtered out before calling
     the returned function.
@@ -113,13 +122,14 @@ def _make_normalize_fn(
         # --- build output ---
         out: dict[str, Any] = {}
 
-        # Copy all original columns except the ones we're replacing
-        for k, v in record.items():
-            if k == id_field:
-                continue
-            if k == text_field and text_field != "text":
-                continue
-            out[k] = v
+        if not bare:
+            # Copy all original columns except the ones we're replacing
+            for k, v in record.items():
+                if k == id_field:
+                    continue
+                if k == text_field and text_field != "text":
+                    continue
+                out[k] = v
 
         out["id"] = generate_id(text)
         out["text"] = text
@@ -131,6 +141,27 @@ def _make_normalize_fn(
     return normalize_record
 
 
+# Env var that ferries set on test/smoke runs to bound the input set on
+# very large staged dumps. Read at execution by ``_discover_files``; not
+# exposed as a public API parameter so production callers can't stumble into
+# it. If unset, no truncation. If set to a positive int, truncate the sorted
+# file list to that many files. Any other value raises.
+_FERRY_TEST_MAX_FILES_ENV = "FERRY_TEST_MAX_FILES"
+
+
+def _ferry_test_max_files() -> int | None:
+    raw = os.environ.get(_FERRY_TEST_MAX_FILES_ENV)
+    if raw is None or raw == "":
+        return None
+    try:
+        n = int(raw)
+    except ValueError as e:
+        raise RuntimeError(f"{_FERRY_TEST_MAX_FILES_ENV}={raw!r} is not an integer") from e
+    if n <= 0:
+        raise RuntimeError(f"{_FERRY_TEST_MAX_FILES_ENV}={n} must be a positive integer")
+    return n
+
+
 def _discover_files(
     input_path: str,
     file_extensions: tuple[str, ...] | None = None,
@@ -138,13 +169,10 @@ def _discover_files(
     """Walk *input_path* recursively and return a sorted flat list of data files.
 
     Only files with matching extensions are included; dotfiles and hidden
-    directories are skipped.
-
-    Args:
-        input_path: Root directory to walk.
-        file_extensions: Tuple of file extensions to include (e.g.
-            ``(".parquet",)``).  Defaults to all extensions supported by
-            ``zephyr.readers.load_file``.
+    directories are skipped. When the ``FERRY_TEST_MAX_FILES`` env var is set
+    to a positive integer, the sorted list is truncated to that many entries —
+    a smoke/test-only knob that bypasses any caller's intent, used by the
+    canary ferries to bound oversized staged dumps.
     """
     extensions = file_extensions or SUPPORTED_EXTENSIONS
     fs, resolved = url_to_fs(input_path)
@@ -167,6 +195,17 @@ def _discover_files(
             discovered.append(_full_path(os.path.join(root, fname)))
 
     discovered.sort()
+    cap = _ferry_test_max_files()
+    if cap is not None and cap < len(discovered):
+        logger.warning(
+            "_discover_files: respecting %s=%d env var; truncating discovered file list from %d to %d "
+            "(testing/smoke-only knob)",
+            _FERRY_TEST_MAX_FILES_ENV,
+            cap,
+            len(discovered),
+            cap,
+        )
+        discovered = discovered[:cap]
     return discovered
 
 
@@ -269,9 +308,10 @@ def _build_pipeline(
     id_field: str | None,
     dedup_mode: DedupMode,
     max_whitespace_run_chars: int,
+    bare: bool = False,
 ) -> Dataset:
     """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
-    normalize_record = _make_normalize_fn(text_field, id_field)
+    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare)
 
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
@@ -325,6 +365,7 @@ def normalize_to_parquet(
     max_workers: int | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    bare: bool = False,
 ) -> NormalizedData:
     """Normalize raw downloaded data to the datakit standard Parquet format.
 
@@ -395,6 +436,7 @@ def normalize_to_parquet(
         id_field,
         dedup_mode,
         max_whitespace_run_chars,
+        bare=bare,
     )
     ctx_kwargs: dict = {"name": "normalize", "resources": resources}
     if max_workers is not None:
@@ -429,10 +471,12 @@ def normalize_step(
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    output_path_prefix: str | None = None,
     override_output_path: str | None = None,
     relative_input_path: str | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
+    bare: bool = False,
 ) -> StepSpec:
     """Create a StepSpec that normalizes downloaded data to Parquet.
 
@@ -446,6 +490,7 @@ def normalize_step(
             See :func:`normalize_to_parquet` for the default.
         max_workers: Maximum number of Zephyr workers. Defaults to Zephyr's
             own default (128 for distributed backends).
+        output_path_prefix: Optional prefix for the normalized step output.
         override_output_path: Override the computed output path.
         relative_input_path: Override the input path relative to the download output.
             Useful when normalizing a subdirectory of the download output.
@@ -464,6 +509,20 @@ def normalize_step(
     else:
         resolved_input = download.output_path
 
+    hash_attrs: dict[str, Any] = {
+        "text_field": text_field,
+        "id_field": id_field,
+        "target_partition_bytes": target_partition_bytes,
+        "max_whitespace_run_chars": max_whitespace_run_chars,
+        "relative_input_path": relative_input_path,
+        "file_extensions": file_extensions,
+        "dedup_mode": dedup_mode,
+    }
+    # Only include bare in hash when set so default callers' hash_id stays
+    # identical to pre-feature step specs (cache identity).
+    if bare:
+        hash_attrs["bare"] = bare
+
     return StepSpec(
         name=name,
         fn=lambda output_path: normalize_to_parquet(
@@ -477,16 +536,10 @@ def normalize_step(
             max_workers=max_workers,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
+            bare=bare,
         ),
         deps=[download],
-        hash_attrs={
-            "text_field": text_field,
-            "id_field": id_field,
-            "target_partition_bytes": target_partition_bytes,
-            "max_whitespace_run_chars": max_whitespace_run_chars,
-            "relative_input_path": relative_input_path,
-            "file_extensions": file_extensions,
-            "dedup_mode": dedup_mode,
-        },
+        hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )

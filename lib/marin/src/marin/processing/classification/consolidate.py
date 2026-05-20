@@ -160,7 +160,10 @@ def consolidate(
         output_path: Destination directory for filtered Parquet output.
         filters: List of filters to apply (see :class:`FilterConfig`).
         filetype: Extension of the input documents (default: ``"jsonl.gz"``).
-        worker_resources: Optional Zephyr worker resource config (defaults to Zephyr defaults).
+        worker_resources: Optional Zephyr worker resource config. Defaults to
+            ``ResourceConfig(cpu=2, ram="4g")`` — Zephyr's 1 CPU / 1 GB default
+            packs multiple workers per VM and OOMs on heavy-tailed inputs where
+            a single doc can blow past the per-worker share.
         max_workers: Maximum number of Zephyr workers (defaults to Zephyr's default).
     """
     input_paths = sorted(fsspec_glob(os.path.join(input_path, f"**/*.{filetype}")))
@@ -186,9 +189,9 @@ def consolidate(
         # Drop rejected docs before the next join so its key extractor never sees None.
         ds = ds.filter(lambda r: r is not None)
 
-    ctx_kwargs: dict = {"name": "consolidate-filter"}
-    if worker_resources is not None:
-        ctx_kwargs["resources"] = worker_resources
+    if worker_resources is None:
+        worker_resources = ResourceConfig(cpu=2, ram="4g")
+    ctx_kwargs: dict = {"name": "consolidate-filter", "resources": worker_resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
     ctx = ZephyrContext(**ctx_kwargs)

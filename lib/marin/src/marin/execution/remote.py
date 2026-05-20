@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generic, ParamSpec, TypeVar, overload
 
-from fray.current_client import current_client as _fray_current_client
+from fray import client as fray_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 P = ParamSpec("P")
@@ -70,7 +70,7 @@ class RemoteCallable(Generic[P, R]):
         else:
             fn_name = getattr(self.fn, "__name__", None) or DEFAULT_JOB_NAME
             name = f"{fn_name}-{uuid.uuid4().hex[:8]}"
-        c = _fray_current_client()
+        c = fray_client.current_client()
         handle = c.submit(
             JobRequest(
                 name=_sanitize_job_name(name),

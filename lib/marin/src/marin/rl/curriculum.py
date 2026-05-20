@@ -19,6 +19,7 @@ import numpy as np
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 from rigging.filesystem import url_to_fs
+from scipy import stats as scipy_stats
 
 logger = logging.getLogger(__name__)
 
@@ -275,8 +276,6 @@ def is_plateaued(stats: LessonStats, window: int = 100, threshold: float = 0.01)
 
     # Linear regression to measure trend
     x = np.arange(len(recent))
-    from scipy import stats as scipy_stats
-
     result = scipy_stats.linregress(x, recent)
     slope = result.slope
     p_value = result.pvalue
