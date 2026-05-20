@@ -38,7 +38,8 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
+from functools import cache, partial
 from typing import Any
 
 import pyarrow as pa
@@ -201,7 +202,52 @@ def _output_schema(score_target_label: str | None) -> pa.Schema:
     )
 
 
-def _make_classifier(
+# Per-process model cache — survives across map_shard calls under InlineRunner,
+# so a worker loads the .bin exactly once regardless of how many shards it handles.
+@cache
+def _load_fasttext_model(model_path_str: str) -> Any:
+    """Return a fasttext model loaded from a local copy of *model_path_str*.
+
+    The .bin is streamed from GCS to ``/tmp`` on first call; subsequent calls in
+    the same worker process return the cached model object.
+    """
+    # fasttext-wheel 0.9.2 calls ``np.array(..., copy=False)`` inside
+    # ``FastText.predict``; NumPy 2.x rejects ``copy=False`` (must use
+    # ``copy=None``). Patch before importing fasttext so the predict path
+    # inherits the shim. Idempotent across calls in the same process.
+    import numpy as np
+
+    if not getattr(np, "_fasttext_copy_compat", False):
+        _orig_np_array = np.array
+
+        def _np_array_copy_compat(*args: Any, **kwargs: Any) -> Any:
+            if kwargs.get("copy") is False:
+                kwargs["copy"] = None
+            return _orig_np_array(*args, **kwargs)
+
+        np.array = _np_array_copy_compat
+        np._fasttext_copy_compat = True
+
+    # Local import so the driver (which never loads a model) doesn't pay the
+    # fasttext C-extension import cost.
+    import fasttext
+
+    fs, resolved = url_to_fs(model_path_str)
+    local = f"/tmp/fasttext-{os.path.basename(resolved)}"
+    if not os.path.exists(local):
+        with fs.open(resolved, "rb") as src, open(local, "wb") as dst:
+            while True:
+                chunk = src.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+    return fasttext.load_model(local)
+
+
+def _classify_shard(
+    paths: Iterator[str],
+    shard: ShardInfo,
+    *,
     model_path_str: str,
     output_dir: str,
     text_field: str,
@@ -209,96 +255,57 @@ def _make_classifier(
     k: int,
     threshold: float,
     score_target_label: str | None,
-) -> Callable[[Iterator[str], ShardInfo], Iterator[dict[str, Any]]]:
-    """Return a ``map_shard`` function that classifies one input parquet → one output parquet."""
+) -> Iterator[dict[str, Any]]:
+    """Classify each input partition, write a co-partitioned output parquet."""
+    model = _load_fasttext_model(model_path_str)
+    output_schema = _output_schema(score_target_label)
 
-    def classify_shard(paths: Iterator[str], shard: ShardInfo) -> Iterator[dict[str, Any]]:
-        # fasttext-wheel 0.9.2 calls ``np.array(..., copy=False)`` inside
-        # ``FastText.predict``; NumPy 2.x rejects ``copy=False`` (must use
-        # ``copy=None``). Patch before importing fasttext so the predict path
-        # inherits the shim. Idempotent across workers in the same process.
-        import numpy as np
+    def _empty_attrs() -> dict[str, Any]:
+        if score_target_label is not None:
+            return {"high_score": 0.0}
+        return {"top_label": "", "top_score": 0.0, "labels": [], "scores": []}
 
-        if not getattr(np, "_fasttext_copy_compat", False):
-            _orig_np_array = np.array
+    def _attrs_from_prediction(stripped: list[str], probs: Any) -> dict[str, Any]:
+        if score_target_label is not None:
+            # Linear scan is fine: K=-1 typical, but even for full
+            # binary/multi-class outputs this is a 2-24 element list.
+            for label, prob in zip(stripped, probs, strict=False):
+                if label == score_target_label:
+                    return {"high_score": float(prob)}
+            return {"high_score": 0.0}
+        top_label = stripped[0] if stripped else ""
+        top_score = float(probs[0]) if len(probs) > 0 else 0.0
+        return {
+            "top_label": top_label,
+            "top_score": top_score,
+            "labels": stripped,
+            "scores": [float(p) for p in probs],
+        }
 
-            def _np_array_copy_compat(*args: Any, **kwargs: Any) -> Any:
-                if kwargs.get("copy") is False:
-                    kwargs["copy"] = None
-                return _orig_np_array(*args, **kwargs)
+    for input_path in paths:
 
-            np.array = _np_array_copy_compat
-            np._fasttext_copy_compat = True
+        def rows_for(p: str) -> Iterator[dict[str, Any]]:
+            for record in load_file(p):
+                text = str(record.get(text_field, "") or "")
+                pid = record.get("partition_id", shard.shard_idx)
+                if not text:
+                    counters.increment("classify/empty_text")
+                    yield {"id": record["id"], "partition_id": pid, "attributes": _empty_attrs()}
+                    continue
+                cleaned = _normalize_for_fasttext(text, max_text_chars)
+                labels, probs = model.predict(cleaned, k=k, threshold=threshold)
+                stripped = [_strip_label_prefix(label) for label in labels]
+                counters.increment("classify/predicted")
+                yield {
+                    "id": record["id"],
+                    "partition_id": pid,
+                    "attributes": _attrs_from_prediction(stripped, probs),
+                }
 
-        # Local import so workers without fasttext (e.g. the driver) don't
-        # crash at module-import time. fasttext is a heavyweight C-extension
-        # dep; only the classify workers need it.
-        import fasttext
-
-        # Load the .bin into worker-local /tmp once per shard; fasttext can't
-        # read directly from GCS. Reuse across all input partitions assigned
-        # to this shard.
-        fs, resolved = url_to_fs(model_path_str)
-        local = f"/tmp/fasttext-{os.path.basename(resolved)}"
-        if not os.path.exists(local):
-            with fs.open(resolved, "rb") as src, open(local, "wb") as dst:
-                while True:
-                    chunk = src.read(8 * 1024 * 1024)
-                    if not chunk:
-                        break
-                    dst.write(chunk)
-        model = fasttext.load_model(local)
-
-        def _empty_attrs() -> dict[str, Any]:
-            if score_target_label is not None:
-                return {"high_score": 0.0}
-            return {"top_label": "", "top_score": 0.0, "labels": [], "scores": []}
-
-        def _attrs_from_prediction(stripped: list[str], probs: Any) -> dict[str, Any]:
-            if score_target_label is not None:
-                # Linear scan is fine: K=-1 typical, but even for full
-                # binary/multi-class outputs this is a 2-24 element list.
-                for label, prob in zip(stripped, probs, strict=False):
-                    if label == score_target_label:
-                        return {"high_score": float(prob)}
-                return {"high_score": 0.0}
-            top_label = stripped[0] if stripped else ""
-            top_score = float(probs[0]) if len(probs) > 0 else 0.0
-            return {
-                "top_label": top_label,
-                "top_score": top_score,
-                "labels": stripped,
-                "scores": [float(p) for p in probs],
-            }
-
-        output_schema = _output_schema(score_target_label)
-
-        for input_path in paths:
-
-            def rows_for(p: str) -> Iterator[dict[str, Any]]:
-                for record in load_file(p):
-                    text = str(record.get(text_field, "") or "")
-                    pid = record.get("partition_id", shard.shard_idx)
-                    if not text:
-                        counters.increment("classify/empty_text")
-                        yield {"id": record["id"], "partition_id": pid, "attributes": _empty_attrs()}
-                        continue
-                    cleaned = _normalize_for_fasttext(text, max_text_chars)
-                    labels, probs = model.predict(cleaned, k=k, threshold=threshold)
-                    stripped = [_strip_label_prefix(label) for label in labels]
-                    counters.increment("classify/predicted")
-                    yield {
-                        "id": record["id"],
-                        "partition_id": pid,
-                        "attributes": _attrs_from_prediction(stripped, probs),
-                    }
-
-            out_filename = os.path.basename(input_path)
-            out_path = f"{output_dir.rstrip('/')}/{out_filename}"
-            result = write_parquet_file(rows_for(input_path), output_path=out_path, schema=output_schema)
-            yield result
-
-    return classify_shard
+        out_filename = os.path.basename(input_path)
+        out_path = f"{output_dir.rstrip('/')}/{out_filename}"
+        result = write_parquet_file(rows_for(input_path), output_path=out_path, schema=output_schema)
+        yield result
 
 
 def classify_fasttext_to_parquet(
@@ -357,10 +364,11 @@ def classify_fasttext_to_parquet(
     )
 
     pipeline = Dataset.from_list(files).map_shard(
-        _make_classifier(
-            model.model_path,
-            output_path,
-            text_field,
+        partial(
+            _classify_shard,
+            model_path_str=model.model_path,
+            output_dir=output_path,
+            text_field=text_field,
             max_text_chars=max_text_chars,
             k=k,
             threshold=threshold,
