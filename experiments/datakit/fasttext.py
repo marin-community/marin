@@ -299,12 +299,16 @@ def _predict_batch(
     truncated = 0
     for record in batch:
         raw = str(record.get(text_field, "") or "")
-        if not raw:
+        normalized = _normalize_for_fasttext(raw, max_text_chars)
+        # Skip empty input AND whitespace-only post-normalization (e.g. a doc
+        # whose only non-whitespace content sits past max_text_chars and gets
+        # cut off, leaving just spaces after newline replacement).
+        if not normalized.strip():
             continue
         bytes_in += len(raw)
         if max_text_chars is not None and len(raw) > max_text_chars:
             truncated += 1
-        texts.append(_normalize_for_fasttext(raw, max_text_chars))
+        texts.append(normalized)
         records_to_predict.append(record)
     counters.increment("classify/bytes_in", bytes_in)
     counters.increment("classify/empty_text", len(batch) - len(texts))
