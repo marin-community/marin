@@ -47,7 +47,7 @@ from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
-from rigging.filesystem import open_url, url_to_fs
+from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ShardInfo, ZephyrContext, atomic_rename, counters, write_parquet_file
 from zephyr.readers import load_file
 
@@ -123,36 +123,6 @@ def model_path(model_dir: str) -> str:
     return os.path.join(model_dir, _MODEL_FILENAME)
 
 
-def _stream_hf_to_gcs(*, hf_repo_id: str, hf_filename: str, revision: str, target_path: str) -> int:
-    """Stream ``<hf_repo_id>@<revision>/<hf_filename>`` to ``target_path``.
-
-    Uses ``HfFileSystem`` via fsspec (the same path the bulk download helper
-    uses), wrapped in :func:`atomic_rename` so a crashed prep run leaves no
-    half-written ``.bin`` behind. Returns the number of bytes written.
-    """
-    # Imports are local because huggingface_hub is only needed at prep time
-    # and we don't want to make it a hard dep of the classify-mark workers.
-    from huggingface_hub import HfFileSystem
-
-    hf_fs = HfFileSystem()
-    src = f"{hf_repo_id}@{revision}/{hf_filename}"
-    target_fs, resolved = url_to_fs(target_path)
-    target_fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
-    bytes_written = 0
-    with atomic_rename(target_path) as temp_path:
-        with hf_fs.open(src, "rb") as src_file, open_url(temp_path, "wb") as dst_file:
-            while True:
-                chunk = src_file.read(8 * 1024 * 1024)
-                if not chunk:
-                    break
-                dst_file.write(chunk)
-                bytes_written += len(chunk)
-    logger.info(
-        "classify: staged %s@%s/%s → %s (%d bytes)", hf_repo_id, revision, hf_filename, target_path, bytes_written
-    )
-    return bytes_written
-
-
 def prepare_fasttext_model(
     *,
     hf_repo_id: str,
@@ -172,13 +142,19 @@ def prepare_fasttext_model(
     Returns:
         :class:`FastTextModel` artifact pointing at the staged ``.bin``.
     """
+    # Import local: huggingface_hub is only needed by the prep step, not by classify workers.
+    from huggingface_hub import hf_hub_download
+
+    local = hf_hub_download(repo_id=hf_repo_id, filename=hf_filename, revision=revision)
+    size = os.path.getsize(local)
     target = model_path(output_path)
-    size = _stream_hf_to_gcs(
-        hf_repo_id=hf_repo_id,
-        hf_filename=hf_filename,
-        revision=revision,
-        target_path=target,
-    )
+    target_fs, resolved = url_to_fs(target)
+    target_fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
+    # atomic_rename keeps the staged path crash-safe: a half-uploaded blob never appears at `target`.
+    with atomic_rename(target) as tmp:
+        tmp_fs, tmp_resolved = url_to_fs(tmp)
+        tmp_fs.put(local, tmp_resolved)
+    logger.info("classify: staged %s@%s/%s → %s (%d bytes)", hf_repo_id, revision, hf_filename, target, size)
     return FastTextModel(
         model_dir=output_path,
         model_path=target,
