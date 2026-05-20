@@ -4,9 +4,8 @@
 """End-to-end reference DAG: every Datakit source → (cluster x quality) store.
 
 This wires the existing per-stage building blocks into a single
-StepRunner-walkable graph. Per source (from
-:func:`marin.datakit.sources.all_sources`, minus the standard
-``safety_pt/*`` / ``climblab-ja`` carve-outs):
+StepRunner-walkable graph. Per source (every entry from
+:func:`marin.datakit.sources.all_sources` — no carve-outs):
 
     normalize → tokenize
               → embed (luxical-one)   → assign (domain v0, given centroids)
@@ -103,12 +102,6 @@ from experiments.datakit.store.datakit_store import (  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
-# Match dedup's source carve-out: safety_pt and climblab-ja are deliberately
-# excluded from minhash/fuzzy_dups, so the store's source set must drop them too
-# (build_clustered_store enforces equal source sets across tokenize / decontam /
-# cluster_assign / quality / dedup).
-_EXCLUDE_PREFIXES: tuple[str, ...] = ("safety_pt/", "climblab-ja")
-
 # Clustering knobs. Must match the centroids file passed in.
 K_TRAIN = 5000
 K_VIEWS: tuple[int, ...] = (40, 1000)
@@ -144,10 +137,6 @@ STORE_MAX_WORKERS = 2048
 SPLIT = "train"
 
 
-def _is_kept(name: str) -> bool:
-    return not any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES)
-
-
 def build_steps(
     *,
     domain_centroids_dir: str,
@@ -166,12 +155,8 @@ def build_steps(
         inference_name: Sub-namespace under ``quality-llm/`` for the model
             wrapper step (so different model versions don't collide).
     """
-    sources = {name: src for name, src in all_sources().items() if _is_kept(name)}
-    logger.info(
-        "Reference pipeline: %d sources kept (excluded prefixes: %s)",
-        len(sources),
-        _EXCLUDE_PREFIXES,
-    )
+    sources = all_sources()
+    logger.info("Reference pipeline: %d sources", len(sources))
 
     centroids_uri = f"{domain_centroids_dir.rstrip('/')}/centroids_{K_TRAIN}.npy"
     lookup_uris = {k: f"{domain_centroids_dir.rstrip('/')}/lookup_{K_TRAIN}_to_{k}.npy" for k in K_VIEWS}
