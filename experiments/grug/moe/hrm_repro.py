@@ -90,6 +90,7 @@ from experiments.grug.moe.heuristic import (
     compute_flops_per_token,
     moe_adamh_heuristic,
 )
+from experiments.grug.moe.hrm_eval import HRM_TEXT_BENCHMARKS_DEFAULT, hrm_eval_step
 from experiments.grug.moe.hrm_text_data import (
     hrm_text_clean_steps,
     hrm_text_mixture,
@@ -152,7 +153,7 @@ def _build_hrm_repro_step(
     hidden_dim: int,
     target_tokens: float,
     run_suffix: str,
-) -> ExecutorStep:
+) -> tuple[ExecutorStep, ExecutorStep]:
     """Build a single-step training launch sized to ``target_tokens``.
 
     Uses ``MoeAdamHHeuristic`` for the model and optimizer, but pins the token
@@ -189,7 +190,7 @@ def _build_hrm_repro_step(
         f"v5p-8 ETA={eta_hours:.1f}h"
     )
 
-    return ExecutorStep(
+    train_step = ExecutorStep(
         name=step_name,
         fn=run_grug_moe_trial,
         config=GrugMoeLaunchConfig(
@@ -229,6 +230,20 @@ def _build_hrm_repro_step(
         ),
     )
 
+    # Post-training HRM-Text Table eval. Loads the final checkpoint at
+    # ``<train_output>/checkpoints/step-<num_steps>``. The dependency is
+    # expressed via ``train_step.cd(...)`` so the executor only schedules the
+    # eval after the train step succeeds.
+    eval_step = hrm_eval_step(
+        name=run_id,
+        model=model,
+        checkpoint_path=train_step.cd(f"checkpoints/step-{num_steps}"),
+        tokenizer_name=llama3_tokenizer,
+        tasks=HRM_TEXT_BENCHMARKS_DEFAULT,
+    )
+
+    return train_step, eval_step
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -250,7 +265,7 @@ TARGET_TOKENS: float = _env_float("HRM_REPRO_TARGET_TOKENS", HRM_XL_TARGET_TOKEN
 RUN_SUFFIX: str = os.environ.get("HRM_REPRO_RUN_SUFFIX", "v1")
 
 
-hrm_repro_step = _build_hrm_repro_step(
+hrm_repro_step, hrm_eval_post = _build_hrm_repro_step(
     hidden_dim=HIDDEN_DIM,
     target_tokens=TARGET_TOKENS,
     run_suffix=RUN_SUFFIX,
@@ -270,10 +285,10 @@ if __name__ == "__main__":
         )
     else:
         executor_main(
-            steps=[hrm_repro_step],
+            steps=[hrm_repro_step, hrm_eval_post],
             description=(
                 "HRM-Text reproduction with marin MoE: "
                 f"d{HIDDEN_DIM}, target_tokens={TARGET_TOKENS:.2e}, "
-                f"full HRM-Text data mix (see experiments.grug.moe.hrm_text_data)."
+                f"full HRM-Text data mix + post-training HRM-Text Table eval."
             ),
         )

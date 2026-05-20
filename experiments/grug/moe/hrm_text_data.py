@@ -515,10 +515,27 @@ def _make_clean_step(
     )
 
 
+_TOKENIZE_RESOURCES = ResourceConfig(cpu=4, ram="16g", disk="10g")
+_TOKENIZE_ENV = {
+    "TRANSFORMERS_NO_TORCH": "1",
+    "TRANSFORMERS_NO_TORCHVISION": "1",
+    "USE_TORCH": "0",
+    "TORCH_DISABLE_GLOBAL_DEPS": "1",
+}
+
+
 def _make_tokenize_from_clean(name: str, clean_step: ExecutorStep) -> ExecutorStep:
+    """Wrap tokenize with @remote so it runs as its own Iris job, like
+    ``experiments.defaults.default_tokenize`` does — without this the tokenize
+    function runs inline in the entrypoint (cpu=0.1, ram=1GB) and stalls."""
     return ExecutorStep(
         name=os.path.join("tokenized", "hrm_text", name),
-        fn=tokenize,
+        fn=remote(
+            tokenize,
+            resources=_TOKENIZE_RESOURCES,
+            pip_dependency_groups=["cpu"],
+            env_vars=_TOKENIZE_ENV,
+        ),
         config=TokenizeConfig(
             train_paths=[clean_step.cd("*.parquet")],
             validation_paths=versioned([]),
@@ -526,6 +543,11 @@ def _make_tokenize_from_clean(name: str, clean_step: ExecutorStep) -> ExecutorSt
             tokenizer=versioned(llama3_tokenizer),
             format=_FORMAT,
             tags=["hrm_text", name],
+            # num_shards=1 bundles all input parquet files into a single tokenize
+            # worker. Trades parallelism for a much smaller scheduling footprint
+            # (one 0.1-core worker per source instead of N) — useful when the
+            # iris cluster is heavily contended.
+            num_shards=1,
         ),
     )
 
