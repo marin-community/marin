@@ -118,11 +118,6 @@ _MODEL_FILENAME = "model.bin"
 _LABEL_PREFIX = "__label__"
 
 
-def model_path(model_dir: str) -> str:
-    """Return the canonical model.bin path inside a prep step's output dir."""
-    return os.path.join(model_dir, _MODEL_FILENAME)
-
-
 def prepare_fasttext_model(
     *,
     hf_repo_id: str,
@@ -147,7 +142,7 @@ def prepare_fasttext_model(
 
     local = hf_hub_download(repo_id=hf_repo_id, filename=hf_filename, revision=revision)
     size = os.path.getsize(local)
-    target = model_path(output_path)
+    target = os.path.join(output_path, _MODEL_FILENAME)
     target_fs, resolved = url_to_fs(target)
     target_fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
     # atomic_rename keeps the staged path crash-safe: a half-uploaded blob never appears at `target`.
