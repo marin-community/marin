@@ -59,6 +59,11 @@ class GrugMoeLaunchConfig:
     # NOT wrapped in versioned() so flipping it on doesn't change the
     # executor's content hash — flag-only opt-in.
     enable_cross_region_ckpt_read: bool = False
+    # Step interval for permanent checkpoints written to ``base_path``. When
+    # ``None``, no step-interval permanent checkpoints are written — only
+    # temporary checkpoints (every ``save_interval``) plus the final
+    # permanent checkpoint at the end of training.
+    checkpoint_keep_every: int | None = 1000
 
 
 NEMOTRON_MIX_WITH_DEFAULT_VALIDATION = add_validation_sets_to_mixture(
@@ -168,7 +173,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            keep=[] if config.checkpoint_keep_every is None else [{"every": config.checkpoint_keep_every}],
         ),
     )
 

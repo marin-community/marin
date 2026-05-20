@@ -578,8 +578,10 @@ def _submit_train_job(
     args: Sequence[Any],
     resources: ResourceConfig,
     env_vars: dict[str, str] | None,
-) -> None:
-    """Resolve env, build a JobRequest, submit to Iris, block on completion.
+    *,
+    wait: bool = True,
+) -> str:
+    """Resolve env, build a JobRequest, submit to Iris. Optionally block on completion.
 
     Args:
         name: Job name (used for the Iris job label after sanitization).
@@ -592,6 +594,12 @@ def _submit_train_job(
         resources: TPU/GPU/CPU resources to request from Iris.
         env_vars: Env vars injected into the Iris worker at startup. Values are
             resolved in the caller's process.
+        wait: If True (default), block until the Iris job completes and raise
+            on failure. If False, return the job id immediately after the
+            controller has accepted the submission.
+
+    Returns:
+        The Iris job id.
     """
     resolved_env_vars = dict(env_vars or {})
     env = resolve_training_env(resolved_env_vars, resources)
@@ -605,7 +613,10 @@ def _submit_train_job(
 
     client = current_client()
     handle = client.submit(job_request)
-    handle.wait(raise_on_failure=True)
+    job_id = handle.job_id
+    if wait:
+        handle.wait(raise_on_failure=True)
+    return job_id
 
 
 def resolve_lm_train_config(
