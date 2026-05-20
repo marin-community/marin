@@ -37,7 +37,7 @@ class GlobSource:
 
 
 @dataclass(frozen=True)
-class DataFusionPartitionsSource:
+class DataFusionSource:
     """Re-iterable source that runs a DataFusion query and yields one
     materialized partition (list of records) per iteration step.
 
@@ -467,7 +467,7 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = list(ctx.execute(ds))
         """
-        return Dataset(DataFusionPartitionsSource(ctx, query)).flat_map(lambda records: records)
+        return Dataset(DataFusionSource(ctx, query)).flat_map(lambda records: records)
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
