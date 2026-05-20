@@ -29,9 +29,12 @@ not train either:
                             :mod:`experiments.datakit.cluster.quality.v0.train`.
 
 Region-agnostic: every worker resource is unpinned, so iris's ``--region``
-flag drives scheduling. Set ``MARIN_PREFIX`` to the in-region GCS bucket
-(e.g. ``gs://marin-us-central2`` when running with ``--region us-central2``)
-so the upstream source artifacts and every step's output land in-region.
+flag drives scheduling. ``MARIN_PREFIX`` is resolved by
+:func:`rigging.filesystem.marin_prefix` -- when unset (the normal iris-
+worker case) it falls back to ``gs://marin-<region>`` from GCS metadata,
+so the upstream source artifacts and every step's output land in-region
+automatically. Override by exporting ``MARIN_PREFIX`` or passing it via
+``iris job run --env-vars MARIN_PREFIX <bucket>``.
 ``EVAL_ROOT`` is hardcoded to ``gs://marin-eu-west4/.../evals``: the eval
 corpus is read once to build the decontam bloom, after which workers read
 the bloom in-region -- the cross-region cost is one bloom build, not
@@ -48,9 +51,6 @@ Submit on iris::
 
 import argparse
 import logging
-import os
-
-os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 
 from fray import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
