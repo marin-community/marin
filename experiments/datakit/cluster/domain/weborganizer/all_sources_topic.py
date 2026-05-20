@@ -35,7 +35,7 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
     uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G \\
         --extra=cpu --priority production --region europe-west4 \\
         --job-name "weborg-topic-all-sources-$(date +%Y%m%d-%H%M%S)" \\
-        -- python -m experiments.datakit.cluster.weborganizer.all_sources_topic
+        -- python -m experiments.datakit.cluster.domain.weborganizer.all_sources_topic
 """
 
 import logging

@@ -30,7 +30,7 @@ Submit:
     uv run iris --cluster=marin job run --no-wait --memory=2G --extra=cpu \\
         --region europe-west4 \\
         --job-name "llm-quality-eval-$(date +%Y%m%d-%H%M%S)" -- \\
-        python -m experiments.datakit.cluster.llm_quality.ops.eval_holdout \\
+        python -m experiments.datakit.cluster.quality.v0.ops.eval_holdout \\
           --model-bin       $BASE/model/sonnet46-thr05/model.bin \\
           --scored-holdout  $BASE/scored/eval-n1000-seed43-sonnet46.parquet \\
           --report          $BASE/eval/holdout-sonnet46-thr05.tsv

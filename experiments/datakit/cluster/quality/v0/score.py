@@ -36,7 +36,7 @@ Submit:
         --extra=cpu --priority production --region europe-west4 \\
         --job-name "llm-quality-score-$(date +%Y%m%d-%H%M%S)" \\
         --env-file .marin.yaml -- \\
-        python -m experiments.datakit.cluster.llm_quality.score \\
+        python -m experiments.datakit.cluster.quality.v0.score \\
           --input  gs://marin-eu-west4/datakit/llm-quality-classifier/samples/train-n7000-seed42.parquet \\
           --output gs://marin-eu-west4/datakit/llm-quality-classifier/scored/train-n7000-seed42-sonnet46.parquet \\
           --budget-usd 45  # leave $5 for the held-out eval sample
@@ -58,7 +58,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.llm_quality.rubric import (
+from experiments.datakit.cluster.quality.v0.rubric import (
     DEFAULT_ORACLE_MODEL,
     PRICING_PER_MTOK,
     SYSTEM_PROMPT,

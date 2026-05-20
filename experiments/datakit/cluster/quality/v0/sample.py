@@ -24,7 +24,7 @@ shards (every shard is a uniform random subset of its source).
 
 Run from anywhere that can read ``gs://marin-eu-west4/datakit/...``:
 
-    uv run python -m experiments.datakit.cluster.llm_quality.sample \\
+    uv run python -m experiments.datakit.cluster.quality.v0.sample \\
         --output gs://marin-eu-west4/datakit/llm-quality-classifier/samples/train-n7000-seed42.parquet \\
         --total-size 7000 --floor-per-source 20 --seed 42
 """

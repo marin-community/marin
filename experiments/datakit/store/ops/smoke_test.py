@@ -26,8 +26,8 @@ from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAt
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.llm_quality.all_sources_quality_llm import LlmQualityOutput
-from experiments.datakit.cluster.v0.assign import AssignmentAttrData
+from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
+from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import LlmQualityOutput
 from experiments.datakit.store.all_sources_store import (
     CLUSTER_ASSIGN_ROOT,
     DECONTAM_ROOT,

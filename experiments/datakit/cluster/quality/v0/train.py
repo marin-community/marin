@@ -11,7 +11,7 @@ summary into ``--output-dir``.
 
 The binary form mirrors :mod:`allenai/dolma3-fasttext-quality-classifier`
 so the trained model plugs directly into
-:func:`experiments.datakit.cluster.llm_quality.all_sources_quality_llm.classify_llm_quality_step` with
+:func:`experiments.datakit.cluster.quality.v0.all_sources_quality_llm.classify_llm_quality_step` with
 ``score_target_label="1"`` -- inference yields ``P(label == "1") ∈ [0, 1]``
 as the continuous quality score for any source.
 
@@ -20,7 +20,7 @@ Submit:
     uv run iris --cluster=marin job run --no-wait --cpu=4 --memory=16G \\
         --extra=cpu --priority production --region europe-west4 \\
         --job-name "llm-quality-train-$(date +%Y%m%d-%H%M%S)" -- \\
-        python -m experiments.datakit.cluster.llm_quality.train \\
+        python -m experiments.datakit.cluster.quality.v0.train \\
           --input gs://marin-eu-west4/datakit/llm-quality-classifier/scored/train-n7000-seed42-sonnet46.parquet \\
           --output-dir gs://marin-eu-west4/datakit/llm-quality-classifier/model/sonnet46-thr05/
 """

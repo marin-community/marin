@@ -22,7 +22,7 @@ Submit on iris in eu-west4 so the GCS reads stay in-region:
     uv run iris --cluster=marin job run --no-wait --memory=2G --extra=cpu \\
         --region europe-west4 \\
         --job-name "llmq-spot-check-$(date +%Y%m%d-%H%M%S)" -- \\
-        python -m experiments.datakit.cluster.llm_quality.ops.spot_check \\
+        python -m experiments.datakit.cluster.quality.v0.ops.spot_check \\
           --inference-base gs://marin-eu-west4/datakit/llm-quality-classifier/inference/sonnet46-thr05 \\
           --top-k 3 --bottom-k 3
 """

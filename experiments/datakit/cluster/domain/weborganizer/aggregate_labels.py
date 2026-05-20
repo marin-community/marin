@@ -20,7 +20,7 @@ Submit::
     uv run iris --cluster=marin job run --no-wait --cpu=8 --memory=16G \\
         --extra=cpu --region europe-west4 \\
         --job-name "weborg-topic-aggregate-$(date +%Y%m%d-%H%M%S)" \\
-        -- python -m experiments.datakit.cluster.weborganizer.aggregate_labels
+        -- python -m experiments.datakit.cluster.domain.weborganizer.aggregate_labels
 """
 
 import logging
@@ -37,7 +37,7 @@ from pydantic import BaseModel
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.weborganizer.all_sources_topic import WeborgTopicOutput, build_classify_steps
+from experiments.datakit.cluster.domain.weborganizer.all_sources_topic import WeborgTopicOutput, build_classify_steps
 
 logger = logging.getLogger(__name__)
 

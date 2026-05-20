@@ -75,8 +75,8 @@ from zephyr import Dataset, ZephyrContext, counters
 from zephyr.dataset import ShardInfo, format_shard_path
 from zephyr.writers import atomic_rename
 
-from experiments.datakit.cluster.llm_quality.all_sources_quality_llm import LlmQualityOutput
-from experiments.datakit.cluster.v0.assign import AssignmentAttrData
+from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
+from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import LlmQualityOutput
 
 logger = logging.getLogger(__name__)
 

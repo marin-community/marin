@@ -3,9 +3,9 @@
 
 """Apply the LLM-quality classifier across every Datakit source.
 
-Mirrors :mod:`experiments.datakit.cluster.dolma3_quality.all_sources_quality`
+Mirrors :mod:`experiments.datakit.cluster.quality.dolma3_quality.all_sources_quality`
 but points the classify fan-out at our locally-trained ``model.bin``
-(produced by :mod:`experiments.datakit.cluster.llm_quality.train`) instead
+(produced by :mod:`experiments.datakit.cluster.quality.v0.train`) instead
 of the AllenAI HuggingFace model. Output records are ``{id, score}``
 where ``score = P(label == "1") = P(quality >= threshold)``,
 co-partitioned with each source's normalized parquet.
@@ -32,7 +32,7 @@ Submit:
     uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G \\
         --extra=cpu --priority production --region europe-west4 \\
         --job-name "llm-quality-allsources-$(date +%Y%m%d-%H%M%S)" \\
-        -- python -m experiments.datakit.cluster.llm_quality.all_sources_quality_llm \\
+        -- python -m experiments.datakit.cluster.quality.v0.all_sources_quality_llm \\
               --model-bin gs://marin-eu-west4/datakit/llm-quality-classifier/model/sonnet46-thr05/model.bin \\
               --inference-name sonnet46-thr05
 """

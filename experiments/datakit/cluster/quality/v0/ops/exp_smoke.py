@@ -16,7 +16,7 @@ Submit (eu-west4 worker so we read marin-eu-west4 in-region):
         --extra=cpu --region europe-west4 \\
         --job-name "llm-quality-smoke-$(date +%Y%m%d-%H%M%S)" \\
         --env-file .marin.yaml -- \\
-        python -m experiments.datakit.cluster.llm_quality.ops.exp_smoke
+        python -m experiments.datakit.cluster.quality.v0.ops.exp_smoke
 """
 
 from __future__ import annotations
@@ -30,9 +30,9 @@ os.environ.setdefault("MARIN_PREFIX", "gs://marin-eu-west4")
 from rigging.filesystem import marin_temp_bucket  # noqa: E402
 from rigging.log_setup import configure_logging  # noqa: E402
 
-from experiments.datakit.cluster.llm_quality.sample import sample  # noqa: E402
-from experiments.datakit.cluster.llm_quality.score import score  # noqa: E402
-from experiments.datakit.cluster.llm_quality.train import train  # noqa: E402
+from experiments.datakit.cluster.quality.v0.sample import sample  # noqa: E402
+from experiments.datakit.cluster.quality.v0.score import score  # noqa: E402
+from experiments.datakit.cluster.quality.v0.train import train  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

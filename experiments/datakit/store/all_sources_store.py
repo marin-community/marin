@@ -10,7 +10,7 @@ Levanter cache per (cluster=40, quality=5) bucket -> 200 leaves max:
     decontam    gs://marin-eu-west4/datakit/decontam/<src>_<hash>/
     cluster     gs://marin-eu-west4/datakit/cluster/assign/<src>_<hash>/
     quality     gs://marin-eu-west4/datakit/llm-quality-classifier/inference/sonnet46-thr05/quality-llm/<src>_<hash>/
-                (Sonnet 4.6 rubric distilled to a fasttext classifier; see experiments/datakit/cluster/llm_quality/)
+                (Sonnet 4.6 rubric distilled to a fasttext classifier; see experiments/datakit/cluster/quality/v0/)
     dedup       gs://marin-eu-west4/datakit/dedup/dedup_v0_manual/
 
 Excludes ``safety_pt/*`` and ``climblab-ja`` -- both are missing from the
@@ -43,8 +43,8 @@ from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.llm_quality.all_sources_quality_llm import LlmQualityOutput
-from experiments.datakit.cluster.v0.assign import AssignmentAttrData
+from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
+from experiments.datakit.cluster.quality.v0.all_sources_quality_llm import LlmQualityOutput
 from experiments.datakit.store.datakit_store import build_clustered_store
 
 logger = logging.getLogger(__name__)

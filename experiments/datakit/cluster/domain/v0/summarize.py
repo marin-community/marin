@@ -41,7 +41,7 @@ import numpy as np
 import pyarrow.parquet as pq
 from rigging.filesystem import open_url
 
-from experiments.datakit.cluster.v0.assign import AssignmentAttrData
+from experiments.datakit.cluster.domain.v0.assign import AssignmentAttrData
 
 logger = logging.getLogger(__name__)
 

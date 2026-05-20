@@ -26,7 +26,7 @@ Submit:
     uv run iris --cluster=marin job run --no-wait --cpu=2 --memory=16G \\
         --extra=cpu --region europe-west4 \\
         --job-name "llm-quality-vs-dolma3-$(date +%Y%m%d-%H%M%S)" -- \\
-        python -m experiments.datakit.cluster.llm_quality.ops.eval_vs_dolma3 \\
+        python -m experiments.datakit.cluster.quality.v0.ops.eval_vs_dolma3 \\
           --model-bin       $BASE/model/sonnet46-thr05/model.bin \\
           --dolma3-bin      gs://marin-eu-west4/datakit/dolma3-quality/_model/dolma3-quality_<hash>/model.bin \\
           --scored-holdout  $BASE/scored/eval-n1000-seed43-sonnet46.parquet \\
@@ -49,7 +49,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.llm_quality.ops.eval_holdout import (
+from experiments.datakit.cluster.quality.v0.ops.eval_holdout import (
     _load_model_local,
     _patch_numpy_copy_compat,
     predict_p_high,
