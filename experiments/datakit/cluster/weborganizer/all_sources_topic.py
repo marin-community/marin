@@ -7,9 +7,9 @@ Applies AllenAI's Dolma3 fasttext WebOrganizer topic classifier
 (``allenai/dolma3-fasttext-weborganizer-topic-classifier``) to every normalized
 source in :func:`marin.datakit.sources.all_sources` (minus the standard
 ``safety_pt/*`` / ``climblab-ja`` carve-outs -- see ``_EXCLUDE_PREFIXES``),
-producing one co-partitioned Parquet attributes dataset per source. The output
-schema is the datakit ``{id, partition_id, attributes}`` convention -- see
-:mod:`experiments.datakit.fasttext` for the struct layout.
+producing one co-partitioned Parquet attributes dataset per source. Output
+records are ``{id, top_label, top_score, labels, scores}`` (full label
+distribution, since downstream consolidate applies its own topic thresholds).
 
 DAG shape::
 
@@ -18,7 +18,7 @@ DAG shape::
         ▼ prepare_fasttext_model_step  (_model/dolma3-weborg-topic_<hash>/)
         │     stages model.bin (~4 GiB) to GCS once
         │
-        ▼ one classify_fasttext_step per Datakit source
+        ▼ one classify_weborg_topic_step per Datakit source
               (topic/<source>_<hash>/)
               workers read the .bin from in-region GCS, scan the source's
               normalized parquet, and emit co-partitioned attributes.
@@ -39,14 +39,26 @@ Submit on iris (eu-west4 pinned by the worker's ``MARIN_PREFIX``):
 """
 
 import logging
+from typing import Any
 
 from fray import ResourceConfig
+from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
+from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_glob
+from pydantic import BaseModel
 from rigging.log_setup import configure_logging
+from zephyr import Dataset, ZephyrContext
 
-from experiments.datakit.fasttext import classify_fasttext_step, prepare_fasttext_model_step
+from experiments.datakit.fasttext import (
+    FastTextModel,
+    classify_fasttext,
+    load_with_source,
+    output_schema,
+    prepare_fasttext_model_step,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +89,9 @@ MAX_TEXT_CHARS = 100_000
 # (cp/stackv2_code, finepdfs, nemotron medium_high_quality_synthetic).
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
 
+# Zephyr's default max_workers (None) keeps us at the framework default.
+PER_SOURCE_MAX_WORKERS: int | None = None
+
 # Permanent output prefix -- sibling of the v0 clustering artifacts under
 # ``gs://marin-eu-west4/datakit/``. No TTL, no churn between runs.
 _OUTPUT_PREFIX = "gs://marin-eu-west4/datakit/weborganizer"
@@ -91,6 +106,97 @@ _EXCLUDE_PREFIXES: tuple[str, ...] = (
     "safety_pt/",
     "climblab-ja",
 )
+
+
+class WeborgTopicOutput(BaseModel):
+    """Step artifact for one source's weborganizer topic classification.
+
+    Output parquets live at ``<output_dir>/data-NNNNN-of-MMMMM.parquet``, each
+    row ``{id, top_label, top_score, labels, scores}`` -- the full per-label
+    distribution; downstream aggregate_labels picks ``top_label``.
+    """
+
+    version: str = "v1"
+    output_dir: str
+    model_path: str
+    counters: dict[str, int]
+
+
+def _run_one_source(
+    *,
+    normalized: NormalizedData,
+    model_path: str,
+    output_path: str,
+    source_name: str,
+    worker_resources: ResourceConfig,
+    max_workers: int | None,
+) -> WeborgTopicOutput:
+    files = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"{source_name}: no .parquet files under {normalized.main_output_dir}")
+    output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"
+    pipeline = Dataset.from_list(files).flat_map(load_with_source)
+    pipeline = classify_fasttext(
+        pipeline,
+        model_path=model_path,
+        max_text_chars=MAX_TEXT_CHARS,
+        k=K,
+        threshold=THRESHOLD,
+    )
+    pipeline = pipeline.write_parquet(
+        output_pattern,
+        schema=output_schema(None),
+        skip_existing=True,
+    )
+    ctx_kwargs: dict[str, Any] = {"name": f"weborg-topic-{source_name}", "resources": worker_resources}
+    if max_workers is not None:
+        ctx_kwargs["max_workers"] = max_workers
+    ctx = ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(pipeline)
+    return WeborgTopicOutput(
+        output_dir=output_path,
+        model_path=model_path,
+        counters=dict(outcome.counters),
+    )
+
+
+def classify_weborg_topic_step(
+    *,
+    name: str,
+    normalized: StepSpec,
+    model_step: StepSpec,
+    output_path_prefix: str,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+) -> StepSpec:
+    """StepSpec factory for one source's weborganizer-topic classification.
+
+    ``worker_resources`` and ``max_workers`` are execution policy -- not in
+    ``hash_attrs`` -- so changing them does not invalidate already-classified
+    sources.
+    """
+    hash_attrs: dict[str, Any] = {
+        "max_text_chars": MAX_TEXT_CHARS,
+        "k": K,
+        "threshold": THRESHOLD,
+    }
+    resources = worker_resources or WORKER_RESOURCES
+    workers = max_workers if max_workers is not None else PER_SOURCE_MAX_WORKERS
+    source_name = name.removeprefix("topic/")
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: _run_one_source(
+            normalized=Artifact.from_path(normalized, NormalizedData),
+            model_path=Artifact.from_path(model_step, FastTextModel).model_path,
+            output_path=output_path,
+            source_name=source_name,
+            worker_resources=resources,
+            max_workers=workers,
+        ),
+        deps=[normalized, model_step],
+        hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
+    )
 
 
 def build_classify_steps() -> list[StepSpec]:
@@ -110,14 +216,10 @@ def build_classify_steps() -> list[StepSpec]:
         if any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES):
             continue
         classify_steps.append(
-            classify_fasttext_step(
+            classify_weborg_topic_step(
                 name=f"topic/{name}",
                 normalized=src.normalized,
                 model_step=model_step,
-                max_text_chars=MAX_TEXT_CHARS,
-                k=K,
-                threshold=THRESHOLD,
-                worker_resources=WORKER_RESOURCES,
                 output_path_prefix=_OUTPUT_PREFIX,
             )
         )

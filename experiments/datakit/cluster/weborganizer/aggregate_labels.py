@@ -37,8 +37,7 @@ from pydantic import BaseModel
 from rigging.filesystem import open_url, url_to_fs
 from rigging.log_setup import configure_logging
 
-from experiments.datakit.cluster.weborganizer.all_sources_topic import build_classify_steps
-from experiments.datakit.fasttext import FastTextAttributes
+from experiments.datakit.cluster.weborganizer.all_sources_topic import WeborgTopicOutput, build_classify_steps
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +73,7 @@ class WeborgLabelRollup(BaseModel):
     per_source_paths: dict[str, str]
 
 
-def _count_labels_one_source(*, source_name: str, attrs: FastTextAttributes) -> SourceLabelCounts:
+def _count_labels_one_source(*, source_name: str, attrs: WeborgTopicOutput) -> SourceLabelCounts:
     """Scan one source's classify parquets, return ``{label: count}``."""
     counts: Counter[str] = Counter()
     n_docs = 0
@@ -84,10 +83,10 @@ def _count_labels_one_source(*, source_name: str, attrs: FastTextAttributes) -> 
     for path in paths:
         full = f"{protocol}://{path}" if protocol and not path.startswith(f"{protocol}://") else path
         with fs.open(full, "rb") as f:
-            # Column projection: skip ``id`` (largest col) and ``partition_id``;
-            # only attributes carries the label we need.
-            table = pq.read_table(f, columns=["attributes"])
-        top_labels = table["attributes"].combine_chunks().field("top_label").to_pylist()
+            # Column projection: skip ``id`` (largest col); only top_label
+            # feeds the histogram.
+            table = pq.read_table(f, columns=["top_label"])
+        top_labels = table["top_label"].to_pylist()
         n_docs += len(top_labels)
         counts.update(top_labels)
     logger.info("aggregated %s: %d docs across %d shard(s)", source_name, n_docs, len(paths))
@@ -102,7 +101,7 @@ def _safe_filename(source_name: str) -> str:
 def aggregate_label_counts(
     *,
     output_path: str,
-    sources: dict[str, FastTextAttributes],
+    sources: dict[str, WeborgTopicOutput],
 ) -> WeborgLabelRollup:
     """Aggregate per-source label counts and write the rollup artifacts."""
     # Per-source counts, threaded
@@ -159,7 +158,7 @@ def aggregate_label_counts_step(*, classify_steps: list[StepSpec]) -> StepSpec:
         hash_attrs=hash_attrs,
         fn=lambda output_path: aggregate_label_counts(
             output_path=output_path,
-            sources={n: Artifact.from_path(p, FastTextAttributes) for n, p in source_paths.items()},
+            sources={n: Artifact.from_path(p, WeborgTopicOutput) for n, p in source_paths.items()},
         ),
     )
 

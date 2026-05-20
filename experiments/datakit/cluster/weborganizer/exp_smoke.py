@@ -9,7 +9,7 @@ an hour. Verifies:
 
 - HF model fetch + GCS staging via :func:`prepare_fasttext_model_step`
 - Co-partitioned attributes parquet writes against datakit-normalized input
-- The datakit ``{id, partition_id, attributes}`` schema downstream consolidate consumes
+- The flat ``{id, top_label, top_score, labels, scores}`` output schema
 - That the staged ``.bin`` is reachable from a Zephyr classify worker in eu-west4
 
 Submit:
@@ -32,7 +32,13 @@ from marin.execution.step_runner import StepRunner  # noqa: E402
 from marin.execution.step_spec import StepSpec  # noqa: E402
 from rigging.filesystem import marin_temp_bucket  # noqa: E402
 
-from experiments.datakit.fasttext import classify_fasttext_step, prepare_fasttext_model_step  # noqa: E402
+from experiments.datakit.cluster.weborganizer.all_sources_topic import (  # noqa: E402
+    MODEL_HF_FILENAME,
+    MODEL_HF_REPO,
+    MODEL_REVISION,
+    classify_weborg_topic_step,
+)
+from experiments.datakit.fasttext import prepare_fasttext_model_step  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +47,10 @@ logger = logging.getLogger(__name__)
 # (NSF grant abstracts spread across Science/Education/Technology/Industry).
 SOURCE_NAME = "nsf_awards"
 
-# Same model + revision as all_sources_topic.py. Smoke and prod share a cache
-# slot, so once the .bin is staged by either path the other reuses it.
-MODEL_HF_REPO = "allenai/dolma3-fasttext-weborganizer-topic-classifier"
-MODEL_HF_FILENAME = "model.bin"
-MODEL_REVISION = "005a0da7d35651eb6f54553171f146bd62c5cdd2"
-
-K = -1
-THRESHOLD = 0.0
-MAX_TEXT_CHARS = 100_000
-
-# Dolma3 weborganizer model.bin is ~4 GiB on disk and ~6-8 GiB resident after
-# fasttext.load_model. 16 GiB worker RAM gives enough headroom for the model
-# plus per-shard parquet I/O buffers; 8 GiB OOMs (observed in 20260517-184843).
+# Pin worker to eu-west4 for the smoke run; production
+# (all_sources_topic.py) leaves region open since it's already running with
+# MARIN_PREFIX pointed at eu-west4. 16 GiB matches the production cap
+# (8 GiB OOMs, observed in 20260517-184843).
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g", regions=[DATA_REGION])
 
 # Pin to eu-west4 explicitly via source_prefix so the output doesn't drift to a
@@ -78,15 +75,12 @@ def _build_steps() -> list[StepSpec]:
         output_path_prefix=_OUTPUT_PREFIX,
     )
 
-    classify_step = classify_fasttext_step(
+    classify_step = classify_weborg_topic_step(
         name=f"datakit/classify/topic/{SOURCE_NAME}",
         normalized=source.normalized,
         model_step=model_step,
-        max_text_chars=MAX_TEXT_CHARS,
-        k=K,
-        threshold=THRESHOLD,
-        worker_resources=WORKER_RESOURCES,
         output_path_prefix=_OUTPUT_PREFIX,
+        worker_resources=WORKER_RESOURCES,
     )
 
     return [*source.normalize_steps, model_step, classify_step]
