@@ -1,36 +1,39 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a fasttext classifier over datakit-normalized data.
+"""Building blocks for running a fasttext classifier in a Zephyr pipeline.
 
-Reads datakit-normalized Parquet (``id``, ``text``), runs a fasttext ``.bin``
-model over each record's text, and emits a co-partitioned Parquet attributes
-dataset with the predicted label distribution.
+Provides three composable pieces:
 
-Schema of the emitted Parquet attributes (datakit ``{id, attributes}`` convention,
-consumable by :func:`marin.processing.classification.consolidate.consolidate`):
+* :func:`prepare_fasttext_model_step` — a StepSpec that pulls a fasttext
+  ``.bin`` from HuggingFace and stages it on GCS. The bin is materialized
+  once; classify workers load it from the in-region GCS path so a 100-source
+  fan-out doesn't hammer the HF Hub.
 
-    id                       : string         — matches source document id
-    attributes               : struct
-        top_label            : string         — fasttext top-1 label (``__label__`` stripped)
-        top_score            : float          — top-1 probability
-        labels               : list[string]   — all labels in fasttext score order
-        scores               : list[float]    — corresponding probabilities
+* :func:`classify_fasttext` — a :class:`Dataset` transform that windows
+  records into batches and runs one ``fasttext.predict`` call per batch.
+  Returns a Dataset of per-record output dicts; the caller composes it into
+  whatever surrounding pipeline they need (typically
+  ``.write_parquet(...)``).
 
-If ``score_target_label`` is passed to :func:`classify_fasttext_to_parquet` or
-:func:`classify_fasttext_step` (binary classifiers, e.g. dolma3-quality with
-``"1"``), the ``attributes`` struct collapses to a single ``high_score: float64``
-field equal to ``P(label == score_target_label)`` — the full label distribution
-is redundant when there are only two classes.
+* :func:`output_schema` — the pyarrow schema for the per-record outputs,
+  for callers that want to pass an explicit schema to
+  ``Dataset.write_parquet``.
 
-The model itself is materialized once via :func:`prepare_fasttext_model_step` —
-a tiny prep step that pulls the model ``.bin`` from HuggingFace and stages it
-into the step's ``output_path`` on GCS. Workers in the classify step then read
-from the in-region GCS path, so a 100-source fan-out doesn't hammer the HF Hub.
+Output record shape (one dict per non-empty input record, keyed by ``id``):
 
-Output is co-partitioned with the source: one ``data-NNNNN-of-MMMMM.parquet``
-per input partition, with shard index preserving the input-file order so
-consolidate can sorted-merge-join against the source without a shuffle.
+    Full distribution (default)        Binary (``score_target_label`` set)
+    ───────────────────────────        ───────────────────────────────────
+    id        : string                 id         : string
+    top_label : string                 high_score : float64
+    top_score : float64
+    labels    : list[string]
+    scores    : list[float64]
+
+Empty-text and whitespace-only records are skipped — consolidate joins by
+``id``, so absence is the right signal that the classifier had nothing to
+score. Individual classifiers wire their own input discovery, output
+naming, hash_attrs, and downstream artifact shape.
 """
 
 from __future__ import annotations
@@ -43,14 +46,10 @@ from functools import cache, partial
 from typing import Any
 
 import pyarrow as pa
-from fray import ResourceConfig
-from marin.datakit.normalize import NormalizedData
-from marin.execution.artifact import Artifact
 from marin.execution.step_spec import StepSpec
-from marin.utils import fsspec_glob
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
-from zephyr import Dataset, ZephyrContext, atomic_rename, counters
+from zephyr import Dataset, atomic_rename, counters
 from zephyr.readers import load_file
 
 logger = logging.getLogger(__name__)
@@ -98,27 +97,6 @@ class FastTextModel(BaseModel):
     hf_filename: str
     revision: str
     size_bytes: int
-
-
-class FastTextAttributes(BaseModel):
-    """Outcome of :func:`classify_fasttext_to_parquet`: a co-partitioned attributes dataset.
-
-    Persisted as the step's ``.artifact`` so downstream consumers can locate
-    the output without re-running the pipeline.
-
-    Attributes:
-        output_dir: Directory containing ``data-NNNNN-of-MMMMM.parquet`` files.
-        num_partitions: Number of output partitions; matches the source.
-        model_path: Path to the fasttext ``.bin`` used to produce these
-            attributes. Recorded so consumers can confirm provenance.
-        counters: Aggregated zephyr counters from the classify pipeline.
-    """
-
-    version: str = "v1"
-    output_dir: str
-    num_partitions: int
-    model_path: str
-    counters: dict[str, int]
 
 
 _MODEL_FILENAME = "model.bin"
@@ -179,29 +157,27 @@ def _strip_label_prefix(label: str) -> str:
     return label.removeprefix(_LABEL_PREFIX)
 
 
-_FULL_ATTRIBUTES_STRUCT = pa.struct(
-    [
-        pa.field("top_label", pa.string()),
-        pa.field("top_score", pa.float64()),
-        pa.field("labels", pa.list_(pa.string())),
-        pa.field("scores", pa.list_(pa.float64())),
-    ]
-)
+def output_schema(score_target_label: str | None) -> pa.Schema:
+    """Pyarrow schema for the per-record output of :func:`classify_fasttext`.
 
-_BINARY_ATTRIBUTES_STRUCT = pa.struct(
-    [
-        pa.field("high_score", pa.float64()),
-    ]
-)
-
-
-def _output_schema(score_target_label: str | None) -> pa.Schema:
-    """Pick the output schema based on whether we're collapsing to a single high-score."""
-    attrs = _BINARY_ATTRIBUTES_STRUCT if score_target_label is not None else _FULL_ATTRIBUTES_STRUCT
+    Use as the ``schema=`` argument to ``Dataset.write_parquet`` so the writer
+    doesn't have to infer from the first record (fragile when the first record
+    happens to be missing fields).
+    """
+    if score_target_label is not None:
+        return pa.schema(
+            [
+                pa.field("id", pa.string()),
+                pa.field("high_score", pa.float64()),
+            ]
+        )
     return pa.schema(
         [
             pa.field("id", pa.string()),
-            pa.field("attributes", attrs),
+            pa.field("top_label", pa.string()),
+            pa.field("top_score", pa.float64()),
+            pa.field("labels", pa.list_(pa.string())),
+            pa.field("scores", pa.list_(pa.float64())),
         ]
     )
 
@@ -243,8 +219,13 @@ def _load_fasttext_model(model_path_str: str) -> Any:
     return fasttext.load_model(local)
 
 
-def _load_with_source(path: str) -> Iterator[dict[str, Any]]:
-    """Load records from *path* and tag each with its ``_source_path``."""
+def load_with_source(path: str) -> Iterator[dict[str, Any]]:
+    """Load records from *path* and tag each with its ``_source_path``.
+
+    A small ``flat_map`` helper for the common ``Dataset.from_list(paths)``
+    layout; tagging the source lets downstream stages distinguish
+    same-id records that came from different input shards.
+    """
     counters.increment("classify/files_in")
     for record in load_file(path):
         record["_source_path"] = path
@@ -256,7 +237,7 @@ def _attrs_from_prediction(
     probs: Any,
     score_target_label: str | None,
 ) -> dict[str, Any]:
-    """Project a single fasttext (labels, probs) pair into the output attribute struct."""
+    """Project a single fasttext (labels, probs) pair into the output attribute fields."""
     if score_target_label is not None:
         # Linear scan: K=-1 typical, but even full binary/multi-class outputs
         # are only 2-24 elements.
@@ -286,8 +267,9 @@ def _predict_batch(
 ) -> Iterator[dict[str, Any]]:
     """One fasttext.predict call per batch; yield per-record output dicts for non-empty docs.
 
-    Empty-text records are skipped (consolidate joins by id, so absence is the
-    correct signal that the classifier had nothing to score).
+    Empty-text and whitespace-only records are skipped (consolidate joins by
+    id, so absence is the correct signal that the classifier had nothing
+    to score).
     """
     model = _load_fasttext_model(model_path_str)
     counters.increment("classify/batches_in")
@@ -322,105 +304,59 @@ def _predict_batch(
     for record, labels, probs in zip(records_to_predict, labels_list, probs_list, strict=True):
         stripped = [_strip_label_prefix(label) for label in labels]
         counters.increment("classify/predicted")
-        yield {
-            "id": record["id"],
-            "attributes": _attrs_from_prediction(stripped, probs, score_target_label),
-        }
+        yield {"id": record["id"], **_attrs_from_prediction(stripped, probs, score_target_label)}
 
 
-def classify_fasttext_to_parquet(
+def classify_fasttext(
+    dataset: Dataset,
     *,
-    normalized_data: NormalizedData,
-    model: FastTextModel,
-    output_path: str,
+    model_path: str,
+    batch_size: int = DEFAULT_BATCH_SIZE,
     text_field: str = "text",
     max_text_chars: int | None = DEFAULT_MAX_TEXT_CHARS,
     k: int = -1,
     threshold: float = 0.0,
     score_target_label: str | None = None,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    worker_resources: ResourceConfig | None = None,
-    max_workers: int | None = None,
-) -> FastTextAttributes:
-    """Classify records in *normalized_data* with the fasttext model at *model*.
+) -> Dataset:
+    """Append the windowed batched-predict stage to *dataset*.
 
     Args:
-        normalized_data: Upstream :class:`NormalizedData` artifact. Reads from
-            ``normalized_data.main_output_dir`` (the flat, co-partitioned
-            Parquet directory produced by datakit normalize). Records must
-            have ``id`` and ``text`` columns.
-        model: :class:`FastTextModel` artifact pointing at a staged
-            ``.bin``. Workers stream the bin from GCS to a per-process
-            tempfile once via :func:`_load_fasttext_model`.
-        output_path: Output directory. Writes ``data-NNNNN-of-MMMMM.parquet``
-            files whose shard index corresponds to the input file at the same
-            sorted index.
+        dataset: Upstream Dataset whose items are record dicts with at least an
+            ``id`` and a text column (named *text_field*). Typically built from
+            ``Dataset.from_list(files).flat_map(load_with_source)``.
+        model_path: GCS path to the staged fasttext ``.bin`` (the
+            ``model_path`` field of a :class:`FastTextModel` artifact produced
+            by :func:`prepare_fasttext_model_step`).
+        batch_size: Records per ``fasttext.predict`` call. Larger batches
+            amortize the Python↔C++ boundary but raise peak per-worker RAM
+            (up to ``batch_size * max_text_chars`` bytes of in-flight text).
         text_field: Text column name in the input records.
         max_text_chars: Truncate input text to this many UTF-8 chars before
             predict. ``None`` disables truncation.
         k: Top-K labels to keep from each prediction. ``-1`` keeps the full
             label distribution.
-        threshold: Minimum score for a label to be kept.
-        score_target_label: If set, collapse output ``attributes`` to a single
-            ``high_score: float64`` = ``P(label == score_target_label)``. Use
-            for binary classifiers; ``None`` keeps the full struct (top_label,
-            top_score, labels, scores).
-        batch_size: Records per ``fasttext.predict`` call. Larger batches
-            amortize the Python↔C++ boundary but raise peak per-worker RAM
-            (up to ``batch_size * max_text_chars`` bytes of in-flight text).
-        worker_resources: Per-shard resource request. Defaults to 2 CPU /
-            8 GB RAM, matching the decon mark step.
-        max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
+        threshold: Minimum probability for a label to be kept.
+        score_target_label: If set, the output collapses to a single
+            ``high_score: float64`` field equal to
+            ``P(label == score_target_label)``. Use for binary classifiers.
+            ``None`` keeps the full ``{top_label, top_score, labels, scores}``
+            field set.
 
     Returns:
-        :class:`FastTextAttributes` describing the output dataset and counters.
+        A Dataset of per-record output dicts (see :func:`output_schema` for
+        the exact field set). Compose with ``.write_parquet(...)`` or any
+        other sink.
     """
-    input_path = normalized_data.main_output_dir
-    files: list[str] = sorted(fsspec_glob(f"{input_path.rstrip('/')}/**/*.parquet"))
-    if not files:
-        raise FileNotFoundError(f"No .parquet files found under {input_path}")
-    num_partitions = len(files)
-    logger.info(
-        "classify: %s → %s, %d input partitions, batch=%d, model=%s",
-        input_path,
-        output_path,
-        num_partitions,
-        batch_size,
-        model.model_path,
-    )
-
-    output_schema = _output_schema(score_target_label)
-    output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"
-    pipeline = (
-        Dataset.from_list(files)
-        .flat_map(_load_with_source)
-        .window(batch_size)
-        .flat_map(
-            partial(
-                _predict_batch,
-                model_path_str=model.model_path,
-                text_field=text_field,
-                max_text_chars=max_text_chars,
-                k=k,
-                threshold=threshold,
-                score_target_label=score_target_label,
-            )
+    return dataset.window(batch_size).flat_map(
+        partial(
+            _predict_batch,
+            model_path_str=model_path,
+            text_field=text_field,
+            max_text_chars=max_text_chars,
+            k=k,
+            threshold=threshold,
+            score_target_label=score_target_label,
         )
-        .write_parquet(output_pattern, schema=output_schema, skip_existing=True)
-    )
-
-    resources = worker_resources or ResourceConfig(cpu=2, ram="8g")
-    ctx_kwargs: dict[str, Any] = {"name": "classify-fasttext", "resources": resources}
-    if max_workers is not None:
-        ctx_kwargs["max_workers"] = max_workers
-    ctx = ZephyrContext(**ctx_kwargs)
-    outcome = ctx.execute(pipeline)
-
-    return FastTextAttributes(
-        output_dir=output_path,
-        num_partitions=num_partitions,
-        model_path=model.model_path,
-        counters=dict(outcome.counters),
     )
 
 
@@ -454,77 +390,6 @@ def prepare_fasttext_model_step(
             revision=revision,
             output_path=output_path,
         ),
-        hash_attrs=hash_attrs,
-        output_path_prefix=output_path_prefix,
-        override_output_path=override_output_path,
-    )
-
-
-def classify_fasttext_step(
-    *,
-    name: str,
-    normalized: StepSpec,
-    model_step: StepSpec,
-    text_field: str = "text",
-    max_text_chars: int | None = DEFAULT_MAX_TEXT_CHARS,
-    k: int = -1,
-    threshold: float = 0.0,
-    score_target_label: str | None = None,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    worker_resources: ResourceConfig | None = None,
-    max_workers: int | None = None,
-    output_path_prefix: str | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that classifies a normalized dataset with a fasttext model.
-
-    Args:
-        name: Step name (e.g. ``"datakit/classify/topic/fineweb"``).
-        normalized: Upstream datakit normalize step whose output is the input.
-        model_step: Upstream :func:`prepare_fasttext_model_step` whose output
-            directory holds the ``.bin``.
-        text_field: Text column name in the input records.
-        max_text_chars: Truncate input text to this many chars before predict.
-            ``None`` disables truncation.
-        k: Top-K labels to keep. ``-1`` keeps the full distribution.
-        threshold: Minimum probability for a label to be kept.
-        score_target_label: Collapse the output attributes to a single
-            ``high_score: float64`` equal to ``P(label == score_target_label)``.
-            Use for binary classifiers (e.g. dolma3-quality, ``"1"``). ``None``
-            keeps the full ``{top_label, top_score, labels, scores}`` struct.
-        batch_size: Records per ``fasttext.predict`` call. Performance knob,
-            not part of the cache key — different sizes produce identical
-            output.
-        worker_resources, max_workers: Zephyr execution knobs.
-        output_path_prefix, override_output_path: StepSpec routing.
-    """
-    hash_attrs: dict[str, Any] = {
-        "text_field": text_field,
-        "max_text_chars": max_text_chars,
-        "k": k,
-        "threshold": threshold,
-    }
-    # Only include when set so the existing full-distribution callers
-    # (weborganizer topic) keep their cache key — adding a ``None`` here
-    # would re-hash and force a re-classify of every already-classified source.
-    if score_target_label is not None:
-        hash_attrs["score_target_label"] = score_target_label
-    return StepSpec(
-        name=name,
-        fn=lambda output_path: classify_fasttext_to_parquet(
-            normalized_data=Artifact.from_path(normalized, NormalizedData),
-            model=Artifact.from_path(model_step, FastTextModel),
-            output_path=output_path,
-            text_field=text_field,
-            max_text_chars=max_text_chars,
-            k=k,
-            threshold=threshold,
-            score_target_label=score_target_label,
-            batch_size=batch_size,
-            worker_resources=worker_resources,
-            max_workers=max_workers,
-        ),
-        deps=[normalized, model_step],
         hash_attrs=hash_attrs,
         output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
