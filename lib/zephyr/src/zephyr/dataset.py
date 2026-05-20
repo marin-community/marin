@@ -45,14 +45,15 @@ class DataFusionSource:
 
     ctx: SessionContext
     query: str
+    params: tuple[tuple[str, Any], ...] = ()
 
     def __iter__(self) -> Iterator[pa.Table]:
-        result = self.ctx.sql(self.query)
+        result = self.ctx.sql(self.query, param_values=dict(self.params))
         for stream in result.execute_stream_partitioned():
             # PyArrow tables are pickleable via Arrow IPC.
             # We only ever load one batch at a time.
-            # Adding the schema avoids a `ValueError` when the partition is empty.
-            yield pa.Table.from_batches((batch.to_pyarrow() for batch in stream), result.schema)
+            # Passing the schema avoids a `ValueError` when the partition is empty.
+            yield pa.Table.from_batches((batch.to_pyarrow() for batch in stream), result.schema())
 
 
 def _table_to_records(table: pa.Table) -> Iterator[dict]:
@@ -451,7 +452,7 @@ class Dataset(Generic[T]):
     # TODO(alxmrs): If we can _read_ from DataFusion, then we probably would want to
     #  _write_ to it, too.
     @staticmethod
-    def from_query(ctx: SessionContext, query: str) -> Dataset[dict]:
+    def from_query(ctx: SessionContext, query: str, *, params: dict[str, Any] | None = None) -> Dataset[dict]:
         """Create a dataset from a DataFusion SQL query.
 
         Instead of directly loading files, we can perform filters and aggregations on
@@ -462,6 +463,10 @@ class Dataset(Generic[T]):
         Args:
             ctx: A DataFusion context that's configured and has pre-registered SQL tables.
             query: A well-formed [DataFusion-dialect](https://datafusion.apache.org/user-guide/sql/index.html) SQL query.
+                Use ``$name`` placeholders in the query and bind values via ``params``
+                rather than interpolating them into the string. DataFusion binds values
+                outside the SQL parser, so they cannot be re-interpreted as SQL.
+            params: Optional mapping of placeholder name to value, bound at execution time.
 
         Returns
             A Dataset of records.
@@ -476,7 +481,8 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(DataFusionSource(ctx, query)).flat_map(_table_to_records)
+        param_tuple: tuple[tuple[str, Any], ...] = tuple(params.items()) if params else ()
+        return Dataset(DataFusionSource(ctx, query, param_tuple)).flat_map(_table_to_records)
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.

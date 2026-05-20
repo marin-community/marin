@@ -106,6 +106,27 @@ def test_from_query__empty_result(zephyr_ctx, sample_datafusion_ctx):
     assert zephyr_ctx.execute(ds).results == []
 
 
+def test_from_query__params(zephyr_ctx, sample_datafusion_ctx):
+    """Bound parameters land at the SQL engine, not the parser, and an
+    injection-shaped value can't escape its placeholder."""
+    ds = Dataset.from_query(
+        sample_datafusion_ctx,
+        "SELECT id FROM mytable WHERE version = $v",
+        params={"v": 2},
+    ).map(lambda r: r["id"])
+    assert sorted(zephyr_ctx.execute(ds).results) == [1, 4]
+
+    # An injection-shaped string should be treated as a value, not SQL.
+    # DataFusion coerces it to int (yielding 0), so no rows match — and
+    # critically the WHERE clause is not rewritten to `1=1`.
+    ds = Dataset.from_query(
+        sample_datafusion_ctx,
+        "SELECT id FROM mytable WHERE version = $v",
+        params={"v": "2 OR 1=1"},
+    )
+    assert zephyr_ctx.execute(ds).results == []
+
+
 def test_filter(sample_data, zephyr_ctx):
     """Test filtering dataset."""
     ds = Dataset.from_list(sample_data).filter(lambda x: x % 2 == 0)
