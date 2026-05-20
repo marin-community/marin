@@ -348,7 +348,8 @@ def render_heatmap(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) ->
     nrows, ncols = values.shape
     fig, ax = plt.subplots(figsize=(1.6 + 1.05 * ncols, 0.8 + 0.6 * nrows))
 
-    im = ax.imshow(z.to_numpy(dtype=float), cmap="RdBu", aspect="auto", vmin=-2.0, vmax=2.0)
+    # Reversed RdBu so lower loss is blue (good) and higher loss is red (bad).
+    im = ax.imshow(z.to_numpy(dtype=float), cmap="RdBu_r", aspect="auto", vmin=-2.0, vmax=2.0)
 
     ax.set_xticks(range(ncols))
     ax.set_xticklabels(cols, rotation=40, ha="right")
@@ -367,7 +368,7 @@ def render_heatmap(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) ->
             ax.text(j, i, text, ha="center", va="center", color=color, fontsize=8)
 
     cbar = fig.colorbar(im, ax=ax, shrink=0.85)
-    cbar.set_label("per-metric z-score (color)")
+    cbar.set_label("per-metric z-score  (blue = lower loss = better)")
 
     ax.set_title(
         f"{TITLE_PREFIX} — {sweep.id}: loss by mixture @ step={ref_step}\n"
