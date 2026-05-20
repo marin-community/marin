@@ -93,9 +93,7 @@ def test_from_query__agg(zephyr_ctx, sample_datafusion_ctx):
 
 
 def test_from_query__reexecutable(zephyr_ctx, sample_datafusion_ctx):
-    """A Dataset built from from_query must produce the same results across
-    repeated executions — the source has to be re-iterable, not a one-shot
-    generator."""
+    """Dataset.from_query() must produce the same results across repeated executions."""
     ds = Dataset.from_query(sample_datafusion_ctx, "SELECT id from mytable WHERE version = 1").map(lambda x: x["id"])
     first = set(zephyr_ctx.execute(ds).results)
     second = set(zephyr_ctx.execute(ds).results)
