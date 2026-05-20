@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 from collections.abc import Iterator
 from functools import cache, partial
 from typing import Any
@@ -208,8 +209,8 @@ def _output_schema(score_target_label: str | None) -> pa.Schema:
 def _load_fasttext_model(model_path_str: str) -> Any:
     """Return a fasttext model loaded from a local copy of *model_path_str*.
 
-    The .bin is streamed from GCS to ``/tmp`` on first call; subsequent calls in
-    the same worker process return the cached model object.
+    The .bin is streamed from GCS to a per-process tempfile on first call;
+    subsequent calls in the same worker process return the cached model object.
     """
     # fasttext-wheel 0.9.2 calls ``np.array(..., copy=False)`` inside
     # ``FastText.predict``; NumPy 2.x rejects ``copy=False`` (must use
@@ -233,14 +234,9 @@ def _load_fasttext_model(model_path_str: str) -> Any:
     import fasttext
 
     fs, resolved = url_to_fs(model_path_str)
-    local = f"/tmp/fasttext-{os.path.basename(resolved)}"
-    if not os.path.exists(local):
-        with fs.open(resolved, "rb") as src, open(local, "wb") as dst:
-            while True:
-                chunk = src.read(8 * 1024 * 1024)
-                if not chunk:
-                    break
-                dst.write(chunk)
+    fd, local = tempfile.mkstemp(prefix="fasttext-", suffix=".bin")
+    os.close(fd)
+    fs.get(resolved, local)
     return fasttext.load_model(local)
 
 
