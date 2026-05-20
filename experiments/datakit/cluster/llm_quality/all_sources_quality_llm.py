@@ -6,9 +6,9 @@
 Mirrors :mod:`experiments.datakit.cluster.dolma3_quality.all_sources_quality`
 but points the classify fan-out at our locally-trained ``model.bin``
 (produced by :mod:`experiments.datakit.cluster.llm_quality.train`) instead
-of the AllenAI HuggingFace model. Output schema is the binary
-``{high_score: float64}`` attribute -- ``P(label == "1") = P(quality >=
-threshold)`` -- co-partitioned with each source's normalized parquet.
+of the AllenAI HuggingFace model. Output records are ``{id, high_score}``
+where ``high_score = P(label == "1") = P(quality >= threshold)``,
+co-partitioned with each source's normalized parquet.
 
 DAG shape::
 
@@ -16,7 +16,7 @@ DAG shape::
         │
         ▼ _register_model_step  (no-op, just emits the FastTextModel artifact)
         │
-        ▼ one classify_fasttext_step per Datakit source
+        ▼ one classify_llm_quality_step per Datakit source
               (quality-llm/<source>_<hash>/)
               workers stream the .bin from in-region GCS, scan the
               normalized parquet, emit co-partitioned attributes.
@@ -45,13 +45,23 @@ import os
 from typing import Any
 
 from fray import ResourceConfig
+from marin.datakit.normalize import NormalizedData
 from marin.datakit.sources import all_sources
+from marin.execution.artifact import Artifact
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.utils import fsspec_glob
+from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
+from zephyr import Dataset, ZephyrContext
 
-from experiments.datakit.fasttext import FastTextModel, classify_fasttext_step
+from experiments.datakit.fasttext import (
+    FastTextModel,
+    classify_fasttext,
+    load_with_source,
+    output_schema,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +71,8 @@ logger = logging.getLogger(__name__)
 _OUTPUT_PREFIX = "gs://marin-eu-west4/datakit/llm-quality-classifier/inference"
 
 # Inference knobs mirror dolma3-quality (binary classifier, P(label="1")
-# collapsed to attributes.high_score) so consumers can swap classifiers
-# without changing downstream consolidate code.
+# collapsed to ``high_score``) so consumers can swap classifiers without
+# changing downstream consolidate code.
 K = -1
 THRESHOLD = 0.0
 MAX_TEXT_CHARS = 100_000
@@ -75,6 +85,9 @@ SCORE_TARGET_LABEL = "1"
 # (cp/stackv2_code, finepdfs, nemotron medium_high_quality_synthetic).
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
 
+# Zephyr default for workers (None = framework default).
+PER_SOURCE_MAX_WORKERS: int | None = None
+
 # Same set excluded by the dolma3-quality and weborganizer fan-outs.
 _EXCLUDE_PREFIXES: tuple[str, ...] = (
     "safety_pt/",
@@ -82,14 +95,27 @@ _EXCLUDE_PREFIXES: tuple[str, ...] = (
 )
 
 
+class LlmQualityOutput(BaseModel):
+    """Step artifact for one source's LLM-quality classification.
+
+    Output parquets live at ``<output_dir>/data-NNNNN-of-MMMMM.parquet``, each
+    row ``{id, high_score: float64}`` where ``high_score = P(label == "1")``.
+    """
+
+    version: str = "v1"
+    output_dir: str
+    model_path: str
+    counters: dict[str, int]
+
+
 def _register_model_step(name: str, model_bin_path: str, output_path_prefix: str) -> StepSpec:
     """Tiny StepSpec that just emits a FastTextModel artifact pointing at *model_bin_path*.
 
-    The existing :func:`classify_fasttext_step` consumes its ``model_step``
-    via ``Artifact.from_path(model_step, FastTextModel)``, so we need a
-    step whose ``.artifact`` is a :class:`FastTextModel`. The fn here
-    doesn't stage anything -- the bin is already on GCS at the path
-    produced by :mod:`llm_quality.train`. We just record provenance.
+    :func:`classify_llm_quality_step` consumes its ``model_step`` via
+    ``Artifact.from_path(model_step, FastTextModel)``, so we need a step
+    whose ``.artifact`` is a :class:`FastTextModel`. The fn here doesn't
+    stage anything -- the bin is already on GCS at the path produced by
+    :mod:`llm_quality.train`. We just record provenance.
     """
 
     def _fn(_output_path: str) -> FastTextModel:
@@ -113,6 +139,85 @@ def _register_model_step(name: str, model_bin_path: str, output_path_prefix: str
     )
 
 
+def _run_one_source(
+    *,
+    normalized: NormalizedData,
+    model_path: str,
+    output_path: str,
+    source_name: str,
+    worker_resources: ResourceConfig,
+    max_workers: int | None,
+) -> LlmQualityOutput:
+    files = sorted(fsspec_glob(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet"))
+    if not files:
+        raise FileNotFoundError(f"{source_name}: no .parquet files under {normalized.main_output_dir}")
+    output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"
+    pipeline = Dataset.from_list(files).flat_map(load_with_source)
+    pipeline = classify_fasttext(
+        pipeline,
+        model_path=model_path,
+        max_text_chars=MAX_TEXT_CHARS,
+        k=K,
+        threshold=THRESHOLD,
+        score_target_label=SCORE_TARGET_LABEL,
+    )
+    pipeline = pipeline.write_parquet(
+        output_pattern,
+        schema=output_schema(SCORE_TARGET_LABEL),
+        skip_existing=True,
+    )
+    ctx_kwargs: dict[str, Any] = {"name": f"llm-quality-{source_name}", "resources": worker_resources}
+    if max_workers is not None:
+        ctx_kwargs["max_workers"] = max_workers
+    ctx = ZephyrContext(**ctx_kwargs)
+    outcome = ctx.execute(pipeline)
+    return LlmQualityOutput(
+        output_dir=output_path,
+        model_path=model_path,
+        counters=dict(outcome.counters),
+    )
+
+
+def classify_llm_quality_step(
+    *,
+    name: str,
+    normalized: StepSpec,
+    model_step: StepSpec,
+    output_path_prefix: str,
+    worker_resources: ResourceConfig | None = None,
+    max_workers: int | None = None,
+) -> StepSpec:
+    """StepSpec factory for one source's LLM-quality classification.
+
+    ``worker_resources`` and ``max_workers`` are execution policy -- not in
+    ``hash_attrs`` -- so changing them does not invalidate already-classified
+    sources.
+    """
+    hash_attrs: dict[str, Any] = {
+        "max_text_chars": MAX_TEXT_CHARS,
+        "k": K,
+        "threshold": THRESHOLD,
+        "score_target_label": SCORE_TARGET_LABEL,
+    }
+    resources = worker_resources or WORKER_RESOURCES
+    workers = max_workers if max_workers is not None else PER_SOURCE_MAX_WORKERS
+    source_name = name.removeprefix("quality-llm/")
+    return StepSpec(
+        name=name,
+        fn=lambda output_path: _run_one_source(
+            normalized=Artifact.from_path(normalized, NormalizedData),
+            model_path=Artifact.from_path(model_step, FastTextModel).model_path,
+            output_path=output_path,
+            source_name=source_name,
+            worker_resources=resources,
+            max_workers=workers,
+        ),
+        deps=[normalized, model_step],
+        hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
+    )
+
+
 def build_classify_steps(*, model_bin_path: str, inference_name: str) -> list[StepSpec]:
     output_prefix = f"{_OUTPUT_PREFIX}/{inference_name}"
     model_step = _register_model_step(
@@ -126,15 +231,10 @@ def build_classify_steps(*, model_bin_path: str, inference_name: str) -> list[St
         if any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES):
             continue
         steps.append(
-            classify_fasttext_step(
+            classify_llm_quality_step(
                 name=f"quality-llm/{name}",
                 normalized=src.normalized,
                 model_step=model_step,
-                max_text_chars=MAX_TEXT_CHARS,
-                k=K,
-                threshold=THRESHOLD,
-                score_target_label=SCORE_TARGET_LABEL,
-                worker_resources=WORKER_RESOURCES,
                 output_path_prefix=output_prefix,
             )
         )
