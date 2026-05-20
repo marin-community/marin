@@ -21,7 +21,7 @@ building shard_specs over ~10K+ nemotron shards)::
     uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
         --priority production --cpu 2 --memory 4GB --enable-extra-resources \\
         --no-preemptible \\
-        -- python experiments/datakit/store/smoke_test_mixed.py
+        -- python experiments/datakit/store/ops/smoke_test_mixed.py
 """
 
 import logging

@@ -12,7 +12,7 @@ For each AA eval and a handful of lm-eval tasks, print:
 Streams (``streaming=True``) so we don't download full datasets just to
 peek at schemas. Local-runnable; needs HF token in env for any gated sets.
 
-    uv run python experiments/datakit/decontam/inspect_eval_corpus.py
+    uv run python experiments/datakit/decontam/ops/inspect_eval_corpus.py
 
 Optional flags via env:
     INSPECT_LMH=1          also inspect a sample of lm-eval tasks

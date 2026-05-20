@@ -30,7 +30,7 @@ Run with the ``eval`` extra so lm-eval is importable. The
 
     uv run --with "lm-eval[math,api,ifeval]@git+https://github.com/stanford-crfm/\
 lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" \\
-        python experiments/datakit/decontam/verify_lmh_tasks.py
+        python experiments/datakit/decontam/ops/verify_lmh_tasks.py
 
 Output: a summary table + a ``verify_lmh_tasks_report.tsv`` next to the
 script with one row per leaf task (status, error, n_docs, split,

@@ -9,10 +9,10 @@ to validate the Arrow scatter/reduce optimization on real data.
 
 Usage:
     # Submit as an Iris job (requires cluster connection):
-    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/datakit/dedup/nemotron_1slice_fuzzy.py
+    uv run lib/marin/src/marin/run/ray_run.py -- python experiments/datakit/dedup/ops/nemotron_1slice_fuzzy.py
 
     # Or run directly if gcloud auth is configured:
-    uv run python experiments/datakit/dedup/nemotron_1slice_fuzzy.py
+    uv run python experiments/datakit/dedup/ops/nemotron_1slice_fuzzy.py
 """
 import logging
 import random

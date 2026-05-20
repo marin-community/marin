@@ -16,7 +16,7 @@ Submit (eu-west4 worker so we read marin-eu-west4 in-region):
         --extra=cpu --region europe-west4 \\
         --job-name "llm-quality-smoke-$(date +%Y%m%d-%H%M%S)" \\
         --env-file .marin.yaml -- \\
-        python -m experiments.datakit.cluster.llm_quality.exp_smoke
+        python -m experiments.datakit.cluster.llm_quality.ops.exp_smoke
 """
 
 from __future__ import annotations

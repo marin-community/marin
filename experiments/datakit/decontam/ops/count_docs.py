@@ -25,11 +25,11 @@ Submit on iris (eu-west4 worker pins ``MARIN_PREFIX`` to gs://marin-eu-west4):
     uv run iris --cluster=marin job run --region europe-west4 \\
         --extra=cpu --priority interactive --memory 8GB --cpu 2 \\
         --enable-extra-resources \\
-        -- python experiments/datakit/decontam/count_docs.py
+        -- python experiments/datakit/decontam/ops/count_docs.py
 
 Or run locally against a known prefix:
 
-    MARIN_PREFIX=gs://marin-eu-west4 uv run python experiments/datakit/decontam/count_docs.py
+    MARIN_PREFIX=gs://marin-eu-west4 uv run python experiments/datakit/decontam/ops/count_docs.py
 """
 
 import logging

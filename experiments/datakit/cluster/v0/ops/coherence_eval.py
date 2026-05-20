@@ -11,7 +11,7 @@ progress files so a kill/restart resumes where it left off.
 
 Usage::
 
-    uv run python -m experiments.datakit.cluster.v0.coherence_eval \\
+    uv run python -m experiments.datakit.cluster.v0.ops.coherence_eval \\
         --input gs://marin-eu-west4/datakit/cluster/summarize_k40_<hash>/cluster_stats_40.json \\
         --output gs://marin-eu-west4/datakit/cluster/coherence/coherence_k40_<hash>.json
 

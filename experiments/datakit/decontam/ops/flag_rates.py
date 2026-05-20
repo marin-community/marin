@@ -15,7 +15,7 @@ within each source.
 Run on iris for in-region speed (recommended), or locally:
 
     MARIN_PREFIX=gs://marin-eu-west4 uv run python \\
-        experiments/datakit/decontam/flag_rates.py \\
+        experiments/datakit/decontam/ops/flag_rates.py \\
         --decon-root gs://marin-eu-west4/tmp/ttl=7d/rav/decon-all-sources-v1/datakit/decon/
 """
 

@@ -26,7 +26,7 @@ to the contamination patterns that show up in real training corpora.
 Usage:
 
     ANTHROPIC_API_KEY=... uv run python \\
-        experiments/datakit/decontam/recall_analysis.py \\
+        experiments/datakit/decontam/ops/recall_analysis.py \\
         --bloom-dir gs://.../datakit/bloom/_combined \\
         --sample-size 50
 

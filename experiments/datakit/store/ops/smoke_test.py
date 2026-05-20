@@ -14,7 +14,7 @@ Submit on iris (eu-west4)::
 
     uv run iris --cluster=marin job run --region europe-west4 --extra=cpu \\
         --priority interactive \\
-        -- python experiments/datakit/store/smoke_test.py
+        -- python experiments/datakit/store/ops/smoke_test.py
 """
 
 import logging

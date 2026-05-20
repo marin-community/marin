@@ -21,7 +21,7 @@ Submit:
     uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G \\
         --extra=cpu \\
         --job-name "embed-clusters-smoke-$(date +%Y%m%d-%H%M%S)" \\
-        -- python -m experiments.datakit.cluster.v0.exp_smoke
+        -- python -m experiments.datakit.cluster.v0.ops.exp_smoke
 """
 
 import logging

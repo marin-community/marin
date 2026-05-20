@@ -23,7 +23,7 @@ plus a precision summary on stdout.
 Usage (after all_sources_decon.py has run):
 
     ANTHROPIC_API_KEY=... uv run python \\
-        experiments/datakit/decontam/precision_analysis.py \\
+        experiments/datakit/decontam/ops/precision_analysis.py \\
         --decon-output gs://.../datakit/decon/finepdfs/  \\
         --source-name finepdfs --sample-size 100
 
