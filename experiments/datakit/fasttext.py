@@ -149,7 +149,7 @@ def prepare_fasttext_model(
     with atomic_rename(target) as tmp:
         tmp_fs, tmp_resolved = url_to_fs(tmp)
         tmp_fs.put(local, tmp_resolved)
-    logger.info("classify: staged %s@%s/%s → %s (%d bytes)", hf_repo_id, revision, hf_filename, target, size)
+    logger.info("Staged %s@%s/%s → %s (%d bytes)", hf_repo_id, revision, hf_filename, target, size)
     return FastTextModel(
         model_dir=output_path,
         model_path=target,
