@@ -50,8 +50,8 @@ from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.dataset import ShardInfo
 
+from experiments.datakit.cluster.llm_quality.all_sources_quality_llm import LlmQualityOutput
 from experiments.datakit.cluster.v0.assign import AssignmentAttrData
-from experiments.datakit.fasttext import FastTextAttributes
 from experiments.datakit.store.all_sources_store import (
     CLUSTER_ASSIGN_ROOT,
     DECONTAM_ROOT,
@@ -157,7 +157,7 @@ def _build_shard_specs(sources: tuple[str, ...], split: str, dedup: FuzzyDupsAtt
         tok = Artifact.from_path(_resolve_artifact_dir(TOKENIZE_ROOT, src), TokenizedAttrData)
         decon = Artifact.from_path(_resolve_artifact_dir(DECONTAM_ROOT, src), DeconAttributes)
         cluster_a = Artifact.from_path(_resolve_artifact_dir(CLUSTER_ASSIGN_ROOT, src), AssignmentAttrData)
-        qual = Artifact.from_path(_resolve_artifact_dir(QUALITY_ROOT, src), FastTextAttributes)
+        qual = Artifact.from_path(_resolve_artifact_dir(QUALITY_ROOT, src), LlmQualityOutput)
         main_dir = tok.source_main_dirs[split]
         dedup_attr_dir = dedup.sources[main_dir].attr_dir
         specs.extend(

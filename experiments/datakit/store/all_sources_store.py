@@ -43,8 +43,8 @@ from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.cluster.llm_quality.all_sources_quality_llm import LlmQualityOutput
 from experiments.datakit.cluster.v0.assign import AssignmentAttrData
-from experiments.datakit.fasttext import FastTextAttributes
 from experiments.datakit.store.datakit_store import build_clustered_store
 
 logger = logging.getLogger(__name__)
@@ -157,19 +157,19 @@ def main() -> None:
     cluster_assign_index = _build_resolution_index(CLUSTER_ASSIGN_ROOT)
     quality_index = _build_resolution_index(QUALITY_ROOT)
 
-    def _resolve(name: str) -> tuple[str, TokenizedAttrData, DeconAttributes, AssignmentAttrData, FastTextAttributes]:
+    def _resolve(name: str) -> tuple[str, TokenizedAttrData, DeconAttributes, AssignmentAttrData, LlmQualityOutput]:
         return (
             name,
             Artifact.from_path(tokenize_index[name], TokenizedAttrData),
             Artifact.from_path(decontam_index[name], DeconAttributes),
             Artifact.from_path(cluster_assign_index[name], AssignmentAttrData),
-            Artifact.from_path(quality_index[name], FastTextAttributes),
+            Artifact.from_path(quality_index[name], LlmQualityOutput),
         )
 
     tokenize: dict[str, TokenizedAttrData] = {}
     decontam: dict[str, DeconAttributes] = {}
     cluster_assign: dict[str, AssignmentAttrData] = {}
-    quality: dict[str, FastTextAttributes] = {}
+    quality: dict[str, LlmQualityOutput] = {}
 
     # Index lookups are O(1); only the 4 ``Artifact.from_path`` reads per
     # source need parallelization. Threadpool of 16 fans those out without

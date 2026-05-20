@@ -75,8 +75,8 @@ from zephyr import Dataset, ZephyrContext, counters
 from zephyr.dataset import ShardInfo, format_shard_path
 from zephyr.writers import atomic_rename
 
+from experiments.datakit.cluster.llm_quality.all_sources_quality_llm import LlmQualityOutput
 from experiments.datakit.cluster.v0.assign import AssignmentAttrData
-from experiments.datakit.fasttext import FastTextAttributes
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ def _per_source_shard_tuples(
     tokenize: TokenizedAttrData,
     decontam: DeconAttributes,
     cluster_assign: AssignmentAttrData,
-    quality: FastTextAttributes,
+    quality: LlmQualityOutput,
     dedup_attr_dir: str,
     split: str,
 ) -> list[dict[str, str]]:
@@ -596,7 +596,7 @@ def build_clustered_store(
     tokenize: dict[str, TokenizedAttrData],
     decontam: dict[str, DeconAttributes],
     cluster_assign: dict[str, AssignmentAttrData],
-    quality: dict[str, FastTextAttributes],
+    quality: dict[str, LlmQualityOutput],
     dedup: FuzzyDupsAttrData,
     output_path: str,
     cluster_view: int = 40,

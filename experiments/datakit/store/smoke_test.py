@@ -26,8 +26,8 @@ from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAt
 from marin.processing.tokenize.attributes import TokenizedAttrData
 from rigging.log_setup import configure_logging
 
+from experiments.datakit.cluster.llm_quality.all_sources_quality_llm import LlmQualityOutput
 from experiments.datakit.cluster.v0.assign import AssignmentAttrData
-from experiments.datakit.fasttext import FastTextAttributes
 from experiments.datakit.store.all_sources_store import (
     CLUSTER_ASSIGN_ROOT,
     DECONTAM_ROOT,
@@ -64,13 +64,13 @@ def main() -> None:
     tokenize: dict[str, TokenizedAttrData] = {}
     decontam: dict[str, DeconAttributes] = {}
     cluster_assign: dict[str, AssignmentAttrData] = {}
-    quality: dict[str, FastTextAttributes] = {}
+    quality: dict[str, LlmQualityOutput] = {}
 
     for source_name in SMOKE_SOURCES:
         tokenize[source_name] = Artifact.from_path(tokenize_index[source_name], TokenizedAttrData)
         decontam[source_name] = Artifact.from_path(decontam_index[source_name], DeconAttributes)
         cluster_assign[source_name] = Artifact.from_path(cluster_assign_index[source_name], AssignmentAttrData)
-        quality[source_name] = Artifact.from_path(quality_index[source_name], FastTextAttributes)
+        quality[source_name] = Artifact.from_path(quality_index[source_name], LlmQualityOutput)
 
     artifact = build_clustered_store(
         tokenize=tokenize,
