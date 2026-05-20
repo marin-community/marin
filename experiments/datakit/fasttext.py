@@ -344,7 +344,7 @@ def classify_fasttext_to_parquet(
         :class:`FastTextAttributes` describing the output dataset and counters.
     """
     input_path = normalized_data.main_output_dir
-    files = sorted(fsspec_glob(f"{input_path.rstrip('/')}/**/*.parquet"))
+    files: list[str] = sorted(fsspec_glob(f"{input_path.rstrip('/')}/**/*.parquet"))
     if not files:
         raise FileNotFoundError(f"No .parquet files found under {input_path}")
     num_partitions = len(files)
@@ -356,19 +356,15 @@ def classify_fasttext_to_parquet(
         model.model_path,
     )
 
-    pipeline = (
-        Dataset.from_list(files)
-        .reshard(num_shards=num_partitions)
-        .map_shard(
-            _make_classifier(
-                model.model_path,
-                output_path,
-                text_field,
-                max_text_chars=max_text_chars,
-                k=k,
-                threshold=threshold,
-                score_target_label=score_target_label,
-            )
+    pipeline = Dataset.from_list(files).map_shard(
+        _make_classifier(
+            model.model_path,
+            output_path,
+            text_field,
+            max_text_chars=max_text_chars,
+            k=k,
+            threshold=threshold,
+            score_target_label=score_target_label,
         )
     )
 

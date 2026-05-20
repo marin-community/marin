@@ -363,8 +363,8 @@ def _make_marker(
                         matched.update(hits)
                     contaminated = max_score > 0 and max_score >= threshold
                     counters.increment("decon/contaminated" if contaminated else "decon/clean")
-                    # With reshard(num_shards=N) on a sorted file list, shard.shard_idx
-                    # matches the input's "part-NNNNN-of-NNNNN" partition number.
+                    # Dataset.from_list yields one shard per item in input order, so shard.shard_idx
+                    # matches the input's "part-NNNNN-of-NNNNN" partition number on a sorted file list.
                     yield {
                         "id": record["id"],
                         "partition_id": shard.shard_idx,
@@ -473,11 +473,7 @@ def decon_to_parquet(
             false_positive_rate=false_positive_rate,
         )
 
-    pipeline = (
-        Dataset.from_list(files)
-        .reshard(num_shards=num_partitions)
-        .map_shard(_make_marker(bloom_path, output_path, text_field, ngram))
-    )
+    pipeline = Dataset.from_list(files).map_shard(_make_marker(bloom_path, output_path, text_field, ngram))
 
     resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
     ctx_kwargs: dict[str, Any] = {"name": "decon-mark", "resources": resources}
