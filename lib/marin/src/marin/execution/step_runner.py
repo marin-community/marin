@@ -151,7 +151,7 @@ class StepRunner:
         # Capture the fray client on the calling thread so worker threads can
         # inherit it explicitly.  This is more robust than contextvars.copy_context()
         # alone because it survives process/thread-pool boundary edge cases.
-        from fray.client import _current_client_var
+        from fray.current_client import _current_client_var
 
         caller_fray_client = _current_client_var.get()
         if caller_fray_client is not None:
@@ -293,7 +293,7 @@ class StepRunner:
 
         def worker_fn():
             if captured_client is not None:
-                from fray.client import set_current_client
+                from fray.current_client import set_current_client
 
                 with set_current_client(captured_client):
                     run_step(step)
