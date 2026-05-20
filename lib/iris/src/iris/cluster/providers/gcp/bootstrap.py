@@ -135,6 +135,16 @@ fi
 # Ensure docker daemon is running
 sudo systemctl start docker || true
 
+# gcloud ships as a snap on tpu-ubuntu2204-base; snapd mounts snaps
+# asynchronously during boot. Wait for seeding to finish here so `gcloud`
+# is on PATH for Artifact Registry auth below. Placed right after the
+# Docker daemon start so seeding overlaps with it and usually returns
+# immediately.
+if command -v snap &> /dev/null; then
+    timeout 300 snap wait system seed.loaded || echo "[iris-init] Warning: snap seed wait timed out"
+fi
+export PATH="$PATH:/snap/bin"
+
 # Tune network stack for high-connection workloads (#3066).
 # Expands ephemeral port range, allows reuse of TIME_WAIT sockets,
 # and raises listen backlog for actor servers handling 1000s of workers.
@@ -305,6 +315,14 @@ else
     echo "[iris-controller] [2/5] ERROR: Docker daemon failed to start"
     exit 1
 fi
+
+# gcloud ships as a snap on the base image; snapd mounts snaps asynchronously
+# during boot. Wait for seeding to finish so `gcloud` is on PATH for Artifact
+# Registry auth below.
+if command -v snap &> /dev/null; then
+    timeout 300 snap wait system seed.loaded || echo "[iris-controller] Warning: snap seed wait timed out"
+fi
+export PATH="$PATH:/snap/bin"
 
 # Tune network stack for high-connection workloads (#3066).
 sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
