@@ -15,6 +15,9 @@ both guarantees:
   keeps running so subsequent updates still go through.
 * If the queue fills up (e.g. the wrapped tracker is wedged), additional
   updates are dropped with a rate-limited warning rather than blocking.
+* ``jax.Array`` metric values are materialized to host memory on the calling
+  thread before they cross the queue, so the worker never issues a JAX
+  device transfer / cross-host collective off the main thread.
 
 Tracker initialization is *not* wrapped. If e.g. ``wandb.init()`` fails
 because of bad auth, that's a fatal configuration problem and the run
@@ -30,6 +33,8 @@ import time
 import typing
 from typing import Any, Optional
 
+import jax
+
 from levanter.tracker.tracker import Tracker
 
 
@@ -41,6 +46,27 @@ class _Shutdown:
 
 
 _SHUTDOWN = _Shutdown()
+
+
+def _materialize_payload(payload: Any) -> Any:
+    """Pull every ``jax.Array`` leaf in ``payload`` to host memory.
+
+    Converting a ``jax.Array`` to host memory issues a device->host transfer;
+    for arrays sharded across hosts that transfer is a cross-host collective.
+    JAX collectives must be dispatched from the main thread in identical
+    program order on every host — otherwise multi-host launch IDs desync and
+    the TPU slice halts ("unexpected peer ... different launch id").
+
+    :class:`BackgroundTracker` runs the wrapped tracker on a daemon thread, so
+    if a metric value reaches the worker still as a ``jax.Array`` the wrapped
+    tracker materializes it off the main thread. We materialize here, on the
+    calling (trainer) thread, leaving only inert numpy/Python data to cross the
+    queue. ``jax.device_get`` recurses through pytrees (dict/list/tuple and
+    registered modules such as ``Histogram``), converting array leaves and
+    passing everything else through unchanged.
+    """
+    return jax.device_get(payload)
+
 
 # Number of times we log a warning when the queue is full before throttling.
 _DROP_LOG_BURST = 5
@@ -118,10 +144,30 @@ class BackgroundTracker(Tracker):
                     dropped,
                 )
 
+    def _enqueue_data(self, method, payload, **kwargs) -> None:
+        """Materialize ``jax.Array`` leaves on the calling thread, then enqueue.
+
+        See :func:`_materialize_payload` for why materialization must happen
+        here rather than on the worker thread.
+        """
+        if self._stopped:
+            logger.debug("Background tracker '%s' already stopped; dropping %s", self.name, method.__name__)
+            return
+        try:
+            payload = _materialize_payload(payload)
+        except Exception:
+            logger.exception(
+                "Background tracker '%s' failed to materialize payload for %s; dropping update.",
+                self.name,
+                method.__name__,
+            )
+            return
+        self._enqueue(method, payload, **kwargs)
+
     # ---- Tracker API --------------------------------------------------------
 
     def log_hyperparameters(self, hparams: dict[str, Any]) -> None:
-        self._enqueue(self.wrapped.log_hyperparameters, hparams)
+        self._enqueue_data(self.wrapped.log_hyperparameters, hparams)
 
     def log(
         self,
@@ -130,10 +176,10 @@ class BackgroundTracker(Tracker):
         step: Optional[int],
         commit: Optional[bool] = None,
     ) -> None:
-        self._enqueue(self.wrapped.log, metrics, step=step, commit=commit)
+        self._enqueue_data(self.wrapped.log, metrics, step=step, commit=commit)
 
     def log_summary(self, metrics: dict[str, Any]) -> None:
-        self._enqueue(self.wrapped.log_summary, metrics)
+        self._enqueue_data(self.wrapped.log_summary, metrics)
 
     def log_artifact(
         self,
