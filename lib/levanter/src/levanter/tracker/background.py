@@ -48,26 +48,6 @@ class _Shutdown:
 _SHUTDOWN = _Shutdown()
 
 
-def _materialize_payload(payload: Any) -> Any:
-    """Pull every ``jax.Array`` leaf in ``payload`` to host memory.
-
-    Converting a ``jax.Array`` to host memory issues a device->host transfer;
-    for arrays sharded across hosts that transfer is a cross-host collective.
-    JAX collectives must be dispatched from the main thread in identical
-    program order on every host — otherwise multi-host launch IDs desync and
-    the TPU slice halts ("unexpected peer ... different launch id").
-
-    :class:`BackgroundTracker` runs the wrapped tracker on a daemon thread, so
-    if a metric value reaches the worker still as a ``jax.Array`` the wrapped
-    tracker materializes it off the main thread. We materialize here, on the
-    calling (trainer) thread, leaving only inert numpy/Python data to cross the
-    queue. ``jax.device_get`` recurses through pytrees (dict/list/tuple and
-    registered modules such as ``Histogram``), converting array leaves and
-    passing everything else through unchanged.
-    """
-    return jax.device_get(payload)
-
-
 # Number of times we log a warning when the queue is full before throttling.
 _DROP_LOG_BURST = 5
 _DROP_LOG_PERIOD = 1000
@@ -147,14 +127,17 @@ class BackgroundTracker(Tracker):
     def _enqueue_data(self, method, payload, **kwargs) -> None:
         """Materialize ``jax.Array`` leaves on the calling thread, then enqueue.
 
-        See :func:`_materialize_payload` for why materialization must happen
-        here rather than on the worker thread.
+        ``jax.device_get`` pulls every array leaf to host memory; for
+        sharded arrays that transfer is a cross-host collective and must be
+        dispatched from the main thread in identical program order on every
+        host (otherwise multi-host launch IDs desync and the TPU slice halts).
+        Doing it here keeps only inert numpy/Python data on the queue.
         """
         if self._stopped:
             logger.debug("Background tracker '%s' already stopped; dropping %s", self.name, method.__name__)
             return
         try:
-            payload = _materialize_payload(payload)
+            payload = jax.device_get(payload)
         except Exception:
             logger.exception(
                 "Background tracker '%s' failed to materialize payload for %s; dropping update.",
