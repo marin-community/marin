@@ -476,7 +476,7 @@ def test_runner_skips_completed_steps(tmp_path: Path):
     runner1.run(steps)
 
     # Record modification times
-    tokenize_artifact_path = os.path.join(steps[1].output_path, "artifact.json")
+    tokenize_artifact_path = os.path.join(steps[1].output_path, ".artifact.json")
     mtime_before = os.path.getmtime(tokenize_artifact_path)
 
     # Re-run — all steps should be skipped
