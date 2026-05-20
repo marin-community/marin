@@ -32,7 +32,9 @@ def tree_map(fn, tree, *rest, is_leaf=None):
 
 
 def _is_scan_stack_leaf(x) -> bool:
-    from haliax.nn.array_stacked import ArrayStacked  # circular import: tree_util -> nn -> embedding -> tree_util
+    from haliax.nn.array_stacked import (
+        ArrayStacked,
+    )  # circular import: tree_util -> nn -> embedding -> tree_util  # noqa: PLC0415
 
     return isinstance(x, (haliax.nn.Stacked, ArrayStacked))
 
@@ -65,7 +67,9 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf=None):
             new_inner = haliax.vmap(mapped_fn, x.Block)(x.stacked, *[r.stacked for r in rest])
             return dataclasses.replace(x, stacked=new_inner)  # type: ignore
 
-        from haliax.nn.array_stacked import ArrayStacked  # circular import: tree_util -> nn -> embedding -> tree_util
+        from haliax.nn.array_stacked import (
+            ArrayStacked,
+        )  # circular import: tree_util -> nn -> embedding -> tree_util  # noqa: PLC0415
 
         if isinstance(x, ArrayStacked):
             num_layers = x.num_layers
@@ -134,7 +138,7 @@ def resize_axis(tree: PyTree[NamedArray], old_axis: AxisSelector, new_size: int,
     manually.
 
     """
-    import haliax.random  # deferred: haliax.__init__ loads random before tree_util; keep lazy to avoid init-order issue
+    import haliax.random  # deferred: haliax.__init__ loads random before tree_util; keep lazy to avoid init-order issue  # noqa: PLC0415
 
     def _resize_one(x, key):
         if not is_named_array(x):

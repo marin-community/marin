@@ -13,7 +13,7 @@ def quick():
 
 
 def sleep(duration: float):
-    import time
+    import time  # noqa: PLC0415
 
     time.sleep(duration)
     return 1
@@ -29,7 +29,7 @@ def noop():
 
 def busy_loop(duration: float = 3.0):
     """CPU-bound busy loop for profiling tests."""
-    import time
+    import time  # noqa: PLC0415
 
     end = time.monotonic() + duration
     while time.monotonic() < end:
@@ -38,7 +38,7 @@ def busy_loop(duration: float = 3.0):
 
 def log_verbose(num_lines: int = 200):
     """Emit log lines at INFO/WARNING/ERROR levels with markers."""
-    import logging
+    import logging  # noqa: PLC0415
 
     logger = logging.getLogger("iris.test.verbose")
     for i in range(num_lines):
@@ -57,9 +57,9 @@ def log_verbose(num_lines: int = 200):
 
 def register_endpoint(prefix):
     """Register an endpoint via RPC and verify it's listed."""
-    from iris.cluster.client import get_job_info
-    from iris.rpc import controller_pb2
-    from iris.rpc.controller_connect import ControllerServiceClientSync
+    from iris.cluster.client import get_job_info  # noqa: PLC0415
+    from iris.rpc import controller_pb2  # noqa: PLC0415
+    from iris.rpc.controller_connect import ControllerServiceClientSync  # noqa: PLC0415
 
     info = get_job_info()
     if info is None:
@@ -88,7 +88,7 @@ def register_endpoint(prefix):
 
 def validate_ports():
     """Validate that requested ports are allocated via JobInfo."""
-    from iris.cluster.client import get_job_info
+    from iris.cluster.client import get_job_info  # noqa: PLC0415
 
     info = get_job_info()
     if info is None:

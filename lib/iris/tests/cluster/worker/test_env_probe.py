@@ -276,8 +276,8 @@ def test_worker_id_from_slice_id_and_tpu_worker_index(tmp_path, monkeypatch):
     This is the slice_id resolution path (priority 2), which takes precedence over
     GCP metadata inference but not an explicit config.worker_id.
     """
-    from iris.cluster.worker import worker as worker_mod
-    from iris.cluster.worker.worker import Worker, WorkerConfig
+    from iris.cluster.worker import worker as worker_mod  # noqa: PLC0415
+    from iris.cluster.worker.worker import Worker, WorkerConfig  # noqa: PLC0415
 
     hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
 
@@ -296,8 +296,8 @@ def test_worker_id_from_slice_id_and_tpu_worker_index(tmp_path, monkeypatch):
 
 def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
     """An explicit config.worker_id (priority 1) takes precedence over slice_id resolution."""
-    from iris.cluster.worker import worker as worker_mod
-    from iris.cluster.worker.worker import Worker, WorkerConfig
+    from iris.cluster.worker import worker as worker_mod  # noqa: PLC0415
+    from iris.cluster.worker.worker import Worker, WorkerConfig  # noqa: PLC0415
 
     hardware = _make_hardware(tpu_worker_id="2", tpu_name="some-tpu-slice")
     monkeypatch.setattr(worker_mod, "probe_hardware", lambda: hardware)

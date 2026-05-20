@@ -25,8 +25,8 @@ pytestmark = skip_if_module_missing("transformers.models.apertus.modeling_apertu
 @pytest.mark.parametrize("beta", [0.5, 0.3])
 def test_xielu_vs_hf(alpha_p_init, alpha_n_init, beta):
     """Test that Levanter XIELUActivation matches HuggingFace implementation."""
-    import torch
-    from transformers.activations import XIELUActivation as HfXIELUActivation
+    import torch  # noqa: PLC0415
+    from transformers.activations import XIELUActivation as HfXIELUActivation  # noqa: PLC0415
 
     # Create both activations with same init parameters
     hf_xielu = HfXIELUActivation(
@@ -90,8 +90,8 @@ def _apertus_rope_scaling(max_position_embeddings: int) -> dict:
 
 
 def _make_hf_apertus_config(vocab_size: int, num_kv_heads: int):
-    from transformers.models.apertus.configuration_apertus import ApertusConfig as HfApertusConfig
-    import torch
+    from transformers.models.apertus.configuration_apertus import ApertusConfig as HfApertusConfig  # noqa: PLC0415
+    import torch  # noqa: PLC0415
 
     max_position_embeddings = 256
     hidden_size = 64
@@ -152,9 +152,9 @@ def _make_levanter_apertus_config(scan_layers: bool, num_kv_heads: int) -> Apert
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2])
 def test_apertus_roundtrip(scan_layers, num_kv_heads):
-    import torch
-    from transformers import AutoModelForCausalLM
-    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers import AutoModelForCausalLM  # noqa: PLC0415
+    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM  # noqa: PLC0415
 
     Vocab = hax.Axis("vocab", 4096)
     hf_config = _make_hf_apertus_config(Vocab.size, num_kv_heads)
@@ -210,8 +210,8 @@ def test_xielu_parameters_loaded_from_checkpoint():
     then verifies the loaded Levanter model has the same parameter values.
     This catches bugs where xIELU parameters might be re-initialized instead of loaded.
     """
-    import torch
-    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers.models.apertus.modeling_apertus import ApertusForCausalLM  # noqa: PLC0415
 
     Vocab = hax.Axis("vocab", 4096)
     num_kv_heads = 2

@@ -25,7 +25,7 @@ from levanter.store.jagged_array import JaggedArrayStore
 
 
 def test_per_segment_loss():
-    import jax
+    import jax  # noqa: PLC0415
 
     Pos = hax.Axis("pos", size=10)
     packer = SequencePacker(Pos=Pos, max_pack_size=10, pad_token=0)

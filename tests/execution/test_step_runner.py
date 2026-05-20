@@ -591,7 +591,7 @@ def test_runner_consumes_unbounded_iterator(tmp_path: Path):
     implementation would try to exhaust the generator before running any step
     and hang (caught by the per-test timeout).
     """
-    import threading
+    import threading  # noqa: PLC0415
 
     stop = threading.Event()
     executed: list[str] = []
@@ -1174,7 +1174,7 @@ def test_runner_propagates_context_vars(tmp_path):
     functions dispatched by the thread pool, so ZephyrContext (and anything
     else that calls ``current_client()``) picks up the correct client.
     """
-    import contextvars
+    import contextvars  # noqa: PLC0415
 
     test_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("test_var", default=None)
     observed: list[str | None] = []

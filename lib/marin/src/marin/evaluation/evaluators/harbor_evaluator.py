@@ -345,12 +345,12 @@ class HarborEvaluator(Evaluator):
         - Restores completed trials from GCS on resume
         - Leverages Harbor's native resume capability
         """
-        from harbor.job import Job
-        from harbor.models.environment_type import EnvironmentType
-        from harbor.models.job.config import JobConfig, LocalDatasetConfig, RegistryDatasetConfig
-        from harbor.models.orchestrator_type import OrchestratorType
-        from harbor.models.registry import RemoteRegistryInfo
-        from harbor.models.trial.config import AgentConfig, EnvironmentConfig
+        from harbor.job import Job  # noqa: PLC0415
+        from harbor.models.environment_type import EnvironmentType  # noqa: PLC0415
+        from harbor.models.job.config import JobConfig, LocalDatasetConfig, RegistryDatasetConfig  # noqa: PLC0415
+        from harbor.models.orchestrator_type import OrchestratorType  # noqa: PLC0415
+        from harbor.models.registry import RemoteRegistryInfo  # noqa: PLC0415
+        from harbor.models.trial.config import AgentConfig, EnvironmentConfig  # noqa: PLC0415
 
         # Generate deterministic job name for resume capability
         job_name = _generate_stable_job_name(dataset, version, model_name, agent, task_limit)

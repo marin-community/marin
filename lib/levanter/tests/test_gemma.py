@@ -87,14 +87,14 @@ def test_gemma_param_counts_dont_change_with_seqlen():
 @skip_if_no_torch
 @pytest.mark.parametrize("gemma_version", [1, 2])
 def test_gemma_rms_norm(gemma_version):
-    import torch
+    import torch  # noqa: PLC0415
 
     if gemma_version == 1:
-        from transformers.models.gemma.modeling_gemma import GemmaRMSNorm as HFGemmaRMSNorm
+        from transformers.models.gemma.modeling_gemma import GemmaRMSNorm as HFGemmaRMSNorm  # noqa: PLC0415
 
         config = _get_gemma_config()
     else:
-        from transformers.models.gemma2.modeling_gemma2 import Gemma2RMSNorm as HFGemmaRMSNorm
+        from transformers.models.gemma2.modeling_gemma2 import Gemma2RMSNorm as HFGemmaRMSNorm  # noqa: PLC0415
 
         config = _get_gemma2_config()
 
@@ -116,9 +116,11 @@ def test_gemma_rms_norm(gemma_version):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma1_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-1 decoder layer against HF reference."""
-    import torch
-    from transformers.models.gemma.modeling_gemma import GemmaDecoderLayer as HFGemmaDecoderLayer
-    from transformers.models.gemma.modeling_gemma import GemmaRotaryEmbedding as HFGemmaRotaryEmbedding
+    import torch  # noqa: PLC0415
+    from transformers.models.gemma.modeling_gemma import GemmaDecoderLayer as HFGemmaDecoderLayer  # noqa: PLC0415
+    from transformers.models.gemma.modeling_gemma import (
+        GemmaRotaryEmbedding as HFGemmaRotaryEmbedding,
+    )  # noqa: PLC0415
 
     gemma_config = _get_gemma_config(num_kv_heads=num_kv_heads)
     LevDecoderLayer = GemmaDecoderLayer
@@ -168,11 +170,15 @@ def test_gemma1_decoder_layer(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma2_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-2 decoder layer against HF reference."""
-    import torch
-    from transformers.models.gemma2.modeling_gemma2 import Gemma2DecoderLayer as HFGemmaDecoderLayer
-    from transformers.models.gemma2.modeling_gemma2 import Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding
+    import torch  # noqa: PLC0415
+    from transformers.models.gemma2.modeling_gemma2 import Gemma2DecoderLayer as HFGemmaDecoderLayer  # noqa: PLC0415
+    from transformers.models.gemma2.modeling_gemma2 import (
+        Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding,
+    )  # noqa: PLC0415
 
-    from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # local to avoid circular import at top
+    from levanter.models.gemma import (
+        Gemma2DecoderLayer as LevDecoderLayer,
+    )  # local to avoid circular import at top  # noqa: PLC0415
 
     gemma_config = _get_gemma2_config(num_kv_heads=num_kv_heads)
 
@@ -228,16 +234,20 @@ def test_pass_different_length_seq(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 @pytest.mark.parametrize("gemma_version", [1, 2])
 def test_gemma_attention(use_flash, num_kv_heads, gemma_version):
-    import torch
+    import torch  # noqa: PLC0415
 
     if gemma_version == 1:
-        from transformers.models.gemma.modeling_gemma import GemmaAttention as HFGemmaAttention
-        from transformers.models.gemma.modeling_gemma import GemmaRotaryEmbedding as HFGemmaRotaryEmbedding
+        from transformers.models.gemma.modeling_gemma import GemmaAttention as HFGemmaAttention  # noqa: PLC0415
+        from transformers.models.gemma.modeling_gemma import (
+            GemmaRotaryEmbedding as HFGemmaRotaryEmbedding,
+        )  # noqa: PLC0415
 
         config = _get_gemma_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
     else:
-        from transformers.models.gemma2.modeling_gemma2 import Gemma2Attention as HFGemmaAttention
-        from transformers.models.gemma2.modeling_gemma2 import Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding
+        from transformers.models.gemma2.modeling_gemma2 import Gemma2Attention as HFGemmaAttention  # noqa: PLC0415
+        from transformers.models.gemma2.modeling_gemma2 import (
+            Gemma2RotaryEmbedding as HFGemmaRotaryEmbedding,
+        )  # noqa: PLC0415
 
         config = _get_gemma2_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
 
@@ -272,8 +282,8 @@ def test_gemma_attention(use_flash, num_kv_heads, gemma_version):
 
 @skip_if_no_torch
 def test_gemma_mlp():
-    import torch
-    from transformers.models.gemma.modeling_gemma import GemmaMLP as HFGemmaMLP
+    import torch  # noqa: PLC0415
+    from transformers.models.gemma.modeling_gemma import GemmaMLP as HFGemmaMLP  # noqa: PLC0415
 
     config = _get_gemma_config()
     mlp = LlamaMlp.init(config.Embed, config.Mlp, config.activation_function, key=random.PRNGKey(0))
@@ -294,8 +304,8 @@ def test_gemma_mlp():
 
 @skip_if_no_torch
 def test_gemma2_mlp():
-    import torch
-    from transformers.models.gemma2.modeling_gemma2 import Gemma2MLP as HFGemmaMLP
+    import torch  # noqa: PLC0415
+    from transformers.models.gemma2.modeling_gemma2 import Gemma2MLP as HFGemmaMLP  # noqa: PLC0415
 
     config = _get_gemma2_config()
     mlp = LlamaMlp.init(config.Embed, config.Mlp, config.activation_function, key=random.PRNGKey(0))
@@ -317,8 +327,8 @@ def test_gemma2_mlp():
 @skip_if_hf_model_not_accessible("google/gemma-2-2b")
 @skip_if_no_torch
 def test_gemma2_roundtrip():
-    import torch
-    from transformers import AutoModelForCausalLM, Gemma2ForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers import AutoModelForCausalLM, Gemma2ForCausalLM  # noqa: PLC0415
 
     config = Gemma2Config(
         max_seq_len=128,
@@ -393,7 +403,7 @@ def _get_gemma_config(use_flash=False, num_kv_heads=4, seq_len=128) -> GemmaConf
 
 
 def _get_gemma2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma2Config:
-    from levanter.models.gemma import Gemma2Config
+    from levanter.models.gemma import Gemma2Config  # noqa: PLC0415
 
     return Gemma2Config(
         max_seq_len=seq_len,
@@ -414,7 +424,7 @@ def _get_gemma2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma2Co
 
 
 def _get_gemma3_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma3Config:
-    from levanter.models.gemma import Gemma3Config
+    from levanter.models.gemma import Gemma3Config  # noqa: PLC0415
 
     return Gemma3Config(
         max_seq_len=seq_len,
@@ -443,7 +453,7 @@ def _get_random_inputs(config: GemmaConfig):
 
 @parameterize_with_configs("gemma*.yaml")
 def test_gemma_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
+    from levanter.main.train_lm import TrainLmConfig  # noqa: PLC0415
 
     config_class = TrainLmConfig
 
@@ -459,11 +469,15 @@ def test_gemma_configs(config_file):
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma3_decoder_layer(num_kv_heads):
     """Validate Levanter Gemma-3 decoder layer against HF reference."""
-    import torch
-    from transformers.models.gemma3.modeling_gemma3 import Gemma3DecoderLayer as HFGemmaDecoderLayer
-    from transformers.models.gemma3.modeling_gemma3 import Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding
+    import torch  # noqa: PLC0415
+    from transformers.models.gemma3.modeling_gemma3 import Gemma3DecoderLayer as HFGemmaDecoderLayer  # noqa: PLC0415
+    from transformers.models.gemma3.modeling_gemma3 import (
+        Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding,
+    )  # noqa: PLC0415
 
-    from levanter.models.gemma import Gemma2DecoderLayer as LevDecoderLayer  # Gemma3 reuses implementation
+    from levanter.models.gemma import (
+        Gemma2DecoderLayer as LevDecoderLayer,
+    )  # Gemma3 reuses implementation  # noqa: PLC0415
 
     gemma_config = _get_gemma3_config(num_kv_heads=num_kv_heads)
 
@@ -511,8 +525,8 @@ def test_gemma3_decoder_layer(num_kv_heads):
 @skip_if_hf_model_not_accessible("google/gemma-3-1b-pt")
 @skip_if_no_torch
 def test_gemma3_roundtrip():
-    import torch
-    from transformers import AutoModelForCausalLM, Gemma3ForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers import AutoModelForCausalLM, Gemma3ForCausalLM  # noqa: PLC0415
 
     config = Gemma3Config(
         max_seq_len=128,
@@ -576,9 +590,11 @@ def test_gemma3_roundtrip():
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_gemma3_attention(use_flash, num_kv_heads):
-    import torch
-    from transformers.models.gemma3.modeling_gemma3 import Gemma3Attention as HFGemmaAttention
-    from transformers.models.gemma3.modeling_gemma3 import Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding
+    import torch  # noqa: PLC0415
+    from transformers.models.gemma3.modeling_gemma3 import Gemma3Attention as HFGemmaAttention  # noqa: PLC0415
+    from transformers.models.gemma3.modeling_gemma3 import (
+        Gemma3RotaryEmbedding as HFGemmaRotaryEmbedding,
+    )  # noqa: PLC0415
 
     gemma_config = _get_gemma3_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
 

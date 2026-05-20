@@ -13,7 +13,7 @@ ghalogs_normalized = ghalogs_public_normalize_steps()[-1].as_executor_step()
 def tokenize_ghalogs(*, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
     """Tokenize the normalized GHALogs public training partition."""
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
+        from experiments.marin_models import marin_tokenizer  # noqa: PLC0415
 
         tokenizer = marin_tokenizer
 

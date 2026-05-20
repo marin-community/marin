@@ -401,11 +401,11 @@ def _default_stage_runner_factory_for(client: Client) -> Callable[[int], StageRu
     the other behavior pass ``stage_runner_factory=...`` explicitly.
     """
     if isinstance(client, LocalClient):
-        from zephyr.runners import InlineRunner  # circular import: runners imports execution
+        from zephyr.runners import InlineRunner  # circular import: runners imports execution  # noqa: PLC0415
 
         return lambda n: InlineRunner(num_workers=n)
 
-    from zephyr.runners import SubprocessRunner  # circular import: runners imports execution
+    from zephyr.runners import SubprocessRunner  # circular import: runners imports execution  # noqa: PLC0415
 
     return lambda n: SubprocessRunner(num_workers=n)
 
@@ -1309,7 +1309,7 @@ class ZephyrWorker:
         # ZephyrContext normally pre-resolves this via _CoordinatorJobConfig;
         # the fallback covers callers that construct a worker directly (tests).
         if stage_runner_factory is None:
-            from zephyr.runners import InlineRunner  # circular import: runners imports execution
+            from zephyr.runners import InlineRunner  # circular import: runners imports execution  # noqa: PLC0415
 
             stage_runner_factory = lambda n: InlineRunner(num_workers=n)  # noqa: E731
 

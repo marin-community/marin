@@ -108,7 +108,7 @@ def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
     assert result["count"] == 2
 
     # Verify file was created and is zstd compressed
-    import zstandard as zstd
+    import zstandard as zstd  # noqa: PLC0415
 
     dctx = zstd.ZstdDecompressor()
     with open(output_path, "rb") as raw_f:

@@ -170,9 +170,9 @@ def barrier_sync(timeout: float = 200):
         return
 
     try:
-        from jaxlib.xla_extension import DistributedRuntimeClient
+        from jaxlib.xla_extension import DistributedRuntimeClient  # noqa: PLC0415
     except ModuleNotFoundError:  # jaxlib>=0.6.2
-        from jax._src.lib import _jax as _jax_lib
+        from jax._src.lib import _jax as _jax_lib  # noqa: PLC0415
 
         DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 

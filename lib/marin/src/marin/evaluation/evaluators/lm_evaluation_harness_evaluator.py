@@ -84,9 +84,9 @@ class LMEvaluationHarnessEvaluator(Evaluator):
                 resolved_model = env.model
 
                 def _run_lm_eval(lm_eval_model_local: str, pretrained_args_local: str) -> None:
-                    from lm_eval.evaluator import simple_evaluate
-                    from lm_eval.loggers import EvaluationTracker, WandbLogger
-                    from lm_eval.utils import simple_parse_args_string
+                    from lm_eval.evaluator import simple_evaluate  # noqa: PLC0415
+                    from lm_eval.loggers import EvaluationTracker, WandbLogger  # noqa: PLC0415
+                    from lm_eval.utils import simple_parse_args_string  # noqa: PLC0415
 
                     for eval_task in evals:
                         result_filepath = os.path.join(

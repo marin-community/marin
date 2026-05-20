@@ -40,7 +40,7 @@ def create_test_tokenizer():
 
 def create_test_logprobs(text: str):
     """Create logprobs content for a response text."""
-    from openai.types.chat.chat_completion_chunk import ChoiceLogprobsLogprob
+    from openai.types.chat.chat_completion_chunk import ChoiceLogprobsLogprob  # noqa: PLC0415
 
     logprobs_content = []
     for c in text:

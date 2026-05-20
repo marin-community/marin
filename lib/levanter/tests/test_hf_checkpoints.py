@@ -31,7 +31,7 @@ from tests.test_utils import use_test_mesh
 
 @skip_if_no_torch
 def test_conversion_to_jnp_bfloat16():
-    import torch
+    import torch  # noqa: PLC0415
 
     x = torch.arange(10, dtype=torch.bfloat16) / 3.14
     with pytest.raises(TypeError):
@@ -57,7 +57,7 @@ def test_save_sharded_checkpoints():
             converter.save_pretrained(nano_model, tmpdir, max_shard_size=1024)
 
         # make sure we saved a few different files
-        import glob
+        import glob  # noqa: PLC0415
 
         assert len(glob.glob(tmpdir + "/*.safetensors")) > 1
 

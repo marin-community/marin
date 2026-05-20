@@ -1113,7 +1113,7 @@ class LmEvalHarnessConfig:
         downloading evaluation datasets.
         """
         logger.info("Loading tasks...")
-        import lm_eval.tasks as tasks
+        import lm_eval.tasks as tasks  # noqa: PLC0415
 
         manager = tasks.TaskManager()
         # we need to do it this way b/c i can't figure out how to run e.g. hellaswag 0 shot and 10 shot in a single run
@@ -1147,7 +1147,7 @@ class LmEvalHarnessConfig:
 
         Uses retry logic with exponential backoff to handle HuggingFace rate limits.
         """
-        import lm_eval.tasks as tasks
+        import lm_eval.tasks as tasks  # noqa: PLC0415
 
         task_name = task if isinstance(task, str) else task["task"]
 
@@ -1161,8 +1161,8 @@ class LmEvalHarnessConfig:
         return this_task
 
     def _rename_tasks_for_eval_harness(self, this_task, lm_eval_task_name, our_name):
-        from lm_eval.api.group import ConfigurableGroup
-        from lm_eval.api.task import ConfigurableTask
+        from lm_eval.api.group import ConfigurableGroup  # noqa: PLC0415
+        from lm_eval.api.task import ConfigurableTask  # noqa: PLC0415
 
         # hacky, but this allows us to run multiple instances of the same task with different fewshot settings
         if isinstance(this_task, dict):
@@ -1211,7 +1211,7 @@ class LmEvalHarnessConfig:
         return lm_eval_name
 
     def _get_child_tasks(self, task_group):
-        from lm_eval.api.group import ConfigurableGroup
+        from lm_eval.api.group import ConfigurableGroup  # noqa: PLC0415
 
         out = []
         for k, v in task_group.items():

@@ -94,7 +94,7 @@ def _http_get_with_retry(url: str, *, timeout: int = 60, attempts: int = 5) -> b
     preserves the original capture's Content-Encoding, so snapshots crawled
     from gzip-serving CDNs come back gzipped regardless of request headers).
     """
-    import time
+    import time  # noqa: PLC0415
 
     delay = 2.0
     last_err: Exception | None = None
@@ -153,7 +153,7 @@ def fetch_live_html(url: str) -> tuple[str, dict]:
     ``fetch_cc_html`` returns so downstream schemas stay uniform; WARC fields
     are empty / 0 to signal the source was the live web.
     """
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime  # noqa: PLC0415
 
     req = Request(url, headers={"User-Agent": "marin-test-fixtures/0.1 (+https://github.com/marin-community/marin)"})
     with urlopen(req, timeout=60) as resp:
@@ -169,13 +169,13 @@ def fetch_live_html(url: str) -> tuple[str, dict]:
 
 
 def parse_with_trafilatura(html: str) -> str:
-    import trafilatura
+    import trafilatura  # noqa: PLC0415
 
     return trafilatura.extract(html, include_comments=False, favor_recall=True) or ""
 
 
 def parse_with_html2text(html: str) -> str:
-    import html2text as html2text_mod
+    import html2text as html2text_mod  # noqa: PLC0415
 
     h = html2text_mod.HTML2Text()
     h.ignore_links = False
@@ -184,7 +184,7 @@ def parse_with_html2text(html: str) -> str:
 
 
 def parse_with_readability(html: str) -> str:
-    from readability import Document
+    from readability import Document  # noqa: PLC0415
 
     doc = Document(html)
     summary_html = doc.summary()

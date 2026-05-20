@@ -755,7 +755,7 @@ def test_ocdbt_merges_files():
 
 def test_backward_compatibility_with_ocdbt():
     """Test that we can load old non-OCDBT checkpoints with new OCDBT-enabled code."""
-    import jax.experimental.array_serialization.serialization as array_ser
+    import jax.experimental.array_serialization.serialization as array_ser  # noqa: PLC0415
 
     key0 = jax.random.PRNGKey(0)
     key1 = jax.random.PRNGKey(1)
@@ -766,7 +766,7 @@ def test_backward_compatibility_with_ocdbt():
     with tempfile.TemporaryDirectory() as tmpdir:
         # Save with old format by directly using serialize_with_paths (non-OCDBT)
         manager = array_ser.GlobalAsyncCheckpointManager()
-        from levanter.utils import jax_utils
+        from levanter.utils import jax_utils  # noqa: PLC0415
 
         checkpoint_path = tmpdir
 

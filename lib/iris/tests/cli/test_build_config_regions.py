@@ -22,7 +22,7 @@ def test_build_cluster_images_pushes_worker_controller_and_task_to_ghcr() -> Non
         patch("iris.cli.cluster._build_and_push_for_tag") as build_and_push_for_tag,
         patch("iris.cli.cluster._build_and_push_task_image") as build_and_push_task,
     ):
-        from iris.cli.cluster import _build_cluster_images
+        from iris.cli.cluster import _build_cluster_images  # noqa: PLC0415
 
         built = _build_cluster_images(config)
 

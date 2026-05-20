@@ -251,8 +251,8 @@ def test_mixtral_config():
 
 @skip_if_no_torch
 def test_mixtral_roundtrip():
-    import torch
-    from transformers import AutoModelForCausalLM, MixtralForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers import AutoModelForCausalLM, MixtralForCausalLM  # noqa: PLC0415
 
     converter = MixtralConfig().hf_checkpoint_converter()
 
@@ -336,7 +336,7 @@ def _get_random_inputs(config: MixtralConfig, override_Pos=None):
 
 @parameterize_with_configs("mixtral*.yaml")
 def test_mixtral_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
+    from levanter.main.train_lm import TrainLmConfig  # noqa: PLC0415
 
     config_class = TrainLmConfig
 
@@ -363,7 +363,7 @@ def test_mixtral_configs(config_file):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_state_dict_consistency(scan_layers, num_kv_heads):
-    from transformers import MixtralForCausalLM
+    from transformers import MixtralForCausalLM  # noqa: PLC0415
 
     config = MixtralConfig(
         max_seq_len=128,

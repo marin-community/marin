@@ -121,7 +121,7 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-        from levanter.models.gpt2 import Gpt2Mlp
+        from levanter.models.gpt2 import Gpt2Mlp  # noqa: PLC0415
 
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)

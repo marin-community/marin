@@ -222,8 +222,11 @@ def _tpu_splash_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
 ) -> Float[Array, "B Q Hq D"]:
-    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
-    from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
+    from jax.experimental.pallas.ops.tpu.splash_attention import (
+        splash_attention_kernel,
+        splash_attention_mask,
+    )  # noqa: PLC0415
+    from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds  # noqa: PLC0415
 
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))

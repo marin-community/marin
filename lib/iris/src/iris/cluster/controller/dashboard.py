@@ -148,7 +148,7 @@ class _RouteAuthMiddleware:
 
     def _resolve_policy(self, scope: Scope) -> str:
         """Resolve the auth policy for the matched route."""
-        from starlette.routing import Match
+        from starlette.routing import Match  # noqa: PLC0415
 
         for route in self._router.routes:
             if isinstance(route, Mount):
@@ -210,8 +210,8 @@ class _DashboardAuthInterceptor:
 
     def _resolve_or_raise(self, ctx):
         """Returns (identity, fallback_to_null). Raises ConnectError on rejection."""
-        from connectrpc.code import Code
-        from connectrpc.errors import ConnectError
+        from connectrpc.code import Code  # noqa: PLC0415
+        from connectrpc.errors import ConnectError  # noqa: PLC0415
 
         token = extract_bearer_token(ctx.request_headers())
         try:
@@ -224,7 +224,7 @@ class _DashboardAuthInterceptor:
         return identity
 
     def intercept_unary_sync(self, call_next, request, ctx):
-        from iris.rpc.auth import _verified_identity
+        from iris.rpc.auth import _verified_identity  # noqa: PLC0415
 
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return call_next(request, ctx)
@@ -240,7 +240,7 @@ class _DashboardAuthInterceptor:
             _verified_identity.reset(reset_token)
 
     async def intercept_unary(self, call_next, request, ctx):
-        from iris.rpc.auth import _verified_identity
+        from iris.rpc.auth import _verified_identity  # noqa: PLC0415
 
         if ctx.method().name in _UNAUTHENTICATED_RPCS:
             return await call_next(request, ctx)

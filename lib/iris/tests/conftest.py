@@ -115,7 +115,7 @@ def local_iris_client():
     reuse, override this fixture in your test file with ``scope="module"`` and
     the same body — ``make_local_client`` does not depend on per-test state.
     """
-    from iris.client.local_client import make_local_client
+    from iris.client.local_client import make_local_client  # noqa: PLC0415
 
     client = make_local_client()
     try:

@@ -16,7 +16,7 @@ from test_utils import skip_if_no_torch, use_test_mesh
 
 def _hf_qwen_config(vocab_size=151936):
     """Return a tiny transformers Qwen2Config tweaked for tests but with qk-norm on."""
-    from transformers.models.qwen3 import Qwen3Config
+    from transformers.models.qwen3 import Qwen3Config  # noqa: PLC0415
 
     cfg_dict = {
         "architectures": ["Qwen3LMHeadModel"],
@@ -37,8 +37,8 @@ def _hf_qwen_config(vocab_size=151936):
 
 @skip_if_no_torch
 def test_qwen3_roundtrip():
-    import torch
-    from transformers.models.qwen3 import Qwen3ForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers.models.qwen3 import Qwen3ForCausalLM  # noqa: PLC0415
 
     Vocab = hax.Axis("vocab", 151936)
     hf_config = _hf_qwen_config(Vocab.size)

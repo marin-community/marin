@@ -149,7 +149,7 @@ def test_merge_lora():
 @skip_if_module_missing("peft")
 @skip_if_no_torch
 def test_lora_load_in_peft():
-    import torch
+    import torch  # noqa: PLC0415
 
     converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
     config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
@@ -164,7 +164,7 @@ def test_lora_load_in_peft():
     causal_mask = AttentionMask.causal()
 
     with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
-        from peft import PeftConfig, PeftModel
+        from peft import PeftConfig, PeftModel  # noqa: PLC0415
 
         converter.save_pretrained(model, f"{tmpdir}/model")
 
@@ -199,7 +199,7 @@ def test_lora_load_in_peft():
 @skip_if_module_missing("peft")
 @skip_if_no_torch
 def test_lora_merged_load_in_hf():
-    import torch
+    import torch  # noqa: PLC0415
 
     converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
     config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)

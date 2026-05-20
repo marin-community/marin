@@ -156,7 +156,7 @@ def smoke_cluster(request):
 def smoke_page(smoke_cluster):
     """Module-scoped Playwright page for smoke dashboard tests."""
     try:
-        import playwright.sync_api as pw
+        import playwright.sync_api as pw  # noqa: PLC0415
 
         with pw.sync_playwright() as p:
             b = p.chromium.launch()
@@ -268,8 +268,8 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
 
 def _parent_with_two_children():
     """Parent callable that submits two child jobs and waits for both."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+    from iris.client.client import iris_ctx  # noqa: PLC0415
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec  # noqa: PLC0415
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")
@@ -773,7 +773,7 @@ def test_checkpoint_restore():
     Phase 2 — restart the controller and verify the job is still SUCCEEDED
               and the cluster can accept new work.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster  # noqa: PLC0415
 
     config = load_config(DEFAULT_CONFIG)
     config = make_local_config(config)
@@ -881,10 +881,10 @@ def test_dashboard_login_flow():
     full browser auth flow: redirect to login, paste token, verify RPC data loads,
     then logout back to the login page.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
+    from iris.cluster.providers.local.cluster import LocalCluster  # noqa: PLC0415
 
     try:
-        import playwright.sync_api as pw
+        import playwright.sync_api as pw  # noqa: PLC0415
     except ImportError:
         pytest.skip("playwright not installed")
 
@@ -950,7 +950,7 @@ def test_dashboard_login_flow():
         except Exception as exc:
             errors.append(exc)
 
-    import threading
+    import threading  # noqa: PLC0415
 
     t = threading.Thread(target=_run_browser_flow)
     t.start()
@@ -977,8 +977,8 @@ def _login_for_jwt(url: str, identity_token: str) -> str:
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from iris.cluster.providers.local.cluster import LocalCluster
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+    from iris.cluster.providers.local.cluster import LocalCluster  # noqa: PLC0415
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider  # noqa: PLC0415
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -1019,8 +1019,8 @@ def test_static_auth_job_ownership():
     PENDING). Verifies user-b gets PERMISSION_DENIED when trying to terminate
     it, while user-a can terminate their own job.
     """
-    from iris.cluster.providers.local.cluster import LocalCluster
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+    from iris.cluster.providers.local.cluster import LocalCluster  # noqa: PLC0415
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider  # noqa: PLC0415
 
     _TOKEN_A = "token-user-a"
     _TOKEN_B = "token-user-b"

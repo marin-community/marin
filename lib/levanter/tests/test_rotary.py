@@ -15,10 +15,12 @@ from test_utils import skip_if_no_torch
 @skip_if_no_torch
 @pytest.mark.parametrize("test_seq_len", [64, 128, 256])
 def test_apply_rotary_pos_emb(test_seq_len):
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb as hf_apply_rotary_pos_emb
-    from transformers.models.llama.modeling_llama import rotate_half as hf_rotate_half
+    import torch  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import (
+        apply_rotary_pos_emb as hf_apply_rotary_pos_emb,
+    )  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import rotate_half as hf_rotate_half  # noqa: PLC0415
 
     def assert_equal_out(hax_out, torch_out: torch.Tensor):
         assert np.isclose(
@@ -71,11 +73,11 @@ def test_apply_rotary_pos_emb(test_seq_len):
 
 def test_yarn_rotary_embedding():
     """Test that YarnRotaryEmbeddings can be created and used."""
-    from jax import random
+    from jax import random  # noqa: PLC0415
 
-    import haliax as hax
+    import haliax as hax  # noqa: PLC0415
 
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig  # noqa: PLC0415
 
     # Test configuration
     HeadSize = hax.Axis("HeadSize", 64)
@@ -129,12 +131,14 @@ def test_yarn_rotary_embedding():
 @pytest.mark.parametrize("factor", [1.0, 2.0, 4.0, 8.0])
 def test_yarn_rotary_embedding_vs_hf(factor):
     """Test that YARN rotary embeddings match HuggingFace implementation."""
-    import torch
-    from transformers import LlamaConfig
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+    import torch  # noqa: PLC0415
+    from transformers import LlamaConfig  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import (
+        LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
+    )  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb  # noqa: PLC0415
 
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig  # noqa: PLC0415
 
     head_dim = 64
     seq_len = 32

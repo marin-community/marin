@@ -368,7 +368,7 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
     column inside Parquet, avoiding the N*M pickle file blowup.
     """
 
-    from zephyr.writers import infer_arrow_schema
+    from zephyr.writers import infer_arrow_schema  # noqa: PLC0415
 
     # NOTE: confirm frozenset is not arrow-serializable type to trigger the pickle envelope path
     with pytest.raises(pa.lib.ArrowInvalid, match="Could not convert frozenset"):
@@ -394,7 +394,7 @@ def test_group_by_non_vortex_serializable(zephyr_ctx):
 
 def test_scatter_file_iterator_pickle_roundtrip(tmp_path):
     """ScatterFileIterator round-trips non-Arrow-serializable items (e.g. frozenset)."""
-    from zephyr.shuffle import ScatterFileIterator, _write_chunk_frame
+    from zephyr.shuffle import ScatterFileIterator, _write_chunk_frame  # noqa: PLC0415
 
     items = [frozenset([1, 2]), frozenset([3, 4, 5])]
     frame = _write_chunk_frame(items)

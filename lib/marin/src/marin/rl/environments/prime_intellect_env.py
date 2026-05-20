@@ -48,7 +48,7 @@ class PrimeIntellectEnv(MarinEnv):
     def _ensure_verifiers_installed(self):
         """Ensure verifiers package is installed."""
         try:
-            import verifiers  # noqa: F401
+            import verifiers  # noqa: F401, PLC0415
         except ImportError as e:
             raise ImportError(
                 "The 'verifiers' package is required to use PrimeIntellectEnv. "
@@ -60,7 +60,7 @@ class PrimeIntellectEnv(MarinEnv):
         Get the Verifiers environment for the environment ID.
         """
         self._ensure_verifiers_installed()
-        import verifiers as vf
+        import verifiers as vf  # noqa: PLC0415
 
         logger.debug(f"Loading Verifiers environment for {env_id} with arguments: {env_args}")
 
@@ -85,9 +85,9 @@ class PrimeIntellectEnv(MarinEnv):
         """Sample problems and generate responses using the model."""
         del prng_key, system_prompt
         self._ensure_verifiers_installed()
-        import subprocess
+        import subprocess  # noqa: PLC0415
 
-        from verifiers.types import GenerateOutputs
+        from verifiers.types import GenerateOutputs  # noqa: PLC0415
 
         # Download/install the environment
         subprocess.run(["prime", "env", "install", self.env_id], check=True)

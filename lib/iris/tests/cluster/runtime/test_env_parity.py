@@ -229,7 +229,7 @@ def test_standard_paths_always_present():
 
 def test_task_resources_uses_proto_json():
     """IRIS_TASK_RESOURCES should be valid proto-JSON for ResourceSpecProto."""
-    from google.protobuf import json_format as jf
+    from google.protobuf import json_format as jf  # noqa: PLC0415
 
     env = _common_env(_make_req())
     raw = env["IRIS_TASK_RESOURCES"]
@@ -240,7 +240,7 @@ def test_task_resources_uses_proto_json():
 
 
 def test_task_resources_includes_gpu_device():
-    from google.protobuf import json_format as jf
+    from google.protobuf import json_format as jf  # noqa: PLC0415
 
     env = _common_env(_make_req(gpu_count=8))
     proto = job_pb2.ResourceSpecProto()
@@ -250,7 +250,7 @@ def test_task_resources_includes_gpu_device():
 
 
 def test_task_resources_includes_tpu_device():
-    from google.protobuf import json_format as jf
+    from google.protobuf import json_format as jf  # noqa: PLC0415
 
     env = _common_env(_make_req(tpu=True))
     proto = job_pb2.ResourceSpecProto()

@@ -38,7 +38,7 @@ def compare_outputs(input_name, expected_file, output_file, diff_path):
             return
 
     os.makedirs(diff_path, exist_ok=True)
-    import difflib
+    import difflib  # noqa: PLC0415
 
     diff = list(
         difflib.context_diff(

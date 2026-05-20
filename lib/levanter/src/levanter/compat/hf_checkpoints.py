@@ -276,7 +276,7 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
 
 
 def _load_torch(path, dtype, fs: AbstractFileSystem | None = None):
-    import torch  # noqa: F401
+    import torch  # noqa: F401, PLC0415
 
     device = torch.device("cpu")
     with contextlib.ExitStack() as stack:
@@ -1302,7 +1302,7 @@ def load_processor(
     model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True
 ) -> "ProcessorMixin":
     """Like AutoProcessor.from_pretrained, but works with gs:// paths or anything on fsspec"""
-    from transformers import AutoProcessor
+    from transformers import AutoProcessor  # noqa: PLC0415
 
     with _patch_hf_hub_download():
         return _hf_hub_retry(
@@ -1334,7 +1334,7 @@ def upload_to_hub(local_path: str, repo_ref: Union[str, RepoRef], **hf_upload_kw
 
 
 def _convert_to_jnp(v, dtype):
-    import torch
+    import torch  # noqa: PLC0415
 
     # we'd rather not convert to float32 to conserve memory, so we convert direct to jax.numpy
     with use_cpu_device():

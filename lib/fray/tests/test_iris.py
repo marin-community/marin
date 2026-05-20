@@ -44,7 +44,7 @@ class TestConvertConstraints:
         region_constraints = [c for c in constraints if c.key == "region"]
         assert len(region_constraints) == 1
         c = region_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
+        from iris.cluster.constraints import ConstraintOp  # noqa: PLC0415
 
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-central1"
@@ -55,7 +55,7 @@ class TestConvertConstraints:
         region_constraints = [c for c in constraints if c.key == "region"]
         assert len(region_constraints) == 1
         c = region_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
+        from iris.cluster.constraints import ConstraintOp  # noqa: PLC0415
 
         assert c.op == ConstraintOp.IN
         assert tuple(v.value for v in c.values) == ("us-central1", "us-central2")
@@ -66,7 +66,7 @@ class TestConvertConstraints:
         zone_constraints = [c for c in constraints if c.key == "zone"]
         assert len(zone_constraints) == 1
         c = zone_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
+        from iris.cluster.constraints import ConstraintOp  # noqa: PLC0415
 
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-east1-d"
@@ -85,7 +85,7 @@ class TestConvertConstraintsDeviceAlternatives:
         device_constraints = [c for c in constraints if c.key == "device-variant"]
         assert len(device_constraints) == 1
         c = device_constraints[0]
-        from iris.cluster.constraints import ConstraintOp
+        from iris.cluster.constraints import ConstraintOp  # noqa: PLC0415
 
         assert c.op == ConstraintOp.IN
         assert {v.value for v in c.values} == {"v4-8", "v5p-8"}

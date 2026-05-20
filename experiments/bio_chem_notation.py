@@ -96,7 +96,7 @@ def bio_chem_tokenized(
     *, tokenizer: str = llama3_tokenizer, slices: tuple[BioChemSlice, ...] = BIO_CHEM_SLICES
 ) -> dict[str, TokenizerStep]:
     """Tokenize every bio/chem slice for the regular validation-loss flow."""
-    from experiments.defaults import default_tokenize
+    from experiments.defaults import default_tokenize  # noqa: PLC0415
 
     out: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for slice_ in slices:
@@ -114,7 +114,7 @@ def bio_chem_raw_validation_sets(
     slices: tuple[BioChemSlice, ...] = BIO_CHEM_SLICES,
 ):
     """Wire bio/chem slices into the perplexity-gap raw-text dataset registry."""
-    from marin.evaluation.perplexity_gap import raw_text_dataset
+    from marin.evaluation.perplexity_gap import raw_text_dataset  # noqa: PLC0415
 
     return {
         _slice_key(slice_): raw_text_dataset(slice_.step.as_executor_step().cd(_slice_glob(slice_))) for slice_ in slices

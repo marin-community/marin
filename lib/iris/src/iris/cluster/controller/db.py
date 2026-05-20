@@ -260,7 +260,7 @@ class ControllerDB:
         # construction. The check is safe pre-instantiation — owned will be
         # empty and no violations can fire — and is re-runnable after
         # projections are built.
-        from iris.cluster.controller import projections, writes  # noqa: F401
+        from iris.cluster.controller import projections, writes  # noqa: F401, PLC0415
 
         projections.assert_owned_tables_not_externally_written()
 

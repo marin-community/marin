@@ -267,7 +267,7 @@ def summarize_profile_artifact(
         warmup_steps: Number of initial steps to exclude from steady-state stats.
         hot_op_limit: Maximum number of hot ops to include.
     """
-    from marin.profiling.xplane import MultipleXPlaneFilesError, find_xplane_file, summarize_xplane
+    from marin.profiling.xplane import MultipleXPlaneFilesError, find_xplane_file, summarize_xplane  # noqa: PLC0415
 
     try:
         return summarize_xplane(

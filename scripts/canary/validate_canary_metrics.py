@@ -41,7 +41,7 @@ def resolve_canary_output_path() -> str:
     Uses mirror:// so the read works regardless of which region the canary
     wrote to.
     """
-    from experiments.ferries.canary_ferry import canary_moe_step
+    from experiments.ferries.canary_ferry import canary_moe_step  # noqa: PLC0415
 
     executor = Executor(
         prefix="mirror://",

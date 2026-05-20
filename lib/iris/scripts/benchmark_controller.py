@@ -150,7 +150,7 @@ class _FakeProvider:
     def reconcile_workers(self, plans):
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        from iris.cluster.controller.worker_provider import WorkerReconcileResult
+        from iris.cluster.controller.worker_provider import WorkerReconcileResult  # noqa: PLC0415
 
         return [
             WorkerReconcileResult(
@@ -1203,7 +1203,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
     # ---- resource_usage_by_worker (NEW): full join over unfinished
     #      worker-bound attempts. Runs every scheduling tick. ----
     def _usage_new():
-        from iris.cluster.controller import db as db_mod
+        from iris.cluster.controller import db as db_mod  # noqa: PLC0415
 
         with db_mod.read_snapshot(db.sa_read_engine) as snap:
             reads.resource_usage_by_worker(snap)
@@ -1229,7 +1229,7 @@ def benchmark_scheduling(db: ControllerDB) -> None:
 
     # ---- Full tick: _read_scheduling_state-style aggregate ----
     def _state_read():
-        from iris.cluster.controller import db as db_mod
+        from iris.cluster.controller import db as db_mod  # noqa: PLC0415
 
         _schedulable_tasks(db)
         with db.read_snapshot() as _rtx:
@@ -1360,7 +1360,7 @@ def benchmark_polling(db: ControllerDB) -> None:
         ids = worker_ids[:batch_size]
 
         def _reconcile(_ids=ids):
-            from iris.cluster.controller import db as db_mod
+            from iris.cluster.controller import db as db_mod  # noqa: PLC0415
 
             target_ids = set(_ids)
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
@@ -1473,7 +1473,7 @@ def benchmark_polling(db: ControllerDB) -> None:
         drain_jid = drain_row.job_id
 
         def _has_unfinished():
-            from iris.cluster.controller import db as db_mod
+            from iris.cluster.controller import db as db_mod  # noqa: PLC0415
 
             with db_mod.read_snapshot(db.sa_read_engine) as snap:
                 reads.has_unfinished_worker_attempts(snap, drain_jid)
@@ -2537,8 +2537,8 @@ def serve_cmd(db_path: Path, state_dir: Path, on_loop: bool) -> None:
     lifetime.
     """
     if on_loop:
-        from iris.cluster.controller.service import ControllerServiceImpl
-        from iris.rpc.async_adapter import _ON_LOOP_ATTR
+        from iris.cluster.controller.service import ControllerServiceImpl  # noqa: PLC0415
+        from iris.rpc.async_adapter import _ON_LOOP_ATTR  # noqa: PLC0415
 
         setattr(ControllerServiceImpl.set_task_status_text, _ON_LOOP_ATTR, True)
 

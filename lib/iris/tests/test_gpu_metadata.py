@@ -79,7 +79,7 @@ def test_gpu_worker_metadata(tmp_path):
                 assert meta.device.gpu.count == 8
                 assert "H100" in meta.device.gpu.variant
 
-                from iris.cluster.constraints import WellKnownAttribute
+                from iris.cluster.constraints import WellKnownAttribute  # noqa: PLC0415
 
                 attrs = meta.attributes
                 assert WellKnownAttribute.GPU_VARIANT in attrs

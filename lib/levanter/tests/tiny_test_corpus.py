@@ -50,7 +50,7 @@ def tiny_asr_corpus_config(path):
 def construct_small_data_cache(
     path, num_shards=8, chunk_size=512, doc_len=128, vocab_size=1024
 ) -> tuple[LmDataConfig, dict[str, TreeCache]]:
-    from levanter.store.cache import SerialCacheWriter
+    from levanter.store.cache import SerialCacheWriter  # noqa: PLC0415
 
     rng = np.random.default_rng(0)
 

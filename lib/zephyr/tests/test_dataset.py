@@ -568,7 +568,7 @@ def test_load_file_unsupported_extension(tmp_path, zephyr_ctx):
     ds = Dataset.from_files(str(input_dir), "*.txt").flat_map(load_file)
 
     # Worker errors are wrapped in ZephyrWorkerError
-    from zephyr.execution import ZephyrWorkerError
+    from zephyr.execution import ZephyrWorkerError  # noqa: PLC0415
 
     with pytest.raises(ZephyrWorkerError, match="Unsupported"):
         zephyr_ctx.execute(ds)
@@ -586,7 +586,7 @@ def test_write_without_shard_pattern_multiple_shards(tmp_path, zephyr_ctx):
     ds = Dataset.from_list(sample_data).write_jsonl(str(output_dir / "output.jsonl"))
 
     # Worker errors are wrapped in ZephyrWorkerError
-    from zephyr.execution import ZephyrWorkerError
+    from zephyr.execution import ZephyrWorkerError  # noqa: PLC0415
 
     with pytest.raises(ZephyrWorkerError, match="Output pattern must"):
         zephyr_ctx.execute(ds)
@@ -900,7 +900,7 @@ def test_map_shard_error_propagation(zephyr_ctx):
 
     ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(failing_generator)
 
-    from zephyr.execution import ZephyrWorkerError
+    from zephyr.execution import ZephyrWorkerError  # noqa: PLC0415
 
     with pytest.raises(ZephyrWorkerError, match="Test error"):
         zephyr_ctx.execute(ds)
@@ -1078,7 +1078,7 @@ def test_repr_handles_lambdas():
 
 def test_filter_with_expression(zephyr_ctx):
     """Test filter with expression on in-memory data."""
-    from zephyr import col
+    from zephyr import col  # noqa: PLC0415
 
     ds = Dataset.from_list(
         [
@@ -1095,7 +1095,7 @@ def test_filter_with_expression(zephyr_ctx):
 
 def test_filter_expression_equality(zephyr_ctx):
     """Test filter with equality expression."""
-    from zephyr import col
+    from zephyr import col  # noqa: PLC0415
 
     ds = Dataset.from_list(
         [
@@ -1112,7 +1112,7 @@ def test_filter_expression_equality(zephyr_ctx):
 
 def test_filter_expression_logical_and(zephyr_ctx):
     """Test filter with logical AND expression."""
-    from zephyr import col
+    from zephyr import col  # noqa: PLC0415
 
     ds = Dataset.from_list(
         [
@@ -1130,7 +1130,7 @@ def test_filter_expression_logical_and(zephyr_ctx):
 
 def test_filter_expression_logical_or(zephyr_ctx):
     """Test filter with logical OR expression."""
-    from zephyr import col
+    from zephyr import col  # noqa: PLC0415
 
     ds = Dataset.from_list(
         [
@@ -1147,7 +1147,7 @@ def test_filter_expression_logical_or(zephyr_ctx):
 
 def test_filter_nested_field(zephyr_ctx):
     """Test filter with nested field access."""
-    from zephyr import col
+    from zephyr import col  # noqa: PLC0415
 
     ds = Dataset.from_list(
         [
@@ -1204,7 +1204,7 @@ def test_select_preserves_column_order(zephyr_ctx):
 
 def test_filter_and_select_combined(zephyr_ctx):
     """Test combined filter and select."""
-    from zephyr import col
+    from zephyr import col  # noqa: PLC0415
 
     ds = (
         Dataset.from_list(
@@ -1226,7 +1226,7 @@ def test_filter_and_select_combined(zephyr_ctx):
 @pytest.mark.parametrize("output_format", ["parquet", "jsonl"])
 def test_filter_and_select(tmp_path, zephyr_ctx, output_format: str):
     """Test combined filter and select on parquet."""
-    from zephyr import col
+    from zephyr import col  # noqa: PLC0415
 
     ds = Dataset.from_list(
         [
@@ -1256,8 +1256,8 @@ def test_filter_and_select(tmp_path, zephyr_ctx, output_format: str):
 
 def test_filter_expression_repr():
     """Test FilterOp repr with expression."""
-    from zephyr import col
-    from zephyr.dataset import FilterOp
+    from zephyr import col  # noqa: PLC0415
+    from zephyr.dataset import FilterOp  # noqa: PLC0415
 
     expr = col("score") > 50
     op = FilterOp(predicate=expr.evaluate, expr=expr)
@@ -1267,7 +1267,7 @@ def test_filter_expression_repr():
 
 def test_mixed_filter_expression_and_lambda(zephyr_ctx):
     """Test combining expression filter with lambda filter."""
-    from zephyr import col
+    from zephyr import col  # noqa: PLC0415
 
     ds = (
         Dataset.from_list(
@@ -1294,7 +1294,7 @@ def test_mixed_filter_expression_and_lambda(zephyr_ctx):
 
 def test_input_file_spec_row_range_basic(tmp_path):
     """Test InputFileSpec reads only the specified row range."""
-    from zephyr.readers import InputFileSpec, load_parquet
+    from zephyr.readers import InputFileSpec, load_parquet  # noqa: PLC0415
 
     data = [{"id": i, "value": i * 10} for i in range(100)]
     input_path = tmp_path / "data.parquet"
@@ -1316,7 +1316,7 @@ def test_input_file_spec_row_range_basic(tmp_path):
 
 def test_input_file_spec_with_columns_and_row_range(tmp_path):
     """Test InputFileSpec with both columns and row_range."""
-    from zephyr.readers import InputFileSpec, load_parquet
+    from zephyr.readers import InputFileSpec, load_parquet  # noqa: PLC0415
 
     data = [{"id": i, "name": f"item_{i}", "value": i * 10} for i in range(50)]
     input_path = tmp_path / "data.parquet"

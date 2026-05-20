@@ -56,7 +56,7 @@ def test_mistral_gpt2_roundtrip():
 
 
 def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2Config] = None):
-    import torch
+    import torch  # noqa: PLC0415
 
     if config is None:
         converter = Gpt2Config(use_flash_attention=False).hf_checkpoint_converter()
@@ -131,7 +131,7 @@ def test_hf_gradient_fa():
 
 
 def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2Config] = None):
-    import torch
+    import torch  # noqa: PLC0415
 
     if config is None:
         hf_config = HfGpt2Config.from_pretrained(model_id, revision=revision)
@@ -259,7 +259,7 @@ def test_hf_save_to_gcs_roundtrip():
         with use_test_mesh():
             simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
-            from gcsfs.retry import HttpError
+            from gcsfs.retry import HttpError  # noqa: PLC0415
 
             try:
                 converter.save_pretrained(simple_model, unique_path)

@@ -982,7 +982,7 @@ def _make_vm_slice_for_bootstrap(
     zone: str = "us-central2-b",
 ) -> tuple[GcpVmSliceHandle, str]:
     """Create a VM in InMemoryGcpService and return a handle + vm_name for bootstrap testing."""
-    from iris.cluster.providers.gcp.service import VmCreateRequest
+    from iris.cluster.providers.gcp.service import VmCreateRequest  # noqa: PLC0415
 
     vm_name = "test-bootstrap-vm"
     gcp_service.vm_create(
@@ -1105,7 +1105,7 @@ def test_vm_bootstrap_cloud_not_ready_raises_phase1_timeout():
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
 
     # Create a VM but set it to non-READY state
-    from iris.cluster.providers.gcp.service import VmCreateRequest
+    from iris.cluster.providers.gcp.service import VmCreateRequest  # noqa: PLC0415
 
     vm_name = "test-stuck-vm"
     gcp_service.vm_create(

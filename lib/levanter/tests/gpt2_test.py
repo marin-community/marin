@@ -49,7 +49,7 @@ def test_gradient_checkpointing(num_blocks, attn_backend):
 
 @parameterize_with_configs("gpt2*.yaml")
 def test_gpt2_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
+    from levanter.main.train_lm import TrainLmConfig  # noqa: PLC0415
 
     check_load_config(TrainLmConfig, config_file)
 

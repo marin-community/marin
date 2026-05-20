@@ -260,7 +260,7 @@ def cluster_start(ctx, local: bool, fresh: bool):
     click.echo("Starting controller...")
     try:
         if is_local:
-            from iris.cluster.providers.local.cluster import LocalCluster
+            from iris.cluster.providers.local.cluster import LocalCluster  # noqa: PLC0415
 
             cluster = LocalCluster(config)
             address = cluster.start()
@@ -309,7 +309,7 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
 
     # Set ephemeral state dir via marin_temp_bucket, which resolves
     # region-appropriate storage from MARIN_PREFIX.
-    from rigging.filesystem import marin_temp_bucket
+    from rigging.filesystem import marin_temp_bucket  # noqa: PLC0415
 
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
@@ -661,13 +661,13 @@ def cluster_dashboard_proxy(ctx, port: int):
     the upstream controller. Open the rsbuild URL (printed on startup) in
     your browser.
     """
-    import signal
-    import subprocess
+    import signal  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
 
-    import uvicorn
+    import uvicorn  # noqa: PLC0415
 
-    from iris.cluster.controller.dashboard import ProxyControllerDashboard
-    from iris.cluster.dashboard_common import VUE_DIST_DIR
+    from iris.cluster.controller.dashboard import ProxyControllerDashboard  # noqa: PLC0415
+    from iris.cluster.dashboard_common import VUE_DIST_DIR  # noqa: PLC0415
 
     controller_url = require_controller_url(ctx)
     dashboard = ProxyControllerDashboard(upstream_url=controller_url, port=port)
@@ -772,7 +772,7 @@ def vm_logs(ctx, vm_id):
     try:
         resp = _get_worker_status(controller_url, vm_id)
     except ConnectError as e:
-        from connectrpc.code import Code
+        from connectrpc.code import Code  # noqa: PLC0415
 
         if e.code == Code.NOT_FOUND:
             click.echo(f"Worker not found: {vm_id}", err=True)
@@ -854,7 +854,7 @@ def controller_serve(ctx, host, port, checkpoint_path, checkpoint_interval, dry_
         iris --config=cluster.yaml cluster controller serve --dry-run \\
             --checkpoint-path gs://bucket/controller-state/1234567890
     """
-    from iris.cluster.controller.main import run_controller_serve
+    from iris.cluster.controller.main import run_controller_serve  # noqa: PLC0415
 
     config = ctx.obj.get("config")
     if not config:
@@ -900,7 +900,7 @@ def controller_checkpoint(ctx, stop: bool):
         if not config:
             click.echo("--stop requires --config", err=True)
             raise SystemExit(1)
-        from iris.cluster.config import IrisConfig
+        from iris.cluster.config import IrisConfig  # noqa: PLC0415
 
         iris_config = IrisConfig(config)
         bundle = iris_config.provider_bundle()

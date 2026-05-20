@@ -145,7 +145,7 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
 
 
 def test_tree_broadcast_to_simple():
-    from levanter.utils.jax_utils import tree_broadcast_to
+    from levanter.utils.jax_utils import tree_broadcast_to  # noqa: PLC0415
 
     # Test with simple nested dicts
     prefix = {"a": 1, "b": 2}
@@ -170,7 +170,7 @@ def test_tree_broadcast_to_simple():
 
 
 def test_tree_broadcast_to_mixed_types():
-    from levanter.utils.jax_utils import tree_broadcast_to
+    from levanter.utils.jax_utils import tree_broadcast_to  # noqa: PLC0415
 
     # Test with mixed types
     prefix = {"a": 1, "b": 2}
@@ -181,10 +181,10 @@ def test_tree_broadcast_to_mixed_types():
 
 
 def test_tree_broadcast_to_with_equinox():
-    import equinox as eqx
-    import jax.numpy as jnp
+    import equinox as eqx  # noqa: PLC0415
+    import jax.numpy as jnp  # noqa: PLC0415
 
-    from levanter.utils.jax_utils import tree_broadcast_to
+    from levanter.utils.jax_utils import tree_broadcast_to  # noqa: PLC0415
 
     class SimpleModule(eqx.Module):
         weight: jnp.ndarray
@@ -219,7 +219,7 @@ def test_tree_broadcast_to_with_equinox():
 
 
 def test_tree_broadcast_to_edge_cases():
-    from levanter.utils.jax_utils import tree_broadcast_to
+    from levanter.utils.jax_utils import tree_broadcast_to  # noqa: PLC0415
 
     # Test with empty trees
     prefix = None

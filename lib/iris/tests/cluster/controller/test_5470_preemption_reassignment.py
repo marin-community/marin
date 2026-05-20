@@ -153,7 +153,7 @@ def _build_context(scheduler, state):
 
 
 def _schedulable_tasks_for_test(state):
-    from .conftest import schedulable_tasks as _schedulable_tasks
+    from .conftest import schedulable_tasks as _schedulable_tasks  # noqa: PLC0415
 
     return _schedulable_tasks(state)
 

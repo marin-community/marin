@@ -149,7 +149,7 @@ def test_decorator_auto_path_from_marin_prefix(tmp_path: Path, monkeypatch):
 
 def test_run_step_with_cache_and_lock(tmp_path: Path):
     """run_step acquires a lock, runs the function, saves the artifact, and writes STATUS_SUCCESS."""
-    from marin.execution.step_runner import check_cache, run_step
+    from marin.execution.step_runner import check_cache, run_step  # noqa: PLC0415
 
     call_count = 0
 
@@ -174,7 +174,7 @@ def test_run_step_with_cache_and_lock(tmp_path: Path):
 
 def test_functools_cache_with_disk_cache(tmp_path: Path, monkeypatch):
     """@cache + @disk_cache: in-memory cache avoids repeated disk reads."""
-    from functools import cache
+    from functools import cache  # noqa: PLC0415
 
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "prefix"))
 

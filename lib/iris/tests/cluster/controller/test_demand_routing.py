@@ -383,7 +383,7 @@ class TestWaterfallRouting:
 
     def test_backoff_group_falls_through_to_fallback(self):
         """When primary group is in BACKOFF, demand falls through to fallback."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability  # noqa: PLC0415
 
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
@@ -408,7 +408,7 @@ class TestWaterfallRouting:
 
     def test_backoff_group_with_ready_slices_still_falls_through(self):
         """Even with ready slices, a BACKOFF group rejects demand so it falls through."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability  # noqa: PLC0415
 
         discovered = [make_mock_slice_handle("slice-0", all_ready=True)]
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
@@ -454,7 +454,7 @@ class TestWaterfallRouting:
 
     def test_at_max_slices_causes_fallthrough(self):
         """Groups at AT_MAX_SLICES reject demand, causing fallthrough to lower-priority groups."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
+        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability  # noqa: PLC0415
 
         config_a = make_scale_group_config(name="group-a", max_slices=1, priority=10)
         config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
@@ -1255,7 +1255,7 @@ class TestCheckCoschedulingFeasibility:
         return make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8")[0].constraints
 
     def _make_autoscaler(self, groups):
-        from iris.cluster.controller.autoscaler import Autoscaler
+        from iris.cluster.controller.autoscaler import Autoscaler  # noqa: PLC0415
 
         return Autoscaler(
             scale_groups=groups,
@@ -1308,7 +1308,7 @@ class TestCheckRoutingFeasibility:
     """Tests for Autoscaler.job_feasibility() (non-coscheduled jobs)."""
 
     def _make_autoscaler(self, groups):
-        from iris.cluster.controller.autoscaler import Autoscaler
+        from iris.cluster.controller.autoscaler import Autoscaler  # noqa: PLC0415
 
         return Autoscaler(
             scale_groups=groups,

@@ -16,7 +16,7 @@ UNSPECIFIED = Unspecified()
 
 
 def is_named_array(leaf):
-    from .core import NamedArray  # circular import: core -> axis -> util -> core
+    from .core import NamedArray  # circular import: core -> axis -> util -> core  # noqa: PLC0415
 
     "Typically used as the is_leaf predicate in tree_map"
     return isinstance(leaf, NamedArray)

@@ -135,7 +135,7 @@ def test_replay_buffer():
         writer.write_batch(batch)
 
     with data_loader:
-        import time
+        import time  # noqa: PLC0415
 
         time.sleep(0.2)  # Let it collect some batches
         rollouts = data_loader.get_rollouts(timeout=1.0)

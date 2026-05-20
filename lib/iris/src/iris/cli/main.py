@@ -113,7 +113,7 @@ def create_client_token_provider(
 
 def _configure_client_s3(config) -> None:
     """Configure S3 env vars for fsspec access. Delegates to the canonical implementation."""
-    from iris.cluster.providers.k8s.controller import configure_client_s3
+    from iris.cluster.providers.k8s.controller import configure_client_s3  # noqa: PLC0415
 
     configure_client_s3(config)
 
@@ -148,14 +148,14 @@ def require_controller_url(ctx: click.Context) -> str:
     # Lazy tunnel establishment from config
     config = ctx.obj.get("config") if ctx.obj else None
     if config:
-        from iris.cluster.config import IrisConfig
+        from iris.cluster.config import IrisConfig  # noqa: PLC0415
 
         iris_config = IrisConfig(config)
         bundle = iris_config.provider_bundle()
         ctx.obj["provider_bundle"] = bundle
 
         if iris_config.proto.controller.WhichOneof("controller") == "local":
-            from iris.cluster.providers.local.cluster import LocalCluster
+            from iris.cluster.providers.local.cluster import LocalCluster  # noqa: PLC0415
 
             cluster = LocalCluster(iris_config.proto)
             controller_address = cluster.start()
@@ -248,7 +248,7 @@ def iris(
 
     # Load config if provided
     if config_file:
-        from iris.cluster.config import IrisConfig
+        from iris.cluster.config import IrisConfig  # noqa: PLC0415
 
         iris_config = IrisConfig.load(config_file)
         ctx.obj["config"] = iris_config.proto

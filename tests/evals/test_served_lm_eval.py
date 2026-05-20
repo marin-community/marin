@@ -91,10 +91,10 @@ def test_real_lm_eval_local_completions_scoring_against_deterministic_stub(
     pytest.importorskip("tiktoken")
     pytest.importorskip("lm_eval")
 
-    from lm_eval.api.instance import Instance
-    from lm_eval.api.task import Task, TaskConfig
-    from lm_eval.evaluator import simple_evaluate
-    from lm_eval.loggers import EvaluationTracker
+    from lm_eval.api.instance import Instance  # noqa: PLC0415
+    from lm_eval.api.task import Task, TaskConfig  # noqa: PLC0415
+    from lm_eval.evaluator import simple_evaluate  # noqa: PLC0415
+    from lm_eval.loggers import EvaluationTracker  # noqa: PLC0415
 
     class TinyScoringTask(Task):
         OUTPUT_TYPE = "loglikelihood"

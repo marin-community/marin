@@ -15,7 +15,7 @@ from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def get_config(vocab_size=1000):
-    from transformers import Qwen2Config
+    from transformers import Qwen2Config  # noqa: PLC0415
 
     qwen_cfg = json.loads(
         """
@@ -68,8 +68,8 @@ def get_config(vocab_size=1000):
 
 @skip_if_no_torch
 def test_qwen_roundtrip():
-    import torch
-    from transformers import Qwen2ForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers import Qwen2ForCausalLM  # noqa: PLC0415
 
     Vocab = hax.Axis("vocab", 1000)
     hf_config = get_config(Vocab.size)

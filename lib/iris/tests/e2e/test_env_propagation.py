@@ -40,7 +40,7 @@ def dummy_entrypoint():
 
 
 def _sleep_entrypoint():
-    import time
+    import time  # noqa: PLC0415
 
     time.sleep(300)
 
@@ -85,11 +85,11 @@ def _chain_job(output_file: str, child_spec: dict | None = None):
             - extras: list[str] | None — extras for the child's EnvironmentSpec
             - child_spec: dict | None — recursive spec for the grandchild
     """
-    import json
+    import json  # noqa: PLC0415
 
-    from iris.client.client import iris_ctx
-    from iris.cluster.client.job_info import get_job_info
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+    from iris.client.client import iris_ctx  # noqa: PLC0415
+    from iris.cluster.client.job_info import get_job_info  # noqa: PLC0415
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec  # noqa: PLC0415
 
     info = get_job_info()
     state = {

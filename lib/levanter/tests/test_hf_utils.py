@@ -12,7 +12,7 @@ from test_utils import skip_if_hf_model_not_accessible
 
 def test_load_tokenizer_in_memory_fs():
     # sort of like a gs:// path insasmuch as it uses fsspec machinery
-    import fsspec
+    import fsspec  # noqa: PLC0415
 
     fs: AbstractFileSystem = fsspec.filesystem("memory")
     directory_of_this_test = os.path.dirname(os.path.abspath(__file__))
@@ -32,7 +32,7 @@ def test_load_tokenizer_in_memory_fs():
 
 def test_model_info_patch_for_fsspec_urls():
     """transformers calls model_info() in _patch_mistral_regex to check if a model is a base Mistral model."""
-    import huggingface_hub
+    import huggingface_hub  # noqa: PLC0415
 
     with _patch_hf_hub_download():
         # This should NOT raise or make a network call - it should return a mock

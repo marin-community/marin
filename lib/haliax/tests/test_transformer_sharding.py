@@ -75,7 +75,7 @@ def _tiny_transformer(params: TinyTransformerParams, x: NamedArray) -> NamedArra
 def test_transformer_block_explicit_sharding():
     devices = jax.devices()
     if len(devices) % 2 != 0:
-        import pytest
+        import pytest  # noqa: PLC0415
 
         pytest.skip("Need even number of devices to build (data, model) mesh")
 

@@ -86,7 +86,7 @@ def test_fused_execution_with_batch():
     Note: Batching happens per-shard. Since each input item becomes its own shard,
     and filtering may reduce items per shard, batches may not span across shards.
     """
-    from zephyr.execution import ZephyrContext
+    from zephyr.execution import ZephyrContext  # noqa: PLC0415
 
     # Use a flat_map to create multiple items in a single shard
     ds = (
@@ -128,10 +128,10 @@ def test_stage_name_truncation():
 def test_lambda_filter_blocks_select_pushdown(tmp_path):
     """A lambda filter prevents SelectOp pushdown — otherwise the projection
     would drop columns the lambda reads, KeyError-ing the user code."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-    from zephyr.execution import ZephyrContext
-    from zephyr.expr import col
+    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow.parquet as pq  # noqa: PLC0415
+    from zephyr.execution import ZephyrContext  # noqa: PLC0415
+    from zephyr.expr import col  # noqa: PLC0415
 
     path = str(tmp_path / "data.parquet")
     pq.write_table(

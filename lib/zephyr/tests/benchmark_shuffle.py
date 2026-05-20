@@ -253,7 +253,7 @@ def main(
 
     status_path = os.environ.get("BENCH_STATUS_PATH")
     if status_path:
-        from rigging.filesystem import url_to_fs
+        from rigging.filesystem import url_to_fs  # noqa: PLC0415
 
         fs, _ = url_to_fs(status_path)
         with fs.open(status_path, "w") as f:

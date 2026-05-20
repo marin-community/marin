@@ -32,7 +32,7 @@ def tokenize_hplt_v3(
 ) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for the HPLT v3 dataset."""
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
+        from experiments.marin_models import marin_tokenizer  # noqa: PLC0415
 
         tokenizer = marin_tokenizer
 

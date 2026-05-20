@@ -593,7 +593,7 @@ class TestLocalConfigTransformation:
 
     def test_make_local_config_transforms_gcp_to_local(self, tmp_path: Path):
         """make_local_config transforms GCP config to local mode."""
-        from iris.cluster.config import make_local_config
+        from iris.cluster.config import make_local_config  # noqa: PLC0415
 
         config_content = """\
 platform:
@@ -657,7 +657,7 @@ scale_groups:
 
     def test_make_local_config_preserves_scale_group_details(self, tmp_path: Path):
         """make_local_config preserves accelerator type and other scale group settings."""
-        from iris.cluster.config import make_local_config
+        from iris.cluster.config import make_local_config  # noqa: PLC0415
 
         config_content = """\
 platform:
@@ -729,7 +729,7 @@ scale_groups:
 
     def test_example_configs_load_and_transform(self):
         """Example configs in config/ directory load and transform to local correctly."""
-        from iris.cluster.config import make_local_config
+        from iris.cluster.config import make_local_config  # noqa: PLC0415
 
         iris_root = Path(__file__).parent.parent.parent.parent
         example_configs = [
@@ -760,7 +760,7 @@ scale_groups:
 
     def test_example_config_zones_in_known_gcp_zones(self):
         """All GCP zones used in example configs must be in KNOWN_GCP_ZONES."""
-        from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES
+        from iris.cluster.providers.gcp.service import KNOWN_GCP_ZONES  # noqa: PLC0415
 
         iris_root = Path(__file__).parent.parent.parent.parent
         for config_path in [iris_root / "config" / "marin.yaml", iris_root / "config" / "marin-dev.yaml"]:

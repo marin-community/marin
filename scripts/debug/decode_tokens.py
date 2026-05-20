@@ -211,7 +211,7 @@ def info_cmd():
 @cli.command("clear")
 def clear_cmd():
     """Clear the screen."""
-    import os
+    import os  # noqa: PLC0415
 
     os.system("clear" if os.name == "posix" else "cls")
 

@@ -152,7 +152,7 @@ extend-exclude = ["scripts/"]
 extend-include = ["scripts/workflows/**/*.py"]
 
 [tool.ruff.lint]
-select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
+select = ["A", "B", "E", "F", "I", "NPY", "PLC0415", "RUF", "UP", "W"]
 ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]

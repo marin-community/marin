@@ -105,7 +105,7 @@ def export_xplane_tables(
     count_trace_events: bool = False,
 ) -> XPlaneTableExport:
     """Convert an XPlane protobuf into compact xprof table JSON files."""
-    from xprof.convert import raw_to_tool_data
+    from xprof.convert import raw_to_tool_data  # noqa: PLC0415
 
     if not xplane_path.exists():
         raise FileNotFoundError(f"XPlane protobuf does not exist: {xplane_path}")
@@ -643,7 +643,7 @@ def _int_like_stat(stats: dict[str, Any], *keys: str) -> int | None:
 
 
 def _trace_event_count_from_xprof(xplane_path: Path) -> int | None:
-    from xprof.convert import raw_to_tool_data
+    from xprof.convert import raw_to_tool_data  # noqa: PLC0415
 
     data, _content_type = raw_to_tool_data.xspace_to_tool_data(
         [str(xplane_path)],

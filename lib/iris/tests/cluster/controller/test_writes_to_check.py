@@ -78,7 +78,7 @@ def test_cascade_violation_detected(projections_built, registry_isolated):
     # endpoints_table is harmless filler so this isn't *also* flagged as a
     # direct write to a Projection-owned table; the assertion below targets
     # the cascade leg specifically.
-    from iris.cluster.controller.schema import meta_table
+    from iris.cluster.controller.schema import meta_table  # noqa: PLC0415
 
     @writes_to(meta_table, cascades_into=(worker_attributes_table,))
     def rogue_cascade(tx) -> None:

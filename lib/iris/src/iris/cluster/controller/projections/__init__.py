@@ -62,7 +62,7 @@ def assert_owned_tables_not_externally_written() -> None:
     # writes/__init__.py imports from projections during its own setup
     # for the cascade hooks, so importing it at module top-level would
     # cycle.
-    from iris.cluster.controller.writes import REGISTERED_WRITE_FUNCTIONS
+    from iris.cluster.controller.writes import REGISTERED_WRITE_FUNCTIONS  # noqa: PLC0415
 
     owned: dict[Table, type] = {}
     for projection in PROJECTIONS:

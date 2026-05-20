@@ -173,8 +173,8 @@ def test_job_wait_with_stream_logs(client, iris_client, caplog):
 
 def _parent_with_two_children():
     """Parent callable that submits two child jobs and waits for both."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+    from iris.client.client import iris_ctx  # noqa: PLC0415
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec  # noqa: PLC0415
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")
@@ -198,8 +198,8 @@ def _parent_with_two_children():
 
 def _parent_with_delayed_child():
     """Parent callable that starts a child after streaming has already begun."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+    from iris.client.client import iris_ctx  # noqa: PLC0415
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec  # noqa: PLC0415
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")
@@ -262,8 +262,8 @@ def test_wait_stream_logs_discovers_child_tasks(client, iris_client, caplog):
 
 def _parent_with_failing_child():
     """Parent callable that submits a child that exits with an error."""
-    from iris.client.client import iris_ctx
-    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+    from iris.client.client import iris_ctx  # noqa: PLC0415
+    from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec  # noqa: PLC0415
 
     ctx = iris_ctx()
     res = ResourceSpec(cpu=1, memory="1g")

@@ -78,8 +78,8 @@ def create_tar_gz():
                 json_content = "\n".join(json.dumps(r) for r in records)
                 json_bytes = json_content.encode("utf-8")
 
-                import io
-                import tarfile as tf
+                import io  # noqa: PLC0415
+                import tarfile as tf  # noqa: PLC0415
 
                 tarinfo = tf.TarInfo(name=filename)
                 tarinfo.size = len(json_bytes)

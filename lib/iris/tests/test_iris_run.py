@@ -210,7 +210,7 @@ def test_run_iris_job_adds_region_and_zone_constraints(monkeypatch):
 
 def test_run_iris_job_passes_priority_band(monkeypatch):
     """run_iris_job converts a priority name to its proto value."""
-    from iris.rpc import job_pb2
+    from iris.rpc import job_pb2  # noqa: PLC0415
 
     captured: dict[str, object] = {}
 
@@ -234,7 +234,7 @@ def test_run_iris_job_passes_priority_band(monkeypatch):
 
 def test_run_iris_job_default_priority_unspecified(monkeypatch):
     """run_iris_job defaults to PRIORITY_BAND_UNSPECIFIED when --priority is omitted."""
-    from iris.rpc import job_pb2
+    from iris.rpc import job_pb2  # noqa: PLC0415
 
     captured: dict[str, object] = {}
 
@@ -257,9 +257,9 @@ def test_run_iris_job_default_priority_unspecified(monkeypatch):
 
 def test_no_wait_prints_job_id(monkeypatch):
     """--no-wait prints the job ID to stdout."""
-    from click.testing import CliRunner
-    from iris.cli.job import run as run_cmd
-    from iris.cluster.types import JobName
+    from click.testing import CliRunner  # noqa: PLC0415
+    from iris.cli.job import run as run_cmd  # noqa: PLC0415
+    from iris.cluster.types import JobName  # noqa: PLC0415
 
     class FakeJob:
         job_id = JobName.from_wire("/test-user/test-job")

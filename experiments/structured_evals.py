@@ -346,7 +346,7 @@ def structured_evals_tokenized(
     tokenizer: str = llama3_tokenizer,
 ) -> dict[str, TokenizerStep]:
     """Tokenize the structured-text eval slices for a given tokenizer."""
-    from experiments.defaults import default_tokenize
+    from experiments.defaults import default_tokenize  # noqa: PLC0415
 
     steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for key, staged in STRUCTURED_EVAL_STAGED.items():

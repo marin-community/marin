@@ -52,7 +52,7 @@ def test_tmpfs_mount_cache_mount_independence(tmp_path):
 
 def test_process_handle_cleanup_removes_tmpfs(tmp_path):
     """ProcessContainerHandle.cleanup() removes TMPFS directories."""
-    from iris.cluster.runtime.process import ProcessRuntime
+    from iris.cluster.runtime.process import ProcessRuntime  # noqa: PLC0415
 
     runtime = ProcessRuntime(cache_dir=tmp_path)
     mounts = [MountSpec("/tmp", kind=MountKind.TMPFS)]

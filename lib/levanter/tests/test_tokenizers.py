@@ -671,7 +671,7 @@ def test_multi_chunk_path_preserves_bos(backend_tokenizer, monkeypatch):
     Forces the multi-chunk path by feeding text with a long run of whitespace
     and capping the homogeneous-run limit so the splitter cuts it up.
     """
-    import levanter.tokenizers as tk
+    import levanter.tokenizers as tk  # noqa: PLC0415
 
     if backend_tokenizer.bos_token_id is None:
         pytest.skip("Backend has no BOS token to verify against")
@@ -747,7 +747,7 @@ def test_normal_text_unchanged_by_splitter(backend_tokenizer):
 def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkeypatch):
     """encode_batch must reassemble per-text token sequences correctly when
     some texts are split into multiple parts and others aren't."""
-    import levanter.tokenizers as tk
+    import levanter.tokenizers as tk  # noqa: PLC0415
 
     monkeypatch.setattr(tk, "_MAX_HOMOGENEOUS_RUN_CHARS", 100)
     monkeypatch.setattr(tk, "_OVERLONG_RUN_RE", re.compile(r"\s{100,}|\S{100,}"))
@@ -781,7 +781,7 @@ def test_encode_batch_scatters_parts_back_to_originals(backend_tokenizer, monkey
 def test_safe_split_caps_runs_and_roundtrips(monkeypatch):
     """The splitter must cap homogeneous runs within each part and round-trip
     losslessly on a pathological all-whitespace input."""
-    import levanter.tokenizers as tk
+    import levanter.tokenizers as tk  # noqa: PLC0415
 
     # 1 MB of spaces with two real words at the ends — the realistic shape of
     # the FDLP/lps47065 OOM document.
@@ -1201,7 +1201,7 @@ CHAT_MODEL_WITH_PAD = "mistralai/Mistral-7B-Instruct-v0.2"
 
 def test_padding_uses_pad_token_id_not_zero():
     """Verify BatchTokenizer pads input_ids with pad_token_id, not hardcoded 0."""
-    from levanter.data.text._batch_tokenizer import BatchTokenizer
+    from levanter.data.text._batch_tokenizer import BatchTokenizer  # noqa: PLC0415
 
     try:
         tok = load_tokenizer(CHAT_MODEL_WITH_PAD)
@@ -1239,7 +1239,7 @@ def test_chat_processor_with_marin_tokenizer():
     if not _MODEL_AVAILABLE:
         pytest.skip("HF auth or network unavailable")
 
-    from levanter.data.text.formats import ChatProcessor
+    from levanter.data.text.formats import ChatProcessor  # noqa: PLC0415
 
     tok = load_tokenizer(MODEL_NAME)
     assert isinstance(tok, MarinTokenizer)
@@ -1270,9 +1270,9 @@ def test_encode_batch_respects_prepend_bos(backend_tokenizer, text):
     regression test patches _prepend_bos=False to exercise the code path
     that was previously unchecked in encode_batch.
     """
-    import dataclasses as _dc
+    import dataclasses as _dc  # noqa: PLC0415
 
-    from levanter.tokenizers import KitokenMarinTokenizer
+    from levanter.tokenizers import KitokenMarinTokenizer  # noqa: PLC0415
 
     if not isinstance(backend_tokenizer, KitokenMarinTokenizer):
         pytest.skip("Bug only affects KitokenMarinTokenizer")

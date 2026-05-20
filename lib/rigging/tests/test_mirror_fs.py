@@ -176,7 +176,7 @@ def test_glob_discovers_remote_files(mirror_fs, mirror_env):
 
 def test_mirror_budget_context_manager(mirror_fs, mirror_env):
     """Transfer budget set via context manager is used for copies."""
-    from rigging.filesystem import mirror_budget
+    from rigging.filesystem import mirror_budget  # noqa: PLC0415
 
     _write_file(mirror_env["remote1"], "data/big.bin", b"x" * 1000)
 
@@ -185,7 +185,7 @@ def test_mirror_budget_context_manager(mirror_fs, mirror_env):
 
 
 def test_mirror_budget_context_manager_blocks_over_budget(mirror_fs, mirror_env):
-    from rigging.filesystem import mirror_budget
+    from rigging.filesystem import mirror_budget  # noqa: PLC0415
 
     mirror_fs._budget.reset(limit_bytes=10 * 1024 * 1024 * 1024)  # high instance budget
     _write_file(mirror_env["remote1"], "data/big.bin", b"x" * 2000)

@@ -257,7 +257,7 @@ def split_gcs_path(gs_uri: str) -> tuple[str, pathlib.Path]:
 
 def get_bucket_location(bucket_name_or_path: str) -> str:
     """Return the GCS bucket's location (lower-cased region string)."""
-    from google.cloud import storage
+    from google.cloud import storage  # noqa: PLC0415
 
     if bucket_name_or_path.startswith("gs://"):
         bucket_name = split_gcs_path(bucket_name_or_path)[0]
@@ -277,7 +277,7 @@ def check_path_in_region(key: str, path: str, region: str, local_ok: bool = Fals
     (instead of raising) when the bucket's region can't be checked due
     to permission errors.
     """
-    from google.api_core.exceptions import Forbidden as GcpForbiddenException
+    from google.api_core.exceptions import Forbidden as GcpForbiddenException  # noqa: PLC0415
 
     if not path.startswith("gs://"):
         if local_ok:

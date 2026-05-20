@@ -152,9 +152,9 @@ class vLLMInferenceContext(BaseInferenceContext):
     def _patch_tpu_inference_registry():
         """Register architectures needed by RL hot-reload in tpu_inference."""
         try:
-            from tpu_inference.models.common import model_loader
-            from tpu_inference.models.jax.llama3 import LlamaForCausalLM
-            from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM
+            from tpu_inference.models.common import model_loader  # noqa: PLC0415
+            from tpu_inference.models.jax.llama3 import LlamaForCausalLM  # noqa: PLC0415
+            from tpu_inference.models.jax.qwen2 import Qwen2ForCausalLM  # noqa: PLC0415
 
             required_architectures = {
                 # Qwen2 is still missing in the pinned tpu_inference registry.

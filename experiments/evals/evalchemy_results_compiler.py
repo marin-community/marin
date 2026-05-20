@@ -179,7 +179,7 @@ def _log_averaged_results_to_wandb(
     config_task_name: str | None,
 ) -> None:
     """Log averaged results to wandb, one run per base model."""
-    import wandb
+    import wandb  # noqa: PLC0415
 
     num_seeds = len(seeds_config) if seeds_config else avg_df["num_seeds"].max()
     wandb_entity = os.environ.get("WANDB_ENTITY", "marin-community")

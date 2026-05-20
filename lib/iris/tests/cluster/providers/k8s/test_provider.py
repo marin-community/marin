@@ -67,7 +67,7 @@ def test_sync_propagates_non_kubectl_failure(provider, k8s):
 
 
 def test_sync_catches_kubectl_error_and_returns_task_failure(provider, k8s):
-    from iris.cluster.providers.k8s.types import KubectlError
+    from iris.cluster.providers.k8s.types import KubectlError  # noqa: PLC0415
 
     k8s.inject_failure(
         "apply_json",
@@ -622,7 +622,7 @@ def test_sync_node_failure_yields_no_capacity(provider, k8s):
 
 def test_resource_stats_from_kubectl_top(provider, k8s, task_stats_table):
     """Running pods emit IrisTaskStat rows via the background ResourceCollector."""
-    from iris.cluster.worker.stats import IrisTaskStat
+    from iris.cluster.worker.stats import IrisTaskStat  # noqa: PLC0415
 
     task_id = JobName.from_wire("/job/0")
     attempt_id = 0
@@ -1006,7 +1006,7 @@ def _seed_configmap(k8s, name: str, task_hash: str, created: str) -> None:
 
 
 def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1040,7 +1040,7 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 
 def test_gc_respects_interval(provider, k8s):
     """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1124,7 +1124,7 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     terminal (old) and attempt 1 is still Running, deleting by task_hash would
     remove the active attempt's configmap and PDB protection.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta, timezone  # noqa: PLC0415
 
     now = datetime.now(timezone.utc)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1171,8 +1171,8 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 
 def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
     """LogCollector.set_pods() adds new pods and removes absent ones."""
-    from iris.cluster.providers.k8s.tasks import LogCollector
-    from iris.cluster.types import JobName
+    from iris.cluster.providers.k8s.tasks import LogCollector  # noqa: PLC0415
+    from iris.cluster.types import JobName  # noqa: PLC0415
 
     collector = LogCollector(k8s, log_client, concurrency=1)
     task_a = JobName.from_wire("/job/0")
@@ -1210,10 +1210,10 @@ def test_log_collector_set_pods_adds_and_removes(k8s, log_client):
 
 def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
     """set_pods() preserves last_timestamp for pods that remain tracked."""
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone  # noqa: PLC0415
 
-    from iris.cluster.providers.k8s.tasks import LogCollector
-    from iris.cluster.types import JobName
+    from iris.cluster.providers.k8s.tasks import LogCollector  # noqa: PLC0415
+    from iris.cluster.types import JobName  # noqa: PLC0415
 
     collector = LogCollector(k8s, log_client, concurrency=1)
     task_id = JobName.from_wire("/job/0")
@@ -1244,7 +1244,7 @@ def test_log_collector_set_pods_preserves_cursor_state(k8s, log_client):
 
 def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
     """set_pods() replaces the tracked pod set wholesale."""
-    from iris.cluster.providers.k8s.tasks import ResourceCollector
+    from iris.cluster.providers.k8s.tasks import ResourceCollector  # noqa: PLC0415
 
     collector = ResourceCollector(k8s, task_stats_table, concurrency=1)
     key_a = ("/job/0", 0)
@@ -1263,8 +1263,8 @@ def test_resource_collector_set_pods_replaces_active_set(k8s, task_stats_table):
 
 def test_resource_collector_writes_iris_task_rows(k8s, task_stats_table):
     """A successful kubectl top read appends one IrisTaskStat row to the Table."""
-    from iris.cluster.providers.k8s.tasks import ResourceCollector
-    from iris.cluster.worker.stats import IrisTaskStat
+    from iris.cluster.providers.k8s.tasks import ResourceCollector  # noqa: PLC0415
+    from iris.cluster.worker.stats import IrisTaskStat  # noqa: PLC0415
 
     k8s.set_top_pod("pod-a", PodResourceUsage(cpu_millicores=750, memory_bytes=2 * 1024 * 1024 * 1024))
 

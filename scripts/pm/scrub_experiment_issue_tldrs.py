@@ -176,7 +176,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = parse_args()
 
-    from github import Github
+    from github import Github  # noqa: PLC0415
 
     github_token = ensure_env("GITHUB_TOKEN")
     github = Github(github_token)

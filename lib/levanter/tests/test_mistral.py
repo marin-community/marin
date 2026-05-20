@@ -87,8 +87,8 @@ def test_mistral_lm_head_model_bwd(use_flash, num_kv_heads):
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_mistral_roundtrip(num_kv_heads):
-    import torch
-    from transformers import AutoModelForCausalLM, MistralForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers import AutoModelForCausalLM, MistralForCausalLM  # noqa: PLC0415
 
     config = MistralConfig(
         max_seq_len=128,
@@ -159,7 +159,7 @@ def _get_mistral_config(use_flash=False, num_kv_heads=4) -> MistralConfig:
 
 @parameterize_with_configs("mistral*.yaml")
 def test_mistral_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
+    from levanter.main.train_lm import TrainLmConfig  # noqa: PLC0415
 
     config_class = TrainLmConfig
 

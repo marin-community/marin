@@ -66,7 +66,7 @@ def paloma_tokenized(
     Returns a dictionary of steps to tokenize the Paloma eval sets. Keys are the subset names (with `paloma/` prefix)
     """
     # avoid cyclic dependency
-    from experiments.defaults import default_tokenize
+    from experiments.defaults import default_tokenize  # noqa: PLC0415
 
     paloma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, path_part in PALOMA_DATASETS_TO_DIR.items():
@@ -81,7 +81,7 @@ def paloma_tokenized(
 
 
 def paloma_raw_validation_sets(*, paloma_raw: ExecutorStep = paloma):
-    from marin.evaluation.perplexity_gap import raw_text_dataset
+    from marin.evaluation.perplexity_gap import raw_text_dataset  # noqa: PLC0415
 
     return {
         os.path.join("paloma", dataset): raw_text_dataset(paloma_raw.cd(f"{path_part}/val/val*.jsonl.gz"))

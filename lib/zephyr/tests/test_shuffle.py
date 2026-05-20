@@ -334,7 +334,7 @@ def test_scatter_file_iterator_multiple_chunks(tmp_path):
 
 
 def test_external_sort_merge_streaming(tmp_path):
-    from zephyr.external_sort import external_sort_merge
+    from zephyr.external_sort import external_sort_merge  # noqa: PLC0415
 
     iters = [iter([1, 4, 7]), iter([2, 5, 8]), iter([3, 6, 9])]
     result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
@@ -342,7 +342,7 @@ def test_external_sort_merge_streaming(tmp_path):
 
 
 def test_external_sort_merge_single_batch(tmp_path):
-    from zephyr.external_sort import external_sort_merge
+    from zephyr.external_sort import external_sort_merge  # noqa: PLC0415
 
     iters = [iter([i]) for i in range(10)]
     result = list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))
@@ -350,7 +350,7 @@ def test_external_sort_merge_single_batch(tmp_path):
 
 
 def test_external_sort_merge_cleans_up(tmp_path):
-    from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge
+    from zephyr.external_sort import EXTERNAL_SORT_FAN_IN, external_sort_merge  # noqa: PLC0415
 
     iters = [iter([i]) for i in range(EXTERNAL_SORT_FAN_IN + 1)]
     list(external_sort_merge(iter(iters), merge_key=lambda x: x, external_sort_dir=str(tmp_path)))

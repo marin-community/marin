@@ -21,7 +21,7 @@ def _to_np(x):
 def _get_hf_kernels():
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
-    from transformers.models.qwen3_next.modular_qwen3_next import (
+    from transformers.models.qwen3_next.modular_qwen3_next import (  # noqa: PLC0415
         torch_chunk_gated_delta_rule as hf_chunk,
         torch_recurrent_gated_delta_rule as hf_recur,
     )
@@ -211,7 +211,7 @@ def test_gradients_exist_small_kernel_graph():
 
 @skip_if_no_torch
 def test_recurrent_kernel_matches_hf():
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -242,7 +242,7 @@ def test_recurrent_kernel_matches_hf():
 
 @skip_if_no_torch
 def test_chunk_kernel_matches_hf():
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -274,7 +274,7 @@ def test_chunk_kernel_matches_hf():
 @skip_if_no_torch
 def test_chunk_kernel_matches_hf_non_divisible():
     """L not divisible by chunk_size should still match HF fallback (padding path)."""
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -308,7 +308,7 @@ def test_chunk_kernel_matches_hf_non_divisible():
 @skip_if_no_torch
 def test_chunk_size_one_matches_hf_recurrent():
     """chunk_size=1 should degenerate to the recurrent rule."""
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -352,7 +352,7 @@ def test_chunk_kernel_with_initial_state_matches_recurrent_continuation():
     """
     Provide an initial S0 and check chunk kernel == recurrent kernel on the same sequence.
     """
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -400,7 +400,7 @@ def test_chunk_kernel_with_initial_state_matches_recurrent_continuation():
 @skip_if_no_torch
 def test_short_sequences_edge_cases():
     """Short L vs chunk_size and kernel-size behaviors."""
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -433,7 +433,7 @@ def test_short_sequences_edge_cases():
 @skip_if_no_torch
 def test_extreme_gates_no_nans_and_parity():
     """Stress alpha = exp(g) close to 0 (very negative g) and beta near 0/1."""
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -471,7 +471,7 @@ def test_kernels_match_hf_without_l2norm():
     # TODO: fix edge case? although per original paper L2 norm is needed for stability
     pytest.skip("not matching HF implementation")
 
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -524,7 +524,7 @@ def test_recurrent_backward_matches_hf():
     JAX vs HF fallback gradient parity for the recurrent (decode) kernel.
     We compare grads w.r.t. q, k, v, g, beta, and initial_state S0 on a small case.
     """
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 
@@ -600,7 +600,7 @@ def test_chunk_backward_matches_hf():
     JAX vs HF fallback gradient parity for the chunkwise kernel (two chunks).
     Includes gradients w.r.t. q, k, v, g, beta, and initial_state S0.
     """
-    import torch
+    import torch  # noqa: PLC0415
 
     hf_chunk, hf_recur = _get_hf_kernels()
 

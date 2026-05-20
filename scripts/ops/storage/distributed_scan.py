@@ -133,7 +133,7 @@ class ColumnBuffer:
 
 def _write_parquet_to_gcs(table: pa.Table, staging_dir: str) -> str:
     """Write an Arrow table as a zstd-compressed parquet segment to GCS."""
-    import fsspec
+    import fsspec  # noqa: PLC0415
 
     segment_id = uuid.uuid4().hex[:12]
     path = f"{staging_dir}/objects_{segment_id}.parquet"
@@ -149,7 +149,7 @@ def _truncate_staging_dir(staging_dir: str) -> None:
     files — without this, every re-run strictly appends and the consumer
     sees N-way duplicated (bucket, name) rows.
     """
-    import fsspec
+    import fsspec  # noqa: PLC0415
 
     fs, _ = fsspec.core.url_to_fs(staging_dir)
     pattern = f"{staging_dir.rstrip('/')}/objects_*.parquet"
@@ -518,8 +518,8 @@ def worker_job_entrypoint(
     Discovers the coordinator actor, then runs WORKER_THREADS threads
     that pull tasks and scan prefixes.
     """
-    from iris.actor.client import ActorClient
-    from iris.client import iris_ctx
+    from iris.actor.client import ActorClient  # noqa: PLC0415
+    from iris.client import iris_ctx  # noqa: PLC0415
 
     ctx = iris_ctx()
     resolver = ctx.resolver
@@ -598,9 +598,9 @@ def run_distributed(
     Coordinator accumulates objects in memory and writes consolidated
     parquet segments (~100MB each) to staging_dir on GCS.
     """
-    from iris.actor import ActorServer
-    from iris.client import iris_ctx
-    from iris.cluster.types import Entrypoint, ResourceSpec
+    from iris.actor import ActorServer  # noqa: PLC0415
+    from iris.client import iris_ctx  # noqa: PLC0415
+    from iris.cluster.types import Entrypoint, ResourceSpec  # noqa: PLC0415
 
     ctx = iris_ctx()
     client = ctx.client
@@ -614,7 +614,7 @@ def run_distributed(
     server.register(actor_name, coordinator)
     actual_port = server.serve_background()
 
-    from iris.cluster.client import get_job_info
+    from iris.cluster.client import get_job_info  # noqa: PLC0415
 
     job_info = get_job_info()
     address = f"http://{job_info.advertise_host}:{actual_port}"

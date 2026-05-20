@@ -954,7 +954,7 @@ def take(array: NamedArray, axis: AxisSelector, index: int | NamedArray) -> Name
         else:
             new_axes = array.axes[:axis_index] + index.axes + array.axes[axis_index + 1 :]
             # Local import to avoid a circular import between core <-> partitioning.
-            from haliax.partitioning import get_pspec_for_manual_mesh
+            from haliax.partitioning import get_pspec_for_manual_mesh  # noqa: PLC0415
 
             out_sharding = get_pspec_for_manual_mesh(new_axes)
             indexer = [py_slice(None)] * array.array.ndim

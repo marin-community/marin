@@ -139,7 +139,7 @@ def count_params_for_run(run_id: str, entity=WANDB_ENTITY, project=WANDB_PROJECT
     """
     Retrieves the number of parameters for a specific WandB run.
     """
-    from experiments.llama import LlamaConfig, compute_num_parameters
+    from experiments.llama import LlamaConfig, compute_num_parameters  # noqa: PLC0415
 
     # Initialize the WandB API
     api = wandb.Api()

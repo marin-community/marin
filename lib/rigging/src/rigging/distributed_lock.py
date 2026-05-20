@@ -190,8 +190,8 @@ class GcsLease(DistributedLease):
         return (bucket, blob_path)
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        from google.api_core.exceptions import NotFound
-        from google.cloud import storage
+        from google.api_core.exceptions import NotFound  # noqa: PLC0415
+        from google.cloud import storage  # noqa: PLC0415
 
         client = storage.Client()
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
@@ -208,7 +208,7 @@ class GcsLease(DistributedLease):
         return (blob.generation, Lease(**data))
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-        from google.cloud import storage
+        from google.cloud import storage  # noqa: PLC0415
 
         client = storage.Client()
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
@@ -217,8 +217,8 @@ class GcsLease(DistributedLease):
         blob.upload_from_string(json.dumps(asdict(lease)), if_generation_match=if_generation_match)
 
     def _delete(self) -> None:
-        from google.api_core.exceptions import NotFound
-        from google.cloud import storage
+        from google.api_core.exceptions import NotFound  # noqa: PLC0415
+        from google.cloud import storage  # noqa: PLC0415
 
         client = storage.Client()
         bucket_name, blob_path = self._parse_gcs_path(self.lock_path)
@@ -265,8 +265,8 @@ class S3Lease(DistributedLease):
         headers and causing ``SignatureDoesNotMatch``. Keying by lock path gives
         each ``S3Lease`` instance its own client, avoiding the race.
         """
-        import botocore.config
-        import botocore.session
+        import botocore.config  # noqa: PLC0415
+        import botocore.session  # noqa: PLC0415
 
         session = botocore.session.get_session()
         endpoint_url = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
@@ -281,7 +281,7 @@ class S3Lease(DistributedLease):
         return session.create_client("s3", **kwargs)
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        from botocore.exceptions import ClientError
+        from botocore.exceptions import ClientError  # noqa: PLC0415
 
         client = self._make_client(self.lock_path)
         bucket, key = self._parse_s3_path(self.lock_path)
@@ -297,7 +297,7 @@ class S3Lease(DistributedLease):
             raise
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-        from botocore.exceptions import ClientError
+        from botocore.exceptions import ClientError  # noqa: PLC0415
 
         client = self._make_client(self.lock_path)
         bucket, key = self._parse_s3_path(self.lock_path)
@@ -338,7 +338,7 @@ class LocalFileLease(DistributedLease):
     """Local-filesystem lease using ``fcntl`` file locking."""
 
     def _read_with_generation(self) -> tuple[int, Lease | None]:
-        import fcntl
+        import fcntl  # noqa: PLC0415
 
         try:
             with open(self.lock_path, "r") as f:
@@ -352,7 +352,7 @@ class LocalFileLease(DistributedLease):
             return (0, None)
 
     def _write(self, lease: Lease, if_generation_match: int) -> None:
-        import fcntl
+        import fcntl  # noqa: PLC0415
 
         parent = os.path.dirname(self.lock_path)
         os.makedirs(parent, exist_ok=True)

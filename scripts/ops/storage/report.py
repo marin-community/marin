@@ -48,7 +48,7 @@ def _download_gcs_parquet(gcs_dir: str, local_dir: Path) -> Path:
 
     Returns the local directory.
     """
-    import fsspec
+    import fsspec  # noqa: PLC0415
 
     local_dir.mkdir(parents=True, exist_ok=True)
     fs, _ = fsspec.core.url_to_fs(gcs_dir)
@@ -761,7 +761,7 @@ def main(parquet_dir: str, output: str | None) -> None:
     report = generate_report(conn)
     if output:
         if output.startswith("gs://"):
-            import fsspec
+            import fsspec  # noqa: PLC0415
 
             with fsspec.open(output, "w") as f:
                 f.write(report)

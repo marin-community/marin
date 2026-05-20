@@ -100,7 +100,7 @@ def test_job_name_require_task_errors_on_non_task():
 
 
 def test_job_name_to_safe_token_and_deep_nesting():
-    import hashlib
+    import hashlib  # noqa: PLC0415
 
     job = JobName.from_string("/test-user/a/b/c/d/e/0")
     expected_hash = hashlib.sha256(str(job).encode()).hexdigest()

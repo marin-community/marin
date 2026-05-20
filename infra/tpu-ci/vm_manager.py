@@ -72,8 +72,8 @@ NOUNS = [
 
 def generate_random_id() -> str:
     """Generate a short random ID (4 alphanumeric characters)."""
-    import random
-    import string
+    import random  # noqa: PLC0415
+    import string  # noqa: PLC0415
 
     chars = string.ascii_lowercase + string.digits
     return "".join(random.choices(chars, k=4))
@@ -86,7 +86,7 @@ def generate_fun_name(zone: str) -> str:
     Format: {verb}-{noun}-{zone}-{random_id}
     Example: running-tiger-us-west4-a-7x3k
     """
-    import random
+    import random  # noqa: PLC0415
 
     verb = random.choice(VERBS)
     noun = random.choice(NOUNS)

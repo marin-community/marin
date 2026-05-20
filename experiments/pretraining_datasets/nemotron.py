@@ -79,7 +79,7 @@ def tokenize_nemotron(
     entrypoint restarts.
     """
     if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
+        from experiments.llama import llama3_tokenizer  # noqa: PLC0415
 
         tokenizer = llama3_tokenizer
 
@@ -102,7 +102,7 @@ def tokenize_nemotron(
         )
 
         # Check if we need to use override path for llama3
-        from experiments.llama import llama3_tokenizer as _llama3_tokenizer
+        from experiments.llama import llama3_tokenizer as _llama3_tokenizer  # noqa: PLC0415
 
         if tokenizer == _llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERRIDES:
             step = step.with_output_path(NEMOTRON_LLAMA3_OVERRIDES[split])

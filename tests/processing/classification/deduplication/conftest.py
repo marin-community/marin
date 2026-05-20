@@ -38,7 +38,7 @@ def parser_variants_corpus():
     is unnecessary for the public dataset, but the marker keeps these
     network-touching tests off the unit-test job).
     """
-    from datasets import load_dataset
+    from datasets import load_dataset  # noqa: PLC0415
 
     return load_dataset(
         PARSER_VARIANTS_REPO,
@@ -68,7 +68,7 @@ def same_site_distinct_corpus():
     is preserved. Drives the precision regression that distinct article
     bodies must not cluster despite shared template.
     """
-    from datasets import load_dataset
+    from datasets import load_dataset  # noqa: PLC0415
 
     return load_dataset(
         DATASET_REPO,
@@ -92,7 +92,7 @@ def wikipedia_revisions_corpus():
     Drives the recall regression that minor temporal drift across revisions
     of one article must still cluster.
     """
-    from datasets import load_dataset
+    from datasets import load_dataset  # noqa: PLC0415
 
     return load_dataset(
         DATASET_REPO,
@@ -122,7 +122,7 @@ def quote_inclusion_corpus():
     long quote of the other' document is built at test time inside the
     test, not stored here.
     """
-    from datasets import load_dataset
+    from datasets import load_dataset  # noqa: PLC0415
 
     return load_dataset(
         DATASET_REPO,

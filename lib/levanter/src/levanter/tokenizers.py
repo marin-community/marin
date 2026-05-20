@@ -407,7 +407,7 @@ class HfMarinTokenizer:
         return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
 
     def as_hf_tokenizer(self) -> Any:
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer  # noqa: PLC0415
 
         return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
 
@@ -568,7 +568,7 @@ class KitokenMarinTokenizer:
         return _apply_chat_template_with_masks(self, conversations, chat_template=chat_template, **kwargs)
 
     def as_hf_tokenizer(self) -> Any:
-        from transformers import AutoTokenizer
+        from transformers import AutoTokenizer  # noqa: PLC0415
 
         return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
 
@@ -962,7 +962,7 @@ def _resolve_special_token_id_from_config(
 
 
 def _load_kitoken_tokenizer(name_or_path: str) -> KitokenMarinTokenizer:
-    import kitoken
+    import kitoken  # noqa: PLC0415
 
     local_json = os.path.join(name_or_path, "tokenizer.json")
     if not os.path.isfile(local_json):

@@ -196,7 +196,7 @@ def test_proxy_handle_shutdown_is_idempotent(loopback_proxy):
 
 def test_proxy_header_deadline_disconnects_slow_client(loopback_proxy):
     """A client that connects but never sends headers must be disconnected by the deadline."""
-    import time as _time
+    import time as _time  # noqa: PLC0415
 
     s = socket.create_connection((loopback_proxy.host, loopback_proxy.port), timeout=10.0)
     s.settimeout(10.0)

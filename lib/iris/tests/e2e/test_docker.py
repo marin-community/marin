@@ -118,7 +118,7 @@ def test_jax_coordinator_address_format(tpu_sim_cluster):
     """
 
     def validate_jax_env_format():
-        import os
+        import os  # noqa: PLC0415
 
         addr = os.environ.get("JAX_COORDINATOR_ADDRESS", "")
         proc_id = os.environ.get("JAX_PROCESS_ID", "")

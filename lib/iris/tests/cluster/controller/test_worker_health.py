@@ -115,7 +115,7 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
     The seeding logic is now a free function on Controller; this test
     exercises it directly via WorkerHealthTracker.heartbeat.
     """
-    from rigging.timing import Timestamp
+    from rigging.timing import Timestamp  # noqa: PLC0415
 
     db = ControllerDB(db_dir=tmp_path)
     try:

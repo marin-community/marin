@@ -16,7 +16,7 @@ from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def get_config(vocab_size=1000):
-    from transformers import LlamaConfig
+    from transformers import LlamaConfig  # noqa: PLC0415
 
     llama3_cfg = json.loads(
         """
@@ -71,8 +71,8 @@ def get_config(vocab_size=1000):
 @skip_if_no_torch
 @pytest.mark.parametrize("test_seq_len", [128, 256, 512])
 def test_llama3_roundtrip(test_seq_len):
-    import torch
-    from transformers import AutoModelForCausalLM, LlamaForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers import AutoModelForCausalLM, LlamaForCausalLM  # noqa: PLC0415
 
     Vocab = hax.Axis("vocab", 1000)
     hf_config = get_config(Vocab.size)
@@ -128,9 +128,11 @@ def test_llama3_roundtrip(test_seq_len):
 
 @skip_if_no_torch
 def test_llama3_rotary_embedding():
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+    import torch  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import (
+        LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
+    )  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb  # noqa: PLC0415
 
     llama_config = get_config()
     device = "cpu"

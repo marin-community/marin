@@ -174,7 +174,7 @@ def _local_vizier_db_path(study_id: str) -> str:
 
 
 def _configure_vizier_local_db(local_path: str) -> None:
-    from vizier.service import clients
+    from vizier.service import clients  # noqa: PLC0415
 
     clients.environment_variables.servicer_kwargs["database_url"] = f"sqlite:///{local_path}"
 
@@ -250,7 +250,7 @@ def _serialize_parameters(parameters: Mapping[str, object]) -> dict[str, float |
 
 
 def _metric_goal(mode: str) -> Any:
-    from vizier.service import pyvizier as vz
+    from vizier.service import pyvizier as vz  # noqa: PLC0415
 
     if mode == "min":
         return vz.ObjectiveMetricGoal.MINIMIZE
@@ -336,8 +336,8 @@ def _build_base_launch_config() -> GrugBaseLaunchConfig:
 
 def run_vizier_suggest(config: VizierSuggestConfig) -> None:
     """Create or load a Vizier study, suggest trials, and persist the study DB."""
-    from vizier.service import clients
-    from vizier.service import pyvizier as vz
+    from vizier.service import clients  # noqa: PLC0415
+    from vizier.service import pyvizier as vz  # noqa: PLC0415
 
     local_db_path = _local_vizier_db_path(config.study_id)
     output_db_path = os.path.join(config.output_path, VIZIER_DB_FILENAME)
@@ -441,8 +441,8 @@ def run_vizier_train(config: VizierTrainConfig) -> None:
 
 def run_vizier_update(config: VizierUpdateConfig) -> None:
     """Load trial results, update Vizier, and write summary output."""
-    from vizier.service import clients
-    from vizier.service import pyvizier as vz
+    from vizier.service import clients  # noqa: PLC0415
+    from vizier.service import pyvizier as vz  # noqa: PLC0415
 
     local_db_path = _local_vizier_db_path(config.study_id)
     if not config.input_db_path:
@@ -528,7 +528,7 @@ def run_vizier_update(config: VizierUpdateConfig) -> None:
 
 def run_vizier_optimal(config: VizierOptimalConfig) -> None:
     """Load the final Vizier study and report optimal trials."""
-    from vizier.service import clients
+    from vizier.service import clients  # noqa: PLC0415
 
     local_db_path = _local_vizier_db_path(config.study_id)
     if not _sync_vizier_db_from_gcs(config.input_db_path, local_db_path):

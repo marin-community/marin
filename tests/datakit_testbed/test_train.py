@@ -25,8 +25,8 @@ def test_tokenize_step_bridge_produces_training_ready_steps():
     ``ExecutorStep[TokenizeConfig]`` (= ``TokenizerStep``), not a generic
     ExecutorStep wrapping ``_StepSpecMigrationConfig``.
     """
-    from marin.execution.executor import ExecutorStep
-    from marin.processing.tokenize import TokenizeConfig
+    from marin.execution.executor import ExecutorStep  # noqa: PLC0415
+    from marin.processing.tokenize import TokenizeConfig  # noqa: PLC0415
 
     steps = build_testbed_steps(sources=[_SMOKE_SOURCE])
     sampled = next(s for s in steps if s.name.startswith("data/datakit/normalized/"))
@@ -42,7 +42,7 @@ def test_bridge_steps_compose_into_lm_mixture():
     Exercises ``step_to_lm_mixture_component`` + ``_verify_tokenizers_same``,
     which silently failed on ``_StepSpecMigrationConfig`` before the bridge fix.
     """
-    from marin.processing.tokenize import lm_mixture_data_config
+    from marin.processing.tokenize import lm_mixture_data_config  # noqa: PLC0415
 
     steps = build_testbed_steps(sources=[_SMOKE_SOURCE])
     sampled = next(s for s in steps if s.name.startswith("data/datakit/normalized/"))

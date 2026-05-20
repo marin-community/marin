@@ -493,7 +493,7 @@ class Gemma2Config(GemmaConfig):
         construct the Hugging-Face config explicitly so that the intent is clear.
         """
 
-        from transformers import (
+        from transformers import (  # noqa: PLC0415
             Gemma2Config as _HFGemma2Config,  # local import (optional dependency)
         )
 
@@ -821,7 +821,7 @@ class Gemma3Config(Gemma2Config):
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None):  # type: ignore[override]
         """Convert to ``transformers.Gemma3Config``."""
-        from transformers import Gemma3TextConfig as _HFGemma3Config
+        from transformers import Gemma3TextConfig as _HFGemma3Config  # noqa: PLC0415
 
         if config_overrides is None:
             config_overrides = {}

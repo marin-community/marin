@@ -21,7 +21,7 @@ common_corpus_download = normalize_common_corpus_step(
 def tokenize_common_corpus(*, tokenizer: str | None = None) -> TokenizerStep:
     """Tokenize the filtered Common Corpus (English, open types)."""
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
+        from experiments.marin_models import marin_tokenizer  # noqa: PLC0415
 
         tokenizer = marin_tokenizer
 

@@ -44,7 +44,7 @@ def _get_dolmino_split_paths(split: str):
 def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolmino dataset splits."""
     if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
+        from experiments.llama import llama3_tokenizer  # noqa: PLC0415
 
         tokenizer = llama3_tokenizer
 
@@ -64,7 +64,7 @@ def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep
         )
 
         # Check if we need to use override path for llama3
-        from experiments.llama import llama3_tokenizer as _llama3_tokenizer
+        from experiments.llama import llama3_tokenizer as _llama3_tokenizer  # noqa: PLC0415
 
         if tokenizer == _llama3_tokenizer and split in DOLMINO_LLAMA3_OVERRIDES:
             step = step.with_output_path(DOLMINO_LLAMA3_OVERRIDES[split])
@@ -88,7 +88,7 @@ _all_dolmino_math_files = [
 def tokenize_dolmino_math(tokenizer: str | None = None):
     """Create the combined math dataset tokenization step."""
     if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
+        from experiments.llama import llama3_tokenizer  # noqa: PLC0415
 
         tokenizer = llama3_tokenizer
 

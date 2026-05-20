@@ -275,7 +275,7 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.
     ptrace/SYS_PTRACE requirements that fail when profiling the controller or
     worker's own process from within a container.
     """
-    import memray
+    import memray  # noqa: PLC0415
 
     spec = resolve_memory_spec(memory_config, duration_seconds, pid=pid)
     file_format = memray.FileFormat.AGGREGATED_ALLOCATIONS if spec.leaks else memray.FileFormat.ALL_ALLOCATIONS

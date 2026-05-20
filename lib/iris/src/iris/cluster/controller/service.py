@@ -813,7 +813,7 @@ def _attempts_for_worker(
     independent state/duration per attempt rather than inheriting from the
     parent task (which produced bogus duplicate-RUNNING rows).
     """
-    from sqlalchemy import case
+    from sqlalchemy import case  # noqa: PLC0415
 
     with db.read_snapshot() as tx:
         raw_rows = tx.execute(

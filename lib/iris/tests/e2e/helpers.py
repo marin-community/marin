@@ -22,7 +22,7 @@ class TestJobs:
 
     @staticmethod
     def sleep(duration: float):
-        import time
+        import time  # noqa: PLC0415
 
         time.sleep(duration)
         return 1
@@ -30,8 +30,8 @@ class TestJobs:
     @staticmethod
     def log_periodic(duration: float, interval: float = 1.0):
         """Log a message every `interval` seconds for `duration` seconds."""
-        import logging
-        import time
+        import logging  # noqa: PLC0415
+        import time  # noqa: PLC0415
 
         logger = logging.getLogger("iris.test.log_periodic")
         start = time.monotonic()
@@ -59,7 +59,7 @@ class TestJobs:
     @staticmethod
     def busy_loop(duration: float = 3.0):
         """CPU-bound busy loop for profiling tests."""
-        import time
+        import time  # noqa: PLC0415
 
         end = time.monotonic() + duration
         while time.monotonic() < end:
@@ -74,7 +74,7 @@ class TestJobs:
         named markers (info-marker, warning-marker, error-marker) for precise
         level assertions.
         """
-        import logging
+        import logging  # noqa: PLC0415
 
         logger = logging.getLogger("iris.test.verbose")
         for i in range(num_lines):
@@ -93,9 +93,9 @@ class TestJobs:
     @staticmethod
     def register_endpoint(prefix):
         """Register an endpoint via RPC and verify it's listed."""
-        from iris.cluster.client import get_job_info
-        from iris.rpc import controller_pb2
-        from iris.rpc.controller_connect import ControllerServiceClientSync
+        from iris.cluster.client import get_job_info  # noqa: PLC0415
+        from iris.rpc import controller_pb2  # noqa: PLC0415
+        from iris.rpc.controller_connect import ControllerServiceClientSync  # noqa: PLC0415
 
         info = get_job_info()
         if info is None:
@@ -124,7 +124,7 @@ class TestJobs:
     @staticmethod
     def validate_ports():
         """Validate that requested ports are allocated via JobInfo."""
-        from iris.cluster.client import get_job_info
+        from iris.cluster.client import get_job_info  # noqa: PLC0415
 
         info = get_job_info()
         if info is None:
@@ -137,9 +137,9 @@ class TestJobs:
     @staticmethod
     def validate_job_context():
         """Validate job context via get_job_info() in a coscheduled job."""
-        import logging
+        import logging  # noqa: PLC0415
 
-        from iris.cluster.client import get_job_info
+        from iris.cluster.client import get_job_info  # noqa: PLC0415
 
         logger = logging.getLogger("iris.test.context")
         info = get_job_info()
@@ -151,7 +151,7 @@ class TestJobs:
     @staticmethod
     def wait_for_sentinel(s):
         """Wait on a sentinel with a short timeout, used for concurrency tests."""
-        from rigging.timing import Duration
+        from rigging.timing import Duration  # noqa: PLC0415
 
         s.wait(timeout=Duration.from_seconds(2))
         return "done"

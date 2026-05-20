@@ -153,8 +153,8 @@ def test_sanitize_container_id_uniqueness_across_calls():
 
 
 def _frame(record: dict) -> bytes:
-    import json
-    import struct
+    import json  # noqa: PLC0415
+    import struct  # noqa: PLC0415
 
     payload = json.dumps(record).encode("utf-8")
     return struct.pack(">I", len(payload)) + payload

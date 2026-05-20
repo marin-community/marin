@@ -276,8 +276,8 @@ def create_vllm_inference_config():
 
 def create_test_curriculum_config(actor_name: str = "test_curriculum"):
     """Create a minimal CurriculumConfig for testing."""
-    from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
-    from marin.rl.environments import EnvConfig
+    from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams  # noqa: PLC0415
+    from marin.rl.environments import EnvConfig  # noqa: PLC0415
 
     return CurriculumConfig(
         lessons={
@@ -340,7 +340,7 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
 
 def create_test_rollout_storage_config() -> RolloutStorageConfig:
     """Create in-memory storage config for testing."""
-    from marin.rl.rollout_storage import StorageType
+    from marin.rl.rollout_storage import StorageType  # noqa: PLC0415
 
     test_id = uuid.uuid4().hex[:8]
     return RolloutStorageConfig(storage_type=StorageType.IN_MEMORY, queue_name=f"test_{test_id}")

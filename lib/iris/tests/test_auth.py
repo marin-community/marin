@@ -31,8 +31,8 @@ def _quick():
 
 def test_static_auth_rpc_access():
     """Static auth rejects unauthenticated and wrong-token RPCs, accepts valid JWT."""
-    from connectrpc.errors import ConnectError
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+    from connectrpc.errors import ConnectError  # noqa: PLC0415
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider  # noqa: PLC0415
 
     config = _make_controller_only_config()
     config.auth.static.tokens[_AUTH_TOKEN] = _AUTH_USER
@@ -65,8 +65,8 @@ def test_static_auth_rpc_access():
 
 def test_static_auth_job_ownership():
     """Job ownership: user A cannot terminate user B's job."""
-    from connectrpc.errors import ConnectError
-    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider
+    from connectrpc.errors import ConnectError  # noqa: PLC0415
+    from iris.rpc.auth import AuthTokenInjector, StaticTokenProvider  # noqa: PLC0415
 
     _TOKEN_A = "token-user-a"
     _TOKEN_B = "token-user-b"

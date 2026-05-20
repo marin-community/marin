@@ -174,7 +174,7 @@ class ServiceTestHarness:
         resources: job_pb2.ResourceSpecProto | None = None,
     ) -> JobName:
         """Submit a job via the RPC layer. Returns job_id."""
-        from tests.cluster.controller.conftest import make_test_entrypoint
+        from tests.cluster.controller.conftest import make_test_entrypoint  # noqa: PLC0415
 
         job_id = JobName.root(user, name)
         request = controller_pb2.Controller.LaunchJobRequest(
@@ -410,7 +410,7 @@ class ServiceTestHarness:
 
 
 def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
+    from iris.cluster.controller.worker_health import WorkerHealthTracker  # noqa: PLC0415
 
     db = ControllerDB(db_dir=tmp_path / "k8s_db")
     health = WorkerHealthTracker()
@@ -458,7 +458,7 @@ def _make_k8s_harness(tmp_path) -> ServiceTestHarness:
 
 
 def _make_gcp_harness(tmp_path) -> ServiceTestHarness:
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
+    from iris.cluster.controller.worker_health import WorkerHealthTracker  # noqa: PLC0415
 
     db = ControllerDB(db_dir=tmp_path / "gcp_db")
     health = WorkerHealthTracker()

@@ -128,7 +128,7 @@ class SimpleEvaluator(Evaluator):
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
     ) -> None:
-        from vllm import LLM, SamplingParams
+        from vllm import LLM, SamplingParams  # noqa: PLC0415
 
         # Download and load the model with vLLM
         # Use the model name if a path is not specified (e.g., for Hugging Face models)

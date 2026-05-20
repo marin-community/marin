@@ -45,8 +45,8 @@ def run_lm_eval(model: RunningModel, run: LmEvalRun) -> None:
         raise ValueError("LmEvalRun.tasks must contain at least one task.")
 
     # lm_eval is only installed with Marin's eval extra.
-    from lm_eval.evaluator import simple_evaluate
-    from lm_eval.loggers import EvaluationTracker
+    from lm_eval.evaluator import simple_evaluate  # noqa: PLC0415
+    from lm_eval.loggers import EvaluationTracker  # noqa: PLC0415
 
     evaluation_tracker = EvaluationTracker(output_path=run.output_path)
     results = simple_evaluate(

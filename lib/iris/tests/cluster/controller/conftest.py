@@ -113,7 +113,7 @@ class FakeProvider:
         return []
 
     def reconcile_workers(self, plans, addresses, *, use_reconcile_rpc):
-        from iris.cluster.controller.reconcile import ReconcileResult
+        from iris.cluster.controller.reconcile import ReconcileResult  # noqa: PLC0415
 
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 

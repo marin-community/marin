@@ -75,7 +75,7 @@ def set_job_state(
     """Directly set job state in DB for dashboard-only read-model tests."""
     values: dict = {"state": new_state}
     if started_at_ms is not None:
-        from rigging.timing import Timestamp
+        from rigging.timing import Timestamp  # noqa: PLC0415
 
         values["started_at_ms"] = Timestamp.from_ms(started_at_ms)
     with state._db.transaction() as tx:
@@ -1081,7 +1081,7 @@ def test_fetch_logs_backward_compat_proxy(client):
 
 def test_fetch_logs_backward_compat_proxy_proto_binary(client):
     """Old clients using default Connect proto encoding hit the compat endpoint."""
-    from finelog.rpc import logging_pb2
+    from finelog.rpc import logging_pb2  # noqa: PLC0415
 
     task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
     req = logging_pb2.FetchLogsRequest(
@@ -1250,7 +1250,7 @@ def test_auth_config_returns_disabled_by_default(client):
 
 def test_auth_config_returns_enabled_when_verifier_set(service, log_service):
     """Auth config endpoint reports auth enabled with provider name."""
-    from iris.rpc.auth import StaticTokenVerifier
+    from iris.rpc.auth import StaticTokenVerifier  # noqa: PLC0415
 
     verifier = StaticTokenVerifier({"test-token": "test-user"})
     dashboard = ControllerDashboard(service, log_service=log_service, auth_verifier=verifier, auth_provider="gcp")
@@ -1302,8 +1302,8 @@ def test_auth_config_kubernetes_provider_kind(state, scheduler, tmp_path):
 
 def _make_k8s_dashboard_client(state, scheduler, tmp_path):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
-    from iris.cluster.providers.k8s.fake import InMemoryK8sService
-    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
+    from iris.cluster.providers.k8s.fake import InMemoryK8sService  # noqa: PLC0415
+    from iris.cluster.providers.k8s.tasks import K8sTaskProvider  # noqa: PLC0415
 
     k8s = InMemoryK8sService(namespace="iris")
     provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest")
@@ -1327,8 +1327,8 @@ def _make_k8s_dashboard_client(state, scheduler, tmp_path):
 
 def test_k8s_cluster_status_returns_nodes_and_pods(state, scheduler, tmp_path):
     """GetKubernetesClusterStatus returns node capacity and pod statuses after sync."""
-    from iris.cluster.controller.transitions import DirectProviderBatch
-    from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE
+    from iris.cluster.controller.transitions import DirectProviderBatch  # noqa: PLC0415
+    from iris.cluster.providers.k8s.tasks import _LABEL_MANAGED, _LABEL_RUNTIME, _RUNTIME_LABEL_VALUE  # noqa: PLC0415
 
     client, k8s, provider = _make_k8s_dashboard_client(state, scheduler, tmp_path)
 

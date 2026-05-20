@@ -142,7 +142,7 @@ def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
     """
 
     def crash(_: int) -> int:
-        import os
+        import os  # noqa: PLC0415
 
         os._exit(139)
 

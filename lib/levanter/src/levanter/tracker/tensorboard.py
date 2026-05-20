@@ -125,7 +125,7 @@ class TensorboardConfig(TrackerConfig):
 
         pylogger.info(f"Writing Tensorboard logs to {dir_to_write}")
 
-        from tensorboardX import SummaryWriter  # noqa: F811
+        from tensorboardX import SummaryWriter  # noqa: F811, PLC0415
 
         writer = SummaryWriter(
             dir_to_write,

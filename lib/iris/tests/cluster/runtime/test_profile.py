@@ -152,14 +152,14 @@ def test_memray_transform_stats_includes_json_flag_and_output():
 
 def _allocate_during(duration_seconds: int) -> list:
     """Force allocations so memray captures something during short profiles."""
-    import threading
+    import threading  # noqa: PLC0415
 
     results: list = []
 
     def _alloc():
         for _ in range(duration_seconds * 100):
             results.append(bytearray(1024))
-            import time
+            import time  # noqa: PLC0415
 
             time.sleep(duration_seconds / 100)
 

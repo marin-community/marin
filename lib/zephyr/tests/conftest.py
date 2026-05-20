@@ -35,7 +35,7 @@ def iris_cluster():
     cluster from one test module does not bleed into another. Tests within a
     single module still amortize the cluster startup cost.
     """
-    from iris.cluster.config import connect_cluster, load_config, make_local_config
+    from iris.cluster.config import connect_cluster, load_config, make_local_config  # noqa: PLC0415
 
     config = load_config(IRIS_CONFIG)
     config = make_local_config(config)
@@ -73,7 +73,7 @@ def zephyr_ctx(local_client, tmp_path_factory):
 
 def _parent_holder_entrypoint():
     """Long-running no-op that keeps the integration-test parent job alive."""
-    import time
+    import time  # noqa: PLC0415
 
     time.sleep(3600)
 
@@ -92,8 +92,8 @@ def integration_client(request):
         yield client
         client.shutdown(wait=True)
     elif request.param == "iris":
-        from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-        from iris.cluster.types import Entrypoint, ResourceSpec
+        from iris.client.client import IrisClient, IrisContext, iris_ctx_scope  # noqa: PLC0415
+        from iris.cluster.types import Entrypoint, ResourceSpec  # noqa: PLC0415
 
         iris_cluster = request.getfixturevalue("iris_cluster")
         iris_client = IrisClient.remote(iris_cluster, workspace=ZEPHYR_ROOT)
@@ -141,9 +141,9 @@ def integration_ctx(integration_client, tmp_path_factory):
 @pytest.fixture
 def actor_context():
     """Provide a fake actor context so ZephyrCoordinator can call current_actor()."""
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock  # noqa: PLC0415
 
-    from fray.actor import ActorContext, _reset_current_actor, _set_current_actor
+    from fray.actor import ActorContext, _reset_current_actor, _set_current_actor  # noqa: PLC0415
 
     token = _set_current_actor(ActorContext(handle=MagicMock(), index=0, group_name="test-coord"))
     yield

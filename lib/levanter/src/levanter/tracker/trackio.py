@@ -30,7 +30,7 @@ class TrackioTracker(Tracker):
     run: TrackioRun
 
     def __init__(self, run: Optional[TrackioRun] = None):
-        import trackio
+        import trackio  # noqa: PLC0415
 
         if run is None:
             logger.warning("Trackio run is not initialized. Initializing a new run.")
@@ -47,12 +47,12 @@ class TrackioTracker(Tracker):
         for k, v in metrics.items():
             to_log[k] = _convert_value_to_loggable_rec(v)
 
-        import trackio
+        import trackio  # noqa: PLC0415
 
         trackio.log(to_log, step=step)
 
     def log_summary(self, metrics: typing.Mapping[str, Any]):
-        import trackio
+        import trackio  # noqa: PLC0415
 
         to_log = {f"summary/{k}": _convert_value_to_loggable_rec(v) for k, v in metrics.items()}
         trackio.log(to_log)
@@ -62,7 +62,7 @@ class TrackioTracker(Tracker):
         logger.warning("Trackio does not currently support artifacts. Skipping upload for %s", artifact_path)
 
     def finish(self):
-        import trackio
+        import trackio  # noqa: PLC0415
 
         logger.info("Finishing trackio run...")
         trackio.finish()
@@ -127,7 +127,7 @@ class TrackioConfig(TrackerConfig):
     background_finish_timeout: float = 120.0
 
     def init(self, run_id: Optional[str]) -> Tracker:
-        import trackio
+        import trackio  # noqa: PLC0415
 
         # Only the primary process should log by default.
         if jax.process_index() == 0:

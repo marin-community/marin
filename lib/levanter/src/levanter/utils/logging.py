@@ -51,13 +51,13 @@ def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.
 
 
 def save_xla_dumps_to_wandb(initial_time: float):
-    from levanter.tracker.wandb import is_wandb_available
+    from levanter.tracker.wandb import is_wandb_available  # noqa: PLC0415
 
     if not is_wandb_available():
         pylogger.warning("Wandb is not available, so we can't save XLA dumps")
         return
 
-    import wandb
+    import wandb  # noqa: PLC0415
 
     # attempt to parse xla_flags to see if we're dumping assembly files
     flags = os.getenv("XLA_FLAGS", None)

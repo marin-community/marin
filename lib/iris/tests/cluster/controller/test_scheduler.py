@@ -82,7 +82,7 @@ def _job_requirements_from_job(job) -> JobRequirements:
 
 def _decode_worker_attr_value(row):
     """Decode a worker_attributes row value by value_type."""
-    from iris.cluster.constraints import AttributeValue
+    from iris.cluster.constraints import AttributeValue  # noqa: PLC0415
 
     if row.value_type == "int":
         return AttributeValue(int(row.int_value))
@@ -353,8 +353,8 @@ def test_scheduler_detects_timed_out_tasks(state):
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.
-    from iris.cluster.controller.schema import jobs_table
-    from sqlalchemy import update as sa_update
+    from iris.cluster.controller.schema import jobs_table  # noqa: PLC0415
+    from sqlalchemy import update as sa_update  # noqa: PLC0415
 
     with state._db.transaction() as _tx:
         _tx.execute(
@@ -2231,7 +2231,7 @@ def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
 
 def _register_worker_with_probed_attributes(state, worker_id, address, metadata):
     """Register a worker, populating attributes via _build_worker_attributes (as real workers do)."""
-    from iris.cluster.worker.env_probe import _build_worker_attributes
+    from iris.cluster.worker.env_probe import _build_worker_attributes  # noqa: PLC0415
 
     # Determine accelerator_type and variant from the device config on metadata,
     # mirroring what the autoscaler would set on WorkerConfig.

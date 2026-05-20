@@ -176,7 +176,7 @@ def test_iter_parquet_row_groups_predicate_columns_dropped(tmp_path):
 
 def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
     """Verify that load_parquet does NOT import pyarrow.dataset."""
-    import sys
+    import sys  # noqa: PLC0415
 
     path = str(tmp_path / "data.parquet")
     _write_test_parquet(path, RECORDS)

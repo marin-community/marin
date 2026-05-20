@@ -240,7 +240,7 @@ def test_reconcile_drops_rows_for_missing_files(tmp_path):
     s1.close()
 
     # Delete the parquet behind the catalog's back.
-    import os
+    import os  # noqa: PLC0415
 
     os.unlink(seg_path)
 
@@ -373,7 +373,7 @@ def test_registry_replace_segments_is_atomic(tmp_path):
     """A failing upsert mid-replace must roll the whole swap back."""
     db = Catalog(tmp_path)
     db.upsert("ns", _worker_schema())
-    from finelog.store.types import SegmentRow
+    from finelog.store.types import SegmentRow  # noqa: PLC0415
 
     initial = SegmentRow(
         namespace="ns",

@@ -93,7 +93,7 @@ def pytest_collection_modifyitems(config, items):
     """
     is_cloud = config.getoption("--iris-controller-url") is not None
 
-    import pytest
+    import pytest  # noqa: PLC0415
 
     first_smoke_test = True
     for item in items:
@@ -529,7 +529,7 @@ def assert_visible(page, selector: str, *, timeout: int = 10_000) -> None:
     """Assert a selector is visible. No-op when Playwright is unavailable."""
     if _is_noop_page(page):
         return
-    from playwright.sync_api import expect
+    from playwright.sync_api import expect  # noqa: PLC0415
 
     expect(page.locator(selector).first).to_be_visible(timeout=timeout)
 
@@ -548,7 +548,7 @@ def dashboard_goto(page, url: str) -> None:
     """
     if _is_noop_page(page):
         return
-    from urllib.parse import urlparse
+    from urllib.parse import urlparse  # noqa: PLC0415
 
     parsed = urlparse(url)
     path = parsed.path

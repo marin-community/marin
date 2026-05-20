@@ -784,7 +784,7 @@ def test_logprobs_match_full_forward_pass(test_client, loaded_model, trainer_con
     print("Computing model logprobs using full forward pass")
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
-        from levanter.layers.attention import AttentionMask
+        from levanter.layers.attention import AttentionMask  # noqa: PLC0415
 
         # Concatenate prompt + generated tokens
         full_sequence = prompt_tokens + generated_token_ids

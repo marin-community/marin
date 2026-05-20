@@ -62,8 +62,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _scan_stage(staging_dir: str, workers: int) -> None:
     """Iris-side entrypoint for stage 1: distributed scan into parquet segments."""
-    from scripts.ops.storage.constants import MARIN_BUCKETS
-    from scripts.ops.storage.distributed_scan import run_distributed
+    from scripts.ops.storage.constants import MARIN_BUCKETS  # noqa: PLC0415
+    from scripts.ops.storage.distributed_scan import run_distributed  # noqa: PLC0415
 
     run_distributed(
         buckets=MARIN_BUCKETS,
@@ -91,8 +91,8 @@ def _dedup_stage(input_glob: str, output_dir: str, num_shards: int, worker_cpu: 
     collapses those into one row per (bucket, name) and lives inside the
     coordinator job so the pipeline is constructed where it executes.
     """
-    from fray import ResourceConfig
-    from zephyr import Dataset, ZephyrContext
+    from fray import ResourceConfig  # noqa: PLC0415
+    from zephyr import Dataset, ZephyrContext  # noqa: PLC0415
 
     output_pattern = f"{output_dir.rstrip('/')}/objects-{{shard:05d}}.parquet"
 
@@ -115,9 +115,9 @@ def _dedup_stage(input_glob: str, output_dir: str, num_shards: int, worker_cpu: 
 
 def _report_stage(deduped_dir: str, report_path: str) -> None:
     """Iris-side entrypoint for stage 3: build the markdown report."""
-    import fsspec as _fsspec
+    import fsspec as _fsspec  # noqa: PLC0415
 
-    from scripts.ops.storage.report import generate_report, load_parquet_db
+    from scripts.ops.storage.report import generate_report, load_parquet_db  # noqa: PLC0415
 
     conn = load_parquet_db(deduped_dir)
     report = generate_report(conn)

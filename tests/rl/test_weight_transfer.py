@@ -90,8 +90,8 @@ def sample_params():
 
 def create_test_weight_transfer_pair(weight_transfer_config):
     """Helper function to create server/client pairs for testing with simplified Levanter API."""
-    from fray import current_client
-    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
+    from fray import current_client  # noqa: PLC0415
+    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator  # noqa: PLC0415
 
     # Set unique coordinator name for distributed modes
     coordinator_name = f"test_coordinator_{uuid.uuid4().hex[:8]}"
@@ -146,7 +146,7 @@ def weight_transfer_config(transfer_mode):
 @pytest.fixture(autouse=True)
 def v2_client():
     """Ensure a v2 LocalClient for weight transfer tests."""
-    from fray import LocalClient, set_current_client
+    from fray import LocalClient, set_current_client  # noqa: PLC0415
 
     with set_current_client(LocalClient()) as client:
         yield client
@@ -208,8 +208,8 @@ def test_arrow_flight_server_debug_snapshot_reports_stored_bytes(sample_params):
 
 
 def test_arrow_flight_coordinator_accepts_rollback_weight_ids():
-    from fray import current_client
-    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
+    from fray import current_client  # noqa: PLC0415
+    from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator  # noqa: PLC0415
 
     client = current_client()
     coordinator = client.create_actor(
@@ -382,7 +382,7 @@ def benchmark_arrow_flight_with_llama():
 @pytest.mark.slow("Uses real Llama model, requires HuggingFace access.")
 def test_arrow_flight_transfer_to_vllm():
     """Test Arrow Flight weight transfer to vLLM."""
-    from vllm import LLM
+    from vllm import LLM  # noqa: PLC0415
 
     MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
     devices = jax.devices("tpu")

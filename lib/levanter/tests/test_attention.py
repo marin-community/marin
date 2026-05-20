@@ -683,7 +683,7 @@ def sink_attention_ref_gpt_oss(
     sliding_window: int | None = None,
     start_q=0,
 ):
-    import torch
+    import torch  # noqa: PLC0415
 
     batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim = query.shape
     batch_size, num_keys, num_key_value_heads, head_dim = key.shape
@@ -730,7 +730,7 @@ def sink_attention(
     block_size: int | None = None,
     inference: bool = True,
 ):
-    import torch
+    import torch  # noqa: PLC0415
 
     batch_size, num_queries, num_key_value_heads, num_key_value_groups, head_dim = query.shape
     _, num_keys, _, _ = key.shape
@@ -853,7 +853,7 @@ def test_attention_equivalence(
     sliding_window,
     start_q,
 ):
-    import torch
+    import torch  # noqa: PLC0415
 
     if num_queries > num_keys:
         pytest.skip("too many queries")
@@ -916,7 +916,7 @@ def test_attention_equivalence_jax_flash(
     block_size,
 ):
     """Make sure the JAX backend is tested"""
-    import torch
+    import torch  # noqa: PLC0415
 
     if num_queries > num_keys:
         pytest.skip("too many queries")

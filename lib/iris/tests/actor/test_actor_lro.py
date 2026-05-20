@@ -44,7 +44,7 @@ def test_lro_basic():
         # get_operation auto-polls until done
         op = client.get_operation(op_id)
         assert op.state == actor_pb2.Operation.SUCCEEDED
-        import cloudpickle
+        import cloudpickle  # noqa: PLC0415
 
         assert cloudpickle.loads(op.serialized_result) == 5
     finally:
@@ -99,7 +99,7 @@ def test_lro_not_found():
 
     try:
         client = _make_client(port)
-        from connectrpc.errors import ConnectError
+        from connectrpc.errors import ConnectError  # noqa: PLC0415
 
         with pytest.raises(ConnectError, match="not found"):
             client.poll_operation_status("nonexistent")

@@ -224,7 +224,7 @@ def test_insert_attempt_propagates_non_uid_integrity_error():
         task_id = _submit_pending_task(state, job="pk-collide")
         _insert_attempt(state, task_id, attempt_id=0)
 
-        from sqlalchemy.exc import IntegrityError
+        from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
 
         with pytest.raises(IntegrityError):
             _insert_attempt(state, task_id, attempt_id=0)

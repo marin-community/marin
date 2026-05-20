@@ -169,7 +169,7 @@ def test_region_constrained_routing(integration_cluster):
     # Query workers to check for multi-region support
     workers = integration_cluster.list_workers()
 
-    from iris.cluster.constraints import WellKnownAttribute
+    from iris.cluster.constraints import WellKnownAttribute  # noqa: PLC0415
 
     regions = set()
     for w in workers:

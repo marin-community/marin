@@ -11,7 +11,7 @@ from test_utils import skip_if_module_missing
 @skip_if_module_missing("lm_eval")
 def test_iterate_tokenized_requests_with_chat_template():
     """Test the chat template functionality in _iterate_tokenized_requests"""
-    from lm_eval.api.instance import Instance
+    from lm_eval.api.instance import Instance  # noqa: PLC0415
 
     # Load a tokenizer with chat template - Llama 3 has one
     hf_tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-tokenizer")
@@ -96,7 +96,7 @@ def test_iterate_tokenized_requests_with_chat_template():
 
 @skip_if_module_missing("lm_eval")
 def test_iterate_tokenized_requests():
-    from lm_eval.api.instance import Instance
+    from lm_eval.api.instance import Instance  # noqa: PLC0415
 
     hf_tokenizer = AutoTokenizer.from_pretrained("marin-community/marin-tokenizer")
     if hf_tokenizer.pad_token is None:

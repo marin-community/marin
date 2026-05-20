@@ -49,7 +49,7 @@ class WandbTracker(Tracker):
         suppress_logging: bool = False,
         minimum_log_step: int = 0,
     ):
-        import wandb
+        import wandb  # noqa: PLC0415
 
         if run is None:
             if wandb.run is None:
@@ -95,7 +95,7 @@ class WandbTracker(Tracker):
             if isinstance(v, Histogram):
                 # if the value is a Histogram, convert it to a wandb Histogram
                 # this will log the histogram counts and bin edges
-                import wandb
+                import wandb  # noqa: PLC0415
 
                 counts, limits = v.to_numpy_histogram()
                 wandb_hist = wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
@@ -150,7 +150,7 @@ class WandbTracker(Tracker):
         if self._replicate_path is None:
             return
 
-        import fsspec
+        import fsspec  # noqa: PLC0415
 
         metrics_file = f"{self._replicate_path}/tracker_metrics.jsonl"
         fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
@@ -218,7 +218,7 @@ def _convert_value_to_loggable_rec(value: Any):
     elif isinstance(value, np.generic):
         return value.item()
     elif isinstance(value, Histogram):
-        import wandb
+        import wandb  # noqa: PLC0415
 
         counts, limits = value.to_numpy_histogram()
 
@@ -229,7 +229,7 @@ def _convert_value_to_loggable_rec(value: Any):
 
 def is_wandb_available():
     try:
-        import wandb
+        import wandb  # noqa: PLC0415
     except ImportError:
         return False
     return wandb is not None and wandb.run is not None
@@ -281,7 +281,7 @@ class WandbConfig(TrackerConfig):
     """Maximum seconds to wait for the background thread to drain on finish()."""
 
     def init(self, run_id: Optional[str]) -> Tracker:
-        import wandb
+        import wandb  # noqa: PLC0415
 
         if run_id is not None and self.id is not None and run_id != self.id:
             warnings.warn(
@@ -414,7 +414,7 @@ class WandbConfig(TrackerConfig):
             if "SHA is empty" in str(e):
                 # we have another workaround, which is to use the git command line
                 # git --git-dir={code_dir}/.git rev-parse HEAD
-                import subprocess
+                import subprocess  # noqa: PLC0415
 
                 try:
                     out = subprocess.run(

@@ -71,8 +71,8 @@ def test_alibi_attention_bias():
 
 @skip_if_no_torch
 def test_alibi_attention_compared_to_hf():
-    import torch
-    from transformers.models.bloom.modeling_bloom import build_alibi_tensor
+    import torch  # noqa: PLC0415
+    from transformers.models.bloom.modeling_bloom import build_alibi_tensor  # noqa: PLC0415
 
     L, H = hax.make_axes(L=1, H=16)
 

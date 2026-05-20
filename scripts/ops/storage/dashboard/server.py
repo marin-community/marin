@@ -757,7 +757,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     def create_protect_rule(req: ProtectRuleCreate) -> dict[str, Any]:
         conn = db()
         new_id = _next_rule_id(conn, "protect_rules")
-        import json as _json
+        import json as _json  # noqa: PLC0415
 
         path = catalog.protect_rules_json
         rules = _json.loads(path.read_text()) if path.exists() else []
@@ -778,7 +778,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.delete("/api/rules/{rule_id}")
     @serialized
     def remove_protect_rule(rule_id: int) -> dict[str, Any]:
-        import json as _json
+        import json as _json  # noqa: PLC0415
 
         conn = db()
         path = catalog.protect_rules_json
@@ -1000,7 +1000,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.post("/api/delete-rules")
     @serialized
     def create_delete_rule(req: DeleteRuleCreate) -> dict[str, Any]:
-        import json as _json
+        import json as _json  # noqa: PLC0415
 
         conn = db()
         new_id = _next_rule_id(conn, "delete_rules")
@@ -1022,7 +1022,7 @@ def create_app(catalog: StorageCatalog = DEFAULT_CATALOG) -> FastAPI:
     @app.delete("/api/delete-rules/{rule_id}")
     @serialized
     def remove_delete_rule(rule_id: int) -> dict[str, Any]:
-        import json as _json
+        import json as _json  # noqa: PLC0415
 
         conn = db()
         path = catalog.delete_rules_json

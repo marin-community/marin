@@ -225,7 +225,7 @@ def ssd_chunked_forward(
             flat_b,
             flat_x,
         )
-        from .reference import ssd_chunked_from_local_blocks_reference_batched
+        from .reference import ssd_chunked_from_local_blocks_reference_batched  # noqa: PLC0415
 
         y, final_state = ssd_chunked_from_local_blocks_reference_batched(
             flat_a_log_cumsum, flat_c, local_output, chunk_state

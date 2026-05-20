@@ -609,7 +609,7 @@ def _ensure_iris_protos() -> None:
     resolve imports from other modules, even when the generated files themselves
     are excluded from type-checking via project-excludes.
     """
-    import shutil
+    import shutil  # noqa: PLC0415
 
     rpc_dir = ROOT_DIR / "lib" / "iris" / "src" / "iris" / "rpc"
     # Check if any pb2 file exists already

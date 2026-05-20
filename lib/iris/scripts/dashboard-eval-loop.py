@@ -253,7 +253,7 @@ async def run_fixer_agent(
 
 async def main_async():
     """Run the evaluation loop."""
-    import argparse
+    import argparse  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description="Dashboard evaluation and improvement loop")
     parser.add_argument(

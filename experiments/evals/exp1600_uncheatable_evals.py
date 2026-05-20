@@ -78,7 +78,7 @@ def uncheatable_eval_tokenized(
 
 
 def uncheatable_eval_raw_validation_sets(*, uncheatable_eval_raw: ExecutorStep = uncheatable_eval):
-    from marin.evaluation.perplexity_gap import raw_text_dataset
+    from marin.evaluation.perplexity_gap import raw_text_dataset  # noqa: PLC0415
 
     return {
         os.path.join("uncheatable_eval", dataset): raw_text_dataset(uncheatable_eval_raw.cd(path_part))

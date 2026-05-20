@@ -55,7 +55,7 @@ def tokenize_nemotron_v2_family(
     ``outputs/main/`` directory.
     """
     if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
+        from experiments.llama import llama3_tokenizer  # noqa: PLC0415
 
         tokenizer = llama3_tokenizer
 

@@ -33,8 +33,8 @@ def test_sniff_format_for_json():
 
 def test_sniff_format_for_parquet():
 
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow.parquet as pq  # noqa: PLC0415
 
     with tempfile.NamedTemporaryFile(suffix=".parquet") as f:
         table = pa.table({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
@@ -46,8 +46,8 @@ def test_sniff_format_for_parquet():
 
 def test_basic_parquet_datasource_read_row():
 
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow.parquet as pq  # noqa: PLC0415
 
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=True) as f:
         # Create a simple dataset
@@ -72,8 +72,8 @@ def test_basic_parquet_datasource_read_row():
 
 
 def test_text_url_data_source_parquet():
-    import pyarrow as pa
-    import pyarrow.parquet as pq
+    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow.parquet as pq  # noqa: PLC0415
 
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=True) as f:
         data = {

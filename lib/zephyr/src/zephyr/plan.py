@@ -638,7 +638,7 @@ def _merge_sorted_chunks(
 
     # Check if external sort is needed BEFORE materializing all iterators.
     # ScatterReader can decide using manifest stats (no file opens needed).
-    from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
+    from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan  # noqa: PLC0415
 
     use_external = (
         external_sort_dir is not None
@@ -780,8 +780,8 @@ def run_stage(
 
     configure_logging(level=logging.INFO)
 
-    from zephyr import counters  # circular import: counters → execution → plan
-    from zephyr.writers import (  # circular import: writers → counters → execution → plan
+    from zephyr import counters  # circular import: counters → execution → plan  # noqa: PLC0415
+    from zephyr.writers import (  # circular import: writers → counters → execution → plan  # noqa: PLC0415
         write_binary_file,
         write_jsonl_file,
         write_parquet_file,
@@ -835,7 +835,7 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Build ScatterReader directly from per-mapper sidecars, then
             # merge sorted chunks and reduce per key.
-            from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan
+            from zephyr.shuffle import ScatterReader  # circular import: shuffle imports plan  # noqa: PLC0415
 
             shard = ctx.shard
             if not isinstance(shard, ScatterReader):

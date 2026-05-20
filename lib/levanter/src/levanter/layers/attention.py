@@ -271,7 +271,7 @@ def dot_product_attention(
     if attention_out is not None:
         return attention_out
     else:
-        from levanter.models.flash_attention import (
+        from levanter.models.flash_attention import (  # noqa: PLC0415
             flash_attention,
         )  # circular import: flash_attention imports attention
 
@@ -518,7 +518,7 @@ def _te_flash_attention(
     scaling_factor: float,
     logits_soft_cap: Optional[float] = None,
 ):
-    from transformer_engine.jax.attention import (  # type: ignore[import]
+    from transformer_engine.jax.attention import (  # type: ignore[import]  # noqa: PLC0415
         AttnBiasType,
         QKVLayout,
         SequenceDescriptor,
@@ -644,7 +644,7 @@ def _te_flash_attention(
 
 def _te_get_mask_type(mask):
     """Get the TE AttnMaskType from a mask object without materializing it."""
-    from transformer_engine.jax.attention import AttnMaskType  # type: ignore[import]
+    from transformer_engine.jax.attention import AttnMaskType  # type: ignore[import]  # noqa: PLC0415
 
     if isinstance(mask, NamedArray):
         raise NotImplementedError(
@@ -1263,7 +1263,7 @@ def _tpu_splash_attention(
     logits_soft_cap: float | None = None,
     attn_sink: Optional[NamedArray] = None,
 ) -> Optional[NamedArray]:
-    from jax.experimental.pallas.ops.tpu.splash_attention import (
+    from jax.experimental.pallas.ops.tpu.splash_attention import (  # noqa: PLC0415
         SegmentIds as SplashSegmentIds,
         splash_attention_kernel,
         splash_attention_mask,

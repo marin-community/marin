@@ -1138,7 +1138,7 @@ class IrisConfig:
         Returns:
             ProviderBundle with controller and optional workers
         """
-        from iris.cluster.providers.factory import create_provider_bundle
+        from iris.cluster.providers.factory import create_provider_bundle  # noqa: PLC0415
 
         return create_provider_bundle(
             platform_config=self._proto.platform,
@@ -1180,7 +1180,7 @@ def connect_cluster(config: config_pb2.IrisClusterConfig) -> Iterator[str]:
     is_local = config.controller.WhichOneof("controller") == "local"
 
     if is_local:
-        from iris.cluster.providers.local.cluster import LocalCluster
+        from iris.cluster.providers.local.cluster import LocalCluster  # noqa: PLC0415
 
         cluster = LocalCluster(config)
         address = cluster.start()
@@ -1228,8 +1228,8 @@ def create_autoscaler(
         ValueError: If autoscaler_config has invalid timing values
     """
     # Local import: controller modules import config.py, creating a circular dependency.
-    from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.autoscaler.scaling_group import (
+    from iris.cluster.controller.autoscaler import Autoscaler  # noqa: PLC0415
+    from iris.cluster.controller.autoscaler.scaling_group import (  # noqa: PLC0415
         DEFAULT_SCALE_DOWN_RATE_LIMIT,
         DEFAULT_SCALE_UP_RATE_LIMIT,
         ScalingGroup,
@@ -1288,7 +1288,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
     """
     which = cluster_config.WhichOneof("provider")
     if which == "kubernetes_provider":
-        from iris.cluster.providers.k8s.service import CloudK8sService
+        from iris.cluster.providers.k8s.service import CloudK8sService  # noqa: PLC0415
 
         kp = cluster_config.kubernetes_provider
         namespace = kp.namespace or "iris"
@@ -1307,7 +1307,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
             task_env=dict(cluster_config.defaults.task_env),
         )
     if which == "worker_provider":
-        from iris.cluster.controller.worker_provider import RpcWorkerStubFactory
+        from iris.cluster.controller.worker_provider import RpcWorkerStubFactory  # noqa: PLC0415
 
         return WorkerProvider(stub_factory=RpcWorkerStubFactory())
     raise ValueError(
@@ -1323,7 +1323,7 @@ def make_provider(cluster_config: config_pb2.IrisClusterConfig) -> WorkerProvide
 
 def clear_remote_state(remote_state_dir: str) -> None:
     """Remove all files under the remote state dir so the controller starts fresh."""
-    import fsspec
+    import fsspec  # noqa: PLC0415
 
     fs, path = fsspec.core.url_to_fs(remote_state_dir)
     if fs.exists(path):

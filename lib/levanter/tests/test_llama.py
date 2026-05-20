@@ -78,9 +78,11 @@ def test_llama_params():
 @pytest.mark.parametrize("use_flash", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_attention(use_flash, num_kv_heads):
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaAttention as HFLlamaAttention
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+    import torch  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import LlamaAttention as HFLlamaAttention  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import (
+        LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
+    )  # noqa: PLC0415
 
     config = _get_llama_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
 
@@ -120,8 +122,8 @@ def test_llama_param_counts_dont_change_with_seqlen():
 
 @skip_if_no_torch
 def test_llama_rms_norm():
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaRMSNorm as HFLlamaRMSNorm
+    import torch  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import LlamaRMSNorm as HFLlamaRMSNorm  # noqa: PLC0415
 
     config = _get_llama_config()
     ln = hnn.RmsNorm.init(config.Embed, eps=config.layer_norm_epsilon, use_bias=config.use_bias)
@@ -141,9 +143,11 @@ def test_llama_rms_norm():
 @skip_if_no_torch
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_decoder_layer(num_kv_heads):
-    import torch
-    from transformers.models.llama.modeling_llama import LlamaDecoderLayer as HFLlamaDecoderLayer
-    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+    import torch  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import LlamaDecoderLayer as HFLlamaDecoderLayer  # noqa: PLC0415
+    from transformers.models.llama.modeling_llama import (
+        LlamaRotaryEmbedding as HFLlamaRotaryEmbedding,
+    )  # noqa: PLC0415
 
     llama_config = _get_llama_config(num_kv_heads=num_kv_heads)
     key = random.PRNGKey(0)
@@ -220,8 +224,8 @@ def test_llama_lm_head_model_bwd(use_flash, num_kv_heads):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
 def test_llama_roundtrip(scan_layers, num_kv_heads):
-    import torch
-    from transformers import AutoModelForCausalLM, LlamaForCausalLM
+    import torch  # noqa: PLC0415
+    from transformers import AutoModelForCausalLM, LlamaForCausalLM  # noqa: PLC0415
 
     converter = LlamaConfig().hf_checkpoint_converter()
 
@@ -308,7 +312,7 @@ def _get_random_inputs(config: LlamaConfig, override_Pos=None):
 
 @parameterize_with_configs("llama*.yaml")
 def test_llama_configs(config_file):
-    from levanter.main.train_lm import TrainLmConfig
+    from levanter.main.train_lm import TrainLmConfig  # noqa: PLC0415
 
     config_class = TrainLmConfig
 
@@ -331,7 +335,7 @@ def test_pass_different_length_seq(num_kv_heads):
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_state_dict_consistency(scan_layers, num_kv_heads):
-    from transformers import LlamaForCausalLM
+    from transformers import LlamaForCausalLM  # noqa: PLC0415
 
     config = LlamaConfig(
         max_seq_len=128,

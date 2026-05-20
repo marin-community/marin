@@ -470,15 +470,15 @@ def test_route_auth_middleware_uses_resolve_auth(service, log_service, verifier,
     We build a dashboard with a @requires_auth route injected and verify it
     agrees with resolve_auth for every (token, optional) combination.
     """
-    from iris.cluster.controller.dashboard import (
+    from iris.cluster.controller.dashboard import (  # noqa: PLC0415
         ControllerDashboard,
         _LegacyFetchLogsRedirect,
         _RouteAuthMiddleware,
         _SubdomainProxyMiddleware,
         requires_auth,
     )
-    from starlette.responses import JSONResponse as _J
-    from starlette.routing import Route
+    from starlette.responses import JSONResponse as _J  # noqa: PLC0415
+    from starlette.routing import Route  # noqa: PLC0415
 
     @requires_auth
     def _protected(_request):

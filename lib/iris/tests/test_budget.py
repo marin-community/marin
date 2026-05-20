@@ -271,9 +271,9 @@ def test_compute_user_spend_null_resources_proto(state):
 def service(state, tmp_path) -> ControllerServiceImpl:
     """ControllerServiceImpl wired with static-provider auth so that
     priority-band authorization triggers (see launch_job band check)."""
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
+    from iris.cluster.controller.projections.endpoints import EndpointsProjection  # noqa: PLC0415
+    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection  # noqa: PLC0415
+    from iris.cluster.controller.worker_health import WorkerHealthTracker  # noqa: PLC0415
 
     return ControllerServiceImpl(
         state,

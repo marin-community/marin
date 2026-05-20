@@ -155,7 +155,7 @@ def mock_hf_filesystem():
 
         def mock_open(path, mode="rb"):
             if path in files:
-                import io
+                import io  # noqa: PLC0415
 
                 return io.BytesIO(files[path])
             raise FileNotFoundError(f"File not found: {path}")

@@ -194,7 +194,7 @@ def test_migration_0027_runs_unconditionally_idempotent(tmp_path: Path) -> None:
     (_has_column / _column_is_notnull / IF NOT EXISTS) must also make a direct
     re-invocation a no-op — that is what makes a crash-and-retry safe.
     """
-    import importlib.util
+    import importlib.util  # noqa: PLC0415
 
     db = ControllerDB(db_dir=tmp_path)
     _revert_to_pre_0027(db)

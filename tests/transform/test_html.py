@@ -246,7 +246,7 @@ def test_ar5iv_pipeline_integration(tmp_path, write_jsonl_gz, read_all_jsonl_gz)
         ],
     )
 
-    from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
+    from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump  # noqa: PLC0415
 
     config = Ar5ivExtractionConfig(
         input_path=str(input_dir),

@@ -145,7 +145,7 @@ class TestVortexPipeline:
         assert len(results) == 1
 
         # Verify parquet output
-        from zephyr.readers import load_parquet
+        from zephyr.readers import load_parquet  # noqa: PLC0415
 
         loaded = list(load_parquet(results[0]))
         assert len(loaded) == 100
@@ -153,7 +153,7 @@ class TestVortexPipeline:
     def test_parquet_to_vortex_conversion(self, sync_ctx, tmp_path):
         """Test converting parquet to vortex."""
         # Create parquet file
-        from zephyr.writers import write_parquet_file
+        from zephyr.writers import write_parquet_file  # noqa: PLC0415
 
         records = [{"a": i, "b": f"val_{i}"} for i in range(50)]
         parquet_path = tmp_path / "input.parquet"

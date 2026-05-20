@@ -166,7 +166,7 @@ def visualize_shardings(tree) -> None:
     will fall back to :func:`jax.debug.visualize_sharding`.
     """
 
-    import haliax.tree_util as htu  # circular import: debug -> tree_util -> nn -> partitioning -> tree_util
+    import haliax.tree_util as htu  # circular import: debug -> tree_util -> nn -> partitioning -> tree_util  # noqa: PLC0415
 
     def _show(x):
         if isinstance(x, NamedArray):

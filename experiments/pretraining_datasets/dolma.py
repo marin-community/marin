@@ -59,7 +59,7 @@ DOLMA_LLAMA3_OVERRIDES = {
 
 def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolma 1.7 dataset splits."""
-    from experiments.llama import llama3_tokenizer
+    from experiments.llama import llama3_tokenizer  # noqa: PLC0415
 
     if tokenizer is None:
         tokenizer = llama3_tokenizer
