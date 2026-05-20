@@ -450,7 +450,7 @@ class Dataset(Generic[T]):
 
         Args:
             ctx: A DataFusion context that's configured and has pre-registered SQL tables.
-            query: A well-formed Apache Calcite-dialect SQL query.
+            query: A well-formed [DataFusion-dialect](https://datafusion.apache.org/user-guide/sql/index.html) SQL query.
 
         Returns
             A Dataset of records.
