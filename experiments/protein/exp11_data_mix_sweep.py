@@ -5,31 +5,26 @@
 
 Tracks ``Open-Athena/MarinFold#11``. Compares mixtures derived from the
 quality-bucketed re-publication ``eczech/marinfold-exp11-protein-docs``
-(H=round0, M=round1, L=round2..4), with the same loss-mask recipe as
+(H=round0, M=round1, L=round2..4), loss-masked to match
 ``protein_train_common.distance_masked_components()``.
 
 Hyperparameters trace back to ``train_protein_1_5b_distance_masked.py``
-(the source of truth): batch=128, seq=8192, lr=3.5e-4, weight_decay=0.01,
-warmup=0.1, ``optimizer`` defaults. For other (model, batch) pairs the LR
-is recomputed via ``scaled_lr(b, h) = LR_CONSTANT * sqrt(b) / h`` where
-``LR_CONSTANT`` is derived from the source recipe.
+(source of truth): batch=128, seq=8192, lr=3.5e-4, weight_decay=0.01,
+warmup=0.1. Other (batch, hidden) pairs rescale via
+``scaled_lr(b, h) = LR_CONSTANT * sqrt(b) / h``.
 
 Subcommands (``COMMAND`` env var):
 
-* ``tokenize`` — one Fray job per (quality, split) cell that materializes
-  the tokenized cache at a deterministic path.
-* ``run_smoke`` — single trial: mixture m9 (staged), 100M model, ~200M
-  tokens. m9 is chosen so the smoke exercises the staged-mixture path
-  (transition-step alignment + MixtureDataset weight_stages).
-* ``run_mix_sweep`` — all 9 mixtures at 100M scale, ~4.3B tokens each.
-* ``run_scale_sweep`` — m1, m4, m6 at 1.5B scale on v5p-32 (one job per
-  mixture), ~43B tokens each.
+* ``tokenize`` — one Fray job per (quality, split) cell.
+* ``run_smoke`` — single trial: m9 (staged), 100M, ~200M tokens; m9
+  exercises the staged-mixture path.
+* ``run_mix_sweep`` — all 9 mix mixtures (m1..m9) at 100M, ~4.3B tokens each.
+* ``run_scale_sweep`` — 4 scale mixtures (m10..m13) at 1.5B on v5p-8,
+  batch=128, ~43.3B tokens each (one job per mixture).
 
 Env vars: ``COMMAND`` (required), ``RUNS`` (CSV substring filter on target
 ids), ``PREVIEW=yes`` (list targets, submit nothing), ``NUM_WORKERS``
-(default depends on stage), ``TPU`` (override the worker TPU type — only
-``run_smoke`` / ``run_mix_sweep`` honor this; the scale sweep is pinned to
-v5p-32 because LR is calibrated to batch=512).
+(default per stage), ``TPU`` (override worker TPU; default v5p-8).
 
 Smoke usage::
 
@@ -78,25 +73,20 @@ logger = logging.getLogger(__name__)
 
 # --- Data source -------------------------------------------------------------
 
-# Quality-bucketed re-publication of contacts-and-distances-v1-5x, pinned by
-# sha so a future re-shard of the HF repo doesn't silently change tokenize
-# inputs. Cache path versioning (``DATA_VERSION``) is independent.
+# SHA-pinned so an HF re-shard can't silently change tokenize inputs;
+# ``DATA_VERSION`` forks the cache independently.
 HF_DATASET_ID = "eczech/marinfold-exp11-protein-docs"
 HF_REVISION = "41b2ec71070cb9e8799311cd8f78877e747f6754"
 HF_REVISION_SHORT = HF_REVISION[:7]
 
-# Mapping: quality bucket -> HF config name (subdir on HF).
+# Quality bucket -> HF config name; HF layout is ``<config>/{train,val,test}/*.parquet``.
 QUALITY_CONFIGS: dict[str, str] = {"H": "high", "M": "medium", "L": "low"}
-# Splits on the HF side: train/val/test. HF lays them out as
-# ``<config>/train|val|test/*.parquet``.
 HF_SPLITS: tuple[str, ...] = ("train", "val", "test")
 
 # --- Cache layout ------------------------------------------------------------
 
-# Bump to fork the tokenize cache root when tokenize semantics change. Pinned
-# in path so the sweep can reference the cache directly without an Executor
-# step. ``HF_REVISION_SHORT`` is also baked in so a data revision bump
-# automatically forks the cache.
+# Bump to fork the cache when tokenize semantics change; ``HF_REVISION_SHORT``
+# is baked in so an HF rev bump also forks.
 DATA_VERSION = "v1"
 CACHE_SUBPATH = f"tokenized/exp11-data-mix-{HF_REVISION_SHORT}-{DATA_VERSION}"
 
@@ -136,26 +126,19 @@ def cell_input_glob(cell: Cell) -> str:
 def cell_cache_path(cell: Cell) -> str:
     """Levanter cache root for one tokenized cell.
 
-    Tokenize writes train cells under ``<cache>/train/`` and val/test cells
-    under ``<cache>/validation/``. Component lookup in the sweep uses this
-    same root.
+    Train cells write under ``<cache>/train/``, val/test under ``<cache>/validation/``.
     """
     return f"{marin_prefix()}/{CACHE_SUBPATH}/{cell.suffix}/"
 
 
 # --- Tokenize ---------------------------------------------------------------
 
-# Coordinator-side resources are slack — zephyr children do the heavy work.
-# Matches eac-plm/tokenize_quality_splits.TOKENIZE_RESOURCES.
+# Coordinator-side is slack; zephyr children do the heavy work.
 TOKENIZE_RESOURCES = ResourceConfig(cpu=2, ram="16G", disk="50G")
 
 
 def _tokenize_one_cell(cell: Cell) -> None:
-    """Fray entrypoint: tokenize one HF cell into its cache path.
-
-    Re-running is a fast no-op on cache hit (marin.tokenize writes a shard
-    ledger and short-circuits when present).
-    """
+    """Tokenize one HF cell into its cache path. Idempotent on cache hit."""
     glob = [cell_input_glob(cell)]
     config = TokenizeConfig(
         train_paths=glob if cell.is_train else [],
@@ -163,8 +146,8 @@ def _tokenize_one_cell(cell: Cell) -> None:
         cache_path=cell_cache_path(cell),
         tokenizer=PROTEIN_TOKENIZER,
         format=TextLmDatasetFormat(text_key="document"),
-        # We name HF splits explicitly (train/val/test); the cell's role
-        # (train vs validation cache) is encoded above.
+        # HF "test" splits feed the validation cache for eval, not train —
+        # bypass the safety assert.
         allow_test_in_train=True,
     )
     tokenize(config)
@@ -201,11 +184,9 @@ def _tokenize_main(cells: list[Cell]) -> None:
 
 # --- Models -----------------------------------------------------------------
 
-# Re-use the existing shapes from this repo so any future arch change to those
-# scripts propagates to this sweep without manual sync.
 SEQ_LEN = 8192
 
-# Hidden widths for the LR-scaling formula.
+# Pulled from the existing model configs so arch changes propagate here.
 HIDDEN_100M: int = protein_llama_100m.hidden_dim  # 768
 HIDDEN_1_5B: int = protein_llama_1_5b.hidden_dim  # 2048
 
@@ -216,8 +197,8 @@ LR_REF: float = 3.5e-4
 LR_REF_BATCH: int = 128
 LR_REF_HIDDEN: int = HIDDEN_1_5B  # 2048
 
-# Solve ``lr = lr_constant * sqrt(batch) / hidden`` for ``lr_constant`` using
-# the 1.5B source recipe; reuse to scale LR at other (batch, hidden) pairs.
+# Solve ``lr = lr_constant * sqrt(batch) / hidden`` from the 1.5B recipe;
+# reuse to scale LR at other (batch, hidden) pairs.
 LR_CONSTANT: float = LR_REF * LR_REF_HIDDEN / math.sqrt(LR_REF_BATCH)
 
 
@@ -226,75 +207,61 @@ def scaled_lr(batch_size: int, hidden_size: int) -> float:
     return LR_CONSTANT * math.sqrt(batch_size) / hidden_size
 
 
-# Per source recipe; unchanged across stages.
 WEIGHT_DECAY: float = 0.01
 WARMUP: float = 0.1
 
-# LR schedule (uniform across stages). Linear decay to ``DECAY * peak`` over
-# the post-warmup window. Deliberately overrides Levanter's cosine default so
-# the smoke/mix/scale runs are directly comparable.
+# Linear decay to ``DECAY * peak`` post-warmup. Overrides Levanter's cosine
+# default so smoke/mix/scale runs are directly comparable.
 LR_SCHEDULE: str = "linear"
 DECAY: float = 0.2
 
-# Rolling temp-checkpoint cadence. Overrides defaults.py's 10-minute default
-# (Levanter's underlying default is 15) so preemption/host-loss survives with
-# at most ~8 min of lost progress on these short runs.
+# Rolling temp-checkpoint cadence. Overrides defaults.py's 10-min default so
+# preemption/host-loss costs ≤8 min of progress.
 TEMP_CHECKPOINT_INTERVAL = timedelta(minutes=8)
 
-# Vocab size for the legacy ``timodonnell/protein-docs-tokenizer@83f597d88e9b``
-# revision (pinned in PROTEIN_TOKENIZER). Hardcoded so it lands in run-config
-# hashes / wandb tags; bump if the tokenizer pin changes. Matches the value
-# used in eac-plm's quality-splits sweep, but for the legacy 2840-vocab.
+# Evenly-spaced permanent checkpoints per run.
+# steps_per_export = num_train_steps // NUM_PERMANENT_CHECKPOINTS.
+NUM_PERMANENT_CHECKPOINTS: int = 5
+
+# Vocab for the legacy 2840-vocab tokenizer pinned in PROTEIN_TOKENIZER.
+# Hardcoded so it lands in run-config hashes / wandb tags; bump on pin change.
 PROTEIN_VOCAB_SIZE: int = 2840
 
-# Sequences carved off each train cell as an IID held-out eval. Matches the
-# eac-plm sweep default; ~4096 sequences ≈ 33.5M tokens / cell / eval pass.
+# IID held-out sequences carved per train cell; ~4096 ≈ 33.5M tokens / cell.
 IID_EVAL_SEQS_PER_TRAIN: int = 4096
 
-# Per-component cap. At batch=128, seq=8192 this is ~33.6M tokens / cell / eval.
+# At batch=128, seq=8192 this caps eval at ~33.6M tokens / component.
 MAX_EVAL_BATCHES: int = 32
 
-# Pinned across stages so cross-run comparisons share the same data permutation.
+# Pinned so cross-run comparisons share the same data permutation.
 DATA_SEED: int = 1729
 
-# Per-component shuffle: full Feistel permutation across the whole cell.
-# Pick: full-Feistel over Levanter's hierarchical-block default because (a) we
-# want clean cross-mixture comparisons without window-boundary correlations
-# inside a single cell, and (b) per-cell sizes (≤5.28M packed sequences) are
-# well within Feistel PRP's cheap-evaluation regime. Matches the eac-plm
-# quality-splits sweep precedent.
+# Full Feistel (not Levanter's hierarchical-block default): clean
+# cross-mixture comparisons, and per-cell sizes (≤5.28M packed seqs) stay in
+# Feistel PRP's cheap regime.
 SHUFFLE: bool = True
 PERMUTATION_TYPE: str = "feistel"
 
-# MixtureDataset's per-block proportional guarantee. Pinned (Levanter default)
-# so stage-boundary alignment math below stays predictable. block_size must be
-# a multiple of train_batch_size for staged mixtures to land on a valid
-# boundary; helper ``_resolve_mixture_weights`` enforces this.
+# MixtureDataset's per-block proportional guarantee. ``block_size`` must be a
+# multiple of train_batch_size for staged mixtures to land on a valid boundary;
+# ``_resolve_mixture_weights`` enforces this.
 MIXTURE_BLOCK_SIZE: int = 2048
 
 # --- Resources --------------------------------------------------------------
 
-# us-east5-a keeps TPUs co-located with the ``marin-us-east5`` checkpoint
-# bucket (matches ``PROTEIN_RESOURCES_USE5``). Override the 100M TPU with
-# the ``TPU`` env var.
+# us-east5-a co-locates TPUs with the ``marin-us-east5`` checkpoint bucket.
 PROTEIN_ZONE = "us-east5-a"
 
-# Default for the smoke + mix stages; scale stage is pinned (see below).
-_DEFAULT_100M_TPU = "v5p-8"
+# All stages run batch=128 with ``scaled_lr`` so v5p-8 fits.
+_DEFAULT_TPU = "v5p-8"
 
 
-def _tpu_100m() -> str:
-    return os.environ.get("TPU") or _DEFAULT_100M_TPU
+def _tpu() -> str:
+    return os.environ.get("TPU") or _DEFAULT_TPU
 
 
-def _resources_100m() -> ResourceConfig:
-    return ResourceConfig.with_tpu(_tpu_100m(), zone=PROTEIN_ZONE)
-
-
-def _resources_1_5b() -> ResourceConfig:
-    # Pinned — LR for the scale sweep is calibrated to batch=512, which in
-    # turn assumes v5p-32 utilization. Don't honor TPU env var here.
-    return ResourceConfig.with_tpu("v5p-32", zone=PROTEIN_ZONE)
+def _resources() -> ResourceConfig:
+    return ResourceConfig.with_tpu(_tpu(), zone=PROTEIN_ZONE)
 
 
 # --- Mixtures ---------------------------------------------------------------
@@ -304,12 +271,9 @@ def _resources_1_5b() -> ResourceConfig:
 class Mixture:
     """One named train-data mixture over (H, M, L) train cells.
 
-    Either ``static`` (one flat dict) or ``staged`` (a list of
-    ``(stage_frac, weights)`` entries). Stage fractions are resolved to
-    actual training-step indices by :func:`_resolve_mixture_weights`, which
-    also snaps each boundary to a multiple of
-    ``MIXTURE_BLOCK_SIZE // batch_size`` so it lands on a valid
-    ``MixtureDataset`` block boundary.
+    Either ``static`` (flat dict) or ``staged`` (list of ``(stage_frac, weights)``
+    entries). Fractions are resolved by :func:`_resolve_mixture_weights`, which
+    snaps each boundary to a ``MixtureDataset`` block edge.
     """
 
     id: str
@@ -322,11 +286,10 @@ def _resolve_mixture_weights(
 ) -> dict[str, float] | list[tuple[int, dict[str, float]]]:
     """Resolve a mixture to MixtureDataset's expected weights form.
 
-    For staged mixtures, snaps each stage's ``(frac * num_train_steps)`` step
-    DOWN to a multiple of ``alignment = MIXTURE_BLOCK_SIZE // batch_size`` so
-    ``step * batch_size`` (the seq-index passed to MixtureDataset) lands on
-    a block boundary. First stage is pinned to step 0. Monotonicity is
-    re-asserted after snapping in case two stages snap together.
+    Staged: snaps ``frac * num_train_steps`` DOWN to a multiple of
+    ``MIXTURE_BLOCK_SIZE // batch_size`` so ``step * batch_size`` lands on a
+    block boundary. First stage pinned to 0; monotonicity re-asserted after
+    snapping in case two stages collapse.
     """
     if mixture.static is not None:
         return dict(mixture.static)
@@ -357,11 +320,12 @@ def _resolve_mixture_weights(
     return stages
 
 
+# Mixtures for ``run_mix_sweep``: every variant at 100M, ~4.3B tokens.
 # m6 ratios are proportional to per-cell sizes:
 #   H ≈ 1.68M / 5.39M = 0.3117 → 0.31
 #   M ≈ 1.42M / 5.39M = 0.2634 → 0.26
 #   L ≈ 2.29M / 5.39M = 0.4249 → 0.43
-ALL_MIXTURES: tuple[Mixture, ...] = (
+MIX_MIXTURES: tuple[Mixture, ...] = (
     Mixture(id="m1", static={"H": 1.0}),
     Mixture(id="m2", static={"M": 1.0}),
     Mixture(id="m3", static={"L": 1.0}),
@@ -379,14 +343,41 @@ ALL_MIXTURES: tuple[Mixture, ...] = (
         ),
     ),
 )
-MIXTURE_BY_ID: dict[str, Mixture] = {m.id: m for m in ALL_MIXTURES}
+
+# Mixtures for ``run_scale_sweep``: a focused subset re-run at 1.5B scale.
+# m10 == m1 (H-only), m11 == m6 (size-proportional blend), m12 == m7
+# (L→H staged). m13 is the staged analogue of m11: a three-stage L→M→H
+# curriculum whose per-stage fractions match m6/m11 (L=0.43, M=0.26,
+# H=0.31), so transitions land at 0.43 and 0.43+0.26=0.69.
+SCALE_MIXTURES: tuple[Mixture, ...] = (
+    Mixture(id="m10", static={"H": 1.0}),
+    Mixture(id="m11", static={"H": 0.31, "M": 0.26, "L": 0.43}),
+    Mixture(id="m12", staged=((0.0, {"L": 1.0}), (0.5, {"H": 1.0}))),
+    Mixture(
+        id="m13",
+        staged=(
+            (0.0, {"L": 1.0}),
+            (0.43, {"M": 1.0}),
+            (0.69, {"H": 1.0}),
+        ),
+    ),
+)
+MIXTURE_BY_ID: dict[str, Mixture] = {m.id: m for m in (*MIX_MIXTURES, *SCALE_MIXTURES)}
 
 # --- Components --------------------------------------------------------------
 
-# Subset of training cells (the three train splits). Always present in every
-# mixture's components dict; weight=0 for any cell a mixture doesn't draw on.
+# Always present in every mixture's components dict; weight=0 for qualities a
+# mixture omits.
 TRAIN_CELLS: tuple[Cell, ...] = tuple(Cell(q, "train") for q in QUALITY_CONFIGS)
+
+# Default heldout eval cells: all 6 (H/M/L) x (val/test). Scale narrows this
+# via ``StageSpec.heldout_cells``.
 HELDOUT_CELLS: tuple[Cell, ...] = tuple(Cell(q, s) for q in QUALITY_CONFIGS for s in HF_SPLITS if s != "train")
+
+# Reuse the existing cd-val cache (~440M tokens). Masked matches training
+# loss; unmasked is the explicit additional metric per the issue.
+CD_VAL_COMPONENT_MASKED = "protein-docs-cd-val"
+CD_VAL_COMPONENT_UNMASKED = "protein-docs-cd-val-unmasked"
 
 
 def _quality_to_train_component_name(quality: str) -> str:
@@ -394,21 +385,25 @@ def _quality_to_train_component_name(quality: str) -> str:
 
 
 def _train_weights_for(
-    mixture: Mixture, num_train_steps: int, *, batch_size: int
+    mixture: Mixture,
+    num_train_steps: int,
+    *,
+    batch_size: int,
+    heldout_cells: tuple[Cell, ...],
+    include_cd_val_unmasked: bool,
 ) -> dict[str, float] | list[tuple[int, dict[str, float]]]:
     """Resolve mixture per-quality weights to per-component weights.
 
-    Always includes all three train components (zero-weight for any quality a
-    mixture doesn't draw on) AND every heldout-eval component at weight 0.
-    Levanter's ``MixtureDataset`` drops zero-weight datasets from the sampling
-    pool but still loads them for eval.
+    Always lists all 3 train components (zero for unused qualities) AND every
+    heldout-eval component at weight 0. ``MixtureDataset`` drops zero-weight
+    datasets from sampling but still loads them for eval.
     """
-    eval_zeros = {cell.component_name: 0.0 for cell in HELDOUT_CELLS}
+    eval_zeros = {cell.component_name: 0.0 for cell in heldout_cells}
     eval_zeros[CD_VAL_COMPONENT_MASKED] = 0.0
-    eval_zeros[CD_VAL_COMPONENT_UNMASKED] = 0.0
+    if include_cd_val_unmasked:
+        eval_zeros[CD_VAL_COMPONENT_UNMASKED] = 0.0
 
     def _expand(qw: dict[str, float]) -> dict[str, float]:
-        # Every train component listed, zero if absent from the mixture.
         train_part = {_quality_to_train_component_name(q): float(qw.get(q, 0.0)) for q in QUALITY_CONFIGS}
         return {**train_part, **eval_zeros}
 
@@ -418,31 +413,16 @@ def _train_weights_for(
     return [(step, _expand(w)) for step, w in weights]
 
 
-# --- cd-val (existing legacy cache, both masked and unmasked) ----------------
-
-# Reference the existing protein-docs-cd-val tokenized cache from
-# protein_train_common so we don't re-tokenize ~440M tokens. The issue
-# requires evaluation on the combined cd validation split both masked
-# (consistent with training loss) and unmasked (the explicit exception in
-# the issue): "Eval on unmasked contacts-and-distances-v1-5x/validation too".
-CD_VAL_COMPONENT_MASKED = "protein-docs-cd-val"
-CD_VAL_COMPONENT_UNMASKED = "protein-docs-cd-val-unmasked"
-
-
 def _cd_val_cache_path() -> str:
-    """Resolve the existing cd-val cache via the protein_train_common step."""
-    # ``override_output_path`` is set on this step, so the field is the
-    # final on-disk path.
+    """On-disk cd-val cache path (``override_output_path`` on the source step)."""
     return protein_docs_val_tokenized.override_output_path
 
 
 def _empty_source_component(cache_dir: str, *, masked: bool) -> DatasetComponent:
-    """Cache-only component: ``UrlDatasetSourceConfig`` with empty url lists.
+    """Cache-only component: empty url lists short-circuit Levanter's cache-build.
 
-    The empty-url source short-circuits Levanter's cache-build path: it just
-    loads ``<cache_dir>/{train,validation}/`` if present, otherwise the split
-    is skipped (matches the eac-plm pattern). Loss masking is applied iff
-    ``masked``.
+    Loads ``<cache_dir>/{train,validation}/`` if present; loss masking applied
+    iff ``masked``.
     """
     fmt = TextLmDatasetFormat(text_key="document")
     source = UrlDatasetSourceConfig(
@@ -462,50 +442,62 @@ def _empty_source_component(cache_dir: str, *, masked: bool) -> DatasetComponent
     )
 
 
-def _components() -> dict[str, DatasetComponent]:
-    """All train + eval components, identical across mixtures.
+def _components(heldout_cells: tuple[Cell, ...], *, include_cd_val_unmasked: bool) -> dict[str, DatasetComponent]:
+    """All train + eval components for one stage.
 
-    Train cells: 3 (loss-masked). Per-quality heldout: 6 (loss-masked).
-    Combined cd-val: 2 (one masked, one unmasked).
+    3 train cells (loss-masked) feed sampling + IID-carve eval. Heldout
+    evals: ``heldout_cells`` + cd-val masked, plus cd-val unmasked when
+    requested.
     """
     components: dict[str, DatasetComponent] = {}
     for cell in TRAIN_CELLS:
         components[cell.component_name] = _empty_source_component(cell_cache_path(cell), masked=True)
-    for cell in HELDOUT_CELLS:
+    for cell in heldout_cells:
         components[cell.component_name] = _empty_source_component(cell_cache_path(cell), masked=True)
     cd_val_cache = _cd_val_cache_path()
     components[CD_VAL_COMPONENT_MASKED] = _empty_source_component(cd_val_cache, masked=True)
-    components[CD_VAL_COMPONENT_UNMASKED] = _empty_source_component(cd_val_cache, masked=False)
+    if include_cd_val_unmasked:
+        components[CD_VAL_COMPONENT_UNMASKED] = _empty_source_component(cd_val_cache, masked=False)
     return components
 
 
 def _has_nonzero_weight(train_weights: dict[str, float] | list[tuple[int, dict[str, float]]], name: str) -> bool:
     """Mirror of Levanter's ``LmDataConfig._has_nonzero_weight``.
 
-    Levanter's ``build_caches("train")`` skips components that have zero
-    weight in every stage; if ``num_validation_sequences`` lists one of
-    those names, the IID-carve step KeyErrors. Keep this in lockstep with
-    the upstream check at ``lib/levanter/src/levanter/data/text/datasets.py``.
+    ``build_caches("train")`` skips components that are zero in every stage;
+    if ``num_validation_sequences`` names one of those, the IID-carve step
+    KeyErrors. Keep this in lockstep with the upstream check.
     """
     if isinstance(train_weights, dict):
         return train_weights.get(name, 0) > 0
     return any(w.get(name, 0) > 0 for _, w in train_weights)
 
 
-def build_mixture(mixture: Mixture, num_train_steps: int, *, batch_size: int) -> LmDataConfig:
+def build_mixture(
+    mixture: Mixture,
+    num_train_steps: int,
+    *,
+    batch_size: int,
+    heldout_cells: tuple[Cell, ...] = HELDOUT_CELLS,
+    include_cd_val_unmasked: bool = True,
+) -> LmDataConfig:
     """Build the LmDataConfig for one mixture at a given (step, batch) shape.
 
-    ``num_train_steps`` + ``batch_size`` resolve staged mixtures' transition
-    points into Levanter's ``(step, weights)`` schedule and align each step
-    to a MixtureDataset block boundary.
+    ``num_train_steps`` + ``batch_size`` resolve staged-mixture transitions
+    into Levanter's ``(step, weights)`` schedule and align them to block edges.
+    Defaults match the smoke/mix recipe; scale narrows the heldout set.
     """
-    components = _components()
-    train_weights = _train_weights_for(mixture, num_train_steps, batch_size=batch_size)
-    # IID-carve only from train cells with nonzero weight in this mixture.
-    # Levanter's build_caches("train") skips components that are zero in every
-    # stage, so listing a skipped cell here KeyErrors in the IID-carve step of
-    # _validation_datasets_unwrapped. Matters for single-cell mixtures (m1/m2/m3)
-    # and staged mixtures that omit a quality (m7/m8 never use M).
+    components = _components(heldout_cells, include_cd_val_unmasked=include_cd_val_unmasked)
+    train_weights = _train_weights_for(
+        mixture,
+        num_train_steps,
+        batch_size=batch_size,
+        heldout_cells=heldout_cells,
+        include_cd_val_unmasked=include_cd_val_unmasked,
+    )
+    # IID-carve only from active train cells: listing a zero-weight cell here
+    # KeyErrors against Levanter's build_caches skip (m1/m2/m3 single-cell,
+    # m7/m8 omit M, etc.).
     num_validation_sequences = {
         cell.component_name: IID_EVAL_SEQS_PER_TRAIN
         for cell in TRAIN_CELLS
@@ -607,13 +599,10 @@ def _print_tokenize_preview(suffixes: list[str]) -> None:
 
 
 # ============================================================================
-# Sweep stage specs
+# Sweep stage specs. Add/edit stages in :func:`_make_stage_specs`; the
+# dispatch table and launcher pick them up automatically. Bump ``version``
+# to fork run names + sweep-root lock dir.
 # ============================================================================
-# Each stage = one StageSpec consumed by ``_trial_name`` / ``_build_trial`` /
-# ``_stage_targets``. Add or change a stage by editing :func:`_make_stage_specs`
-# below; the dispatch table (`STAGE_SPECS`) and the worker / launcher pick it
-# up automatically. Bump ``version`` to fork run names (and the sweep-root
-# lock dir) when a stage's recipe changes but its identity doesn't.
 SWEEP_ROOT_PREFIX = "gs://marin-us-east5/sweeps/prot-exp11-data-mix"
 RUN_NAME_PREFIX = "prot-exp11-dm"
 
@@ -634,6 +623,10 @@ class StageSpec:
     learning_rate: float
     version: str  # bump to fork run names + sweep-root when recipe changes
     num_workers: int  # default Fray-worker count for this stage's launcher
+    # Defaults match the smoke/mix recipe; override per-stage to narrow.
+    heldout_cells: tuple[Cell, ...] = HELDOUT_CELLS
+    include_cd_val_unmasked: bool = True
+    steps_per_export: int | None = None  # None = keep no permanent intermediates
 
 
 def _trial_name(spec: StageSpec, mixture_id: str) -> str:
@@ -650,7 +643,13 @@ def _stage_targets(spec: StageSpec) -> list[SweepTarget]:
 
 def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
     """Build one trial's ``(job_name, raw_config)`` for ``prepare_lm_train``."""
-    data = build_mixture(MIXTURE_BY_ID[mixture_id], spec.num_train_steps, batch_size=spec.batch_size)
+    data = build_mixture(
+        MIXTURE_BY_ID[mixture_id],
+        spec.num_train_steps,
+        batch_size=spec.batch_size,
+        heldout_cells=spec.heldout_cells,
+        include_cd_val_unmasked=spec.include_cd_val_unmasked,
+    )
     train_config = SimpleTrainConfig(
         resources=spec.resources_fn(),
         train_batch_size=spec.batch_size,
@@ -662,6 +661,7 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         lr_schedule=LR_SCHEDULE,
         train_seq_len=SEQ_LEN,
         steps_per_eval=spec.steps_per_eval,
+        steps_per_export=spec.steps_per_export,
         max_eval_batches=MAX_EVAL_BATCHES,
         data_seed=DATA_SEED,
         env_vars={"WANDB_ENTITY": "timodonnell"},
@@ -691,7 +691,7 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         use_default_validation=False,
         wandb_group="exp11-data-mix",
     )
-    # Override the defaults.py 10-min temp-checkpoint cadence (see TEMP_CHECKPOINT_INTERVAL).
+    # Override defaults.py's 10-min cadence; see TEMP_CHECKPOINT_INTERVAL.
     raw_config = dataclasses.replace(
         raw_config,
         trainer=dataclasses.replace(
@@ -706,20 +706,18 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
 
 
 def _make_stage_specs() -> dict[str, StageSpec]:
-    # Issue EDA: cd train = 43,301,511,168 packed tokens (taken at face value;
-    # see the user-confirmed "skip the 43B verification" instruction).
+    # cd train = 43.301B packed tokens (user-confirmed face value, no recount).
     smoke_steps, smoke_spe = _schedule(200_000_000, num_evals=2, batch_size=128)
     mix_steps, mix_spe = _schedule(4_300_000_000, num_evals=8, batch_size=128)
-    scale_steps, scale_spe = _schedule(43_301_511_168, num_evals=8, batch_size=512)
+    scale_steps, scale_spe = _schedule(43_301_511_168, num_evals=32, batch_size=128)
     return {
-        # m9 chosen over a static mixture so smoke also exercises
-        # MixtureDataset's weight_stages path (alignment + rescaling).
+        # m9 exercises MixtureDataset's weight_stages path (alignment + rescaling).
         "run_smoke": StageSpec(
             name="run_smoke",
             label="smoke",
             model_tag="100m",
             model_config=protein_llama_100m,
-            resources_fn=_resources_100m,
+            resources_fn=_resources,
             mixture_ids=("m9",),
             batch_size=128,
             num_train_steps=smoke_steps,
@@ -733,8 +731,8 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             label="mix",
             model_tag="100m",
             model_config=protein_llama_100m,
-            resources_fn=_resources_100m,
-            mixture_ids=tuple(m.id for m in ALL_MIXTURES),
+            resources_fn=_resources,
+            mixture_ids=tuple(m.id for m in MIX_MIXTURES),
             batch_size=128,
             num_train_steps=mix_steps,
             steps_per_eval=mix_spe,
@@ -748,15 +746,18 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             label="scale",
             model_tag="1_5b",
             model_config=protein_llama_1_5b,
-            resources_fn=_resources_1_5b,
-            mixture_ids=("m1", "m4", "m6"),
-            batch_size=512,
+            resources_fn=_resources,
+            mixture_ids=tuple(m.id for m in SCALE_MIXTURES),
+            batch_size=128,
             num_train_steps=scale_steps,
             steps_per_eval=scale_spe,
-            learning_rate=scaled_lr(512, HIDDEN_1_5B),
-            version="v1",
-            # 3 trials, one v5p-32 per worker → 1 trial each.
-            num_workers=3,
+            learning_rate=scaled_lr(128, HIDDEN_1_5B),
+            version="v2",
+            # 4 trials, one v5p-8 per worker → 1 trial each.
+            num_workers=4,
+            heldout_cells=(Cell("H", "val"), Cell("H", "test")),
+            include_cd_val_unmasked=False,
+            steps_per_export=scale_steps // NUM_PERMANENT_CHECKPOINTS,
         ),
     }
 
@@ -783,11 +784,10 @@ def _sweep_root_for(spec: StageSpec) -> str:
 
 
 def _worker_entrypoint(stage: str, rank: int, num_workers: int, runs: tuple[str, ...]) -> None:
-    """One worker: re-resolve targets, take its rank-stride slice, run claim_and_run.
+    """One worker: take a rank-stride slice of targets and run claim_and_run.
 
-    Re-resolving on the worker (instead of shipping the full list as args)
-    keeps the JobRequest payload tiny and round-robins disjoint subsets so
-    workers don't fight for the same lock.
+    Re-resolving targets here (vs shipping them as args) keeps JobRequest
+    tiny; rank-stride slicing yields disjoint subsets so workers don't fight.
     """
     spec = STAGE_SPECS[stage]
     targets = _resolve_targets(spec, runs)
