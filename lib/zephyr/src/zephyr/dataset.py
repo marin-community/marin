@@ -47,10 +47,12 @@ class DataFusionSource:
     query: str
 
     def __iter__(self) -> Iterator[pa.Table]:
-        for stream in self.ctx.sql(self.query).execute_stream_partitioned():
-            # PyArrow tables are pickable via Arrow IPC.
+        result = self.ctx.sql(self.query)
+        for stream in result.execute_stream_partitioned():
+            # PyArrow tables are pickleable via Arrow IPC.
             # We only ever load one batch at a time.
-            yield pa.Table.from_batches(batch.to_pyarrow() for batch in stream)
+            # Adding the schema avoids a `ValueError` when the partition is empty.
+            yield pa.Table.from_batches((batch.to_pyarrow() for batch in stream), result.schema)
 
 
 def _table_to_records(table: pa.Table) -> Iterator[dict]:

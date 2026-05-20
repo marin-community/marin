@@ -100,6 +100,12 @@ def test_from_query__reexecutable(zephyr_ctx, sample_datafusion_ctx):
     assert first == second == {1, 2, 3, 6}
 
 
+def test_from_query__empty_result(zephyr_ctx, sample_datafusion_ctx):
+    """A query whose filter excludes every row must yield no records, not crash."""
+    ds = Dataset.from_query(sample_datafusion_ctx, "SELECT id from mytable WHERE version = 999")
+    assert zephyr_ctx.execute(ds).results == []
+
+
 def test_filter(sample_data, zephyr_ctx):
     """Test filtering dataset."""
     ds = Dataset.from_list(sample_data).filter(lambda x: x % 2 == 0)
