@@ -116,7 +116,7 @@ def _build_steps() -> list[StepSpec]:
             lambda output_path, np=normalize_step.output_path: embed_source(
                 output_path=output_path,
                 normalized=Artifact.from_path(np, NormalizedData),
-                window_size=EMBED_WINDOW,
+                batch_size=EMBED_WINDOW,
                 max_shards=MAX_SHARDS,
                 worker_resources=EMBED_WORKER_RESOURCES,
                 max_workers=EMBED_MAX_WORKERS,

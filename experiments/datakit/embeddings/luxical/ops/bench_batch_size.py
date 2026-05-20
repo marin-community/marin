@@ -97,7 +97,7 @@ def main() -> None:
         chars_per_sec = total_chars / encode_s
         results.append(
             {
-                "window_size": w,
+                "batch_size": w,
                 "n_docs": len(texts),
                 "encode_s": encode_s,
                 "docs_per_sec": docs_per_sec,

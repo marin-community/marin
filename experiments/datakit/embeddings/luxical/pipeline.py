@@ -46,14 +46,15 @@ LUXICAL_REPO = "DatologyAI/luxical-one"
 LUXICAL_WEIGHTS_FILE = "luxical_one_rc4.npz"
 LUXICAL_DIM = 192
 
-# Window size for per-encode batches. The native ``luxical.embedder.Embedder``
-# takes the whole list at once (no explicit batch_size arg), so this primarily
-# bounds in-flight memory. Benched on Iris cpu=8 (see bench_batch_size.py):
-# native throughput climbs from 218 docs/s at window=64 to 1516 docs/s at
-# window=4096 and plateaus there (window=10000 was identical). Memory at
-# window=4096: ~48 MB of in-flight text + BoW state — trivial in a ram=16g
-# worker. Bumping further wastes RAM with no throughput gain.
-DEFAULT_WINDOW = 4096
+# Records per ``embedder(texts)`` call. The native
+# ``luxical.embedder.Embedder`` takes the whole list at once (no explicit
+# batch_size arg), so this primarily bounds in-flight memory. Benched on
+# Iris cpu=8 (see bench_batch_size.py): native throughput climbs from 218
+# docs/s at batch=64 to 1516 docs/s at batch=4096 and plateaus there
+# (batch=10000 was identical). Memory at batch=4096: ~48 MB of in-flight
+# text + BoW state — trivial in a ram=16g worker. Bumping further wastes
+# RAM with no throughput gain.
+DEFAULT_BATCH_SIZE = 4096
 
 # Quantization envelope. Sweep against real Luxical-One output (10K docs of
 # nemotron_cc_v2/high_quality) showed +/-0.6 keeps mean cos sim 0.9998 with
@@ -86,7 +87,7 @@ class EmbeddingAttrData(BaseModel):
         embedding_dim: Vector dimension (192 for Luxical-One).
         quantization_scale: ``fp32 = int8.astype(float32) * scale``.
         quantization_range: Original envelope before quantization.
-        window_size: Encode batch size used (informational; recoverable
+        batch_size: Encode batch size used (informational; recoverable
             from logs, but recorded for reproducibility).
         counters: Aggregated zephyr counters from the embed pipeline.
     """
@@ -98,7 +99,7 @@ class EmbeddingAttrData(BaseModel):
     embedding_dim: int
     quantization_scale: float
     quantization_range: float
-    window_size: int
+    batch_size: int
     counters: dict[str, int] = {}
 
     def shard_paths(self) -> list[str]:
@@ -181,7 +182,7 @@ def embed_source(
     *,
     repo_id: str = LUXICAL_REPO,
     weights_filename: str = LUXICAL_WEIGHTS_FILE,
-    window_size: int = DEFAULT_WINDOW,
+    batch_size: int = DEFAULT_BATCH_SIZE,
     max_shards: int | None = None,
     worker_resources: ResourceConfig | None = None,
     max_workers: int = 128,
@@ -189,7 +190,7 @@ def embed_source(
     """Map-only Zephyr embed of every shard under ``NormalizedData.main_output_dir``.
 
     Each Zephyr task reads one source parquet shard, encodes records in
-    ``window_size``-sized batches via the native :mod:`luxical.embedder`
+    ``batch_size``-sized batches via the native :mod:`luxical.embedder`
     Embedder, L2-normalizes, quantizes to int8, and writes one output
     parquet shard with the same basename.
     """
@@ -205,12 +206,12 @@ def embed_source(
         return f"{output_path.rstrip('/')}/{bn[shard_idx]}"
 
     logger.info(
-        "Embedding %d shards from %s with %s/%s (window=%d)",
+        "Embedding %d shards from %s with %s/%s (batch=%d)",
         len(source_shards),
         normalized.main_output_dir,
         repo_id,
         weights_filename,
-        window_size,
+        batch_size,
     )
 
     # Project columns at read time — partition_id (~8 B/row) is ~120 GB of
@@ -220,7 +221,7 @@ def embed_source(
     ds = (
         Dataset.from_list(source_specs)
         .flat_map(load_file)
-        .window(window_size)
+        .window(batch_size)
         .map_shard(
             lambda batches, shard, rid=repo_id, wf=weights_filename: _embed_shard(
                 batches, shard, repo_id=rid, weights_filename=wf
@@ -249,7 +250,7 @@ def embed_source(
         embedding_dim=LUXICAL_DIM,
         quantization_scale=QUANT_SCALE,
         quantization_range=QUANT_RANGE,
-        window_size=window_size,
+        batch_size=batch_size,
         counters=dict(outcome.counters),
     )
     Artifact.save(artifact, output_path)
