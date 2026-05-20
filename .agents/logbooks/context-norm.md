@@ -48,5 +48,19 @@ Code refs:
 - Config: heuristic-derived d512 (steps=6387, batch=32) and d768
   (steps=10343, batch=64). `use_context_norm=True`. All other recipe knobs
   match baseline.
+- Result: stopped before completion. d512 finished with one preemption.
+  (W&B: `context-norm-gate1-v1-d512-2.19e17`.)
+- Next action: switch to a different variant (below).
+
+### 2026-05-19 - Variant change: replace XSA with norm+gate
+- Hypothesis: XSA may be redundant once a learnable per-head RMSNorm is
+  inserted before the head-wise gate. Try dropping XSA entirely.
+- Code change: new `GrugModelConfig.use_xsa: bool = True` toggle; the no-XSA
+  variant sets `use_xsa=False, use_context_norm=True`.
+- Branch (same): `moe_context_norm_gate1`.
+- Launch: `experiments/grug/moe/context_norm_no_xsa_gate1.py`.
+- Iris job: `/kaiyue/iris-run-job-20260520-023742` (preemptible v5p-8).
+- W&B group: `context-norm-no-xsa-gate1` (`-v1-d{512,768}-...`).
 - Result: pending.
-- Next action: submit d512 and d768 to Iris (preemptible v5p-8), babysit.
+- Next action: babysit; on completion compute effective speedup vs. v16
+  baselines at both scales.
