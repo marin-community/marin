@@ -349,6 +349,13 @@ def main() -> None:
         required=True,
         help="GCS path to the trained fasttext quality model.bin from cluster/quality/v0",
     )
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Max steps StepRunner runs concurrently. Defaults to StepRunner's default (8).",
+    )
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
@@ -356,7 +363,7 @@ def main() -> None:
         domain_centroids_dir=args.domain_centroids,
         quality_model_bin=args.quality_model_bin,
     )
-    StepRunner().run(steps)
+    StepRunner().run(steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":
