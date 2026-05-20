@@ -77,12 +77,11 @@ import math
 import os
 
 from fray.cluster import ResourceConfig
-from levanter.data.text import SupervisedLmDatasetFormat
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import add_validation_sets_to_mixture, lm_mixture_data_config
+from marin.processing.tokenize import add_validation_sets_to_mixture
 
-from experiments.defaults import default_tokenize, default_validation_sets
+from experiments.defaults import default_validation_sets
 from experiments.evals.task_configs import EvalTaskConfig
 from experiments.grug.moe.heuristic import (
     DEFAULT_TARGET_STEPS,
@@ -90,6 +89,11 @@ from experiments.grug.moe.heuristic import (
     SEQ_LEN,
     compute_flops_per_token,
     moe_adamh_heuristic,
+)
+from experiments.grug.moe.hrm_text_data import (
+    hrm_text_clean_steps,
+    hrm_text_mixture,
+    hrm_text_tokenize_steps,
 )
 from experiments.grug.moe.launch import GrugMoeLaunchConfig, run_grug_moe_trial
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
@@ -112,28 +116,12 @@ HRM_TEXT_BENCHMARKS: tuple[EvalTaskConfig, ...] = (
 # Data
 # ---------------------------------------------------------------------------
 
-HRM_TEXT_HF_DATASET_ID: str = "sapientinc/HRM-Text-data-io-cleaned-20260515"
-HRM_TEXT_TOKENIZER: str = llama3_tokenizer
-
-# instruction / response are the actual column names on the HF dataset.
-HRM_TEXT_FORMAT = SupervisedLmDatasetFormat(input_key="instruction", target_key="response")
-
-
-hrm_text_tokenized: ExecutorStep = default_tokenize(
-    name="hrm_text_cleaned_20260515",
-    dataset=HRM_TEXT_HF_DATASET_ID,
-    tokenizer=HRM_TEXT_TOKENIZER,
-    format=HRM_TEXT_FORMAT,
-    tags=("hrm_text", "supervised"),
-)
-
-
+# The full HRM-Text training mix is ported source-by-source in
+# ``hrm_text_data.py``; here we just splice in the standard marin validation
+# sets so the training loop reports per-domain perplexity.
 HRM_TEXT_MIX = add_validation_sets_to_mixture(
-    lm_mixture_data_config(
-        components={"hrm_text": hrm_text_tokenized},
-        weights={"hrm_text": 1.0},
-    ),
-    default_validation_sets(tokenizer=HRM_TEXT_TOKENIZER),
+    hrm_text_mixture(),
+    default_validation_sets(tokenizer=llama3_tokenizer),
 )
 
 
@@ -269,12 +257,23 @@ hrm_repro_step = _build_hrm_repro_step(
 )
 
 
+# Standalone entry to materialize just the data pipeline (clean → tokenize) for
+# the full HRM-Text mix. Useful for warming the cache before training.
+_HRM_DATA_ONLY = os.environ.get("HRM_REPRO_DATA_ONLY", "").strip().lower() in ("1", "true", "yes")
+
+
 if __name__ == "__main__":
-    executor_main(
-        steps=[hrm_repro_step],
-        description=(
-            "HRM-Text reproduction with marin MoE: "
-            f"d{HIDDEN_DIM}, target_tokens={TARGET_TOKENS:.2e}, "
-            f"data=sapientinc/HRM-Text-data-io-cleaned-20260515."
-        ),
-    )
+    if _HRM_DATA_ONLY:
+        executor_main(
+            steps=[*hrm_text_clean_steps(), *hrm_text_tokenize_steps()],
+            description="HRM-Text data port: per-source cleaners + tokenize.",
+        )
+    else:
+        executor_main(
+            steps=[hrm_repro_step],
+            description=(
+                "HRM-Text reproduction with marin MoE: "
+                f"d{HIDDEN_DIM}, target_tokens={TARGET_TOKENS:.2e}, "
+                f"full HRM-Text data mix (see experiments.grug.moe.hrm_text_data)."
+            ),
+        )
