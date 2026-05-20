@@ -10,11 +10,17 @@ Provides three composable pieces:
   once; classify workers load it from the in-region GCS path so a 100-source
   fan-out doesn't hammer the HF Hub.
 
-* :func:`classify_fasttext` — a :class:`Dataset` transform that windows
-  records into batches and runs one ``fasttext.predict`` call per batch.
-  Returns a Dataset of per-record output dicts; the caller composes it into
-  whatever surrounding pipeline they need (typically
-  ``.flat_map(load_file)`` upstream + ``.write_parquet(...)`` downstream).
+* :func:`get_fasttext_batch_predict` — bind the caller's classifier knobs
+  (model path, max_text_chars, k, threshold, ...) and return a
+  ``flat_map``-shaped callable. Plug into a pipeline as::
+
+      .window(batch_size).flat_map(get_fasttext_batch_predict(...))
+
+  **Caller responsibility**: pass ``stage_runner_factory=InlineRunner``
+  to your :class:`ZephyrContext`. The model is loaded once per worker
+  process via an ``@cache`` on :func:`_load_fasttext_model`; under the
+  default ``SubprocessRunner`` every shard is a fresh process and the
+  cache buys nothing.
 
 * :func:`output_schema` — the pyarrow schema for the per-record outputs,
   for callers that want to pass an explicit schema to
@@ -41,7 +47,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from functools import cache, partial
 from typing import Any
 
@@ -49,7 +55,7 @@ import pyarrow as pa
 from marin.execution.step_spec import StepSpec
 from pydantic import BaseModel
 from rigging.filesystem import url_to_fs
-from zephyr import Dataset, atomic_rename, counters
+from zephyr import atomic_rename, counters
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +163,7 @@ def _strip_label_prefix(label: str) -> str:
 
 
 def output_schema(score_target_label: str | None) -> pa.Schema:
-    """Pyarrow schema for the per-record output of :func:`classify_fasttext`.
+    """Pyarrow schema for the per-record output of :func:`get_fasttext_batch_predict`.
 
     Use as the ``schema=`` argument to ``Dataset.write_parquet`` so the writer
     doesn't have to infer from the first record (fragile when the first record
@@ -296,29 +302,32 @@ def _predict_batch(
         yield {"id": record["id"], **_attrs_from_prediction(stripped, probs, score_target_label)}
 
 
-def classify_fasttext(
-    dataset: Dataset,
+def get_fasttext_batch_predict(
     *,
     model_path: str,
-    batch_size: int = DEFAULT_BATCH_SIZE,
     text_field: str = "text",
     max_text_chars: int | None = DEFAULT_MAX_TEXT_CHARS,
     k: int = -1,
     threshold: float = 0.0,
     score_target_label: str | None = None,
-) -> Dataset:
-    """Append the windowed batched-predict stage to *dataset*.
+) -> Callable[[list[dict[str, Any]]], Iterator[dict[str, Any]]]:
+    """Bind classifier knobs and return a ``flat_map`` callable for batched predict.
+
+    Usage::
+
+        ctx = ZephyrContext(..., stage_runner_factory=InlineRunner)
+        pipeline = (
+            Dataset.from_list(files)
+            .flat_map(load_file)
+            .window(batch_size)
+            .flat_map(get_fasttext_batch_predict(model_path=..., ...))
+            .write_parquet(pattern, schema=output_schema(...), skip_existing=True)
+        )
 
     Args:
-        dataset: Upstream Dataset whose items are record dicts with at least an
-            ``id`` and a text column (named *text_field*). Typically built from
-            ``Dataset.from_list(files).flat_map(load_file)``.
         model_path: GCS path to the staged fasttext ``.bin`` (the
             ``model_path`` field of a :class:`FastTextModel` artifact produced
             by :func:`prepare_fasttext_model_step`).
-        batch_size: Records per ``fasttext.predict`` call. Larger batches
-            amortize the Python↔C++ boundary but raise peak per-worker RAM
-            (up to ``batch_size * max_text_chars`` bytes of in-flight text).
         text_field: Text column name in the input records.
         max_text_chars: Truncate input text to this many UTF-8 chars before
             predict. ``None`` disables truncation.
@@ -332,20 +341,18 @@ def classify_fasttext(
             field set.
 
     Returns:
-        A Dataset of per-record output dicts (see :func:`output_schema` for
-        the exact field set). Compose with ``.write_parquet(...)`` or any
-        other sink.
+        A ``(list[dict] -> Iterator[dict])`` callable suitable for
+        ``.flat_map(...)`` after ``.window(batch_size)``. See
+        :func:`output_schema` for the exact per-record output shape.
     """
-    return dataset.window(batch_size).flat_map(
-        partial(
-            _predict_batch,
-            model_path_str=model_path,
-            text_field=text_field,
-            max_text_chars=max_text_chars,
-            k=k,
-            threshold=threshold,
-            score_target_label=score_target_label,
-        )
+    return partial(
+        _predict_batch,
+        model_path_str=model_path,
+        text_field=text_field,
+        max_text_chars=max_text_chars,
+        k=k,
+        threshold=threshold,
+        score_target_label=score_target_label,
     )
 
 

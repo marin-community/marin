@@ -52,10 +52,12 @@ from pydantic import BaseModel
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext
 from zephyr.readers import load_file
+from zephyr.runners import InlineRunner
 
 from experiments.datakit.fasttext import (
+    DEFAULT_BATCH_SIZE,
     FastTextModel,
-    classify_fasttext,
+    get_fasttext_batch_predict,
     output_schema,
     prepare_fasttext_model_step,
 )
@@ -147,24 +149,33 @@ def _run_one_source(
     if not files:
         raise FileNotFoundError(f"{source_name}: no .parquet files under {normalized.main_output_dir}")
     output_pattern = f"{output_path.rstrip('/')}/data-{{shard:05d}}-of-{{total:05d}}.parquet"
-    pipeline = Dataset.from_list(files).flat_map(load_file)
-    pipeline = classify_fasttext(
-        pipeline,
-        model_path=model_path,
-        max_text_chars=MAX_TEXT_CHARS,
-        k=K,
-        threshold=THRESHOLD,
-        score_target_label=SCORE_TARGET_LABEL,
+    pipeline = (
+        Dataset.from_list(files)
+        .flat_map(load_file)
+        .window(DEFAULT_BATCH_SIZE)
+        .flat_map(
+            get_fasttext_batch_predict(
+                model_path=model_path,
+                max_text_chars=MAX_TEXT_CHARS,
+                k=K,
+                threshold=THRESHOLD,
+                score_target_label=SCORE_TARGET_LABEL,
+            )
+        )
+        .write_parquet(
+            output_pattern,
+            schema=output_schema(SCORE_TARGET_LABEL),
+            skip_existing=True,
+        )
     )
-    pipeline = pipeline.write_parquet(
-        output_pattern,
-        schema=output_schema(SCORE_TARGET_LABEL),
-        skip_existing=True,
-    )
+    # InlineRunner: required so the per-process @cache on _load_fasttext_model
+    # survives across shards in the same worker. SubprocessRunner would
+    # re-load the .bin on every shard.
     ctx = ZephyrContext(
         name=f"dolma3-quality-{source_name}",
         resources=worker_resources,
         max_workers=max_workers,
+        stage_runner_factory=InlineRunner,
     )
     outcome = ctx.execute(pipeline)
     return DolmaQualityOutput(
