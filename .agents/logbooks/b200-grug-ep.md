@@ -112,3 +112,27 @@
   - The script's explicit device-count check did the right thing by refusing to benchmark a partial node.
 - Next action:
   - Wait for retry job `49677`; if it runs cleanly, record JSON rows and then decide whether to test the full #5894 local-row shape.
+
+### 2026-05-21 11:00 - Back off to 4 GPUs and measure current EP backends
+- Experiment ID: `B200-EP-004`
+- Hypothesis:
+  - A 4-GPU full-block smoke can identify whether either checked-in EP backend is worth pursuing while full-node resources are unavailable.
+- Command:
+  - Canceled pending jobs `49677` and `49678`.
+  - Submitted job `49679`.
+  - Benchmark command family: `.agents/scripts/bench_grug_ep.py --tokens 32768 --hidden-dim 5120 --intermediate-dim 2560 --local-experts 8 --topk 2 --num-devices 4 --warmup 1 --iters 3 --dtype bf16`
+- Config:
+  - hardware: 4 B200 GPUs on one NVLinked node
+  - implementations: `ring`, `ragged_all_to_all`
+  - pass modes: `forward`, `forward_backward`
+- Result:
+  - `ring`, `forward`: `0.002853 s`, `11.485M tok/s`
+  - `ragged_all_to_all`, `forward`: `0.040758 s`, `0.804M tok/s`
+  - `ring`, `forward_backward`: `0.007157 s`, `4.579M tok/s`
+  - `ragged_all_to_all`, `forward_backward`: `0.083056 s`, `0.395M tok/s`
+- Interpretation:
+  - The checked-in JAX `ragged_all_to_all` backend is more than 10x slower than `ring` on this B200 slice.
+  - `ring` is the only current-tree baseline worth comparing against DeepEP or a new full-block Triton/CUTLASS path.
+  - The next route to 5-10% of DeepEP is not incremental `ragged_all_to_all` tuning; it requires a DeepEP baseline and then a transport/full-block replacement candidate.
+- Next action:
+  - Recover a runnable DeepEP full-block `forward_backward` baseline on the same 4-GPU shape.
