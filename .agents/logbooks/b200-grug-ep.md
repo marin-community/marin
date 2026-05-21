@@ -198,3 +198,24 @@
   - The checked-in `ragged_all_to_all` path remains more than 10x slower than `ring`; do not spend more time on it unless replacing the collective schedule wholesale.
 - Next action:
   - Run the side-by-side current `ring` vs restored DeepEP comparison on 8 GPUs, then decide whether a custom Triton/CUTLASS transport is still necessary or whether the work should shift to hardening the restored DeepEP benchmark and scaling/shape sweeps.
+
+### 2026-05-21 11:26 - 8-GPU retry status
+- Experiment ID: `B200-EP-007`
+- Hypothesis:
+  - The 4-GPU parity result should be rechecked on a full 8-GPU B200 node with the same side-by-side harness.
+- Command:
+  - Submitted job `49687`: `b200_compare_current_deepep8.sh`.
+  - Submitted job `49688` with the node that exposed only 7 usable devices excluded.
+- Config:
+  - target hardware: 8 B200 GPUs on one NVLinked node
+  - current `ring`: `local_experts=8`, `num_devices=8`, `topk=2`, `forward_backward`
+  - DeepEP: `experts=64`, `ep=8`, `topk=2`, `forward_backward`
+- Result:
+  - Job `49687` failed before benchmark rows were emitted.
+  - The allocation had 8 physical B200s, but JAX failed to create a stream executor for one device and exposed only 7 usable devices.
+  - Job `49688` was submitted after excluding that node and was pending on resources at last check.
+- Interpretation:
+  - The 8-GPU comparison is blocked on full-node device health / availability, not on the code path.
+  - The current evidence remains the 4-GPU same-allocation result from `B200-EP-006`.
+- Next action:
+  - Let the pending 8-GPU retry run if resources free up; otherwise resume from `B200-EP-006` and either retry later or broaden 4-GPU shape sweeps.
