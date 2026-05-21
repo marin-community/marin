@@ -391,7 +391,7 @@
     - `tokens=262144`, `shared_expert_dim=0`, both kernels
     - `tokens=262144`, `shared_expert_dim=2048`, both kernels
 - Result:
-  - Job `49779` is running.
+  - Job `49779` completed with exit code `0`.
   - Completed cases:
     - `tokens=131072`, `shared_expert_dim=0`:
       - `current`: `0.181974 s`, `0.720M tok/s`
@@ -408,15 +408,18 @@
       - `deepep_transport_capped_prewarmed`: `0.219625 s`, `1.194M tok/s`
       - This is a completion boundary: DeepEP completed, while the current path timed out after GPU OOM and collective rendezvous failures.
       - DeepEP exact caps: `max_recv_tokens=178816`, `max_local_assignments=263168`, `recv_factor=1.465999`, `assign_factor=7.968872`.
-  - Current running case:
-    - `tokens=262144`, `shared_expert_dim=2048`, kernel `current`.
+    - `tokens=262144`, `shared_expert_dim=2048`:
+      - `current`: no result line, exited `124`.
+      - `deepep_transport_capped_prewarmed`: `0.223786 s`, `1.171M tok/s`
+      - This is another completion boundary: DeepEP completed, while the current path timed out.
+      - DeepEP exact caps: `max_recv_tokens=178816`, `max_local_assignments=263168`, `recv_factor=1.465999`, `assign_factor=7.968872`.
 - Interpretation:
   - Increasing expert width exposed a large gap immediately, even at `131072` tokens.
   - The current ring path is now far outside the requested `5-10%` parity window on full fwd+bwd MoE MLP.
   - Because both shared and no-shared cases lose by roughly the same amount, the next likely bottleneck is the combination of token exchange and local expert GEMM scheduling/overlap rather than shared-expert work alone.
-  - The `262144` no-shared case confirms the memory/runtime boundary: DeepEP completes at the larger token count, while the current path does not.
+  - The `262144` cases confirm the memory/runtime boundary: DeepEP completes at the larger token count, while the current path does not, both with and without shared experts.
 - Next action:
-  - Let the `262144` shared-expert current case finish or time out, then profile the `131072` anchor and investigate why the current path materializes too much state at `262144`.
+  - Use EP4 as the operating scale for implementation work, then re-check EP8 once an improved path is available.
 
 ### 2026-05-21 10:36 - Submit EP4 larger expert anchor
 - Experiment ID: `B200-EP-013`
@@ -436,8 +439,8 @@
     - This keeps the global model at `experts=64`, so EP4 has `16` local experts per GPU.
     - If we want to preserve `8` local experts per GPU instead, run a separate `experts=32` control.
 - Result:
-  - Running.
-  - Completed or result-emitting cases:
+  - Job `49801` completed with exit code `0`.
+  - Completed cases:
     - `tokens=131072`, `shared_expert_dim=0`, kernel `current`:
       - `current`: `0.194346 s`, `0.674M tok/s`
     - `tokens=131072`, `shared_expert_dim=0`, kernel `deepep_transport_capped_prewarmed`:
@@ -450,9 +453,128 @@
       - `deepep_transport_capped_prewarmed`: `0.171901 s`, `0.762M tok/s`
       - DeepEP is about `14.1%` faster on wall time.
       - DeepEP exact caps: `max_recv_tokens=120064`, `max_local_assignments=262912`, `recv_factor=1.091684`, `assign_factor=3.988315`.
-      - The result line has emitted; the case end line has not emitted yet.
 - Interpretation:
   - The `mlp_dim=4096` gap is present on EP4 for the same global `experts=64` shape, but it is smaller than the EP8 gap.
   - EP4 shows a `14-17%` DeepEP advantage, while EP8 showed a `40-44%` advantage at the same `131072` token shape. The problem is therefore not purely an 8-GPU artifact, but it does worsen with EP size or local/global layout.
 - Next action:
-  - Wait for the final case end line, then decide whether to run an EP4 `experts=32` control that preserves `8` local experts per GPU.
+  - Operate at this EP4 scale for the next iteration: use it to decompose the gap before returning to EP8.
+
+### 2026-05-21 10:43 - Submit EP4 decomposition anchor
+- Experiment ID: `B200-EP-014`
+- Hypothesis:
+  - The EP4 `mlp_dim=4096` anchor is cheap enough to iterate on and still reproduces a `14-17%` DeepEP advantage. Run cumulative DeepEP transport probes to identify whether the time is dominated by dispatch/pack, first ragged GEMM, activation, second ragged GEMM, or combine.
+- Command:
+  - Submitted job `49810`.
+  - Benchmark command family: `bench_moe_hillclimb.py --tokens 131072 --hidden 5120 --mlp-dim 4096 --experts 64 --shared-expert-dim 0 --topk 8 --distribution random --bench-pass forward_backward --ep-list 4 --warmup 1 --iters 3`
+  - Each case has a per-case timeout.
+- Config:
+  - hardware target: 4 B200 GPUs on one NVLinked node
+  - kernels:
+    - `current`
+    - `deepep_transport_first_ragged_dot_probe`
+    - `deepep_transport_gate_probe`
+    - `deepep_transport_second_ragged_dot_probe`
+    - `deepep_transport_capped_prewarmed`
+  - shape: `tokens=131072`, `hidden=5120`, `mlp_dim=4096`, `experts=64`, `topk=8`, `shared_expert_dim=0`, fwd+bwd.
+- Result:
+  - Job `49810` completed with exit code `0`.
+  - Results:
+    - `current`: `0.192763 s`, `0.680M tok/s`
+    - `deepep_transport_first_ragged_dot_probe`: `0.161756 s`, `0.810M tok/s`
+    - `deepep_transport_gate_probe`: `0.202126 s`, `0.648M tok/s`
+    - `deepep_transport_second_ragged_dot_probe`: `0.267500 s`, `0.490M tok/s`
+    - `deepep_transport_capped_prewarmed`: `0.158097 s`, `0.829M tok/s`
+      - DeepEP exact caps: `max_recv_tokens=120064`, `max_local_assignments=262912`, `recv_factor=1.091684`, `assign_factor=3.988315`.
+- Interpretation:
+  - The EP4 no-shared gap is stable: DeepEP is about `18.0%` faster than current in this repeat.
+  - The probe kernels should not be read as clean cumulative phase timings: the full capped DeepEP path is faster than the gate and second-ragged-dot probes, so those probes are using slower diagnostic paths or changing enough of the backward graph to distort phase attribution.
+  - The first-ragged-dot probe is close to full capped DeepEP, which still points at the current ring path's global all-gather/materialization as the first concrete optimization target.
+- Next action:
+  - Sweep the existing current-path variants at the EP4 anchor before writing new kernels.
+
+### 2026-05-21 10:54 - Submit EP4 current-path variant sweep
+- Experiment ID: `B200-EP-015`
+- Hypothesis:
+  - Existing current-path variants may already isolate a faster counting, packing, all-to-all, scatter, or backward-combine choice at the EP4 `mlp_dim=4096` anchor.
+- Command:
+  - Submitted job `49811`.
+  - Benchmark command family: `bench_moe_hillclimb.py --tokens 131072 --hidden 5120 --mlp-dim 4096 --experts 64 --shared-expert-dim 0 --topk 8 --distribution random --bench-pass forward_backward --ep-list 4 --warmup 1 --iters 3`
+  - Each case has a per-case timeout.
+- Config:
+  - hardware target: 4 B200 GPUs on one NVLinked node
+  - shape: `tokens=131072`, `hidden=5120`, `mlp_dim=4096`, `experts=64`, `topk=8`, `shared_expert_dim=0`, fwd+bwd.
+  - kernels:
+    - `current`, `cumsum`, `packed_return`, `stream_ring`
+    - `ragged_a2a`, `deepep_layout_ragged_a2a`
+    - `prefix_counts`, `vector_prefix`, `onehot_counts`, `padded_take`
+    - `segment_sum`, `sorted_segment_sum`, `prefix_segment_sum`, `vector_sorted_segment_sum`
+    - `owner_local_scatter`, `lax_scatter`
+    - `take_segment_bwd`, `take_sorted_segment_bwd`, `owner_local_take`
+    - `weight_cast`, `narrow_meta`
+    - `deepep_transport_capped_prewarmed`
+- Result:
+  - Job `49811` completed with exit code `0`.
+  - Results:
+    - `deepep_transport_capped_prewarmed`: `0.162267 s`, `0.808M tok/s`
+    - `stream_ring`: `0.174792 s`, `0.750M tok/s`
+    - `padded_take`: `0.187466 s`, `0.699M tok/s`
+    - `onehot_counts`: `0.188501 s`, `0.695M tok/s`
+    - `prefix_counts`: `0.190201 s`, `0.689M tok/s`
+    - `take_segment_bwd`: `0.190920 s`, `0.687M tok/s`
+    - `lax_scatter`: `0.191231 s`, `0.685M tok/s`
+    - `prefix_segment_sum`: `0.192139 s`, `0.682M tok/s`
+    - `segment_sum`: `0.192214 s`, `0.682M tok/s`
+    - `owner_local_take`: `0.192385 s`, `0.681M tok/s`
+    - `weight_cast`: `0.192893 s`, `0.680M tok/s`
+    - `current`: `0.192940 s`, `0.679M tok/s`
+    - `vector_prefix`: `0.193392 s`, `0.678M tok/s`
+    - `narrow_meta`: `0.194278 s`, `0.675M tok/s`
+    - `owner_local_scatter`: `0.196997 s`, `0.665M tok/s`
+    - `cumsum`: `0.235193 s`, `0.557M tok/s`
+    - `packed_return`: `0.241644 s`, `0.542M tok/s`
+    - `sorted_segment_sum`: `0.277624 s`, `0.472M tok/s`
+    - `take_sorted_segment_bwd`: `0.278600 s`, `0.470M tok/s`
+    - `vector_sorted_segment_sum`: `0.283091 s`, `0.463M tok/s`
+    - `ragged_a2a`: no result line, exited `1`.
+    - `deepep_layout_ragged_a2a`: no result line, exited `1`.
+  - DeepEP exact caps: `max_recv_tokens=120064`, `max_local_assignments=262912`, `recv_factor=1.091684`, `assign_factor=3.988315`.
+- Interpretation:
+  - `stream_ring` is the only existing non-DeepEP variant that materially improves the EP4 anchor.
+  - At this operating scale, `stream_ring` is about `9.4%` faster than `current` and about `7.7%` slower than DeepEP on wall time, so it reaches the requested `5-10%` parity window for the no-shared anchor.
+  - Most smaller metadata/scatter/counting variants are within noise of `current`; sorted segment-sum variants are much slower.
+  - This points to `stream_ring` as the immediate implementation path to validate with shared experts, not a fresh Triton/CUTLASS local-GEMM rewrite.
+- Next action:
+  - Validate `stream_ring` against DeepEP at the same EP4 scale with both `shared_expert_dim=0` and `shared_expert_dim=2048`.
+
+### 2026-05-21 10:59 - Submit EP4 stream-ring validation
+- Experiment ID: `B200-EP-016`
+- Hypothesis:
+  - Since `stream_ring` is within `5-10%` of DeepEP on the EP4 no-shared anchor, it may be the shortest path to parity at this operating scale. Validate it with a slightly longer timing loop and with shared experts enabled.
+- Command:
+  - Submitted job `49812`.
+  - Benchmark command family: `bench_moe_hillclimb.py --tokens 131072 --hidden 5120 --mlp-dim 4096 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 4 --warmup 1 --iters 5`
+- Config:
+  - hardware target: 4 B200 GPUs on one NVLinked node
+  - kernels: `stream_ring`, `deepep_transport_capped_prewarmed`
+  - shapes:
+    - `tokens=131072`, `shared_expert_dim=0`, both kernels
+    - `tokens=131072`, `shared_expert_dim=2048`, both kernels
+- Result:
+  - Job `49812` completed with exit code `0`.
+  - Results:
+    - `tokens=131072`, `shared_expert_dim=0`:
+      - `stream_ring`: `0.173944 s`, `0.754M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.162149 s`, `0.808M tok/s`
+      - `stream_ring` is about `7.3%` slower than DeepEP on wall time.
+      - DeepEP exact caps: `max_recv_tokens=120064`, `max_local_assignments=262912`, `recv_factor=1.091684`, `assign_factor=3.988315`.
+    - `tokens=131072`, `shared_expert_dim=2048`:
+      - `stream_ring`: `0.182407 s`, `0.719M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.172454 s`, `0.760M tok/s`
+      - `stream_ring` is about `5.8%` slower than DeepEP on wall time.
+      - DeepEP exact caps: `max_recv_tokens=120064`, `max_local_assignments=262912`, `recv_factor=1.091684`, `assign_factor=3.988315`.
+- Interpretation:
+  - `stream_ring` validates inside the requested `5-10%` parity window at the EP4 operating scale, both with and without shared experts.
+  - The validated gap is much smaller than the original current path gap: `stream_ring` is about `10.9%` faster than current on the no-shared anchor and about `8.9%` faster than current on the shared anchor, using the `B200-EP-013` current timings as reference.
+  - This makes `stream_ring` the best immediate baseline for implementation work. A fresh Triton/CUTLASS local-GEMM rewrite is not the first move unless `stream_ring` fails at EP8 or recipe-shaped anchors.
+- Next action:
+  - Promote `stream_ring` as the EP4 development baseline, then re-check EP8 and recipe-shaped anchors.
