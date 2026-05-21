@@ -961,19 +961,10 @@ def default_dpo(
             is_hf=dpo_config.reference_is_hf,
         )
 
-    # Force the DPO-correct LoRA init for any LoraAdaptationConfig adapter.
-    # The standard LoRA-paper init (B=0, A=Gaussian) interacts pathologically
-    # with FSDP all-reduce noise on canonical-mesh v5p-8 (Bug-1): a 6-seed
-    # mesh-permutation sweep showed a deterministic ~14x rate gap between
-    # canonical and reverse device permutations driven by ~3.8% per-element
-    # bit-noise on the first live grad_B, amplified through the DPO sigmoid
-    # near pi=pi_ref. Flipping to A=0 / B=Gaussian preserves B@A=0 at init
-    # but routes the first live optimizer step through the full-rank A
-    # matrix, decoupling first-step direction-picking from the sigma-
-    # sensitive point. A 17-run LR sweep on bloom-speceval-v2 confirmed
-    # strict dominance of A=0 over B=0 at every LR. Users who specifically
-    # want the LoRA-paper init can construct SimpleDPOConfig/TrainDpoConfig
-    # directly and skip default_dpo().
+    # Default DPO LoRA to the topology-stable A=0/B=Gaussian init.
+    # Standard LoRA init is fragile here; see
+    # https://github.com/marin-community/marin/issues/4755.
+    # Users who need paper init can construct TrainDpoConfig directly.
     if isinstance(dpo_config.adapter, LoraAdaptationConfig):
         dpo_config = dataclasses.replace(
             dpo_config,
