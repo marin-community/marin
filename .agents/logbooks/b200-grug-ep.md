@@ -353,28 +353,26 @@
     - `tokens=524288`, `shared_expert_dim=2048`, DeepEP only
     - `tokens=786432`, `shared_expert_dim=0`, both kernels
 - Result:
-  - In progress.
-  - Observed cases:
+  - Job `49775` completed with exit code `0`, but all benchmark cases failed or timed out before emitting a result line.
+  - Cases:
     - `tokens=393216`, `shared_expert_dim=2048`, kernel `current`: no result line, exited `134`.
       - The error log showed a collective rendezvous termination after an all-gather; the script continued to the next case.
     - `tokens=393216`, `shared_expert_dim=2048`, kernel `deepep_transport_capped_prewarmed`: no result line, exited `124`.
       - The per-case timeout fired after 15 minutes.
-    - `tokens=524288`, `shared_expert_dim=2048`, kernel `deepep_transport_capped_prewarmed`: running at the time of observation.
-      - No result line, exited `124`.
+    - `tokens=524288`, `shared_expert_dim=2048`, kernel `deepep_transport_capped_prewarmed`: no result line, exited `124`.
       - The per-case timeout fired after large GPU OOM allocation failures and collective rendezvous waits.
-    - `tokens=786432`, `shared_expert_dim=0`, kernel `current`: running at the time of observation.
-      - No result line, exited `124`.
+    - `tokens=786432`, `shared_expert_dim=0`, kernel `current`: no result line, exited `124`.
       - The per-case timeout fired after large GPU OOM allocation failures and collective rendezvous waits.
-    - `tokens=786432`, `shared_expert_dim=0`, kernel `deepep_transport_capped_prewarmed`: running at the time of observation.
-      - The error log is already showing large GPU OOM allocation failures and collective rendezvous waits.
+    - `tokens=786432`, `shared_expert_dim=0`, kernel `deepep_transport_capped_prewarmed`: no result line, exited `124`.
+      - The per-case timeout fired after large GPU OOM allocation failures and collective rendezvous waits.
 - Interpretation:
   - This is already below the `524288` shared-expert OOM point, so the usable shared-expert `topk=8` boundary appears to be below `393216` tokens in this harness for both current ring and restored DeepEP.
   - The shared-expert failure mode is no longer a small latency gap; it is memory/runtime robustness at high token count.
   - The no-shared `786432` current case is also beyond the current memory envelope in this harness; `524288` no-shared remains the largest completed no-shared point so far.
-  - DeepEP has not yet completed the `786432` no-shared case, but it is showing the same memory pressure pattern.
+  - DeepEP also failed to complete the `786432` no-shared case under the same per-case timeout, so this sweep did not find a larger valid no-shared point.
   - The per-case timeout/script structure is working: a failed current case did not stop the DeepEP follow-up.
 - Next action:
-  - Watch job `49775`.
+  - Use the `mlp_dim=4096` sweep to find whether larger expert compute exposes a latency gap before the memory boundary.
 
 ### 2026-05-21 13:25 - Submit larger expert-size sweep
 - Experiment ID: `B200-EP-012`
@@ -393,8 +391,25 @@
     - `tokens=262144`, `shared_expert_dim=0`, both kernels
     - `tokens=262144`, `shared_expert_dim=2048`, both kernels
 - Result:
-  - Pending at submission.
+  - Job `49779` is running.
+  - Completed cases:
+    - `tokens=131072`, `shared_expert_dim=0`:
+      - `current`: `0.181974 s`, `0.720M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.108659 s`, `1.206M tok/s`
+      - DeepEP is about `40.3%` faster on wall time.
+      - DeepEP exact caps: `max_recv_tokens=89344`, `max_local_assignments=131584`, `recv_factor=1.467049`, `assign_factor=7.968872`.
+    - `tokens=131072`, `shared_expert_dim=2048`:
+      - `current`: `0.197305 s`, `0.664M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.110731 s`, `1.184M tok/s`
+      - DeepEP is about `43.9%` faster on wall time.
+      - DeepEP exact caps: `max_recv_tokens=89344`, `max_local_assignments=131584`, `recv_factor=1.467049`, `assign_factor=7.968872`.
+  - Current running case:
+    - `tokens=262144`, `shared_expert_dim=0`, kernel `current`.
+    - The error stream is showing large GPU OOM allocation failures followed by NCCL communicator initialization failure and collective rendezvous waits.
 - Interpretation:
-  - This is a conservative expert-size push: larger `mlp_dim`, but token counts stay below the known shared-expert OOM edge.
+  - Increasing expert width exposed a large gap immediately, even at `131072` tokens.
+  - The current ring path is now far outside the requested `5-10%` parity window on full fwd+bwd MoE MLP.
+  - Because both shared and no-shared cases lose by roughly the same amount, the next likely bottleneck is the combination of token exchange and local expert GEMM scheduling/overlap rather than shared-expert work alone.
+  - The `262144` current case may not fit the present harness memory envelope at `mlp_dim=4096`.
 - Next action:
-  - Let job `49775` finish first, then watch job `49779`.
+  - Let job `49779` finish or time out, then decide whether to profile the `131072` case or reduce the `262144` case to isolate memory from scheduling.
