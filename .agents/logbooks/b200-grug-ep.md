@@ -311,3 +311,23 @@
 - Next action:
   - Run one narrow follow-up if memory allows: `tokens=524288`, `shared_expert_dim=2048`, `topk=8`, and optionally `tokens=1048576`, `shared_expert_dim=0` if the no-shared case fits comfortably.
   - If the gap exceeds `10%`, prioritize transport/scheduling work; if it stays under `10%`, prioritize repeatability and correctness hardening around the restored DeepEP baseline and the current ring path.
+
+### 2026-05-21 13:12 - Submit topk=8 boundary follow-up
+- Experiment ID: `B200-EP-010`
+- Hypothesis:
+  - The `524288` no-shared stress case showed DeepEP about `7.7%` faster, so the next boundary checks are adding shared-expert backward work at the same token count and doubling tokens without shared experts.
+- Command:
+  - Submitted job `49766`.
+  - Benchmark command family: `bench_moe_hillclimb.py --hidden 5120 --mlp-dim 2560 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 8 --warmup 1 --iters 3`
+- Config:
+  - hardware target: 8 B200 GPUs on one NVLinked node
+  - kernels: `current`, `deepep_transport_capped_prewarmed`
+  - shapes:
+    - `tokens=524288`, `shared_expert_dim=2048`
+    - `tokens=1048576`, `shared_expert_dim=0`
+- Result:
+  - Pending at submission.
+- Interpretation:
+  - This follow-up should tell us whether the observed `topk=8` token-pressure boundary crosses the `10%` threshold, or remains within the requested parity band.
+- Next action:
+  - Watch job `49766`; if the gap exceeds `10%`, shift from parity validation to transport/scheduling optimization.
