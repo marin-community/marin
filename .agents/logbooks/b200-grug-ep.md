@@ -676,9 +676,12 @@
   - Fixed the offset helper in commit `a625b06e1` and submitted retry job `49892`.
   - Job `49892` allocated four B200 GPUs but failed after GPU discovery, before producing correctness output. No benchmark result was emitted.
   - Submitted job `49902` as a two-GPU correctness-only sanity check while waiting for four-GPU resources. It failed before running the check because the batch script tried to update the checkout from GitHub inside the batch allocation, where repository authentication was not available.
+  - Submitted no-pull two-GPU retry job `49910` against commit `a625b06e1`. It completed with exit code `0`, but the post-offset-fix token-ragged path still failed semantic validation:
+    - output max-absolute error vs `stream_ring`: `1.280000e+02`
+    - gradient max-absolute error vs `stream_ring`: `8.000000e+00`
 - Interpretation:
   - The pre-fix result is not evidence against token-level `ragged_all_to_all`; it was using the wrong receive layout.
   - The pre-fix timing is still useful as a warning that the JAX path has multiple ragged exchanges plus metadata traffic, so correctness must be established before treating its timing as meaningful.
-  - The post-fix jobs have not yet tested correctness; both failures were operational, before the value/gradient comparison.
+  - The output-offset fix was necessary but not sufficient. The remaining bug is likely in token-level metadata ordering on the return path or in the local token-to-assignment expansion after dispatch.
 - Next action:
-  - Resubmit a no-pull two-GPU sanity job and keep the four-GPU timing retry queued separately. If the small correctness check passes, use the four-GPU timing smoke to decide whether to run the full `tokens=131072`, `mlp_dim=4096`, `topk=8` EP4/EP8 anchors.
+  - Stop timing `token_ragged_a2a` until it passes the two-GPU value/gradient check. Next debug step is an instrumented two-GPU toy case that compares token payload order, returned source-token order, and local assignment counts against the stream-ring/reference path.
