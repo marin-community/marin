@@ -213,9 +213,14 @@
 - Result:
   - Job `49687` failed before benchmark rows were emitted.
   - The allocation had 8 physical B200s, but JAX failed to create a stream executor for one device and exposed only 7 usable devices.
-  - Job `49688` was submitted after excluding that node and was pending on resources at last check.
+  - Job `49688` completed with exit code `0`.
+  - `ring`, `forward_backward`: `0.005574 s`, `5.878M tok/s`, `0` dropped assignments.
+  - `deepep_transport_capped_prewarmed`, `ep=8`, `forward_backward`: `0.005509 s`, `5.948M tok/s`.
+  - DeepEP exact caps: `max_recv_tokens=7936`, `max_local_assignments=8320`, `recv_factor=4.129032`, `assign_factor=7.876923`.
+  - The DeepEP run emitted CUDA teardown warnings after the result line; Slurm recorded the job as completed successfully.
 - Interpretation:
-  - The 8-GPU comparison is blocked on full-node device health / availability, not on the code path.
-  - The current evidence remains the 4-GPU same-allocation result from `B200-EP-006`.
+  - The 8-GPU B200 full-block fwd+bwd shape is at parity: restored current-branch DeepEP is about `1.2%` faster than current `ring` on wall time.
+  - This confirms the current JAX `ring` path is within the requested 5-10% window for both the 4-GPU and 8-GPU B200 checks run so far.
+  - A custom Triton/CUTLASS transport replacement is not currently justified by these B200 parity numbers; the next value is shape coverage and hardening.
 - Next action:
-  - Let the pending 8-GPU retry run if resources free up; otherwise resume from `B200-EP-006` and either retry later or broaden 4-GPU shape sweeps.
+  - Broaden the sweep across token count, `topk`, and shared-expert settings, especially the historically hard `topk=8` / shared-expert fwd+bwd cases.
