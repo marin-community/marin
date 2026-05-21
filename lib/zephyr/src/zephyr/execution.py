@@ -441,7 +441,7 @@ class JobStatus:
     in_flight: int
     queue_depth: int
     done: bool
-    fatal_error: str
+    fatal_error: str | None
     workers: dict[str, dict[str, Any]]
 
 
@@ -727,7 +727,7 @@ class ZephyrCoordinator:
             dead,
         )
 
-        # Map-only stages don't yield through ``_StageStatsGenerator`` and never
+        # Map-only stages don't yield through ``_wrap_stage_stats`` and never
         # populate these counters. Drop the items/bytes_processed segment for
         # those stages.
         elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
@@ -852,15 +852,6 @@ class ZephyrCoordinator:
     def _maybe_requeue_worker_task(self, worker_id: str) -> None:
         """Requeue the worker's in-flight task as an INFRA failure (preemption/heartbeat)."""
         self._record_shard_failure(worker_id, ShardFailureKind.INFRA)
-
-    def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
-        """Internal heartbeat check (called with lock held)."""
-        now = time.monotonic()
-        for worker_id, last in list(self._last_seen.items()):
-            if now - last > timeout and self._worker_states.get(worker_id) not in {WorkerState.FAILED, WorkerState.DEAD}:
-                logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
-                self._worker_states[worker_id] = WorkerState.FAILED
-                self._maybe_requeue_worker_task(worker_id)
 
     def pull_task(self, worker_id: str, epoch: int | None = None) -> tuple[ShardTask, int, dict] | PullStatus:
         """Called by workers to get next task.
@@ -1306,7 +1297,15 @@ class ZephyrCoordinator:
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
-            self._check_worker_heartbeats(timeout)
+            now = time.monotonic()
+            for worker_id, last in list(self._last_seen.items()):
+                if now - last > timeout and self._worker_states.get(worker_id) not in {
+                    WorkerState.FAILED,
+                    WorkerState.DEAD,
+                }:
+                    logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
+                    self._worker_states[worker_id] = WorkerState.FAILED
+                    self._maybe_requeue_worker_task(worker_id)
 
 
 # ---------------------------------------------------------------------------
