@@ -39,8 +39,10 @@ from marin.datakit.download.nsf_awards import nsf_awards_normalize_steps
 from marin.datakit.download.starcoder2_extras import starcoder2_extras_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_normalize_steps
 from marin.datakit.download.svgfind import svgfind_creativecommons_normalize_steps
+from marin.datakit.download.swallow_math_v2 import swallow_math_v2_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_normalize_steps
+from marin.datakit.download.ultradata_math import ultradata_math_normalize_steps
 from marin.execution.step_spec import StepSpec
 
 
@@ -325,6 +327,30 @@ def all_sources() -> dict[str, DatakitSource]:
         },
     )
 
+    # SwallowMath-v2 stage3 outputs: QA-style and textbook-style math text.
+    # Token counts measured by the upstream README (Llama-3 tokenizer).
+    swallow_math_v2 = _rows_flat(
+        swallow_math_v2_normalize_steps,
+        {
+            "swallow_math_v2/qa": 13.60,
+            "swallow_math_v2/textbook": 18.30,
+        },
+    )
+
+    # UltraData-Math L2/L3 text-compatible slices. L1 and L3/Multi-Style are
+    # excluded (see ultradata_math.py). Token counts: L2-preview from the
+    # upstream README (33.7B); L3 subsets apportioned from the README's 88B
+    # L3 total by row count (16.9M / 27.1M / 26.0M out of 81.4M).
+    ultradata_math = _rows_flat(
+        ultradata_math_normalize_steps,
+        {
+            "ultradata_math/l2_preview": 33.70,
+            "ultradata_math/l3_conversation": 18.27,
+            "ultradata_math/l3_qa": 29.30,
+            "ultradata_math/l3_textbook_exercise": 28.11,
+        },
+    )
+
     # locuslab Safety Pretraining: moral_education, safeweb, and refuseweb
     # (fineweb_annotated is a score-annotated copy of FineWeb itself and is
     # excluded to avoid double-counting that corpus). Token counts measured
@@ -357,6 +383,8 @@ def all_sources() -> dict[str, DatakitSource]:
         *nemotron_sft,
         *nemotron_specialized,
         *nemotron_specialized_v1_1,
+        *swallow_math_v2,
+        *ultradata_math,
         *safety_pretraining,
     )
 
