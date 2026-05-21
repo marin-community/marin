@@ -25,6 +25,10 @@ def _valid_row() -> dict:
         "wandb_project": "delphi-midtraining",
         "wandb_entity": "marin-community",
         "base_flops_key": "1e21",
+        "tpu_type": "v5p-64",
+        "train_batch_size": 512,
+        "per_device_parallelism": -1,
+        "max_task_failures": 100,
         "data_manifest_uri": "gs://marin-us-east5/midtrain-manifests/data/p33m67/abc.json",
         "data_manifest_fingerprint": "sha256:abc",
         "tokenizer": {

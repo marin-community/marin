@@ -1,5 +1,51 @@
 # Delphi midtraining — model & run catalogue
 
+> ## 🚨 CRITICAL TRAP #1 — THE "1e20" ENTRY IN THIS CATALOGUE IS NOT DELPHI 🚨
+>
+> **Discovered 2026-05-14.** Any 1e20 entry below that points at `isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5` is the **wrong checkpoint** — that's a deprecated v5 isoflop ablation point with a different architecture (d=2048, L=21) and different optimizer recipe than the v6 Delphi family. The catalogue's own §1 even says Delphi = "AdamH **v6** scaling-ladder suite" — that's the contradiction that should have caught this earlier.
+>
+> The canonical Delphi 3e20 base is:
+>
+>     isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6
+>     gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/
+>     Registered: experiments/exp1337_eval_suite.py:180
+>
+> Note that **Delphi proper only goes 1e21 → 1e23.** The 3e20 entry is one of the 7 ISOFlop-bucket winners used to fit the Delphi scaling law (see HF collection). There is no "1e20 Delphi" — closest is the 3e20 bucket winner above.
+>
+> **Full post-mortem:** [`.agents/ops/2026-05-14-wrong-1e20-base-v5-vs-v6.md`](../ops/2026-05-14-wrong-1e20-base-v5-vs-v6.md)
+>
+> **Rule (verbatim, do not deviate):** Base checkpoints for any Marin scaling-law / Delphi / isoflop experiment come from `exp1337_eval_suite.py` EVAL_BASES OR `MARIN_SCALING_SUITES["nemotron-completed-adamh"]` OR the HF Delphi collection. NEVER from a GCS `gsutil ls` grep — the bucket preserves every deprecated experiment generation.
+
+> ## 🚨 CRITICAL TRAP #2 — "-v5-" IN 1e21 / 1e22 / 1e23 NAMES IS **NOT** THE BROKEN v1 RECIPE 🚨
+>
+> **Verified 2026-05-16 via hparam math against the published Delphi blog.** The canonical 1e21, 1e22, and 1e23 Delphi runs have `-v5-` in their directory names (`adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021`, `…-1e+22-v5-025b0e`, `…-1e+23-v5-27f2fb`). This **looks like** they should be the failed Cautious-AdamC attempt-1, and a future agent will be tempted to discard them. **Do not.** They are the AdamH attempt-2 held-out validation runs and are what the Delphi paper actually publishes.
+>
+> Per the Delphi blog (https://openathena.ai/blog/delphi/), there were two recipes:
+>
+> - **Attempt 1 (broken)** — Cautious AdamC, `experiments/scaling_law_sweeps/c_adamc.py`. Fixed `weight_decay=0.1`, `β1=0.95`, `β2=0.98^(B/B0)`, `ε=1e-15`, `max_grad_norm=1.0`, projection LR `η = 0.33·√B / H`. The fit diverged at 1e23 by **2.5% then more**. This recipe is *not* used by any Delphi run on GCS that we keep.
+> - **Attempt 2 (Delphi)** — AdamH + Complete(d)P, `experiments/scaling_law_sweeps/completed_adamh.py`. Weight decay removed (AdamH bounds the Frobenius norm), `β1=0.9`, `β2=clip(0.9999^(B/B0), 0.9, 0.9999)`, `ε=ε0·√(B0·T / B·T0)`, `max_grad_norm=0.1`, projection LR `η = η0·√(B/B0)·(T0/T)^0.3`, separate Adam-scalar LR `η_Adam = η0_Adam·√(B·T0 / B0·T)`. Fit lands all held-out runs within 0.5%. **This is what every "Delphi" checkpoint we care about was trained with.**
+>
+> The Delphi scaling law was **fit on the 7 IsoFLOP optima at 3e18 → 3e20** (see §4.1 below — these are the "v6 isoflop" entries in the codebase). **1e21, 1e22, and 1e23 are held-out validation runs**, trained with hparams predicted by that fit, not refit on them. So directionally, smaller compute-optimal runs predicted the larger ones — and the larger "v5"-named runs are *downstream* of the fit, not predecessors of it.
+>
+> The `-v5-` suffix is a hardcoded experiment-iteration tag from `exp1337_delphi_suite.py:232` (`f"-v5{suffix}"`). The same file uses `LABEL = "adamh_scaling_v6"` (line 62) → these runs ARE canonical AdamH Delphi. The naming overlap is documented in the [[project_delphi_canonical_bases]] memory under "v5/v6 string overlaps three different things."
+>
+> **Empirical check — when in doubt, do this. Do not trust the directory name.**
+>
+> The v2/AdamH/Complete(d)P recipe's reference constants from the blog: `B0=64, T0=2.5e9 tokens, η0=0.00630, η0_Adam=0.000656, ε0=1.85e-8`. For any base with `(B, T, H)`, plug into both recipes and check which one the registry's stored `peak_lr` / `peak_adam_lr` / `beta2` match.
+>
+> Verified for the two suspect entries on 2026-05-16:
+>
+> | Base | Stored peak_lr | v1 / Cautious AdamC prediction | v2 / AdamH prediction | Stored beta2 | v1 prediction | v2 prediction |
+> |---|---|---|---|---|---|---|
+> | DELPHI_1E21 (B=512, T=46.3B, H=2560) | **7.425e-3** | 2.92e-3 ❌ | 7.42e-3 ✅ | **0.99920** | 0.922 ❌ | 0.9992 ✅ |
+> | DELPHI_1E22 (B=1024, T=160B, H=3840) | **7.232e-3** | 2.75e-3 ❌ | 7.23e-3 ✅ | (clamped 0.9999) | 0.851 ❌ | 0.9999 ✅ |
+>
+> Both match the v2 AdamH/Complete(d)P recipe to within rounding; both miss the v1 Cautious-AdamC recipe by ~2.5×. **The "v5"-named 1e21 and 1e22 are AdamH runs. Use them. Do not relaunch them under a different name; do not "fix the typo".**
+>
+> **Rule:** if a Delphi base entry looks suspicious because of "v5" in its name, **do the hparam-math check above before discarding it.** If the v2 formula matches, the run is canonical Delphi regardless of the version string in the path.
+
+---
+
 **Goal of this doc:** give a future agent a single place to find every "Delphi" compute-optimal scaling-ladder model — where the runs live on W&B, where every Levanter / HF checkpoint lives on GCS, which budgets finished vs crashed, and how this suite connects to the broader Mantis-style midtraining program.
 
 Author-agent context: captured 2026-04-21 from a live dump of `marin-community/marin` + `marin-community/marin-analysis` on W&B and `gs://marin-us-central2/` on GCS. If you are a future agent, **verify the W&B run states and GCS paths before acting** — anything marked "crashed" below may have been resumed or deleted since this was written.
@@ -247,6 +293,82 @@ Stick with **linear LR decay** as the baseline schedule. It's the tried-and-true
 ### 8.6 Generalized midtraining-mix framework
 
 The concrete API design (`MidtrainMixSpec` / `MidtrainComponent` / `build_midtrain_lm_data_config` / `midtrain_token_budget`) plus four-layer safety assertions and a numbered corner-case catalogue (CC1-CC25) lives in the logbook section §"2026-05-01 21:00 UTC — generalized midtraining-mix framework + safety assertions" of `.agents/logbooks/midtraining_delphi.md`. That framework generalizes the §8.3 budget heuristic and the §8.2 held-out val slice to arbitrary single-component or multi-component midtraining mixtures, with runtime guarantees that val never leaks into training (sample-based hashing assertion + pinned val-partition fingerprint). Refactor `experiments/midtraining_mixes.py` per that section before launching the next sweep.
+
+### 8.7 Visualization: marimo endpoint-scaling notebook
+
+Use the marimo notebook for interactive final-loss scaling and within-run
+prediction diagnostics:
+
+```bash
+uv run --with marimo marimo edit \
+  --headless --no-token --host 127.0.0.1 --port 2718 \
+  scripts/analysis/delphi_small_final_loss_scaling_notebook.py
+```
+
+The notebook reads cached outputs from:
+
+- `midtrain_analysis_outputs/small_final_loss_scaling/endpoints.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/fit_summary.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/extrapolation_targets.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/extrapolation_predictions.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_points.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_prefix_predictions.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_prefix_summary.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_method_selection.csv`
+
+Generate or refresh endpoint outputs first with:
+
+```bash
+uv run python scripts/analysis/delphi_small_final_loss_scaling.py
+```
+
+Then refresh within-run prefix-prediction outputs with:
+
+```bash
+uv run python scripts/analysis/delphi_within_run_prediction.py
+```
+
+Refresh without `--use-cache` after sweeps finish. The script queries W&B live
+for both the small-ladder endpoints and the `1e21`/`1e22` extrapolation targets;
+the older local trajectory dump is only a fallback when W&B is unavailable.
+
+Notebook UX decisions that matter:
+
+- Use **marimo controls**, not the Plotly legend, as the source of truth.
+- Learning-rate filtering is four explicit checkboxes (`lr33`, `lr50`, `lr67`, `lr83`). This was intentional: Plotly legend toggles are ambiguous when each recipe has multiple traces (points, fit line, residual line, partial marker).
+- The endpoint plot renders only checked LR recipes, so visible curves always correspond exactly to selected controls.
+- The `1e21`/`1e22` points are held-out extrapolation targets. They are rendered past the `2e20` fit boundary and never enter the small-ladder fit.
+- Target markers are diamonds for complete-like held-out runs and open x markers for best-prefix runs that did not reach the final planned step.
+- The fit-quality readout should prioritize residuals and leave-one-scale-out error in raw loss units. `R^2` is secondary because these monotone endpoint curves can make bad extrapolations look visually plausible.
+- The `floor + A * compute^-alpha` fit is diagnostic only until we have more scales; the default baseline is `log(loss) = a + b log(compute)`.
+- The within-run section tunes prefix-prediction methods on completed small
+  ladder runs through `2e20`, then evaluates `1e21`/`1e22` as held-out large
+  targets. Use the prefix controls to inspect the accuracy/cost tradeoff; do
+  not assume the first 10% is enough for every metric.
+
+After the `2e20` sweep completed, held-out math endpoint loss remained very
+clean under the log-log fit: per-recipe `R^2 ~= 0.998`, monotone endpoints, and
+exponents clustered near `b ~= -0.095`. The same small-ladder fit extrapolates
+tightly to `1e21` (mean absolute math-loss error `0.0094`) and under-predicts
+the complete `1e22` improvement (mean observed-minus-predicted error `-0.0641`,
+roughly `-10.7%`). The live W&B snapshot used here has `1e22` coverage at
+`11/12` complete-like targets; `p50m50-lr67` is still a best-prefix target in
+W&B at step 6382/7647. See `.agents/logbooks/midtraining_delphi.md` sections
+`2026-05-21T01:52Z — final-loss scaling-law first pass` and
+`2026-05-21T02:45Z — held-out 1e21/1e22 extrapolation overlay` for the recorded
+result and commands.
+
+Within-run prefix-prediction first pass (2026-05-21) used five methods:
+`last_value`, `linear_tau`, `template_global`, `template_by_mix`, and
+`template_by_recipe`. The template methods learn the median fraction of final
+improvement achieved by a prefix on the small ladder. For math validation,
+10% progress is informative but not enough under small-CV (`template_by_mix`
+MAE `0.0353`); the selected accuracy/cost point is `template_by_recipe` at
+50% progress (small-CV MAE `0.00387`, held-out complete MAE `0.0210`). Paloma
+macro and C4 select `template_by_recipe` at 10% progress with held-out MAE
+around `0.024` and `0.022` respectively. See
+`midtrain_analysis_outputs/small_final_loss_scaling/trajectory_prediction_summary.md`
+for the full leaderboard.
 
 ---
 

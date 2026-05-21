@@ -75,6 +75,11 @@ def build_manifest_row(
         "wandb_project": run.wandb_project,
         "wandb_entity": run.wandb_entity,
         "base_flops_key": spec.base.flops_key,
+        "tpu_type": spec.compute.tpu_type,
+        "train_batch_size": spec.compute.batch_size,
+        "per_device_parallelism": spec.compute.per_device_parallelism,
+        "max_retries_failure": spec.compute.max_retries_failure,
+        "max_task_failures": spec.compute.max_task_failures,
         "data_manifest_uri": data_manifest_uri,
         "data_manifest_fingerprint": data_manifest_fingerprint,
         "tokenizer": tokenizer,
@@ -164,6 +169,7 @@ class LaunchRequest:
     train_config_uri: str
     resources_kwargs: dict[str, object]
     env: dict[str, str]
+    max_retries_failure: int
     max_task_failures: int
     extras: tuple[str, ...] = ("tpu",)
 
@@ -176,8 +182,8 @@ class LaunchResult:
     request: LaunchRequest
     job: object = field(repr=False)
 
-    def wait(self, *, raise_on_failure: bool = True) -> None:
-        self.job.wait(raise_on_failure=raise_on_failure)
+    def wait(self, *, raise_on_failure: bool = True) -> object:
+        return self.job.wait(raise_on_failure=raise_on_failure)
 
 
 def build_launch_request(
@@ -198,6 +204,7 @@ def build_launch_request(
         train_config_uri=train_config_uri,
         resources_kwargs=resources_kwargs,
         env=env,
+        max_retries_failure=spec.compute.max_retries_failure,
         max_task_failures=spec.compute.max_task_failures,
     )
 
@@ -209,6 +216,7 @@ def submit_launch(request: LaunchRequest, *, client: object | None = None) -> La
     resources = ResourceConfig.with_tpu(
         request.resources_kwargs["tpu_type"],
         regions=request.resources_kwargs.get("regions") or None,
+        ram=request.resources_kwargs["ram"],
     )
     environment = create_environment(env_vars=request.env, extras=list(request.extras))
     job_request = JobRequest(
@@ -216,7 +224,7 @@ def submit_launch(request: LaunchRequest, *, client: object | None = None) -> La
         entrypoint=Entrypoint.from_binary("python", list(request.command_args())),
         resources=resources,
         environment=environment,
-        max_retries_failure=0,
+        max_retries_failure=request.max_retries_failure,
         max_task_failures=request.max_task_failures,
     )
     client = client or current_client()
@@ -248,4 +256,4 @@ def _resources_kwargs(compute: ComputeProfile, run: RunIdentity) -> dict[str, ob
     regions = compute.regions or (run.output_region,)
     if regions != (run.output_region,):
         raise ValueError(f"ComputeProfile.regions={regions!r} must equal ({run.output_region!r},) for a real launch.")
-    return {"tpu_type": compute.tpu_type, "regions": list(regions)}
+    return {"tpu_type": compute.tpu_type, "regions": list(regions), "ram": compute.ram}

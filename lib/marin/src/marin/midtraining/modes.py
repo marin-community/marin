@@ -35,6 +35,46 @@ CHECKPOINT_INIT_MODE_MODEL_ONLY = "model_only"
 CHECKPOINT_INIT_MODE_FULL_STATE = "full_state"
 
 # ---------------------------------------------------------------------------
+# CPT optimizer-schedule defaults.
+#
+# Policy decision (2026-05-16, see ``.agents/logbooks/midtraining_redesign.md``):
+# every CPT launch follows a **triangular** LR schedule: linear warmup over
+# 10% of ``num_train_steps``, then immediate linear decay over the remaining
+# ~90% to ``min_lr_ratio * peak`` (typically 0). No stable plateau between
+# warmup and decay. This matches the schedule the legacy
+# ``experiments/exp_delphi_math_10b_midtrain.py`` script used for the
+# 1e21 / 1e22 / 3e20 midtraining runs (``decay_steps = num_train_steps -
+# warmup_steps``).
+#
+# **IMPORTANT — DO NOT change ``CPT_DEFAULT_DECAY`` to a float like ``0.9``
+# or ``1.0 - CPT_DEFAULT_WARMUP_FRACTION``.** Levanter's
+# ``_convert_frac_or_steps`` truncates each fractional stage independently.
+# When ``num_train_steps`` is not divisible by 10, ``warmup=0.1`` plus
+# ``decay=0.9`` can leave a one-step stable plateau (for example, at
+# 7401 steps: ``int(0.1 * 7401) == 740`` and ``int(0.9 * 7401) == 6660``).
+# Passing ``decay=None`` is Levanter's documented sentinel for "full decay
+# after warmup":
+#
+#   # lib/levanter/src/levanter/optim/config.py:318-322
+#   requested_decay_steps = (
+#       _convert_frac_or_steps(self.decay, cycle_steps)
+#       if self.decay is not None else max_decay_steps  # ← None → exact remainder
+#   )
+#
+# which guarantees ``stable_steps == 0`` for every cell regardless of its
+# ``num_train_steps``. This is the only float-safe way to express the
+# triangular shape across the whole sweep.
+#
+# This policy is a deliberate divergence from the legacy *warmup token
+# budget* rule (1.05 B tokens, batch-dependent fractional warmup). That
+# rule degenerated for short K=0.20 CPT runs on the small Delphi bases
+# (warmup exceeded the whole run) and under-warmed at large batch.
+# Fraction-of-run is consistent across the ladder; ``decay=None`` keeps the
+# shape triangular regardless of where ``num_train_steps`` lands.
+CPT_DEFAULT_WARMUP_FRACTION: float = 0.10
+CPT_DEFAULT_DECAY: int | float | None = None  # None == Levanter "full decay after warmup"
+
+# ---------------------------------------------------------------------------
 # Init-source value objects (shared between modes via composition)
 # ---------------------------------------------------------------------------
 
@@ -182,31 +222,17 @@ class CooldownResume:
 
 @dataclass(frozen=True)
 class CptMode:
-    """Continued pretraining: load model weights only, fresh optimizer state."""
+    """Continued pretraining: load model weights only, fresh optimizer state.
+
+    Optimizer and LR-schedule values live in ``MidtrainSpec.optimizer_config``.
+    Do not add unused optimizer knobs here; stale no-op fields make launches
+    look configurable when they are not.
+    """
 
     init: CptInit
     budget: BudgetPolicy
-    lr_factor: float | None = None
-    lr_multiplier: float = 1.0
-    min_lr_ratio: float = 0.0
-    warmup_tokens: int | None = None
-    warmup_fraction: float | None = None
 
     kind = "cpt"
-
-    def __post_init__(self) -> None:
-        if self.lr_factor is not None and self.lr_factor <= 0:
-            raise ValueError(f"CptMode.lr_factor must be positive, got {self.lr_factor!r}")
-        if self.lr_multiplier <= 0:
-            raise ValueError(f"CptMode.lr_multiplier must be positive, got {self.lr_multiplier!r}")
-        if not (0 <= self.min_lr_ratio <= 1):
-            raise ValueError(f"CptMode.min_lr_ratio must be in [0, 1], got {self.min_lr_ratio!r}")
-        if self.warmup_tokens is not None and self.warmup_tokens <= 0:
-            raise ValueError(f"warmup_tokens must be positive, got {self.warmup_tokens!r}")
-        if self.warmup_fraction is not None and not (0 < self.warmup_fraction < 1):
-            raise ValueError(f"warmup_fraction must be in (0, 1), got {self.warmup_fraction!r}")
-        if self.warmup_tokens is not None and self.warmup_fraction is not None:
-            raise ValueError("CptMode: set at most one of warmup_tokens or warmup_fraction")
 
     # --- mode protocol -----------------------------------------------------
 
@@ -286,20 +312,6 @@ class CptMode:
             raise ValueError("CptInit has no resolvable source; mode validation should have caught this")
         return init_section
 
-    @staticmethod
-    def expected_startup_lines() -> tuple[str, ...]:
-        return (
-            "Using output path",
-            "Using run ID",
-            "No checkpoints found",
-            "Loading checkpoint from",
-            "checkpoint_init_mode=model_only",
-        )
-
-    @staticmethod
-    def forbidden_startup_lines() -> tuple[str, ...]:
-        return ("Starting from scratch",)
-
     def all_checkpoint_paths(self) -> tuple[str, ...]:
         """Paths to check against banned-substring rules."""
         paths: list[str] = []
@@ -367,23 +379,6 @@ class CooldownMode:
             "initialize_from_checkpoint_path": None,
             "checkpoint_init_mode": CHECKPOINT_INIT_MODE_FULL_STATE,
         }
-
-    @staticmethod
-    def expected_startup_lines() -> tuple[str, ...]:
-        return (
-            "Using output path",
-            "Using run ID",
-            "Discovered latest checkpoint at",
-            "Resuming training from step",
-        )
-
-    @staticmethod
-    def forbidden_startup_lines() -> tuple[str, ...]:
-        return (
-            "Starting from scratch",
-            "No checkpoints found",
-            "Loading checkpoint from",
-        )
 
     def all_checkpoint_paths(self) -> tuple[str, ...]:
         return (self.resume.pretrain_checkpoint_path,)

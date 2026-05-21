@@ -1,5 +1,17 @@
 # Delphi midtraining sweep — finished runs (for inference handoff)
 
+> ## 🚨 CRITICAL — 1e20 RUNS IN THIS HANDOFF WERE TRAINED FROM A NON-DELPHI BASE 🚨
+>
+> **Discovered 2026-05-14.** The 12 "1e20" cells listed below were midtrained from `isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5` — a deprecated v5 isoflop ablation point, NOT a Delphi v6 compute-optimal model. Will Held (Delphi lead) confirmed the mismatch.
+>
+> Canonical Delphi 3e20 is `isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6` (d=2304 vs 2048, L=23 vs 21, v6 heuristic).
+>
+> **For inference / downstream use:** the 1e20 HF checkpoints below are valid models, but **do not refer to them as "Delphi 1e20."** Label them "v5-isoflop-3e20" or note the family mismatch. 1e21 and 1e22 entries below ARE valid Delphi runs.
+>
+> **Full post-mortem:** [`.agents/ops/2026-05-14-wrong-1e20-base-v5-vs-v6.md`](../ops/2026-05-14-wrong-1e20-base-v5-vs-v6.md)
+
+---
+
 **Last updated:** 2026-05-05. **31 of 36 cells with usable HF checkpoints.** Remaining: 2 still training, 3 blocked on GCP capacity restoration.
 
 ## What this is

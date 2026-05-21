@@ -69,28 +69,25 @@ class ComputeProfile:
 
     tpu_type: str
     batch_size: int
+    ram: str = "128g"
     per_device_parallelism: int = -1
-    tensor_parallel_size: int = 1
     regions: tuple[str, ...] = ()
-    priority: str = "batch"
+    max_retries_failure: int = 3
     max_task_failures: int = 100
-    launch_spacing_seconds: int = 30
 
     def __post_init__(self) -> None:
         if not self.tpu_type:
             raise ValueError("ComputeProfile.tpu_type must be non-empty")
         if self.batch_size <= 0:
             raise ValueError(f"ComputeProfile.batch_size must be positive, got {self.batch_size!r}")
+        if not self.ram:
+            raise ValueError("ComputeProfile.ram must be non-empty")
         if self.per_device_parallelism == 0:
             raise ValueError("ComputeProfile.per_device_parallelism must be -1 or positive, not zero")
-        if self.tensor_parallel_size <= 0:
-            raise ValueError(f"tensor_parallel_size must be positive, got {self.tensor_parallel_size!r}")
+        if self.max_retries_failure < 0:
+            raise ValueError(f"max_retries_failure must be >= 0, got {self.max_retries_failure!r}")
         if self.max_task_failures < 0:
             raise ValueError(f"max_task_failures must be >= 0, got {self.max_task_failures!r}")
-        if self.launch_spacing_seconds < 0:
-            raise ValueError(f"launch_spacing_seconds must be >= 0, got {self.launch_spacing_seconds!r}")
-        if not self.priority:
-            raise ValueError("ComputeProfile.priority must be non-empty")
         for region in self.regions:
             if not region:
                 raise ValueError(f"ComputeProfile.regions must not contain empty strings, got {self.regions!r}")
@@ -363,11 +360,18 @@ def _assert_safety(spec: MidtrainSpec, manifest: DataCacheManifest) -> None:
 
 
 def _assert_model_config_matches_base(spec: MidtrainSpec) -> None:
-    expected = {"hidden_dim": spec.base.hidden_dim, "num_layers": spec.base.num_layers}
+    expected = {
+        "hidden_dim": (spec.base.hidden_dim, "base.hidden_dim"),
+        "num_layers": (spec.base.num_layers, "base.num_layers"),
+        "max_seq_len": (spec.seq_len, "spec.seq_len"),
+    }
     for key, value in expected.items():
+        expected_value, expected_name = value
         rendered = spec.model_config.get(key)
-        if rendered is not None and rendered != value:
-            raise ValueError(f"MidtrainSpec.model_config[{key!r}]={rendered!r} does not match base.{key}={value!r}")
+        if rendered is not None and rendered != expected_value:
+            raise ValueError(
+                f"MidtrainSpec.model_config[{key!r}]={rendered!r} " f"does not match {expected_name}={expected_value!r}"
+            )
 
 
 def replace_run_identity(spec: MidtrainSpec, identity: RunIdentity) -> MidtrainSpec:

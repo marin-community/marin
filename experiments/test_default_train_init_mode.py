@@ -61,6 +61,68 @@ def test_default_train_propagates_model_only_mode():
             f"run {step.name!r} has MODEL_ONLY but no initialize_from_checkpoint_path "
             f"— the mode is dead code without a path"
         )
+        assert inner.trainer.steps_per_eval == delphi._steps_per_eval(
+            inner.trainer.num_train_steps
+        ), f"run {step.name!r} lost per-run eval cadence"
+
+
+def test_delphi_midtrain_eval_cadence_scales_with_run_length():
+    import experiments.exp_delphi_math_10b_midtrain as delphi
+
+    assert delphi._steps_per_eval(10) == 10
+    assert delphi._steps_per_eval(4_411) == 110
+    assert delphi._steps_per_eval(7_646) == 191
+    assert delphi._steps_per_eval(9_413) == 200
+
+
+def test_true_midtrain_uses_natural_resume_full_state_policy():
+    """True midtraining must not use the weights-only init branch.
+
+    The pretrain checkpoint is pre-staged under this run's output path. Levanter
+    then loads it through the normal checkpoint search path, which restores
+    model, optimizer state, and step together.
+    """
+    import experiments.exp_delphi_true_midtrain as true_midtrain
+
+    assert len(true_midtrain.runs) == len(true_midtrain.PRETRAINS) * len(true_midtrain.MIXES)
+    for step in true_midtrain.runs:
+        inner = step.config.train_config
+        assert (
+            inner.initialize_from_checkpoint_path is None
+        ), f"run {step.name!r} uses initialize_from_checkpoint_path, which would bypass natural full-state resume"
+        assert (
+            inner.checkpoint_init_mode is CheckpointInitMode.FULL_STATE
+        ), f"run {step.name!r} lost the documented full-state policy"
+        assert (
+            inner.trainer.initialize_from is None
+        ), f"run {step.name!r} uses trainer.initialize_from instead of the run output-path checkpoint namespace"
+        assert step.config.output_path is not None, f"run {step.name!r} has no output path for checkpoint search"
+
+
+def test_true_midtrain_executor_launch_requires_selected_resume_path(monkeypatch):
+    import experiments.exp_delphi_true_midtrain as true_midtrain
+
+    monkeypatch.setattr(true_midtrain, "_SELECT_SCALE", None)
+    monkeypatch.setattr(true_midtrain, "_SELECT_MIX", None)
+    monkeypatch.setattr(true_midtrain, "_RESUME_OUTPUT_PATH", None)
+    monkeypatch.setattr(true_midtrain, "_EXPECT_RESUME_STEP", None)
+
+    with pytest.raises(ValueError, match="TRUE_MIDTRAIN_DRY_RUN=1"):
+        true_midtrain._validate_executor_launch_contract()
+
+    monkeypatch.setattr(true_midtrain, "_SELECT_SCALE", "1e21")
+    monkeypatch.setattr(true_midtrain, "_SELECT_MIX", "p33m67")
+    monkeypatch.setattr(true_midtrain, "_EXPECT_RESUME_STEP", 20_000)
+
+    with pytest.raises(ValueError, match="RESUME_OUTPUT_PATH"):
+        true_midtrain._validate_executor_launch_contract()
+
+    monkeypatch.setattr(
+        true_midtrain,
+        "_RESUME_OUTPUT_PATH",
+        "gs://marin-us-east5/checkpoints/true-midtrain-1e21-p33m67-step20000",
+    )
+    true_midtrain._validate_executor_launch_contract()
 
 
 def test_delphi_midtrain_child_resources_follow_coordinator_region(monkeypatch):

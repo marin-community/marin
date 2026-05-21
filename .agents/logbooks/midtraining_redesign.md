@@ -1,5 +1,62 @@
 # Midtraining redesign logbook
 
+> ## Policy Update 2026-05-16 — CPT Uses Fractional Warmup And Triangular Decay
+>
+> **Every CPT launch warms up over 10% of its own `num_train_steps` and
+> then decays over the full post-warmup remainder.** This is the
+> load-bearing default; cell authors override at their own risk.
+>
+> - Constants live in `lib/marin/src/marin/midtraining/modes.py`:
+>   `CPT_DEFAULT_WARMUP_FRACTION = 0.10`,
+>   `CPT_DEFAULT_DECAY = None`.
+> - Re-exported from `marin.midtraining` as the public surface.
+> - The new 3e18 K=0.20 sweep
+>   (`experiments/midtrain_specs/delphi_small_cpt_k020.py`) passes these
+>   constants directly into `AdamHConfig` instead of reading
+>   `base.warmup_fraction` / `base.decay_fraction`. Pretrain-derived
+>   warmup/decay are explicitly NOT used for CPT.
+>
+> **Why this changed.** The original draft said "warmup uses a token budget
+> policy, not a magic step count," referring to the legacy
+> `experiments/exp_delphi_math_10b_midtrain.py` rule of a fixed 1.05B-token
+> warmup budget. That warmup rule does not generalize:
+>
+> | Base | Batch | Total midtrain steps (K=0.20) | Legacy warmup steps (1.05B tokens) | Warmup as % of run |
+> |---|---:|---:|---:|---:|
+> | 1e21 | 512 | 4,411 | 500 | **~11%** |
+> | 1e22 | 1024 | 7,635 | 250 | **~3%** |
+> | 1e23 | 2048 | ~30,000 | 125 | **~0.4%** |
+> | 3e18 (new K=0.20 sweep) | 8 | 7,400 | would be 32,000 (capped to 7,399) | **degenerate — entire run becomes warmup** |
+>
+> At small scales the fixed-token rule degenerates entirely (warmup
+> exceeds the whole run). At large scales it leaves the LR ramp far
+> shorter than the Delphi pretrain convention. Neither tail is what we
+> want.
+>
+> Switching warmup to a fraction-of-run rule fixes both ends and matches
+> what the original 1e21 anchor happened to use (11% ≈ 10%), so the
+> reference scale is unchanged in practice. The decay rule intentionally
+> follows the legacy CPT launcher, not the Delphi pretrain WSD shape:
+> `exp_delphi_math_10b_midtrain.py` used
+> `decay_steps = num_train_steps - warmup_steps`, so there was no stable
+> middle. In Levanter terms, setting `warmup=0.10` and `decay=None`
+> expresses the same triangular warmup -> linear decay profile because
+> `None` is the scheduler sentinel for "decay over the full post-warmup
+> remainder." Setting `decay=0.20` would create WSD: 10% warmup,
+> 70% stable, 20% decay.
+>
+> **Operational consequence.** The 3e18 sweep currently running
+> (launched 2026-05-16 16:25Z) was already using 10% warmup
+> *coincidentally* — `DelphiModel.warmup_fraction` defaulted to 0.1 and
+> the cell author forwarded `base.warmup_fraction` straight into
+> `AdamHConfig`. But those cells also inherited `base.decay_fraction = 0.2`,
+> which Levanter renders as WSD. That is a bug in the launched 3e18 sweep.
+> Future bases/cells must use the explicit constants so warmup is fractional
+> and decay covers the whole post-warmup remainder.
+>
+> See `.agents/logbooks/midtraining_delphi.md` for the operational record
+> of the 3e18 WSD incident.
+
 # codex 5.5 2026-05-16T00:34:42Z
 
 This logbook is a redesign brief for Delphi midtraining after the April-May
@@ -209,6 +266,11 @@ class MidtrainSpec:
     min_lr_ratio: float = 0.0
 ```
 
+Codex correction 2026-05-16: optimizer knobs must not live on `CptMode`
+unless the renderer consumes them. The implemented code keeps optimizer
+policy in `MidtrainSpec.optimizer_config`; `CptMode` owns only CPT init and
+budget sizing.
+
 The API should accept exactly one `MidtrainSpec` and return a `LaunchPlan`.
 `LaunchPlan` contains the rendered training config, manifest, preflight checks,
 Iris command, and expected startup log predicates.
@@ -242,7 +304,15 @@ Defaults, explicit in the spec:
 - `checkpoint_init_mode=MODEL_ONLY`
 - `reset_data_loader=True`
 - `num_train_steps = token_budget / (batch_size * seq_len)`
-- warmup uses a token budget policy, not a magic step count
+- ~~warmup uses a token budget policy, not a magic step count~~
+  **SUPERSEDED 2026-05-16** — warmup is a fixed fraction of
+  `num_train_steps` (10% warmup) and decay covers the whole remaining run
+  (`decay=None` in Levanter), via
+  `CPT_DEFAULT_WARMUP_FRACTION` / `CPT_DEFAULT_DECAY`. See the
+  top-of-file POLICY DECISION callout for the rationale and the
+  per-base step-count math. The legacy fixed-token rule degenerated for
+  short CPT runs and undershot warmup at large batch; the legacy triangular
+  post-warmup decay is preserved.
 - eval cadence targets 40 points over `num_train_steps`
 - permanent checkpoints every 10% of `num_train_steps`
 
@@ -372,13 +442,18 @@ The command should be direct Iris, not executor:
 ```bash
 uv run iris --cluster=marin job run \
   --cpu 1 --memory 3GB --disk 9GB \
-  --region us-east5 --region us-central1 \
-  --priority batch \
+  --region us-east5 \
+  --priority interactive \
+  --no-preemptible \
   --job-name <run-name>-<timestamp> \
   --no-wait \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python scripts/run_midtrain_cell.py --manifest <manifest-path>
 ```
+
+The outer coordinator is a long-lived CPU parent and must not run on
+preemptible capacity. If it dies, Iris cascade-kills the TPU child. The
+training child submitted by the launcher remains the preemptible TPU job.
 
 `scripts/run_midtrain_cell.py` reads the manifest, constructs the training
 config, sets `RUN_ID` and W&B identity from `RunIdentity`, and launches the
@@ -613,22 +688,32 @@ The launcher should print and save this checklist before it submits Iris:
 
 Do not mark a launch healthy until logs show the expected mode.
 
-CPT expected lines:
+CPT fresh expected lines, native Levanter init:
 
 ```text
 Using output path <output_path>
 Using run ID <basename(output_path)>
 No checkpoints found in [<output_path>/checkpoints, <temp_path>]
-Loading checkpoint from <base checkpoint or HF staging path>
+Loading checkpoint from <base checkpoint>
 checkpoint_init_mode=MODEL_ONLY
 ```
 
-Cooldown expected lines:
+CPT fresh expected lines, HF init:
+
+```text
+Using output path <output_path>
+Using run ID <basename(output_path)>
+No checkpoints found in [<output_path>/checkpoints, <temp_path>]
+No training checkpoint found. Initializing model from HF checkpoint <repo>@<revision>
+```
+
+Cooldown / same-run resume expected lines:
 
 ```text
 Using output path <output_path>
 Using run ID <basename(output_path)>
 Discovered latest checkpoint at <output_path>/checkpoints/step-<N> or <temp_path>/step-<N>
+Loading checkpoint from <discovered training checkpoint>
 Resuming training from step <N>
 ```
 
@@ -637,8 +722,7 @@ Forbidden lines:
 ```text
 Starting from scratch
 Step <new> is less than current W&B step <old>
-No checkpoints found ...  # cooldown only
-Loading checkpoint from <base checkpoint>  # cooldown only
+No checkpoints found ...  # cooldown / same-run resume only
 ```
 
 If any forbidden line appears, the babysitter should kill the job and mark the
@@ -928,8 +1012,14 @@ class OptimizerPolicy:
     lr_factor: float | None = None          # CPT only
     lr_multiplier: float = 1.0
     min_lr_ratio: float = 0.0
-    warmup_tokens: int | None = None        # CPT
-    warmup_fraction: float | None = None    # optional CPT alternative
+    # Updated 2026-05-16: see top-of-file POLICY DECISION callout. CPT
+    # warmup is now a fixed fraction of num_train_steps (default 0.10);
+    # decay is Levanter's full-remainder sentinel (default None) so CPT is
+    # triangular without fractional-stage truncation drift.
+    # the warmup_tokens / warmup_fraction either-or below is retained only
+    # as a sketch of the original design, NOT current behavior.
+    warmup_tokens: int | None = None        # CPT — DEPRECATED, no longer used
+    warmup_fraction: float | None = None    # CPT — now the only path, default CPT_DEFAULT_WARMUP_FRACTION
     schedule_source: str = "base_registry"  # cooldown uses pretrain schedule
 
 
@@ -1683,7 +1773,6 @@ def make_spec(lr_factor: float) -> MidtrainSpec:
             init=CptInit(source_kind=CheckpointSourceKind.NATIVE_LEVANTER,
                          registry_model=DELPHI_1E21),
             budget=BudgetPolicy.pretrain_fraction(0.20),
-            lr_factor=lr_factor,
         ),
         data_manifest_uri="gs://marin-us-east5/midtrain-manifests/data/p33m67/<fingerprint>.json",
         tokenizer=LLAMA3_TOKENIZER,
@@ -1985,6 +2074,27 @@ per-base parallel waves with `--launch-spacing-seconds 30`.
   heuristic produces), the load works. Verify in smoke.
 - **3e20**: not in this sweep (only "<= 2e20"). The 7th base is one
   added entry away if desired.
+- **Throughput / step-time registry**: there is no central per-(model,
+  TPU) step-time anchor in the repo. The closest thing today is the
+  legacy `v5p_compute=(...)` tuple in
+  `experiments/exp_delphi_math_10b_midtrain.py`, which is an opinionated
+  allowlist with no benchmarked basis behind individual entries; the new
+  `ALLOWED_TPUS_PER_BASE` map in
+  `experiments/midtrain_specs/delphi_small_cpt_k020.py` is similar — it
+  was hand-picked by HBM intuition, not measurement. Decisions like "is
+  3e18 fine on v6e-4 or do we need v6e-8?" or "how long will the 9e19
+  sweep take?" are currently answered by manually mining each base's
+  pretrain W&B run for step time. A stub registry now exists at
+  `experiments/throughput_stats.py` — pure data, never imported by the
+  training stack — with a `ThroughputAnchor` schema, one seeded entry
+  (3e18 on v5p-8, mid-flight measurement), and a CLI that estimates
+  wall-clock from anchors. Future work: (1) walk each Delphi base's
+  pretrain W&B run once and populate one v5p anchor per base; (2) record
+  v6e anchors as soon as any cell completes on v6e-{4,8}; (3) optionally
+  add an eval-overhead field so wall-clock estimates can include
+  amortized eval cost instead of being train-only. The schema is
+  intentionally measurement-keyed-by-W&B-run so any anchor is
+  re-verifiable rather than folkloric.
 
 ## Tests + lint status
 

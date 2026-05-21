@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from marin.midtraining.identity import RunIdentity, output_region
 from marin.midtraining.modes import CheckpointSourceKind, CooldownMode, CptMode
+from marin.midtraining.schema import SCHEMA_VERSION, RunManifestRow, read_run_manifest
 from marin.midtraining.spec import MidtrainSpec, ResolvedMidtrainSpec
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ _CHECKPOINT_STEP_PATTERN = re.compile(r"step-(\d+)$")
 
 GcsExists = Callable[[str], bool]
 GcsList = Callable[[str], tuple[str, ...]]
+ReadManifest = Callable[[str], RunManifestRow]
 
 
 def default_gcs_exists(uri: str) -> bool:
@@ -83,10 +85,17 @@ def preflight(
     resolved: ResolvedMidtrainSpec,
     *,
     cross_region_copy: CrossRegionCopyPolicy = CrossRegionCopyPolicy(),
+    allow_existing_matching_manifest: bool = False,
     exists: GcsExists = default_gcs_exists,
     list_: GcsList = default_gcs_list,
+    read_manifest: ReadManifest = read_run_manifest,
 ) -> PreflightReport:
-    """Run all guards required before a launch."""
+    """Run all guards required before a launch.
+
+    ``allow_existing_matching_manifest`` is only for an Iris retry of the same
+    coordinator task attempt. A normal fresh launch should leave it false so an
+    existing run namespace remains a hard collision.
+    """
     spec = resolved.spec
     run = spec.run
     failures: list[str] = []
@@ -131,7 +140,15 @@ def preflight(
         assert isinstance(spec.mode, CooldownMode)
         staged_uri = _check_cooldown_stage(spec, spec.mode, exists, failures, cross_region_copy)
 
-    _check_run_namespace(resolved, exists, list_, failures)
+    _check_run_namespace(
+        resolved,
+        exists,
+        list_,
+        read_manifest,
+        allow_existing_matching_manifest,
+        failures,
+        notes,
+    )
 
     return PreflightReport(
         cell_id=run.logical_cell_id,
@@ -205,19 +222,37 @@ def _check_run_namespace(
     resolved: ResolvedMidtrainSpec,
     exists: GcsExists,
     list_: GcsList,
+    read_manifest: ReadManifest,
+    allow_existing_matching_manifest: bool,
     failures: list[str],
+    notes: list[str],
 ) -> None:
     spec = resolved.spec
     run = spec.run
     permanent_root = run.permanent_checkpoints_uri
+    temp_root = _temp_checkpoint_uri(run)
     has_permanent_steps = bool(_latest_step_in(exists, list_, permanent_root))
+    has_temp_steps = bool(_latest_step_in(exists, list_, temp_root))
     has_existing_manifest = exists(run.manifest_uri)
 
     if isinstance(spec.mode, CptMode):
         if not spec.is_resume:
+            if has_existing_manifest and allow_existing_matching_manifest:
+                if _existing_manifest_matches_current_run(resolved, read_manifest, failures):
+                    notes.append(
+                        "existing manifest matches this run identity; accepting namespace as same-attempt "
+                        "coordinator retry"
+                    )
+                    return
+                return
             if has_permanent_steps:
                 failures.append(
                     f"Fresh CPT launch refused: permanent checkpoints already exist under {permanent_root}; "
+                    "bump RunIdentity.attempt for a fresh restart, or set expected_min_step to resume."
+                )
+            if has_temp_steps:
+                failures.append(
+                    f"Fresh CPT launch refused: temporary checkpoints already exist under {temp_root}; "
                     "bump RunIdentity.attempt for a fresh restart, or set expected_min_step to resume."
                 )
             if has_existing_manifest:
@@ -226,9 +261,7 @@ def _check_run_namespace(
                     "bump RunIdentity.attempt for a fresh restart, or set expected_min_step to resume."
                 )
         else:
-            latest = _latest_step_in(exists, list_, permanent_root) or _latest_step_in(
-                exists, list_, _temp_checkpoint_uri(run)
-            )
+            latest = _latest_step_across(exists, list_, permanent_root, temp_root)
             assert spec.expected_min_step is not None
             if latest is None and not spec.allow_empty_resume:
                 failures.append(
@@ -242,11 +275,80 @@ def _check_run_namespace(
                 )
     else:
         assert isinstance(spec.mode, CooldownMode)
-        latest = _latest_step_in(exists, list_, permanent_root)
+        latest = _latest_step_across(exists, list_, permanent_root, temp_root)
         if spec.expected_min_step is not None and latest is not None and latest < spec.expected_min_step:
             failures.append(
                 f"Cooldown resume: latest checkpoint step {latest} below expected_min_step " f"{spec.expected_min_step}"
             )
+
+
+def _existing_manifest_matches_current_run(
+    resolved: ResolvedMidtrainSpec,
+    read_manifest: ReadManifest,
+    failures: list[str],
+) -> bool:
+    run = resolved.spec.run
+    try:
+        row = read_manifest(run.manifest_uri)
+    except Exception as exc:
+        failures.append(
+            f"Fresh CPT launch found manifest at {run.manifest_uri}, but could not read it "
+            f"to verify same-attempt retry safety: {exc!r}"
+        )
+        return False
+
+    expected = _manifest_retry_fields(resolved)
+    mismatches = []
+    for key, value in expected.items():
+        actual = row.get(key)
+        if actual != value:
+            mismatches.append(f"{key}: manifest={actual!r} current={value!r}")
+    if mismatches:
+        detail = "; ".join(mismatches[:8])
+        if len(mismatches) > 8:
+            detail += f"; ... {len(mismatches) - 8} more"
+        failures.append(
+            f"Fresh CPT launch refused: manifest already at {run.manifest_uri} but does not match "
+            f"the current resolved run identity/config ({detail}). Bump RunIdentity.attempt for "
+            "a fresh restart, or set expected_min_step for an intentional resume."
+        )
+        return False
+    return True
+
+
+def _manifest_retry_fields(resolved: ResolvedMidtrainSpec) -> dict[str, object]:
+    spec = resolved.spec
+    run = spec.run
+    data_manifest_uri = spec.data_manifest_uri or f"legacy:{spec.data_section_provenance or 'unknown'}"
+    data_manifest_fingerprint = (
+        resolved.data_manifest.fingerprint()
+        if resolved.data_manifest is not None
+        else f"legacy:{spec.data_section_provenance or 'unknown'}"
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "logical_cell_id": run.logical_cell_id,
+        "attempt": run.attempt,
+        "run_id": run.run_id,
+        "mode": spec.mode.kind,
+        "output_path": run.output_path,
+        "wandb_project": run.wandb_project,
+        "wandb_entity": run.wandb_entity,
+        "base_flops_key": spec.base.flops_key,
+        "tpu_type": spec.compute.tpu_type,
+        "train_batch_size": spec.compute.batch_size,
+        "per_device_parallelism": spec.compute.per_device_parallelism,
+        "max_retries_failure": spec.compute.max_retries_failure,
+        "max_task_failures": spec.compute.max_task_failures,
+        "data_manifest_uri": data_manifest_uri,
+        "data_manifest_fingerprint": data_manifest_fingerprint,
+        "seq_len": spec.seq_len,
+        "num_train_steps": resolved.num_train_steps,
+        "actual_tokens": resolved.actual_tokens,
+        "train_config_uri": run.train_config_uri,
+        "permanent_checkpoints_uri": run.permanent_checkpoints_uri,
+        "temp_checkpoints_uri": _temp_checkpoint_uri(run),
+    }
 
 
 def _latest_step_in(exists: GcsExists, list_: GcsList, base_uri: str) -> int | None:
@@ -260,6 +362,14 @@ def _latest_step_in(exists: GcsExists, list_: GcsList, base_uri: str) -> int | N
     if not steps:
         return None
     return max(steps)
+
+
+def _latest_step_across(exists: GcsExists, list_: GcsList, *base_uris: str) -> int | None:
+    steps = [_latest_step_in(exists, list_, uri) for uri in base_uris]
+    present = [step for step in steps if step is not None]
+    if not present:
+        return None
+    return max(present)
 
 
 def _temp_checkpoint_uri(run: RunIdentity) -> str:

@@ -48,7 +48,9 @@ from scipy.optimize import OptimizeWarning, curve_fit
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Canonical runs (clean W&B, lr0.67/0.83 are v2 reruns)
+# Historical v5-isoflop runs (clean W&B, lr0.67/0.83 are v2 reruns).
+# These were previously labeled "Delphi 1e20", but they used the deprecated
+# d2048/L21 adamh_scaling_v5 base, not the canonical Delphi 3e20 v6 base.
 # ---------------------------------------------------------------------------
 
 WANDB_PROJECT = "marin-community/marin"

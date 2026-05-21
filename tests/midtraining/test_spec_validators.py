@@ -4,9 +4,11 @@
 """Validators tied to incident-ledger entries from the redesign doc."""
 
 import dataclasses
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from marin.midtraining.launch import build_launch_request
 from marin.midtraining.modes import (
     CheckpointSourceKind,
     CooldownMode,
@@ -84,6 +86,13 @@ def test_compute_regions_must_collapse_to_output_region():
         _resolve_and_validate(spec)
 
 
+def test_compute_failure_retry_budget_reaches_launch_request():
+    spec = make_cpt_spec(extra_compute_kwargs={"max_retries_failure": 5})
+    resolved = _resolve(spec)
+    request = build_launch_request(resolved)
+    assert request.max_retries_failure == 5
+
+
 def test_data_manifest_region_must_match_run_region():
     spec = make_cpt_spec(data_manifest_uri="gs://marin-us-central1/midtrain-manifests/data/p33m67/abc.json")
     with pytest.raises(ValueError, match="does not match run output region"):
@@ -136,6 +145,13 @@ def test_model_config_must_match_base_shape():
         _resolve_and_validate(spec)
 
 
+def test_model_config_max_seq_len_must_match_spec_seq_len():
+    bad_model_config = {**make_model_config(FAKE_1E21), "max_seq_len": 8192}
+    spec = make_cpt_spec(model_config_override=bad_model_config)
+    with pytest.raises(ValueError, match="max_seq_len"):
+        _resolve_and_validate(spec)
+
+
 def test_checkpoint_override_requires_meaningful_reason():
     from marin.midtraining.modes import CheckpointOverride
     from marin.midtraining.tokenizers import LLAMA3_TOKENIZER
@@ -177,3 +193,29 @@ def test_cpt_init_demands_exactly_one_source():
             hf_repo="marin-community/delphi-1e21-3.4Bparams-46.3Btokens",
             hf_revision="ca7b0e7c0a6b9ea8e3a4bbe847efa8b53f793902",
         )
+
+
+def test_delphi_launcher_rejects_preemptible_coordinator_worker(monkeypatch):
+    from experiments.midtrain_specs import delphi_small_cpt_k020
+
+    job_info = SimpleNamespace(
+        attempt_id=0,
+        constraints=[],
+        worker_id="marin-tpu-v5p-preemptible-8-us-east5-a-worker-0",
+    )
+    monkeypatch.setattr(delphi_small_cpt_k020, "get_job_info", lambda: job_info)
+
+    with pytest.raises(RuntimeError, match="preemptible worker"):
+        delphi_small_cpt_k020._reject_preemptible_coordinator()
+
+
+def test_delphi_launcher_detects_iris_retry_attempt(monkeypatch):
+    from experiments.midtrain_specs import delphi_small_cpt_k020
+
+    monkeypatch.setattr(
+        delphi_small_cpt_k020,
+        "get_job_info",
+        lambda: SimpleNamespace(attempt_id=1, constraints=[], worker_id="cpu-ondemand"),
+    )
+
+    assert delphi_small_cpt_k020._is_iris_retry_attempt()

@@ -3,15 +3,17 @@
 
 """Startup-proof predicates and post-launch monitoring helpers.
 
-Each mode owns its expected and forbidden startup lines (see
-:meth:`CptMode.expected_startup_lines` etc.). The babysitter scans the
-TPU child's stdout and refuses any forbidden line.
+The babysitter scans the TPU child's stdout and refuses forbidden startup
+patterns. Expectations depend on the resolved spec, not just the mode: fresh
+CPT from HF, fresh CPT from native Levanter, and natural resume have different
+Levanter log lines.
 """
 
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from marin.midtraining.modes import CheckpointSourceKind, CooldownMode, CptMode
 from marin.midtraining.spec import ResolvedMidtrainSpec
 
 _W_AND_B_STEP_REGRESSION_PATTERN = re.compile(r"Step (\d+) is less than current W&B step (\d+)")
@@ -42,9 +44,8 @@ class StartupProof:
 
 def evaluate_startup(resolved: ResolvedMidtrainSpec, log_lines: Iterable[str]) -> StartupProof:
     """Scan ``log_lines`` and return a :class:`StartupProof` for the resolved spec."""
-    mode = resolved.spec.mode
-    expected = mode.expected_startup_lines()
-    forbidden = mode.forbidden_startup_lines()
+    expected = _expected_startup_lines(resolved)
+    forbidden = _forbidden_startup_lines(resolved)
     seen_text = "\n".join(log_lines)
 
     matched = tuple(line for line in expected if line in seen_text)
@@ -78,3 +79,24 @@ def _expected_min_step(resolved: ResolvedMidtrainSpec) -> int | None:
     if spec.expected_min_step is not None:
         return spec.expected_min_step
     return spec.mode.expected_min_step()
+
+
+def _expected_startup_lines(resolved: ResolvedMidtrainSpec) -> tuple[str, ...]:
+    spec = resolved.spec
+    common = ("Using output path", "Using run ID")
+
+    if spec.is_resume or isinstance(spec.mode, CooldownMode):
+        return (*common, "Discovered latest checkpoint at", "Resuming training from step")
+
+    assert isinstance(spec.mode, CptMode)
+    if spec.mode.init.source_kind == CheckpointSourceKind.HF_WEIGHTS:
+        return (*common, "No checkpoints found", "Initializing model from HF checkpoint")
+
+    return (*common, "No checkpoints found", "Loading checkpoint from", "checkpoint_init_mode=model_only")
+
+
+def _forbidden_startup_lines(resolved: ResolvedMidtrainSpec) -> tuple[str, ...]:
+    spec = resolved.spec
+    if spec.is_resume or isinstance(spec.mode, CooldownMode):
+        return ("Starting from scratch", "No checkpoints found")
+    return ("Starting from scratch",)

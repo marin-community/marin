@@ -19,9 +19,19 @@ from levanter.checkpoint import _stage_mirror_to_local
 from levanter.tensorstore_serialization import _create_ocdbt_spec
 from rigging.filesystem import marin_prefix, mirror_budget
 
+from experiments.delphi_models import DELPHI_3E20
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-CKPT_REL = "checkpoints/isoflop/isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5/checkpoints/step-46915"
+
+def _marin_relative_path(gcs_path: str) -> str:
+    prefix = "gs://marin-us-central2/"
+    if not gcs_path.startswith(prefix):
+        raise ValueError(f"Expected checkpoint under {prefix!r}, got {gcs_path!r}")
+    return gcs_path.removeprefix(prefix)
+
+
+CKPT_REL = _marin_relative_path(DELPHI_3E20.verified_checkpoint_path)
 MIRROR_URL = f"mirror://{CKPT_REL}"
 
 
@@ -35,10 +45,9 @@ def main() -> int:
     print(f"[verify] mirror URL   = {MIRROR_URL}")
 
     t0 = time.time()
-    # Matches the budget `experiments/exp_delphi_math_10b_midtrain.py` sets
-    # on the 1e20 `mirrored(...)` value (30 GB). The real training run runs
+    # Matches the budget used for the canonical 3e20 Delphi checkpoint. The real training run runs
     # the same helper inside the executor's own `mirror_budget()` context.
-    with mirror_budget(30.0):
+    with mirror_budget(40.0):
         resolved = _stage_mirror_to_local(MIRROR_URL)
     stage_s = time.time() - t0
     print(f"[verify] staged in {stage_s:.1f}s")

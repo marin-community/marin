@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Visualize the 3 canonical 1e20 midtraining runs.
+"""Visualize the 3 historical v5-isoflop 3e20 midtraining runs.
+
+These runs were previously labeled "Delphi 1e20", but the base checkpoint was
+the deprecated ``isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5`` ablation, not
+the canonical Delphi 3e20 v6 bucket winner.
 
 Produces six PNG plots (saved next to this script):
 
@@ -70,7 +74,7 @@ def plot_train_loss_vs_step(runs_data, out_path: str) -> None:
     ax.axvspan(*TARGET_WINDOW, color="orange", alpha=0.12, label="target window")
     ax.set_xlabel("training step")
     ax.set_ylabel("train/loss (EMA halflife=100)")
-    ax.set_title("Delphi 1e20 midtraining — train/loss vs step")
+    ax.set_title("v5-isoflop 3e20 midtraining (not Delphi) - train/loss vs step")
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -123,7 +127,7 @@ def plot_paloma_vs_step(runs_data, out_path: str) -> None:
     ax.axvline(WARMUP_STEPS, color="gray", ls="--", lw=0.8, alpha=0.6, label="warmup end")
     ax.set_xlabel("training step")
     ax.set_ylabel("eval/paloma/c4_en/loss")
-    ax.set_title("Delphi 1e20 midtraining — retention metric (higher = more damage)")
+    ax.set_title("v5-isoflop 3e20 midtraining (not Delphi) - retention metric")
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()

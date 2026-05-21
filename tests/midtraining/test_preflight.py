@@ -6,6 +6,7 @@
 from unittest.mock import patch
 
 import pytest
+from marin.midtraining.launch import build_manifest_row
 from marin.midtraining.preflight import (
     CrossRegionCopyPolicy,
     fake_gcs,
@@ -54,6 +55,71 @@ def test_fresh_cpt_refuses_existing_manifest():
     assert any("manifest already at" in f for f in report.failures)
 
 
+def test_same_attempt_retry_accepts_matching_manifest_and_checkpoint_namespace():
+    spec = make_cpt_spec()
+    resolved = _resolve(spec)
+    exists, list_ = fake_gcs(spec.data_manifest_uri, FAKE_1E21.verified_checkpoint_path)
+    initial_report = preflight(resolved, exists=exists, list_=list_)
+    row = build_manifest_row(resolved, initial_report, status="launched")
+
+    retry_exists, retry_list = fake_gcs(
+        spec.data_manifest_uri,
+        FAKE_1E21.verified_checkpoint_path,
+        spec.run.manifest_uri,
+        f"{spec.run.permanent_checkpoints_uri}/step-100",
+    )
+    report = preflight(
+        resolved,
+        allow_existing_matching_manifest=True,
+        exists=retry_exists,
+        list_=retry_list,
+        read_manifest=lambda _: row,
+    )
+
+    assert report.ok, report.failures
+    assert any("same-attempt coordinator retry" in note for note in report.notes)
+
+
+def test_same_attempt_retry_rejects_mismatched_manifest():
+    spec = make_cpt_spec()
+    resolved = _resolve(spec)
+    exists, list_ = fake_gcs(spec.data_manifest_uri, FAKE_1E21.verified_checkpoint_path)
+    initial_report = preflight(resolved, exists=exists, list_=list_)
+    row = build_manifest_row(resolved, initial_report, status="launched")
+    row["run_id"] = "different-a001"
+
+    retry_exists, retry_list = fake_gcs(
+        spec.data_manifest_uri,
+        FAKE_1E21.verified_checkpoint_path,
+        spec.run.manifest_uri,
+    )
+    report = preflight(
+        resolved,
+        allow_existing_matching_manifest=True,
+        exists=retry_exists,
+        list_=retry_list,
+        read_manifest=lambda _: row,
+    )
+
+    assert not report.ok
+    assert any("does not match" in failure for failure in report.failures)
+
+
+def test_fresh_cpt_refuses_existing_temp_checkpoint_namespace():
+    spec = make_cpt_spec()
+    resolved = _resolve(spec)
+    sanitized_output = spec.run.output_path.removeprefix("gs://").strip("/").replace("/", "_")
+    temp_root = f"gs://marin-{spec.run.output_region}/tmp/ttl=14d/checkpoints-temp/{sanitized_output}/checkpoints"
+    exists, list_ = fake_gcs(
+        spec.data_manifest_uri,
+        FAKE_1E21.verified_checkpoint_path,
+        f"{temp_root}/step-100",
+    )
+    report = preflight(resolved, exists=exists, list_=list_)
+    assert not report.ok
+    assert any("temporary checkpoints already exist" in f for f in report.failures)
+
+
 def test_resume_requires_checkpoint_floor():
     spec = make_cpt_spec(expected_min_step=4_500)
     resolved = _resolve(spec)
@@ -74,6 +140,21 @@ def test_resume_accepts_above_floor():
         spec.data_manifest_uri,
         FAKE_1E21.verified_checkpoint_path,
         f"{spec.run.permanent_checkpoints_uri}/step-1500",
+    )
+    report = preflight(resolved, exists=exists, list_=list_)
+    assert report.ok, report.failures
+
+
+def test_resume_uses_latest_across_permanent_and_temp_checkpoints():
+    spec = make_cpt_spec(expected_min_step=1_000)
+    resolved = _resolve(spec)
+    sanitized_output = spec.run.output_path.removeprefix("gs://").strip("/").replace("/", "_")
+    temp_root = f"gs://marin-{spec.run.output_region}/tmp/ttl=14d/checkpoints-temp/{sanitized_output}/checkpoints"
+    exists, list_ = fake_gcs(
+        spec.data_manifest_uri,
+        FAKE_1E21.verified_checkpoint_path,
+        f"{spec.run.permanent_checkpoints_uri}/step-100",
+        f"{temp_root}/step-1500",
     )
     report = preflight(resolved, exists=exists, list_=list_)
     assert report.ok, report.failures

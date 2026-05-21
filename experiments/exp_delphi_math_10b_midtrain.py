@@ -41,7 +41,7 @@ Levanter ``RUN_ID``, and ``WANDB_RUN_ID`` from that path and refuses legacy
 ``MIDTRAIN_EXPECT_RESUME_MIN_STEP`` to the last known-good checkpoint step, or
 a conservative floor below it, so stale namespaces fail before training starts.
 
-With no env vars set, all 9 steps are generated (useful for dry-runs /
+With no env vars set, all 8 verified-Delphi steps are generated (useful for dry-runs /
 introspection; do NOT actually ``executor_main`` on the full list).
 
 See ``.agents/logbooks/midtraining_delphi.md`` for the full rationale,
@@ -63,6 +63,7 @@ from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem import marin_region
 
 from experiments.defaults import default_train
+from experiments.delphi_models import DELPHI_1E21, DELPHI_1E22, DelphiModel, assert_not_banned
 from experiments.midtrain_data_safety import assert_val_train_disjoint
 from experiments.midtraining_data_buckets import BUCKET_2
 from experiments.midtraining_mixes import (
@@ -100,7 +101,7 @@ _TOKEN_BUDGET_HARD_OVERRIDE: int | None = (
 )
 _BUDGET_FRACTION_OVERRIDE: float = float(os.environ.get("MIDTRAIN_BUDGET_FRACTION", MIDTRAIN_BUDGET_FRACTION))
 _TOKEN_BUDGET_LABEL_OVERRIDE: str | None = os.environ.get("MIDTRAIN_TOKEN_BUDGET_LABEL")
-# The original 1e20/1e21 sweep uses 500 warmup steps at global batch 512, or
+# The historical v5-isoflop/1e21 sweep used 500 warmup steps at global batch 512, or
 # about 1.05B warmup tokens. Keep that warmup-token budget stable when the
 # batch size changes for larger TPU slices.
 WARMUP_TOKENS: int = 500 * REFERENCE_WARMUP_BATCH_SIZE * DEFAULT_SEQ_LEN
@@ -119,10 +120,15 @@ LR_MULTIPLIER: float = float(os.environ.get("MIDTRAIN_LR_MULTIPLIER", "1.0"))
 MIDTRAIN_TRAIN_REGION: str | None = os.environ.get("MIDTRAIN_TRAIN_REGION")
 MIDTRAIN_COORDINATOR_REGIONS: tuple[str, ...] = ("us-central1", "us-east5")
 
-STEPS_PER_EVAL: int = 200
+# Eval cadence is normalized per run so shorter cells still produce enough
+# validation points for curve comparisons. The max preserves the historical
+# longest-run cadence; the min avoids pathological tiny intervals in smoke runs.
+EVAL_FRACTION_OF_RUN: float = 0.025
+MIN_STEPS_PER_EVAL: int = 25
+MAX_STEPS_PER_EVAL: int = 200
 # Permanent checkpoint cadence is derived per-base from num_train_steps so
 # every run gets ~10 evenly-spaced rollback points regardless of length
-# (1e20 ~9.4k steps gets ~10 ckpts; 1e21 ~4.4k steps also gets ~10). Levanter's
+# (the old v5-isoflop row got ~10 ckpts; 1e21 ~4.4k steps also gets ~10). Levanter's
 # rolling temp checkpoint (save_interval=10min, set in experiments/defaults.py)
 # is independent and handles preemption resume.
 EXPORT_FRACTION_OF_RUN: float = 0.10
@@ -175,6 +181,17 @@ class MidtrainingBaseConfig:
         raise ValueError(f"{tpu_type!r} is not an approved v5p target for this base. Allowed: {allowed}")
 
 
+def _marin_relative_checkpoint_path(model: DelphiModel) -> str:
+    """Return a MARIN_PREFIX-relative Levanter checkpoint path from the registry."""
+    prefix = "gs://marin-us-central2/"
+    checkpoint_path = model.verified_checkpoint_path
+    if not checkpoint_path.startswith(prefix):
+        raise ValueError(f"Expected {model.flops_key} checkpoint under {prefix!r}, got {checkpoint_path!r}")
+    rel_path = checkpoint_path.removeprefix(prefix)
+    assert_not_banned(rel_path)
+    return rel_path
+
+
 # Checkpoint paths are wrapped in `mirrored(...)` so the executor rewrites
 # them to `mirror://<rel>`. MirrorFileSystem locates the file in whichever
 # marin-<region> bucket currently has it and copies to the local prefix on
@@ -185,47 +202,21 @@ class MidtrainingBaseConfig:
 # on capacity. The training child is then pinned to that coordinator region,
 # so concrete gs:// output/cache/checkpoint paths and TPU compute stay aligned.
 BASES: dict[str, MidtrainingBaseConfig] = {
-    # ~1.9 B AdamH isoflop scan point at 3e20 FLOPs (compute-optimal).
-    # Stands in for "1e20" — no optimal-training run exists at 1e20 FLOPs
-    # in the AdamH scaling ladder, only the sweep points up to 3e20.
-    "1e20-iso-d2048-L21": MidtrainingBaseConfig(
-        ckpt=mirrored(
-            "checkpoints/isoflop/isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5/checkpoints/step-46915",
-            budget_gb=30,
-        ),
-        # Match the isoflop base run: d2048/L21, seq_len 4096, global B128.
-        hidden_dim=2048,
-        seq_len=DEFAULT_SEQ_LEN,
-        train_batch_size=128,
-        default_tpu_type="v5p-32",
-        v5p_compute=(
-            V5PComputeConfig("v5p-32"),
-            V5PComputeConfig("v5p-64"),
-            V5PComputeConfig("v5p-128"),
-            V5PComputeConfig("v5p-256"),
-            # At v5p-512 there are more chips than batch examples, so split the
-            # model axis to keep the effective data axis at 128.
-            V5PComputeConfig("v5p-512", tensor_parallel_size=2),
-        ),
-        peak_lr=4.483e-3,
-        peak_adam_lr=7.382e-5,
-        beta2=0.99980,
-        epsilon=4.11e-8,
-        # 47,064 pretrain steps * 128 BS * 4096 seq = 24.67 B tokens
-        # (the 3e20-isoflop d2048-L21 pretrain ran the full 47,064 steps).
-        pretrain_tokens=47_064 * 128 * 4096,
-    ),
+    # The old "1e20-iso-d2048-L21" slot was removed after the 2026-05-14
+    # wrong-base incident. It pointed at an adamh_scaling_v5 ablation, not a
+    # Delphi checkpoint. Add a new 3e20-v6 slot only after verifying the
+    # optimizer config and intended token budget against the canonical run.
     # Canonical Delphi 1e21 v5 (~3.4 B). Seed replicates v5-seed42,
     # v5-seed62746, and v6 converge within 0.001 c4-en-loss of this run.
     "1e21-v5": MidtrainingBaseConfig(
         ckpt=mirrored(
-            "adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-21979",
+            _marin_relative_checkpoint_path(DELPHI_1E21),
             budget_gb=50,
         ),
         # Match the Delphi base run: d2560/L26, seq_len 4096, global B512.
-        hidden_dim=2560,
+        hidden_dim=DELPHI_1E21.hidden_dim,
         seq_len=DEFAULT_SEQ_LEN,
-        train_batch_size=512,
+        train_batch_size=DELPHI_1E21.batch_size,
         default_tpu_type="v5p-256",
         v5p_compute=(
             V5PComputeConfig("v5p-32"),
@@ -238,9 +229,7 @@ BASES: dict[str, MidtrainingBaseConfig] = {
         peak_adam_lr=4.314e-4,
         beta2=0.99920,
         epsilon=2.81e-8,
-        # 22,057 pretrain steps * 512 BS * 4096 seq = 46.27 B tokens
-        # (Delphi v5 pretrain plan; checkpoint at step-21979 is 78 short of plan).
-        pretrain_tokens=22_057 * 512 * 4096,
+        pretrain_tokens=DELPHI_1E21.tokens,
     ),
     # Canonical Delphi 1e22 v5 (~9.7 B). This base was trained at global
     # batch 1024 on v4-512 and finished at step 38206. v5p-512 ran cleanly at
@@ -248,12 +237,12 @@ BASES: dict[str, MidtrainingBaseConfig] = {
     # per-device parallelism at 4.
     "1e22-v5": MidtrainingBaseConfig(
         ckpt=mirrored(
-            "adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-38206",
+            _marin_relative_checkpoint_path(DELPHI_1E22),
             budget_gb=150,
         ),
-        hidden_dim=3840,
+        hidden_dim=DELPHI_1E22.hidden_dim,
         seq_len=DEFAULT_SEQ_LEN,
-        train_batch_size=1024,
+        train_batch_size=DELPHI_1E22.batch_size,
         default_tpu_type="v5p-512",
         v5p_compute=(
             V5PComputeConfig("v5p-64", per_device_parallelism=4),
@@ -265,9 +254,7 @@ BASES: dict[str, MidtrainingBaseConfig] = {
         peak_adam_lr=3.276222099351447e-4,
         beta2=0.9984011994401821,
         epsilon=3.70426657045089e-8,
-        # 38,235 pretrain steps * 1024 BS * 4096 seq = 160.37 B tokens
-        # (Delphi v5 pretrain plan; checkpoint at step-38206).
-        pretrain_tokens=38_235 * 1024 * 4096,
+        pretrain_tokens=DELPHI_1E22.tokens,
     ),
 }
 
@@ -298,7 +285,6 @@ if _MATH_TOKENIZED_OUTPUT_PATH_OVERRIDE:
 _TOKENIZED_TRAIN_DATA = midtraining_mix_by_name(_MIDTRAIN_MIX_NAME) if _MIDTRAIN_MIX_NAME else MATH_TRAIN_STEP
 
 _BASE_OUTPUT_TAGS = {
-    "1e20-iso-d2048-L21": "1e20",
     "1e21-v5": "1e21",
     "1e22-v5": "1e22",
 }
@@ -344,12 +330,18 @@ def _num_train_steps(token_budget: int, batch_size: int, seq_len: int) -> int:
     return max(1, round(token_budget / (batch_size * seq_len)))
 
 
+def _steps_per_eval(num_train_steps: int) -> int:
+    """Validation cadence: roughly 40 eval points per cell, capped at the old 200-step cadence."""
+    eval_steps = int(num_train_steps * EVAL_FRACTION_OF_RUN)
+    return min(num_train_steps, max(MIN_STEPS_PER_EVAL, min(MAX_STEPS_PER_EVAL, eval_steps)))
+
+
 def _steps_per_export(num_train_steps: int) -> int:
     """Permanent checkpoint cadence: ``EXPORT_FRACTION_OF_RUN`` of the run.
 
     Every base gets ~10 evenly-spaced permanent checkpoints regardless of total
-    length, so 1e21 (4,411 steps) is as resilient to mid-run failure as 1e20
-    (9,413 steps). HF exports use the same cadence (Levanter resolves
+    length, so 1e21 (4,411 steps) keeps roughly the same rollback density as
+    the historical v5-isoflop row (9,413 steps). HF exports use the same cadence (Levanter resolves
     ``steps_per_hf_export=None`` to ``steps_per_export``).
     """
     return max(MIN_STEPS_PER_EXPORT, int(num_train_steps * EXPORT_FRACTION_OF_RUN))
@@ -375,6 +367,23 @@ def _build_adamh(base: MidtrainingBaseConfig, lr_factor: float, warmup_steps: in
         lr_schedule="linear",
         nesterov=False,
     )
+
+
+def _assert_continued_pretraining_optimizer_state_policy(train_cfg: SimpleTrainConfig) -> None:
+    """Continued pretraining loads base weights only and starts a fresh optimizer.
+
+    This file is the K=0.20 continued-pretraining sweep: the base checkpoint is
+    consumed through ``initialize_from_checkpoint_path`` with ``MODEL_ONLY``.
+    That deliberately drops the pretrain optimizer state. Normal preemption
+    recovery from this run's own output path still restores this run's full
+    trainer state before this initialization branch is reached.
+    """
+    if train_cfg.initialize_from_checkpoint_path is None:
+        raise AssertionError("continued pretraining must initialize model weights from a base checkpoint")
+    if train_cfg.checkpoint_init_mode is not CheckpointInitMode.MODEL_ONLY:
+        raise AssertionError(
+            "continued pretraining must use CheckpointInitMode.MODEL_ONLY so the pretrain optimizer state resets"
+        )
 
 
 def _selected_compute_config(base: MidtrainingBaseConfig) -> V5PComputeConfig:
@@ -681,11 +690,12 @@ def _build_runs() -> list[ExecutorStep]:
                 # the schedule to min_lr for the entire midtrain run.
                 # See .agents/logbooks/midtraining_delphi.md.
                 checkpoint_init_mode=CheckpointInitMode.MODEL_ONLY,
-                steps_per_eval=STEPS_PER_EVAL,
+                steps_per_eval=_steps_per_eval(num_train_steps),
                 steps_per_export=_steps_per_export(num_train_steps),
                 # HF export cadence: None → matches steps_per_export.
                 steps_per_hf_export=None,
             )
+            _assert_continued_pretraining_optimizer_state_policy(train_cfg)
 
             name = _build_run_name(base_tag, lr_factor, token_budget)
             if _OUTPUT_PATH_OVERRIDE is not None:

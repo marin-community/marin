@@ -21,7 +21,7 @@ from typing import Any, Required, TypedDict, TypeGuard
 MANIFEST_FILENAME = "midtrain_manifest.json"
 TRAIN_CONFIG_FILENAME = "train_lm_config.yaml"
 LAUNCH_COMMAND_FILENAME = "launch_command.txt"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class TokenizerRecord(TypedDict, total=False):
@@ -54,6 +54,11 @@ class RunManifestRow(TypedDict, total=False):
     wandb_project: Required[str]
     wandb_entity: Required[str]
     base_flops_key: Required[str]
+    tpu_type: Required[str]
+    train_batch_size: Required[int]
+    per_device_parallelism: Required[int]
+    max_retries_failure: int
+    max_task_failures: Required[int]
     data_manifest_uri: Required[str]
     data_manifest_fingerprint: Required[str]
     tokenizer: Required[TokenizerRecord]
@@ -94,6 +99,10 @@ def is_run_manifest(row: Any) -> TypeGuard[RunManifestRow]:
         "wandb_project",
         "wandb_entity",
         "base_flops_key",
+        "tpu_type",
+        "train_batch_size",
+        "per_device_parallelism",
+        "max_task_failures",
         "data_manifest_uri",
         "data_manifest_fingerprint",
         "tokenizer",

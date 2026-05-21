@@ -1,5 +1,27 @@
 # Delphi × Nemotron-CC-Math 10 B midtraining — logbook
 
+> ## 🚨 CRITICAL — 1e20 RESULTS IN THIS LOGBOOK USED THE WRONG BASE MODEL 🚨
+>
+> **Discovered 2026-05-14.** Every "1e20" cell logged below — across the April 10 B sweep, the April 20 B sweep, and the May K=0.20 36-cell sweep — was trained from `isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5`. **This is NOT a Delphi compute-optimal checkpoint.** It's from a deprecated v5 isoflop sweep generation with a different optimizer recipe (different LR formula, different `/H` treatment, different (d, L) architecture). Will Held (Delphi lead) confirmed: *"a checkpoint from a totally different scaling recipe."*
+>
+> The canonical Delphi 3e20 base is `isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6` (d=2304 vs 2048, L=23 vs 21, v6 heuristic). Registered in `experiments/exp1337_eval_suite.py:180`.
+>
+> **1e21 and 1e22 results in this logbook ARE valid** — those used the canonical `adamh-scaling-ladder-nemotron-optimal-{1e+21,1e+22}-v5-...` runs, which use the v6 heuristic (`LABEL = "adamh_scaling_v6"`, `exp1337_delphi_suite.py:62`). The `-v5-` in their names is an unrelated experiment-iteration tag.
+>
+> **Contaminated claims:** the cross-scale transfer headline ("recipe ranks generalize cleanly across scales") and the mix-gap stability (0.103 / 0.106 / 0.106) are weakened because the 1e20 point is from a different scaling family. The 1e21 → 1e22 within-family results survive.
+>
+> **Full post-mortem:** [`.agents/ops/2026-05-14-wrong-1e20-base-v5-vs-v6.md`](../ops/2026-05-14-wrong-1e20-base-v5-vs-v6.md)
+>
+> **Rule for future agents:** NEVER pick a scaling-law base by grepping GCS. Always source from one of:
+> 1. `experiments/exp1337_eval_suite.py` EVAL_BASES (lines 174-186) — canonical mapping
+> 2. `MARIN_SCALING_SUITES["nemotron-completed-adamh"]` in `experiments/isoflop_sweep.py`
+> 3. `experiments/exp1337_delphi_suite.py`
+> 4. https://huggingface.co/collections/marin-community/delphi
+>
+> If the registry doesn't include the scale you need, STOP. Ping Will Held. Do not silently substitute.
+
+---
+
 ## WARNING — resume identity must come from one old output path
 
 Do not relaunch a failed Delphi midtraining run with hand-written
@@ -8577,3 +8599,1358 @@ For future midtraining sweeps: keep `-e MIDTRAIN_MAX_TASK_FAILURES 100` on every
   5. `[midtrain] Log 2026-05-07 placement-collision recurrence and resiliency plan`
   6. (this) `[logbook] Log 2026-05-09 v5p-64 resubmission with MAX_TASK_FAILURES + outcome`
 - User has now asked to push `midtrain_data` to origin so the work is durable across session/machine boundaries. Pushing this branch only — no PR cycle yet for the iris/fray plumbing (that's a separate engineering review with the iris owners).
+
+# codex 5.5 2026-05-16T00:22:21Z
+
+Changed `experiments/exp_delphi_math_10b_midtrain.py` so eval cadence is
+normalized per run length instead of hard-coded at 200 steps.
+
+Rationale:
+
+- The file already derived checkpoint cadence from `num_train_steps` so each
+  run got roughly the same rollback density.
+- Eval cadence was still fixed at `STEPS_PER_EVAL = 200`, which gave shorter
+  cells fewer validation points. That made the 1e21 curves coarser than the
+  longer 1e22 curves.
+
+New policy:
+
+- `_steps_per_eval(num_train_steps)` targets about 40 eval points per run via
+  `EVAL_FRACTION_OF_RUN = 0.025`.
+- `MAX_STEPS_PER_EVAL = 200` preserves the historical longest-run cadence.
+- `MIN_STEPS_PER_EVAL = 25` avoids pathological tiny intervals in short smoke
+  runs.
+- Current expected examples:
+  - `num_train_steps=4_411` -> eval every `110` steps.
+  - `num_train_steps=7_646` -> eval every `191` steps.
+  - historical `num_train_steps=9_413` -> capped at `200` steps.
+
+Validation run:
+
+```bash
+uv run pytest experiments/test_default_train_init_mode.py -q
+uv run python -m py_compile experiments/exp_delphi_math_10b_midtrain.py \
+  experiments/test_default_train_init_mode.py
+./infra/pre-commit.py --fix experiments/exp_delphi_math_10b_midtrain.py \
+  experiments/test_default_train_init_mode.py
+```
+
+# claude 2026-05-16T09:27Z — Launched 3e18 K=0.20 sweep as 12 top-level iris jobs
+
+User direction: "first kill all jobs i have running. OK, let's do the minimum
+correct sweep launch all of those jobs but launch them one by one be extremely
+careful! do not start a monitor. Just tell me when you have launched the
+jobs.!"
+
+## What happened
+
+1. Stopped/verified terminal: all prior `/ahmed/aa-delphi-3e18-cpt-k020-*`
+   coordinators (rounds 1-5) are terminal. The round-5 coord `1778947003`
+   was stopped earlier in the session after the cascade-kill investigation;
+   no other non-terminal jobs under `/ahmed/`.
+2. Surgically tightened `experiments/midtrain_specs/delphi_small_cpt_k020.py`:
+   - `--base / --mix / --lr` are now `required=True` with `choices=...` and
+     a single value each (no `action="append"`). The script can no longer
+     default to "all 72 cells" — invocation without selectors is a hard CLI
+     error. This eliminates the foot-gun that produced rounds 1-5 coords,
+     which each submitted 12 children at once and got cascade-killed when
+     the parent reached SUCCEEDED. The redesign doc said multi-cell sweeps
+     must loop in the driver shell, never inside the launcher.
+   - Per-base TPU allowlist (`ALLOWED_TPUS_PER_BASE`): a `--tpu` outside
+     the allowlist for the chosen base raises before submission. Picking
+     a too-small TPU (e.g. 2e20 on v5p-8) or unnecessarily large (v5p-64
+     on 3e18) is now a launch-time error rather than a silent waste.
+   - Stale env-var rejection: any of `RUN_ID`, `WANDB_RUN_ID`, or anything
+     prefixed `MIDTRAIN_` / `TRUE_MIDTRAIN_` in the shell aborts the
+     launch. The redesign doc forbids identity-from-shell-env.
+   - Deleted the legacy `for cell in cells:` loop + `time.sleep(spacing)`
+     in `main()`. The script now resolves one spec, preflights, writes the
+     manifest/yaml, submits one training child, blocks on `result.wait()`,
+     and exits. Each `iris job run` is a top-level coordinator that lives
+     for exactly one TPU training run.
+3. Cleaned orphan a001 resources from round 5 (none of these dirs had a
+   real step-N checkpoint — only `train_lm_config.yaml`,
+   `midtrain_manifest.json`, and an empty `eval_metrics.jsonl`):
+   - `gs://marin-us-east5/checkpoints/delphi-3e18-{p33m67,p50m50}-k0p20-lr*-a001/`
+     (7 dirs)
+   - `gs://marin-us-east5/midtrain-manifests/runs/delphi-3e18-{p33m67,p50m50}-k0p20-lr*.json`
+     (7 files)
+4. `--dry-run` clean for two endpoint cells (lr33 and lr83). Reported
+   `tpu=v5p-8, steps=7400` — matches the K=0.20 plan for 3e18.
+5. Submitted 12 separate top-level iris jobs, one per (mix, lr) cell, at
+   interactive priority in us-east5. Each is a CPU-1/3GB/9GB coordinator
+   running `python experiments/midtrain_specs/delphi_small_cpt_k020.py
+   --base 3e18 --mix MIX --lr LR`; inside, the script submits one TPU child
+   and blocks on it.
+
+## Job IDs
+
+| # | run_id                              | iris job id                              |
+|---|-------------------------------------|------------------------------------------|
+| 1 | delphi-3e18-p33m67-k0p20-lr33-a001  | /ahmed/aa-d3e18-p33m67-lr33-1778948729   |
+| 2 | delphi-3e18-p33m67-k0p20-lr50-a001  | /ahmed/aa-d3e18-p33m67-lr50-1778948749   |
+| 3 | delphi-3e18-p33m67-k0p20-lr67-a001  | /ahmed/aa-d3e18-p33m67-lr67-1778948759   |
+| 4 | delphi-3e18-p33m67-k0p20-lr83-a001  | /ahmed/aa-d3e18-p33m67-lr83-1778948769   |
+| 5 | delphi-3e18-p50m50-k0p20-lr33-a001  | /ahmed/aa-d3e18-p50m50-lr33-1778948780   |
+| 6 | delphi-3e18-p50m50-k0p20-lr50-a001  | /ahmed/aa-d3e18-p50m50-lr50-1778948790   |
+| 7 | delphi-3e18-p50m50-k0p20-lr67-a001  | /ahmed/aa-d3e18-p50m50-lr67-1778948800   |
+| 8 | delphi-3e18-p50m50-k0p20-lr83-a001  | /ahmed/aa-d3e18-p50m50-lr83-1778948814   |
+| 9 | delphi-3e18-p67m33-k0p20-lr33-a001  | /ahmed/aa-d3e18-p67m33-lr33-1778948824   |
+|10 | delphi-3e18-p67m33-k0p20-lr50-a001  | /ahmed/aa-d3e18-p67m33-lr50-1778948834   |
+|11 | delphi-3e18-p67m33-k0p20-lr67-a001  | /ahmed/aa-d3e18-p67m33-lr67-1778948846   |
+|12 | delphi-3e18-p67m33-k0p20-lr83-a001  | /ahmed/aa-d3e18-p67m33-lr83-1778948857   |
+
+## Deliberately NOT done (deferred from the audit, lower priority)
+
+- W&B run-id preflight (audit item #2). The attempt suffix (`-aNNN`)
+  makes fresh-attempt collisions unlikely; we'd only re-collide if the
+  same invocation was retried within the same attempt counter. Adding a
+  `wandb.Api().run(...)` check is straightforward but adds a network call
+  per invocation; not blocking for this sweep.
+- The remaining 5 bases (9e18, 2e19, 3e19, 9e19, 2e20). The user
+  explicitly scoped this round to 3e18. Once these 12 are observed to
+  actually start training (TPU acquired, levanter Resuming/initializing
+  log lines, first W&B step), we can submit the next base's 12 cells
+  with the same script.
+
+## Per the user
+
+No monitor started.
+
+## 16:41Z follow-up — 10 pending coordinators resubmitted as `--preemptible`
+
+Check-in at 16:33Z showed 2/12 coordinators running and 10/12 pending on the
+iris controller CPU pool (`Scheduler: Insufficient CPU (need 1 cores,
+available 0.1 cor…`). The first-submission iris log line revealed why:
+
+```
+iris.cli.job Executor heuristic: auto-tagging job as non-preemptible
+```
+
+iris's heuristic auto-tags small CPU-only jobs (no direct TPU request) as
+non-preemptible. The non-preemptible CPU pool was saturated; interactive
+priority only helps with queue ordering, not capacity. User correctly
+recalled that the legacy `exp_delphi_math_10b_midtrain.py` launches used
+`--preemptible`.
+
+Action: stopped the 10 pending coordinators (`iris job stop
+--no-include-children` with explicit ids per
+`feedback_iris_job_stop_listing_cap`) and resubmitted with the same
+arguments plus `--preemptible`. All 10 went from submit to `running` with
+zero queue time — preemptible CPU pool clearly has plenty of capacity. The
+2 originally-running non-preemptible coordinators left as-is (their TPU
+children were already underway; killing them would lose progress).
+
+Post-resubmission state (16:41Z):
+
+- 12/12 coordinators: running
+- 9/12 TPU children: running on v5p-8 workers
+- 3/12 TPU children: pending on the TPU pool (`Scheduler: Insufficient TPUs
+  (need 4, available 0) - 105 wor...`). These are the last three submitted
+  (p67m33 lr50/lr67/lr83); they'll pick up TPUs as the earlier batch's
+  workers free up or as the preemptible TPU pool churns.
+
+Updated coordinator iris job ids (the 10 resubmissions):
+
+| run_id                              | new iris job id                          |
+|-------------------------------------|------------------------------------------|
+| delphi-3e18-p33m67-k0p20-lr67-a001  | /ahmed/aa-d3e18-p33m67-lr67-1778949552   |
+| delphi-3e18-p33m67-k0p20-lr83-a001  | /ahmed/aa-d3e18-p33m67-lr83-1778949563   |
+| delphi-3e18-p50m50-k0p20-lr33-a001  | /ahmed/aa-d3e18-p50m50-lr33-1778949574   |
+| delphi-3e18-p50m50-k0p20-lr50-a001  | /ahmed/aa-d3e18-p50m50-lr50-1778949585   |
+| delphi-3e18-p50m50-k0p20-lr67-a001  | /ahmed/aa-d3e18-p50m50-lr67-1778949595   |
+| delphi-3e18-p50m50-k0p20-lr83-a001  | /ahmed/aa-d3e18-p50m50-lr83-1778949605   |
+| delphi-3e18-p67m33-k0p20-lr33-a001  | /ahmed/aa-d3e18-p67m33-lr33-1778949615   |
+| delphi-3e18-p67m33-k0p20-lr50-a001  | /ahmed/aa-d3e18-p67m33-lr50-1778949625   |
+| delphi-3e18-p67m33-k0p20-lr67-a001  | /ahmed/aa-d3e18-p67m33-lr67-1778949635   |
+| delphi-3e18-p67m33-k0p20-lr83-a001  | /ahmed/aa-d3e18-p67m33-lr83-1778949645   |
+
+The 2 original non-preemptible coordinators (still running) keep their
+prior ids `aa-d3e18-p33m67-lr33-1778948729` and `aa-d3e18-p33m67-lr50-1778948749`.
+
+## 17:45Z follow-up — throughput macro registry added; 3e18 sweep is making progress despite v5p preemption churn
+
+This entry records the post-redesign operational state from the Claude session.
+Going forward, keep run operations, status checks, and tactical decisions in
+this logbook. Keep `.agents/logbooks/midtraining_redesign.md` as the design
+record for the launcher and API.
+
+### Throughput reference module added
+
+User asked for a pure macro-style tracker to estimate wall-clock for future
+Delphi runs without letting those estimates affect launch behavior. Claude added
+`experiments/throughput_stats.py`.
+
+Design:
+
+- Pure reference/data module. It imports only stdlib modules and is not imported
+  by the training stack.
+- Confirmed no `lib/` code references `throughput_stats`.
+- `ThroughputAnchor` records `model_flops_key`, `tpu_type`,
+  `train_batch_size`, `seq_len`, `per_device_parallelism`, `step_time_s`,
+  `wandb_run_path`, `measured_at`, and notes.
+- `estimate_wall_time_s(...)` requires an exact `(model, tpu)` anchor. It uses
+  the exact step time for matching batch/seq, linearly scales by
+  tokens-per-step for same-model/same-TPU different batch/seq, and refuses to
+  extrapolate across TPU families.
+- CLI examples:
+
+```bash
+uv run python experiments/throughput_stats.py --list
+uv run python experiments/throughput_stats.py \
+  --model 3e18 --tpu v5p-8 --steps 7400 \
+  --train-batch-size 8 --seq-len 4096
+```
+
+Seed anchor:
+
+- Source run: `marin-community/delphi-midtraining/delphi-3e18-p33m67-k0p20-lr33-a001`.
+- Rendered training config:
+  - `train_batch_size: 8`
+  - `seq_len: 4096`
+  - `num_train_steps: 7400`
+  - `per_device_parallelism: -1`
+- Tokens per step: 32,768.
+- Measured mid-flight at roughly 1,647 steps in 27:29 wall-clock, including
+  about 3 evals. After subtracting eval overhead, pure train was roughly
+  0.89 s/step; the anchor uses conservative `1.0 s/step`.
+- Estimated train-only wall time for a 7,400-step 3e18 run on v5p-8: about
+  2.06 h.
+
+Future work:
+
+1. Walk each Delphi pretrain W&B run once and populate one v5p anchor per base.
+2. Add v6e anchors as soon as any Delphi cell completes on v6e-4 or v6e-8.
+3. Consider an eval-overhead field if wall-clock estimates need to include
+   amortized validation time rather than train-only time.
+
+### 17:45Z status check
+
+At roughly 17:45Z, about 1h20m after the 3e18 launch wave, the sweep was split:
+5/12 cells were training cleanly and had crossed the first permanent checkpoint;
+7/12 were still in the preempt-before-first-checkpoint loop.
+
+Healthy/training cells:
+
+| Cell | Steps | Loss | Preemptions | Notes |
+|---|---:|---:|---:|---|
+| p33m67-lr33 | 4,630 / 7,400 (63%) | 2.36 | 0 | past first checkpoint |
+| p33m67-lr50 | 4,810 / 7,400 (65%) | 1.98 | 0 | past first checkpoint |
+| p33m67-lr67 | 4,260 / 7,400 (58%) | 2.21 | 0 | past first checkpoint |
+| p33m67-lr83 | 2,410 / 7,400 (33%) | 2.26 | 1 | recovered after preemption |
+| p50m50-lr33 | 4,260 / 7,400 (58%) | 2.97 | 0 | past first checkpoint |
+
+The first permanent checkpoint is around step 370. Once a cell crosses that
+point, future preemptions should resume from disk instead of starting again
+from HF initialization and step-0 eval.
+
+Cells stuck before first checkpoint:
+
+| Cell | Iris state | Preemptions | Effective steps | Notes |
+|---|---|---:|---:|---|
+| p50m50-lr50 | running | 4 | 2 | attempt #5 |
+| p50m50-lr67 | pending | 4 | 2 | waiting for TPU |
+| p50m50-lr83 | pending | 4 | 2 | waiting for TPU |
+| p67m33-lr33 | pending | 4 | 2 | waiting for TPU |
+| p67m33-lr50 | pending | 4 | 2 | waiting for TPU |
+| p67m33-lr67 | pending | 3 | 2 | waiting for TPU |
+| p67m33-lr83 | pending | 4 | 2 | waiting for TPU |
+
+Each failed attempt spent roughly 6 minutes on bundle/JIT/step-0 eval/first
+train step, then lost the v5p preemptible worker before reaching step 370. W&B
+still showed the runs as `running` because `resume="allow"` reconnected after
+each restart, but the stuck cells' useful training progress was pinned around
+step 2.
+
+Options discussed at that point:
+
+1. Wait for the cells to catch a clean 6+ minute window.
+2. Lower the first checkpoint cadence, e.g. checkpoint around step 50, then
+   resubmit stuck cells.
+3. Move stuck cells to v6e-8 in us-east5-b. This is operationally fast but
+   would be the first Delphi v6e smoke.
+4. Move to another v5p region/zone. This has lower model risk than v6e but
+   introduces cross-region storage concerns if leaving us-east5.
+
+### Why interactive jobs were still preempted
+
+The preemptions were GCP spot/preemptible reclaim events, not another Marin
+user preempting us through Iris priority. The logs named workers like
+`marin-tpu-v5p-preemptible-8-us-east5-a-*`.
+
+Important distinction:
+
+- Iris priority (`production`, `interactive`, `batch`) controls scheduling
+  order inside Iris.
+- GCP preemptibility controls whether the underlying VM can be reclaimed.
+- Marin has `v5p-preemptible` configured, but no non-preemptible/reserved v5p
+  pool. `--priority interactive` does not turn a v5p preemptible worker into an
+  on-demand worker.
+
+Dashboard interpretation:
+
+- The dashboard was not stale.
+- Iris cluster status matched the dashboard: at the time, v5p-8 showed
+  `Ready=45, Demand=0` in `us-east5-a` and `Ready=7, Demand=20` in
+  `us-central1-a`, for 52 live v5p-8 slices total.
+- The apparent ~37% "idle" fraction was interpreted as average VM downtime /
+  preemption churn, not a pool of idle v5p slots available to bind our jobs.
+- The alive east5 workers were already occupied by shared-cluster work. When
+  one of our workers was preempted, that cell re-entered the queue and lost
+  position while stable jobs kept their workers.
+
+Conclusion: this is not pointless, but the first-checkpoint window is too
+expensive under high spot churn. Once cells cross step ~370, the run becomes
+normal checkpoint-resume training; before that, each preemption restarts the
+same expensive startup path.
+
+### Subsequent progress check
+
+A later check showed significant net progress: 9/12 cells were now healthy and
+advancing, up from 5/12. Four previously stuck cells crossed the first
+checkpoint.
+
+Healthy/training cells:
+
+| Cell | Steps | Loss | Preemptions | Notes |
+|---|---:|---:|---:|---|
+| p33m67-lr33 | 5,740 / 7,400 (78%) | 2.10 | 0 | oldest wave |
+| p33m67-lr50 | 5,920 / 7,400 (80%) | 1.54 | 0 | oldest wave |
+| p33m67-lr67 | 5,550 / 7,400 (75%) | 2.08 | 0 | oldest wave |
+| p33m67-lr83 | 3,520 / 7,400 (48%) | 2.16 | 1 | recovered |
+| p50m50-lr33 | 5,180 / 7,400 (70%) | 2.32 | 0 | oldest wave |
+| p50m50-lr50 | 742 / 7,400 (10%) | 2.16 | 4 | past step 370 |
+| p50m50-lr67 | 372 / 7,400 (5%) | 2.30 | 4 | just crossed step 370 |
+| p50m50-lr83 | 557 / 7,400 (8%) | 3.19 | 4 | past step 370 |
+| p67m33-lr33 | 557 / 7,400 (8%) | 3.14 | 4 | past step 370 |
+
+Still stuck:
+
+| Cell | Preemptions | Effective steps | Notes |
+|---|---:|---:|---|
+| p67m33-lr50 | 4 | 2 | preempt-before-checkpoint loop |
+| p67m33-lr67 | 3 | 2 | preempt-before-checkpoint loop |
+| p67m33-lr83 | 4 | 2 | preempt-before-checkpoint loop |
+
+Rough ETA from that check:
+
+- The five oldest cells had about 30-40 minutes remaining.
+- The four just-rescued cells had about 2 hours remaining.
+- The three stuck cells were waiting for a clean window; they could land
+  quickly or continue to churn.
+
+Operational takeaway: the 3e18 sweep was making real progress. The stuck-cell
+problem was localized to cells that had not yet crossed the first checkpoint,
+not evidence that the launch was globally broken.
+
+# claude 2026-05-16T18:24Z — Consolidated 3e18 sweep reference (final job ids + state)
+
+This section pins the authoritative job-id table for the 3e18 K=0.20 sweep so
+future agents do not have to reconstruct it from scattered earlier entries.
+The first 2 of the 12 cells (`p33m67-lr33`, `p33m67-lr50`) ran as
+`--no-preemptible` coordinators from the original 16:25–16:27Z submission
+batch (auto-tagged by iris's executor heuristic). The other 10 were stopped
+at 16:38Z when 10/12 were stuck pending on the non-preemptible CPU pool, then
+resubmitted at 16:39–16:40Z with `--preemptible`. The TPU children are
+preemptible regardless of coordinator flag — Marin's only v5p pool is
+`v5p-preemptible` (see `feedback_iris_cpu_coordinator_preemptible` memory).
+
+## Authoritative job-id table
+
+All 12 cells were submitted as standalone top-level `iris job run`
+coordinators (no shared parent). Format: `<coordinator job id> /
+<child task id>`. Region: us-east5. TPU: v5p-8. Priority: interactive.
+Child W&B id matches the run_id column (under
+`marin-community/delphi-midtraining/<run_id>`).
+
+| run_id (== W&B id)                   | Coordinator iris job                     | Child iris job (under coordinator)                                                  | Coord preemptible? |
+|--------------------------------------|------------------------------------------|--------------------------------------------------------------------------------------|---|
+| delphi-3e18-p33m67-k0p20-lr33-a001   | /ahmed/aa-d3e18-p33m67-lr33-1778948729   | .../midtrain-delphi-3e18-p33m67-k0p20-lr33-a001                                      | no |
+| delphi-3e18-p33m67-k0p20-lr50-a001   | /ahmed/aa-d3e18-p33m67-lr50-1778948749   | .../midtrain-delphi-3e18-p33m67-k0p20-lr50-a001                                      | no |
+| delphi-3e18-p33m67-k0p20-lr67-a001   | /ahmed/aa-d3e18-p33m67-lr67-1778949552   | .../midtrain-delphi-3e18-p33m67-k0p20-lr67-a001                                      | yes |
+| delphi-3e18-p33m67-k0p20-lr83-a001   | /ahmed/aa-d3e18-p33m67-lr83-1778949563   | .../midtrain-delphi-3e18-p33m67-k0p20-lr83-a001                                      | yes |
+| delphi-3e18-p50m50-k0p20-lr33-a001   | /ahmed/aa-d3e18-p50m50-lr33-1778949574   | .../midtrain-delphi-3e18-p50m50-k0p20-lr33-a001                                      | yes |
+| delphi-3e18-p50m50-k0p20-lr50-a001   | /ahmed/aa-d3e18-p50m50-lr50-1778949585   | .../midtrain-delphi-3e18-p50m50-k0p20-lr50-a001                                      | yes |
+| delphi-3e18-p50m50-k0p20-lr67-a001   | /ahmed/aa-d3e18-p50m50-lr67-1778949595   | .../midtrain-delphi-3e18-p50m50-k0p20-lr67-a001                                      | yes |
+| delphi-3e18-p50m50-k0p20-lr83-a001   | /ahmed/aa-d3e18-p50m50-lr83-1778949605   | .../midtrain-delphi-3e18-p50m50-k0p20-lr83-a001                                      | yes |
+| delphi-3e18-p67m33-k0p20-lr33-a001   | /ahmed/aa-d3e18-p67m33-lr33-1778949615   | .../midtrain-delphi-3e18-p67m33-k0p20-lr33-a001                                      | yes |
+| delphi-3e18-p67m33-k0p20-lr50-a001   | /ahmed/aa-d3e18-p67m33-lr50-1778949625   | .../midtrain-delphi-3e18-p67m33-k0p20-lr50-a001                                      | yes |
+| delphi-3e18-p67m33-k0p20-lr67-a001   | /ahmed/aa-d3e18-p67m33-lr67-1778949635   | .../midtrain-delphi-3e18-p67m33-k0p20-lr67-a001                                      | yes |
+| delphi-3e18-p67m33-k0p20-lr83-a001   | /ahmed/aa-d3e18-p67m33-lr83-1778949645   | .../midtrain-delphi-3e18-p67m33-k0p20-lr83-a001                                      | yes |
+
+## State at 18:24:35Z (~2h after launch)
+
+Pulled from `iris cluster status` + `iris job logs` + `iris job summary` per
+cell. All 12 iris children show `state=running`. The "step" column is the
+training step on the current attempt (already-resumed-from-disk on cells
+past step 370).
+
+| run_id                              | iris state | preemptions | step    | total | % done | train loss |
+|-------------------------------------|------------|------------:|--------:|------:|-------:|-----------:|
+| p33m67-k0p20-lr33                   | running    |           0 |   6,850 | 7,400 |    93% |       2.53 |
+| p33m67-k0p20-lr50                   | running    |           0 |   7,220 | 7,400 |    98% |       1.61 |
+| p33m67-k0p20-lr67                   | running    |           0 |   6,480 | 7,400 |    88% |       2.02 |
+| p33m67-k0p20-lr83                   | running    |           1 | (eval)  | 7,400 |    >50%| (n/a)      |
+| p50m50-k0p20-lr33                   | running    |           0 |   6,480 | 7,400 |    88% |       2.17 |
+| p50m50-k0p20-lr50                   | running    |           4 |   2,040 | 7,400 |    28% |       2.39 |
+| p50m50-k0p20-lr67                   | running    |           4 |   1,480 | 7,400 |    20% |       2.63 |
+| p50m50-k0p20-lr83                   | running    |           4 |   1,670 | 7,400 |    23% |       3.19 |
+| p67m33-k0p20-lr33                   | running    |           4 |   1,670 | 7,400 |    23% |       3.74 |
+| p67m33-k0p20-lr50                   | running    |           5 |       2 | 7,400 |    <1% |       2.95 |
+| p67m33-k0p20-lr67                   | running    |           4 |       2 | 7,400 |    <1% |       2.95 |
+| p67m33-k0p20-lr83                   | running    |           5 |       2 | 7,400 |    <1% |       2.95 |
+
+Categories:
+
+- **Past first checkpoint, healthy** (9/12): step >= 370, so any subsequent
+  preemption resumes from disk rather than restarting from the HF weights.
+  Includes the 4 cells that were stuck earlier (preempt=4) but eventually
+  caught a 6+ minute window during step 0–370.
+- **Pre-checkpoint preempt loop** (3/12): p67m33-lr50/67/83. Each has
+  cumulative ~25–30 min of wall-clock burned in the bundle→eval-0→step-1
+  startup path with zero stable training progress. Preemption count keeps
+  ticking; the only thing changing per attempt is the iris worker name.
+
+Math validation loss snapshot (from the oldest cell at step ~5,000, eval at
+`nemotron_cc_math_v1/4plus`): values in the 1.6–2.5 range across mixes/LRs,
+consistent with the 1e21 reference curve at the same fractional progress.
+Bit-identical val partition; cross-scale comparisons valid.
+
+## Throughput / step-time registry
+
+New file: `experiments/throughput_stats.py` — pure data + helper module
+listing measured `ThroughputAnchor` tuples per (model, TPU). Seeded with one
+mid-flight anchor (3e18 on v5p-8 at ~1.0 s/step) sourced from the
+delphi-3e18-p33m67-k0p20-lr33-a001 run. Module is intentionally not imported
+by any training code; it exists so future agents can answer "how long will
+this run take on that hardware?" via `--list` / `--estimate` CLI without
+reverse-engineering from logs. TODOs left in-file: populate v5p anchors for
+9e18, 2e19, 3e19, 9e19, 2e20 from each base's pretrain W&B run; add v6e
+anchors as soon as any cell completes on v6e-{4,8}. See the
+"Decisions deferred" section of
+`.agents/logbooks/midtraining_redesign.md` for the rationale.
+
+## Outstanding decisions (handoff state)
+
+1. **3 stuck cells.** Options still open: (a) wait — could be hours of churn;
+   (b) tighten `min_permanent_steps` to ~50 and resubmit the 3, so first
+   checkpoint lands inside the typical preemption interval; (c) move the 3 to
+   v6e-8 in us-east5-b (small calmer pool, but first Delphi v6e run, treat as
+   smoke). User wants to decide; do not act unilaterally.
+2. **Throughput anchors for the rest of the Delphi ladder.** Off the critical
+   path for this sweep but the next base submission would benefit. Tracked in
+   the throughput_stats TODOs.
+3. **Superseded operator note**:
+   the earlier `feedback_iris_cpu_coordinator_preemptible.md` claim was
+   wrong for the one-cell launcher. Do **not** pass `--preemptible` on Iris
+   CPU coordinators that wrap a TPU child. The a002 relaunch packed all
+   twelve coordinators onto one preemptible v5p worker; one worker failure
+   retried all parents and cascade-killed the children. Use stable CPU for
+   the coordinator (`--no-preemptible` or omit `--preemptible` and let the
+   CPU heuristic choose non-preemptible); the nested TPU training child is
+   still preemptible.
+
+## 2026-05-19T01:10Z — 9e18/2e19 a002 Batch Sweep Status
+
+Checked the `a002` full sweeps after several hours of batch scheduling:
+
+- `9e18/v6e-4`: `12/12` Iris jobs running. Representative cell
+  `delphi-9e18-p33m67-k0p20-lr33-a002` is actively training at
+  `7.75k/8.82k` steps and has recent checkpoint activity at step `7525`.
+  Iris summary shows `3` TPU preemptions, but the run is resuming and making
+  forward progress.
+- `2e19/v6e-8`: `8/12` Iris jobs running and `4/12` pending. The pending
+  jobs are the `p67m33` cells, all blocked by scheduler capacity:
+  `Insufficient TPUs (need 8, available 0)`.
+- Representative `2e19` cell `delphi-2e19-p33m67-k0p20-lr33-a002` is
+  actively training at `2.17k/10.98k` steps, has saved permanent checkpoint
+  `step-2196`, and has seen `9` TPU preemptions.
+- No failed `9e18` or `2e19` `a002` jobs were observed in this check.
+
+Throughput sanity check against the 20-step probes:
+
+- `2e19/v6e-8` is matching the probe. Probe anchor:
+  `0.345s/step` (`2.90 it/s`) for `train_batch_size=16`, `seq_len=4096`.
+  Live train-only log lines show `2.8 it/s`, about `0.357s/step`, within
+  roughly `4%` of the probe.
+- `9e18/v6e-4` has no direct 9e18 probe anchor in
+  `experiments/throughput_stats.py`. The nearest same-hardware anchor is
+  `2e19/v6e-4` at `0.573s/step` with the same `train_batch_size=16` and
+  `seq_len=4096`. The live `9e18/v6e-4` train-only rate is `2.4 it/s`, about
+  `0.417s/step`, which is faster than the larger 2e19 anchor as expected.
+- Ignore the occasional `~55s/it` progress lines when comparing throughput;
+  those are emitted across eval/checkpoint stalls, not steady train steps.
+
+ETA notes at `2026-05-19T01:15Z`:
+
+- `9e18`: all 12 cells are running. Sampled cells range from about
+  `6.17k/8.82k` to `7.93k/8.82k`. At the live steady train rate
+  (`~2.4-2.5 it/s`), the remaining train work is roughly `7-20` minutes per
+  sampled cell, but eval/checkpoint/HF export and future preemptions make the
+  practical completion window closer to `30-60` minutes.
+- `2e19`: 8 cells are running and 4 `p67m33` cells remain pending for
+  `v6e-8`. Running-cell logs are uneven because of preemptions: one sampled
+  cell is at `2.37k/10.98k` with a train-only remaining estimate around
+  `52` minutes; another sampled cell has restarted from HF at step `1` with
+  no checkpoint yet. Once a `2e19/v6e-8` cell is stably allocated, expect
+  about `1.0h` train-only from scratch and roughly `1.5-2h` wall-clock after
+  startup/eval/export/preemption overhead.
+- `2e19/v5p-8` is not faster per step. Probe anchors say:
+  - `2e19/v6e-8`: `0.345s/step`, `1.05h` train-only for `10,983` steps.
+  - `2e19/v5p-8`: `0.511s/step`, `1.56h` train-only for `10,983` steps.
+  v5p-8 only wins wall-clock for the pending cells if the v6e-8 queue wait is
+  longer than about `35-45` minutes, after accounting for relaunch/startup
+  overhead.
+
+## 2026-05-19T01:28Z — Isoflop Ladder + Cadence Sanity Check
+
+Verified the current Delphi registry and small-CPT launcher:
+
+- Isoflop bucket winners in the registry are:
+  `3e18`, `9e18`, `2e19`, `3e19`, `9e19`, `2e20`, `3e20`.
+  The original sweep constant uses `1.8e19` / `1.8e20`, but the registry and
+  HF-facing names round these to `2e19` / `2e20`.
+- The current `experiments/midtrain_specs/delphi_small_cpt_k020.py` launcher
+  intentionally includes bases only through `2e20`; `3e20` is registered in
+  `experiments/delphi_models.py` but is not currently in that launch grid.
+- The scales between `2e19` and `3e20` are: `3e19`, `9e19`, `2e20`, then
+  `3e20`.
+
+Rendered config sanity check for `p33m67/lr0.5`:
+
+| base | CPT steps | permanent checkpoint / HF export interval | warmup | decay |
+|---|---:|---:|---:|---|
+| `3e18` | 7,400 | 740 | 0.1 | `None` |
+| `9e18` | 8,819 | 881 | 0.1 | `None` |
+| `2e19` | 10,983 | 1,098 | 0.1 | `None` |
+| `3e19` | 7,574 | 757 | 0.1 | `None` |
+| `9e19` | 8,033 | 803 | 0.1 | `None` |
+| `2e20` | 11,278 | 1,127 | 0.1 | `None` |
+
+Code path:
+
+- `MidtrainSpec.permanent_fraction = 0.10`.
+- `render_train_lm_config(...).trainer.checkpointer.keep = [{"every":
+  int(num_train_steps * 0.10)}]`, floor-rounded with a `min_permanent_steps`
+  guard of `50`.
+- `hf_save_steps` uses the same interval.
+- Temporary checkpointing is separate: `save_interval: "10m"` to the TTL temp
+  checkpoint path.
+- `CPT_DEFAULT_WARMUP_FRACTION = 0.10`; `CPT_DEFAULT_DECAY = None`, which
+  means Levanter decays over the full post-warmup remainder with no stable
+  plateau.
+
+## 2026-05-19T04:41Z — 3e19 / 9e19 Batch Launch Handoff
+
+Decision: launch both `3e19` and `9e19` full K=0.20 sweeps on `v6e-8`,
+batch priority, with `256g` container memory. Rationale: the `3e19/v6e-8`
+probe succeeded cleanly; the `9e19/v6e-8` probe reached train step 19 and
+failed only during HF export under lower RAM, so the relaunch uses doubled
+RAM. `v5p-8` was not selected because it is not a good fit for `9e19`, and
+the useful throughput/HBM signal points to `v6e-8`.
+
+State:
+
+- `a001` partial materialization was local-only and was cleaned from GCS; no
+  `a001` full-sweep Iris jobs were launched.
+- `a002` materialized all 24 configs/manifests. Launch source:
+  `scratch/20260519T040130Z_delphi_3e19_9e19_a002_launch.tsv`.
+- Python submit log:
+  `scratch/20260519T042113Z_delphi_3e19_9e19_a002_python_submit_remaining.log`.
+- The first Python submitter was too slow because it resent the workspace
+  bundle blob on every `client.submit`. After reading the `bundle_id` from an
+  already-submitted job (`2974349143c96317a0532f66484afc4b287485852b78c3fed99c17fa89ee7b75`),
+  a second submit pass reused the bundle id.
+- Bundle-id submit log:
+  `scratch/20260519T043848Z_delphi_3e19_9e19_a002_submit_with_bundle_id.log`.
+- Submission is complete: `24/24` full-sweep jobs landed
+  (`submitted=13 existing=11 failed=0` in the bundle-id submit pass).
+
+Controller state observed around `04:41Z`:
+
+- `3e19`: `12/12` full-sweep jobs landed.
+  - Running: all four `p33m67` cells.
+  - Pending for `v6e-8` capacity: all four `p50m50` and all four `p67m33`
+    cells.
+- `9e19`: `12/12` full-sweep jobs landed, all pending for `v6e-8` capacity.
+
+Next action: monitor scheduling/progress. The current blocker is capacity
+(`Scheduler: Insufficient TPUs (need 8, available 0)`), not a launch failure.
+
+## 2026-05-19T04:57Z — Full-Sweep Status Snapshot
+
+Iris state snapshot for active Delphi full-sweep attempts:
+
+| sweep | attempt | status |
+|---|---|---|
+| `3e18` | `a003` | `12/12` succeeded |
+| `9e18` | `a002` | `9/12` succeeded, `3/12` running |
+| `2e19` | `a002` | `3/12` succeeded, `9/12` running |
+| `3e19` | `a002` | `4/12` running, `8/12` pending on `v6e-8` capacity |
+| `9e19` | `a002` | `12/12` pending on `v6e-8` capacity |
+
+Running cells:
+
+- `9e18`: `p33m67/lr67`, `p67m33/lr33`, `p67m33/lr83`.
+- `2e19`: `p33m67/lr83`, all four `p50m50`, all four `p67m33`.
+- `3e19`: all four `p33m67`.
+- `2e20` probe: `p67m33/lr50`, `v5p-16`, `a005`, still running.
+
+No active full-sweep job in this snapshot was in a failed/killed terminal
+state. The remaining blocker for the newly launched `3e19`/`9e19` jobs is
+scheduler capacity, not submit/config failure.
+
+## 2026-05-20T00:21Z — Future-Agent Handoff Map for Small Delphi CPT
+
+Where the context lives:
+
+- `.agents/logbooks/midtraining_redesign.md` is the design document for the
+  post-executor small-CPT launcher. It records the intended architecture and
+  policy choices, including fixed 10% warmup, `decay=None` triangular LR,
+  per-base K=0.20 budgets, preflight/manifest design, and why the launcher is
+  direct-Iris rather than executor-based.
+- `.agents/logbooks/codex_fixes_midtraining.md` is only for actual code fixes
+  and audit findings after the redesign. It records the WSD schedule bug,
+  preflight temp/permanent checkpoint fixes, startup-proof fixes, and manifest
+  schema additions. Do not use it as a training-status log.
+- `.agents/logbooks/midtraining_delphi.md` is the live experiment logbook for
+  Delphi midtraining. Use it for sweep launches, status snapshots, operational
+  failures, hardware choices, and throughput observations.
+- `experiments/throughput_stats.py` is the pure advisory hardware/throughput
+  registry. It is intentionally not imported by training code. Use it for
+  train-only wall-time estimates and update it from measured W&B/Iris runs.
+
+Small-suite state captured so far:
+
+- Implemented small-CPT launcher:
+  `experiments/midtrain_specs/delphi_small_cpt_k020.py`.
+- Covered bases in the launcher: `3e18`, `9e18`, `2e19`, `3e19`, `9e19`,
+  `2e20`; `3e20` exists in `experiments/delphi_models.py` but is not in this
+  launcher grid.
+- Each full sweep is 12 cells: 3 mixes (`p33m67`, `p50m50`, `p67m33`) × 4 LR
+  multipliers.
+- Rendered schedule policy is fixed across the small suite: `warmup=0.1`,
+  `decay=None`, `lr_schedule=linear`, no WSD plateau.
+- Permanent checkpoint / HF export cadence is `int(num_train_steps * 0.10)`
+  with `min_permanent_steps=50`; temporary checkpoints use the separate
+  10-minute TTL path.
+- Full `3e18/a003` sweep succeeded.
+- `9e18/a002`, `2e19/a002`, `3e19/a002`, and `9e19/a002` were submitted as
+  batch-priority sweeps; earlier status snapshots in this logbook record their
+  running/pending state.
+
+Latest 2e20 hardware note:
+
+- Probe run:
+  `marin-community/delphi-midtraining/delphi-2e20-p67m33-k0p20-lr50-probe-v5p16-30s-a005`
+  on `v5p-16`.
+- It reached a stable train window before being killed by preemption churn
+  (`5` preemptions). This was not an HBM/OOM failure.
+- Measured stable speed: median `2.079s/step`, about `126k tok/s`, about
+  `41.8%` W&B MFU over global steps `2-9`.
+- HBM utilization was not logged in W&B history or Iris logs. The useful
+  conclusion is only that `2e20` compiled and ran steady train steps on
+  `v5p-16` with no `RESOURCE_EXHAUSTED` / HBM error; numeric HBM margin is
+  unknown.
+- `experiments/throughput_stats.py` now has a provisional `2e20/v5p-16`
+  anchor from this probe. It estimates a full K=0.20 `2e20` cell at about
+  `6.5h` train-only on `v5p-16`; practical wall-clock per cell is closer to
+  `7-8h` before queue/preemption effects.
+- Recommendation from current evidence: use `v5p-16` for `2e20` full sweeps.
+  Do not assume `v5p-8` fits or is worthwhile without a separate probe.
+
+Operational note:
+
+- At `2026-05-20T00:19Z`, the only ready `v5p-256` slice in
+  `us-central1-a` was fully occupied by Michael Ryan's batch-priority job
+  `/michaelryan/hq-fm-3000-budget-ext-v2/curation-curation-high_quality_3000-expFM_natural-9e+20-d1536-L16-B1024`
+  (`32/32` tasks running on
+  `marin-tpu-v5p-preemptible-256-us-central-20260519-2343-4c908b75`).
+
+## 2026-05-20T01:03Z — 2e20 v5p-8 probe launched
+
+Per-user request to see if `2e20` (1.9B params, batch=64) fits on `v5p-8`
+before committing to `v5p-32`/`v5p-64` for the full sweep. The v5p-16 probe
+ran cleanly (see entry above), but v5p-8 is half the chip count and pushes
+`per_device_parallelism` to 16 — explicitly flagged in the prior handoff as
+"do not assume v5p-8 fits without a probe."
+
+Code changes:
+
+- `experiments/midtrain_specs/delphi_small_cpt_k020.py`:
+  `ALLOWED_TPUS_PER_BASE["2e20"]` extended to
+  `frozenset({"v5p-8", "v5p-16", "v5p-32", "v5p-64"})`. v5p-8/v5p-16 still
+  require an explicit `--tpu` override; `DEFAULT_TPU["2e20"]` remains
+  `v5p-32`.
+
+Launch:
+
+```bash
+uv run iris --cluster=marin job run \
+  --cpu 1 --memory 3GB --disk 9GB \
+  --region us-east5 \
+  --priority interactive \
+  --no-preemptible \
+  --job-name aa-d2e20-probe-v5p8-30s-1779238972 \
+  --no-wait \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e MARIN_PREFIX gs://marin-us-east5 \
+  -- python experiments/midtrain_specs/delphi_small_cpt_k020.py \
+    --base 2e20 --mix p67m33 --lr 0.5 --tpu v5p-8 --probe-steps 30 \
+    --run-suffix probe-v5p8-30s --attempt 1
+```
+
+Rendered spec (from `--dry-run`):
+
+- Run id: `delphi-2e20-p67m33-k0p20-lr50-probe-v5p8-30s-a001`
+- TPU: `v5p-8` (preemptible/batch via Fray default; us-east5-a worker
+  allocated)
+- Container RAM: `256g`
+- num_train_steps: `30` (BudgetPolicy.fixed_steps via `--probe-steps 30`)
+- W&B project: `delphi-midtraining`
+- Probe tags: `probe:throughput-hbm`, `probe_steps:30`,
+  `do_not_compare:quality`
+
+Parent: `/ahmed/aa-d2e20-probe-v5p8-30s-1779238972` (CPU coordinator,
+`--no-preemptible --priority interactive`, us-east5).
+Child: `/ahmed/aa-d2e20-probe-v5p8-30s-1779238972/midtrain-delphi-2e20-p67m33-k0p20-lr50-probe-v5p8-30s-a001/0`
+on `marin-tpu-v5p-preemptible-8-us-east5-a-20260520-0101-4e102db9-worker-0`.
+
+Status as of `2026-05-20T01:04:39Z`: child has finished `syncing deps`,
+`installing pip deps`, activated venv, and is `running user command`. No
+HBM/OOM yet — Levanter is in the HF-checkpoint download / JIT-compile phase
+before the first train step.
+
+Outcome at `2026-05-20T01:33Z` — probe **succeeded cleanly**:
+
+- W&B state: `finished`, last step 29.
+- First train step completed in `28.0s` (JIT compile + first compile-bound
+  step).
+- Steady-state median step time from W&B `throughput/duration` over
+  global_step >= 5 (25 samples): **`3.471 s/step`**, min/max
+  `3.466 / 3.476` (very tight; cleanly captured probe window).
+- Tokens/step = `64 * 4096 = 262,144`; about **75.5k tok/s**.
+- No `RESOURCE_EXHAUSTED` / HBM errors; no exit-137 host-OOM; no
+  preemptions. Permanent checkpoint at `step-29` saved cleanly at
+  `01:31:30Z`.
+
+Implications for the full 2e20 K=0.20 sweep (`num_train_steps=11,278`):
+
+| TPU | step time | wall-clock/cell | chip-h/cell | 12-cell total chip-h |
+|---|---:|---:|---:|---:|
+| `v5p-8` (new) | 3.471 s | **10.87 h** | 87 | **~1,046** |
+| `v5p-16` (prior probe) | 2.079 s | 6.51 h | 104 | ~1,248 |
+
+So v5p-8 is **~1.67x slower per cell but ~16% cheaper in chip-hours** than
+v5p-16. Per-device load doubles (8 vs 4 seq/chip), which scales close to
+linearly here — measured 1.67x vs ideal 2.0x suggests we are mildly
+memory-bandwidth bound, not compute-bound, on v5p at this scale.
+
+Anchor added to `experiments/throughput_stats.py` so the planner can use it:
+
+```
+$ uv run python experiments/throughput_stats.py --model 2e20 --tpu v5p-8 \
+    --steps 11278 --train-batch-size 64 --seq-len 4096
+Estimated train-only wall time: 10.87h (39146s)
+  anchor:  marin-community/delphi-midtraining/delphi-2e20-p67m33-k0p20-lr50-probe-v5p8-30s-a001
+```
+
+Recommendation: v5p-8 is **safe to use for the 2e20 full K=0.20 sweep**
+when capacity is more available than wall-clock. v5p-16 stays the right
+choice if turnaround time matters more than chip-hour cost. v5p-32
+(launcher default) is still unprobed — no anchor for it yet.
+
+## 2026-05-20T01:48Z — Full 2e20 K=0.20 sweep launched on v5p-8 (a001)
+
+Per-user decision: launch the full 2e20 sweep on v5p-8 with interactive
+priority, accepting the ~1.67x slower per-cell wall-clock for ~16% lower
+chip-hour cost vs v5p-16. Estimated total spend ~1,046 v5p-8 chip-hours
+across 12 cells (3 mixes × 4 LRs × 87 chip-h/cell).
+
+Pre-launch:
+
+- Dry-runs: 12/12 cells passed preflight. Rendered as
+  `delphi-2e20-<mix>-k0p20-lr<LR>-a001`, `tpu=v5p-8`, `ram=256g`,
+  `num_train_steps=11,278`.
+- GCS namespaces: all 12 a001 paths empty in `us-east5`. No prior probe
+  artifacts at the full-sweep names (probe lived at the distinct
+  `-probe-v5p8-30s-` suffix).
+
+Launch pattern (one iris job run per cell, 20s spacing, CPU coordinator
+not preemptible):
+
+```bash
+uv run iris --cluster=marin job run \
+  --cpu 1 --memory 3GB --disk 9GB \
+  --region us-east5 \
+  --priority interactive \
+  --no-preemptible \
+  --job-name aa-d2e20-<mix>-lr<LR>-a001-<timestamp> \
+  --no-wait \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e MARIN_PREFIX gs://marin-us-east5 \
+  -- python experiments/midtrain_specs/delphi_small_cpt_k020.py \
+    --base 2e20 --mix <mix> --lr <LR> --tpu v5p-8 --attempt 1
+```
+
+CPU coordinator on `--priority interactive` (so it doesn't queue behind
+batch CPU work). The v5p-8 TPU child is submitted by the python launcher
+through Fray; v5p-8 only exists as a preemptible/batch pool
+(`tpu_v5p-preemptible_8-us-east5-a` / `-us-central1-a`), so the child
+inherits effective batch priority regardless. Submit log:
+`/tmp/2e20_v5p8_a001_submit_1779241725.log`.
+
+12 submitted parent job ids:
+
+- `/ahmed/aa-d2e20-p33m67-lr33-a001-1779241726`
+- `/ahmed/aa-d2e20-p33m67-lr50-a001-1779241754`
+- `/ahmed/aa-d2e20-p33m67-lr67-a001-1779241781`
+- `/ahmed/aa-d2e20-p33m67-lr83-a001-1779241807`
+- `/ahmed/aa-d2e20-p50m50-lr33-a001-1779241836`
+- `/ahmed/aa-d2e20-p50m50-lr50-a001-1779241865`
+- `/ahmed/aa-d2e20-p50m50-lr67-a001-1779241892`
+- `/ahmed/aa-d2e20-p50m50-lr83-a001-1779241919`
+- `/ahmed/aa-d2e20-p67m33-lr33-a001-1779241947`
+- `/ahmed/aa-d2e20-p67m33-lr50-a001-1779241974`
+- `/ahmed/aa-d2e20-p67m33-lr67-a001-1779242001`
+- `/ahmed/aa-d2e20-p67m33-lr83-a001-1779242029`
+
+Initial Iris state at `2026-05-20T01:54Z` (a few minutes after the last
+submit): 6/12 parents `RUNNING`, 6/12 pending on on-demand CPU capacity.
+First two cells already created their v5p-8 TPU child task (pending on
+v5p-8 capacity). No early failures.
+
+Babysit window armed for 15 min (background task `bimjywmo5`) — emits
+state counts every minute, flags any terminal failures. The 9e18/2e19/3e19
+a002 sweeps gave us confidence the schedule and HF-export-OOM are
+non-issues at 256g RAM, so the 15-min window is mainly to catch any
+config/preflight regressions and verify the CPU coordinators stay alive
+past the dependency-sync window.
+
+## 2026-05-20T14:55Z — Mass-preempt by Romain's vLLM serving job
+
+While the sweep was 78-97% through training (12/12 cells actively running on
+v5p-8 us-east5-a, ~13 h after launch), **all 12 cells got preempted in one
+shot** at `14:55Z` by:
+
+```
+/romain/served-qwen3-humaneval-full-4w-v5p8-useast5-20260520-145529
+```
+
+That's a 4-worker qwen3-humaneval serving job. The preemption error
+recorded in `task_attempts.error` for every one of our 12 cells was the
+same `"Preempted by /romain/served-qwen3-humaneval-full-4w-v5p8-useast5..."`
+string. No cell was permanently lost — all 12 parents stayed in
+`JOB_STATE_RUNNING` and Iris managed retries.
+
+### Why a "production" job could preempt our "interactive" sweep
+
+Inspected the Iris `PriorityBand` enum (decoded from
+`lib/iris/src/iris/rpc/job_pb2.py`):
+
+```
+PRIORITY_BAND_UNSPECIFIED = 0
+PRIORITY_BAND_PRODUCTION  = 1
+PRIORITY_BAND_INTERACTIVE = 2
+PRIORITY_BAND_BATCH       = 3
+```
+
+`job_config.priority_band` per job class:
+
+| Job | priority_band | name |
+|---|---:|---|
+| Our parent CPU coordinators (12) | `2` | INTERACTIVE (set by `iris job run --priority interactive`) |
+| **Our child v5p-8 TPU jobs (12)** | **`0`** | **UNSPECIFIED** |
+| Romain's `served-qwen3-humaneval-full-4w-v5p8` (all tasks) | `1` | PRODUCTION |
+| Probe parent (reference) | `2` | INTERACTIVE |
+| Probe child (reference) | `0` | UNSPECIFIED |
+
+The TPU child is submitted by `submit_launch` in
+`lib/marin/src/marin/midtraining/launch.py` via Fray's `JobRequest`. That
+path does **not pass a `priority_band`**, so Iris records the child as
+band 0 (UNSPECIFIED), which the scheduler treats as below PRODUCTION.
+Romain's PRODUCTION-tier serving job thus had the right to evict our
+TPU training children, regardless of our parent's INTERACTIVE band.
+
+The 2026-05-16 codex audit (`codex_fixes_midtraining.md`) explicitly
+removed `ComputeProfile.priority` because it was set but not propagated
+to Fray/Iris. Today's preemption is the consequence of that gap not yet
+being plumbed end-to-end. Adding priority to the Fray submit path is the
+fix; the audit note already calls this out as a follow-up.
+
+### Recovery
+
+By `2026-05-20T22:14Z` Iris had spawned **fresh task lineages**
+(attempt_id reset to 0 for each cell) on new v5p-8 workers. Levanter
+resumed each cell from its temp checkpoint and the progress recovered:
+
+| Cell | Pre-preempt step | At 22:27Z post-recovery |
+|---|---:|---:|
+| `p33m67-lr33` | 10,955 (97.1%) | 11,185 (99.2%) |
+| `p33m67-lr50` | 10,869 (96.4%) | 11,008 (97.6%) |
+| `p33m67-lr67` | 9,799 (86.9%) | 9,964 (88.3%) |
+| `p33m67-lr83` | 8,875 (78.7%) | 8,999 (79.8%) |
+| `p50m50-lr33` | 10,599 (94.0%) | 10,612 (94.1%) |
+| `p50m50-lr50` | 10,653 (94.5%) | 10,799 (95.8%) |
+| `p50m50-lr67` | 10,464 (92.8%) | 10,599 (94.0%) |
+| `p50m50-lr83` | 8,949 (79.3%) | 9,123 (80.9%) |
+| `p67m33-lr33` | 9,269 (82.2%) | 9,415 (83.5%) |
+| `p67m33-lr50` | 9,599 (85.1%) | 9,799 (86.9%) |
+| `p67m33-lr67` | 9,477 (84.0%) | 9,599 (85.1%) |
+| `p67m33-lr83` | 9,799 (86.9%) | 9,875 (87.6%) |
+
+Wall-clock cost of the event: ~7h between preemption and full resumption
+(includes Romain's serving job occupying capacity + Iris re-scheduling +
+HF/JIT re-download per cell). No data lost; resumption-from-temp-checkpoint
+worked as designed.
+
+## 2026-05-21T01:35Z — 2e20 a001 progress + 9e19 a002 completion
+
+### 9e19 a002
+
+All **12/12 cells `state=finished` at step 8032/8033**. The 11 cells that
+were still in flight at the 2026-05-19 status snapshot completed
+overnight. No remediation needed; sweep is shippable.
+
+### 2e20 a001 — **12/12 finished** ✅
+
+Sweep complete at `2026-05-21T02:41Z`. All 12 cells `state=finished`
+at Levanter terminal step `11,277/11,278`. Iris parents all in state 4
+(SUCCEEDED).
+
+| Cell | Finished | Final step |
+|---|---|---:|
+| `p33m67-lr33` | 22:53Z | 11,277/11,278 |
+| `p33m67-lr50` | 23:03Z | 11,277/11,278 |
+| `p33m67-lr67` | ≤01:16Z | 11,277/11,278 |
+| `p33m67-lr83` | 02:41Z | 11,277/11,278 |
+| `p50m50-lr33` | 23:58Z | 11,277/11,278 |
+| `p50m50-lr50` | 23:47Z | 11,277/11,278 |
+| `p50m50-lr67` | 23:58Z | 11,277/11,278 |
+| `p50m50-lr83` | 02:07Z | 11,277/11,278 |
+| `p67m33-lr33` | 01:35Z | 11,277/11,278 |
+| `p67m33-lr50` | ≤01:16Z | 11,277/11,278 |
+| `p67m33-lr67` | 01:38Z | 11,277/11,278 |
+| `p67m33-lr83` | ≤01:16Z | 11,277/11,278 |
+
+Total wall-clock for the sweep: **~25h** from launch
+(`2026-05-20T01:48Z`) to last cell finished (`2026-05-21T02:41Z`). That
+includes the ~7h recovery from Romain's mass-preempt event, plus
+per-cell preemption churn (which the launcher absorbed transparently via
+temp-checkpoint resume). Estimated train-only per-cell wall-clock was
+~10.87h from the v5p-8 probe anchor; actual per-cell wall-clock tracked
+that closely, with the preemption events extending it ~2x for cells
+caught mid-preempt.
+
+Monitor `bca8pfsmr` stopped at sweep completion.
+
+Wall-clock between the 22:14Z full recovery and 01:35Z: ~3h 21m for the
+first 8 finishes. Slowest two remaining cells (`p33m67-lr83`,
+`p50m50-lr83`) need a few more hours. State-transition monitor
+(`bca8pfsmr`) is live and emitting per cell-finish event.
+
+### Isoflop-bucket-winner K=0.20 CPT status
+
+The 7 v6 isoflop-bucket-winner bases (3e18 → 3e20) are the "small Delphi"
+ladder this launcher targets. Current state:
+
+| Isoflop | Sweep id | Cells done | Status |
+|---|---|---:|---|
+| `3e18` | a003 | 12/12 | ✅ done |
+| `9e18` | a002 | 12/12 | ✅ done (a001 OOM'd in HF export; a002 fixed with 256g RAM) |
+| `2e19` | a002 | 12/12 | ✅ done |
+| `3e19` | a002 | 12/12 | ✅ done |
+| `9e19` | a002 | 12/12 | ✅ done |
+| `2e20` | a001 | 12/12 | ✅ done (finished 2026-05-21T02:41Z) |
+| `3e20` | a001 | 0/12 | 🏃 in flight on v5p-16 (launched 2026-05-20T20:30Z) |
+
+## 2026-05-20T20:30Z — Full 3e20 K=0.20 sweep launched on v5p-16 (a001)
+
+Closing out the v6 isoflop-bucket-winner ladder. 3e20 was the only base
+left in the 3e18 → 3e20 set without a CPT sweep.
+
+### Correctness checks before any submission
+
+User asked to `MAKE SURE IT'S CORRECT` because Trap #1 in
+`.agents/projects/delphi_midtraining.md` is exactly the "pick wrong v5
+ablation as 3e20 base" scenario. Walking through full verification:
+
+1. **Base canonicality.** `DELPHI_3E20.gcs_run_root` =
+   `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6` —
+   contains `adamh_scaling_v6` (canonical). `assert_not_banned` passes.
+   **NOT** the `d2048-L21-B128-adamh_scaling_v5` deprecated ablation.
+2. **Architecture match.** Registry: `d=2304, L=23, params=2.5B,
+   batch=128, num_train_steps=35,408` — matches the postmortem's
+   canonical 3e20 ISOFlop bucket winner and HF repo
+   `marin-community/delphi-3e20-2.5Bparams-18.6Btokens`.
+3. **Hparam formula check** (per Trap #2 verification protocol). For
+   `(B=128, T=18.56B, H=2304)` against the v2 AdamH/Complete(d)P recipe:
+
+   | Param | Stored | v2 predicted | v1 predicted | v2 match? |
+   |---|---:|---:|---:|---|
+   | `peak_lr` | `4.878e-3` | `4.882e-3` | `1.620e-3` | ✅ within 0.1% |
+   | `peak_adam_lr` | `3.400e-4` | `3.404e-4` | — | ✅ within 0.2% |
+   | `beta2` | `0.999800` | `0.999800` | `0.960400` | ✅ exact |
+   | `epsilon` | `3.570e-8` | `3.565e-8` | — | ✅ within 0.2% |
+
+   All four match the v2 recipe within < 0.2% rounding. v1 prediction
+   is off by 3× on `peak_lr` and 4% on `beta2`. **Definitively v6**.
+4. **Token math.** Pretrain tokens = `128 × 35,408 × 4,096 =
+   18,563,948,544` ≈ 18.56B ✓ (matches HF repo's `18.6Btokens` suffix).
+5. **K=0.20 budget math.** Launcher rendered `num_train_steps=7,082`
+   (`floor(3,712,789,709 / 524,288) = 7,082.66`) → K = 0.19999 actual,
+   off from 0.20 by 11 ppm. Same math as the other isoflop sweeps.
+6. **Tests.** Extended
+   `tests/midtraining/test_val_set_equivalence.py`'s base_key
+   parametrize list to include `"3e20"`; 3/3 mixes pass — the rendered
+   `data:` block bit-matches the legacy 1e21 reference.
+7. **Dry-runs.** All 12 cells (3 mixes × 4 LR factors) render
+   `tpu=v5p-16, ram=256g, num_train_steps=7082`. Pre-commit clean.
+8. **GCS namespace.** All 12 a001 paths empty in us-east5.
+
+### TPU choice rationale (v5p-16)
+
+User picked v5p-16. Per-chip load vs working 2e20 anchors:
+
+| Hardware | Chips | 3e20 seq/chip | Reference |
+|---|---:|---:|---|
+| v5p-8 | 4 | 32 | 2× the 2e20/v5p-8 load + 1.32× bigger model → high HBM risk; **excluded from allowlist** |
+| **v5p-16** | 8 | **16** | matches **2e20/v5p-8** anchor (which fit) with 1.32× larger params |
+| v5p-32 | 16 | 8 | safer fallback if v5p-16 OOMs |
+| v5p-64 | 32 | 4 | comfortable |
+
+`ALLOWED_TPUS_PER_BASE["3e20"] = {"v5p-16", "v5p-32", "v5p-64"}`.
+
+### Launch + first-submit race
+
+12 CPU-coordinator iris jobs at `--priority batch --no-preemptible`,
+region us-east5, 20s spacing, attempt 1. Each coordinator submits its
+v5p-16 TPU child via Fray.
+
+```bash
+uv run iris --cluster=marin job run \
+  --cpu 1 --memory 3GB --disk 9GB \
+  --region us-east5 \
+  --priority batch \
+  --no-preemptible \
+  --job-name aa-d3e20-<mix>-lr<LR>-a001-<timestamp> \
+  --no-wait \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -e MARIN_PREFIX gs://marin-us-east5 \
+  -- python experiments/midtrain_specs/delphi_small_cpt_k020.py \
+    --base 3e20 --mix <mix> --lr <LR> --tpu v5p-16 --attempt 1
+```
+
+The very first submission
+(`/ahmed/aa-d3e20-p33m67-lr33-a001-1779332811`) errored with
+`ConnectError: Job ... already exists and is still running`, then
+landed in iris state 5 (FAILED) with empty GCS namespace (parent never
+reached `write_manifest`). Hypothesis: iris client retried internally
+after a transient connection issue, and the second retry hit the
+"already exists" check on the first retry's submission. Resubmitted at
+`20:29:55Z` with fresh timestamp:
+`/ahmed/aa-d3e20-p33m67-lr33-a001-1779334184`.
+
+Final 12 active parents (one per cell):
+
+- `aa-d3e20-p33m67-lr33-a001-1779334184` (resubmit)
+- `aa-d3e20-p33m67-lr50-a001-1779333786`
+- `aa-d3e20-p33m67-lr67-a001-1779333812`
+- `aa-d3e20-p33m67-lr83-a001-1779333846`
+- `aa-d3e20-p50m50-lr33-a001-1779333872`
+- `aa-d3e20-p50m50-lr50-a001-1779333907`
+- `aa-d3e20-p50m50-lr67-a001-1779333933`
+- `aa-d3e20-p50m50-lr83-a001-1779333962`
+- `aa-d3e20-p67m33-lr33-a001-1779333987`
+- `aa-d3e20-p67m33-lr50-a001-1779334016`
+- `aa-d3e20-p67m33-lr67-a001-1779334049`
+- `aa-d3e20-p67m33-lr83-a001-1779334075`
+
+Initial state (~20:30Z post-submit): **4 parents RUNNING, 8 PENDING**
+on on-demand CPU (batch priority means slower CPU scheduling than the
+2e20 sweep got at interactive priority). 0/12 non-running children.
+No early failures. v5p-16 HBM fit remains unverified until the first
+cell completes JIT compile and lands its first train step (~15-20 min
+after a child gets a worker).
+
+State-transition monitor armed at `bvhrbleu2` (filters out the dead
+`1779332811` job so dedup picks the live `1779334184` replacement).
+
+### Code changes
+
+- `experiments/midtrain_specs/delphi_small_cpt_k020.py`:
+  - Added `DELPHI_3E20` to imports.
+  - `BASES["3e20"] = DELPHI_3E20`
+  - `DEFAULT_TPU["3e20"] = "v5p-16"`
+  - `ALLOWED_TPUS_PER_BASE["3e20"] = frozenset({"v5p-16", "v5p-32", "v5p-64"})`
+- `tests/midtraining/test_val_set_equivalence.py`: added `"3e20"` to
+  the `base_key` parametrize list of the data-section bit-identity
+  test. 3/3 mixes pass.
+
+## 2026-05-21T01:52Z — final-loss scaling-law first pass
+
+Question from Ahmed: before fitting full validation trajectories, start with
+the simplest endpoint analysis. For each completed small-ladder CPT cell, take
+the final observed validation loss and ask whether a power-law-style scaling
+fit across isoflop scale is visible.
+
+Plan:
+
+1. Fetch only W&B metadata/history rows for small-ladder runs named
+   `delphi-{3e18,9e18,2e19,3e19,9e19,2e20}-{mix}-k0p20-lr{33,50,67,83}-aNNN`.
+2. Use completed cells only for the fit; keep partial 2e20 cells in the table
+   but mark them out-of-fit.
+3. Fit per `(mix, lr, metric)` endpoint curves over compute scale with simple
+   forms: log-linear in loss, log-linear in improvement from baseline, and a
+   two-parameter power floor diagnostic when enough points exist.
+4. Write CSV/HTML outputs under `midtrain_analysis_outputs/small_final_loss_scaling/`
+   and summarize whether the endpoint curves look scale-law-like enough to
+   justify a richer trajectory model.
+
+Result:
+
+- Added `scripts/analysis/delphi_small_final_loss_scaling.py`.
+- Fetched W&B summaries from `marin-community/delphi-midtraining` and selected
+  the best exact non-probe attempt per `(scale, mix, lr)` cell.
+- Coverage at fetch time: `3e18`, `9e18`, `2e19`, `3e19`, `9e19` all `12/12`
+  complete; `2e20` `10/12` complete. The running `2e20` cells were retained in
+  `endpoints.csv` but excluded from fits.
+- Held-out math endpoint loss is extremely scale-law-like under the simplest
+  log-log fit `log(loss) = a + b log(compute)`: every recipe has `R^2 ~= 0.998`,
+  monotone non-increasing endpoints, and exponent tightly clustered around
+  `b ~= -0.096` (range `-0.0984` to `-0.0928`).
+- Aggregate `eval/loss` also fits cleanly but with a shallower exponent
+  (`median b ~= -0.0624`); Paloma macro/C4 are shallower again
+  (`median b ~= -0.046`).
+- 3-parameter `floor + A * compute^-alpha` fits improve RMSE slightly but are
+  diagnostic only with 5-6 scales; fitted floors vary by recipe and should not
+  be interpreted yet.
+
+Artifacts:
+
+- `midtrain_analysis_outputs/small_final_loss_scaling/endpoints.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/fit_summary.csv`
+- `midtrain_analysis_outputs/small_final_loss_scaling/summary.md`
+- `midtrain_analysis_outputs/small_final_loss_scaling/endpoint_math_val_loss.html`
+- `midtrain_analysis_outputs/small_final_loss_scaling/endpoint_eval_loss.html`
+- `midtrain_analysis_outputs/small_final_loss_scaling/endpoint_paloma_macro_loss.html`
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_small_final_loss_scaling.py`
+- `uv run python scripts/analysis/delphi_small_final_loss_scaling.py --use-cache`
+- `./infra/pre-commit.py --fix scripts/analysis/delphi_small_final_loss_scaling.py`
+
+## 2026-05-21T02:06Z — marimo notebook for endpoint-scaling diagnostics
+
+Ahmed could not judge fit quality from the static Plotly HTML and asked for a
+marimo notebook. Added:
+
+- `scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+
+Notebook behavior:
+
+- Reads the cached endpoint/fits outputs from
+  `midtrain_analysis_outputs/small_final_loss_scaling/`.
+- Provides controls for metric, mix, and fit family.
+- Shows a focused endpoint plot for one mix at a time with residuals directly
+  underneath the fit curve.
+- Adds leave-one-scale-out predicted-vs-observed diagnostics and an error
+  summary table, so fit quality is visible in raw loss units rather than only
+  by `R^2`.
+- Adds a recipe heatmap of log-linear exponents.
+
+Verification:
+
+- `./infra/pre-commit.py --fix scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+- `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+  (passes structurally; marimo emits markdown-indentation style warnings only)
+- `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
+- Started interactive server:
+  `uv run --with marimo marimo edit --headless --no-token --host 127.0.0.1 --port 2718 scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+
+## 2026-05-21T02:45Z — held-out 1e21/1e22 extrapolation overlay
+
+Ahmed asked to train the endpoint scaling fits only on the clean small ladder
+(`3e18` -> `2e20`) and then evaluate the fit against the local canonical Delphi
+`1e21` and `1e22` midtraining data.
+
+Implemented:
+
+- Extended `scripts/analysis/delphi_small_final_loss_scaling.py` to read held-out
+  targets from the local dump:
+  - `midtrain_analysis_outputs/midtrain_run_registry.csv`
+  - `midtrain_analysis_outputs/midtrain_trajectory_deltas.csv`
+- Wrote two new artifacts under
+  `midtrain_analysis_outputs/small_final_loss_scaling/`:
+  - `extrapolation_targets.csv`
+  - `extrapolation_predictions.csv`
+- Updated `scripts/analysis/delphi_small_final_loss_scaling_notebook.py` so the
+  marimo plot extends the small-ladder fit past the `2e20` boundary and overlays
+  `1e21`/`1e22` held-out points. Complete-like held-out targets render as
+  diamonds; best-prefix targets render as open x markers.
+
+Held-out target coverage from the local registry:
+
+| Scale | Complete-like targets |
+|---|---:|
+| `1e21` | 12/12 |
+| `1e22` | 9/12 |
+
+The three `1e22` best-prefix targets are `p33m67-lr83` at 93.9% progress,
+`p50m50-lr50` at 66.5%, and `p50m50-lr67` at 48.2%; they are included for
+visual context but clearly marked as prefixes.
+
+Math-validation log-linear extrapolation summary:
+
+| Target | Status | n | Mean abs error | Median observed - predicted | Mean pct error |
+|---|---|---:|---:|---:|---:|
+| `1e21` | complete | 12 | 0.00816 | -0.00809 | -0.84% |
+| `1e22` | complete | 9 | 0.06007 | -0.05573 | -9.98% |
+| `1e22` | best_prefix | 3 | 0.04293 | -0.00625 | -1.36% |
+
+Interpretation: the small-ladder endpoint law predicts `1e21` math validation
+loss quite well. At complete `1e22` cells the observed math loss is
+systematically lower than the small-ladder extrapolation predicts, so the
+simple fit is conservative at that jump. The effect is mix-dependent: complete
+`1e22` mean observed-minus-predicted error is about `-0.0870` for `p33m67`,
+`-0.0616` for complete `p50m50` cells, and `-0.0391` for `p67m33`.
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_small_final_loss_scaling.py --use-cache`
+- `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+  (structural pass; markdown-indentation style warnings only)
+- `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
+- `./infra/pre-commit.py --fix scripts/analysis/delphi_small_final_loss_scaling.py scripts/analysis/delphi_small_final_loss_scaling_notebook.py .agents/projects/delphi_midtraining.md`
+
+## 2026-05-21T03:08Z — refresh endpoint/extrapolation fits from live W&B
+
+Ahmed pointed out two stale assumptions in the first extrapolation pass:
+
+- the `2e20` small-ladder sweep had finished and should contribute all 12 cells;
+- the local `1e22` dump was stale, so held-out targets should be refreshed from
+  live W&B rather than `midtrain_trajectory_deltas.csv`.
+
+Read GitHub issue #4547. The issue's visible principled-sweep comment is still
+the older `1e22: 9/12 + 3 partial` snapshot, plus the later correction that the
+old `1e20` rows used a non-Delphi v5 isoflop base. Live W&B is newer than the
+local dump for two of the old `1e22` partials:
+
+- `p33m67-lr83` is now finished at step 7646.
+- `p50m50-lr50` is now finished at step 7646.
+- `p50m50-lr67` still appears as a best-prefix target in W&B at step
+  6382/7647, and `gs://marin-us-east5/checkpoints/delphi-1e22-p50m50-32p07b-lr0.67-e78260/hf/step-7646/`
+  does not exist at this check.
+
+Implemented:
+
+- `scripts/analysis/delphi_small_final_loss_scaling.py` now loads held-out
+  `1e21`/`1e22` targets from live W&B first, using the local trajectory dump
+  only as a fallback.
+- Refreshed outputs without `--use-cache`.
+
+Coverage after refresh:
+
+| Source | Scale | Complete-like targets |
+|---|---|---:|
+| small-ladder W&B summaries | `2e20` | 12/12 |
+| live W&B held-out targets | `1e21` | 12/12 |
+| live W&B held-out targets | `1e22` | 11/12 |
+
+Math-validation log-linear extrapolation summary after the full `2e20` refresh:
+
+| Target | Status | n | Mean abs error | Median observed - predicted | Mean pct error |
+|---|---|---:|---:|---:|---:|
+| `1e21` | complete | 12 | 0.00944 | -0.00922 | -1.00% |
+| `1e22` | complete | 11 | 0.06405 | -0.06751 | -10.72% |
+| `1e22` | best_prefix | 1 | 0.03597 | -0.03597 | -5.66% |
+
+Interpretation remains directionally unchanged: the small-ladder fit predicts
+`1e21` closely and is conservative at `1e22`, where observed math loss is lower
+than predicted. The fit now uses all 12 completed `2e20` rows, so the lr83
+recipes no longer train only through `9e19`.
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_small_final_loss_scaling.py`
+- `gcloud storage ls gs://marin-us-east5/checkpoints/delphi-1e22-p50m50-32p07b-lr0.67-e78260/hf/step-7646/`
+  returned no objects.
+
+## 2026-05-21T04:59Z — within-run prefix prediction notebook section
+
+Ahmed asked for a second analysis axis: predict final validation loss within a
+run from an early prefix (for example first 10% of training), tune the
+accuracy-vs-prefix tradeoff on small models through `2e20`, and then check
+generalization on `1e21`/`1e22`.
+
+Implemented:
+
+- Added `scripts/analysis/delphi_within_run_prediction.py`.
+- The script fetches validation trajectories from live W&B for the same 96
+  selected runs used by the endpoint notebook: 72 completed small-ladder runs
+  through `2e20`, 12 `1e21` held-out runs, and 12 `1e22` held-out runs.
+- It writes:
+  - `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_points.csv`
+  - `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_prefix_predictions.csv`
+  - `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_prefix_summary.csv`
+  - `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_method_selection.csv`
+  - `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_prediction_summary.md`
+- Added a marimo section to
+  `scripts/analysis/delphi_small_final_loss_scaling_notebook.py` with:
+  - method/prefix controls;
+  - the selected small-scale recipe table;
+  - the prefix-vs-error tradeoff table;
+  - per-run held-out prediction details;
+  - trajectory overlays with observed and predicted final markers.
+
+Methods tested:
+
+- `last_value`: carry forward the last validation point in the prefix.
+- `linear_tau`: fit a line in normalized progress `tau` and evaluate it at
+  `tau=1`.
+- `template_global`, `template_by_mix`, `template_by_recipe`: learn the median
+  fraction of final improvement achieved by a prefix on completed small-ladder
+  runs, then apply that fraction to the target run's observed prefix
+  improvement. Small-ladder evaluation is leave-one-run-out; held-out large
+  evaluation uses the full small-ladder template.
+
+Coverage:
+
+| Split | Scale | Complete-like targets |
+|---|---|---:|
+| small-CV | `3e18` | 12/12 |
+| small-CV | `9e18` | 12/12 |
+| small-CV | `2e19` | 12/12 |
+| small-CV | `3e19` | 12/12 |
+| small-CV | `9e19` | 12/12 |
+| small-CV | `2e20` | 12/12 |
+| held-out | `1e21` | 12/12 |
+| held-out | `1e22` | 11/12 |
+
+Selected accuracy/cost points:
+
+| Metric | Selected method | Prefix | Small-CV MAE | Held-out complete MAE | Held-out complete MAPE |
+|---|---|---:|---:|---:|---:|
+| `eval_loss` | `template_by_recipe` | 0.40 | 0.00574 | 0.03246 | 1.94% |
+| `math_val_loss` | `template_by_recipe` | 0.50 | 0.00387 | 0.02104 | 3.16% |
+| `paloma_c4_loss` | `template_by_recipe` | 0.10 | 0.00475 | 0.02159 | 0.80% |
+| `paloma_macro_loss` | `template_by_recipe` | 0.10 | 0.00514 | 0.02378 | 0.88% |
+
+Interpretation:
+
+- For math validation, 10% progress is useful but not reliable enough under
+  small-scale cross-validation. The best 10% method is `template_by_mix` with
+  small-CV MAE `0.0353`; the selected cost/accuracy point shifts to
+  `template_by_recipe` at 50% with small-CV MAE `0.00387`.
+- Paloma macro/C4 are easier to forecast early: both select
+  `template_by_recipe` at 10%.
+- The naive `linear_tau` extrapolator is a bad fit for early prefixes because
+  validation trajectories are curved in normalized training progress.
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_within_run_prediction.py`
+- `uv run python scripts/analysis/delphi_within_run_prediction.py --use-cache`
+- `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+- `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`

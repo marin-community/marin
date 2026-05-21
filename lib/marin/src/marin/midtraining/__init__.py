@@ -35,6 +35,8 @@ from marin.midtraining.launch import (
 )
 from marin.midtraining.levanter_config import render_train_lm_config, render_train_lm_yaml
 from marin.midtraining.modes import (
+    CPT_DEFAULT_DECAY,
+    CPT_DEFAULT_WARMUP_FRACTION,
     CheckpointOverride,
     CheckpointSourceKind,
     CooldownMode,
@@ -73,6 +75,8 @@ from marin.midtraining.tokenizers import LLAMA3_TOKENIZER, QWEN3_TOKENIZER, Toke
 from marin.midtraining.watch import StartupProof, evaluate_startup
 
 __all__ = [
+    "CPT_DEFAULT_DECAY",
+    "CPT_DEFAULT_WARMUP_FRACTION",
     "LLAMA3_TOKENIZER",
     "QWEN3_TOKENIZER",
     "SCHEMA_VERSION",
