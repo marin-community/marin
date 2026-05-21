@@ -11,11 +11,13 @@ import os
 import threading
 import time
 import uuid
+from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from fray import ResourceConfig
+from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from zephyr import counters
 from zephyr.dataset import Dataset
@@ -1303,9 +1305,6 @@ def test_heartbeat_failures_fail_actor_context():
     Without this, the worker would set only its internal ``_shutdown_event``
     and exit cleanly — iris would mark the task SUCCEEDED and never retry.
     """
-    from concurrent.futures import Future
-
-    from fray.actor import ActorContext
 
     class _FailingMethod:
         def remote(self, *args, **kwargs):
