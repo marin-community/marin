@@ -537,7 +537,6 @@ def _compute_file_pushdown(
     # into multiple SourceItems. Splits are best-effort: a row group is never divided,
     # so a shard can exceed approx_shard_bytes when a single row group is larger.
     source_items: list[SourceItem] = []
-    shard_idx = 0
     for entry in files:
         path = entry.path
         is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
@@ -545,7 +544,7 @@ def _compute_file_pushdown(
             for row_start, row_end in compute_parquet_splits(path, load_op.approx_shard_bytes):
                 source_items.append(
                     SourceItem(
-                        shard_idx=shard_idx,
+                        shard_idx=len(source_items),
                         data=InputFileSpec(
                             path=path,
                             format=load_op.format,
@@ -556,11 +555,10 @@ def _compute_file_pushdown(
                         ),
                     )
                 )
-                shard_idx += 1
         else:
             source_items.append(
                 SourceItem(
-                    shard_idx=shard_idx,
+                    shard_idx=len(source_items),
                     data=InputFileSpec(
                         path=path,
                         format=load_op.format,
@@ -569,7 +567,6 @@ def _compute_file_pushdown(
                     ),
                 )
             )
-            shard_idx += 1
 
     # Build final operations list: LoadFileOp + remaining ops
     final_ops = [load_op] + [op for i, op in enumerate(operations) if i not in ops_to_skip]
