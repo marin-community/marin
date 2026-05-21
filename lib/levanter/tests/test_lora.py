@@ -338,6 +338,33 @@ def test_lora_peft_export_uses_hf_llama_keys_and_target_modules(tmp_path):
     assert all("base_model.model.transformer." not in key for key in keys)
 
 
+def test_lora_peft_export_does_not_use_generic_numpy_state_dict(tmp_path, monkeypatch):
+    config = LlamaConfig(
+        max_seq_len=32,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        gradient_checkpointing=False,
+        scan_layers=False,
+    )
+    vocab = hax.Axis("vocab", 128)
+    model = LlamaLMHeadModel.init(vocab, config=config, key=jax.random.PRNGKey(0))
+    lora_config = LoraConfig(r=8)
+
+    loraized = loraize(model, lora_config, key=jax.random.PRNGKey(1))
+
+    def fail_generic_helper(*args, **kwargs):
+        raise AssertionError("PEFT export should use its mesh-aware state-dict path")
+
+    monkeypatch.setattr("haliax.state_dict.to_numpy_state_dict", fail_generic_helper)
+    save_peft_pretrained(loraized, lora_config, "marin-community/marin-8b-base", str(tmp_path))
+
+    with safe_open(tmp_path / "adapter_model.safetensors", framework="numpy") as tensors:
+        assert tensors.keys()
+
+
 def test_lora_works_with_checkpointer():
     with tempfile.TemporaryDirectory() as tempdir:
         k0 = jax.random.PRNGKey(0)

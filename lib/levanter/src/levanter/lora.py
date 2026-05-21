@@ -53,19 +53,22 @@ from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar, Unio
 
 import equinox as eqx
 import jax
+import numpy as np
 from jaxtyping import PyTree
 
 import haliax
 import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis
-from haliax.jax_utils import shaped_rng_split
+from haliax.jax_utils import is_jax_array_like, shaped_rng_split
 from haliax.state_dict import (
     ModuleWithStateDictSerialization,
     StateDict,
+    flatten_modules_for_export,
     save_state_dict,
-    to_torch_compatible_state_dict,
+    to_state_dict,
 )
+from jax.sharding import PartitionSpec
 
 from levanter.callbacks import StepInfo
 from levanter.compat.hf_checkpoints import (
@@ -697,6 +700,18 @@ def to_hf_config(
     }
 
 
+@eqx.filter_jit
+def _lora_state_dict_jax(model: M, prefix: str) -> StateDict:
+    lora_params = filter_lora_params(model)
+    lora_params = eqx.filter(lora_params, is_jax_array_like)
+    lora_params = flatten_modules_for_export(lora_params)
+    state_dict = to_state_dict(lora_params, prefix=prefix)
+    mesh = jax.sharding.get_abstract_mesh()
+    if mesh is not None and not mesh.empty:
+        state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
+    return state_dict
+
+
 def lora_state_dict(model: M, prefix: Optional[str] = DEFAULT_DICT_PREFIX) -> StateDict:
     """
     Returns a state dict of the LoRA parameters of the given model without other parameters.
@@ -704,5 +719,5 @@ def lora_state_dict(model: M, prefix: Optional[str] = DEFAULT_DICT_PREFIX) -> St
     """
     if prefix is None:
         prefix = _default_peft_state_dict_prefix(model)
-    state_dict = to_torch_compatible_state_dict(filter_lora_params(model), prefix=prefix)
-    return {k: v for k, v in state_dict.items() if v is not None}
+    state_dict = _lora_state_dict_jax(model, prefix)
+    return {k: np.asarray(v) for k, v in state_dict.items() if v is not None}
