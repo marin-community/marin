@@ -4,8 +4,9 @@
 """Raw Sonic Triton gather/combine backend for local Grug MoE.
 
 The Triton gather kernel is adapted from SonicMoE commit
-cfbd65f39b980b85b878b3cccdacb09191e24993,
-`sonicmoe/functional/reduction_over_k_gather.py`, also Apache-2.0.
+cfbd65f39b980b85b878b3cccdacb09191e24993:
+https://github.com/Dao-AILab/sonic-moe/blob/cfbd65f39b980b85b878b3cccdacb09191e24993/sonicmoe/functional/reduction_over_k_gather.py.
+SonicMoE is also Apache-2.0.
 """
 
 from collections.abc import Callable
