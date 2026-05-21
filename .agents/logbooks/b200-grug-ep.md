@@ -433,8 +433,16 @@
     - If we want to preserve `8` local experts per GPU instead, run a separate `experts=32` control.
 - Result:
   - Running.
-  - First observed case: `tokens=131072`, `shared_expert_dim=0`, kernel `current`.
+  - Observed cases:
+    - `tokens=131072`, `shared_expert_dim=0`, kernel `current`:
+      - `current`: `0.194346 s`, `0.674M tok/s`
+    - `tokens=131072`, `shared_expert_dim=0`, kernel `deepep_transport_capped_prewarmed`:
+      - `deepep_transport_capped_prewarmed`: `0.160582 s`, `0.816M tok/s`
+      - DeepEP is about `17.4%` faster on wall time.
+      - DeepEP exact caps: `max_recv_tokens=120064`, `max_local_assignments=262912`, `recv_factor=1.091684`, `assign_factor=3.988315`.
+      - The result line has emitted; the case end line has not emitted yet.
 - Interpretation:
-  - Pending.
+  - The `mlp_dim=4096` gap is present on EP4 for the same global `experts=64` shape, but the first no-shared point is smaller than the EP8 gap.
+  - This suggests the EP8 result is not purely an 8-GPU artifact; however, the gap still grows with EP size or local/global layout.
 - Next action:
   - Watch job `49801` and compare the EP4 gap against the EP8 `B200-EP-012` anchor.
