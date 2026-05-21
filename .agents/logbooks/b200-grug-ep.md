@@ -1,0 +1,92 @@
+# B200 Grug Expert Parallelism: Research Logbook
+
+## Scope
+- Goal: find the best expert-parallel Grug MoE path for NVLinked B200 nodes.
+- Primary metric(s): forward and forward+backward tokens/sec for Grug MoE EP8 shapes, with compile-including and steady-state timings separated.
+- Constraints:
+  - Use issue #3841 as historical DeepEP context, not as the only active tracking issue.
+  - Use issue #5894 as the current B200 grouped-matmul baseline thread.
+  - Do not publish private cluster/source names in logged files or GitHub comments.
+  - Keep throwaway sweep harnesses out of production paths unless they become reusable.
+  - Compare one axis at a time: EP backend, GMM tile/backend, then dispatch/combine replacement.
+- GitHub issues:
+  - https://github.com/marin-community/marin/issues/3841
+  - https://github.com/marin-community/marin/issues/5894
+  - https://github.com/marin-community/marin/issues/5815
+  - https://github.com/marin-community/marin/issues/5328
+- Experiment ID prefix: `B200-EP`
+
+## Baseline
+- Date: 2026-05-21
+- Code refs:
+  - `lib/levanter/src/levanter/grug/grug_moe.py`
+  - `lib/levanter/src/levanter/grug/_moe/ep_ring.py`
+  - `lib/levanter/src/levanter/grug/_moe/ep_ragged_all_to_all.py`
+  - `lib/haliax/src/haliax/nn/ragged_dot.py`
+  - `lib/levanter/src/levanter/grug/_moe/sonic.py`
+- Fixed baseline case:
+  - hardware: one NVLinked B200 node
+  - dtype: BF16
+  - local experts: 8
+  - rows: 32768
+  - hidden: 5120
+  - intermediate: 2560
+  - implementation candidates: `ring`, `ragged_all_to_all`, local `sonic`/`scatter` controls
+- Inherited B200 GMM baseline from issue #5894:
+  - old BF16 Triton default tile: `block_m=128`, `block_n=128`, `block_k=32`, `warps=4`, `stages=4`
+  - Blackwell candidate tile: `block_m=128`, `block_n=256`, `block_k=32`, `warps=4`, `stages=4`
+  - W13: `1.8789 ms -> 1.5735 ms`
+  - W2: `1.0781 ms -> 0.8985 ms`
+  - public-path confirmation: W13 `1.5811 ms`, W2 `0.8996 ms`
+- Historical DeepEP facts from issue #3841:
+  - The best H100 thread combined expert-padded W13/W2, fast shared accumulation, and capped DeepEP send-token knobs.
+  - Large `topk=2` rows reached parity or better against sealed Megatron anchors.
+  - The remaining hard row was `262144`, `topk=8`, `shared_expert_dim=2048`, `forward_backward`.
+  - The last attribution pointed at replicated shared-gradient all-reduce scheduling and dtype, not local GMM math alone.
+
+## Experiment Log
+
+### 2026-05-21 10:13 - Kickoff and baseline recovery
+- Experiment ID: `B200-EP-001`
+- Hypothesis:
+  - B200 EP performance should start from the Blackwell BF16 ragged-dot tile baseline, then measure full EP backends before resurrecting older DeepEP code.
+- Command:
+  - `gh issue view 3841 --repo marin-community/marin --json number,title,state,labels,body,url,comments`
+  - `gh issue view 5894 --repo marin-community/marin --json number,title,state,labels,body,url,comments`
+  - `git cherry-pick 8a036b797`
+- Config:
+  - branch: `research/b200-grug-ep`
+  - starting commit: `b01a88dd0`
+  - cherry-picked commit: `8a036b797`
+- Result:
+  - Confirmed #3841 is the historical DeepEP residual-overlap thread.
+  - Confirmed #5894 is the active B200 GMM thread and records the first Blackwell tile win.
+  - Brought the Blackwell-only `block_n=256` ragged-dot default onto this branch with focused dispatch tests.
+- Interpretation:
+  - The first B200 EP comparison should use the Blackwell tile as baseline to avoid retesting an already-won local GMM setting.
+  - The next measurement must compare full EP paths, because local GMM-only wins do not answer dispatch/combine or collective scheduling.
+- Next action:
+  - Run one-node B200 smoke and benchmark matrix for `ring` vs `ragged_all_to_all`, using the same BF16 shape family as #5894.
+
+### 2026-05-21 10:39 - Add reusable EP benchmark scaffold
+- Experiment ID: `B200-EP-002`
+- Hypothesis:
+  - A minimal JSON-emitting benchmark script is enough for the first one-axis B200 sweep without bringing back the full historical DeepEP hillclimb harness.
+- Command:
+  - `uv run --project lib/haliax --group dev pytest -q -o addopts='' tests/test_ragged_dot_dispatch.py`
+  - `uv run python .agents/scripts/bench_grug_ep.py --tokens 16 --hidden-dim 16 --intermediate-dim 8 --local-experts 1 --topk 1 --num-devices 1 --warmup 0 --iters 1 --implementations ring --pass-mode forward`
+- Config:
+  - benchmark script: `.agents/scripts/bench_grug_ep.py`
+  - smoke shape: CPU-sized local fallback, not an EP performance claim
+- Result:
+  - Ragged-dot dispatch tests passed: `6 passed`.
+  - Benchmark smoke emitted one JSON timing row.
+- Interpretation:
+  - The scaffold is syntactically usable and catches the JAX 0.9 explicit-axis mesh requirement.
+  - Performance claims still require the B200 run.
+- Next action:
+  - Run the script on a single B200 node with 8 GPUs for:
+    - `ring`, `forward`
+    - `ragged_all_to_all`, `forward`
+    - `ring`, `forward_backward`
+    - `ragged_all_to_all`, `forward_backward`
