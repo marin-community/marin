@@ -331,6 +331,23 @@ class WorkerState(enum.Enum):
     DEAD = "dead"
 
 
+class PullStatus(enum.StrEnum):
+    """Control signals returned by ``ZephyrCoordinator.pull_task`` in place of a task.
+
+    Three explicit states make the slot's required response unambiguous:
+
+    - ``NO_WORK_BACKOFF``: queue is empty mid-stage; slot sleeps and retries.
+    - ``STAGE_COMPLETED``: this stage's pool is done (boundary or epoch-stale slot);
+      slot exits and the worker re-pools for the next stage.
+    - ``SHUTDOWN``: pipeline is finished or the coordinator is shutting down;
+      slot exits and the worker breaks its outer loop.
+    """
+
+    NO_WORK_BACKOFF = enum.auto()
+    STAGE_COMPLETED = enum.auto()
+    SHUTDOWN = enum.auto()
+
+
 @dataclass
 class ShardTask:
     """Describes a unit of work for a worker: one shard through one stage."""
@@ -845,19 +862,25 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.FAILED
                 self._maybe_requeue_worker_task(worker_id)
 
-    def pull_task(self, worker_id: str, epoch: int | None = None) -> tuple[ShardTask, int, dict] | str | None:
+    def pull_task(self, worker_id: str, epoch: int | None = None) -> tuple[ShardTask, int, dict] | PullStatus:
         """Called by workers to get next task.
 
         Args:
             worker_id: Unique ID for this worker slot.
             epoch: Stage epoch the slot was registered under. If provided and it
                 no longer matches the coordinator's current epoch, the slot has
-                survived into a later stage and receives SHUTDOWN immediately.
+                survived into a later stage and is told STAGE_COMPLETED so the
+                worker re-registers under the new epoch.
 
         Returns:
-            - (task, attempt, config) tuple if task available
-            - "SHUTDOWN" string if coordinator is shutting down or epoch is stale
-            - None if no task available (worker should backoff and retry)
+            - ``(task, attempt, config)`` if a task is available.
+            - ``PullStatus.SHUTDOWN`` if the coordinator is shutting down or the
+              last stage has no more work to hand out — the worker should exit.
+            - ``PullStatus.STAGE_COMPLETED`` at a non-last stage boundary or when
+              the slot's epoch is stale — slot exits, worker re-pools for the
+              next stage.
+            - ``PullStatus.NO_WORK_BACKOFF`` if the queue is empty mid-stage —
+              slot should sleep and retry.
         """
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
@@ -865,28 +888,33 @@ class ZephyrCoordinator:
 
             if self._shutdown_event.is_set():
                 self._worker_states[worker_id] = WorkerState.DEAD
-                return "SHUTDOWN"
+                return PullStatus.SHUTDOWN
 
             if epoch is not None and epoch != self._stage_epoch:
-                # This slot was created for an earlier stage and missed its SHUTDOWN
+                # Slot was created for an earlier stage and missed its STAGE_COMPLETED
                 # (e.g. it was sleeping through the _mark_stage_complete window).
-                # Send SHUTDOWN now so it exits before picking up next-stage tasks.
+                # Tell it the stage is over so the worker re-registers under the new epoch.
                 self._worker_states[worker_id] = WorkerState.DEAD
-                return "SHUTDOWN"
+                return PullStatus.STAGE_COMPLETED
 
             if self._fatal_error:
-                return None
+                return PullStatus.NO_WORK_BACKOFF
 
             if not self._task_queue:
-                if self._is_last_stage or self._stage_complete:
-                    # No more work to hand out — exit immediately.  If an
-                    # in-flight worker crashes and its shard is requeued, Iris
-                    # restarts the worker which re-registers and picks it up.
-                    # _check_worker_group() detects permanent worker-job death
-                    # as a failsafe so we never deadlock.
+                if self._is_last_stage:
+                    # Last stage has no more tasks to hand out — pipeline is winding
+                    # down for this worker. If an in-flight peer crashes and its
+                    # shard is requeued, Iris restarts the worker which re-registers
+                    # and picks it up. _check_worker_group() detects permanent
+                    # worker-job death as a failsafe so we never deadlock.
                     self._worker_states[worker_id] = WorkerState.DEAD
-                    return "SHUTDOWN"
-                return None
+                    return PullStatus.SHUTDOWN
+                if self._stage_complete:
+                    # Non-last stage boundary — slot exits so the worker can re-pool
+                    # at the size required by the next stage (map vs reduce).
+                    self._worker_states[worker_id] = WorkerState.DEAD
+                    return PullStatus.STAGE_COMPLETED
+                return PullStatus.NO_WORK_BACKOFF
 
             task = self._task_queue.popleft()
             attempt = self._task_attempts[task.shard_idx]
@@ -1400,14 +1428,17 @@ class ZephyrWorker:
             num_active_workers = len(self._active_sub_ids)
             self._active_runners = [self._stage_runner_factory(num_active_workers) for _ in range(num_active_workers)]
 
+            # Slots write their final PullStatus here before returning so we can
+            # tell a stage-boundary exit from a pipeline-shutdown exit.
+            slot_statuses: list[PullStatus | None] = [None] * num_active_workers
             threads = [
                 threading.Thread(
                     target=self._poll_loop,
-                    args=(self._coordinator, sub_id, runner, stage_epoch),
+                    args=(self._coordinator, sub_id, runner, stage_epoch, slot_statuses, i),
                     daemon=True,
                     name=f"zephyr-poll-{sub_id}",
                 )
-                for sub_id, runner in zip(self._active_sub_ids, self._active_runners, strict=True)
+                for i, (sub_id, runner) in enumerate(zip(self._active_sub_ids, self._active_runners, strict=True))
             ]
             for t in threads:
                 t.start()
@@ -1423,6 +1454,12 @@ class ZephyrWorker:
                     self._coordinator.deregister_worker.remote(sub_id).result(timeout=10.0)
                 except Exception:
                     logger.warning("[%s] deregister_worker failed for %s (ignoring)", self._worker_id, sub_id)
+
+            # Any slot seeing SHUTDOWN means the pipeline is done for this worker
+            # — no next stage will come, so break instead of polling forever.
+            if any(s == PullStatus.SHUTDOWN for s in slot_statuses):
+                logger.info("[%s] Pipeline shutdown signaled by slot — exiting stage manager", self._worker_id)
+                break
 
         logger.info("[%s] Stage manager exiting", self._worker_id)
         if self._host_shutdown_event is not None:
@@ -1508,12 +1545,25 @@ class ZephyrWorker:
             self._shutdown_event.wait(timeout=interval)
         logger.debug("[%s] Heartbeat loop exiting after %d beats", self._worker_id, heartbeat_count)
 
-    def _poll_loop(self, coordinator: ActorHandle, worker_id: str, stage_runner: StageRunner, epoch: int = 0) -> None:
-        """Single-slot polling loop. Exits on SHUTDOWN signal or coordinator death.
+    def _poll_loop(
+        self,
+        coordinator: ActorHandle,
+        worker_id: str,
+        stage_runner: StageRunner,
+        epoch: int,
+        status_holder: list[PullStatus | None],
+        slot_idx: int,
+    ) -> None:
+        """Single-slot polling loop. Exits on STAGE_COMPLETED / SHUTDOWN or coordinator death.
 
         ``epoch`` is the stage epoch returned by ``register_worker``; it is passed
         on every ``pull_task`` call so the coordinator can detect slots that survived
-        past stage completion and send them SHUTDOWN before they pick up next-stage tasks.
+        past stage completion and send STAGE_COMPLETED before they pick up next-stage tasks.
+
+        On exit, the slot writes its final ``PullStatus`` to
+        ``status_holder[slot_idx]`` so the stage manager can distinguish a
+        stage-boundary exit (re-pool for next stage) from a pipeline-shutdown
+        exit (break the outer loop).
         """
         task_count = 0
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
@@ -1543,11 +1593,17 @@ class ZephyrWorker:
 
             future = None
 
-            if response == "SHUTDOWN":
+            if response == PullStatus.SHUTDOWN:
                 logger.info("[%s] Received SHUTDOWN", worker_id)
-                break
+                status_holder[slot_idx] = PullStatus.SHUTDOWN
+                return
 
-            if response is None:
+            if response == PullStatus.STAGE_COMPLETED:
+                logger.info("[%s] Stage completed", worker_id)
+                status_holder[slot_idx] = PullStatus.STAGE_COMPLETED
+                return
+
+            if response == PullStatus.NO_WORK_BACKOFF:
                 time.sleep(backoff.next_interval())
                 continue
 
