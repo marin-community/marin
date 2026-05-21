@@ -27,6 +27,7 @@ from jax import shard_map
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P, get_abstract_mesh
 
 from levanter.grug import grug_moe as grug_moe_lib
+from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.kernels.deepep import deepep_combine_intranode, deepep_dispatch_intranode, deepep_get_dispatch_layout
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -37,6 +38,7 @@ Kernel = Literal[
     "cumsum",
     "packed_return",
     "stream_ring",
+    "stream_ring_sonic_combine",
     "ragged_a2a",
     "deepep_layout_ragged_a2a",
     "deepep_transport_identity",
@@ -667,6 +669,59 @@ def _compact_local_assignments_topk(
     group_sizes = jnp.bincount(expert_local, weights=valid_weight, length=local_experts).astype(jnp.int32)
     group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
     return token_local, weight_dispatch, x_dispatch, group_sizes, dropped_local
+
+
+def _compact_local_assignments_topk_with_positions(
+    x_source: jax.Array,
+    local_expert: jax.Array,
+    local_mask: jax.Array,
+    weight_flat: jax.Array,
+    *,
+    local_experts: int,
+    local_capacity: int,
+    topk: int,
+    ep_size: int | None = None,
+    take_fn: Callable[[jax.Array, jax.Array], jax.Array] | None = None,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    if take_fn is None:
+        take_fn = _take_with_gather
+    local_count = jnp.sum(local_mask, dtype=jnp.int32)
+    dropped_local = jnp.maximum(local_count - local_capacity, 0)
+    valid = jnp.arange(local_capacity, dtype=jnp.int32) < local_count
+    valid_weight = valid.astype(jnp.float32)
+
+    local_expert = jnp.where(local_mask, local_expert, 0)
+    assignments = int(local_expert.shape[0])
+    flat_pos = jnp.arange(assignments, dtype=jnp.int32)
+    order_key = local_expert * assignments + flat_pos
+    max_order_key = local_experts * assignments
+    selection_key = jnp.where(local_mask, max_order_key - order_key, -1)
+    _, local_idx = jax.lax.top_k(selection_key, local_capacity)
+
+    token_local = jnp.floor_divide(local_idx, topk)
+    expert_local = jnp.take(local_expert, local_idx, axis=0)
+    weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_source.dtype)
+    x_take = take_fn(x_source, token_local)
+    x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+    weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
+    expert_local = jnp.where(valid, expert_local, 0)
+    group_sizes = jnp.bincount(expert_local, weights=valid_weight, length=local_experts).astype(jnp.int32)
+    group_sizes = group_sizes.at[-1].add(local_capacity - jnp.sum(group_sizes, dtype=jnp.int32))
+
+    inverse_size = assignments + 1
+    dummy_assignment = jnp.array(assignments, dtype=jnp.int32)
+    safe_assignment = jnp.where(valid, local_idx, dummy_assignment)
+    dispatch_rows = jnp.arange(local_capacity, dtype=jnp.int32)
+    dispatch_positions_flat = (
+        jnp.zeros((inverse_size,), dtype=jnp.int32).at[safe_assignment].set(dispatch_rows)[:assignments]
+    )
+    sonic_weights_flat = (
+        jnp.zeros((inverse_size,), dtype=x_source.dtype).at[safe_assignment].set(weight_dispatch)[:assignments]
+    )
+
+    dispatch_positions = dispatch_positions_flat.reshape((x_source.shape[0], topk))
+    sonic_weights = sonic_weights_flat.reshape((x_source.shape[0], topk))
+    return x_dispatch, group_sizes, dropped_local, dispatch_positions, sonic_weights
 
 
 def _compact_local_assignments_prefix_counts(
@@ -3616,6 +3671,84 @@ def _moe_mlp_ep_stream_ring_local(
     return out_local, dropped_total
 
 
+def _moe_mlp_ep_stream_ring_sonic_combine_local(
+    x_local: jax.Array,
+    selected_experts_local: jax.Array,
+    combine_weights_local: jax.Array,
+    moe_w13_local: jax.Array,
+    moe_w2_local: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    num_experts: int,
+    capacity_factor: float,
+) -> tuple[jax.Array, jax.Array]:
+    local_experts = moe_w13_local.shape[0]
+    if num_experts % local_experts != 0:
+        raise ValueError(
+            f"num_experts={num_experts} must be divisible by local expert count={local_experts} in EP mode"
+        )
+
+    ep_size = num_experts // local_experts
+    expert_axis = jax.lax.axis_index("expert")
+    expert_start = expert_axis * local_experts
+
+    tokens_per_chunk = x_local.shape[0]
+    topk = selected_experts_local.shape[1]
+    assignments_per_chunk = tokens_per_chunk * topk
+    local_capacity = int(np.ceil(capacity_factor * assignments_per_chunk / ep_size))
+    local_capacity = max(local_experts, local_capacity)
+
+    next_perm = [(src, (src + 1) % ep_size) for src in range(ep_size)]
+
+    def ring_step(carry, _):
+        x_chunk, selected_chunk, weight_chunk, out_chunk, dropped_acc = carry
+
+        expert_flat = selected_chunk.reshape(assignments_per_chunk)
+        weight_flat = weight_chunk.reshape(assignments_per_chunk)
+        local_expert = expert_flat - expert_start
+        local_mask = jnp.logical_and(local_expert >= 0, local_expert < local_experts)
+
+        x_dispatch, group_sizes, dropped_local, dispatch_positions, sonic_weights = (
+            _compact_local_assignments_topk_with_positions(
+                x_chunk,
+                local_expert,
+                local_mask,
+                weight_flat,
+                local_experts=local_experts,
+                local_capacity=local_capacity,
+                topk=topk,
+            )
+        )
+
+        w13_out = ragged_dot(x_dispatch, moe_w13_local, group_sizes)
+        moe_dim = moe_w2_local.shape[1]
+        gate, up = jnp.split(w13_out, [moe_dim], axis=-1)
+        out_dispatch = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
+        out_chunk = out_chunk + sonic_gather_sum(out_dispatch, dispatch_positions, sonic_weights).astype(
+            out_chunk.dtype
+        )
+
+        return (
+            jax.lax.ppermute(x_chunk, "expert", next_perm),
+            jax.lax.ppermute(selected_chunk, "expert", next_perm),
+            jax.lax.ppermute(weight_chunk, "expert", next_perm),
+            jax.lax.ppermute(out_chunk, "expert", next_perm),
+            dropped_acc + dropped_local,
+        ), None
+
+    init_carry = (
+        x_local,
+        selected_experts_local,
+        combine_weights_local,
+        jnp.zeros_like(x_local),
+        jnp.array(0, dtype=jnp.int32),
+    )
+    final_carry, _ = jax.lax.scan(ring_step, init_carry, xs=None, length=ep_size)
+    _, _, _, out_local, dropped_local_total = final_carry
+    dropped_total = jax.lax.psum(dropped_local_total, ("data", "expert"))
+    return out_local, dropped_total
+
+
 def _moe_mlp_stream_ring(
     x: jax.Array,
     selected_experts: jax.Array,
@@ -3653,6 +3786,82 @@ def _moe_mlp_stream_ring(
         shard_fn = shard_map(
             partial(
                 _moe_mlp_ep_stream_ring_local,
+                activation_fn=activation_fn,
+                num_experts=num_experts,
+                capacity_factor=capacity_factor,
+            ),
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                P("expert", None, None),
+                P("expert", None, None),
+            ),
+            out_specs=(batch_spec, P()),
+            check_vma=False,
+        )
+        out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+        return out
+
+    shard_fn = shard_map(
+        partial(
+            grug_moe_lib._moe_mlp_local,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        ),
+        mesh=mesh,
+        in_specs=(
+            batch_spec,
+            batch_spec,
+            batch_spec,
+            local_expert_spec,
+            local_expert_spec,
+        ),
+        out_specs=(batch_spec, P()),
+        check_vma=False,
+    )
+    out, _ = shard_fn(x, selected_experts, combine_weights, w_up_gate, w_down)
+    return out
+
+
+def _moe_mlp_stream_ring_sonic_combine(
+    x: jax.Array,
+    selected_experts: jax.Array,
+    combine_weights: jax.Array,
+    w_up_gate: jax.Array,
+    w_down: jax.Array,
+    *,
+    mesh: jax.sharding.AbstractMesh | None = None,
+    capacity_factor: float = grug_moe_lib._DEFAULT_EP_CAPACITY_FACTOR,
+) -> jax.Array:
+    if mesh is None:
+        mesh = get_abstract_mesh()
+
+    activation_fn = ActivationFunctionEnum.silu.to_jax_fn()
+    num_experts = int(w_up_gate.shape[0])
+    has_expert_axis = grug_moe_lib._mesh_has_axis(mesh, "expert")
+    expert_axis_size = grug_moe_lib._mesh_axis_size(mesh, "expert")
+
+    if mesh is None or mesh.empty:
+        out, _ = grug_moe_lib._moe_mlp_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=activation_fn,
+            num_experts=num_experts,
+        )
+        return out
+
+    batch_spec = grug_moe_lib._batch_spec_from_x(x, mesh)
+    local_expert_spec = P("expert", None, None) if has_expert_axis else P(None, None, None)
+
+    if has_expert_axis and expert_axis_size > 1:
+        shard_fn = shard_map(
+            partial(
+                _moe_mlp_ep_stream_ring_sonic_combine_local,
                 activation_fn=activation_fn,
                 num_experts=num_experts,
                 capacity_factor=capacity_factor,
@@ -3855,6 +4064,14 @@ def _forward(
         )
     elif kernel == "stream_ring":
         routed = _moe_mlp_stream_ring(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+        )
+    elif kernel == "stream_ring_sonic_combine":
+        routed = _moe_mlp_stream_ring_sonic_combine(
             x,
             selected_experts,
             combine_weights,
@@ -4401,6 +4618,7 @@ def main() -> None:
             "cumsum",
             "packed_return",
             "stream_ring",
+            "stream_ring_sonic_combine",
             "ragged_a2a",
             "deepep_layout_ragged_a2a",
             "deepep_transport_identity",
