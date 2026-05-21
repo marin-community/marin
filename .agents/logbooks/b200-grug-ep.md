@@ -224,3 +224,27 @@
   - A custom Triton/CUTLASS transport replacement is not currently justified by these B200 parity numbers; the next value is shape coverage and hardening.
 - Next action:
   - Broaden the sweep across token count, `topk`, and shared-expert settings, especially the historically hard `topk=8` / shared-expert fwd+bwd cases.
+
+### 2026-05-21 12:04 - Submit topk=8 shape sweep
+- Experiment ID: `B200-EP-008`
+- Hypothesis:
+  - The measured `topk=2` parity point is not enough; ring should lose first as `topk=8`, token count, and shared-expert backward pressure increase.
+- Command:
+  - Submitted job `49750`.
+  - Benchmark command family: `bench_moe_hillclimb.py --hidden 5120 --mlp-dim 2560 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 8 --warmup 1 --iters 3`
+- Config:
+  - hardware target: 8 B200 GPUs on one NVLinked node
+  - kernels: `current`, `deepep_transport_capped_prewarmed`
+  - shapes:
+    - `tokens=32768`, `shared_expert_dim=2048`
+    - `tokens=65536`, `shared_expert_dim=0`
+    - `tokens=65536`, `shared_expert_dim=2048`
+    - `tokens=131072`, `shared_expert_dim=0`
+    - `tokens=131072`, `shared_expert_dim=2048`
+    - `tokens=262144`, `shared_expert_dim=0`
+- Result:
+  - Pending at submission.
+- Interpretation:
+  - This is the first boundary-finding sweep after the 4-GPU and 8-GPU `topk=2` parity checks.
+- Next action:
+  - Watch job `49750`; record every completed shape and preserve failures as data.
