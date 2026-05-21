@@ -243,8 +243,8 @@
     - `tokens=131072`, `shared_expert_dim=2048`
     - `tokens=262144`, `shared_expert_dim=0`
 - Result:
-  - Job `49750` started on 8 B200 GPUs.
-  - Partial results at the 10-minute check:
+  - Job `49750` completed with exit code `0`.
+  - Results:
     - `tokens=32768`, `shared_expert_dim=2048`:
       - `current`: `0.015817 s`, `2.072M tok/s`
       - `deepep_transport_capped_prewarmed`: `0.016488 s`, `1.987M tok/s`
@@ -261,9 +261,38 @@
       - `current`: `0.063556 s`, `2.062M tok/s`
       - `deepep_transport_capped_prewarmed`: `0.063620 s`, `2.060M tok/s`
       - effectively tied, with `current` about `0.1%` faster on wall time.
-  - The `tokens=131072`, `shared_expert_dim=0` DeepEP case had emitted a result line but had not emitted its `CASE_END` line yet at the check.
+    - `tokens=131072`, `shared_expert_dim=2048`:
+      - `current`: `0.068007 s`, `1.927M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.067086 s`, `1.954M tok/s`
+      - DeepEP is about `1.4%` faster on wall time.
+    - `tokens=262144`, `shared_expert_dim=0`:
+      - `current`: `0.132050 s`, `1.985M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.129119 s`, `2.030M tok/s`
+      - DeepEP is about `2.2%` faster on wall time.
+  - DeepEP emitted CUDA teardown warnings after result lines; Slurm recorded the job as completed successfully.
 - Interpretation:
-  - In the completed early `topk=8` cases, ring still has not lost; it is faster at the smaller/shared shapes and tied at `131072` no-shared.
-  - The first likely breakpoint remains the still-running `131072` shared case or the `262144` no-shared case.
+  - `topk=8` does produce the expected crossover, but the gap is still small on B200.
+  - Ring is faster at smaller token counts, effectively tied at `131072` no-shared, and loses by only `1-2%` on the heavier `131072` shared and `262144` no-shared cases.
+  - We still do not have a B200 shape where ring is outside the requested 5-10% DeepEP window.
 - Next action:
-  - Watch job `49750`; record every completed shape and preserve failures as data.
+  - Push beyond this sweep: test `tokens=262144`, `shared_expert_dim=2048`, and then larger token counts if memory allows.
+
+### 2026-05-21 12:52 - Submit topk=8 stress sweep
+- Experiment ID: `B200-EP-009`
+- Hypothesis:
+  - Since ring only lost by `1-2%` in the completed `topk=8` sweep, the next likely stressors are `tokens=262144` with shared experts and `tokens=524288` without shared experts.
+- Command:
+  - Submitted job `49753`.
+  - Benchmark command family: `bench_moe_hillclimb.py --hidden 5120 --mlp-dim 2560 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 8 --warmup 1 --iters 3`
+- Config:
+  - hardware target: 8 B200 GPUs on one NVLinked node
+  - kernels: `current`, `deepep_transport_capped_prewarmed`
+  - shapes:
+    - `tokens=262144`, `shared_expert_dim=2048`
+    - `tokens=524288`, `shared_expert_dim=0`
+- Result:
+  - Pending at submission.
+- Interpretation:
+  - This is now a boundary stress test rather than a broad sweep.
+- Next action:
+  - Watch job `49753`; if these still stay within the parity window, shift to repeatability and correctness hardening rather than transport replacement.
