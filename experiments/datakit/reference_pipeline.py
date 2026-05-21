@@ -143,7 +143,7 @@ DECONTAM_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
 
 # Store.
 STORE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
-STORE_MAX_WORKERS = 2048
+STORE_MAX_WORKERS = 4096
 SPLIT = "train"
 
 
