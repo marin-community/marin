@@ -240,32 +240,6 @@ class _TimedOutTask:
     worker_id: WorkerId | None
 
 
-# Pulled out so tests can compile and EXPLAIN this query without instantiating
-# the controller. The `hint_rare_state` wrapper keeps the planner driving off
-# the active-state index on populated DBs instead of full-scanning tasks.
-_EXECUTION_TIMEOUT_QUERY = (
-    select(
-        tasks_table.c.task_id,
-        tasks_table.c.current_worker_id,
-        task_attempts_table.c.started_at_ms,
-        job_config_table.c.timeout_ms,
-    )
-    .select_from(
-        tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id).join(
-            task_attempts_table,
-            (task_attempts_table.c.task_id == tasks_table.c.task_id)
-            & (task_attempts_table.c.attempt_id == tasks_table.c.current_attempt_id),
-        )
-    )
-    .where(
-        hint_rare_state(tasks_table.c.state.in_(bindparam("executing_states", expanding=True))),
-        job_config_table.c.timeout_ms.is_not(None),
-        job_config_table.c.timeout_ms > 0,
-        task_attempts_table.c.started_at_ms.is_not(None),
-    )
-)
-
-
 def job_requirements_from_job(job: PendingTask) -> JobRequirements:
     """Convert a job row to scheduler-compatible JobRequirements."""
     dc = device_counts_from_json(job.res_device_json)
@@ -2282,7 +2256,25 @@ class Controller:
         self._last_timeout_check_ms = now_ms
         with self._db.read_snapshot() as tx:
             _timeout_rows = tx.execute(
-                _EXECUTION_TIMEOUT_QUERY,
+                select(
+                    tasks_table.c.task_id,
+                    tasks_table.c.current_worker_id,
+                    task_attempts_table.c.started_at_ms,
+                    job_config_table.c.timeout_ms,
+                )
+                .select_from(
+                    tasks_table.join(job_config_table, job_config_table.c.job_id == tasks_table.c.job_id).join(
+                        task_attempts_table,
+                        (task_attempts_table.c.task_id == tasks_table.c.task_id)
+                        & (task_attempts_table.c.attempt_id == tasks_table.c.current_attempt_id),
+                    )
+                )
+                .where(
+                    hint_rare_state(tasks_table.c.state.in_(bindparam("executing_states", expanding=True))),
+                    job_config_table.c.timeout_ms.is_not(None),
+                    job_config_table.c.timeout_ms > 0,
+                    task_attempts_table.c.started_at_ms.is_not(None),
+                ),
                 {"executing_states": [int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING)]},
             ).all()
         timed_out = [
