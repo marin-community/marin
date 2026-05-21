@@ -14,14 +14,15 @@ Storage: ~1 byte per embedded value (no Parquet dictionary needed because we
 write int8 directly). Consumers ``pq.read_table`` then dequantize with
 ``dequantize_to_fp32`` (``int8.astype(float32) * scale``).
 
-Model staging: the driver does one ``hf_hub_download`` (~880 MB) and
-stages the raw ``.npz`` bytes via ``ZephyrContext.put`` -- workers then
-``get_shared`` them from the (in-region) ``chunk_storage_prefix`` and
-materialize an :class:`Embedder` from a per-process tempfile, cached
-via ``@cache``. Combined with ``InlineRunner`` this gets the .npz
-across the wire exactly once per pipeline execution and reused for
-every shard. Without staging the bytes, every worker process would
-re-pull from the HF Hub.
+Model staging: the driver does one ``hf_hub_download`` (~880 MB), uploads
+the file to an in-region TTL'd GCS path (``marin_temp_bucket``), and
+broadcasts just the resulting URL via ``ZephyrContext.put``. Workers
+``get_shared`` the URL (a string), ``fs.get`` the .npz to a per-process
+tempfile, and load the :class:`Embedder` from there, cached via
+``@cache``. Combined with ``InlineRunner`` this puts the .npz across the
+wire exactly once per pipeline execution and reuses it for every shard
+-- with none of the 880 MB ever traveling through cloudpickle or sitting
+in coordinator RAM.
 
 Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``.
 """
@@ -42,6 +43,7 @@ from marin.datakit.normalize import NormalizedData
 from marin.execution.artifact import Artifact
 from marin.utils import fsspec_glob
 from pydantic import BaseModel
+from rigging.filesystem import marin_temp_bucket, url_to_fs
 from zephyr import Dataset, InputFileSpec, ShardInfo, ZephyrContext, counters, load_file, zephyr_worker_ctx
 from zephyr.runners import InlineRunner
 
@@ -121,28 +123,52 @@ def dequantize_to_fp32(arr: np.ndarray, scale: float = QUANT_SCALE) -> np.ndarra
     return arr.astype(np.float32) * scale
 
 
-# Zephyr shared-data key under which the driver stages the .npz bytes.
-_LUXICAL_SHARED_KEY = "luxical_npz_bytes"
+# Zephyr shared-data key under which the driver broadcasts the staged .npz URL.
+_LUXICAL_SHARED_KEY = "luxical_npz_url"
 
 
 # Per-process embedder cache — survives across map_shard calls under
 # InlineRunner, so a worker materializes Luxical exactly once regardless
-# of how many shards it handles. The .npz bytes are fetched once from
-# Zephyr shared data (in-region GCS), written to a tempfile, and passed
-# to ``Embedder.load`` (which expects a path -- the Cython ArrowTokenizer
-# isn't picklable, so we can't ship the loaded Embedder directly).
+# of how many shards it handles. The URL is fetched once from Zephyr
+# shared data (a tiny string), then the worker pulls the .npz from
+# in-region GCS into a tempfile and hands the path to ``Embedder.load``
+# (the Cython ArrowTokenizer isn't picklable, so we can't broadcast the
+# loaded Embedder directly).
 @cache
 def _load_embedder_from_shared() -> Any:
-    """Return the native Luxical Embedder loaded from Zephyr-staged ``.npz`` bytes."""
+    """Return the native Luxical Embedder loaded via the driver-staged GCS URL."""
     from luxical.embedder import Embedder
 
-    npz_bytes: bytes = zephyr_worker_ctx().get_shared(_LUXICAL_SHARED_KEY)
+    npz_url: str = zephyr_worker_ctx().get_shared(_LUXICAL_SHARED_KEY)
     fd, local = tempfile.mkstemp(prefix="luxical-", suffix=".npz")
     os.close(fd)
-    with open(local, "wb") as f:
-        f.write(npz_bytes)
-    logger.info("Loading native Luxical embedder from %s (%.1f MB)", local, len(npz_bytes) / 1e6)
+    fs, resolved = url_to_fs(npz_url)
+    fs.get(resolved, local)
+    logger.info("Loading native Luxical embedder from %s (staged at %s)", local, npz_url)
     return Embedder.load(local)
+
+
+def _stage_luxical_to_gcs(repo_id: str, weights_filename: str) -> str:
+    """Download the .npz from HF on the driver and upload it to an in-region TTL'd
+    GCS path. Returns the GCS URL workers will read from. Stable per
+    ``(region, repo_id, weights_filename)`` so concurrent / consecutive pipeline
+    runs share the staged file."""
+    from huggingface_hub import hf_hub_download
+
+    sanitized_repo = repo_id.replace("/", "__")
+    staged_url = f"{marin_temp_bucket(ttl_days=1, prefix='luxical-staging')}/{sanitized_repo}/{weights_filename}"
+    fs, resolved = url_to_fs(staged_url)
+    if fs.exists(resolved):
+        logger.info("Luxical weights already staged at %s (cache hit)", staged_url)
+        return staged_url
+
+    logger.info("Fetching luxical weights %s/%s on driver", repo_id, weights_filename)
+    npz_local = hf_hub_download(repo_id=repo_id, filename=weights_filename)
+    size_mb = os.path.getsize(npz_local) / 1e6
+    logger.info("Uploading %.1f MB of luxical weights to %s", size_mb, staged_url)
+    fs.mkdirs(os.path.dirname(resolved), exist_ok=True)
+    fs.put(npz_local, resolved)
+    return staged_url
 
 
 def _l2_normalize(arr: np.ndarray) -> np.ndarray:
@@ -226,15 +252,11 @@ def embed_source(
         batch_size,
     )
 
-    # One HF Hub download on the driver. Workers will pull the bytes from
-    # the in-region chunk_storage_prefix via zephyr_worker_ctx().get_shared.
-    from huggingface_hub import hf_hub_download
-
-    logger.info("Fetching luxical weights %s/%s on driver", repo_id, weights_filename)
-    npz_path = hf_hub_download(repo_id=repo_id, filename=weights_filename)
-    with open(npz_path, "rb") as f:
-        npz_bytes = f.read()
-    logger.info("Staging %.1f MB of luxical weights as Zephyr shared data", len(npz_bytes) / 1e6)
+    # One HF Hub download + one in-region GCS upload on the driver. Workers
+    # will pull the file via fs.get; we only broadcast the URL through
+    # Zephyr shared data, so no 880 MB ever touches coordinator RAM or
+    # cloudpickle.
+    staged_url = _stage_luxical_to_gcs(repo_id, weights_filename)
 
     # Project columns at read time — partition_id (~8 B/row) is ~120 GB of
     # extra read at 15 B-doc scale, and we don't need it.
@@ -259,7 +281,7 @@ def embed_source(
         # cache actually gets reused across shards (huge win at this load cost).
         stage_runner_factory=InlineRunner,
     )
-    ctx.put(_LUXICAL_SHARED_KEY, npz_bytes)
+    ctx.put(_LUXICAL_SHARED_KEY, staged_url)
     outcome = ctx.execute(ds, verbose=True)
 
     artifact = EmbeddingAttrData(
