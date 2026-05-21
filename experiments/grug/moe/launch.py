@@ -101,7 +101,7 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
             base_path=os.path.join(config.output_path, "checkpoints"),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=30),
-            keep=[{"every": 10_000}],
+            keep=[{"every": 1_000}],
         ),
     )
 

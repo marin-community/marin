@@ -8,6 +8,7 @@ import hashlib
 import logging
 import os
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -109,6 +110,20 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     return PackageSpec(package_specs=package_specs, py_modules=py_modules)
 
 
+def uv_find_links(pyproject_path: str = "pyproject.toml") -> list[str]:
+    path = Path(pyproject_path)
+    if not path.exists():
+        return []
+
+    pyproject = tomllib.loads(path.read_text())
+    find_links = pyproject.get("tool", {}).get("uv", {}).get("find-links", [])
+    if isinstance(find_links, str):
+        return [find_links]
+    if not isinstance(find_links, list) or not all(isinstance(link, str) for link in find_links):
+        raise ValueError("[tool.uv].find-links must be a string or list of strings")
+    return find_links
+
+
 def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     """Build the PYTHONPATH for the given submodules.
 
@@ -169,6 +184,8 @@ def build_runtime_env_for_packages(
     ]
     # Add resiliparse custom index
     requirements_txt.append("--extra-index-url https://marin-community.github.io/chatnoir-resiliparse/simple")
+    for link in uv_find_links():
+        requirements_txt.append(f"--find-links {link}")
 
     torch_pkgs = []
     for pkg in package_spec.package_specs + pip_packages:

@@ -45,6 +45,15 @@ TPU_TYPE_TO_VM_IMAGE = {
 
 logger = logging.getLogger(__name__)
 
+RAY_WORKER_START_FLAGS = (
+    "--min-worker-port=10002 "
+    "--max-worker-port=19999 "
+    "--dashboard-agent-grpc-port=52365 "
+    "--dashboard-agent-listen-port=52366 "
+    "--runtime-env-agent-port=52367 "
+    "--metrics-export-port=52368"
+)
+
 
 def _list_jobs(filters: list[str] | None = None) -> list[dict]:
     """Fetch the list of jobs using the Ray CLI."""
@@ -274,7 +283,7 @@ if [ -z "$HEAD_IP" ]; then
 fi
 
 echo "Found head node IP: $HEAD_IP"
-ray start --address=${{HEAD_IP}}:6379 --block
+ray start --address=${{HEAD_IP}}:6379 {RAY_WORKER_START_FLAGS} --block
 echo "Ray worker crashed. Sleeping 10 seconds to avoid rapid restart..."
 sleep 10
     """
