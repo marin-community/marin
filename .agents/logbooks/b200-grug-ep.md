@@ -291,8 +291,23 @@
     - `tokens=262144`, `shared_expert_dim=2048`
     - `tokens=524288`, `shared_expert_dim=0`
 - Result:
-  - Pending at submission.
+  - Job `49753` completed with exit code `0`.
+  - Results:
+    - `tokens=262144`, `shared_expert_dim=2048`:
+      - `current`: `0.139057 s`, `1.885M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.137598 s`, `1.905M tok/s`
+      - DeepEP is about `1.0%` faster on wall time.
+      - DeepEP exact caps: `max_recv_tokens=178816`, `max_local_assignments=263168`, `recv_factor=1.465999`, `assign_factor=7.968872`.
+    - `tokens=524288`, `shared_expert_dim=0`:
+      - `current`: `0.279768 s`, `1.874M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.258105 s`, `2.031M tok/s`
+      - DeepEP is about `7.7%` faster on wall time.
+      - DeepEP exact caps: `max_recv_tokens=356736`, `max_local_assignments=525696`, `recv_factor=1.469681`, `assign_factor=7.978573`.
+  - DeepEP emitted timeout-check and CUDA teardown warnings after result lines; Slurm recorded the job as completed successfully.
 - Interpretation:
-  - This is now a boundary stress test rather than a broad sweep.
+  - This is the first B200 `topk=8` stress point where the current ring path is clearly losing rather than tying, but it is still within the requested 5-10% parity window.
+  - The observed boundary is token-count pressure rather than shared-expert pressure: `262144` with shared experts is only about `1%` behind, while `524288` without shared experts is about `7.7%` behind.
+  - A transport replacement is now plausible but not yet forced; the next useful decision point is whether the gap keeps widening at larger token counts or whether targeted scheduling/overlap fixes can recover the `524288` case.
 - Next action:
-  - Watch job `49753`; if these still stay within the parity window, shift to repeatability and correctness hardening rather than transport replacement.
+  - Run one narrow follow-up if memory allows: `tokens=524288`, `shared_expert_dim=2048`, `topk=8`, and optionally `tokens=1048576`, `shared_expert_dim=0` if the no-shared case fits comfortably.
+  - If the gap exceeds `10%`, prioritize transport/scheduling work; if it stays under `10%`, prioritize repeatability and correctness hardening around the restored DeepEP baseline and the current ring path.
