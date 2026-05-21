@@ -326,8 +326,35 @@
     - `tokens=524288`, `shared_expert_dim=2048`
     - `tokens=1048576`, `shared_expert_dim=0`
 - Result:
+  - Job `49766` was cancelled after the first case wedged.
+  - The first case was `tokens=524288`, `shared_expert_dim=2048`, kernel `current`.
+  - No result line was emitted before cancellation.
+  - The error log showed repeated GPU OOM allocation failures followed by collective rendezvous waits.
+- Interpretation:
+  - `tokens=524288`, `shared_expert_dim=2048`, `topk=8` is beyond the current ring path's memory envelope in this harness.
+  - This is a stronger boundary than a `>10%` latency miss: current did not complete the first case.
+  - The original script let the OOM wedge the first process, so it did not reach the no-shared token-pressure case.
+- Next action:
+  - Relaunch with per-case timeouts and a smaller shared-expert boundary point.
+
+### 2026-05-21 13:19 - Submit topk=8 boundary retry
+- Experiment ID: `B200-EP-011`
+- Hypothesis:
+  - Since `524288` with shared experts OOMed on the current ring path, the useful follow-up is a smaller shared-expert point plus a larger no-shared token-pressure point with timeouts so one OOM cannot block the rest.
+- Command:
+  - Submitted job `49775`.
+  - Benchmark command family: `bench_moe_hillclimb.py --hidden 5120 --mlp-dim 2560 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 8 --warmup 1 --iters 3`
+  - Each case has a per-case timeout.
+- Config:
+  - hardware target: 8 B200 GPUs on one NVLinked node
+  - kernels: `current`, `deepep_transport_capped_prewarmed`
+  - shapes:
+    - `tokens=393216`, `shared_expert_dim=2048`, both kernels
+    - `tokens=524288`, `shared_expert_dim=2048`, DeepEP only
+    - `tokens=786432`, `shared_expert_dim=0`, both kernels
+- Result:
   - Pending at submission.
 - Interpretation:
-  - This follow-up should tell us whether the observed `topk=8` token-pressure boundary crosses the `10%` threshold, or remains within the requested parity band.
+  - This should separate memory-envelope failure from latency crossover and preserve any later case results even if one case fails.
 - Next action:
-  - Watch job `49766`; if the gap exceeds `10%`, shift from parity validation to transport/scheduling optimization.
+  - Watch job `49775`.
