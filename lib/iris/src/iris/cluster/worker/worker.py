@@ -24,7 +24,6 @@ from iris.cluster.runtime.profile import (
     IrisProfile,
     ProfileTrigger,
     build_profile_row,
-    parse_profile_target,
     profile_local_process,
 )
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
@@ -1293,7 +1292,7 @@ class Worker:
             row_source = f"/system/worker/{self._worker_id}"
             row_attempt_id: int | None = None
         else:
-            parsed = parse_profile_target(target)
+            parsed = TaskAttemptId.from_wire(target)
             task_id_wire = parsed.task_id.to_wire()
             resolved_attempt_id = parsed.attempt_id
             if resolved_attempt_id is None:
