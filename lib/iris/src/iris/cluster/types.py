@@ -314,6 +314,7 @@ def get_tpu_count(device: job_pb2.DeviceConfig) -> int:
 
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
+AttemptUid = NewType("AttemptUid", str)
 
 
 @dataclass(frozen=True, slots=True)

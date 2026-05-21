@@ -164,5 +164,5 @@ enforces these minimum interfaces:
 - HBM/OOM tuning guide: [`/docs/references/hbm-optimization.md`](../../docs/references/hbm-optimization.md)
 - Executor mechanics: [`/docs/explanations/executor.md`](../../docs/explanations/executor.md)
 - Executor tutorial: [`/docs/tutorials/executor-101.md`](../../docs/tutorials/executor-101.md)
-- TPU debug workflow: [`.agents/skills/dev-tpu/`](../../.agents/skills/dev-tpu/SKILL.md)
-- Cluster launch details: [`lib/iris/OPS.md`](../../lib/iris/OPS.md), [`.agents/skills/ferries/SKILL.md`](../../.agents/skills/ferries/SKILL.md)
+- TPU debug workflow: [`.agents/skills/reserve-tpu/`](../../.agents/skills/reserve-tpu/SKILL.md)
+- Cluster launch details: [`lib/iris/OPS.md`](../../lib/iris/OPS.md), [`.agents/skills/run-ferries/SKILL.md`](../../.agents/skills/run-ferries/SKILL.md)

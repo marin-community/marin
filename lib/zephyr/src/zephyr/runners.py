@@ -16,10 +16,6 @@ Two implementations ship here:
   worker actor. Slower (~700ms of cold-import overhead per task).
 
 Pick the runner pipeline-wide via ``ZephyrContext(stage_runner_factory=...)``.
-The factory is invoked once per worker actor; each worker holds its own
-runner instance. The runner's ``live_counters()`` is polled by the worker's
-heartbeat thread, so per-runner state (counter file pointer, in-memory ctx)
-stays encapsulated.
 """
 
 from __future__ import annotations
@@ -87,12 +83,13 @@ class _InProcessWorkerContext:
     of the task.
     """
 
-    def __init__(self, chunk_prefix: str, execution_id: str):
+    def __init__(self, chunk_prefix: str, execution_id: str, num_workers: int = 1):
         self._chunk_prefix = chunk_prefix
         self._execution_id = execution_id
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, int] = {}
         self._generation = 0
+        self.num_workers = num_workers
 
     def get_shared(self, name: str) -> Any:
         if name not in self._shared_data_cache:
@@ -113,19 +110,14 @@ class _InProcessWorkerContext:
 _T = TypeVar("_T")
 
 
-class _StageStatsGenerator:
-    """Wraps a generator and records item count + byte size into the worker context."""
-
-    def __init__(self, stage_name: str, ctx: _InProcessWorkerContext) -> None:
-        self._item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
-        self._byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
-        self._ctx = ctx
-
-    def wrap(self, gen: Iterator[_T]) -> Iterator[_T]:
-        for item in gen:
-            self._ctx.increment_counter(self._item_key, 1)
-            self._ctx.increment_counter(self._byte_key, sys.getsizeof(item))
-            yield item
+def _wrap_stage_stats(gen: Iterator[_T], stage_name: str, ctx: _InProcessWorkerContext) -> Iterator[_T]:
+    """Yield items from ``gen`` while recording item count and byte size into ``ctx``."""
+    item_key = ZEPHYR_STAGE_ITEM_COUNT_KEY.format(stage_name=stage_name)
+    byte_key = ZEPHYR_STAGE_BYTES_PROCESSED_KEY.format(stage_name=stage_name)
+    for item in gen:
+        ctx.increment_counter(item_key, 1)
+        ctx.increment_counter(byte_key, sys.getsizeof(item))
+        yield item
 
 
 def _run_stage_with_ctx(
@@ -150,9 +142,12 @@ def _run_stage_with_ctx(
     stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"
     external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
     scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
-    stats = _StageStatsGenerator(task.stage_name, ctx)
     return _write_stage_output(
-        stats.wrap(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
+        _wrap_stage_stats(
+            run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir),
+            task.stage_name,
+            ctx,
+        ),
         source_shard=task.shard_idx,
         stage_dir=stage_dir,
         shard_idx=task.shard_idx,
@@ -175,7 +170,8 @@ class InlineRunner:
     here, and tests run dramatically faster than under ``SubprocessRunner``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, num_workers: int = 1) -> None:
+        self._num_workers = num_workers
         self._ctx: _InProcessWorkerContext | None = None
 
     def execute(
@@ -184,14 +180,14 @@ class InlineRunner:
         chunk_prefix: str,
         execution_id: str,
     ) -> tuple[TaskResult, dict[str, int]]:
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id)
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, num_workers=self._num_workers)
         self._ctx = ctx
-        token = _worker_ctx_var.set(ctx)
+        worker_token = _worker_ctx_var.set(ctx)
         try:
             result = _run_stage_with_ctx(task, chunk_prefix, execution_id, ctx)
             return result, dict(ctx._counters)
         finally:
-            _worker_ctx_var.reset(token)
+            _worker_ctx_var.reset(worker_token)
             self._ctx = None
 
     def live_counters(self) -> dict[str, int]:
@@ -263,9 +259,15 @@ class SubprocessRunner:
     ``returncode != 0`` task errors. Costs ~700ms per task in cold Python
     imports plus pickle round-trip; reserve for stages with leak-prone or
     crash-prone user code.
+
+    Args:
+        num_workers: Total number of concurrent subprocess workers sharing this
+            actor's RAM. Passed to child processes via ``ZEPHYR_NUM_WORKERS_PER_ACTOR``
+            so each child scales its scatter-write buffer budget proportionally.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, num_workers: int = 1) -> None:
+        self._num_workers = num_workers
         self._counter_file: str | None = None
 
     def execute(
@@ -287,7 +289,7 @@ class SubprocessRunner:
             # faulthandler traceback reaches the parent's log before the
             # process dies.
             proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr.runners", task_file, result_file],
+                [sys.executable, "-u", "-m", "zephyr.runners", task_file, result_file, str(self._num_workers)],
                 stdout=sys.stdout,
                 stderr=sys.stderr,
             )
@@ -343,7 +345,7 @@ class SubprocessRunner:
 # ---------------------------------------------------------------------------
 
 
-def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
+def _execute_shard_subprocess(task_file: str, result_file: str, num_workers: int) -> None:
     """Subprocess child body: runs one ShardTask and writes the result file."""
     # Each shard already runs in its own subprocess; redundant Arrow thread
     # pools just compete with the parent's shard-level parallelism.
@@ -365,7 +367,7 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
         with open(task_file, "rb") as f:
             task, chunk_prefix, execution_id = cloudpickle.load(f)
 
-        ctx = _InProcessWorkerContext(chunk_prefix, execution_id)
+        ctx = _InProcessWorkerContext(chunk_prefix, execution_id, num_workers=num_workers)
         _worker_ctx_var.set(ctx)
 
         shard_monotonic_start = time.monotonic()
@@ -417,8 +419,8 @@ def _execute_shard_subprocess(task_file: str, result_file: str) -> None:
 
 
 def _subprocess_main() -> None:
-    if len(sys.argv) != 3:
-        print("Usage: python -m zephyr.runners <task_file> <result_file>", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print("Usage: python -m zephyr.runners <task_file> <result_file> <num_workers>", file=sys.stderr)
         os._exit(1)
     # Bypass interpreter shutdown: PyArrow GCS/Azure filesystem background
     # threads can race with module GC and fire ``std::terminate`` → SIGABRT,
@@ -427,7 +429,7 @@ def _subprocess_main() -> None:
     # one-shot child needs ``atexit`` / ``__del__`` to run.
     exit_code = 0
     try:
-        _execute_shard_subprocess(sys.argv[1], sys.argv[2])
+        _execute_shard_subprocess(sys.argv[1], sys.argv[2], int(sys.argv[3]))
     except BaseException:
         traceback.print_exc()
         exit_code = 1

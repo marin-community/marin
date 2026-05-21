@@ -67,6 +67,9 @@ export function ControlPlanePanel() {
   const aggregationLabel = data?.aggregationWindowMs
     ? `${formatDuration(data.aggregationWindowMs)} rolling`
     : "rolling";
+  const pointLabel = data?.summaryPointIntervalMs
+    ? `${formatDuration(data.summaryPointIntervalMs)} points`
+    : "points";
 
   return (
     <div>
@@ -76,7 +79,7 @@ export function ControlPlanePanel() {
         </h3>
         <span className="text-xs text-slate-500">
           {samples.length > 1
-            ? `${displayedSpanLabel(samples)} · ${aggregationLabel} · p50/max`
+            ? `${displayedSpanLabel(samples)} · ${pointLabel} · ${aggregationLabel} · p50/max`
             : "history warming up"}
         </span>
       </div>

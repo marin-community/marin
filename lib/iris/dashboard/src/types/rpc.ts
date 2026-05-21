@@ -75,6 +75,7 @@ export interface TaskAttempt {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   isWorkerFailure?: boolean
+  attemptUid?: string
 }
 
 export interface TaskStatus {

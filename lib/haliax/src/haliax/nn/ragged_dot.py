@@ -40,6 +40,28 @@ except (ImportError, ModuleNotFoundError):
 Implementation: TypeAlias = Literal["auto", "megablox", "triton", "xla"]
 _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
+_TRITON_DEFAULT_BLOCK_N = 128
+_TRITON_BLACKWELL_BLOCK_N = 256
+
+
+def _is_blackwell_gpu_backend() -> bool:
+    if jax.default_backend() != "gpu":
+        return False
+    try:
+        devices = jax.devices("gpu")
+    except RuntimeError:
+        return False
+    if not devices:
+        return False
+    device = devices[0]
+    compute_capability = getattr(device, "compute_capability", None)
+    if compute_capability is not None:
+        try:
+            return float(compute_capability) >= 10.0
+        except (TypeError, ValueError):
+            pass
+    device_kind = getattr(device, "device_kind", "")
+    return any(name in device_kind for name in ("B200", "B300", "GB200", "GB300"))
 
 
 def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
@@ -92,14 +114,20 @@ def _triton_ragged_dot_kernel(
         plgpu.store(out_ref.at[span_m, pl.ds(0, out_ref.shape[1])], acc.astype(out_ref.dtype), mask=mask[:, None])
 
 
+def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
+    block_m = min(128, int(pl.next_power_of_2(m)))
+    max_block_n = _TRITON_BLACKWELL_BLOCK_N if _is_blackwell_gpu_backend() else _TRITON_DEFAULT_BLOCK_N
+    block_n = min(max_block_n, int(pl.next_power_of_2(n)))
+    block_k = min(32, int(pl.next_power_of_2(k)))
+    return block_m, block_n, block_k
+
+
 def _triton_default_pallas_call(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     """Raw Pallas-Triton grouped matmul for the default ragged-dot layout."""
     m, k = lhs.shape
     num_groups, _, n = rhs.shape
 
-    block_m = min(128, int(pl.next_power_of_2(m)))
-    block_n = min(128, int(pl.next_power_of_2(n)))
-    block_k = min(32, int(pl.next_power_of_2(k)))
+    block_m, block_n, block_k = _triton_default_block_sizes(m, k, n)
 
     cum_rows = jnp.cumulative_sum(group_sizes, include_initial=True)
 

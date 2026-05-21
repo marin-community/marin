@@ -115,6 +115,7 @@ def create_local_autoscaler(
     platform = GcpWorkerProvider(
         gcp_config=local_gcp_config,
         label_prefix=label_prefix,
+        worker_port=config.defaults.worker.port,
         gcp_service=gcp_service,
     )
 

@@ -56,6 +56,7 @@ class RawTextEvaluationDataset:
     input_path: str | InputName | ExecutorStep | None = None
     hf_dataset_id: str | None = None
     hf_dataset_name: str | None = None
+    hf_dataset_revision: str | None = None
     text_key: str = "text"
     input_key: str | None = None
     target_key: str | None = None
@@ -87,6 +88,7 @@ class ModelPerplexityGapConfig:
     model_b_scores_path: str | InputName | ExecutorStep
     output_path: str = field(default_factory=this_output_path)  # type: ignore[arg-type]
     wandb_tags: list[str] | None = None
+    retry_key: str | None = None
     cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
@@ -101,6 +103,7 @@ def raw_text_dataset(
         return RawTextEvaluationDataset(
             hf_dataset_id=source.id,
             hf_dataset_name=source.name,
+            hf_dataset_revision=source.revision,
             text_key=text_key,
             split=split,
             tags=tags,
@@ -122,6 +125,7 @@ def supervised_text_dataset(
         return RawTextEvaluationDataset(
             hf_dataset_id=source.id,
             hf_dataset_name=source.name,
+            hf_dataset_revision=source.revision,
             input_key=input_key,
             target_key=target_key,
             split=split,
@@ -190,7 +194,9 @@ def model_perplexity_gap_from_scores(
     model_a_scores_path: str | InputName | ExecutorStep,
     model_b_scores_path: str | InputName | ExecutorStep,
     name: str,
+    resource_config: ResourceConfig | None = None,
     wandb_tags: list[str] | None = None,
+    retry_key: str | None = None,
 ) -> ExecutorStep:
     return ExecutorStep(
         name=f"analysis/perplexity_gap/{name}",
@@ -202,15 +208,18 @@ def model_perplexity_gap_from_scores(
             model_a_scores_path=model_a_scores_path,
             model_b_scores_path=model_b_scores_path,
             wandb_tags=wandb_tags,
+            retry_key=retry_key,
             cache_key=versioned(
                 {
                     "name": name,
                     "model_a_name": model_a_name,
                     "model_b_name": model_b_name,
                     "wandb_tags": wandb_tags,
+                    "retry_key": retry_key,
                 }
             ),
         ),
+        resources=resource_config,
     )
 
 
@@ -302,6 +311,7 @@ def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
         source = HfDatasetSourceConfig(
             id=config.hf_dataset_id,
             name=config.hf_dataset_name,
+            revision=config.hf_dataset_revision,
             format=dataset_format,
             splits=[config.split],
         )
@@ -368,6 +378,7 @@ def _cache_key_for_dataset(dataset: RawTextEvaluationDataset) -> dict[str, Any]:
         "input_path": input_path,
         "hf_dataset_id": dataset.hf_dataset_id,
         "hf_dataset_name": dataset.hf_dataset_name,
+        "hf_dataset_revision": dataset.hf_dataset_revision,
         "text_key": dataset.text_key,
         "input_key": dataset.input_key,
         "target_key": dataset.target_key,

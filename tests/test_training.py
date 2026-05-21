@@ -19,10 +19,10 @@ from marin.processing.tokenize import read_tokenized_cache_stats, tokenized_cach
 from marin.training.training import (
     TrainDpoOnPodConfig,
     TrainLmOnPodConfig,
-    _doublecheck_paths,
     _enforce_run_id,
     _maybe_auto_resolve_dpo_schedule,
     _update_config_to_use_out_path,
+    doublecheck_paths,
     temporary_checkpoint_base_path,
 )
 
@@ -75,7 +75,7 @@ def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
             ),
             resources=ResourceConfig.with_tpu("v4-8"),
         )
-        _doublecheck_paths(config)
+        doublecheck_paths(config)
 
 
 def test_temporary_checkpoint_base_path_follows_output_path_region():
@@ -168,7 +168,7 @@ def test_recursive_path_checking(trainer_config):
             resources=ResourceConfig.with_tpu("v4-8"),
         )
         with pytest.raises(ValueError, match="not in the same region"):
-            _doublecheck_paths(config)
+            doublecheck_paths(config)
 
 
 def test_dataclass_recursive_checking(trainer_config):
@@ -185,7 +185,7 @@ def test_dataclass_recursive_checking(trainer_config):
             resources=ResourceConfig.with_tpu("v4-8"),
         )
         with pytest.raises(ValueError, match="not in the same region"):
-            _doublecheck_paths(config)
+            doublecheck_paths(config)
 
 
 def test_pathlib_path_handling(trainer_config):
@@ -202,7 +202,7 @@ def test_pathlib_path_handling(trainer_config):
             resources=ResourceConfig.with_tpu("v4-8"),
         )
         with pytest.raises(ValueError, match="not in the same region"):
-            _doublecheck_paths(config)
+            doublecheck_paths(config)
 
 
 def test_tokenized_cache_stats_path_handles_local_and_gcs_paths():

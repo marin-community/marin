@@ -24,11 +24,10 @@ from iris.cluster.runtime.profile import (
     IrisProfile,
     ProfileTrigger,
     build_profile_row,
-    parse_profile_target,
     profile_local_process,
 )
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
-from iris.cluster.types import JobName
+from iris.cluster.types import AttemptUid, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
@@ -147,9 +146,9 @@ class Worker:
 
     # Grace period during which a freshly-submitted task is treated as
     # "expected" by reconciliation, even if it hasn't yet appeared in the
-    # controller's expected_tasks list. Protects against the StartTasks →
-    # PollTasks race where the controller polls before its internal view
-    # catches up with the task it just assigned.
+    # controller's expected_tasks list. Protects against the race where the
+    # worker has just enqueued a task (via PollTasks pull or Reconcile) but
+    # the controller's next poll arrives before its internal view catches up.
     _RECENT_SUBMISSION_GRACE_SECONDS = 30.0
 
     def __init__(
@@ -204,9 +203,13 @@ class Worker:
                 worker_attributes=config.worker_attributes,
             )
 
-        # Task state: maps (task_id, attempt_id) -> TaskAttempt.
-        # Preserves all attempts so logs for historical attempts remain accessible.
-        self._tasks: dict[tuple[str, int], TaskAttempt] = {}
+        # Task state: a flat list of TaskAttempt. Each attempt is
+        # self-describing — it carries its own task_id / attempt_id /
+        # attempt_uid — so the store needs no key. It is not keyed by UID
+        # because a worker booting mid-rollover adopts pre-upgrade containers
+        # that have no UID yet. Preserves all attempts so logs for historical
+        # attempts remain accessible. O(10) elements; linear scans are cheap.
+        self._tasks: list[TaskAttempt] = []
         # Freshly-submitted tasks -> monotonic submission time. Used by
         # reconciliation to grant a grace period before a task becomes
         # eligible for "unexpected, kill" if the controller hasn't yet
@@ -381,9 +384,11 @@ class Worker:
             )
             attempt.on_state_change = self._make_state_change_callback(attempt)
 
-            key = (container.task_id, container.attempt_id)
+            # Containers created by a pre-upgrade worker carry no iris.attempt_uid
+            # label; the resulting attempt enters the list with an empty UID and
+            # is stamped by the first Reconcile tick that composite-matches it.
             with self._lock:
-                self._tasks[key] = attempt
+                self._tasks.append(attempt)
 
             # Spawn monitoring thread
             def _run_adopted(stop_event: threading.Event, a: TaskAttempt = attempt) -> None:
@@ -670,22 +675,64 @@ class Worker:
         }
     )
 
-    def _get_current_attempt(self, task_id_wire: str) -> TaskAttempt | None:
-        """Get the most recent attempt for a task, or None if no attempts exist."""
-        # Find all attempts for this task and return the one with highest attempt_id
-        matching = [(key, task) for key, task in self._tasks.items() if key[0] == task_id_wire]
-        if not matching:
+    def _prefer_live(self, attempts: list[TaskAttempt]) -> TaskAttempt | None:
+        """Pick the highest-attempt_id member of ``attempts``, preferring non-terminal.
+
+        Two attempts can share a ``(task_id, attempt_id)`` composite when a
+        fresh-UID resubmit runs alongside a retained terminal attempt. Callers
+        resolving by composite always want the live one, so terminal attempts
+        are considered only when no live attempt matches.
+        """
+        if not attempts:
             return None
-        # Return the attempt with the highest attempt_id
-        matching.sort(key=lambda x: x[0][1], reverse=True)
-        return matching[0][1]
+        live = [t for t in attempts if t.status not in self._TERMINAL_STATES]
+        return max(live or attempts, key=lambda t: t.attempt_id)
+
+    def current_attempt(self, task_id: str) -> TaskAttempt | None:
+        """Most recent attempt for a task, preferring a live attempt over a terminal twin."""
+        return self._prefer_live([t for t in self._tasks if t.task_id.to_wire() == task_id])
+
+    def task_by_uid(self, uid: AttemptUid) -> TaskAttempt | None:
+        """Resolve an attempt by its controller-minted UID.
+
+        Returns None for an empty UID — an empty UID never identifies an
+        attempt, even though pre-upgrade attempts carry one until stamped.
+        """
+        if not uid:
+            return None
+        return next((t for t in self._tasks if t.attempt_uid == uid), None)
+
+    def task_by_attempt(self, task_id: str, attempt_id: int) -> TaskAttempt | None:
+        """Resolve an attempt by its ``(task_id, attempt_id)`` composite key.
+
+        Prefers a live attempt over a retained terminal twin sharing the key.
+        """
+        return self._prefer_live(
+            [t for t in self._tasks if t.task_id.to_wire() == task_id and t.attempt_id == attempt_id]
+        )
+
+    def resolve_attempt(self, uid: AttemptUid, task_id: str, attempt_id: int) -> TaskAttempt | None:
+        """Resolve a controller-addressed attempt: UID first, composite fallback.
+
+        This is the routing order the controller itself uses. The composite
+        fallback covers attempts created before any UID reached the worker
+        (legacy controller) and label-less adopted attempts not yet stamped.
+        """
+        return self.task_by_uid(uid) or self.task_by_attempt(task_id, attempt_id)
 
     def submit_task(self, request: job_pb2.RunTaskRequest) -> str:
         """Submit a new task for execution.
 
-        If a non-terminal task with the same task_id already exists:
-        - Same or older attempt_id: rejected as duplicate
-        - Newer attempt_id: old attempt is killed and new one starts
+        Identity is the controller-minted ``attempt_uid``: a request whose UID
+        already names a known attempt is rejected as a duplicate. A re-submitted
+        ``(task_id, attempt_id)`` with a *fresh* UID is a distinct attempt and
+        runs even though a terminal attempt with that composite is retained.
+
+        When the UID is empty (legacy controller), identity falls back to the
+        ``(task_id, attempt_id)`` composite.
+
+        A higher-attempt-id submission supersedes a non-terminal current
+        attempt for the same task — the old attempt is killed.
 
         Raises:
             RuntimeError: If a non-terminal attempt already exists (sanity check)
@@ -696,13 +743,15 @@ class Worker:
         task_id_wire = request.task_id
         task_id = JobName.from_wire(task_id_wire)
         attempt_id = request.attempt_id
-        key = (task_id_wire, attempt_id)
+        attempt_uid = AttemptUid(request.attempt_uid)
 
         should_kill_existing = False
         with self._lock:
-            # Check if this exact (task_id, attempt_id) already exists
-            if key in self._tasks:
-                existing = self._tasks[key]
+            # Reject an exact duplicate. With a UID, identity is the UID; a
+            # re-submitted composite carrying a fresh UID is therefore a new
+            # attempt. Without a UID, fall back to composite identity.
+            existing = self.task_by_uid(attempt_uid) if attempt_uid else self.task_by_attempt(task_id_wire, attempt_id)
+            if existing is not None:
                 logger.info(
                     "Rejecting duplicate task %s attempt %d (status=%s)",
                     task_id,
@@ -712,7 +761,7 @@ class Worker:
                 return task_id_wire
 
             # Sanity check: find any non-terminal attempt for this task
-            current = self._get_current_attempt(task_id_wire)
+            current = self.current_attempt(task_id_wire)
             if current is not None and current.status not in self._TERMINAL_STATES:
                 if attempt_id <= current.attempt_id:
                     logger.info(
@@ -733,7 +782,8 @@ class Worker:
                 should_kill_existing = True
 
         if should_kill_existing:
-            self._kill_task_attempt(task_id_wire, current.attempt_id)  # type: ignore[union-attr]
+            assert current is not None  # set only on the supersede branch above
+            current.kill()
 
         task_id.require_task()
 
@@ -745,6 +795,7 @@ class Worker:
             num_tasks=request.num_tasks,
             request=request,
             cache_dir=self._cache_dir,
+            attempt_uid=attempt_uid,
         )
 
         attempt = TaskAttempt(
@@ -764,8 +815,8 @@ class Worker:
         attempt.on_state_change = self._make_state_change_callback(attempt)
 
         with self._lock:
-            self._tasks[key] = attempt
-            self._recent_submissions[key] = time.monotonic()
+            self._tasks.append(attempt)
+            self._recent_submissions[(task_id_wire, attempt_id)] = time.monotonic()
 
         # Start execution in a monitored non-daemon thread. When stop() is called,
         # the on_stop callback kills the container so attempt.run() exits promptly.
@@ -795,8 +846,8 @@ class Worker:
             from execution internals.
         """
         if attempt_id >= 0:
-            return self._tasks.get((task_id, attempt_id))
-        return self._get_current_attempt(task_id)
+            return self.task_by_attempt(task_id, attempt_id)
+        return self.current_attempt(task_id)
 
     def list_tasks(self) -> list[TaskInfo]:
         """List all task attempts.
@@ -804,7 +855,7 @@ class Worker:
         Returns TaskInfo views (implemented by TaskAttempt) to decouple callers
         from execution internals. Returns all attempts, not just current ones.
         """
-        return list(self._tasks.values())
+        return list(self._tasks)
 
     def list_current_tasks(self) -> list[TaskInfo]:
         """List only the most recent attempt for each task.
@@ -813,9 +864,10 @@ class Worker:
         """
         # Group by task_id and return only the highest attempt_id for each
         by_task: dict[str, TaskAttempt] = {}
-        for (task_id, attempt_id), task in self._tasks.items():
+        for task in self._tasks:
+            task_id = task.task_id.to_wire()
             existing = by_task.get(task_id)
-            if existing is None or attempt_id > existing.attempt_id:
+            if existing is None or task.attempt_id > existing.attempt_id:
                 by_task[task_id] = task
         return list(by_task.values())
 
@@ -871,9 +923,9 @@ class Worker:
     def _reconcile_expected_tasks(
         self,
         expected_entries,
-    ) -> tuple[list[job_pb2.WorkerTaskStatus], list[tuple[str, int]]]:
+    ) -> tuple[list[job_pb2.WorkerTaskStatus], list[TaskAttempt]]:
         """Build status entries for expected tasks; collect non-terminal local tasks
-        not in the expected set as targets to kill.
+        not in the expected set as attempts to kill.
 
         Caller must hold ``self._lock``.
 
@@ -887,18 +939,18 @@ class Worker:
         for expected_entry in expected_entries:
             task_id = expected_entry.task_id
             expected_attempt_id = expected_entry.attempt_id
-            key = (task_id, expected_attempt_id)
-            expected_keys.add(key)
-            task = self._tasks.get(key)
+            expected_keys.add((task_id, expected_attempt_id))
+            task = self.task_by_attempt(task_id, expected_attempt_id)
             if task is None:
                 tasks.append(self._missing_task_status(task_id, expected_attempt_id))
             else:
                 tasks.append(self._encode_task_status(task, task_id))
         expected_keys |= self._prune_and_get_recent_submission_keys()
-        tasks_to_kill: list[tuple[str, int]] = []
-        for key, task in self._tasks.items():
+        tasks_to_kill: list[TaskAttempt] = []
+        for task in self._tasks:
+            key = (task.task_id.to_wire(), task.attempt_id)
             if key not in expected_keys and task.status not in self._TERMINAL_STATES:
-                tasks_to_kill.append(key)
+                tasks_to_kill.append(task)
         return tasks, tasks_to_kill
 
     def _collect_resource_metrics(self) -> job_pb2.WorkerResourceSnapshot:
@@ -907,7 +959,7 @@ class Worker:
         running_count = 0
         total_processes = 0
         with self._lock:
-            for task in self._tasks.values():
+            for task in self._tasks:
                 if task.status == job_pb2.TASK_STATE_RUNNING:
                     running_count += 1
                     total_processes += task.process_count
@@ -973,9 +1025,9 @@ class Worker:
         """Stop given tasks on this worker."""
         for task_id in request.task_ids:
             try:
-                current = self._get_current_attempt(task_id)
+                current = self.current_attempt(task_id)
                 if current:
-                    self._kill_task_attempt(task_id, current.attempt_id, async_kill=True)
+                    self._kill_async(current)
                     logger.info("StopTasks: initiated async kill for task %s", task_id)
             except Exception as e:
                 logger.warning("StopTasks: failed to kill task %s: %s", task_id, e)
@@ -990,87 +1042,192 @@ class Worker:
         """
         with self._lock:
             tasks, tasks_to_kill = self._reconcile_expected_tasks(request.expected_tasks)
-        for task_id, attempt_id in tasks_to_kill:
-            logger.warning("PollTasks: killing task %s attempt %d (unexpected)", task_id, attempt_id)
-            self._kill_task_attempt(task_id, attempt_id, async_kill=True)
+        for attempt in tasks_to_kill:
+            logger.warning("PollTasks: killing task %s attempt %d (unexpected)", attempt.task_id, attempt.attempt_id)
+            self._kill_async(attempt)
         return worker_pb2.Worker.PollTasksResponse(tasks=tasks)
 
-    def _kill_task_attempt(
+    def handle_reconcile(self, request: worker_pb2.Worker.ReconcileRequest) -> worker_pb2.Worker.ReconcileResponse:
+        """Process desired state from the controller and return observed state."""
+        for desired in request.desired:
+            if desired.HasField("run"):
+                self._process_run_intent(
+                    desired.task_id, desired.attempt_id, AttemptUid(desired.attempt_uid), desired.run
+                )
+            else:
+                self._process_stop_intent(desired.task_id, desired.attempt_id, AttemptUid(desired.attempt_uid))
+
+        # An attempt is desired if a DesiredAttempt resolves to it. Resolve by
+        # UID first, then by the composite key — the same order routing uses,
+        # so a label-less adopted attempt stamped by a run intent above is now
+        # found by UID. Composite resolution covers attempts the worker created
+        # before any UID reached it (legacy controller).
+        with self._lock:
+            desired_attempts: set[int] = set()
+            for desired in request.desired:
+                match = self.resolve_attempt(AttemptUid(desired.attempt_uid), desired.task_id, desired.attempt_id)
+                if match is not None:
+                    desired_attempts.add(id(match))
+            snapshot = list(self._tasks)
+
+        for task in snapshot:
+            if id(task) in desired_attempts or task.status in self._TERMINAL_STATES:
+                continue
+            logger.info(
+                "Reconcile: killing zombie attempt %s/%d (not in desired set)",
+                task.task_id,
+                task.attempt_id,
+            )
+            self._kill_async(task)
+
+        observations: list[worker_pb2.Worker.AttemptObservation] = []
+        with self._lock:
+            snapshot = list(self._tasks)
+            for task in snapshot:
+                observations.append(self._build_observation(task))
+
+            # Synthesize MISSING for run intents that resolved to no local attempt.
+            for desired in request.desired:
+                if not desired.HasField("run"):
+                    continue
+                match = self.resolve_attempt(AttemptUid(desired.attempt_uid), desired.task_id, desired.attempt_id)
+                if match is None:
+                    observations.append(
+                        worker_pb2.Worker.AttemptObservation(
+                            attempt_uid=desired.attempt_uid,
+                            task_id=desired.task_id,
+                            attempt_id=desired.attempt_id,
+                            state=job_pb2.TASK_STATE_MISSING,
+                        )
+                    )
+
+        resource_snapshot = self._collect_resource_metrics()
+        health = check_worker_health(disk_path=str(self._cache_dir))
+        if not health.healthy:
+            logger.warning("Reconcile: worker health check failed: %s", health.error)
+
+        worker_health = worker_pb2.Worker.WorkerHealth(
+            healthy=health.healthy,
+            health_error=health.error,
+            resources=resource_snapshot,
+        )
+
+        return worker_pb2.Worker.ReconcileResponse(
+            worker_id=self._worker_id or "",
+            observed=observations,
+            health=worker_health,
+        )
+
+    def _process_run_intent(
         self,
         task_id: str,
         attempt_id: int,
-        term_timeout_ms: int = 5000,
-        async_kill: bool = False,
-    ) -> bool:
-        """Kill a specific task attempt.
+        attempt_uid: AttemptUid,
+        attempt_spec: worker_pb2.Worker.AttemptSpec,
+    ) -> None:
+        """Handle a single DesiredAttempt with intent=run.
 
-        Args:
-            task_id: Wire-format task ID.
-            attempt_id: Attempt number to kill.
-            term_timeout_ms: Time to wait for graceful shutdown before SIGKILL.
-            async_kill: If True, signal the task immediately but perform the
-                container stop/wait/force-kill sequence in a daemon thread.
-                Used by heartbeat to avoid blocking the RPC response.
+        Resolves the target attempt by ``attempt_uid``. On a UID miss, falls
+        back once to the ``(task_id, attempt_id)`` composite — this adopts a
+        label-less attempt left by a pre-upgrade worker, stamping the UID onto
+        it so later ticks resolve directly. If the worker already holds the
+        attempt by either route, this is a no-op. Otherwise enqueue when an
+        inline spec is provided; without a spec, leave the attempt absent so
+        the observation loop reports MISSING.
         """
-        task = self._tasks.get((task_id, attempt_id))
-        if not task:
-            return False
+        with self._lock:
+            task = self.task_by_uid(attempt_uid)
+            if task is None:
+                task = self.task_by_attempt(task_id, attempt_id)
+                if task is not None and attempt_uid and not task.attempt_uid:
+                    # Adopted (label-less) attempt — stamp the UID so later
+                    # ticks route directly by it.
+                    logger.info(
+                        "Reconcile: stamping attempt_uid %s onto attempt %s/%d (composite match)",
+                        attempt_uid,
+                        task_id,
+                        attempt_id,
+                    )
+                    task.attempt_uid = attempt_uid
 
-        # Check if already in terminal state
-        if task.status not in (
-            job_pb2.TASK_STATE_RUNNING,
-            job_pb2.TASK_STATE_BUILDING,
-            job_pb2.TASK_STATE_PENDING,
-        ):
-            return False
-
-        # Set flag to signal the task's execution thread to stop.
-        # This is always done immediately regardless of async_kill.
-        task.should_stop = True
-
-        if async_kill:
-            thread = threading.Thread(
-                target=self._do_kill_container,
-                args=(task, term_timeout_ms),
-                name=f"kill-{task_id}-{attempt_id}",
-                daemon=True,
-            )
-            thread.start()
-        else:
-            self._do_kill_container(task, term_timeout_ms)
-
-        return True
-
-    @staticmethod
-    def _do_kill_container(task: TaskAttempt, term_timeout_ms: int) -> None:
-        """Perform the SIGTERM -> wait -> SIGKILL sequence for a task's container."""
-        if not task.has_container:
+        if task is not None:
             return
 
-        try:
-            task.stop(force=False)
-
-            running_states = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
-            stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
-                lambda: task.status not in running_states,
-                timeout=Duration.from_ms(term_timeout_ms),
+        if attempt_spec.HasField("request"):
+            logger.info("Reconcile: enqueuing attempt %s/%d (spec inline)", task_id, attempt_id)
+            self.submit_task(attempt_spec.request)
+        else:
+            logger.info(
+                "Reconcile: attempt %s/%d unknown and no spec; will report MISSING",
+                task_id,
+                attempt_id,
             )
 
-            if not stopped:
-                try:
-                    task.stop(force=True)
-                except RuntimeError:
-                    pass
-        except RuntimeError:
-            # Container may have already been removed or stopped
-            pass
+    def _process_stop_intent(self, task_id: str, attempt_id: int, attempt_uid: AttemptUid) -> None:
+        """Handle a single DesiredAttempt with intent=stop.
+
+        Resolves the target attempt by ``attempt_uid``, falling back to the
+        ``(task_id, attempt_id)`` composite. Idempotent: silently does nothing
+        if the attempt is already terminal or not present locally.
+        """
+        with self._lock:
+            task = self.resolve_attempt(attempt_uid, task_id, attempt_id)
+            if task is None:
+                return
+
+        logger.info("Reconcile: stopping attempt %s/%d (stop intent)", task_id, attempt_id)
+        self._kill_async(task)
+
+    def _build_observation(
+        self,
+        task: TaskAttempt,
+    ) -> worker_pb2.Worker.AttemptObservation:
+        """Build an AttemptObservation from a local TaskAttempt.
+
+        Reports ``attempt_uid`` for UID routing and keeps the composite
+        ``task_id`` / ``attempt_id`` populated for the controller's fallback.
+        ``attempt_uid`` is empty for an adopted attempt not yet stamped by a
+        Reconcile tick — the controller then routes that observation by
+        composite, which is exactly the rollover case.
+        """
+        state = task.status
+        # Workers never report PENDING to the controller; map it to BUILDING.
+        if state == job_pb2.TASK_STATE_PENDING:
+            state = job_pb2.TASK_STATE_BUILDING
+
+        obs = worker_pb2.Worker.AttemptObservation(
+            attempt_uid=task.attempt_uid,
+            task_id=task.task_id.to_wire(),
+            attempt_id=task.attempt_id,
+            state=state,
+            exit_code=task.exit_code or 0,
+            error=task.error or "",
+            container_id=task.platform_container_id or "",
+        )
+        if task.status in self._TERMINAL_STATES and task.finished_at is not None:
+            obs.finished_at.CopyFrom(timestamp_to_proto(task.finished_at))
+        return obs
+
+    def _kill_async(self, attempt: TaskAttempt, term_timeout_ms: int = 5000) -> None:
+        """Kill ``attempt`` in a daemon thread so an RPC handler does not block on it.
+
+        ``TaskAttempt.kill`` runs a stop/wait/force-kill sequence that can take
+        up to ``term_timeout_ms``; heartbeat and reconcile paths offload it so
+        the RPC response returns promptly.
+        """
+        threading.Thread(
+            target=attempt.kill,
+            args=(term_timeout_ms,),
+            name=f"kill-{attempt.task_id.to_wire()}-{attempt.attempt_id}",
+            daemon=True,
+        ).start()
 
     def kill_task(self, task_id: str, term_timeout_ms: int = 5000) -> bool:
         """Kill the current (most recent) attempt of a task."""
-        current = self._get_current_attempt(task_id)
+        current = self.current_attempt(task_id)
         if not current:
             return False
-        return self._kill_task_attempt(task_id, current.attempt_id, term_timeout_ms)
+        return current.kill(term_timeout_ms)
 
     def _run_profile_loop(self, stop_event: threading.Event) -> None:
         """Tick at ``profile_interval`` and capture a CPU profile per running attempt.
@@ -1091,7 +1248,7 @@ class Worker:
                 break
             limiter.mark_run()
             with self._lock:
-                running = [a for a in self._tasks.values() if a.status == job_pb2.TASK_STATE_RUNNING]
+                running = [a for a in self._tasks if a.status == job_pb2.TASK_STATE_RUNNING]
             for attempt in running:
                 if stop_event.is_set():
                     break
@@ -1135,15 +1292,15 @@ class Worker:
             row_source = f"/system/worker/{self._worker_id}"
             row_attempt_id: int | None = None
         else:
-            parsed = parse_profile_target(target)
+            parsed = TaskAttemptId.from_wire(target)
             task_id_wire = parsed.task_id.to_wire()
             resolved_attempt_id = parsed.attempt_id
             if resolved_attempt_id is None:
-                current = self._get_current_attempt(task_id_wire)
+                current = self.current_attempt(task_id_wire)
                 if current is None:
                     raise RuntimeError(f"no attempts for task {task_id_wire}")
                 resolved_attempt_id = current.attempt_id
-            attempt = self._tasks.get((task_id_wire, resolved_attempt_id))
+            attempt = self.task_by_attempt(task_id_wire, resolved_attempt_id)
             if attempt is None or attempt.status != job_pb2.TASK_STATE_RUNNING:
                 raise RuntimeError("attempt no longer running")
             data = attempt.profile(duration, request.profile_type)
@@ -1177,7 +1334,7 @@ class Worker:
 
         Delegates to the container handle's underlying runtime (docker exec, subprocess, kubectl exec).
         """
-        attempt = self._get_current_attempt(task_id)
+        attempt = self.current_attempt(task_id)
         if not attempt:
             return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {task_id} not found")
         if attempt.status != job_pb2.TASK_STATE_RUNNING:

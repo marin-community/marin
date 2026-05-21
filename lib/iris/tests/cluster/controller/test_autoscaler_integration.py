@@ -387,7 +387,7 @@ def test_pending_counter_prevents_double_scaleup():
     )
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project", label_prefix="iris")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central1-a"])
-    platform = SlowGcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", gcp_service=service)
+    platform = SlowGcpWorkerProvider(gcp_config=gcp_config, label_prefix="iris", worker_port=10001, gcp_service=service)
     group = ScalingGroup(
         sg_config,
         platform,

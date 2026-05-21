@@ -137,7 +137,11 @@ class GrugMuonConfig(MuonConfig):
                 return "adamw"
             elif hasattr(param, "ndim") and param.ndim == 2:
                 return "muon"
-            elif hasattr(param, "ndim") and param.ndim == 3 and ("w_up_gate" in path_lower or "w_down" in path_lower):
+            elif (
+                hasattr(param, "ndim")
+                and param.ndim == 3
+                and ("w_up_gate" in path_lower or "w_gate_up" in path_lower or "w_down" in path_lower)
+            ):
                 return "muon"
             else:
                 return "adamw"
