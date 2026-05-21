@@ -103,25 +103,44 @@ def _load_vllm(model_path: str, seed: int):
     for key, value in VLLM_TPU_ENV_VARS.items():
         os.environ.setdefault(key, value)
 
+    # Halve ragged-paged-attention prefill block sizes to keep v5p HBM headroom.
+    # Mirrors smoke_iid_vllm_tpu.py — replaces an older `get_tuned_block_sizes`
+    # patch that no longer exists in current tpu_inference.
     import tpu_inference.kernels.ragged_paged_attention.v3.kernel as rpa_kernel
 
-    orig_get_tuned = rpa_kernel.get_tuned_block_sizes
+    original_get_default_block_sizes = rpa_kernel.get_default_block_sizes
+    if not getattr(original_get_default_block_sizes, "_marin_iid_patched", False):
 
-    def patched_get_tuned(*args, **kwargs):
-        bkv_p, bq_sz = orig_get_tuned(*args, **kwargs)
-        return (max(1, bkv_p // 2), bq_sz)
+        def patched_get_default_block_sizes(*args, **kwargs):
+            sizes = dict(original_get_default_block_sizes(*args, **kwargs))
+            case = kwargs.get("case")
+            if case is not rpa_kernel.RpaCase.DECODE:
+                page_size = args[5]
+                sizes["bq_sz"] = max(1, sizes["bq_sz"] // 2)
+                sizes["bq_csz"] = max(1, sizes["bq_csz"] // 2)
+                sizes["bkv_sz"] = max(page_size, sizes["bkv_sz"] // 2)
+                sizes["bkv_csz"] = max(page_size, sizes["bkv_csz"] // 2)
+            return sizes
 
-    rpa_kernel.get_tuned_block_sizes = patched_get_tuned
+        patched_get_default_block_sizes._marin_iid_patched = True  # type: ignore[attr-defined]
+        rpa_kernel.get_default_block_sizes = patched_get_default_block_sizes
 
     from vllm import LLM, SamplingParams
 
     resolved_model_path = discover_hf_checkpoints(model_path)[-1]
     logger.info("Resolved %s -> %s", model_path, resolved_model_path)
+    # Force Qwen3ForCausalLM architecture: Delphi/midtrain HF configs sometimes
+    # carry `architectures: ["LlamaForCausalLM"]` from the PR #3092 Qwen3 export
+    # bug, which makes vLLM trip on `q_norm` / `k_norm` keys it doesn't know
+    # belong to Llama. The actual weights are Qwen3 — overriding architectures
+    # at load time is safe; `model_type: qwen3` is already correct in the
+    # config so vLLM picks the right loader.
     llm = LLM(
         model=resolved_model_path,
         trust_remote_code=True,
         load_format="runai_streamer",
         seed=seed,
+        hf_overrides={"architectures": ["Qwen3ForCausalLM"]},
     )
     return llm, SamplingParams
 
