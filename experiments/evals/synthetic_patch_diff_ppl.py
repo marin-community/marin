@@ -134,7 +134,7 @@ def _python_diff(row_index: int, rng: random.Random) -> tuple[str, str, dict[str
     before_name = f"compute_total_{row_index % 11}"
     guard_value = rng.randint(2, 9)
     file_path = f"src/payments/reconcile_{row_index % 7}.py"
-    hunk_header = f"@@ -{12 + row_index % 13},7 +{12 + row_index % 13},9 @@"
+    hunk_header = f"@@ -{12 + row_index % 13},3 +{12 + row_index % 13},7 @@"
     input_text = (
         f"File: {file_path}\n"
         "Bug: empty batches should return 0 and large values must keep cents precision.\n"

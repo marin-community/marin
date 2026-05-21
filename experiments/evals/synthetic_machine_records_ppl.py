@@ -192,10 +192,14 @@ def _choice(rng: random.Random, values: tuple[str, ...]) -> str:
     return values[rng.randrange(len(values))]
 
 
+def _clock_field(value: int) -> int:
+    return value % 60
+
+
 def _service_log_record(
     slice_: MachineRecordPplSlice, index: int, rng: random.Random
 ) -> tuple[str, str, dict[str, Any]]:
-    minute = 10 + index
+    minute = _clock_field(10 + index)
     host = f"node-{rng.randint(1, 9):02d}"
     pod = f"api-{rng.randrange(1000, 9999)}"
     if slice_.subset == "zeek":
@@ -269,10 +273,11 @@ def _trace_error_record(
 
 def _ci_log_record(slice_: MachineRecordPplSlice, index: int, rng: random.Random) -> tuple[str, str, dict[str, Any]]:
     step = _choice(rng, ("Install dependencies", "Run unit tests", "Build image", "Upload coverage"))
+    minute = _clock_field(20 + index)
     input_text = _base_prompt(
         slice_.subset,
         slice_.task_name,
-        f"2026-05-11T14:{20 + index:02d}:00.0000000Z ##[group]{step}\n"
+        f"2026-05-11T14:{minute:02d}:00.0000000Z ##[group]{step}\n"
         "2026-05-11T14:20:01.0000000Z shell: /usr/bin/bash -e {0}\n"
         "2026-05-11T14:20:02.0000000Z ",
     )
@@ -282,6 +287,7 @@ def _ci_log_record(slice_: MachineRecordPplSlice, index: int, rng: random.Random
 
 def _json_log_record(slice_: MachineRecordPplSlice, index: int, rng: random.Random) -> tuple[str, str, dict[str, Any]]:
     request_id = f"req-{rng.randrange(16**10):010x}"
+    second = _clock_field(10 + index)
     input_text = _base_prompt(
         slice_.subset,
         slice_.task_name,
@@ -294,7 +300,7 @@ def _json_log_record(slice_: MachineRecordPplSlice, index: int, rng: random.Rand
         "latency_ms": rng.randint(12, 900),
         "message": "request completed",
     }
-    target = f'{10 + index:02d}Z",' + json.dumps(target_obj, sort_keys=True)[1:] + "\n"
+    target = f'{second:02d}Z",' + json.dumps(target_obj, sort_keys=True)[1:] + "\n"
     return input_text, target, {"request_id": request_id}
 
 

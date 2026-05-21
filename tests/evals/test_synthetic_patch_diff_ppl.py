@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 
 from experiments.evals.synthetic_patch_diff_ppl import (
     EXAMPLES_PER_CONFIG,
@@ -86,6 +87,17 @@ def test_patch_diff_examples_preserve_patch_artifact_shapes():
     gh_event = records_by_subset["gh_pr_event_patch"]
     assert str(gh_event["input"]).startswith('{"event":"pull_request"')
     assert str(gh_event["target"]).startswith("@@ -22,7 +22,7 @@")
+
+
+def test_unified_diff_hunk_header_counts_match_body():
+    record = synthetic_patch_diff_record(SyntheticPatchDiffSubset.UNIFIED_DIFF_HUNKS, row_index=0)
+    hunk = f"{record['input']}{record['target']}"
+    header = next(line for line in hunk.splitlines() if line.startswith("@@ "))
+    old_count, new_count = (int(count) for count in re.match(r"@@ -\d+,(\d+) \+\d+,(\d+) @@", header).groups())
+    body = hunk.split(f"{header}\n", maxsplit=1)[1].splitlines()
+
+    assert sum(not line.startswith("+") for line in body) == old_count
+    assert sum(not line.startswith("-") for line in body) == new_count
 
 
 def test_write_local_sample_creates_jsonl_per_hf_config(tmp_path):

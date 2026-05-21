@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 from experiments.evals.synthetic_machine_records_ppl import (
     iter_machine_record_examples,
     synthetic_machine_records_raw_validation_sets,
@@ -71,3 +73,15 @@ def test_machine_record_examples_keep_native_record_shapes():
     dockerfile = records_by_task["dockerfile"]
     assert str(dockerfile["input"]).startswith("FROM python:3.12-slim\nWORKDIR /app")
     assert str(dockerfile["target"]).endswith('CMD ["python", "-m", "service.main"]\n')
+
+
+def test_machine_record_timestamps_keep_valid_clock_fields():
+    records = list(iter_machine_record_examples(examples_per_config=125))
+    timestamp_pattern = re.compile(r"14:(?P<minute>\d{2})(?::(?P<second>\d{2}))?")
+
+    for record in records:
+        text = f"{record['input']}{record['target']}"
+        for match in timestamp_pattern.finditer(text):
+            assert int(match.group("minute")) < 60
+            if match.group("second") is not None:
+                assert int(match.group("second")) < 60
