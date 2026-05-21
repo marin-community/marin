@@ -8,7 +8,7 @@ without spinning up a full coordinator.
 """
 
 import pytest
-from zephyr.execution import _worker_ctx_var
+from zephyr.execution.internals import _worker_ctx_var
 from zephyr.plan import deterministic_hash
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shuffle import (

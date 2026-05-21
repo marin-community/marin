@@ -136,7 +136,7 @@ def _default_scatter_write_buffer_bytes() -> int:
     actor's RAM. Falls back to 256 MB (divided by the same factor) when the
     cgroup limit cannot be read.
     """
-    from zephyr.execution import _worker_ctx_var  # local import breaks the shuffle↔execution cycle
+    from zephyr.execution.internals import _worker_ctx_var  # local import breaks the shuffle↔internals cycle
 
     num_workers = _worker_ctx_var.get().num_workers
     memory = TaskResources.from_environment().memory_bytes

@@ -4,7 +4,8 @@
 """Tests for Zephyr user-defined counters: worker API and heartbeat plumbing."""
 
 from zephyr import counters
-from zephyr.execution import CounterSnapshot, ZephyrExecutionResult, _worker_ctx_var
+from zephyr.execution import ZephyrExecutionResult
+from zephyr.execution.internals import CounterSnapshot, _worker_ctx_var
 
 
 class FakeWorker:

@@ -21,24 +21,22 @@ from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import (
+from zephyr.execution import ZephyrContext, ZephyrWorkerError, zephyr_worker_ctx
+from zephyr.execution.coordinator import ZephyrCoordinator
+from zephyr.execution.internals import (
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     CoordinatorUnreachable,
     CounterSnapshot,
-    ListShard,
     PickleDiskChunk,
     PullStatus,
     ShardTask,
     TaskResult,
     WorkerState,
-    ZephyrContext,
-    ZephyrCoordinator,
-    ZephyrWorker,
-    ZephyrWorkerError,
-    zephyr_worker_ctx,
 )
+from zephyr.execution.worker import ZephyrWorker
 from zephyr.plan import PhysicalStage, StageType, compute_plan
+from zephyr.shuffle import ListShard
 
 
 def test_simple_map(zephyr_ctx):
@@ -404,7 +402,7 @@ def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_pa
     status log should drop the ``items=... bytes_processed=...`` segment rather
     than print misleading zeros. Once either counter is recorded, the segment
     reappears."""
-    from zephyr.execution import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
+    from zephyr.execution.internals import ZEPHYR_STAGE_BYTES_PROCESSED_KEY, ZEPHYR_STAGE_ITEM_COUNT_KEY
 
     coord = ZephyrCoordinator()
     coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")

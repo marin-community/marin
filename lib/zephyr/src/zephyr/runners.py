@@ -39,7 +39,7 @@ import pyarrow as pa
 from rigging.filesystem import open_url
 from rigging.log_setup import configure_logging
 
-from zephyr.execution import (
+from zephyr.execution.internals import (
     ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
     ZEPHYR_STAGE_ITEM_COUNT_KEY,
     CounterSnapshot,

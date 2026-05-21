@@ -11,14 +11,18 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 ## Source Layout
 
 - `src/zephyr/dataset.py` — `Dataset` class, `ShardInfo`, all transformation operations including `group_by`, `deduplicate`, `sorted_merge_join`
-- `src/zephyr/execution.py` — `ZephyrContext`, `ZephyrCoordinator`, `ZephyrWorker`, `CounterSnapshot`, execution control flow
+- `src/zephyr/execution/` — execution engine package, split into:
+  - `internals.py` — shared types (`ShardTask`, `TaskResult`, `CounterSnapshot`, `PullStatus`, …), the `WorkerContext` / `StageRunner` protocols, and formatting/IO helpers
+  - `coordinator.py` — `ZephyrCoordinator`, shard plumbing (`_build_source_shards`, `_reshard_refs`, `_compute_tasks_from_shards`, `_regroup_result_refs`)
+  - `worker.py` — `ZephyrWorker`
+  - `context.py` — `ZephyrContext`, `ZephyrExecutionResult`, coordinator-as-job entrypoint
 - `src/zephyr/plan.py` — `compute_plan`, `PhysicalPlan`, operation fusion
 - `src/zephyr/readers.py` — `load_jsonl`, `load_parquet`, `load_vortex`, `InputFileSpec`
 - `src/zephyr/writers.py` — `write_jsonl_file`, `write_parquet_file`, `write_vortex_file`, Levanter cache writer
 - `src/zephyr/shuffle.py` — scatter pipeline internals (`ScatterFileIterator`, `ScatterReader`, hash-routing, combiner, zstd-chunk file format with byte-range sidecar)
 - `src/zephyr/expr.py` — `Expr`, `col`, `lit` for filter expressions
 - `src/zephyr/external_sort.py` — `external_sort_merge` k-way merge of sorted runs
-- `src/zephyr/counters.py` — `increment` / `get_counters` per-worker counter API (`CounterSnapshot` lives in `execution.py`)
+- `src/zephyr/counters.py` — `increment` / `get_counters` per-worker counter API (`CounterSnapshot` lives in `execution/internals.py`)
 
 ## Execution Model
 
