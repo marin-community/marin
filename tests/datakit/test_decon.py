@@ -726,7 +726,7 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
     # Path A: inline build.
     inline_output = Path(fox_corpus["output_dir"]) / "inline"
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
         output_path=str(inline_output),
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -754,7 +754,7 @@ def test_build_eval_bloom_then_decon_matches_inline(fox_corpus):
 
     prebuilt_output = Path(fox_corpus["output_dir"]) / "prebuilt"
     decon_to_parquet(
-        normalized_data=_as_source(Path(fox_corpus["input_dir"]), num_partitions=2),
+        normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(prebuilt_output),
         ngram=NGramConfig(ngram_length=3, overlap_threshold=0.5),
@@ -790,7 +790,7 @@ def test_merge_eval_blooms_equals_single_build(tmp_path: Path):
             {"id": "doc_unique", "text": "nothing in common with either eval", "partition_id": 0},
         ],
     )
-    src = _as_source(input_dir, num_partitions=1)
+    src = _as_source(input_dir)
     ngram = NGramConfig(ngram_length=3, overlap_threshold=0.5)
 
     # Combined-build baseline.
@@ -851,7 +851,7 @@ def test_merge_eval_blooms_equals_single_build(tmp_path: Path):
 
 def test_decon_to_parquet_requires_exactly_one_of_eval_or_prebuilt(fox_corpus):
     """Neither / both raise ValueError before any work is done."""
-    src = _as_source(Path(fox_corpus["input_dir"]), num_partitions=2)
+    src = _as_source(Path(fox_corpus["input_dir"]))
     out = fox_corpus["output_dir"]
 
     # neither

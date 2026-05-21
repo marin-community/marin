@@ -303,15 +303,20 @@ def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
     cap_by_id = {r["id"]: r["buckets"] for r in _read_cluster_attrs(cap_mh.attr_dir)}
     nocap_by_id = {r["id"]: r["buckets"] for r in _read_cluster_attrs(nocap_mh.attr_dir)}
 
-    assert set(cap_by_id) == {"mega", "small"} == set(nocap_by_id)
+    # normalize_to_parquet generates a deterministic xxh3 id from text; the
+    # raw "mega"/"small" handles are renamed to source_id internally and
+    # don't appear in minhash attrs.
+    mega_id = generate_id(mega_text)
+    small_id = generate_id(small_text)
+    assert set(cap_by_id) == {mega_id, small_id} == set(nocap_by_id)
 
     # Small doc (under cap) → unaffected.
-    assert sorted(cap_by_id["small"]) == sorted(
-        nocap_by_id["small"]
+    assert sorted(cap_by_id[small_id]) == sorted(
+        nocap_by_id[small_id]
     ), "doc smaller than the cap should produce identical buckets"
     # Mega doc (over cap) → different signature, no band overlap.
-    cap_mega = set(cap_by_id["mega"])
-    nocap_mega = set(nocap_by_id["mega"])
+    cap_mega = set(cap_by_id[mega_id])
+    nocap_mega = set(nocap_by_id[mega_id])
     assert cap_mega != nocap_mega, "doc over the cap should produce a different signature"
     assert not (cap_mega & nocap_mega), (
         "doc over the cap should share no LSH bands between cap / no-cap signatures "
