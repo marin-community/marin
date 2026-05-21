@@ -136,3 +136,30 @@
   - The next route to 5-10% of DeepEP is not incremental `ragged_all_to_all` tuning; it requires a DeepEP baseline and then a transport/full-block replacement candidate.
 - Next action:
   - Recover a runnable DeepEP full-block `forward_backward` baseline on the same 4-GPU shape.
+
+### 2026-05-21 11:07 - Resurrect historical JAX DeepEP baseline on B200
+- Experiment ID: `B200-EP-005`
+- Hypothesis:
+  - The last known runnable JAX DeepEP bridge can still provide a same-shape 4-GPU anchor if patched for Blackwell codegen and current import constraints.
+- Command:
+  - Submitted job `49680`, then job `49681` after patching the historical checkout.
+  - Benchmark command family: `bench_moe_hillclimb.py --tokens 32768 --hidden 5120 --mlp-dim 2560 --experts 32 --shared-expert-dim 0 --topk 2 --distribution random --bench-pass forward_backward --kernel deepep_transport_capped_prewarmed --ep-list 4 --warmup 1 --iters 3`
+- Config:
+  - hardware: 4 B200 GPUs on one NVLinked node
+  - historical Marin commit: `95e2e589c`
+  - DeepEP source ref: `7febc6e`
+  - scratch-only compatibility patches:
+    - allow `sm_100` / Torch arch `10.0` in the transport FFI build
+    - avoid importing optional orchestration dependencies from the historical package root
+- Result:
+  - Job `49680` failed before benchmark due to a missing optional orchestration dependency in the historical package root.
+  - Job `49681` completed with exit code `0`.
+  - Exact caps: `max_recv_tokens=14592`, `max_local_assignments=16512`, `recv_factor=2.245614`, `assign_factor=3.968992`.
+  - `deepep_transport_capped_prewarmed`, `ep=4`, `forward_backward`: `0.024093 s`, `1.360M tok/s`.
+  - The run emitted CUDA teardown warnings after the result line; Slurm still recorded the job as completed successfully.
+- Interpretation:
+  - The historical JAX DeepEP bridge is now runnable on B200 for the 4-GPU full-block `forward_backward` shape.
+  - At this shape, current-tree `ring` is faster than this resurrected historical JAX DeepEP baseline: `0.007157 s` vs `0.024093 s`, or about `3.37x` higher throughput.
+  - This should not be treated as a final DeepEP parity win. It compares current `ring` against an old JAX bridge plus scratch-only compatibility patches, not a production-quality current DeepEP/Megatron full-block reference.
+- Next action:
+  - Make the DeepEP baseline durable in the current branch or build a fairer current DeepEP reference before spending time on a Triton/CUTLASS transport replacement.

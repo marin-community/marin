@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
+from levanter.grug._moe.common import _DEFAULT_EP_CAPACITY_FACTOR
 from levanter.grug.grug_moe import moe_mlp
 from levanter.utils.activation import ActivationFunctionEnum
 
@@ -41,6 +42,20 @@ def _time_call(fn: Callable, args: tuple, *, warmup: int, iters: int) -> tuple[f
         _block_until_ready(fn(*args))
     steady_s = (time.perf_counter() - start) / iters
     return compile_s, steady_s
+
+
+def _scalar_int(value) -> int:
+    return int(np.asarray(jax.device_get(value)))
+
+
+def _benchmark_dropped_assignments(value, *, pass_mode: str) -> int:
+    if pass_mode == "forward":
+        _, dropped = value
+        return _scalar_int(dropped)
+
+    (loss, dropped), _ = value
+    del loss
+    return _scalar_int(dropped)
 
 
 def _make_mesh(num_devices: int, *, data_axis: int, model_axis: int) -> Mesh:
@@ -115,6 +130,7 @@ def _forward_fn(
         implementation=implementation,
         mesh=mesh,
         capacity_factor=capacity_factor,
+        report_capacity_overflow=True,
     )
 
 
@@ -139,7 +155,11 @@ def _loss_fn(
         implementation=implementation,
         capacity_factor=capacity_factor,
     )
-    return jnp.mean(out.astype(jnp.float32) * out.astype(jnp.float32))
+    if isinstance(out, tuple):
+        out, dropped = out
+    else:
+        dropped = jnp.array(0, dtype=jnp.int32)
+    return jnp.mean(out.astype(jnp.float32) * out.astype(jnp.float32)), dropped
 
 
 def _parse_args() -> argparse.Namespace:
@@ -149,7 +169,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--intermediate-dim", type=int, default=2560)
     parser.add_argument("--local-experts", type=int, default=8)
     parser.add_argument("--topk", type=int, default=2)
-    parser.add_argument("--capacity-factor", type=float, default=1.0)
+    parser.add_argument("--capacity-factor", type=float, default=_DEFAULT_EP_CAPACITY_FACTOR)
     parser.add_argument("--num-devices", type=int, default=0)
     parser.add_argument("--data-axis", type=int, default=1)
     parser.add_argument("--model-axis", type=int, default=1)
@@ -199,11 +219,13 @@ def main() -> None:
                             implementation=implementation,
                             capacity_factor=args.capacity_factor,
                         ),
+                        has_aux=True,
                         argnums=(0, 3, 4),
                     )
                 )
 
             compile_s, steady_s = _time_call(bench_fn, inputs, warmup=args.warmup, iters=args.iters)
+            dropped_assignments = _benchmark_dropped_assignments(bench_fn(*inputs), pass_mode=args.pass_mode)
             _json_print(
                 {
                     "implementation": implementation,
@@ -220,6 +242,7 @@ def main() -> None:
                     "num_devices": num_devices,
                     "dtype": args.dtype,
                     "capacity_factor": args.capacity_factor,
+                    "dropped_assignments": dropped_assignments,
                 }
             )
 
