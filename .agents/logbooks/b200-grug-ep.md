@@ -578,3 +578,37 @@
   - This makes `stream_ring` the best immediate baseline for implementation work. A fresh Triton/CUTLASS local-GEMM rewrite is not the first move unless `stream_ring` fails at EP8 or recipe-shaped anchors.
 - Next action:
   - Promote `stream_ring` as the EP4 development baseline, then re-check EP8 and recipe-shaped anchors.
+
+### 2026-05-21 11:48 - Test Sonic-style combine inside stream ring
+- Experiment ID: `B200-EP-017`
+- Hypothesis:
+  - The best `stream_ring` variant still uses a scatter-add combine inside each ring step. Replacing that combine with Sonic's fixed-top-k Triton gather/combine may reduce backward combine overhead while preserving the stream-ring communication pattern.
+- Code:
+  - Added benchmark-only kernel `stream_ring_sonic_combine` in `bench_moe_hillclimb.py`.
+  - The variant builds fixed `(tokens, topk)` dispatch positions from the local compacted assignments and calls the existing Sonic gather/combine kernel for each ring step.
+- Command:
+  - Submitted job `49815`.
+  - Submitted retry job `49816` after adding the missing `jax-triton` dependency in a scratch-local Python target; canceled once the failure mode was identified.
+  - Submitted job `49817` under a newer CUDA module for the Sonic-only cases.
+  - Benchmark command family: `bench_moe_hillclimb.py --tokens 131072 --hidden 5120 --mlp-dim 4096 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 4 --warmup 1 --iters 5`
+- Config:
+  - hardware target: 4 B200 GPUs on one NVLinked node
+  - shape: `tokens=131072`, `hidden=5120`, `mlp_dim=4096`, `experts=64`, `topk=8`, fwd+bwd.
+  - compared `stream_ring`, `stream_ring_sonic_combine`, and `deepep_transport_capped_prewarmed` for `shared_expert_dim=0` and `shared_expert_dim=2048`.
+- Result:
+  - Job `49815` completed with exit code `0`, but both `stream_ring_sonic_combine` cases exited `1` because the runtime environment lacked `jax-triton`.
+  - Job `49816` confirmed the next failure mode with `jax-triton` present: the CUDA 12 assembler rejected the PTX version emitted by Triton. The job was canceled after the failure reproduced.
+  - Job `49817` completed both Sonic-combine cases under a newer CUDA module:
+    - `shared_expert_dim=0`, `stream_ring_sonic_combine`: `0.175608 s`, `0.746M tok/s`
+    - `shared_expert_dim=2048`, `stream_ring_sonic_combine`: `0.184465 s`, `0.711M tok/s`
+  - Same-run-family baselines from job `49815`:
+    - `shared_expert_dim=0`, `stream_ring`: `0.173550 s`, `0.755M tok/s`
+    - `shared_expert_dim=0`, `deepep_transport_capped_prewarmed`: `0.162848 s`, `0.805M tok/s`
+    - `shared_expert_dim=2048`, `stream_ring`: `0.182891 s`, `0.717M tok/s`
+    - `shared_expert_dim=2048`, `deepep_transport_capped_prewarmed`: `0.169560 s`, `0.773M tok/s`
+- Interpretation:
+  - Sonic-style combine is not an improvement at this EP4 anchor. It is about `1.2%` slower than `stream_ring` without shared experts and about `0.9%` slower with shared experts.
+  - The remaining `stream_ring` gap to DeepEP is not primarily the local scatter-add combine. The next useful work is either promoting `stream_ring` into the production path or re-checking EP8 scaling, not another local-combine swap.
+  - Operational note: Sonic/Triton experiments need `jax-triton` and a CUDA assembler new enough for Triton's emitted PTX. Keep that in job scripts for future Triton probes.
+- Next action:
+  - Keep `stream_ring` as the EP4 development baseline. Re-check the same `topk=8`, `mlp_dim=4096` anchor at EP8 with `stream_ring` before deciding whether a DeepEP-style transport rewrite is necessary.

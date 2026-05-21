@@ -23,6 +23,11 @@ window on the EP4 anchor: about `7.3%` slower than DeepEP without shared experts
 and about `5.8%` slower with `shared_expert_dim=2048`. Treat `stream_ring` as
 the EP4 development baseline before starting a fresh transport rewrite.
 
+Follow-up: replacing stream-ring's local scatter-add combine with Sonic's
+fixed-top-k Triton combine did not improve the EP4 anchor. The Sonic-combine
+variant was about `1%` slower than `stream_ring`, so the remaining gap is not
+primarily the local combine primitive.
+
 ## Recipe-Derived Anchor Shapes
 
 The large-run MoE sizing table in `experiments/grug/moe/README.md` gives:
@@ -65,6 +70,8 @@ run recipe `topk=4` as a control after the gap is understood.
 
 4. Promote `stream_ring` before writing new kernels.
    - Make `stream_ring` the EP4 development baseline.
+   - Do not pursue the Sonic-style local combine swap further for this shape;
+     it tested slightly slower than the scatter-add combine.
    - Re-check EP8 with `stream_ring` before investing in a DeepEP-style
      transport rewrite.
    - If EP8 reopens the gap, isolate whether the loss is EP-size communication
