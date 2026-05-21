@@ -403,16 +403,20 @@
       - `deepep_transport_capped_prewarmed`: `0.110731 s`, `1.184M tok/s`
       - DeepEP is about `43.9%` faster on wall time.
       - DeepEP exact caps: `max_recv_tokens=89344`, `max_local_assignments=131584`, `recv_factor=1.467049`, `assign_factor=7.968872`.
+    - `tokens=262144`, `shared_expert_dim=0`:
+      - `current`: no result line, exited `124`.
+      - `deepep_transport_capped_prewarmed`: `0.219625 s`, `1.194M tok/s`
+      - This is a completion boundary: DeepEP completed, while the current path timed out after GPU OOM and collective rendezvous failures.
+      - DeepEP exact caps: `max_recv_tokens=178816`, `max_local_assignments=263168`, `recv_factor=1.465999`, `assign_factor=7.968872`.
   - Current running case:
-    - `tokens=262144`, `shared_expert_dim=0`, kernel `current`.
-    - The error stream is showing large GPU OOM allocation failures followed by NCCL communicator initialization failure and collective rendezvous waits.
+    - `tokens=262144`, `shared_expert_dim=2048`, kernel `current`.
 - Interpretation:
   - Increasing expert width exposed a large gap immediately, even at `131072` tokens.
   - The current ring path is now far outside the requested `5-10%` parity window on full fwd+bwd MoE MLP.
   - Because both shared and no-shared cases lose by roughly the same amount, the next likely bottleneck is the combination of token exchange and local expert GEMM scheduling/overlap rather than shared-expert work alone.
-  - The `262144` current case may not fit the present harness memory envelope at `mlp_dim=4096`.
+  - The `262144` no-shared case confirms the memory/runtime boundary: DeepEP completes at the larger token count, while the current path does not.
 - Next action:
-  - Let job `49779` finish or time out, then decide whether to profile the `131072` case or reduce the `262144` case to isolate memory from scheduling.
+  - Let the `262144` shared-expert current case finish or time out, then profile the `131072` anchor and investigate why the current path materializes too much state at `262144`.
 
 ### 2026-05-21 10:36 - Submit EP4 larger expert anchor
 - Experiment ID: `B200-EP-013`
@@ -433,16 +437,22 @@
     - If we want to preserve `8` local experts per GPU instead, run a separate `experts=32` control.
 - Result:
   - Running.
-  - Observed cases:
+  - Completed or result-emitting cases:
     - `tokens=131072`, `shared_expert_dim=0`, kernel `current`:
       - `current`: `0.194346 s`, `0.674M tok/s`
     - `tokens=131072`, `shared_expert_dim=0`, kernel `deepep_transport_capped_prewarmed`:
       - `deepep_transport_capped_prewarmed`: `0.160582 s`, `0.816M tok/s`
       - DeepEP is about `17.4%` faster on wall time.
       - DeepEP exact caps: `max_recv_tokens=120064`, `max_local_assignments=262912`, `recv_factor=1.091684`, `assign_factor=3.988315`.
+    - `tokens=131072`, `shared_expert_dim=2048`, kernel `current`:
+      - `current`: `0.200196 s`, `0.655M tok/s`
+    - `tokens=131072`, `shared_expert_dim=2048`, kernel `deepep_transport_capped_prewarmed`:
+      - `deepep_transport_capped_prewarmed`: `0.171901 s`, `0.762M tok/s`
+      - DeepEP is about `14.1%` faster on wall time.
+      - DeepEP exact caps: `max_recv_tokens=120064`, `max_local_assignments=262912`, `recv_factor=1.091684`, `assign_factor=3.988315`.
       - The result line has emitted; the case end line has not emitted yet.
 - Interpretation:
-  - The `mlp_dim=4096` gap is present on EP4 for the same global `experts=64` shape, but the first no-shared point is smaller than the EP8 gap.
-  - This suggests the EP8 result is not purely an 8-GPU artifact; however, the gap still grows with EP size or local/global layout.
+  - The `mlp_dim=4096` gap is present on EP4 for the same global `experts=64` shape, but it is smaller than the EP8 gap.
+  - EP4 shows a `14-17%` DeepEP advantage, while EP8 showed a `40-44%` advantage at the same `131072` token shape. The problem is therefore not purely an 8-GPU artifact, but it does worsen with EP size or local/global layout.
 - Next action:
-  - Watch job `49801` and compare the EP4 gap against the EP8 `B200-EP-012` anchor.
+  - Wait for the final case end line, then decide whether to run an EP4 `experts=32` control that preserves `8` local experts per GPU.
