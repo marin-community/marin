@@ -1634,7 +1634,7 @@ def _moe_mlp_ep_token_ragged_a2a_local(
             send_capacity=token_fanout_capacity,
         )
         topk_payload = _pack_token_rank_payload(
-            selected_experts_local.astype(jnp.int64),
+            selected_experts_local.astype(jnp.int32),
             is_token_in_rank,
             num_tokens_per_rank,
             send_capacity=token_fanout_capacity,
