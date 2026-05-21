@@ -1543,11 +1543,6 @@ class ZephyrWorker:
                         self._worker_id,
                         consecutive_failures,
                     )
-                    # Fail the actor so iris records the task as FAILED and the
-                    # worker group's max_task_retries policy reschedules this
-                    # replica. Setting only _shutdown_event would drain the
-                    # worker but exit cleanly — iris would record SUCCEEDED
-                    # and never retry.
                     self._actor_ctx.fail(
                         CoordinatorUnreachable(f"{consecutive_failures} consecutive heartbeat failures")
                     )
