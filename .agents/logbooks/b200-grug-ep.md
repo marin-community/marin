@@ -413,3 +413,28 @@
   - The `262144` current case may not fit the present harness memory envelope at `mlp_dim=4096`.
 - Next action:
   - Let job `49779` finish or time out, then decide whether to profile the `131072` case or reduce the `262144` case to isolate memory from scheduling.
+
+### 2026-05-21 10:36 - Submit EP4 larger expert anchor
+- Experiment ID: `B200-EP-013`
+- Hypothesis:
+  - The large `mlp_dim=4096` gap might depend on EP8 communication pressure; run the same global MoE shape on 4 GPUs to check whether the current path still loses badly.
+- Command:
+  - Submitted job `49801`.
+  - Benchmark command family: `bench_moe_hillclimb.py --tokens 131072 --hidden 5120 --mlp-dim 4096 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 4 --warmup 1 --iters 3`
+  - Each case has a per-case timeout.
+- Config:
+  - hardware target: 4 B200 GPUs on one NVLinked node
+  - kernels: `current`, `deepep_transport_capped_prewarmed`
+  - shapes:
+    - `tokens=131072`, `shared_expert_dim=0`, both kernels
+    - `tokens=131072`, `shared_expert_dim=2048`, both kernels
+  - Note:
+    - This keeps the global model at `experts=64`, so EP4 has `16` local experts per GPU.
+    - If we want to preserve `8` local experts per GPU instead, run a separate `experts=32` control.
+- Result:
+  - Running.
+  - First observed case: `tokens=131072`, `shared_expert_dim=0`, kernel `current`.
+- Interpretation:
+  - Pending.
+- Next action:
+  - Watch job `49801` and compare the EP4 gap against the EP8 `B200-EP-012` anchor.
