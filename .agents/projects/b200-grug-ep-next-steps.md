@@ -28,6 +28,11 @@ fixed-top-k Triton combine did not improve the EP4 anchor. The Sonic-combine
 variant was about `1%` slower than `stream_ring`, so the remaining gap is not
 primarily the local combine primitive.
 
+EP8 follow-up: `stream_ring` is still a large improvement over the old current
+path, but lands just outside the target parity window at the `131072`,
+`hidden=5120`, `mlp_dim=4096`, `topk=8` anchor: about `10.4%` slower than DeepEP
+without shared experts and about `10.7%` slower with `shared_expert_dim=2048`.
+
 ## Recipe-Derived Anchor Shapes
 
 The large-run MoE sizing table in `experiments/grug/moe/README.md` gives:
@@ -72,10 +77,9 @@ run recipe `topk=4` as a control after the gap is understood.
    - Make `stream_ring` the EP4 development baseline.
    - Do not pursue the Sonic-style local combine swap further for this shape;
      it tested slightly slower than the scatter-add combine.
-   - Re-check EP8 with `stream_ring` before investing in a DeepEP-style
-     transport rewrite.
-   - If EP8 reopens the gap, isolate whether the loss is EP-size communication
-     scaling, local/global layout, or memory pressure.
+   - EP8 now shows a residual `~10-11%` gap rather than the old `40-44%` gap.
+     Promote `stream_ring`, but keep one profile/probe task for the remaining
+     EP8 transport difference.
 
 5. Test recipe-shaped anchors after the debug shape is decomposed.
    - `1e24` proxy: start with `hidden=7680`, `mlp_dim=3840`,

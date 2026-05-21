@@ -612,3 +612,36 @@
   - Operational note: Sonic/Triton experiments need `jax-triton` and a CUDA assembler new enough for Triton's emitted PTX. Keep that in job scripts for future Triton probes.
 - Next action:
   - Keep `stream_ring` as the EP4 development baseline. Re-check the same `topk=8`, `mlp_dim=4096` anchor at EP8 with `stream_ring` before deciding whether a DeepEP-style transport rewrite is necessary.
+
+### 2026-05-21 12:12 - Validate stream ring at EP8
+- Experiment ID: `B200-EP-018`
+- Hypothesis:
+  - `stream_ring` closed the EP4 gap to the requested parity window. Re-check the original EP8 scale to determine whether the remaining problem is only the old current path or whether EP8 still needs transport work.
+- Command:
+  - Submitted job `49818`.
+  - Benchmark command family: `bench_moe_hillclimb.py --tokens 131072 --hidden 5120 --mlp-dim 4096 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 8 --warmup 1 --iters 5`
+- Config:
+  - hardware target: 8 B200 GPUs on one NVLinked node
+  - kernels: `stream_ring`, `deepep_transport_capped_prewarmed`
+  - shapes:
+    - `tokens=131072`, `shared_expert_dim=0`, both kernels
+    - `tokens=131072`, `shared_expert_dim=2048`, both kernels
+- Result:
+  - Job `49818` completed with exit code `0`.
+  - Results:
+    - `tokens=131072`, `shared_expert_dim=0`:
+      - `stream_ring`: `0.095364 s`, `1.374M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.086349 s`, `1.518M tok/s`
+      - `stream_ring` is about `10.4%` slower than DeepEP on wall time.
+      - DeepEP exact caps: `max_recv_tokens=89344`, `max_local_assignments=131584`, `recv_factor=1.467049`, `assign_factor=7.968872`.
+    - `tokens=131072`, `shared_expert_dim=2048`:
+      - `stream_ring`: `0.099782 s`, `1.314M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.090154 s`, `1.454M tok/s`
+      - `stream_ring` is about `10.7%` slower than DeepEP on wall time.
+      - DeepEP exact caps: `max_recv_tokens=89344`, `max_local_assignments=131584`, `recv_factor=1.467049`, `assign_factor=7.968872`.
+- Interpretation:
+  - `stream_ring` nearly reaches the requested `5-10%` parity window at EP8 but lands just outside it on both shared and no-shared anchors.
+  - This is still a major improvement over the old EP8 current-path gap (`40-44%` DeepEP advantage at the same shape), so the production path should probably move toward `stream_ring` first.
+  - The residual EP8 gap is now small enough that profile-driven transport work is more useful than broad variant sweeps. The next discriminator should profile `stream_ring` vs DeepEP at EP8 or test recipe-shaped anchors to see whether the slight gap grows with hidden/expert size.
+- Next action:
+  - Promote `stream_ring` toward the production EP path, while keeping a focused EP8 profile/probe task for the remaining `~10-11%` gap.
