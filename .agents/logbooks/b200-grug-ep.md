@@ -674,8 +674,11 @@
     - `deepep_transport_capped_prewarmed`: `0.043299 s`, `0.757M tok/s`
   - Root cause found after the job: the benchmark-local `_shard_a2a_params` helper had stale `ragged_all_to_all` output-offset semantics compared with the checked-in Grug helper. It used receiver-local cumulative offsets instead of sender-side output offsets, which can permute receive segments.
   - Fixed the offset helper in commit `a625b06e1` and submitted retry job `49892`.
+  - Job `49892` allocated four B200 GPUs but failed after GPU discovery, before producing correctness output. No benchmark result was emitted.
+  - Submitted job `49902` as a two-GPU correctness-only sanity check while waiting for four-GPU resources. It failed before running the check because the batch script tried to update the checkout from GitHub inside the batch allocation, where repository authentication was not available.
 - Interpretation:
   - The pre-fix result is not evidence against token-level `ragged_all_to_all`; it was using the wrong receive layout.
   - The pre-fix timing is still useful as a warning that the JAX path has multiple ragged exchanges plus metadata traffic, so correctness must be established before treating its timing as meaningful.
+  - The post-fix jobs have not yet tested correctness; both failures were operational, before the value/gradient comparison.
 - Next action:
-  - Watch job `49892`. If the small correctness check passes, use the timing smoke to decide whether to run the full `tokens=131072`, `mlp_dim=4096`, `topk=8` EP4/EP8 anchors.
+  - Resubmit a no-pull two-GPU sanity job and keep the four-GPU timing retry queued separately. If the small correctness check passes, use the four-GPU timing smoke to decide whether to run the full `tokens=131072`, `mlp_dim=4096`, `topk=8` EP4/EP8 anchors.
