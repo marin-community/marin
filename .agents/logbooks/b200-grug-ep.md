@@ -243,8 +243,27 @@
     - `tokens=131072`, `shared_expert_dim=2048`
     - `tokens=262144`, `shared_expert_dim=0`
 - Result:
-  - Pending at submission.
+  - Job `49750` started on 8 B200 GPUs.
+  - Partial results at the 10-minute check:
+    - `tokens=32768`, `shared_expert_dim=2048`:
+      - `current`: `0.015817 s`, `2.072M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.016488 s`, `1.987M tok/s`
+      - `current` is about `4.1%` faster on wall time.
+    - `tokens=65536`, `shared_expert_dim=0`:
+      - `current`: `0.029809 s`, `2.199M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.031265 s`, `2.096M tok/s`
+      - `current` is about `4.7%` faster on wall time.
+    - `tokens=65536`, `shared_expert_dim=2048`:
+      - `current`: `0.032064 s`, `2.044M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.032978 s`, `1.987M tok/s`
+      - `current` is about `2.8%` faster on wall time.
+    - `tokens=131072`, `shared_expert_dim=0`:
+      - `current`: `0.063556 s`, `2.062M tok/s`
+      - `deepep_transport_capped_prewarmed`: `0.063620 s`, `2.060M tok/s`
+      - effectively tied, with `current` about `0.1%` faster on wall time.
+  - The `tokens=131072`, `shared_expert_dim=0` DeepEP case had emitted a result line but had not emitted its `CASE_END` line yet at the check.
 - Interpretation:
-  - This is the first boundary-finding sweep after the 4-GPU and 8-GPU `topk=2` parity checks.
+  - In the completed early `topk=8` cases, ring still has not lost; it is faster at the smaller/shared shapes and tied at `131072` no-shared.
+  - The first likely breakpoint remains the still-running `131072` shared case or the `262144` no-shared case.
 - Next action:
   - Watch job `49750`; record every completed shape and preserve failures as data.
