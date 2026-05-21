@@ -747,14 +747,15 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
             per_device_parallelism=PER_DEVICE_PARALLELISM,
         ),
     )
+    train_resources = ResourceConfig.with_tpu(TPU_TYPES, ram="128g")
     pod_config = TrainLmOnPodConfig(
         train_config=inner,
-        resources=ResourceConfig.with_tpu(TPU_TYPES, ram="128g"),
+        resources=train_resources,
         output_path=this_output_path(),
     )
     return ExecutorStep(
         name=os.path.join("checkpoints", run_name),
-        fn=remote(run_levanter_train_lm, resources=ResourceConfig.with_cpu()),
+        fn=remote(run_levanter_train_lm, resources=train_resources),
         config=pod_config,
     )
 
