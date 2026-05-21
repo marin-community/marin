@@ -1634,7 +1634,7 @@ def _moe_mlp_ep_token_ragged_a2a_local(
             send_capacity=token_fanout_capacity,
         )
         topk_payload = _pack_token_rank_payload(
-            selected_experts_local.astype(jnp.int32),
+            selected_experts_local.astype(jnp.float32),
             is_token_in_rank,
             num_tokens_per_rank,
             send_capacity=token_fanout_capacity,
@@ -1646,7 +1646,7 @@ def _moe_mlp_ep_token_ragged_a2a_local(
             send_capacity=token_fanout_capacity,
         )
         src_token_payload = _pack_token_rank_payload(
-            jnp.arange(tokens_per_shard, dtype=jnp.int32)[:, None],
+            jnp.arange(tokens_per_shard, dtype=jnp.float32)[:, None],
             is_token_in_rank,
             num_tokens_per_rank,
             send_capacity=token_fanout_capacity,
@@ -1675,6 +1675,7 @@ def _moe_mlp_ep_token_ragged_a2a_local(
             recv_sizes,
             axis_name="expert",
         )
+        recv_topk_idx = recv_topk_idx.astype(jnp.int32)
         recv_topk_weights = jax.lax.ragged_all_to_all(
             weight_payload,
             jnp.zeros((recv_token_capacity, topk), dtype=weight_payload.dtype),
@@ -1693,7 +1694,7 @@ def _moe_mlp_ep_token_ragged_a2a_local(
             recv_sizes,
             axis_name="expert",
         )
-        recv_src_token = jnp.squeeze(recv_src_token, axis=1)
+        recv_src_token = jnp.squeeze(recv_src_token, axis=1).astype(jnp.int32)
 
         x_dispatch, assignment_weights, recv_token_indices, local_group_sizes = _pack_deepep_local_assignments(
             recv_x,
@@ -1733,15 +1734,15 @@ def _moe_mlp_ep_token_ragged_a2a_local(
             axis_name="expert",
         )
         returned_token = jax.lax.ragged_all_to_all(
-            recv_src_token[:, None],
-            jnp.zeros((token_fanout_capacity, 1), dtype=recv_src_token.dtype),
+            recv_src_token.astype(jnp.float32)[:, None],
+            jnp.zeros((token_fanout_capacity, 1), dtype=jnp.float32),
             return_input_offsets,
             return_send_sizes,
             return_output_offsets,
             return_recv_sizes,
             axis_name="expert",
         )
-        returned_token = jnp.squeeze(returned_token, axis=1)
+        returned_token = jnp.squeeze(returned_token, axis=1).astype(jnp.int32)
         num_returned_tokens = jnp.sum(num_tokens_per_rank, dtype=jnp.int32)
         return_valid = jnp.arange(token_fanout_capacity, dtype=jnp.int32) < num_returned_tokens
         out_local = (
