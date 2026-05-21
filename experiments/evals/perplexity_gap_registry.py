@@ -29,12 +29,26 @@ from experiments.bio_chem_notation import bio_chem_raw_validation_sets
 from experiments.defaults import default_raw_validation_sets
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
 from experiments.evals.formal_hardware_ppl import formal_hardware_raw_validation_sets
+from experiments.evals.long_context_ppl import long_context_validation_sets
 from experiments.evals.web_markup_image_text_ppl import web_markup_image_text_raw_validation_sets
 from experiments.marin_models import marin_tokenizer
 
 DEFAULT_MAX_EVAL_LENGTH = 4096
 DEFAULT_MAX_DOCS_PER_DATASET = 256
 DEFAULT_MAX_DOC_BYTES = 32_768
+
+# Long-context tracking budget (#5825). 32K is the default tracking tier;
+# 64K is opt-in and not part of the default registered bundle tuple.
+LONG_CONTEXT_32K_EVAL_LENGTH = 32_768
+LONG_CONTEXT_64K_EVAL_LENGTH = 65_536
+# Cap each document at ~1 MiB so 32K/64K bundles can ingest whole long
+# documents without unbounded I/O. Per-bundle UTF-8 safe truncation runs
+# downstream in levanter.
+LONG_CONTEXT_MAX_DOC_BYTES = 1_048_576
+# Keep wall-clock cheap: 32 docs/slice at 32K context is ~64x the per-doc
+# cost of the 4K bundles. Holding doc count low offsets the per-doc length
+# growth so total cost stays in the same order of magnitude.
+LONG_CONTEXT_MAX_DOCS_PER_DATASET = 32
 
 
 @dataclass(frozen=True)
@@ -110,6 +124,40 @@ def bio_chem_bundle() -> PerplexityGapBundle:
     )
 
 
+def long_context_bundle() -> PerplexityGapBundle:
+    """Default 32K long-context reading + retrieval tracking bundle (#5825).
+
+    Couples raw long-doc PPL (PG19, GovReport) with target-only retrieval PPL
+    (SCROLLS QASPER, NarrativeQA, QuALITY) so periodic tracking sees both
+    full-document conditioning and answer-span likelihood.
+    """
+    return PerplexityGapBundle(
+        key="long_context_32k",
+        description="Long-context reading + retrieval slices at 32K eval length.",
+        datasets_factory=long_context_validation_sets,
+        max_eval_length=LONG_CONTEXT_32K_EVAL_LENGTH,
+        max_docs_per_dataset=LONG_CONTEXT_MAX_DOCS_PER_DATASET,
+        max_doc_bytes=LONG_CONTEXT_MAX_DOC_BYTES,
+    )
+
+
+def long_context_64k_bundle() -> PerplexityGapBundle:
+    """Opt-in 64K diagnostic tier (#5825).
+
+    Same slice set as ``long_context_bundle`` but rescored at 64K context.
+    Not part of the default registered tuple; callers pass it explicitly to
+    ``build_registered_perplexity_gap_coverage_plan(bundles=...)``.
+    """
+    return PerplexityGapBundle(
+        key="long_context_64k",
+        description="Long-context reading + retrieval slices at 64K eval length (opt-in diagnostic).",
+        datasets_factory=long_context_validation_sets,
+        max_eval_length=LONG_CONTEXT_64K_EVAL_LENGTH,
+        max_docs_per_dataset=LONG_CONTEXT_MAX_DOCS_PER_DATASET,
+        max_doc_bytes=LONG_CONTEXT_MAX_DOC_BYTES,
+    )
+
+
 def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
     return (
         base_raw_bundle(),
@@ -117,6 +165,7 @@ def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
         web_markup_image_text_bundle(),
         formal_hardware_bundle(),
         bio_chem_bundle(),
+        long_context_bundle(),
     )
 
 
