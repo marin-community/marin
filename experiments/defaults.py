@@ -374,6 +374,7 @@ def _build_train_lm_config(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    eval_harness_max_packed_segments: int = 64,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
 ) -> tuple[str, TrainLmConfig]:
@@ -393,7 +394,11 @@ def _build_train_lm_config(
     name = _truncate_wandb_name(name)
 
     if eval_harness_tasks:
-        harness_config = LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(eval_harness_tasks))
+        harness_config = LmEvalHarnessConfig(
+            task_spec=convert_to_levanter_task_config(eval_harness_tasks),
+            include_path="experiments/evals/custom_tasks",
+            max_packed_segments=eval_harness_max_packed_segments,
+        )
     else:
         harness_config = None
 
@@ -509,6 +514,7 @@ def default_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = True,
     eval_harness_tasks: Sequence[EvalTaskConfig] = CORE_TASKS,
+    eval_harness_max_packed_segments: int = 64,
     wandb_name: str | None = None,
     wandb_group: str | None = None,
     override_output_path: str | None = None,
@@ -535,6 +541,7 @@ def default_train(
         tags=tags,
         use_default_validation=use_default_validation,
         eval_harness_tasks=eval_harness_tasks,
+        eval_harness_max_packed_segments=eval_harness_max_packed_segments,
         wandb_name=wandb_name,
         wandb_group=wandb_group,
     )
