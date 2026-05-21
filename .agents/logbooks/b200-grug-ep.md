@@ -354,12 +354,17 @@
     - `tokens=786432`, `shared_expert_dim=0`, both kernels
 - Result:
   - In progress.
-  - First observed case:
+  - Observed cases:
     - `tokens=393216`, `shared_expert_dim=2048`, kernel `current`: no result line, exited `134`.
-    - The error log showed a collective rendezvous termination after an all-gather; the script continued to the next case.
-  - Remaining cases are still pending or running.
+      - The error log showed a collective rendezvous termination after an all-gather; the script continued to the next case.
+    - `tokens=393216`, `shared_expert_dim=2048`, kernel `deepep_transport_capped_prewarmed`: no result line, exited `124`.
+      - The per-case timeout fired after 15 minutes.
+    - `tokens=524288`, `shared_expert_dim=2048`, kernel `deepep_transport_capped_prewarmed`: running at the time of observation.
+      - The error log is already showing large GPU OOM allocation failures and collective rendezvous waits.
+  - Remaining no-shared `786432` cases are still pending.
 - Interpretation:
-  - This is already below the `524288` shared-expert OOM point, so the current ring boundary for shared-expert `topk=8` appears to be at or below `393216` tokens in this harness.
+  - This is already below the `524288` shared-expert OOM point, so the usable shared-expert `topk=8` boundary appears to be below `393216` tokens in this harness for both current ring and restored DeepEP.
+  - The shared-expert failure mode is no longer a small latency gap; it is memory/runtime robustness at high token count.
   - The per-case timeout/script structure is working: a failed current case did not stop the DeepEP follow-up.
 - Next action:
   - Watch job `49775`.
