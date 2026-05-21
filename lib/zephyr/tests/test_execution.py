@@ -25,6 +25,7 @@ from zephyr.execution import (
     CounterSnapshot,
     ListShard,
     PickleDiskChunk,
+    PullStatus,
     ShardTask,
     TaskResult,
     WorkerState,
@@ -33,7 +34,7 @@ from zephyr.execution import (
     ZephyrWorkerError,
     zephyr_worker_ctx,
 )
-from zephyr.plan import compute_plan
+from zephyr.plan import PhysicalStage, StageType, compute_plan
 
 
 def test_simple_map(zephyr_ctx):
@@ -261,7 +262,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
 
     # worker-0 pulls the task so it becomes in-flight
     pulled = coord.pull_task("worker-0")
-    assert pulled is not None and pulled != "SHUTDOWN"
+    assert isinstance(pulled, tuple)
 
     # Simulate 2 workers dying via heartbeat timeout
     coord._last_seen["worker-0"] = 0.0
@@ -280,7 +281,7 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
 
     # worker-2 picks up the requeued task
     pulled2 = coord.pull_task("worker-2")
-    assert pulled2 is not None and pulled2 != "SHUTDOWN"
+    assert isinstance(pulled2, tuple)
 
     # Simulate worker-0 re-registering while worker-2 holds the task in-flight
     # (race between heartbeat requeue and re-registration).
@@ -298,6 +299,100 @@ def test_status_reports_alive_workers_not_total(actor_context, tmp_path):
     coord.register_worker("worker-2", MagicMock())
     assert "worker-2" not in coord._in_flight  # in-flight cleared
     assert len(coord._task_queue) == 1  # task was requeued
+
+
+def _make_task(stage_name: str = "test", shard_idx: int = 0) -> ShardTask:
+    return ShardTask(
+        shard_idx=shard_idx,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name=stage_name,
+    )
+
+
+def test_pull_task_returns_shutdown_on_last_stage_tail(actor_context, tmp_path):
+    """During the last stage's tail (queue drained, in-flight tasks still
+    finishing), a fresh slot's ``pull_task`` must return SHUTDOWN so the worker
+    breaks its outer loop instead of respawning slots that would just get
+    killed again — that's the original hot-spin bug.
+    """
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord._current_stage = PhysicalStage(operations=[], stage_type=StageType.MAP_WORKER)
+    coord._start_stage("tail", 0, [_make_task("tail")], is_last_stage=True)
+
+    coord.register_worker("worker-0", MagicMock())
+    assert isinstance(coord.pull_task("worker-0"), tuple)  # drain the queue
+
+    coord.register_worker("worker-1", MagicMock())
+    assert coord.pull_task("worker-1") == PullStatus.SHUTDOWN
+
+
+def test_pull_task_returns_no_work_backoff_mid_non_last_stage(actor_context, tmp_path):
+    """Mid-stage on a non-last stage with the queue drained but in-flight tasks
+    running: NO_WORK_BACKOFF, not SHUTDOWN or STAGE_COMPLETED — the slot must
+    stay alive and keep polling so it can pick up requeued tasks or the eventual
+    stage-end signal.
+    """
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord._current_stage = PhysicalStage(operations=[], stage_type=StageType.MAP_WORKER)
+    coord._start_stage("mid", 0, [_make_task("mid")], is_last_stage=False)
+
+    coord.register_worker("worker-0", MagicMock())
+    assert isinstance(coord.pull_task("worker-0"), tuple)  # drain the queue
+
+    coord.register_worker("worker-1", MagicMock())
+    assert coord.pull_task("worker-1") == PullStatus.NO_WORK_BACKOFF
+
+
+def test_pull_task_returns_stage_completed_after_mark_stage_complete(actor_context, tmp_path):
+    """At a non-last stage boundary (after ``_mark_stage_complete``), pull_task
+    returns STAGE_COMPLETED so slots tear down and the worker re-pools at the
+    size required by the next stage.
+    """
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord._current_stage = PhysicalStage(operations=[], stage_type=StageType.MAP_WORKER)
+    coord._start_stage("mid", 0, [_make_task("mid")], is_last_stage=False)
+
+    coord.register_worker("worker-0", MagicMock())
+    coord.pull_task("worker-0")  # drain the queue
+    coord._mark_stage_complete()
+
+    assert coord.pull_task("worker-0") == PullStatus.STAGE_COMPLETED
+
+
+def test_pull_task_returns_stage_completed_on_epoch_mismatch(actor_context, tmp_path):
+    """A slot that woke late and is still tagged with a stale epoch must get
+    STAGE_COMPLETED, not SHUTDOWN — the worker should re-register under the new
+    epoch and continue, not exit.
+    """
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord._current_stage = PhysicalStage(operations=[], stage_type=StageType.MAP_WORKER)
+    coord._start_stage("first", 0, [_make_task("first")], is_last_stage=False)
+    stale_epoch = coord._stage_epoch
+    coord._start_stage("second", 1, [_make_task("second")], is_last_stage=False)
+    assert coord._stage_epoch != stale_epoch
+
+    coord.register_worker("worker-0", MagicMock())
+    assert coord.pull_task("worker-0", epoch=stale_epoch) == PullStatus.STAGE_COMPLETED
+
+
+def test_pull_task_returns_shutdown_on_coordinator_shutdown(actor_context, tmp_path):
+    """When the coordinator's shutdown_event is set, all pull_task calls return
+    SHUTDOWN regardless of stage state.
+    """
+    coord = ZephyrCoordinator()
+    coord.set_chunk_config(str(tmp_path / "chunks"), "test-exec")
+    coord._current_stage = PhysicalStage(operations=[], stage_type=StageType.MAP_WORKER)
+    coord._start_stage("any", 0, [_make_task("any")], is_last_stage=False)
+    coord._shutdown_event.set()
+
+    coord.register_worker("worker-0", MagicMock())
+    assert coord.pull_task("worker-0") == PullStatus.SHUTDOWN
 
 
 def test_log_status_omits_throughput_when_counters_missing(actor_context, tmp_path, caplog):
@@ -364,8 +459,7 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
 
     # Worker A pulls task (attempt 0)
     pulled = coord.pull_task("worker-A")
-    assert pulled is not None
-    assert pulled != "SHUTDOWN"
+    assert isinstance(pulled, tuple)
     _task_a, attempt_a, _config = pulled
 
     # Simulate heartbeat timeout: mark worker-A stale and requeue
@@ -377,8 +471,7 @@ def test_no_duplicate_results_on_heartbeat_timeout(actor_context, tmp_path):
 
     # Worker B picks up the requeued task (attempt 1)
     pulled_b = coord.pull_task("worker-B")
-    assert pulled_b is not None
-    assert pulled_b != "SHUTDOWN"
+    assert isinstance(pulled_b, tuple)
     _task_b, attempt_b, _config = pulled_b
     assert attempt_b == 1
 
@@ -515,7 +608,7 @@ def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path)
     # Each failure should re-queue until the limit
     for i in range(MAX_SHARD_FAILURES - 1):
         pulled = coord.pull_task("worker-0")
-        assert pulled is not None and pulled != "SHUTDOWN"
+        assert isinstance(pulled, tuple)
         _task, _attempt, _config = pulled
         coord.report_error("worker-0", 0, f"error-{i}")
         assert coord._fatal_error is None, f"Should not abort on failure {i + 1}"
@@ -523,7 +616,7 @@ def test_report_error_requeues_until_max_shard_failures(actor_context, tmp_path)
 
     # The final failure should set _fatal_error
     pulled = coord.pull_task("worker-0")
-    assert pulled is not None and pulled != "SHUTDOWN"
+    assert isinstance(pulled, tuple)
     coord.report_error("worker-0", 0, "final-error")
     assert coord._fatal_error is not None
     assert "Shard 0" in coord._fatal_error
@@ -548,7 +641,7 @@ def test_heartbeat_timeouts_do_not_count_toward_shard_failures(actor_context, tm
     # Far more heartbeat timeouts than MAX_SHARD_FAILURES — must not abort.
     for _ in range(MAX_SHARD_FAILURES * 5):
         pulled = coord.pull_task("worker-0")
-        assert pulled is not None and pulled != "SHUTDOWN"
+        assert isinstance(pulled, tuple)
         coord._last_seen["worker-0"] = 0.0
         coord.check_heartbeats(timeout=0.0)
         assert coord._fatal_error is None
@@ -556,7 +649,7 @@ def test_heartbeat_timeouts_do_not_count_toward_shard_failures(actor_context, tm
     # Task-error budget is untouched; a successful completion closes the shard.
     assert coord._task_error_attempts[0] == 0
     pulled = coord.pull_task("worker-0")
-    assert pulled is not None and pulled != "SHUTDOWN"
+    assert isinstance(pulled, tuple)
     _task, attempt, _config = pulled
     coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
     assert coord._completed_shards == 1
@@ -588,17 +681,95 @@ def test_repeated_infra_failures_on_same_shard_eventually_abort(actor_context, t
     # One short of the cap: still re-queues, no abort yet.
     for _ in range(MAX_SHARD_INFRA_FAILURES - 1):
         pulled = coord.pull_task("worker-0")
-        assert pulled is not None and pulled != "SHUTDOWN"
+        assert isinstance(pulled, tuple)
         coord._last_seen["worker-0"] = 0.0
         coord.check_heartbeats(timeout=0.0)
         assert coord._fatal_error is None
 
     # The next failure crosses the cap and aborts.
     pulled = coord.pull_task("worker-0")
-    assert pulled is not None and pulled != "SHUTDOWN"
+    assert isinstance(pulled, tuple)
     coord._last_seen["worker-0"] = 0.0
     coord.check_heartbeats(timeout=0.0)
 
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "crashed its worker" in coord._fatal_error
+
+
+def test_max_shard_failures_override_via_initialize(actor_context, tmp_path):
+    """``initialize(max_shard_failures=N)`` makes the coordinator abort after N task errors.
+
+    Sets the per-shard task-error cap to 2 (vs. the default ``MAX_SHARD_FAILURES=3``);
+    a fresh shard must survive 1 failure and abort on the 2nd.
+    """
+    coord = ZephyrCoordinator()
+    coord.initialize(
+        chunk_prefix=str(tmp_path / "chunks"),
+        coordinator_handle=MagicMock(),
+        max_shard_failures=2,
+    )
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # First failure: re-queues, no abort.
+    pulled = coord.pull_task("worker-0")
+    assert isinstance(pulled, tuple)
+    coord.report_error("worker-0", 0, "error-1")
+    assert coord._fatal_error is None
+
+    # Second failure: hits the custom cap of 2 → abort.
+    pulled = coord.pull_task("worker-0")
+    assert isinstance(pulled, tuple)
+    coord.report_error("worker-0", 0, "error-2")
+    assert coord._fatal_error is not None
+    assert "Shard 0" in coord._fatal_error
+    assert "error-2" in coord._fatal_error
+
+
+def test_max_shard_infra_failures_override_via_initialize(actor_context, tmp_path):
+    """``initialize(max_shard_infra_failures=N)`` makes the coordinator abort after N
+    infra failures on the same shard.
+
+    Sets the per-shard infra-failure cap to 2 (vs. the default ``MAX_SHARD_INFRA_FAILURES=20``).
+    """
+    coord = ZephyrCoordinator()
+    coord.initialize(
+        chunk_prefix=str(tmp_path / "chunks"),
+        coordinator_handle=MagicMock(),
+        max_shard_infra_failures=2,
+    )
+
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+    )
+    coord._start_stage("test", 0, [task])
+    coord.register_worker("worker-0", MagicMock())
+
+    # First infra failure: re-queues, no abort.
+    pulled = coord.pull_task("worker-0")
+    assert isinstance(pulled, tuple)
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
+    assert coord._fatal_error is None
+
+    # Second infra failure: hits the custom cap of 2 → abort.
+    pulled = coord.pull_task("worker-0")
+    assert isinstance(pulled, tuple)
+    coord._last_seen["worker-0"] = 0.0
+    coord.check_heartbeats(timeout=0.0)
     assert coord._fatal_error is not None
     assert "Shard 0" in coord._fatal_error
     assert "crashed its worker" in coord._fatal_error
@@ -621,7 +792,7 @@ def test_worker_reregistration_does_not_count_toward_shard_failures(actor_contex
 
     for _ in range(MAX_SHARD_FAILURES * 5):
         pulled = coord.pull_task("worker-0")
-        assert pulled is not None and pulled != "SHUTDOWN"
+        assert isinstance(pulled, tuple)
         # Simulate preemption + Iris reconstruction: worker re-registers while
         # a task is still recorded as in-flight on the old handle.
         coord.register_worker("worker-0", MagicMock())
@@ -649,7 +820,7 @@ def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(actor
     # Several preemption cycles first — these must not count.
     for _ in range(5):
         pulled = coord.pull_task("worker-0")
-        assert pulled is not None and pulled != "SHUTDOWN"
+        assert isinstance(pulled, tuple)
         coord._last_seen["worker-0"] = 0.0
         coord.check_heartbeats(timeout=0.0)
 
@@ -658,7 +829,7 @@ def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(actor
     # Now MAX_SHARD_FAILURES explicit task errors should abort.
     for i in range(MAX_SHARD_FAILURES):
         pulled = coord.pull_task("worker-0")
-        assert pulled is not None and pulled != "SHUTDOWN"
+        assert isinstance(pulled, tuple)
         coord.report_error("worker-0", 0, f"boom-{i}")
 
     assert coord._fatal_error is not None
@@ -726,7 +897,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(actor_context, tmp_path):
         time.sleep(0.1)
         coord.register_worker("worker-0", MagicMock())
         pulled = coord.pull_task("worker-0")
-        assert pulled is not None and pulled != "SHUTDOWN"
+        assert isinstance(pulled, tuple)
         _task, attempt, _config = pulled
         coord.report_result("worker-0", 0, attempt, TaskResult(shard=ListShard(refs=[])), CounterSnapshot.empty())
 

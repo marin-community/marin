@@ -15,10 +15,15 @@ T = TypeVar("T")
 
 
 class Artifact:
-    __artifact_file_name = "artifact.json"
-    # Legacy filename written before the rename; read-only fallback so historical
-    # GCS outputs remain loadable. Safe to remove once those prefixes are gone.
-    __legacy_artifact_file_name = ".artifact"
+    # Dot-prefix keeps the sidecar out of data-discovery passes that match by
+    # extension (e.g. ``normalize._discover_files`` would otherwise read
+    # ``artifact.json`` as JSONL — see #5864).
+    __artifact_file_name = ".artifact.json"
+    # Legacy filenames written before the rename; read-only fallbacks so historical
+    # GCS outputs remain loadable. ``artifact.json`` was the short-lived form from
+    # #5843; ``.artifact`` predates the JSON-extension convention. Safe to remove
+    # once those prefixes are gone.
+    __legacy_artifact_file_names = ("artifact.json", ".artifact")
 
     @overload
     @classmethod
@@ -37,10 +42,10 @@ class Artifact:
         If ``base_path`` is a relative path (no URL scheme, doesn't start with ``/``),
         it is resolved against ``marin_prefix()``.
 
-        If ``base_path`` has no ``artifact.json`` (or legacy ``.artifact``) file but
-        its ``.executor_status`` file contains ``SUCCESS``, returns a
-        :class:`PathMetadata` pointing at ``base_path`` — provided the caller asked
-        for no specific type or for ``PathMetadata``.
+        If ``base_path`` has no ``.artifact.json`` (or legacy ``artifact.json`` /
+        ``.artifact``) file but its ``.executor_status`` file contains ``SUCCESS``,
+        returns a :class:`PathMetadata` pointing at ``base_path`` — provided the
+        caller asked for no specific type or for ``PathMetadata``.
         """
 
         if isinstance(base_path, StepSpec):
@@ -48,7 +53,7 @@ class Artifact:
         elif _is_relative_path(base_path):
             base_path = f"{marin_prefix()}/{base_path}"
 
-        for file_name in (cls.__artifact_file_name, cls.__legacy_artifact_file_name):
+        for file_name in (cls.__artifact_file_name, *cls.__legacy_artifact_file_names):
             try:
                 with open_url(f"{base_path}/{file_name}", "rb") as fd:
                     if artifact_type is None:
