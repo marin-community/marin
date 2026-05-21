@@ -28,8 +28,7 @@ class ActorContext:
 
     To exit, the actor sets ``shutdown_event`` (clean — task SUCCEEDED) or
     calls ``fail(exc)`` (task FAILED — retry policy applies). Backends create
-    the event and block on it; on wake, they re-raise the first recorded
-    error if any.
+    the event and block on it; on wake, they inspect recorded errors.
     """
 
     handle: ActorHandle
