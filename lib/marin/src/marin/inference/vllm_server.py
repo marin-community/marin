@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -31,6 +32,7 @@ class VllmServerHandle:
     server_url: str
     port: int
     process: subprocess.Popen[str]
+    process_group_id: int | None
     log_dir: str
 
 
@@ -75,6 +77,41 @@ def _native_diagnostics(handle: VllmServerHandle, *, max_lines: int = 200) -> di
         "vLLM native log dir": handle.log_dir,
         "vLLM native logs (tail)": _native_logs_tail(handle.log_dir, max_lines=max_lines),
     }
+
+
+def _signal_process_group(process: subprocess.Popen[str], process_group_id: int | None, sig: signal.Signals) -> None:
+    if process_group_id is not None:
+        try:
+            os.killpg(process_group_id, sig)
+        except ProcessLookupError:
+            pass
+        return
+
+    if process.poll() is None:
+        process.send_signal(sig)
+
+
+def _process_group_exists(process_group_id: int | None) -> bool:
+    if process_group_id is None:
+        return False
+    try:
+        os.killpg(process_group_id, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _stop_vllm_process(process: subprocess.Popen[str], process_group_id: int | None) -> None:
+    _signal_process_group(process, process_group_id, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(process, process_group_id, signal.SIGKILL)
+        process.wait(timeout=10)
+
+    if _process_group_exists(process_group_id):
+        # The API parent can exit before EngineCore does, so check the group after wait().
+        _signal_process_group(process, process_group_id, signal.SIGKILL)
 
 
 def _is_object_store_path(path: str) -> bool:
@@ -170,7 +207,7 @@ def _get_first_model_id(server_url: str) -> str:
 
 
 class VllmEnvironment:
-    """Manage vLLM server lifecycle and lm-eval configuration."""
+    """Manage vLLM server lifecycle and eval-client configuration."""
 
     def __init__(
         self,
@@ -234,7 +271,7 @@ class VllmEnvironment:
 
     def close(self) -> None:
         if self.vllm_server is not None:
-            self.vllm_server.process.kill()
+            _stop_vllm_process(self.vllm_server.process, self.vllm_server.process_group_id)
             self.vllm_server = None
 
     @property
@@ -307,7 +344,7 @@ def _start_vllm_native_server(
     timeout_seconds: int = 3600,
     extra_cli_args: list[str] | None = None,
 ) -> VllmServerHandle:
-    """Start `vllm serve` in-process and wait until `/v1/models` responds."""
+    """Start `vllm serve` as a subprocess and wait until `/v1/models` responds."""
 
     resolved_port = port if port is not None else 8000
 
@@ -335,7 +372,20 @@ def _start_vllm_native_server(
         f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
         f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
     )
-    process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
+    process = subprocess.Popen(
+        cmd,
+        stdout=stdout_f,
+        stderr=stderr_f,
+        text=True,
+        env=native_env,
+        # vLLM can leave EngineCore children alive after the API parent exits; a process group lets cleanup
+        # release the TPU instead of leaving libtpu held by a stale child.
+        start_new_session=True,
+    )
+    try:
+        process_group_id = os.getpgid(process.pid)
+    except ProcessLookupError:
+        process_group_id = None
 
     server_url: str = f"http://{host}:{resolved_port}/v1"
 
@@ -359,7 +409,7 @@ def _start_vllm_native_server(
             check_alive=_check_process_alive,
         )
     except Exception:
-        process.kill()
+        _stop_vllm_process(process, process_group_id)
         raise
     finally:
         stdout_f.close()
@@ -368,5 +418,6 @@ def _start_vllm_native_server(
         server_url=server_url,
         port=resolved_port,
         process=process,
+        process_group_id=process_group_id,
         log_dir=log_dir,
     )

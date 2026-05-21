@@ -558,6 +558,7 @@ class FrayIrisClient:
                 max_retries_preemption=request.max_retries_preemption,
                 existing_job_policy=policy,
                 task_image=request.resources.image,
+                priority_band=request.priority_band,
             )
         except IrisJobAlreadyExists as e:
             raise FrayJobAlreadyExists(request.name) from e
@@ -605,7 +606,15 @@ class FrayIrisClient:
         actor_config: ActorConfig = ActorConfig(),
         **kwargs: Any,
     ) -> ActorHandle:
-        group = self.create_actor_group(actor_class, *args, name=name, count=1, resources=resources, **kwargs)
+        group = self.create_actor_group(
+            actor_class,
+            *args,
+            name=name,
+            count=1,
+            resources=resources,
+            actor_config=actor_config,
+            **kwargs,
+        )
         return group.wait_ready()[0]
 
     def create_actor_group(
@@ -647,6 +656,7 @@ class FrayIrisClient:
             coscheduling=coscheduling,
             replicas=count,  # Create N replicas in a single job
             task_image=resources.image,
+            priority_band=actor_config.priority_band,
             **retry_kwargs,
         )
 
