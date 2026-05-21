@@ -685,3 +685,30 @@
   - The output-offset fix was necessary but not sufficient. The remaining bug is likely in token-level metadata ordering on the return path or in the local token-to-assignment expansion after dispatch.
 - Next action:
   - Stop timing `token_ragged_a2a` until it passes the two-GPU value/gradient check. Next debug step is an instrumented two-GPU toy case that compares token payload order, returned source-token order, and local assignment counts against the stream-ring/reference path.
+
+### 2026-05-21 17:00 - Isolate token ragged payload exchange on TPU
+- Experiment ID: `B200-EP-020`
+- Hypothesis:
+  - Before debugging the full `token_ragged_a2a` MoE path, isolate whether JAX `ragged_all_to_all` preserves the token-rank payload order and float metadata needed by the protocol.
+- Command:
+  - Ran a two-way TPU toy check that:
+    - builds deterministic token payloads, top-k expert ids, weights, and source-token ids;
+    - packs each token once per destination rank with `_pack_token_rank_payload`;
+    - exchanges x, top-k, weights, and source-token metadata with `jax.lax.ragged_all_to_all`;
+    - compares received rows against a NumPy reference ordering.
+- Config:
+  - TPU debug holder: single-host v5p-8
+  - toy shape: `ep_size=2`, `tokens_per_rank=32`, `hidden=8`, `num_experts=16`, `topk=4`
+  - metadata path: top-k and source-token ids encoded as `float32` payloads for this diagnostic
+- Result:
+  - Payload-only check passed:
+    - `TPU_PAYLOAD_CHECK max_abs=0.000000e+00`
+    - received sizes: `[[32, 32], [32, 32]]`
+  - A full end-to-end TPU check still failed before correctness comparison because the TPU Megablox GMM path hit a Mosaic compile error: `Bad lhs type` in the GMM accumulator matmul.
+  - B200 jobs `49916` and `49917` were still pending at the last queue check.
+- Interpretation:
+  - The token-rank `ragged_all_to_all` exchange ordering is correct for the isolated payload path, including the diagnostic float metadata path.
+  - The remaining full-MoE TPU blocker is separate from the exchange itself and is now the TPU GMM compile failure.
+  - This does not yet prove the B200 full `token_ragged_a2a` path correct; the pending B200 jobs are still needed for CUDA correctness and timing.
+- Next action:
+  - Use the held TPU to reduce the Megablox/Pallas GMM compile failure separately, while waiting for the B200 two-GPU correctness jobs.
