@@ -58,7 +58,6 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.evaluation.evaluation_config import convert_to_levanter_task_config
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.execution.remote import remote
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
@@ -755,7 +754,7 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
     )
     return ExecutorStep(
         name=os.path.join("checkpoints", run_name),
-        fn=remote(run_levanter_train_lm, resources=train_resources),
+        fn=run_levanter_train_lm,
         config=pod_config,
     )
 
