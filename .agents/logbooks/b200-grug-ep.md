@@ -163,3 +163,38 @@
   - This should not be treated as a final DeepEP parity win. It compares current `ring` against an old JAX bridge plus scratch-only compatibility patches, not a production-quality current DeepEP/Megatron full-block reference.
 - Next action:
   - Make the DeepEP baseline durable in the current branch or build a fairer current DeepEP reference before spending time on a Triton/CUTLASS transport replacement.
+
+### 2026-05-21 11:21 - Current-branch DeepEP parity check
+- Experiment ID: `B200-EP-006`
+- Hypothesis:
+  - Once the DeepEP bridge is restored in the current branch, the current Grug `ring` backend should be compared against the same-process DeepEP path with production EP capacity settings.
+- Command:
+  - Restored the DeepEP FFI package and `bench_moe_hillclimb.py` into the current branch.
+  - Patched `ragged_dot` Pallas index dtypes so the current Triton backward path traces under `JAX_ENABLE_X64=1`.
+  - Submitted jobs `49682` through `49686`.
+  - Current EP command family: `.agents/scripts/bench_grug_ep.py --tokens 32768 --hidden-dim 5120 --intermediate-dim 2560 --local-experts 8 --topk 2 --num-devices 4 --dtype bf16 --pass-mode forward_backward --implementations ring`
+  - DeepEP command family: `bench_moe_hillclimb.py --tokens 32768 --hidden 5120 --mlp-dim 2560 --experts 32 --shared-expert-dim 0 --topk 2 --distribution random --bench-pass forward_backward --kernel deepep_transport_capped_prewarmed --ep-list 4`
+- Config:
+  - hardware: 4 B200 GPUs on one NVLinked node
+  - current branch commit: `5b433a7d1`
+  - EP capacity factor: `1.25`
+  - DeepEP exact caps: `max_recv_tokens=14592`, `max_local_assignments=16512`, `recv_factor=2.245614`, `assign_factor=3.968992`
+- Result:
+  - Job `49682` corrected current EP matrix:
+    - `ring`, `forward`: `0.003179 s`, `10.307M tok/s`, `0` dropped assignments
+    - `ragged_all_to_all`, `forward`: `0.041205 s`, `0.795M tok/s`, `0` dropped assignments
+    - `ring`, `forward_backward`: `0.008153 s`, `4.019M tok/s`, `0` dropped assignments
+    - `ragged_all_to_all`, `forward_backward`: `0.084363 s`, `0.388M tok/s`, `0` dropped assignments
+  - Job `49683` failed before measurement because the allocation exposed only 3 usable devices to JAX.
+  - Job `49684` exposed a current `ragged_dot` Triton/Pallas x64 index dtype bug in the DeepEP backward path; fixed by commit `5b433a7d1`.
+  - Job `49685` current-branch DeepEP check:
+    - `deepep_transport_capped_prewarmed`, `ep=4`, `forward_backward`: `0.009477 s`, `3.458M tok/s`
+  - Job `49686` same-allocation side-by-side check with `warmup=2`, `iters=10`:
+    - current `ring`, `forward_backward`: `0.008234 s`, `3.980M tok/s`, `0` dropped assignments
+    - current-branch `deepep_transport_capped_prewarmed`, `forward_backward`: `0.009369 s`, `3.498M tok/s`
+- Interpretation:
+  - On the measured 4-GPU B200 full-block shape, current `ring` is faster than the restored current-branch JAX DeepEP path by about `12.1%` in wall time on the side-by-side run.
+  - This clears the immediate 4-GPU parity bar for the JAX full-block fwd+bwd path; the next proof point is 8 GPUs once a full usable node is available.
+  - The checked-in `ragged_all_to_all` path remains more than 10x slower than `ring`; do not spend more time on it unless replacing the collective schedule wholesale.
+- Next action:
+  - Run the side-by-side current `ring` vs restored DeepEP comparison on 8 GPUs, then decide whether a custom Triton/CUTLASS transport is still necessary or whether the work should shift to hardening the restored DeepEP benchmark and scaling/shape sweeps.
