@@ -353,8 +353,36 @@
     - `tokens=524288`, `shared_expert_dim=2048`, DeepEP only
     - `tokens=786432`, `shared_expert_dim=0`, both kernels
 - Result:
-  - Pending at submission.
+  - In progress.
+  - First observed case:
+    - `tokens=393216`, `shared_expert_dim=2048`, kernel `current`: no result line, exited `134`.
+    - The error log showed a collective rendezvous termination after an all-gather; the script continued to the next case.
+  - Remaining cases are still pending or running.
 - Interpretation:
-  - This should separate memory-envelope failure from latency crossover and preserve any later case results even if one case fails.
+  - This is already below the `524288` shared-expert OOM point, so the current ring boundary for shared-expert `topk=8` appears to be at or below `393216` tokens in this harness.
+  - The per-case timeout/script structure is working: a failed current case did not stop the DeepEP follow-up.
 - Next action:
   - Watch job `49775`.
+
+### 2026-05-21 13:25 - Submit larger expert-size sweep
+- Experiment ID: `B200-EP-012`
+- Hypothesis:
+  - Increasing per-expert MLP width should shift pressure toward local expert compute and memory, giving a clearer signal about whether the remaining B200 gap is transport/scheduling or expert-kernel dominated.
+- Command:
+  - Submitted job `49779` with dependency `afterany:49775`.
+  - Benchmark command family: `bench_moe_hillclimb.py --hidden 5120 --mlp-dim 4096 --experts 64 --topk 8 --distribution random --bench-pass forward_backward --ep-list 8 --warmup 1 --iters 3`
+  - Each case has a per-case timeout.
+- Config:
+  - hardware target: 8 B200 GPUs on one NVLinked node
+  - kernels: `current`, `deepep_transport_capped_prewarmed`
+  - shapes:
+    - `tokens=131072`, `shared_expert_dim=0`, both kernels
+    - `tokens=131072`, `shared_expert_dim=2048`, both kernels
+    - `tokens=262144`, `shared_expert_dim=0`, both kernels
+    - `tokens=262144`, `shared_expert_dim=2048`, both kernels
+- Result:
+  - Pending at submission.
+- Interpretation:
+  - This is a conservative expert-size push: larger `mlp_dim`, but token counts stay below the known shared-expert OOM edge.
+- Next action:
+  - Let job `49775` finish first, then watch job `49779`.
