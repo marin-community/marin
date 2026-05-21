@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -12,9 +13,14 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from marin.inference.workload_broker import (
+    LeasedWorkloadRequest,
+    LeasedWorkloadResponse,
     WorkloadRequest,
     WorkloadResponse,
+    format_request_ids,
 )
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -47,8 +53,9 @@ class MemoryQueue(Generic[T]):
         self._leases[lease.lease_id] = (item, lease.timestamp, lease_timeout)
         return lease
 
-    def done(self, lease: Lease[T]) -> None:
-        self._leases.pop(lease.lease_id, None)
+    def done(self, lease: Lease[T]) -> bool:
+        self._recover_expired_leases()
+        return self._leases.pop(lease.lease_id, None) is not None
 
     def size(self) -> int:
         return len(self._queue)
@@ -90,24 +97,37 @@ class LocalWorkloadBroker:
             self._requests.push(request)
             self._pending[request.request_id] = None
 
-    def fetch_requests(self, *, max_items: int) -> list[WorkloadRequest]:
-        fetched: list[WorkloadRequest] = []
+    def fetch_requests(self, *, max_items: int) -> list[LeasedWorkloadRequest]:
+        fetched: list[LeasedWorkloadRequest] = []
         with self._lock:
             while len(fetched) < max_items:
                 lease = self._requests.pop(self._request_lease_timeout_seconds)
                 if lease is None:
                     break
-                fetched.append(lease.item)
+                fetched.append(LeasedWorkloadRequest(lease_id=lease.lease_id, request=lease.item))
                 self._request_leases[lease.item.request_id] = lease
         return fetched
 
-    def submit_responses(self, responses: Iterable[WorkloadResponse]) -> None:
+    def submit_responses(self, responses: Iterable[LeasedWorkloadResponse]) -> None:
+        dropped_ids: list[str] = []
         with self._lock:
-            for response in responses:
+            for leased_response in responses:
+                response = leased_response.response
+                lease = self._request_leases.get(response.request_id)
+                if lease is None or lease.lease_id != leased_response.lease_id or not self._requests.done(lease):
+                    dropped_ids.append(response.request_id)
+                    if lease is not None and lease.lease_id == leased_response.lease_id:
+                        self._request_leases.pop(response.request_id, None)
+                    continue
+                self._request_leases.pop(response.request_id, None)
                 self._responses.append(response)
-                if lease := self._request_leases.pop(response.request_id, None):
-                    self._requests.done(lease)
                 self._pending.pop(response.request_id, None)
+        if dropped_ids:
+            logger.warning(
+                "LocalWorkloadBroker dropped responses for inactive request leases count=%d request_ids=%s",
+                len(dropped_ids),
+                format_request_ids(dropped_ids),
+            )
 
     def fetch_responses(self, *, max_items: int) -> list[WorkloadResponse]:
         fetched: list[WorkloadResponse] = []

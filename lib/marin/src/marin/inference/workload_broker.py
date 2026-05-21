@@ -55,11 +55,23 @@ class WorkloadResponse:
     payload: bytes
 
 
+@dataclass(frozen=True)
+class LeasedWorkloadRequest:
+    lease_id: str
+    request: WorkloadRequest
+
+
+@dataclass(frozen=True)
+class LeasedWorkloadResponse:
+    lease_id: str
+    response: WorkloadResponse
+
+
 class WorkloadBroker(Protocol):
     def submit_request(self, request: WorkloadRequest) -> None: ...
 
-    def fetch_requests(self, *, max_items: int) -> list[WorkloadRequest]: ...
+    def fetch_requests(self, *, max_items: int) -> list[LeasedWorkloadRequest]: ...
 
-    def submit_responses(self, responses: Iterable[WorkloadResponse]) -> None: ...
+    def submit_responses(self, responses: Iterable[LeasedWorkloadResponse]) -> None: ...
 
     def fetch_responses(self, *, max_items: int) -> list[WorkloadResponse]: ...

@@ -26,6 +26,8 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm_http_proxy import VllmHttpProxy, serve_vllm_http_proxy
 from marin.inference.vllm_worker import VllmWorker, run_vllm_worker
 from marin.inference.workload_broker import (
+    LeasedWorkloadRequest,
+    LeasedWorkloadResponse,
     WorkloadRequest,
     WorkloadResponse,
     pack_json_payload,
@@ -46,17 +48,17 @@ def test_local_workload_broker_round_trip() -> None:
 
     assert broker.pending() == ["req-1"]
     assert broker.size() == 1
-    assert broker.fetch_requests(max_items=8) == [request]
+    leased_requests = broker.fetch_requests(max_items=8)
+    assert [leased.request for leased in leased_requests] == [request]
     assert broker.fetch_requests(max_items=8) == []
 
     response_a = WorkloadResponse(request_id="req-1", status_code=200, payload=b"a")
-    response_b = WorkloadResponse(request_id="req-2", status_code=200, payload=b"b")
-    broker.submit_responses([response_a, response_b])
+    broker.submit_responses([LeasedWorkloadResponse(lease_id=leased_requests[0].lease_id, response=response_a)])
 
     assert broker.pending() == []
-    assert broker.size() == 2
+    assert broker.size() == 1
     assert broker.fetch_responses(max_items=1) == [response_a]
-    assert broker.fetch_responses(max_items=8) == [response_b]
+    assert broker.fetch_responses(max_items=8) == []
     assert broker.size() == 0
 
 
@@ -67,12 +69,47 @@ def test_local_workload_broker_requeues_unanswered_request_after_lease_timeout()
 
     broker.submit_request(request)
 
-    assert broker.fetch_requests(max_items=1) == [request]
+    leased_a = broker.fetch_requests(max_items=1)
+    assert [leased.request for leased in leased_a] == [request]
     assert broker.fetch_requests(max_items=1) == []
 
     now[0] = 11.0
 
-    assert broker.fetch_requests(max_items=1) == [request]
+    leased_b = broker.fetch_requests(max_items=1)
+    assert [leased.request for leased in leased_b] == [request]
+    assert leased_b[0].lease_id != leased_a[0].lease_id
+
+
+def test_local_workload_broker_drops_response_for_expired_lease_after_requeue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    now = [0.0]
+    broker = LocalWorkloadBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
+    request = WorkloadRequest(request_id="req-1", method="POST", path="/v1/completions", payload=b"request")
+
+    broker.submit_request(request)
+    [lease_a] = broker.fetch_requests(max_items=1)
+
+    now[0] = 11.0
+    [lease_b] = broker.fetch_requests(max_items=1)
+    assert lease_b.request == request
+    assert lease_b.lease_id != lease_a.lease_id
+
+    stale_response = WorkloadResponse(request_id="req-1", status_code=504, payload=b"stale")
+    fresh_response = WorkloadResponse(request_id="req-1", status_code=200, payload=b"fresh")
+
+    with caplog.at_level(logging.WARNING):
+        broker.submit_responses([LeasedWorkloadResponse(lease_id=lease_a.lease_id, response=stale_response)])
+
+    assert broker.fetch_responses(max_items=1) == []
+    assert broker.pending() == ["req-1"]
+    assert "dropped responses for inactive request leases" in caplog.text
+    assert "request_ids=req-1" in caplog.text
+
+    broker.submit_responses([LeasedWorkloadResponse(lease_id=lease_b.lease_id, response=fresh_response)])
+
+    assert broker.pending() == []
+    assert broker.fetch_responses(max_items=1) == [fresh_response]
 
 
 def test_local_brokered_vllm_rejects_multiple_workers() -> None:
@@ -85,10 +122,10 @@ def test_local_brokered_vllm_rejects_multiple_workers() -> None:
 
 def test_brokered_vllm_rejects_timeout_ordering_without_recovery_window() -> None:
     expected = "workers.request_timeout_seconds < request_lease_timeout_seconds < proxy.request_timeout_seconds"
-    with pytest.raises(AssertionError, match=expected):
+    with pytest.raises(ValueError, match=expected):
         BrokeredVllmSystemConfig(model="gpt2", workers=VllmWorkerConfig(request_timeout_seconds=160))
 
-    with pytest.raises(AssertionError, match=expected):
+    with pytest.raises(ValueError, match=expected):
         BrokeredVllmSystemConfig(model="gpt2", proxy=VllmProxyConfig(request_timeout_seconds=130))
 
 
@@ -300,15 +337,21 @@ async def test_vllm_http_proxy_matches_out_of_order_responses_to_inflight_reques
             requests = await _fetch_until_two_requests(broker)
             broker.submit_responses(
                 [
-                    WorkloadResponse(
-                        request_id=requests[1].request_id,
-                        status_code=200,
-                        payload=pack_json_payload({"prompt": "second"}),
+                    _leased_response(
+                        requests[1],
+                        WorkloadResponse(
+                            request_id=requests[1].request.request_id,
+                            status_code=200,
+                            payload=pack_json_payload({"prompt": "second"}),
+                        ),
                     ),
-                    WorkloadResponse(
-                        request_id=requests[0].request_id,
-                        status_code=200,
-                        payload=pack_json_payload({"prompt": "first"}),
+                    _leased_response(
+                        requests[0],
+                        WorkloadResponse(
+                            request_id=requests[0].request.request_id,
+                            status_code=200,
+                            payload=pack_json_payload({"prompt": "first"}),
+                        ),
                     ),
                 ]
             )
@@ -341,10 +384,13 @@ async def test_vllm_http_proxy_rejects_when_pending_queue_is_full() -> None:
 
             broker.submit_responses(
                 [
-                    WorkloadResponse(
-                        request_id=requests[0].request_id,
-                        status_code=200,
-                        payload=pack_json_payload({"prompt": "first"}),
+                    _leased_response(
+                        requests[0],
+                        WorkloadResponse(
+                            request_id=requests[0].request.request_id,
+                            status_code=200,
+                            payload=pack_json_payload({"prompt": "first"}),
+                        ),
                     )
                 ]
             )
@@ -375,12 +421,18 @@ async def test_vllm_http_proxy_times_out_inflight_request() -> None:
 @pytest.mark.asyncio
 async def test_vllm_http_proxy_drops_stale_responses_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     broker = LocalWorkloadBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    request = WorkloadRequest(request_id="stale", method="POST", path="/v1/completions", payload=b"request")
+    broker.submit_request(request)
+    [leased_request] = broker.fetch_requests(max_items=1)
     broker.submit_responses(
         [
-            WorkloadResponse(
-                request_id="stale",
-                status_code=200,
-                payload=pack_json_payload({"prompt": "stale"}),
+            _leased_response(
+                leased_request,
+                WorkloadResponse(
+                    request_id="stale",
+                    status_code=200,
+                    payload=pack_json_payload({"prompt": "stale"}),
+                ),
             )
         ]
     )
@@ -402,12 +454,12 @@ async def test_vllm_http_proxy_drops_stale_responses_with_warning(caplog: pytest
     assert "request_ids=stale" in caplog.text
 
 
-async def _fetch_until_two_requests(broker: LocalWorkloadBroker) -> list[WorkloadRequest]:
+async def _fetch_until_two_requests(broker: LocalWorkloadBroker) -> list[LeasedWorkloadRequest]:
     return await _fetch_until_requests(broker, count=2)
 
 
-async def _fetch_until_requests(broker: LocalWorkloadBroker, *, count: int) -> list[WorkloadRequest]:
-    requests: list[WorkloadRequest] = []
+async def _fetch_until_requests(broker: LocalWorkloadBroker, *, count: int) -> list[LeasedWorkloadRequest]:
+    requests: list[LeasedWorkloadRequest] = []
     deadline = asyncio.get_running_loop().time() + 5
     while len(requests) < count and asyncio.get_running_loop().time() < deadline:
         requests.extend(broker.fetch_requests(max_items=count - len(requests)))
@@ -426,6 +478,10 @@ async def _fetch_until_responses(broker: LocalWorkloadBroker, *, count: int) -> 
             await asyncio.sleep(0.01)
     assert len(responses) == count
     return responses
+
+
+def _leased_response(leased_request: LeasedWorkloadRequest, response: WorkloadResponse) -> LeasedWorkloadResponse:
+    return LeasedWorkloadResponse(lease_id=leased_request.lease_id, response=response)
 
 
 def _completion_workload_request(*, request_id: str, prompt: str) -> WorkloadRequest:

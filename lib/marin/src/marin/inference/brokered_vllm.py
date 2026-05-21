@@ -280,13 +280,15 @@ def _validate_timeout_ordering(config: BrokeredVllmSystemConfig) -> None:
     worker_timeout = config.workers.request_timeout_seconds
     lease_timeout = config.request_lease_timeout_seconds
     proxy_timeout = config.proxy.request_timeout_seconds
-    assert 0 < worker_timeout < lease_timeout < proxy_timeout, (
-        "Brokered vLLM timeouts must satisfy "
-        "0 < workers.request_timeout_seconds < request_lease_timeout_seconds "
-        "< proxy.request_timeout_seconds; "
-        f"got worker={worker_timeout:.1f}s lease={lease_timeout:.1f}s proxy={proxy_timeout:.1f}s."
-    )
-    assert config.proxy.readiness_timeout_seconds > 0, "proxy.readiness_timeout_seconds must be positive."
+    if not 0 < worker_timeout < lease_timeout < proxy_timeout:
+        raise ValueError(
+            "Brokered vLLM timeouts must satisfy "
+            "0 < workers.request_timeout_seconds < request_lease_timeout_seconds "
+            "< proxy.request_timeout_seconds; "
+            f"got worker={worker_timeout:.1f}s lease={lease_timeout:.1f}s proxy={proxy_timeout:.1f}s."
+        )
+    if config.proxy.readiness_timeout_seconds <= 0:
+        raise ValueError("proxy.readiness_timeout_seconds must be positive.")
 
 
 def _validate_resource_zone(resources: ResourceConfig, *, name: str, region: str) -> None:

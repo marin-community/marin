@@ -16,6 +16,8 @@ from rigging.timing import ExponentialBackoff
 
 from marin.inference.types import RunningModel
 from marin.inference.workload_broker import (
+    LeasedWorkloadRequest,
+    LeasedWorkloadResponse,
     WorkloadBroker,
     WorkloadRequest,
     WorkloadResponse,
@@ -55,7 +57,7 @@ class VllmWorker:
         if stop_event is None:
             stop_event = threading.Event()
         backoff = ExponentialBackoff() if backoff is None else backoff.copy()
-        in_flight: set[asyncio.Task[WorkloadResponse]] = set()
+        in_flight: set[asyncio.Task[LeasedWorkloadResponse]] = set()
         logger.info(
             "VllmWorker starting upstream=%s model=%s max_in_flight=%d timeout_seconds=%.1f",
             self._upstream.endpoint.base_url,
@@ -69,16 +71,18 @@ class VllmWorker:
                     available_slots = max_in_flight - len(in_flight)
                     if available_slots:
                         # `max_in_flight` counts individual HTTP requests; vLLM does its own continuous batching.
-                        requests = await asyncio.to_thread(self._broker.fetch_requests, max_items=available_slots)
-                        for request in requests:
-                            in_flight.add(asyncio.create_task(self._forward_one(client, request)))
-                        if requests:
+                        leased_requests = await asyncio.to_thread(self._broker.fetch_requests, max_items=available_slots)
+                        for leased_request in leased_requests:
+                            in_flight.add(asyncio.create_task(self._forward_one(client, leased_request)))
+                        if leased_requests:
                             logger.info(
                                 "VllmWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
-                                len(requests),
+                                len(leased_requests),
                                 len(in_flight),
                                 max_in_flight,
-                                format_request_ids([request.request_id for request in requests]),
+                                format_request_ids(
+                                    [leased_request.request.request_id for leased_request in leased_requests]
+                                ),
                             )
                             backoff.reset()
 
@@ -100,8 +104,8 @@ class VllmWorker:
                             len(responses),
                             len(in_flight),
                             max_in_flight,
-                            dict(Counter(response.status_code for response in responses)),
-                            format_request_ids([response.request_id for response in responses]),
+                            dict(Counter(response.response.status_code for response in responses)),
+                            format_request_ids([response.response.request_id for response in responses]),
                         )
                         backoff.reset()
         finally:
@@ -111,15 +115,19 @@ class VllmWorker:
                     task.cancel()
                 await asyncio.gather(*in_flight, return_exceptions=True)
 
-    async def _forward_one(self, client: httpx.AsyncClient, request: WorkloadRequest) -> WorkloadResponse:
+    async def _forward_one(
+        self, client: httpx.AsyncClient, leased_request: LeasedWorkloadRequest
+    ) -> LeasedWorkloadResponse:
+        request = leased_request.request
         # The proxy receives /v1/... paths, while RunningModel.endpoint.url() already points at /v1.
         upstream_path = request.path.removeprefix("/v1/")
         url = self._upstream.endpoint.url(upstream_path)
         try:
             response = await self._send(client, request, url)
-            return _response_from_upstream(request, response)
+            workload_response = _response_from_upstream(request, response)
         except Exception as exc:
-            return _response_from_exception(request, exc, timeout_seconds=self._request_timeout_seconds)
+            workload_response = _response_from_exception(request, exc, timeout_seconds=self._request_timeout_seconds)
+        return LeasedWorkloadResponse(lease_id=leased_request.lease_id, response=workload_response)
 
     async def _send(self, client: httpx.AsyncClient, request: WorkloadRequest, url: str) -> httpx.Response:
         method = request.method.upper()
