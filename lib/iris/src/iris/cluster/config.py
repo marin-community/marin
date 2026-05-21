@@ -151,6 +151,23 @@ def _validate_scale_group_resources(config: config_pb2.IrisClusterConfig) -> Non
             )
 
 
+def _validate_reserved_capacity_buffer(config: config_pb2.IrisClusterConfig) -> None:
+    """Reject ``buffer_slices > 0`` on reserved-capacity scale groups.
+
+    Reserved pools have fixed, paid-for capacity; holding warm buffer slices
+    open beyond demand wastes that capacity. The autoscaler target for a
+    reserved group must equal current demand, so buffer_slices must be 0.
+    """
+    for name, sg_config in config.scale_groups.items():
+        if sg_config.resources.capacity_type != config_pb2.CAPACITY_TYPE_RESERVED:
+            continue
+        if sg_config.buffer_slices > 0:
+            raise ValueError(
+                f"Scale group '{name}': buffer_slices must be 0 for reserved-capacity groups "
+                f"(got {sg_config.buffer_slices}). Reserved capacity should track demand exactly."
+            )
+
+
 def _validate_slice_templates(config: config_pb2.IrisClusterConfig) -> None:
     """Validate that every scale group has a slice_template with a platform set.
 
@@ -353,6 +370,7 @@ def validate_config(config: config_pb2.IrisClusterConfig) -> None:
     _validate_provider_platform_compat(config)
     _validate_accelerator_types(config)
     _validate_scale_group_resources(config)
+    _validate_reserved_capacity_buffer(config)
     _validate_slice_templates(config)
     _validate_worker_settings(config)
     _validate_worker_defaults(config)

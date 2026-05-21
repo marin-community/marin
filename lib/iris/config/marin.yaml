@@ -156,7 +156,7 @@ tpu_pools:
       256:  { buffer_slices: 0, max_slices: 1 }
       512:  { buffer_slices: 0, max_slices: 1 }
       1024: { buffer_slices: 0, max_slices: 1 }
-      2048: { buffer_slices: 1, max_slices: 1 }
+      2048: { buffer_slices: 0, max_slices: 1 }
       4096: { buffer_slices: 0, max_slices: 1 }
 
 # ---------------------------------------------------------------------------
