@@ -134,7 +134,7 @@ ASSIGN_MAX_WORKERS_PER_SOURCE = 128
 
 # Minhash / dedup mirror all_sources_fuzzy defaults.
 MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=5, ram="32g", disk="5g")
-DEDUP_MAX_PARALLELISM = 2048
+DEDUP_MAX_PARALLELISM = 4096
 DEDUP_WORKER_RESOURCES = ResourceConfig(cpu=3, ram="32g", disk="5g")
 DEDUP_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="3.5g", preemptible=False)
 
