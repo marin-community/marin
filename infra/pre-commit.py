@@ -602,6 +602,145 @@ def check_markdown_precommit_invocation(files: list[pathlib.Path], fix: bool) ->
     return _record("Markdown pre-commit command", 0)
 
 
+SKILL_REFERENCE_PATTERNS = [
+    re.compile(r"`((?:\.agents|\.claude|lib|experiments|docs|scripts|infra|src|tests)/[^`\s,;:)]+)`"),
+    re.compile(r"\]\(((?:\.agents|\.claude|lib|experiments|docs|scripts|infra|src|tests)/[^)]+)\)"),
+]
+SKILL_REFERENCE_PLACEHOLDERS = [
+    "<",
+    "YYYY",
+    "...",
+    "foo.md",
+    "profile_summary.v1",
+    "summary.md",
+    "graphs.jsonl",
+    "tasks.jsonl",
+]
+SKILL_REFERENCE_ALLOWLIST = {
+    ".agents/ops/logs/",
+}
+
+
+def _is_skill_file(file_path: pathlib.Path) -> bool:
+    relative_parts = file_path.relative_to(ROOT_DIR).parts
+    return file_path.name == "SKILL.md" and len(relative_parts) == 4 and relative_parts[:2] == (".agents", "skills")
+
+
+def _skill_reference_exists(skill_path: pathlib.Path, reference: str) -> bool:
+    candidates = [skill_path.parent / reference, ROOT_DIR / reference]
+    return any(candidate.exists() for candidate in candidates)
+
+
+def _should_skip_skill_reference(reference: str) -> bool:
+    return (
+        reference in SKILL_REFERENCE_ALLOWLIST
+        or any(token in reference for token in SKILL_REFERENCE_PLACEHOLDERS)
+        or any(character in reference for character in "*{}")
+    )
+
+
+def check_skill_metadata(files: list[pathlib.Path], fix: bool) -> int:
+    skill_files = [f for f in files if _is_skill_file(f)]
+    if not skill_files:
+        return 0
+
+    all_skill_files = sorted((ROOT_DIR / ".agents" / "skills").glob("*/SKILL.md"))
+    errors: list[tuple[pathlib.Path, str]] = []
+    names: dict[str, list[pathlib.Path]] = {}
+
+    for file_path in all_skill_files:
+        try:
+            text = file_path.read_text()
+        except Exception as e:
+            errors.append((file_path, f"could not read file: {e}"))
+            continue
+
+        if re.search(r"\.agents/project(?!s)", text):
+            errors.append((file_path, "use .agents/projects/, not .agents/project/"))
+
+        if "lib/finelog/src/finelog/proto/stats.proto" in text:
+            errors.append(
+                (
+                    file_path,
+                    "finelog stats proto path is lib/finelog/src/finelog/proto/finelog_stats.proto",
+                )
+            )
+
+        for pattern in SKILL_REFERENCE_PATTERNS:
+            for match in pattern.finditer(text):
+                reference = match.group(1).split("#", 1)[0]
+                if _should_skip_skill_reference(reference):
+                    continue
+                if not _skill_reference_exists(file_path, reference):
+                    errors.append((file_path, f"missing local reference: {reference}"))
+
+        if not text.startswith("---\n"):
+            errors.append((file_path, "missing opening frontmatter delimiter"))
+            continue
+
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            errors.append((file_path, "missing closing frontmatter delimiter"))
+            continue
+
+        try:
+            metadata = yaml.safe_load(parts[1])
+        except Exception as e:
+            errors.append((file_path, f"invalid YAML frontmatter: {e}"))
+            continue
+
+        if not isinstance(metadata, dict):
+            errors.append((file_path, f"frontmatter must be a YAML mapping, got {type(metadata).__name__}"))
+            continue
+
+        name = metadata.get("name")
+        description = metadata.get("description")
+
+        if not isinstance(name, str) or not name.strip():
+            errors.append((file_path, f"frontmatter must include a non-empty string name, got {name!r}"))
+        else:
+            if name != file_path.parent.name:
+                errors.append((file_path, f"name {name!r} must match directory name {file_path.parent.name!r}"))
+            names.setdefault(name, []).append(file_path)
+
+        if not isinstance(description, str) or not description.strip():
+            errors.append((file_path, f"frontmatter must include a non-empty string description, got {description!r}"))
+        elif "\n" in description:
+            errors.append((file_path, "description must be a single-line string"))
+
+        for key in ("schedule_cron", "schedule_tz"):
+            value = metadata.get(key)
+            if value is not None and not isinstance(value, str):
+                errors.append((file_path, f"{key} must be a string, got {type(value).__name__}"))
+
+        if ("schedule_cron" in metadata) != ("schedule_tz" in metadata):
+            errors.append((file_path, "schedule_cron and schedule_tz must be specified together"))
+
+        allowed_tools = metadata.get("allowed-tools")
+        if allowed_tools is not None and not isinstance(allowed_tools, str):
+            errors.append((file_path, f"allowed-tools must be a string, got {type(allowed_tools).__name__}"))
+
+    for name, paths in names.items():
+        if len(paths) <= 1:
+            continue
+        joined_paths = ", ".join(str(p.relative_to(ROOT_DIR)) for p in paths)
+        for path in paths:
+            errors.append((path, f"duplicate skill name {name!r}: {joined_paths}"))
+
+    if errors:
+        checked_paths = {path for path in skill_files}
+        relevant_errors = [(path, error) for path, error in errors if path in checked_paths]
+        if not relevant_errors:
+            relevant_errors = errors
+
+        buf = io.StringIO()
+        for path, error in relevant_errors:
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}: {error}\n")
+        return _record("Skill metadata", 1, buf.getvalue())
+
+    return _record("Skill metadata", 0)
+
+
 def _ensure_iris_protos() -> None:
     """Generate iris protobuf files if they are missing and npx is available.
 
@@ -716,6 +855,12 @@ PRECOMMIT_CONFIGS = [
         patterns=["**/*.md"],
         checks=[
             check_markdown_precommit_invocation,
+        ],
+    ),
+    PrecommitConfig(
+        patterns=[".agents/skills/*/SKILL.md"],
+        checks=[
+            check_skill_metadata,
         ],
     ),
 ]
