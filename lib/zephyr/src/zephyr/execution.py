@@ -1593,19 +1593,14 @@ class ZephyrWorker:
 
             future = None
 
-            if response == PullStatus.SHUTDOWN:
-                logger.info("[%s] Received SHUTDOWN", worker_id)
-                status_holder[slot_idx] = PullStatus.SHUTDOWN
-                return
-
-            if response == PullStatus.STAGE_COMPLETED:
-                logger.info("[%s] Stage completed", worker_id)
-                status_holder[slot_idx] = PullStatus.STAGE_COMPLETED
-                return
-
             if response == PullStatus.NO_WORK_BACKOFF:
                 time.sleep(backoff.next_interval())
                 continue
+
+            if isinstance(response, PullStatus):
+                logger.debug("[%s] Received %s", worker_id, response.name)
+                status_holder[slot_idx] = response
+                return
 
             backoff.reset()
             task, attempt, config = response
