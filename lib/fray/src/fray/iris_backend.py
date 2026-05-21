@@ -254,6 +254,7 @@ class IrisActorHandle:
     def __init__(self, endpoint_name: str):
         self._endpoint_name = endpoint_name
         self._client: Any = None  # Lazily resolved ActorClient
+        self._resolve_lock = threading.Lock()
 
     def __getstate__(self) -> dict:
         # Only serialize the endpoint name - client is lazily resolved
@@ -262,10 +263,15 @@ class IrisActorHandle:
     def __setstate__(self, state: dict) -> None:
         self._endpoint_name = state["endpoint_name"]
         self._client = None
+        self._resolve_lock = threading.Lock()
 
     def _resolve(self) -> Any:
         """Resolve endpoint to ActorClient via IrisContext."""
-        if self._client is None:
+        if self._client is not None:
+            return self._client
+        with self._resolve_lock:
+            if self._client is not None:
+                return self._client
             ctx = get_iris_ctx()
             if ctx is None:
                 raise RuntimeError(
@@ -273,7 +279,7 @@ class IrisActorHandle:
                     "Call from within an Iris job or set context via iris_ctx_scope()."
                 )
             self._client = ActorClient(ctx.resolver, self._endpoint_name)
-        return self._client
+            return self._client
 
     def __getattr__(self, method_name: str) -> _IrisActorMethod:
         if method_name.startswith("_"):
