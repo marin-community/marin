@@ -96,6 +96,7 @@ def _triton_ragged_dot_kernel(
 
     @pl.when(start_m < hi)
     def _compute():
+        zero_i32 = jnp.asarray(0, dtype=jnp.int32)
         span_m = pl.ds(start_m, block_m)
         acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
         k = a_ref.shape[1]
@@ -104,14 +105,18 @@ def _triton_ragged_dot_kernel(
             start_k = i * block_k
             span_k = pl.ds(start_k, block_k)
             a = plgpu.load(a_ref.at[span_m, span_k])
-            b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
+            b = plgpu.load(b_ref.at[span_k, pl.ds(zero_i32, b_ref.shape[1])])
             dtype = jnp.result_type(a, b)
             return acc + pl.dot(a.astype(dtype), b.astype(dtype))
 
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
         mask = (start_m + jnp.arange(block_m)) < hi
-        plgpu.store(out_ref.at[span_m, pl.ds(0, out_ref.shape[1])], acc.astype(out_ref.dtype), mask=mask[:, None])
+        plgpu.store(
+            out_ref.at[span_m, pl.ds(zero_i32, out_ref.shape[1])],
+            acc.astype(out_ref.dtype),
+            mask=mask[:, None],
+        )
 
 
 def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
@@ -173,7 +178,8 @@ def _triton_ragged_contracting_dim_dot_kernel(
         dtype = jnp.result_type(a, b)
         return acc + pl.dot(a.astype(dtype).T, b.astype(dtype))
 
-    num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), block_k), 1)
+    block_k_i32 = jnp.asarray(block_k, dtype=jnp.int32)
+    num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), block_k_i32), 1)
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
     acc = jax.lax.fori_loop(0, num_k_blocks - 1, body, acc)
     acc = body(num_k_blocks - 1, acc, mask_k=True)
