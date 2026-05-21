@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Midtraining sweep for Delphi bases 3e18 -> 2e20 at K=0.20.
+"""Midtraining sweep for Delphi bases 3e18 -> 3e20 at K=0.20.
 
-Sweep shape: 6 bases x 3 mixes x 4 LR factors = 72 cells.
+Sweep shape: 7 bases x 3 mixes x 4 LR factors = 84 cells.
 
 Mode: CPT — `initialize_from_hf: <repo>@<revision>`. Each base streams its
 HF weights directly via Levanter's `RepoRef.from_string` path (free

@@ -399,25 +399,55 @@ ANCHORS: tuple[ThroughputAnchor, ...] = (
         tpu_type="v5p-8",
         train_batch_size=64,
         seq_len=4096,
-        per_device_parallelism=-1,
-        step_time_s=3.471,
-        wandb_run_path="marin-community/delphi-midtraining/delphi-2e20-p67m33-k0p20-lr50-probe-v5p8-30s-a001",
-        measured_at=date(2026, 5, 20),
+        per_device_parallelism=16,
+        step_time_s=3.460,
+        wandb_run_path="marin-community/delphi-midtraining/delphi-2e20-p67m33-k0p20-lr33-a001",
+        measured_at=date(2026, 5, 21),
         notes=(
-            "30-step p67m33/lr50 throughput probe; run finished cleanly "
-            "(state=finished, last step 29) on Iris v5p-8 us-east5-a with "
-            "no preemptions. Median from W&B ``throughput/duration`` for "
-            "global_step >= 5 (25 samples); min/max 3.466/3.476 s, so the "
-            "measurement is very stable. Tokens/step = 262,144; about "
-            "75.5k tok/s. No HBM/RESOURCE_EXHAUSTED errors. v5p-8 doubles "
-            "per-device load relative to the v5p-16 probe (8 vs 4 "
-            "seq/chip) and is ~1.67x slower per step but burns ~16% fewer "
-            "chip-hours for a full K=0.20 cell (87 vs 104 chip-h)."
+            "Full K=0.20 sweep on v5p-8 us-east5-a, 12/12 cells completed "
+            "2026-05-20 → 2026-05-21. Median from W&B ``throughput/duration`` "
+            "over the 200 most-recent samples of the cited cell (p10/p50/p90 "
+            "= 3.443/3.460/3.469 s, max 3.515, very stable). Cross-cell "
+            "agreement is tight: per-cell median clean s/step in [3.43, 3.58] "
+            "across all 12 finished cells. Tokens/step = 262,144 → about "
+            "75.8k tok/s. Replaces the earlier 30-step v5p-8 probe anchor "
+            "(``delphi-2e20-p67m33-k0p20-lr50-probe-v5p8-30s-a001``, "
+            "step_time_s=3.471); full-sweep and probe agree to within 0.3 %. "
+            "Per-cell pure-compute = 10.85 h * 4 W&B-reported chips = 43.4 "
+            "chip-h. The actual sweep wall-clock ran 24.6 h end-to-end with "
+            "~80 % preemption overhead from background BATCH-priority "
+            "contention."
         ),
     ),
-    # TODO: Add pretrain anchors for 9e18, 2e19, 3e19, 9e19, 2e20 from each
-    # base's original W&B run (entity ``marin-community``, project varies —
-    # look in ``experiments/delphi_models.py`` for URLs). Each should be a
+    ThroughputAnchor(
+        model_flops_key="3e20",
+        tpu_type="v5p-16",
+        train_batch_size=128,
+        seq_len=4096,
+        per_device_parallelism=16,
+        step_time_s=4.869,
+        wandb_run_path="marin-community/delphi-midtraining/delphi-3e20-p33m67-k0p20-lr67-a001",
+        measured_at=date(2026, 5, 21),
+        notes=(
+            "Full K=0.20 sweep on v5p-16 us-east5-a, IN-FLIGHT at measurement "
+            "time (8/12 cells actively training; cited cell at ~5663 of 7082 "
+            "steps, state=running). Median from W&B ``throughput/duration`` "
+            "over the 200 most-recent samples (p10/p50/p90 = "
+            "4.859/4.869/4.873 s; one outlier at 5.648 s, presumably an eval "
+            "or checkpoint step). Tokens/step = 524,288 → about 108.5k tok/s, "
+            "mean MFU 47.3 %. Cross-cell agreement is tight: per-cell median "
+            "clean s/step in [4.83, 4.89] across all 8 actively-running 3e20 "
+            "cells. Per-cell pure-compute (full 7082 steps) ~= 9.58 h * 8 "
+            "W&B-reported chips = 76.6 chip-h. The four remaining cells "
+            "(p33m67-lr33, p67m33-lr50, p67m33-lr67, p67m33-lr83) were "
+            "submitted at ``--priority batch`` and have been starved by "
+            "default-priority traffic for >19 h; refresh this anchor when the "
+            "sweep finishes."
+        ),
+    ),
+    # TODO: Add pretrain anchors for 9e18, 2e19, 3e19, 9e19, 2e20, 3e20 from
+    # each base's original W&B run (entity ``marin-community``, project varies
+    # — look in ``experiments/delphi_models.py`` for URLs). Each should be a
     # (base, TPU) pair with step_time read off ``train/time_per_step`` on a
     # stable window.
     #
