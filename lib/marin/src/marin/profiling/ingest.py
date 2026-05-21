@@ -447,34 +447,20 @@ def normalize_run_target(target: str, *, entity: str | None, project: str | None
     - W&B run URL (`https://wandb.ai/entity/project/runs/run_id`)
     """
     if target.startswith(("http://", "https://")):
-        parsed = urlparse(target)
-        parts = [part for part in parsed.path.split("/") if part]
+        parts = [part for part in urlparse(target).path.split("/") if part]
         if len(parts) < 3:
             raise ValueError(f"Could not parse run information from URL: {target}")
-        run_entity = parts[0]
-        run_project = parts[1]
-        if parts[2] == "runs" and len(parts) >= 4:
-            run_id = parts[3]
-        else:
-            run_id = parts[2]
-        return run_entity, run_project, run_id
+    else:
+        parts = [part for part in target.split("/") if part]
+        if len(parts) == 1:
+            if entity is None or project is None:
+                raise ValueError("Bare run ids require --entity and --project.")
+            return entity, project, parts[0]
+        if len(parts) < 3:
+            raise ValueError(f"Unrecognized run target: {target}")
 
-    parts = [part for part in target.split("/") if part]
-    if len(parts) == 1:
-        if entity is None or project is None:
-            raise ValueError("Bare run ids require --entity and --project.")
-        return entity, project, parts[0]
-
-    if len(parts) >= 3:
-        run_entity = parts[0]
-        run_project = parts[1]
-        if parts[2] == "runs" and len(parts) >= 4:
-            run_id = parts[3]
-        else:
-            run_id = parts[2]
-        return run_entity, run_project, run_id
-
-    raise ValueError(f"Unrecognized run target: {target}")
+    run_id = parts[3] if parts[2] == "runs" and len(parts) >= 4 else parts[2]
+    return parts[0], parts[1], run_id
 
 
 def _load_trace_payload(trace_path: Path) -> dict[str, Any]:

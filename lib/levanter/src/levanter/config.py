@@ -140,7 +140,9 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
                 fs: AbstractFileSystem
                 fs, fs_path = url_to_fs(config_path)
                 temp_file = tempfile.NamedTemporaryFile(prefix="config", suffix=".yaml", delete=False)
-                atexit.register(lambda: os.unlink(temp_file.name))
+                # Bind ``temp_file`` per-iteration via a default arg: without this, every lambda
+                # captures the same loop variable and only the final temp file would be unlinked.
+                atexit.register(lambda tf=temp_file: os.unlink(tf.name))
                 fs.get(fs_path, temp_file.name)
                 config_path = temp_file.name
 
