@@ -24,6 +24,7 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_backward_launcher,
     segmented_flash_attention_forward_launcher,
 )
+from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,7 @@ def segmented_flash_attention_forward(
     valid: jax.Array,
     *,
     softmax_scale: float,
-    kernel_config: Any,
+    kernel_config: Flash4CuteKernelConfig,
 ) -> tuple[jax.Array, jax.Array]:
     """FA4/CuTe segmented attention forward entry point.
 
@@ -96,8 +97,8 @@ def segmented_flash_attention_forward(
     except Exception as exc:
         raise _optional_dependency_error() from exc
 
-    forward_tile = getattr(kernel_config, "forward_tile", (128, 64))
-    num_threads = getattr(kernel_config, "num_threads", 128)
+    forward_tile = kernel_config.forward_tile
+    num_threads = kernel_config.num_threads
     launcher = segmented_flash_attention_forward_launcher(
         modules,
         head_dim=q.shape[-1],
@@ -132,7 +133,7 @@ def segmented_flash_attention_backward(
     valid: jax.Array,
     *,
     softmax_scale: float,
-    kernel_config: Any,
+    kernel_config: Flash4CuteKernelConfig,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """FA4/CuTe segmented attention backward boundary.
 
@@ -148,8 +149,8 @@ def segmented_flash_attention_backward(
     except Exception as exc:
         raise _optional_dependency_error() from exc
 
-    backward_tile = getattr(kernel_config, "backward_tile", (128, 64))
-    num_threads = getattr(kernel_config, "num_threads", 128)
+    backward_tile = kernel_config.backward_tile
+    num_threads = kernel_config.num_threads
     launcher = segmented_flash_attention_backward_launcher(
         modules,
         dtype=q.dtype,
@@ -247,7 +248,7 @@ def fa4_cute_attention_forward(
     valid: jax.Array,
     *,
     sm_scale: float | None = None,
-    kernel_config: Any | None = None,
+    kernel_config: Flash4CuteKernelConfig,
 ) -> jax.Array:
     """FA4/CuTe attention boundary with packed causal metadata.
 
@@ -275,7 +276,7 @@ def _segmented_flash_attention_custom_vjp(
     lower_bounds: jax.Array,
     valid: jax.Array,
     softmax_scale: float,
-    kernel_config: Any,
+    kernel_config: Flash4CuteKernelConfig,
 ) -> jax.Array:
     out, _ = segmented_flash_attention_forward(
         q,
@@ -296,7 +297,7 @@ def _segmented_flash_attention_custom_vjp_fwd(
     lower_bounds: jax.Array,
     valid: jax.Array,
     softmax_scale: float,
-    kernel_config: Any,
+    kernel_config: Flash4CuteKernelConfig,
 ) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]]:
     out, lse = segmented_flash_attention_forward(
         q,
@@ -312,7 +313,7 @@ def _segmented_flash_attention_custom_vjp_fwd(
 
 def _segmented_flash_attention_custom_vjp_bwd(
     softmax_scale: float,
-    kernel_config: Any,
+    kernel_config: Flash4CuteKernelConfig,
     residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
 ) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None]:

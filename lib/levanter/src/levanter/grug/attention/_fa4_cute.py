@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from dataclasses import dataclass
 
 import equinox as eqx
 import jax
@@ -11,13 +10,7 @@ from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
-
-
-@dataclass(frozen=True)
-class _Flash4CuteKernelConfig:
-    forward_tile: tuple[int, int]
-    backward_tile: tuple[int, int]
-    num_threads: int
+from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
 
 
 def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: int) -> jax.Array:
@@ -120,39 +113,6 @@ def _validate_head_layout(q: jax.Array, k: jax.Array, *, backend_name: str) -> N
         raise ValueError(f"{backend_name} requires Hq divisible by Hkv, got q={q.shape}, k={k.shape}")
 
 
-def _flash4_cute_kernel_config(
-    head_dim: int,
-    *,
-    arch: int,
-) -> _Flash4CuteKernelConfig:
-    arch_family = arch // 10
-    if arch_family == 10:
-        return _Flash4CuteKernelConfig(
-            forward_tile=(128, 128 if head_dim <= 64 else 64),
-            backward_tile=(64, 64),
-            num_threads=128,
-        )
-    if arch_family == 12:
-        return _Flash4CuteKernelConfig(
-            forward_tile=(128, 128 if head_dim <= 64 else 64),
-            backward_tile=(64, 64),
-            num_threads=128,
-        )
-    if arch_family == 8:
-        return _Flash4CuteKernelConfig(
-            forward_tile=(128, 64),
-            backward_tile=(128, 64),
-            num_threads=128,
-        )
-    if arch_family == 9:
-        return _Flash4CuteKernelConfig(
-            forward_tile=(128, 128 if head_dim <= 64 else 64),
-            backward_tile=(128, 64),
-            num_threads=128,
-        )
-    raise NotImplementedError(f"FA4/CuTe attention does not support SM{arch}.")
-
-
 def _gpu_compute_arch() -> int:
     for device in jax.local_devices(backend="gpu"):
         compute_capability = getattr(device, "compute_capability", None)
@@ -186,7 +146,7 @@ def gpu_fa4_cute_attention(
         seq_len=q.shape[1],
         sliding_window=mask.sliding_window,
     )
-    kernel_config = _flash4_cute_kernel_config(q.shape[-1], arch=_gpu_compute_arch())
+    kernel_config = flash4_cute_kernel_config(q.shape[-1], arch=_gpu_compute_arch())
 
     return fa4_cute_attention_forward(
         q,
