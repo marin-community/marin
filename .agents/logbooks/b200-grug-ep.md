@@ -90,3 +90,25 @@
     - `ragged_all_to_all`, `forward`
     - `ring`, `forward_backward`
     - `ragged_all_to_all`, `forward_backward`
+
+### 2026-05-21 10:54 - Submit first B200 EP smoke
+- Experiment ID: `B200-EP-003`
+- Hypothesis:
+  - A one-node 8-GPU smoke can establish whether current `ring` and `ragged_all_to_all` both run on B200 before scaling the matrix.
+- Command:
+  - Submitted a Slurm wrapper from the isolated `research/b200-grug-ep` checkout.
+  - Benchmark command family: `.agents/scripts/bench_grug_ep.py --tokens 32768 --hidden-dim 5120 --intermediate-dim 2560 --local-experts 8 --topk 2 --num-devices 8 --warmup 1 --iters 3 --dtype bf16`
+- Config:
+  - first job: `49676`
+  - retry job: `49677`
+  - pass modes: `forward`, `forward_backward`
+  - implementations: `ring`, `ragged_all_to_all`
+- Result:
+  - Job `49676` failed before benchmark rows were emitted.
+  - The allocated node exposed only 7 B200 devices to JAX, and the benchmark rejected the requested 8-device mesh.
+  - The retry job `49677` was submitted with the bad node excluded and was pending on resources at last check.
+- Interpretation:
+  - The first failure is an infrastructure/device-health failure, not an EP performance result.
+  - The script's explicit device-count check did the right thing by refusing to benchmark a partial node.
+- Next action:
+  - Wait for retry job `49677`; if it runs cleanly, record JSON rows and then decide whether to test the full #5894 local-row shape.
