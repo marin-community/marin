@@ -664,6 +664,18 @@
   - kernels: `token_ragged_a2a`, `stream_ring`, `deepep_transport_capped_prewarmed`
   - preflight correctness check: compare `token_ragged_a2a` against `stream_ring` on a smaller EP4 shape for output and gradient max-absolute error.
 - Result:
-  - Job `49882` is pending.
+  - Job `49882` completed with exit code `0` against code commit `250f88488`.
+  - The first `token_ragged_a2a` implementation compiled and ran, but failed semantic validation:
+    - output max-absolute error vs `stream_ring`: `1.280000e+02`
+    - gradient max-absolute error vs `stream_ring`: `4.000000e+00`
+  - Timing smoke for the same pre-fix implementation:
+    - `token_ragged_a2a`: `0.338680 s`, `0.097M tok/s`
+    - `stream_ring`: `0.105866 s`, `0.310M tok/s`
+    - `deepep_transport_capped_prewarmed`: `0.043299 s`, `0.757M tok/s`
+  - Root cause found after the job: the benchmark-local `_shard_a2a_params` helper had stale `ragged_all_to_all` output-offset semantics compared with the checked-in Grug helper. It used receiver-local cumulative offsets instead of sender-side output offsets, which can permute receive segments.
+  - Fixed the offset helper in commit `a625b06e1` and submitted retry job `49892`.
+- Interpretation:
+  - The pre-fix result is not evidence against token-level `ragged_all_to_all`; it was using the wrong receive layout.
+  - The pre-fix timing is still useful as a warning that the JAX path has multiple ragged exchanges plus metadata traffic, so correctness must be established before treating its timing as meaningful.
 - Next action:
-  - Watch job `49882`. If the small correctness check passes, use the timing smoke to decide whether to run the full `tokens=131072`, `mlp_dim=4096`, `topk=8` EP4/EP8 anchors.
+  - Watch job `49892`. If the small correctness check passes, use the timing smoke to decide whether to run the full `tokens=131072`, `mlp_dim=4096`, `topk=8` EP4/EP8 anchors.
