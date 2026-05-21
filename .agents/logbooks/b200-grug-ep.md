@@ -645,3 +645,25 @@
   - The residual EP8 gap is now small enough that profile-driven transport work is more useful than broad variant sweeps. The next discriminator should profile `stream_ring` vs DeepEP at EP8 or test recipe-shaped anchors to see whether the slight gap grows with hidden/expert size.
 - Next action:
   - Promote `stream_ring` toward the production EP path, while keeping a focused EP8 profile/probe task for the remaining `~10-11%` gap.
+
+### 2026-05-21 16:41 - Submit token-level JAX ragged all-to-all smoke
+- Experiment ID: `B200-EP-019`
+- Hypothesis:
+  - DeepEP's communication advantage may come from token-to-rank ragged exchange rather than assignment-to-expert exchange. A JAX `ragged_all_to_all` path that sends each token at most once per destination rank may recover most of DeepEP's transport behavior without depending on DeepEP's transport kernels.
+- Code:
+  - Added benchmark-only kernel `token_ragged_a2a` in `bench_moe_hillclimb.py`.
+  - The variant uses DeepEP's layout kernel for token reachability metadata, then uses JAX `ragged_all_to_all` for dispatch and return combine.
+  - Each receiver expands the received token metadata into local expert assignments before the existing grouped expert GEMMs.
+- Command:
+  - Submitted job `49881` for a small value/gradient smoke and a 4-GPU timing check.
+  - Job `49881` failed before reaching the benchmark because the allocated node exposed only three usable CUDA devices for a four-GPU request.
+  - Submitted retry job `49882` excluding that node.
+  - Benchmark command family for timing smoke: `bench_moe_hillclimb.py --tokens 32768 --hidden 5120 --mlp-dim 4096 --experts 64 --shared-expert-dim 0 --topk 8 --distribution random --bench-pass forward_backward --ep-list 4 --warmup 1 --iters 3`
+- Config:
+  - hardware target: 4 B200 GPUs on one NVLinked node
+  - kernels: `token_ragged_a2a`, `stream_ring`, `deepep_transport_capped_prewarmed`
+  - preflight correctness check: compare `token_ragged_a2a` against `stream_ring` on a smaller EP4 shape for output and gradient max-absolute error.
+- Result:
+  - Job `49882` is pending.
+- Next action:
+  - Watch job `49882`. If the small correctness check passes, use the timing smoke to decide whether to run the full `tokens=131072`, `mlp_dim=4096`, `topk=8` EP4/EP8 anchors.

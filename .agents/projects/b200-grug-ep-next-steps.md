@@ -33,6 +33,11 @@ path, but lands just outside the target parity window at the `131072`,
 `hidden=5120`, `mlp_dim=4096`, `topk=8` anchor: about `10.4%` slower than DeepEP
 without shared experts and about `10.7%` slower with `shared_expert_dim=2048`.
 
+Current experiment: test whether JAX `ragged_all_to_all` can express the
+DeepEP-like token-to-rank protocol. The benchmark-only `token_ragged_a2a`
+variant uses DeepEP layout metadata for the first smoke, but performs dispatch
+and combine with JAX ragged all-to-all.
+
 ## Recipe-Derived Anchor Shapes
 
 The large-run MoE sizing table in `experiments/grug/moe/README.md` gives:
@@ -80,6 +85,9 @@ run recipe `topk=4` as a control after the gap is understood.
    - EP8 now shows a residual `~10-11%` gap rather than the old `40-44%` gap.
      Promote `stream_ring`, but keep one profile/probe task for the remaining
      EP8 transport difference.
+   - First probe the `token_ragged_a2a` benchmark variant. If it works and is
+     competitive, it is a cleaner path than committing directly to DeepEP
+     transport FFI.
 
 5. Test recipe-shaped anchors after the debug shape is decomposed.
    - `1e24` proxy: start with `hidden=7680`, `mlp_dim=3840`,
