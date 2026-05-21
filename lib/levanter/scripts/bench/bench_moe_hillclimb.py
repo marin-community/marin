@@ -1156,10 +1156,9 @@ def _shard_a2a_params(
     input_offsets = jnp.cumsum(jnp.concatenate((jnp.array([0], dtype=row.dtype), row[:-1])))
     send_sizes = row
 
-    zero_row = jnp.zeros((1, shard_counts.shape[1]), dtype=shard_counts.dtype)
-    cumulative = jnp.cumsum(jnp.concatenate((zero_row, shard_counts), axis=0), axis=0, dtype=shard_counts.dtype)
-    output_offsets = cumulative[shard_id]
     recv_sizes = shard_counts[:, shard_id]
+    sender_output_offsets = jnp.cumsum(shard_counts, axis=0, dtype=shard_counts.dtype) - shard_counts
+    output_offsets = sender_output_offsets[shard_id]
     return input_offsets, send_sizes, output_offsets, recv_sizes
 
 
