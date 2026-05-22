@@ -737,3 +737,25 @@
   - B200 CUDA correctness remains pending on jobs `49916` and `49917`.
 - Next action:
   - Wait for the B200 correctness jobs. If they remain pending, use the held GPU debug allocation once available to inspect full `token_ragged_a2a` value/gradient mismatch directly.
+
+### 2026-05-21 17:54 - Submit TPU32 token-ragged benchmark
+- Experiment ID: `B200-EP-022`
+- Hypothesis:
+  - A 32-chip TPU run can test whether token-level `ragged_all_to_all` has useful scaling as a transport pattern, independent of GPU-only DeepEP kernels.
+- Code:
+  - Added `.agents/scripts/bench_moe_hillclimb_tpu_pure_layout.py`.
+  - The wrapper initializes JAX distributed under Iris and replaces the GPU-only DeepEP layout helper with a pure-JAX token-to-rank layout implementation before calling the existing MoE hillclimb benchmark.
+- Command:
+  - Submitted Iris job `/dlwh/token-ragged-tpu32-v5lite`.
+  - TPU type: `v5litepod-32`, 8 Iris replicas.
+  - Benchmark command family:
+    - `bench_moe_hillclimb_tpu_pure_layout.py --tokens 131072 --hidden 2048 --mlp-dim 2048 --experts 256 --shared-expert-dim 0 --topk 8 --distribution random --bench-pass forward_backward --ep-list 32 --warmup 1 --iters 3 --dtype bfloat16`
+  - Kernels:
+    - `stream_ring`
+    - `token_ragged_a2a`
+- Result:
+  - Submitted and pending/running state not yet recorded.
+- Interpretation:
+  - This is not a DeepEP parity measurement. It is a TPU transport-scaling probe for token-rank ragged exchange versus the stream-ring baseline at `topk=8`.
+- Next action:
+  - Babysit `/dlwh/token-ragged-tpu32-v5lite`; if it fails during compile or runtime, fall back to a payload-only token ragged A2A microbenchmark on the same TPU topology.
