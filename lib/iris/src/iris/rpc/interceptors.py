@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
-import threading
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -33,9 +33,9 @@ def _deadline_error(method: str) -> ConnectError:
 
 
 class ConcurrencyLimitInterceptor:
-    """Caps the number of in-flight RPCs per method.
+    """Caps the number of in-flight RPCs per method on an ASGI connectrpc mount.
 
-    Callers exceeding the limit block on a semaphore until a slot frees up;
+    Callers exceeding the limit await the semaphore until a slot frees up;
     Connect/gRPC deadlines already cover the case where a caller gave up
     waiting. Methods absent from ``limits`` are passed through unchanged.
 
@@ -45,47 +45,31 @@ class ConcurrencyLimitInterceptor:
     instead of running a handler whose result will be discarded. This
     stops stale RPCs from piling more load onto an already-overloaded
     server.
+
+    Only the async path is implemented; the sync (WSGI) path has no callers
+    today. Add ``intercept_unary_sync`` with a separate ``threading.Semaphore``
+    if a WSGI mount ever needs capping — ``asyncio.Semaphore`` cannot serve
+    both transports.
     """
 
     def __init__(self, limits: dict[str, int]):
-        self._semaphores: dict[str, threading.Semaphore] = {
-            method: threading.Semaphore(n) for method, n in limits.items()
-        }
-
-    def _acquire(self, method: str) -> threading.Semaphore | None:
-        sem = self._semaphores.get(method)
-        if sem is None:
-            return None
-        if not sem.acquire(blocking=False):
-            logger.debug("RPC %s blocked waiting for concurrency slot", method)
-            sem.acquire()
-        return sem
-
-    def intercept_unary_sync(self, call_next, request, ctx):
-        method = ctx.method().name
-        if _deadline_expired(ctx):
-            raise _deadline_error(method)
-        sem = self._acquire(method)
-        try:
-            if _deadline_expired(ctx):
-                raise _deadline_error(method)
-            return call_next(request, ctx)
-        finally:
-            if sem is not None:
-                sem.release()
+        self._semaphores: dict[str, asyncio.Semaphore] = {method: asyncio.Semaphore(n) for method, n in limits.items()}
 
     async def intercept_unary(self, call_next, request, ctx):
         method = ctx.method().name
         if _deadline_expired(ctx):
             raise _deadline_error(method)
-        sem = self._acquire(method)
-        try:
+        sem = self._semaphores.get(method)
+        if sem is None:
+            return await call_next(request, ctx)
+        if sem.locked():
+            logger.debug("RPC %s blocked waiting for concurrency slot", method)
+        # ``async with`` yields to the loop on contention and releases on any
+        # exit, including ``CancelledError`` raised mid-wait.
+        async with sem:
             if _deadline_expired(ctx):
                 raise _deadline_error(method)
             return await call_next(request, ctx)
-        finally:
-            if sem is not None:
-                sem.release()
 
 
 class RequestTimingInterceptor:
