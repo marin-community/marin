@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "marin-probes"
+name = "marin-infra-probes"
 version = "0.1.0"
 description = "Synthetic infra monitoring: continuously exercises Iris and Finelog, records latency and error samples."
 requires-python = ">=3.11,<3.13"

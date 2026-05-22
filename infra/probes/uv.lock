@@ -749,6 +749,37 @@ wheels = [
 ]
 
 [[package]]
+name = "marin-infra-probes"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "click" },
+    { name = "marin-finelog" },
+    { name = "marin-iris" },
+    { name = "marin-rigging" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.3.1" },
+    { name = "marin-finelog", specifier = ">=0.99.dev0" },
+    { name = "marin-iris", specifier = ">=0.99.dev0" },
+    { name = "marin-rigging", specifier = ">=0.99.dev0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "marin-iris"
 version = "0.99.dev20260521"
 source = { registry = "https://github.com/marin-community/marin/releases/expanded_assets/marin-iris-latest" }
@@ -778,37 +809,6 @@ dependencies = [
 ]
 wheels = [
     { url = "https://github.com/marin-community/marin/releases/download/marin-iris-latest/marin_iris-0.99.dev20260521-py3-none-any.whl" },
-]
-
-[[package]]
-name = "marin-probes"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "click" },
-    { name = "marin-finelog" },
-    { name = "marin-iris" },
-    { name = "marin-rigging" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-timeout" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.3.1" },
-    { name = "marin-finelog", specifier = ">=0.99.dev0" },
-    { name = "marin-iris", specifier = ">=0.99.dev0" },
-    { name = "marin-rigging", specifier = ">=0.99.dev0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.4" },
-    { name = "pytest-timeout" },
 ]
 
 [[package]]
