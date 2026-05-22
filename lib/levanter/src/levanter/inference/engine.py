@@ -12,6 +12,7 @@ from typing import Optional, Sequence
 
 import equinox as eqx
 import haliax as hax
+import humanfriendly as hly
 from rigging.filesystem import open_url
 import haliax.haxtyping as ht
 import jax
@@ -224,8 +225,6 @@ def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig)
     next_bytes = cache_bytes(high)
     per_page = bytes_at_max if max_pages == 1 else bytes_at_max - cache_bytes(max_pages - 1)
     base_bytes = max(bytes_at_max - per_page * max_pages, 0)
-
-    import humanfriendly as hly
 
     logger.info(
         "Auto-computed KV cache budget: base=%s, per_page=%s, budget=%s, used=%s, next=%s -> max_pages=%d",

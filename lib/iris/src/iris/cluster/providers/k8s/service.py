@@ -9,6 +9,7 @@ import logging
 import os
 import socket
 import subprocess
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -645,42 +646,64 @@ class CloudK8sService:
         local_port: int | None = None,
         timeout: float = 90.0,
     ) -> Iterator[str]:
-        """Port-forward to a K8s Service, yielding the local URL."""
+        """Port-forward to a K8s Service, yielding the local URL.
+
+        kubectl port-forward's spdy stream is fragile — idle drops, network
+        blips, or transient api-server hiccups exit the process and leave
+        the local listener gone for the rest of the session. A daemon
+        watchdog keeps the listener self-healing for the lifetime of the
+        context: on exit it respawns kubectl with bounded backoff. Brief
+        gaps between respawn cycles are expected and callers should already
+        retry connection errors.
+        """
         if local_port is None:
             local_port = find_free_port(start=10000)
 
-        proc: subprocess.Popen | None = None
+        # Mutable ref shared with the watchdog so _stop() always sees the
+        # currently-live process, not the one we started with.
+        proc_lock = threading.Lock()
+        proc_ref: list[subprocess.Popen | None] = [None]
+        shutdown = threading.Event()
+
+        def _spawn() -> subprocess.Popen:
+            return self._popen(
+                ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
+                namespaced=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
 
         def _stop() -> None:
-            nonlocal proc
-            if proc is None:
+            with proc_lock:
+                current = proc_ref[0]
+                proc_ref[0] = None
+            if current is None or current.poll() is not None:
                 return
-            proc.terminate()
+            current.terminate()
             try:
-                proc.wait(timeout=5)
+                current.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            proc = None
+                current.kill()
+                current.wait()
 
         deadline = Deadline.from_seconds(timeout)
         backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
 
         while not deadline.expired():
-            if proc is None:
-                proc = self._popen(
-                    ["port-forward", f"svc/{service_name}", f"{local_port}:{remote_port}"],
-                    namespaced=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                )
+            with proc_lock:
+                current = proc_ref[0]
+            if current is None:
+                current = _spawn()
+                with proc_lock:
+                    proc_ref[0] = current
 
-            if proc.poll() is not None:
-                stderr = proc.stderr.read() if proc.stderr else ""
+            if current.poll() is not None:
+                stderr = current.stderr.read() if current.stderr else ""
                 logger.warning("Port-forward exited (retrying): %s", stderr.strip())
-                proc = None
+                with proc_lock:
+                    proc_ref[0] = None
                 time.sleep(min(backoff.next_interval(), max(0, deadline.remaining_seconds())))
                 continue
 
@@ -706,9 +729,39 @@ class CloudK8sService:
             raise RuntimeError(f"kubectl port-forward to {service_name}:{remote_port} failed after {timeout}s")
 
         logger.info("Tunnel ready: 127.0.0.1:%d -> %s:%d", local_port, service_name, remote_port)
+
+        def _watchdog() -> None:
+            wd_backoff = ExponentialBackoff(initial=1.0, maximum=5.0, factor=2.0)
+            while not shutdown.wait(timeout=1.0):
+                with proc_lock:
+                    current = proc_ref[0]
+                if current is None or current.poll() is None:
+                    continue
+                stderr = current.stderr.read() if current.stderr else ""
+                logger.warning(
+                    "port-forward to svc/%s died (%s); respawning",
+                    service_name,
+                    stderr.strip()[:200],
+                )
+                if shutdown.wait(timeout=min(wd_backoff.next_interval(), 5.0)):
+                    return
+                with proc_lock:
+                    if shutdown.is_set():
+                        return
+                    proc_ref[0] = _spawn()
+
+        watchdog = threading.Thread(
+            target=_watchdog,
+            name=f"port-forward-watchdog-{service_name}",
+            daemon=True,
+        )
+        watchdog.start()
+
         try:
             yield f"http://127.0.0.1:{local_port}"
         finally:
+            shutdown.set()
+            watchdog.join(timeout=2)
             _stop()
 
 

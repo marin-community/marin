@@ -3,12 +3,8 @@
 
 """Create the ``(namespace, level, min_seq)`` index on ``segments``.
 
-Split out from :mod:`0003_segment_level` because DuckDB rejects
-``CREATE INDEX`` in a transaction that has outstanding ``UPDATE``s on
-the same table, and rejects ``DROP COLUMN`` for a column positioned
-before any indexed column. Migration 0003 handles the schema rewrite
-and backfill; this migration runs in a fresh transaction with no
-pending updates, so ``CREATE INDEX`` succeeds.
+Split from 0003 because DuckDB can't combine CREATE INDEX with the
+DROP COLUMN there in a single transaction.
 """
 
 from __future__ import annotations

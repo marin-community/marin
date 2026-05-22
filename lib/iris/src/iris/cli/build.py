@@ -172,27 +172,6 @@ def _ensure_protos() -> None:
     click.echo("Protobuf bindings regenerated.")
 
 
-def _ensure_dashboard_dist() -> None:
-    """Build Vue dashboard assets.
-
-    Called automatically before building controller/worker images so that
-    ``COPY dashboard/dist`` in the Dockerfile always has fresh assets.
-    """
-    iris_root = find_iris_root()
-    dashboard_dir = iris_root / "dashboard"
-    if not (dashboard_dir / "package.json").exists():
-        raise click.ClickException(
-            f"Dashboard source not found at {dashboard_dir}. " "Cannot build dashboard assets for Docker image."
-        )
-    click.echo("Building frontend assets...")
-    subprocess.run(["npm", "ci"], cwd=dashboard_dir, check=True)
-    result = subprocess.run(["npm", "run", "build"], cwd=dashboard_dir, capture_output=True, text=True)
-    if result.returncode != 0:
-        click.echo(result.stderr, err=True)
-        raise click.ClickException("Dashboard build failed")
-    click.echo("Dashboard built successfully.")
-
-
 def build_image(
     image_type: str,
     tag: str,
@@ -212,10 +191,6 @@ def build_image(
     and the registry cache is updated in the same operation. The images are NOT
     loaded into the local Docker daemon (buildx cannot do both simultaneously).
     """
-    # Controller and worker images COPY dashboard/dist — ensure it exists.
-    if image_type in ("controller", "worker"):
-        _ensure_dashboard_dist()
-
     iris_root = find_iris_root()
     dockerfile_path = iris_root / "Dockerfile"
     # Controller/worker Dockerfiles expect the marin repo root as build context

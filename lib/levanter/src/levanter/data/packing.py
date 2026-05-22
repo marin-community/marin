@@ -11,6 +11,7 @@ yielding the packed examples when they are full.
 This achieves about a 90% "real token" rate, compared to like 10% without packing.
 """
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Literal, Sequence, TypeVar
 
@@ -600,10 +601,6 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
 
 if __name__ == "__main__":
     # demo the GreedyPrepackedDataset
-    import time
-
-    import numpy as np
-
     path = "gs://marin-us-central2/tokenized/tulu_sft_v3_llama3_tokenizer-f88fdb/input_ids/"
 
     store = JaggedArrayStore.open(path, mode="r", dtype=np.uint32, cache_metadata=True)

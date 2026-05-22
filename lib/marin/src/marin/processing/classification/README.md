@@ -1,23 +1,15 @@
 # Classification Processing
 
-This directory now contains the classification-adjacent post-processing workflows that remain in Marin:
+This directory contains classification-adjacent post-processing workflows:
 
 - Deduplication in [`deduplication/`](./deduplication)
-- Decontamination in [`decon.py`](./decon.py)
 - Attribute-driven dataset filtering in [`consolidate.py`](./consolidate.py)
+
+Decontamination has moved to [`marin.datakit.decon`](../../datakit/decon.py) — it consumes datakit-normalized Parquet and emits a co-partitioned Parquet attributes dataset (`id`, `partition_id`, `contaminated`, `max_overlap`).
 
 ## Deduplication
 
-Run exact or fuzzy deduplication from Python by importing the helpers under [`deduplication/`](./deduplication), or use the quickstart config for decontamination-style attribute generation:
-
-```bash
-uv run python -m marin.processing.classification.decon \
-  --config_path lib/marin/src/marin/processing/classification/config/quickstart_decontaminate.yaml
-```
-
-## Decontamination
-
-[`decon.py`](./decon.py) builds bloom filters and marks duplicate spans or train-test overlap attributes. The quickstart config lives at [`config/quickstart_decontaminate.yaml`](./config/quickstart_decontaminate.yaml).
+Run exact or fuzzy deduplication from Python by importing the helpers under [`deduplication/`](./deduplication).
 
 ## Consolidation
 

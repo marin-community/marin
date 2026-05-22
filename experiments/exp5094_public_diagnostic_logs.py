@@ -95,6 +95,22 @@ def _extract_steps(
     )
 
 
+def diagnostic_log_extract_steps(
+    source_path: str | None,
+    max_ghalogs_members: int,
+    max_logchunks_examples: int,
+    max_loghub_files: int,
+) -> tuple[ExecutorStep, ExecutorStep, ExecutorStep]:
+    """Build capped public diagnostic-log extraction steps."""
+
+    return _extract_steps(
+        source_path=source_path,
+        max_ghalogs_members=max_ghalogs_members,
+        max_logchunks_examples=max_logchunks_examples,
+        max_loghub_files=max_loghub_files,
+    )
+
+
 def _tokenize_step(ghalogs_step: ExecutorStep) -> ExecutorStep:
     return ExecutorStep(
         name="tokenized/diagnostic_logs/ghalogs_sample",

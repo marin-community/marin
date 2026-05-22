@@ -1,9 +1,10 @@
 // Hono entrypoint for the Marin status page.
 //
 // Serves:
-//   GET /api/ferry           — GitHub Actions ferry status (60s cache, last 30 runs)
+//   GET /api/ferry           — GitHub Actions ferry status (60s cache, last 10 days)
 //   GET /api/builds          — GitHub per-commit CI rollup on main (60s cache, last 100 commits)
 //   GET /api/iris            — iris controller reachability (15s cache)
+//   GET /api/control-plane/health — active env Iris + finelog health history
 //   GET /api/workers         — current iris worker counts (15s cache)
 //   GET /api/workers/history — in-memory 24h worker count ring buffer
 //   GET /api/jobs            — iris job counts for last 24h by state (60s cache)
@@ -17,25 +18,41 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { TTLCache } from "./cache.js";
-import { WorkerHistory } from "./history.js";
+import { IrisPingHistory, ServiceHealthHistory, WorkerHistory } from "./history.js";
 import {
   FERRY_WORKFLOWS,
   fetchWorkflowStatus,
   type FerryWorkflowStatus,
 } from "./sources/githubActions.js";
 import { fetchBuildsOnMain, type BuildsResponse } from "./sources/githubCommits.js";
-import { irisStatus, type IrisStatus } from "./sources/iris.js";
+import { irisStatus, pingIris, type IrisPingResult } from "./sources/iris.js";
 import { jobsSnapshot, type JobsSnapshot } from "./sources/jobs.js";
+import {
+  serviceHealthResponse,
+  serviceHealthSample,
+  serviceHealthSnapshot,
+  type ServiceHealthSnapshot,
+} from "./sources/serviceHealth.js";
 import { workerSnapshot, type WorkersSnapshot } from "./sources/workers.js";
 
-const FERRY_HISTORY = 30;
+const FERRY_WINDOW_DAYS = 10;
 const BUILD_HISTORY = 100;
 
 const ferryCache = new TTLCache<FerryWorkflowStatus>(60_000);
 const buildCache = new TTLCache<BuildsResponse>(60_000);
-const irisCache = new TTLCache<IrisStatus>(15_000);
 const workersCache = new TTLCache<WorkersSnapshot>(15_000);
 const jobsCache = new TTLCache<JobsSnapshot>(60_000);
+
+// Iris controller ping sampler. We probe /health on a fixed cadence and
+// keep a rolling 1h window of successful samples so /api/iris can report
+// p50/p90/p99 alongside the most recent latency. Failed pings are
+// recorded as the latest result (so the dot can flip red) but excluded
+// from the percentile window.
+const IRIS_PING_INTERVAL_MS = 2_000;
+const IRIS_PING_WINDOW_MS = 60 * 60 * 1000;
+const IRIS_PING_CAPACITY = Math.ceil(IRIS_PING_WINDOW_MS / IRIS_PING_INTERVAL_MS);
+const irisPingHistory = new IrisPingHistory(IRIS_PING_CAPACITY);
+let lastIrisPing: IrisPingResult | null = null;
 
 // Ring buffer for worker-count history. Sized so the buffer holds 24h of
 // samples at the configured cadence. The sampler runs on a fixed interval
@@ -44,6 +61,9 @@ const jobsCache = new TTLCache<JobsSnapshot>(60_000);
 const SAMPLE_INTERVAL_MS = 30_000;
 const HISTORY_CAPACITY = Math.ceil((24 * 60 * 60 * 1000) / SAMPLE_INTERVAL_MS);
 const workerHistory = new WorkerHistory(HISTORY_CAPACITY);
+const serviceHealthHistory = new ServiceHealthHistory(HISTORY_CAPACITY);
+const SERVICE_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1000;
+let lastServiceHealth: ServiceHealthSnapshot[] = [];
 
 async function sampleWorkers(): Promise<void> {
   const snapshot = await workersCache.get("workers", () => workerSnapshot());
@@ -62,6 +82,25 @@ async function sampleWorkers(): Promise<void> {
   });
 }
 
+async function sampleIrisPing(): Promise<void> {
+  const result = await pingIris();
+  lastIrisPing = result;
+  if (result.reachable && result.latencyMs !== null) {
+    irisPingHistory.push({
+      t: Date.parse(result.fetchedAt),
+      latencyMs: result.latencyMs,
+    });
+  } else if (result.error) {
+    console.error("iris ping sampler:", result.error);
+  }
+}
+
+async function sampleServiceHealth(): Promise<void> {
+  const snapshots = await serviceHealthSnapshot();
+  lastServiceHealth = snapshots;
+  serviceHealthHistory.push(serviceHealthSample(snapshots));
+}
+
 // Kick off immediately, then on a fixed cadence. unref() lets the process
 // exit cleanly during tests without waiting on the timer.
 void sampleWorkers().catch((err) => {
@@ -73,6 +112,24 @@ setInterval(() => {
   });
 }, SAMPLE_INTERVAL_MS).unref();
 
+void sampleIrisPing().catch((err) => {
+  console.error("iris ping sampler error", err);
+});
+setInterval(() => {
+  void sampleIrisPing().catch((err) => {
+    console.error("iris ping sampler error", err);
+  });
+}, IRIS_PING_INTERVAL_MS).unref();
+
+void sampleServiceHealth().catch((err) => {
+  console.error("service health sampler error", err);
+});
+setInterval(() => {
+  void sampleServiceHealth().catch((err) => {
+    console.error("service health sampler error", err);
+  });
+}, SAMPLE_INTERVAL_MS).unref();
+
 const app = new Hono();
 
 app.get("/api/health", (c) => c.json({ status: "ok" }));
@@ -80,10 +137,10 @@ app.get("/api/health", (c) => c.json({ status: "ok" }));
 app.get("/api/ferry", async (c) => {
   const results = await Promise.all(
     FERRY_WORKFLOWS.map((wf) =>
-      ferryCache.get(wf.file, () => fetchWorkflowStatus(wf, FERRY_HISTORY)),
+      ferryCache.get(wf.file, () => fetchWorkflowStatus(wf, FERRY_WINDOW_DAYS)),
     ),
   );
-  return c.json({ workflows: results });
+  return c.json({ windowDays: FERRY_WINDOW_DAYS, workflows: results });
 });
 
 app.get("/api/builds", async (c) => {
@@ -91,9 +148,18 @@ app.get("/api/builds", async (c) => {
   return c.json(snapshot);
 });
 
-app.get("/api/iris", async (c) => {
-  const status = await irisCache.get("marin", () => irisStatus());
-  return c.json(status);
+app.get("/api/iris", (c) => {
+  return c.json(irisStatus(lastIrisPing, irisPingHistory.samples(), IRIS_PING_WINDOW_MS));
+});
+
+app.get("/api/control-plane/health", (c) => {
+  return c.json(
+    serviceHealthResponse(
+      lastServiceHealth,
+      serviceHealthHistory.samples(),
+      SERVICE_HEALTH_WINDOW_MS,
+    ),
+  );
 });
 
 app.get("/api/workers", async (c) => {

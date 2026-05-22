@@ -10,23 +10,29 @@ modify state, or run threads.
 
 import pytest
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints
-from iris.cluster.controller.codec import constraints_from_json, resource_spec_from_scalars
-from iris.cluster.controller.db import (
-    _decode_attribute_rows,
-)
+from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
 from iris.cluster.controller.scheduler import (
+    DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+    DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     JobRequirements,
     Scheduler,
+    SchedulingContext,
     SchedulingResult,
+    WorkerSnapshot,
+    worker_snapshot_from_row,
 )
+from iris.cluster.controller.schema import worker_attributes_table
 from iris.cluster.controller.transitions import Assignment, ControllerTransitions, HeartbeatApplyRequest, TaskUpdate
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import duration_to_proto
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import select
 
 from tests.cluster.conftest import eq_constraint, in_constraint
+from tests.cluster.controller._test_support import set_worker_health_for_test
 
 from .conftest import (
     building_counts as _building_counts,
@@ -61,36 +67,50 @@ from .conftest import (
 
 
 def _job_requirements_from_job(job) -> JobRequirements:
+    dc = device_counts_from_json(job.res_device_json)
     return JobRequirements(
-        resources=resource_spec_from_scalars(
-            job.res_cpu_millicores, job.res_memory_bytes, job.res_disk_bytes, job.res_device_json
-        ),
+        req_cpu_millicores=job.res_cpu_millicores,
+        req_memory_bytes=job.res_memory_bytes,
+        req_gpu_count=dc.gpu,
+        req_tpu_count=dc.tpu,
+        device_variant=device_variant_from_json(job.res_device_json),
         constraints=constraints_from_json(job.constraints_json),
         is_coscheduled=job.has_coscheduling,
         coscheduling_group_by=job.coscheduling_group_by if job.has_coscheduling else None,
     )
 
 
+def _decode_worker_attr_value(row):
+    """Decode a worker_attributes row value by value_type."""
+    from iris.cluster.constraints import AttributeValue
+
+    if row.value_type == "int":
+        return AttributeValue(int(row.int_value))
+    if row.value_type == "float":
+        return AttributeValue(float(row.float_value))
+    return AttributeValue(str(row.str_value or ""))
+
+
 def _worker_attr(state: ControllerTransitions, worker_id: WorkerId, key: str):
-    with state._db.snapshot() as q:
-        rows = q.raw(
-            "SELECT worker_id, key, value_type, str_value, int_value, float_value"
-            " FROM worker_attributes WHERE worker_id = ? AND key = ?",
-            (str(worker_id), key),
-        )
+    with state._db.read_snapshot() as tx:
+        rows = tx.execute(
+            select(worker_attributes_table).where(
+                worker_attributes_table.c.worker_id == worker_id,
+                worker_attributes_table.c.key == key,
+            )
+        ).all()
     if not rows:
         return None
-    attrs = _decode_attribute_rows(rows)
-    return attrs.get(worker_id, {}).get(key)
+    return _decode_worker_attr_value(rows[0])
 
 
 def assign_task_to_worker(state: ControllerTransitions, task, worker_id: WorkerId) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.queue_assignments(cur, [Assignment(task_id=task.task_id, worker_id=worker_id)])
 
 
 def transition_task_to_running(state: ControllerTransitions, task) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -107,7 +127,7 @@ def transition_task_to_running(state: ControllerTransitions, task) -> None:
 
 
 def transition_task_to_state(state: ControllerTransitions, task, new_state: int) -> None:
-    with state._store.transaction() as cur:
+    with state._db.transaction() as cur:
         state.apply_task_updates(
             cur,
             HeartbeatApplyRequest(
@@ -121,6 +141,46 @@ def transition_task_to_state(state: ControllerTransitions, task, new_state: int)
                 ],
             ),
         )
+
+
+def _snapshots_with_usage(state, workers):
+    """Project worker rows + per-cycle held-resource usage into bundled snapshots."""
+    with state._db.read_snapshot() as snap:
+        usage_by_worker = reads.resource_usage_by_worker(snap)
+    return [worker_snapshot_from_row(w, usage_by_worker.get(w.worker_id)) for w in workers]
+
+
+def _make_context(
+    snapshots: list[WorkerSnapshot],
+    *,
+    building_counts: dict[WorkerId, int] | None = None,
+    pending_tasks: list[JobName] | None = None,
+    jobs: dict[JobName, JobRequirements] | None = None,
+    max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+) -> SchedulingContext:
+    """Construct a SchedulingContext for tests with explicit-empty raw-read fields.
+
+    Tests that exercise the per-(task, worker) matching path do not consume the
+    raw-read fields (``pending_task_rows``, ``user_spend``, etc.); those flow
+    through ``apply_scheduling_gates``/``compute_scheduling_order`` which the
+    scheduler tests bypass.
+    """
+    return SchedulingContext(
+        workers=snapshots,
+        building_counts=building_counts or {},
+        max_building_tasks=max_building_tasks,
+        max_assignments_per_worker=max_assignments_per_worker,
+        pending_tasks=pending_tasks or [],
+        jobs=jobs or {},
+        pending_task_rows=[],
+        user_spend={},
+        user_budget_limits={},
+        requested_bands={},
+        reserved_job_ids=frozenset(),
+        reservation_entry_counts={},
+        user_budget_defaults=UserBudgetDefaults(),
+    )
 
 
 def _build_context(scheduler, state):
@@ -139,11 +199,12 @@ def _build_context(scheduler, state):
             if job:
                 jobs[task.job_id] = _job_requirements_from_job(job)
 
-    return scheduler.create_scheduling_context(
-        workers,
+    return _make_context(
+        _snapshots_with_usage(state, workers),
         building_counts=building_counts,
         pending_tasks=task_ids,
         jobs=jobs,
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
     )
 
 
@@ -273,9 +334,10 @@ def test_scheduler_skips_tasks_that_dont_fit(scheduler, state):
 def test_scheduler_detects_timed_out_tasks(state):
     """Verify timed-out tasks are handled by the controller (not the scheduler).
 
-    The scheduler no longer handles timeouts -- the controller filters them out
-    before calling find_assignments. This test verifies the overall behavior
-    by testing the controller-level flow.
+    The controller filters timeout-expired tasks before calling
+    ``find_assignments``, so the scheduler only sees active tasks within
+    their timeout window. This test verifies the overall behavior by
+    testing the controller-level flow.
     """
     register_worker(state, "w1", "addr", make_worker_metadata(cpu=2))
 
@@ -291,10 +353,15 @@ def test_scheduler_detects_timed_out_tasks(state):
     tasks = submit_job(state, "j1", request)
 
     # Manually set deadline epoch to past timestamp in DB.
-    state._db.execute(
-        "UPDATE jobs SET scheduling_deadline_epoch_ms = ? WHERE job_id = ?",
-        (Timestamp.now().epoch_ms() - 2000, JobName.root("test-user", "j1").to_wire()),
-    )
+    from iris.cluster.controller.schema import jobs_table
+    from sqlalchemy import update as sa_update
+
+    with state._db.transaction() as _tx:
+        _tx.execute(
+            sa_update(jobs_table)
+            .where(jobs_table.c.job_id == JobName.root("test-user", "j1"))
+            .values(scheduling_deadline_epoch_ms=Timestamp.now().epoch_ms() - 2000)
+        )
 
     # When building context, the timed-out task should be filtered out
     pending_tasks = _schedulable_tasks(state)
@@ -370,7 +437,7 @@ def test_scheduler_skips_unhealthy_workers(scheduler, state):
     register_worker(state, "w1", "addr1", make_worker_metadata())
     register_worker(state, "w2", "addr2", make_worker_metadata())
     # Mark second worker as unhealthy
-    state.set_worker_health_for_test(WorkerId("w2"), False)
+    set_worker_health_for_test(state, WorkerId("w2"), False)
 
     submit_job(state, "j1", make_job_request())
 
@@ -1478,7 +1545,10 @@ def test_scheduler_reports_device_variant_mismatch(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = _make_context(
+        _snapshots_with_usage(state, healthy_active_workers(state)),
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+    )
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1515,7 +1585,10 @@ def test_scheduler_reports_tpu_count_exceeded(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = _make_context(
+        _snapshots_with_usage(state, healthy_active_workers(state)),
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+    )
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1551,7 +1624,10 @@ def test_scheduler_reports_device_type_mismatch(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = _make_context(
+        _snapshots_with_usage(state, healthy_active_workers(state)),
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+    )
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1588,7 +1664,10 @@ def test_scheduler_reports_coscheduling_capacity_details(scheduler, state):
     tasks = submit_job(state, "j1", req)
 
     # Get job-level scheduling diagnostics
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = _make_context(
+        _snapshots_with_usage(state, healthy_active_workers(state)),
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+    )
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -1609,7 +1688,10 @@ def test_diagnostics_for_schedulable_job_does_not_say_unknown_failure(scheduler,
     register_worker(state, "w1", "addr1", make_worker_metadata())
     tasks = submit_job(state, "j1", make_job_request())
 
-    context = scheduler.create_scheduling_context(healthy_active_workers(state))
+    context = _make_context(
+        _snapshots_with_usage(state, healthy_active_workers(state)),
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
+    )
     job = _query_job(state, tasks[0].job_id)
     job_req = _job_requirements_from_job(job)
     schedulable_task_id = next(
@@ -2136,10 +2218,11 @@ def test_gpu_job_matches_worker_with_config_variant(scheduler, state):
     )
     tasks = submit_job(state, "j1", req)
 
-    context = scheduler.create_scheduling_context(
-        healthy_active_workers(state),
+    context = _make_context(
+        _snapshots_with_usage(state, healthy_active_workers(state)),
         pending_tasks=[t.task_id for t in tasks],
         jobs={tasks[0].job_id: _job_requirements_from_job(_query_job(state, tasks[0].job_id))},
+        max_building_tasks=scheduler.max_building_tasks_per_worker,
     )
     result = scheduler.find_assignments(context)
     assert len(result.assignments) == 1, f"Expected 1 assignment, got {len(result.assignments)}"

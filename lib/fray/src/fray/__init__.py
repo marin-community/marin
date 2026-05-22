@@ -11,7 +11,8 @@ from fray.actor import (
     ActorMethod,
     current_actor,
 )
-from fray.client import Client, JobAlreadyExists, JobFailed, JobHandle, current_client, set_current_client, wait_all
+from fray.client import Client, JobAlreadyExists, JobFailed, JobHandle, wait_all
+from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalActorHandle, LocalActorMethod, LocalClient, LocalJobHandle
 from fray.types import (
     ActorConfig,

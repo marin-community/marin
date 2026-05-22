@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -384,11 +383,7 @@ def test_train_worker_entry_does_not_mark_run_state_failed_on_attempt_crash(monk
         def train(self):
             raise RuntimeError("boom")
 
-    monkeypatch.setitem(
-        sys.modules,
-        "marin.rl.train_worker",
-        SimpleNamespace(TrainWorker=_CrashingTrainWorker),
-    )
+    monkeypatch.setattr("marin.rl.orchestration.TrainWorker", _CrashingTrainWorker)
 
     with pytest.raises(RuntimeError, match="boom"):
         _train_worker_entry(train_config=SimpleNamespace(), runtime=runtime)

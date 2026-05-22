@@ -9,8 +9,11 @@ import enum
 import json
 import os
 import pathlib
+import random
 import sys
 import uuid
+
+import numpy as np
 from dataclasses import asdict, dataclass, is_dataclass
 
 
@@ -79,12 +82,8 @@ def actual_sizeof(obj):
 
 @contextlib.contextmanager
 def set_global_rng_seeds(seed):
-    import numpy as np
-
     current_np_seed = np.random.get_state()
     np.random.seed(seed)
-
-    import random
 
     current_random_seed = random.getstate()
     random.seed(seed)

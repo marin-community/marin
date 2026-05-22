@@ -5,7 +5,7 @@ This file is the canonical 1-pager template for Marin design docs. It contains:
 1. **The template** — fill-in-the-blank scaffolding to copy when starting a new doc.
 2. **A worked example** — the finelog proposal from [#5210](https://github.com/marin-community/marin/issues/5210), kept as the reference for tone, length, and specificity.
 
-Keep this file up to date as conventions evolve. The `design-doc` skill points here; existing docs in `.agents/projects/` predate the skill and are inconsistent — don't use them as style references.
+Keep this file up to date as conventions evolve. The `write-design-doc` skill points here; existing docs in `.agents/projects/` predate the skill and are inconsistent — don't use them as style references.
 
 ## Layout
 

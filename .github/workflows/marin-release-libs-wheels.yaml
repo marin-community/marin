@@ -13,14 +13,9 @@ on:
   push:
     tags:
       - "marin-libs-v*"
-  pull_request:
-    paths:
-      - "lib/**"
-      - "scripts/python_libs_package.py"
-      - ".github/workflows/marin-release-libs-wheels.yaml"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false  # don't kill an in-flight nightly mid-publish
 
 permissions:
@@ -43,12 +38,9 @@ jobs:
           elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
             echo "mode=nightly" >> "$GITHUB_OUTPUT"
             echo "version=" >> "$GITHUB_OUTPUT"
-          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
-            echo "version=" >> "$GITHUB_OUTPUT"
           else
-            # pull_request: build-only smoke test
-            echo "mode=manual" >> "$GITHUB_OUTPUT"
+            # workflow_dispatch
+            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
             echo "version=" >> "$GITHUB_OUTPUT"
           fi
 
@@ -81,7 +73,6 @@ jobs:
 
   publish:
     needs: [resolve, build]
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

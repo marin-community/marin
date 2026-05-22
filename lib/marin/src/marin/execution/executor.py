@@ -96,12 +96,16 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import draccus
 import levanter.utils.fsspec_utils as fsspec_utils
+from fray.current_client import current_client
+from fray.iris_backend import FrayIrisClient
 from fray.types import ResourceConfig, TpuConfig
 from iris.cluster.constraints import WellKnownAttribute
+from iris.rpc import config_pb2
 from rigging.filesystem import (
     collect_gcs_paths,
     get_bucket_location,
     marin_prefix,
+    mirror_budget,
     open_url,
     region_from_prefix,
     split_gcs_path,
@@ -307,10 +311,6 @@ def _allowed_regions_for_step(
 
 
 def _regions_for_tpu_variant_from_iris(variant: str) -> set[str] | None:
-    from fray.client import current_client
-    from fray.iris_backend import FrayIrisClient
-    from iris.rpc import config_pb2
-
     try:
         client = current_client()
     except Exception:
@@ -532,9 +532,6 @@ def _component_tpu_pins(
 
 
 def _iris_backend_is_active() -> bool:
-    from fray.client import current_client
-    from fray.iris_backend import FrayIrisClient
-
     try:
         client = current_client()
     except Exception:
@@ -646,6 +643,7 @@ def resolve_executor_step(
             original,
             deps=deps or list(original.deps),
             override_output_path=original.output_path,
+            resources=original.resources,
         )
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
@@ -672,8 +670,6 @@ def resolve_executor_step(
 
     def resolved_fn(output_path):
         if captured_budget is not None:
-            from rigging.filesystem import mirror_budget
-
             with mirror_budget(captured_budget):
                 return captured_fn(captured_config)
         return captured_fn(captured_config)
@@ -690,6 +686,7 @@ def resolve_executor_step(
         deps=deps or [],
         override_output_path=output_path,
         fn=final_fn,
+        resources=step.resources,
     )
 
 
@@ -1302,6 +1299,11 @@ class Executor:
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
         self._depth_cache: dict[ExecutorStep, int] = {}
+        # Dedupe advisory warnings emitted from compute_version. Shared upstream
+        # DAG chains (e.g. nemotron download/normalize reused across 100+ sources)
+        # otherwise repeat the same warning thousands of times.
+        self._warned_duplicate_versions: set[str] = set()
+        self._warned_override_mismatches: set[tuple[str, str]] = set()
 
     def run(
         self,
@@ -1317,8 +1319,8 @@ class Executor:
 
         Args:
             steps: The steps to run.
-            dry_run: If True, only print out what needs to be done. Reads existing
-                statuses to report which steps would actually be executed.
+            dry_run: If True, walk the step graph and log what would run, without
+                touching remote filesystems or launching any work.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
             max_concurrent: Maximum number of steps to run concurrently. If None, run all ready steps in parallel.
@@ -1350,8 +1352,11 @@ class Executor:
         if steps_to_run != self.steps:
             logger.info(f"### Running {len(steps_to_run)} steps out of {len(self.steps)} ###")
 
-        logger.info("### Writing metadata ###")
-        self.write_infos()
+        if dry_run:
+            logger.info("### Skipping metadata write (dry run) ###")
+        else:
+            logger.info("### Writing metadata ###")
+            self.write_infos()
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
         if max_concurrent is not None:
@@ -1511,10 +1516,13 @@ class Executor:
             override_path = _make_prefix_absolute_path(self.prefix, override_path)
 
             if output_path != override_path:
-                logger.warning(
-                    f"Output path {output_path} doesn't match given "
-                    f"override {step.override_output_path}, using the latter."
-                )
+                mismatch_key = (output_path, override_path)
+                if mismatch_key not in self._warned_override_mismatches:
+                    self._warned_override_mismatches.add(mismatch_key)
+                    logger.warning(
+                        f"Output path {output_path} doesn't match given "
+                        f"override {step.override_output_path}, using the latter."
+                    )
                 output_path = override_path
 
         # Record everything
@@ -1525,7 +1533,8 @@ class Executor:
         if version_str not in self.version_str_to_step:
             self.steps.append(step)
             self.version_str_to_step[version_str] = step
-        else:
+        elif version_str not in self._warned_duplicate_versions:
+            self._warned_duplicate_versions.add(version_str)
             logger.warning(
                 f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
             )
@@ -1712,8 +1721,23 @@ class ExecutorMainConfig:
 
 
 @draccus.wrap()
-def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
-    """Main entry point for experiments (to standardize)"""
+def executor_main(
+    config: ExecutorMainConfig,
+    steps: list[ExecutorStep],
+    description: str | None = None,
+    max_concurrent: int | None = None,
+):
+    """Main entry point for experiments (to standardize).
+
+    Args:
+        config: Parsed CLI config (draccus). Carries `--dry_run`, `--max_concurrent`, etc.
+        steps: Steps to execute.
+        description: Optional human-readable description recorded in executor info.
+        max_concurrent: Programmatic cap on concurrent step execution. If provided,
+            takes precedence over `config.max_concurrent`. Use this to express
+            "run all of these with cap N" inside an experiment script without
+            requiring users to pass `--max_concurrent N` on the CLI.
+    """
 
     configure_logging(level=logging.INFO)
     time_in = time.time()
@@ -1731,20 +1755,23 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         description=description,
     )
 
+    effective_max_concurrent = max_concurrent if max_concurrent is not None else config.max_concurrent
+
     executor.run(
         steps=steps,
         dry_run=config.dry_run,
         run_only=config.run_only,
         force_run_failed=config.force_run_failed,
-        max_concurrent=config.max_concurrent,
+        max_concurrent=effective_max_concurrent,
     )
     time_out = time.time()
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
-    # print json path again so it's easy to copy
-    logger.info(f"Executor info written to {executor.executor_info_path}")
-    if not executor.prefix.startswith("gs://"):
-        logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
-    logger.info(f"View the experiment at {executor.get_experiment_url()}")
+    if not config.dry_run:
+        # print json path again so it's easy to copy
+        logger.info(f"Executor info written to {executor.executor_info_path}")
+        if not executor.prefix.startswith("gs://"):
+            logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
+        logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 
 def _make_prefix_absolute_path(prefix, override_path):

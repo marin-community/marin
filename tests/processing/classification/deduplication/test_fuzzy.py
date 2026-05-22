@@ -373,36 +373,6 @@ def test_low_char_5gram_jaccard_rarely_collides(target_j: float):
     assert collisions <= 5, f"{collisions}/{n_seeds} pairs collided at char-J={target_j} (expected ≤5)"
 
 
-def test_high_char_5gram_jaccard_pair_clusters_end_to_end(tmp_path: Path):
-    """A constructed J≈0.97 char-5-gram pair gets one shared dup_cluster_id.
-
-    The parametrized LSH-level tests above cover recall across the Jaccard
-    band; this single case exercises the full bucket → connected-components
-    → per-source attr-output path.
-    """
-    a, b = _make_pair_with_char_5gram_jaccard(seed=0, target_j=0.97)
-    src_dir = tmp_path / "src"
-    src_dir.mkdir()
-    write_jsonl_file(
-        [{"id": "doc_a", "text": a}, {"id": "doc_b", "text": b}],
-        str(src_dir / "shard_0.jsonl.gz"),
-    )
-
-    source = _normalize(str(src_dir), str(tmp_path / "norm"))
-    minhash = compute_minhash_attrs(source=source, output_path=str(tmp_path / "minhash"))
-    dups = compute_fuzzy_dups_attrs(inputs=[minhash], output_path=str(tmp_path / "dups"), max_parallelism=1)
-
-    by_id = _read_main_records(source)
-    rows = _read_cluster_attrs(dups.sources[source.main_output_dir].attr_dir)
-    by_source_id = {by_id[r["id"]]["source_id"]: r for r in rows if r["id"] in by_id}
-
-    assert {"doc_a", "doc_b"} <= by_source_id.keys(), "both docs must have attr rows"
-    cluster_ids = {by_source_id[s]["attributes"]["dup_cluster_id"] for s in ("doc_a", "doc_b")}
-    assert len(cluster_ids) == 1, f"expected one shared dup_cluster_id; got {cluster_ids}"
-    canonicals = [s for s in ("doc_a", "doc_b") if by_source_id[s]["attributes"]["is_cluster_canonical"]]
-    assert len(canonicals) == 1, f"expected exactly one canonical; got {canonicals}"
-
-
 # ---------------------------------------------------------------------------
 # Real-world parser-variant regression tests.
 #

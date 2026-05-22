@@ -103,7 +103,7 @@ def _validate_normalize(base: str, download_rows: int) -> int:
     # Normalize writes main records to {base}/normalize/outputs/main and duplicates
     # (when exact dedup is enabled) to {base}/normalize/outputs/dups. We load the
     # artifact to resolve the paths rather than hard-coding the layout.
-    normalized = Artifact.load(f"{base}/normalize", NormalizedData)
+    normalized = Artifact.from_path(f"{base}/normalize", NormalizedData)
     files = _list_parquet(normalized.main_output_dir)
     if len(files) != NORMALIZE_EXPECTED_FILES:
         raise SystemExit(f"Normalize: expected {NORMALIZE_EXPECTED_FILES} files, got {len(files)}")
@@ -146,7 +146,7 @@ def _validate_fuzzy_dups(base: str, normalize_rows: int) -> int:
     member is flagged ``is_cluster_canonical=True``. Consolidate's default policy
     keeps canonicals and singletons, so non-canonicals == rows dropped.
     """
-    dedup = Artifact.load(f"{base}/fuzzy_dups", FuzzyDupsAttrData)
+    dedup = Artifact.from_path(f"{base}/fuzzy_dups", FuzzyDupsAttrData)
     if len(dedup.sources) != FUZZY_DUPS_EXPECTED_SOURCES:
         raise SystemExit(f"Fuzzy dups: expected exactly {FUZZY_DUPS_EXPECTED_SOURCES} source, got {len(dedup.sources)}")
     (per_source,) = dedup.sources.values()

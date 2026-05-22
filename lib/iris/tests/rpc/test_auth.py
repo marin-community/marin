@@ -513,13 +513,15 @@ def test_jwt_token_manager_expired(jwt_manager):
 
 
 def test_jwt_token_manager_load_revocations(tmp_path):
+    from iris.cluster.controller import writes
     from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
     from iris.cluster.controller.db import ControllerDB
     from rigging.timing import Timestamp
 
     db = ControllerDB(db_dir=tmp_path)
     now = Timestamp.now()
-    db.ensure_user("alice", now)
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "alice", now)
 
     manager = JwtTokenManager(signing_key="test-key-load-revocations-abc123")
 
@@ -649,31 +651,31 @@ def test_authorize_admin_always_passes():
 
     reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
     try:
-        # Admin should pass any action, even REGISTER_WORKER
-        identity = authorize(AuthzAction.REGISTER_WORKER)
+        # Admin should pass any action, even ACT_AS_WORKER
+        identity = authorize(AuthzAction.ACT_AS_WORKER)
         assert identity.user_id == "admin-user"
     finally:
         _verified_identity.reset(reset)
 
 
-def test_authorize_worker_can_register():
+def test_authorize_worker_can_act_as_worker():
     from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
 
     reset = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
-        identity = authorize(AuthzAction.REGISTER_WORKER)
+        identity = authorize(AuthzAction.ACT_AS_WORKER)
         assert identity.role == "worker"
     finally:
         _verified_identity.reset(reset)
 
 
-def test_authorize_user_cannot_register_worker():
+def test_authorize_user_cannot_act_as_worker():
     from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
 
     reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         with pytest.raises(ConnectError) as exc_info:
-            authorize(AuthzAction.REGISTER_WORKER)
+            authorize(AuthzAction.ACT_AS_WORKER)
         assert exc_info.value.code == Code.PERMISSION_DENIED
     finally:
         _verified_identity.reset(reset)
@@ -684,7 +686,7 @@ def test_authorize_raises_unauthenticated_when_no_identity():
 
     # No identity set — should raise UNAUTHENTICATED
     with pytest.raises(ConnectError) as exc_info:
-        authorize(AuthzAction.REGISTER_WORKER)
+        authorize(AuthzAction.ACT_AS_WORKER)
     assert exc_info.value.code == Code.UNAUTHENTICATED
 
 

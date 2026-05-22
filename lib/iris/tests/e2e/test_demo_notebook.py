@@ -14,7 +14,7 @@ from iris.cluster.providers.local.cluster import LocalCluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import config_pb2
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 def _make_demo_config() -> config_pb2.IrisClusterConfig:

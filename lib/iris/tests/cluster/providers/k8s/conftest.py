@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from finelog.rpc import logging_pb2
 from finelog.server import LogServiceImpl
@@ -28,7 +30,7 @@ class InProcessLogClient:
 
     def write_batch(self, key: str, messages: list[logging_pb2.LogEntry]) -> None:
         if messages:
-            self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=messages), ctx=None)
+            asyncio.run(self._log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=messages), ctx=None))
 
     def close(self) -> None:
         pass
@@ -100,13 +102,11 @@ def make_run_req(task_id: str, attempt_id: int = 0, cpu_mc: int = 1000) -> job_p
 
 def make_batch(
     tasks_to_run=None,
-    tasks_to_kill=None,
     running_tasks=None,
 ) -> DirectProviderBatch:
     return DirectProviderBatch(
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
-        tasks_to_kill=tasks_to_kill or [],
     )
 
 

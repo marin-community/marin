@@ -10,8 +10,10 @@ be in BUILDING state on each worker, preventing resource exhaustion.
 
 The scheduler operates exclusively on scheduler-owned types (JobRequirements,
 WorkerCapacity, SchedulingContext) and has ZERO runtime imports from controller
-state. The boundary conversion from worker rows to WorkerCapacity happens
-via the WorkerSnapshot protocol in create_scheduling_context.
+state. Callers project worker rows into ``WorkerSnapshot`` (via
+``worker_snapshot_from_row``) at the boundary before constructing
+``SchedulingContext`` directly.
+
 """
 
 import logging
@@ -32,11 +34,10 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import (
     JobName,
+    PendingTask,
+    UserBudgetDefaults,
     WorkerId,
-    get_gpu_count,
-    get_tpu_count,
 )
-from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -57,24 +58,83 @@ spare CPU can absorb multiple tasks, preventing false demand signals.
 """
 
 
-class WorkerSnapshot(Protocol):
-    """What the scheduler needs from a worker to build a capacity snapshot.
+@dataclass(frozen=True, slots=True)
+class WorkerSnapshot:
+    """Bundled scheduler input: worker totals, currently-held resources, attributes.
 
-    This protocol decouples the scheduler from a concrete worker row type. Any object
-    exposing these fields can be used.  Fields mirror the DB column names so that
-    projection row classes satisfy this protocol without computed properties.
+    The scheduler's sole worker input type — independent of any DB row class.
+    Callers project their row types plus per-cycle usage (derived from
+    ``task_attempts``) into this dataclass at the boundary via
+    ``worker_snapshot_from_row``. ``WorkerCapacity`` is then derived directly
+    from the snapshot: ``available_* = total_* - committed_*``.
+
+    The ``committed_*`` fields hold the resources reserved by unfinished
+    worker-bound attempts at cycle start; they are *not* persisted on the
+    workers table — the controller fetches them per cycle from
+    ``reads.scheduler.resource_usage_by_worker``.
     """
 
     worker_id: WorkerId
     total_cpu_millicores: int
-    committed_cpu_millicores: int
     total_memory_bytes: int
-    committed_mem: int
     total_gpu_count: int
-    committed_gpu: int
     total_tpu_count: int
-    committed_tpu: int
+    committed_cpu_millicores: int
+    committed_memory_bytes: int
+    committed_gpu_count: int
+    committed_tpu_count: int
     attributes: dict[str, AttributeValue]
+
+
+class _WorkerRowLike(Protocol):
+    """Structural shape of any worker row that ``worker_snapshot_from_row`` accepts."""
+
+    worker_id: WorkerId
+    total_cpu_millicores: int
+    total_memory_bytes: int
+    total_gpu_count: int
+    total_tpu_count: int
+    attributes: dict[str, AttributeValue]
+
+
+class _ResourceUsageLike(Protocol):
+    """Structural shape of any per-worker resource-usage record."""
+
+    cpu_millicores: int
+    memory_bytes: int
+    gpu_count: int
+    tpu_count: int
+
+
+def worker_snapshot_from_row(
+    row: "_WorkerRowLike",
+    usage: "_ResourceUsageLike | None" = None,
+) -> "WorkerSnapshot":
+    """Project a DB worker row + per-cycle usage into a ``WorkerSnapshot``.
+
+    The single boundary adapter between row-shaped objects in the controller/DB
+    layer and the scheduler's narrow input. Callers must use this helper rather
+    than handing rows directly to the scheduler so the scheduler input contract
+    stays decoupled from row schemas. ``usage`` defaults to all-zero held
+    resources for tests and diagnostic paths that operate on synthetic worker
+    lists with no live attempts.
+    """
+    cpu = usage.cpu_millicores if usage is not None else 0
+    mem = usage.memory_bytes if usage is not None else 0
+    gpu = usage.gpu_count if usage is not None else 0
+    tpu = usage.tpu_count if usage is not None else 0
+    return WorkerSnapshot(
+        worker_id=row.worker_id,
+        total_cpu_millicores=row.total_cpu_millicores,
+        total_memory_bytes=row.total_memory_bytes,
+        total_gpu_count=row.total_gpu_count,
+        total_tpu_count=row.total_tpu_count,
+        committed_cpu_millicores=cpu,
+        committed_memory_bytes=mem,
+        committed_gpu_count=gpu,
+        committed_tpu_count=tpu,
+        attributes=row.attributes,
+    )
 
 
 class RejectionKind(StrEnum):
@@ -124,28 +184,20 @@ class RejectionReason:
 class JobRequirements:
     """What a job needs from a worker. Scheduler's input type.
 
-    The four cached scalars (`req_cpu_millicores`, `req_memory_bytes`,
-    `req_gpu_count`, `req_tpu_count`) are derived once from the proto in
-    `__post_init__` so the scheduler's per-(task, worker) `can_fit` hot loop
-    does not pay protobuf attribute access overhead. The hot loop runs
-    ~pending x workers times per scheduling cycle (≈10^5 on the marin cluster).
+    Scalar resource fields are used directly in the per-(task, worker) `can_fit`
+    hot loop, which runs ~pending x workers times per scheduling cycle (≈10^5 on
+    the marin cluster). `device_variant` carries the device variant string (e.g.
+    ``"v5p-64"``) for preemption same-variant gating; None means CPU-only.
     """
 
-    resources: job_pb2.ResourceSpecProto
+    req_cpu_millicores: int
+    req_memory_bytes: int
+    req_gpu_count: int
+    req_tpu_count: int
+    device_variant: str | None
     constraints: list[Constraint]
     is_coscheduled: bool
     coscheduling_group_by: str | None
-
-    req_cpu_millicores: int = field(init=False)
-    req_memory_bytes: int = field(init=False)
-    req_gpu_count: int = field(init=False)
-    req_tpu_count: int = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.req_cpu_millicores = self.resources.cpu_millicores
-        self.req_memory_bytes = self.resources.memory_bytes
-        self.req_gpu_count = get_gpu_count(self.resources.device)
-        self.req_tpu_count = get_tpu_count(self.resources.device)
 
 
 _evaluate_constraint = evaluate_constraint
@@ -174,22 +226,25 @@ class WorkerCapacity:
     @staticmethod
     def from_worker(
         worker: WorkerSnapshot,
+        *,
         building_count: int = 0,
         max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     ) -> "WorkerCapacity":
         """Create capacity snapshot from a worker's current state.
 
         Args:
-            worker: The worker to snapshot (any object satisfying WorkerSnapshot)
+            worker: Bundled snapshot carrying totals, currently-committed
+                resources (held by unfinished worker-bound attempts) and
+                attributes.
             building_count: Number of tasks currently in BUILDING state on this worker
             max_building_tasks: Maximum allowed building tasks per worker
         """
         return WorkerCapacity(
             worker_id=worker.worker_id,
             available_cpu_millicores=worker.total_cpu_millicores - worker.committed_cpu_millicores,
-            available_memory=worker.total_memory_bytes - worker.committed_mem,
-            available_gpus=worker.total_gpu_count - worker.committed_gpu,
-            available_tpus=worker.total_tpu_count - worker.committed_tpu,
+            available_memory=worker.total_memory_bytes - worker.committed_memory_bytes,
+            available_gpus=worker.total_gpu_count - worker.committed_gpu_count,
+            available_tpus=worker.total_tpu_count - worker.committed_tpu_count,
             attributes=dict(worker.attributes),
             building_task_count=building_count,
             max_building_tasks=max_building_tasks,
@@ -266,95 +321,103 @@ class WorkerCapacity:
 
 @dataclass
 class SchedulingContext:
-    """Transient index for a single scheduling cycle.
+    """Single-tick scheduling state: raw reads + derived indexes.
 
-    Built from worker capacities at cycle start. Provides O(1) constraint
-    matching for common cases (EQ on string attributes, EXISTS/NOT_EXISTS)
-    via posting lists. Falls back to linear scan for numeric comparisons.
+    Built once per scheduling cycle inside a single DB snapshot. Carries raw
+    per-tick reads (``pending_task_rows``, ``user_spend``, etc.) for the
+    gates/order pipeline and derived structures (``index``, ``capacities``) for
+    the per-(task, worker) matching hot loop.
 
-    The posting lists are read-only after construction. As workers are
-    tentatively assigned, we track capacity changes in the capacities dict,
-    but do not update the posting lists. This is safe because posting lists
-    are only used for attribute matching, not capacity checks.
+    Construction is direct: callers supply ``workers``, ``building_counts``,
+    ``max_building_tasks``, and the raw-read fields; ``__post_init__`` derives
+    ``capacities``, ``index``, and ``_str_to_wid`` once. To rebuild the index
+    after taint injection mid-tick, use :meth:`evolve_with_workers` which reuses
+    the raw-read fields and only redoes the per-worker derivation.
 
-    Workers are tracked via assignment_counts to limit how many tasks each
-    worker receives per cycle (default 1 for round-robin distribution).
+    Posting lists are read-only after construction; capacity deductions don't
+    touch them. Workers are tracked via ``assignment_counts`` to bound tasks
+    per worker per cycle.
     """
 
-    index: ConstraintIndex
+    workers: list[WorkerSnapshot]
+    building_counts: dict[WorkerId, int]
+    max_building_tasks: int
+    max_assignments_per_worker: int
+    pending_tasks: list[JobName]
+    jobs: dict[JobName, JobRequirements]
+    pending_task_rows: list[PendingTask]
+    user_spend: dict[str, int]
+    user_budget_limits: dict[str, int]
+    requested_bands: dict[JobName, int]
+    reserved_job_ids: frozenset[JobName]
+    reservation_entry_counts: dict[JobName, int]
+    user_budget_defaults: UserBudgetDefaults
 
-    # Worker capacities indexed by worker ID
-    capacities: dict[WorkerId, WorkerCapacity]
+    # Derived from ``workers`` in __post_init__.
+    capacities: dict[WorkerId, WorkerCapacity] = field(init=False)
+    index: ConstraintIndex = field(init=False)
+    _str_to_wid: dict[str, WorkerId] = field(init=False)
 
-    # Reverse map from string ID back to WorkerId
-    _str_to_wid: dict[str, WorkerId]
+    # Per-cycle mutable state; always starts empty.
+    assignment_counts: dict[WorkerId, int] = field(init=False)
 
-    # Per-worker assignment count this cycle (replaces scheduled_workers set)
-    assignment_counts: dict[WorkerId, int] = field(default_factory=dict)
+    # Scores memoized per (worker, soft-constraints) tuple; worker attributes are
+    # stable within a tick so the same pair always yields the same score.
+    _soft_score_cache: dict[tuple[WorkerId, tuple[Constraint, ...]], int] = field(init=False)
 
-    # Maximum assignments per worker per cycle
-    max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
-
-    # Task IDs of pending tasks, in scheduling priority order
-    pending_tasks: list[JobName] = field(default_factory=list)
-
-    # Job requirements indexed by job ID
-    jobs: dict[JobName, JobRequirements] = field(default_factory=dict)
+    def __post_init__(self) -> None:
+        self.capacities = {
+            w.worker_id: WorkerCapacity.from_worker(
+                w,
+                building_count=self.building_counts.get(w.worker_id, 0),
+                max_building_tasks=self.max_building_tasks,
+            )
+            for w in self.workers
+        }
+        str_to_wid: dict[str, WorkerId] = {}
+        entity_attrs: dict[str, dict[str, AttributeValue]] = {}
+        for wid, cap in self.capacities.items():
+            key = str(wid)
+            str_to_wid[key] = wid
+            entity_attrs[key] = dict(cap.attributes)
+        self._str_to_wid = str_to_wid
+        self.index = ConstraintIndex.build(entity_attrs)
+        self.assignment_counts = {}
+        self._soft_score_cache = {}
 
     @property
     def all_worker_ids(self) -> set[WorkerId]:
         return {self._str_to_wid[s] for s in self.index._all_ids}
 
-    @classmethod
-    def from_workers(
-        cls,
+    def evolve_with_workers(
+        self,
         workers: list[WorkerSnapshot],
-        building_counts: dict[WorkerId, int] | None = None,
-        max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
-        pending_tasks: list[JobName] | None = None,
-        jobs: dict[JobName, JobRequirements] | None = None,
-        max_assignments_per_worker: int = DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
+        jobs: dict[JobName, JobRequirements],
+        building_counts: dict[WorkerId, int],
+        max_building_tasks: int,
     ) -> "SchedulingContext":
-        """Build scheduling context from worker list.
+        """Rebuild capacities/index for taint-injected workers.
 
-        Creates capacity snapshots for healthy workers and builds a
-        ConstraintIndex for fast attribute matching.
-
-        Args:
-            workers: List of workers to include in scheduling context
-            building_counts: Map of worker_id -> count of tasks in BUILDING state
-            max_building_tasks: Maximum building tasks allowed per worker
-            pending_tasks: Task IDs in scheduling priority order
-            jobs: Job requirements indexed by job ID
-            max_assignments_per_worker: Maximum task assignments per worker per cycle
+        Reuses all raw-read fields (``pending_task_rows``, ``user_spend``, etc.)
+        verbatim. The caller supplies updated ``workers``/``jobs`` (e.g. after
+        reservation taint injection) and fresh ``building_counts``. The
+        returned context starts a fresh placement pass with empty
+        ``assignment_counts`` and an empty soft-score cache.
         """
-        building_counts = building_counts or {}
-
-        capacities = {
-            w.worker_id: WorkerCapacity.from_worker(
-                w,
-                building_count=building_counts.get(w.worker_id, 0),
-                max_building_tasks=max_building_tasks,
-            )
-            for w in workers
-        }
-
-        str_to_wid: dict[str, WorkerId] = {}
-        entity_attrs: dict[str, dict[str, AttributeValue]] = {}
-        for wid, cap in capacities.items():
-            key = str(wid)
-            str_to_wid[key] = wid
-            entity_attrs[key] = dict(cap.attributes)
-
-        index = ConstraintIndex.build(entity_attrs)
-
-        return cls(
-            index=index,
-            capacities=capacities,
-            _str_to_wid=str_to_wid,
-            pending_tasks=pending_tasks or [],
-            jobs=jobs or {},
-            max_assignments_per_worker=max_assignments_per_worker,
+        return SchedulingContext(
+            workers=workers,
+            building_counts=building_counts,
+            max_building_tasks=max_building_tasks,
+            max_assignments_per_worker=self.max_assignments_per_worker,
+            pending_tasks=self.pending_tasks,
+            jobs=jobs,
+            pending_task_rows=self.pending_task_rows,
+            user_spend=self.user_spend,
+            user_budget_limits=self.user_budget_limits,
+            requested_bands=self.requested_bands,
+            reserved_job_ids=self.reserved_job_ids,
+            reservation_entry_counts=self.reservation_entry_counts,
+            user_budget_defaults=self.user_budget_defaults,
         )
 
     def matching_workers(self, constraints: Sequence[Constraint]) -> set[WorkerId]:
@@ -403,15 +466,22 @@ def rank_by_soft_score(
 ) -> list[WorkerId]:
     """Sort candidate workers by soft-constraint satisfaction (descending).
 
-    Workers satisfying more soft constraints are tried first. Workers with the
-    same score retain arbitrary (set) order.
+    Workers satisfying more soft constraints are tried first. Scores are
+    memoized on the context so the same (worker, constraint set) is computed
+    at most once per tick.
     """
+    key_tail = tuple(soft_constraints)
+    cache = context._soft_score_cache
     scored: list[tuple[int, WorkerId]] = []
     for wid in candidate_ids:
         cap = context.capacities.get(wid)
         if cap is None:
             continue
-        score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+        key = (wid, key_tail)
+        score = cache.get(key)
+        if score is None:
+            score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+            cache[key] = score
         scored.append((score, wid))
     # Sort descending by score so soft-preferred workers are tried first
     scored.sort(key=lambda t: t[0], reverse=True)
@@ -487,16 +557,14 @@ def explain_unfittable(
         if rejection.kind not in rejection_samples:
             rejection_samples[rejection.kind] = rejection
 
-    res = req.resources
-
     if rejection_counts:
         if RejectionKind.BUILDING_LIMIT in rejection_counts:
             workers_with_capacity = sum(
                 1
                 for cwid in candidates
                 if context.assignment_counts.get(cwid, 0) < max_per_worker
-                and context.capacities[cwid].available_cpu_millicores >= res.cpu_millicores
-                and context.capacities[cwid].available_memory >= res.memory_bytes
+                and context.capacities[cwid].available_cpu_millicores >= req.req_cpu_millicores
+                and context.capacities[cwid].available_memory >= req.req_memory_bytes
             )
             if workers_with_capacity > 0:
                 count = rejection_counts[RejectionKind.BUILDING_LIMIT]
@@ -521,12 +589,12 @@ def explain_unfittable(
         constraint_keys = [c.key for c in hard_constraints]
         return (
             f"No worker matches constraints and has sufficient resources "
-            f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes}, "
+            f"(need cpu={req.req_cpu_millicores / 1000:g} cores, memory={req.req_memory_bytes}, "
             f"constraints={constraint_keys})"
         )
     return (
         f"No worker has sufficient resources "
-        f"(need cpu={res.cpu_millicores / 1000:g} cores, memory={res.memory_bytes})"
+        f"(need cpu={req.req_cpu_millicores / 1000:g} cores, memory={req.req_memory_bytes})"
     )
 
 
@@ -545,6 +613,11 @@ class Scheduler:
         max_building_tasks_per_worker: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
     ):
         self._max_building_tasks_per_worker = max_building_tasks_per_worker
+
+    @property
+    def max_building_tasks_per_worker(self) -> int:
+        """Per-worker BUILDING-state limit applied to fresh scheduling contexts."""
+        return self._max_building_tasks_per_worker
 
     def find_assignments(
         self,
@@ -679,14 +752,23 @@ class Scheduler:
         groups = context.workers_by_group(group_by, matching_worker_ids)
 
         # Sort groups so those satisfying more soft constraints are tried first.
+        soft_key_tail = tuple(soft_constraints)
+        cache = context._soft_score_cache
+
         def _group_soft_score(group_worker_ids: list[WorkerId]) -> int:
             if not soft_constraints:
                 return 0
             total = 0
             for wid in group_worker_ids:
                 cap = context.capacities.get(wid)
-                if cap is not None:
-                    total += soft_constraint_score(dict(cap.attributes), soft_constraints)
+                if cap is None:
+                    continue
+                key = (wid, soft_key_tail)
+                score = cache.get(key)
+                if score is None:
+                    score = soft_constraint_score(dict(cap.attributes), soft_constraints)
+                    cache[key] = score
+                total += score
             return total
 
         sorted_groups = sorted(groups.items(), key=lambda kv: _group_soft_score(kv[1]), reverse=True)
@@ -734,43 +816,6 @@ class Scheduler:
             group_by,
         )
         return None
-
-    def create_scheduling_context(
-        self,
-        workers: list[WorkerSnapshot],
-        building_counts: dict[WorkerId, int] | None = None,
-        pending_tasks: list[JobName] | None = None,
-        jobs: dict[JobName, JobRequirements] | None = None,
-        max_building_tasks: int | None = None,
-        max_assignments_per_worker: int | None = None,
-    ) -> SchedulingContext:
-        """Create a scheduling context for the given workers.
-
-        This is the boundary conversion point: accepts WorkerSnapshot-compatible
-        objects (e.g. worker rows) and converts them to scheduler-internal types.
-
-        Args:
-            workers: Workers to include (any objects satisfying WorkerSnapshot)
-            building_counts: Map of worker_id -> count of tasks in BUILDING state
-            pending_tasks: Task IDs in scheduling priority order
-            jobs: Job requirements indexed by job ID
-            max_building_tasks: Override for max building tasks per worker.
-                If None, uses the scheduler's configured default.
-            max_assignments_per_worker: Override for max assignments per worker per cycle.
-                If None, uses DEFAULT_MAX_ASSIGNMENTS_PER_WORKER.
-        """
-        limit = max_building_tasks if max_building_tasks is not None else self._max_building_tasks_per_worker
-        assignments_limit = (
-            max_assignments_per_worker if max_assignments_per_worker is not None else DEFAULT_MAX_ASSIGNMENTS_PER_WORKER
-        )
-        return SchedulingContext.from_workers(
-            workers,
-            building_counts=building_counts,
-            max_building_tasks=limit,
-            pending_tasks=pending_tasks,
-            jobs=jobs,
-            max_assignments_per_worker=assignments_limit,
-        )
 
     def get_job_scheduling_diagnostics(
         self,

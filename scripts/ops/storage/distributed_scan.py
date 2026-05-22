@@ -15,7 +15,7 @@ Architecture:
 
 Usage:
     uv run iris --cluster=marin job run \\
-        --cpu 2 --memory 10GB --enable-extra-resources -- \\
+        --cpu 2 --memory 30GB --enable-extra-resources -- \\
         uv run python scripts/ops/storage/distributed_scan.py \\
         --staging-dir gs://marin-us-central2/tmp/storage-scan \\
         --workers 128
@@ -62,6 +62,19 @@ WORKER_THREADS = 16
 # ~2M objects x ~150 bytes/row ≈ 300MB uncompressed, ~50-80MB zstd parquet.
 # Coordinator runs with 30GB so this leaves plenty of headroom.
 COORDINATOR_FLUSH_THRESHOLD = 2_000_000
+
+# Abandon stragglers when the queue has been empty AND no progress has been
+# reported for this long. "Progress" means either a task completed *or* a
+# worker streamed objects to the coordinator — workers scanning a huge flat
+# prefix can take many minutes between task completions while still streaming
+# steady chunks of objects, and we don't want to abandon those mid-flight.
+# Truly hung workers (no RPCs at all) get timed out here; everything else is
+# bounded by MAX_SCAN_SECONDS.
+STRAGGLER_GRACE_SECONDS = 300
+
+# Hard wall-clock cap on the whole scan. Beyond this we terminate workers
+# and finalize whatever we have, even if some tasks are still in flight.
+MAX_SCAN_SECONDS = 90 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +187,11 @@ class ScanCoordinatorActor:
         self._active_workers = 0
         self._buf = ColumnBuffer()
         self._flush_thread: threading.Thread | None = None
+        # Wall-clock of the last forward-progress signal from any worker —
+        # either a streamed batch of objects or a task completion. Used to
+        # distinguish slow-but-progressing scans from genuinely hung workers
+        # in the straggler-timeout check.
+        self._last_progress_at: float | None = None
 
     def load_tasks(self, tasks: list[ScanTask]) -> None:
         with self._lock:
@@ -193,6 +211,7 @@ class ScanCoordinatorActor:
             added_bytes = self._buf.extend(objects)
             self._total_objects += len(objects)
             self._total_bytes += added_bytes
+            self._last_progress_at = time.monotonic()
             if self._buf.count >= COORDINATOR_FLUSH_THRESHOLD:
                 self._swap_and_flush()
 
@@ -201,6 +220,7 @@ class ScanCoordinatorActor:
         with self._lock:
             self._tasks_completed += 1
             self._active_workers -= 1
+            self._last_progress_at = time.monotonic()
             if new_prefixes:
                 self._queue.extend(new_prefixes)
                 self._tasks_total += len(new_prefixes)
@@ -210,6 +230,7 @@ class ScanCoordinatorActor:
             self._errors.append(f"{prefix}: {error}")
             self._tasks_completed += 1
             self._active_workers -= 1
+            self._last_progress_at = time.monotonic()
 
     def flush(self) -> None:
         """Force-flush remaining buffered objects. Blocks until complete."""
@@ -248,6 +269,18 @@ class ScanCoordinatorActor:
 
     def get_status(self) -> dict[str, Any]:
         with self._lock:
+            queue_empty = len(self._queue) == 0
+            all_completed = queue_empty and self._active_workers == 0 and self._tasks_completed == self._tasks_total
+            # Only declare stragglers timed out when the queue is empty AND
+            # nothing has reported progress (objects or task completion) for
+            # STRAGGLER_GRACE_SECONDS. Workers that are still streaming a huge
+            # flat prefix keep _last_progress_at fresh via report_objects, so
+            # they won't be killed mid-scan.
+            stragglers_timed_out = (
+                queue_empty
+                and self._last_progress_at is not None
+                and time.monotonic() - self._last_progress_at >= STRAGGLER_GRACE_SECONDS
+            )
             return {
                 "total_objects": self._total_objects,
                 "total_bytes": self._total_bytes,
@@ -258,12 +291,7 @@ class ScanCoordinatorActor:
                 "parquet_count": len(self._parquet_paths),
                 "buffered": self._buf.count,
                 "error_count": len(self._errors),
-                "done": (
-                    len(self._queue) == 0
-                    and self._active_workers == 0
-                    and self._tasks_completed == self._tasks_total
-                    and self._tasks_total > 0
-                ),
+                "done": self._tasks_total > 0 and (all_completed or stragglers_timed_out),
             }
 
     def get_parquet_paths(self) -> list[str]:
@@ -628,6 +656,10 @@ def run_distributed(
             if status["done"]:
                 break
 
+            if elapsed >= MAX_SCAN_SECONDS:
+                print(f"Wall-clock cap of {MAX_SCAN_SECONDS}s hit; abandoning stragglers and finalizing")
+                break
+
             time.sleep(30)
     finally:
         try:
@@ -677,7 +709,7 @@ def main(
     Submit via iris job run:
 
         uv run iris --cluster=marin job run \\
-            --cpu 2 --memory 10GB --enable-extra-resources -- \\
+            --cpu 2 --memory 30GB --enable-extra-resources -- \\
             uv run python scripts/ops/storage/distributed_scan.py \\
             --staging-dir gs://marin-us-central2/tmp/storage-scan \\
             --workers 128

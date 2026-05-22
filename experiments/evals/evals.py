@@ -759,15 +759,10 @@ def run_evalchemy_experiment(
         discover_latest_checkpoint=discover_latest_checkpoint,
     )
 
-    # Run eval steps in batches to limit parallelism.
-    # Each executor_main call runs up to max_parallel_jobs eval steps concurrently.
-    # Already-completed steps are automatically skipped via status files on disk.
-    if max_parallel_jobs is not None:
-        for i in range(0, len(eval_steps), max_parallel_jobs):
-            batch = eval_steps[i : i + max_parallel_jobs]
-            executor_main(steps=batch)
-    else:
-        executor_main(steps=eval_steps)
+    # Run all eval steps in a single executor_main call, capping concurrent
+    # execution at max_parallel_jobs. The executor walks the shared dependency
+    # DAG once instead of once per batch.
+    executor_main(steps=eval_steps, max_concurrent=max_parallel_jobs)
 
     # Run compile steps separately. Their eval-step dependencies have already
     # succeeded, so the executor skips them and only runs the compile steps.

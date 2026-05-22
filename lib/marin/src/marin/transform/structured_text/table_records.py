@@ -22,6 +22,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from datasets import load_dataset
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
@@ -384,8 +385,6 @@ def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterab
     module load time (e.g. when only the pure serializer functions are
     used in tests).
     """
-    from datasets import load_dataset  # local import to keep module importable without `datasets`
-
     data_files = _find_split_parquet_files(input_path, split, subset)
     dataset = load_dataset("parquet", data_files={split: data_files}, split=split, streaming=True)
     return dataset

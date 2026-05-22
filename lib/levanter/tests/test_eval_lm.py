@@ -5,7 +5,6 @@ import os
 import tempfile
 
 import jax
-import pytest
 
 import haliax
 
@@ -19,7 +18,6 @@ from levanter.trainer_state import TrainerState
 from test_utils import skip_if_no_torch
 
 
-@pytest.mark.entry
 def test_eval_lm():
     # just testing if eval_lm has a pulse
     # save a checkpoint
@@ -62,7 +60,6 @@ def test_eval_lm():
                 pass
 
 
-@pytest.mark.entry
 @skip_if_no_torch
 def test_eval_lm_from_hf():
     # just testing if eval_lm has a pulse

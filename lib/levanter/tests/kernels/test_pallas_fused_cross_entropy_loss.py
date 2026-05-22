@@ -741,7 +741,7 @@ def test_fused_cross_entropy_pallas_gpu_matches_reference_non_multiple():
     x = jax.random.normal(key_x, (6, 7), dtype=jnp.float32)
     w = jax.random.normal(key_w, (7, 9), dtype=jnp.float32)
     y = jax.random.randint(key_y, (6,), 0, 9, dtype=jnp.int32)
-    block_sizes = fused_api.BlockSizes(b_block_size=16, h_block_size=16, v_block_size=16)
+    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=16, v_block_size=16)
 
     loss = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
         x,
@@ -771,7 +771,7 @@ def test_fused_cross_entropy_pallas_gpu_return_argmax_matches_reference():
     x = jax.random.normal(key_x, (6, 7), dtype=jnp.float32)
     w = jax.random.normal(key_w, (7, 9), dtype=jnp.float32)
     y = jax.random.randint(key_y, (6,), 0, 9, dtype=jnp.int32)
-    block_sizes = fused_api.BlockSizes(b_block_size=16, h_block_size=16, v_block_size=16)
+    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=16, v_block_size=16)
 
     loss, argmax = fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
         x,
@@ -885,7 +885,7 @@ def test_fused_cross_entropy_pallas_gpu_grad_tracing_non_gb10_path(
     x = jax.random.normal(key_x, (batch, hidden), dtype=jnp.float32)
     w = jax.random.normal(key_w, (hidden, vocab), dtype=jnp.float32)
     y = jax.random.randint(key_y, (batch,), 0, vocab, dtype=jnp.int32)
-    block_sizes = fused_api.BlockSizes(b_block_size=16, h_block_size=16, v_block_size=16)
+    block_sizes = fused_api.BlockSizes(b_block_size=128, h_block_size=16, v_block_size=16)
 
     def loss_fn(x_raw: jax.Array, w_raw: jax.Array) -> jax.Array:
         loss, _ = pallas_gpu.linear_softmax_cross_entropy_loss_pallas_gpu(
