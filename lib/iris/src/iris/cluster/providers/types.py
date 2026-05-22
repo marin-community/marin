@@ -95,6 +95,21 @@ def port_is_open(port: int, host: str = "localhost") -> bool:
         return s.connect_ex((host, port)) == 0
 
 
+def probe_outbound_ip() -> str:
+    """Return the routable IP of this host via the default route.
+
+    Opens a UDP socket to a public IP (no packets sent) and reads back the
+    local address the OS selected for that route. Works inside containers
+    using ``--network=host`` and on multi-NIC hosts where ``socket.gethostname()``
+    would resolve to a non-routable address.
+
+    Raises ``OSError`` if no default route is available.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+
+
 def resolve_external_host(host: str) -> str:
     """Return an externally-reachable address for a bind host.
 
@@ -104,10 +119,8 @@ def resolve_external_host(host: str) -> str:
     if host != "0.0.0.0":
         return host
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except Exception:
+        return probe_outbound_ip()
+    except OSError:
         return "127.0.0.1"
 
 
