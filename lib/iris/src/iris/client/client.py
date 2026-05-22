@@ -779,17 +779,27 @@ class IrisClient:
         """
         return self._cluster_client.get_task_status(task_name)
 
-    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
-        """Push markdown status text to the controller for UI display.
+    def report_task_status_text(
+        self,
+        task_id: JobName,
+        attempt_id: int,
+        detail_md: str,
+        summary_md: str,
+    ) -> None:
+        """Push markdown status text for the running task to finelog.
 
-        Called from within a running task to report progress or state.
+        Called from within a running task to report progress or state. Buffered
+        and fire-and-forget; flush failures are logged inside the LogClient
+        background thread and the row is dropped.
 
         Args:
             task_id: Full task ID of the currently-running task.
+            attempt_id: Writer's current attempt (used as tiebreaker so
+                concurrent attempts during preemption resolve deterministically).
             detail_md: Full markdown for the task detail page.
             summary_md: Short summary (up to ~3 lines) for the task list table.
         """
-        self._cluster_client.report_task_status_text(task_id, detail_md, summary_md)
+        self._cluster_client.report_task_status_text(task_id, attempt_id, detail_md, summary_md)
 
     def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.

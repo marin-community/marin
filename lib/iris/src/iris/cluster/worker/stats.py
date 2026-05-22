@@ -3,12 +3,15 @@
 
 """Stats schemas emitted by iris workers.
 
-Two namespaces:
+Three namespaces:
 
 - ``iris.worker`` — one row per ping with host-level utilization. Replaces
   the controller's ``worker_resource_history`` table.
 - ``iris.task`` — one row per attempt resource update. Replaces the
   controller's ``task_resource_history`` table.
+- ``iris.zephyr_task_status`` — one row per ``report_task_status_text`` push
+  from a running task. Replaces the in-memory dict that previously backed
+  ``ControllerService.SetTaskStatusText``. Dashboard reads via finelog SQL.
 
 The ``iris.profile`` schema lives in ``iris.cluster.runtime.profile`` next to
 the capture machinery — see ``IrisProfile`` and ``PROFILE_NAMESPACE`` there.
@@ -30,6 +33,7 @@ from iris.rpc import job_pb2
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
+ZEPHYR_TASK_STATUS_NAMESPACE = "iris.zephyr_task_status"
 
 
 class WorkerStatus(StrEnum):
@@ -103,6 +107,28 @@ class IrisTaskStat:
     memory_peak_mb: int
     accelerator_util_pct: float | None = None
     accelerator_mem_bytes: int | None = None
+
+
+@dataclass
+class ZephyrTaskStatusRow:
+    """One row per ``report_task_status_text`` push from a running task.
+
+    Dashboard reads ``WHERE task_id = ? ORDER BY ts DESC, attempt_id DESC
+    LIMIT 1`` (single task on TaskDetail) and ``WHERE task_id IN (...) ...``
+    (batched on JobDetail). ``attempt_id`` is the writer's current attempt;
+    used as a tiebreaker so two attempts colliding within a single
+    millisecond during preemption resolve deterministically. All prior
+    versions stay in the namespace until finelog's level-compactor
+    reclaims them; there is no application-level dedup or TTL.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    task_id: str
+    attempt_id: int
+    ts: datetime
+    status_text_detail_md: str
+    status_text_summary_md: str
 
 
 def build_worker_stat(

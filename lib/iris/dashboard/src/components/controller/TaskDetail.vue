@@ -105,6 +105,40 @@ const taskStatsRows = computed<TaskStatRow[]>(() => {
   return decodeArrowIpc(ipc).rows as TaskStatRow[]
 })
 
+// --- Status text from finelog (iris.zephyr_task_status) ---
+//
+// One row per ``report_task_status_text`` call from the running task. We
+// surface the latest version per task. ``ts`` is the primary sort, with
+// ``attempt_id`` as the tiebreaker so two attempts colliding during
+// preemption resolve deterministically (the newer attempt wins).
+interface StatusTextRow {
+  status_text_detail_md?: string
+  status_text_summary_md?: string
+}
+
+function buildStatusTextSql(taskId: string): string {
+  const escaped = taskId.replace(/'/g, "''")
+  return `
+SELECT status_text_detail_md, status_text_summary_md
+FROM "iris.zephyr_task_status"
+WHERE task_id = '${escaped}'
+ORDER BY ts DESC, attempt_id DESC
+LIMIT 1
+`.trim()
+}
+
+const { data: statusTextData, refresh: fetchStatusText } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildStatusTextSql(props.taskId) }),
+)
+
+const statusTextDetail = computed<string>(() => {
+  const ipc = statusTextData.value?.arrowIpc
+  if (!ipc) return ''
+  const rows = decodeArrowIpc(ipc).rows as StatusTextRow[]
+  return rows[0]?.status_text_detail_md ?? ''
+})
+
 const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
 
 // Latest sample drives the current-value gauges and labels. resource_usage
@@ -166,23 +200,32 @@ const { start: startStatsRefresh, stop: stopStatsRefresh } = useAutoRefresh(
   5_000,
   false,
 )
+const { start: startStatusTextRefresh, stop: stopStatusTextRefresh } = useAutoRefresh(
+  fetchStatusText,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
   if (active) {
     startRefresh()
     startStatsRefresh()
+    startStatusTextRefresh()
   } else {
     stopRefresh()
     stopStatsRefresh()
+    stopStatusTextRefresh()
   }
 })
 
 onMounted(async () => {
   await fetchTask()
   fetchTaskStats()
+  fetchStatusText()
   if (isActive.value) {
     startRefresh()
     startStatsRefresh()
+    startStatusTextRefresh()
   }
 })
 
@@ -353,9 +396,9 @@ watch(() => props.taskId, async () => {
       </div>
 
       <!-- Status text -->
-      <InfoCard v-if="task.statusTextDetailMd" title="Status Text" class="mb-6">
+      <InfoCard v-if="statusTextDetail" title="Status Text" class="mb-6">
         <div class="text-sm text-text">
-          <MarkdownRenderer :content="task.statusTextDetailMd" />
+          <MarkdownRenderer :content="statusTextDetail" />
         </div>
       </InfoCard>
 

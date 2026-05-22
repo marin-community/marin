@@ -237,7 +237,7 @@ def _push_iris_task_status(
         return
     detail_md, summary_md = build_md()
     try:
-        iris_client.report_task_status_text(job_info.task_id, detail_md, summary_md)
+        iris_client.report_task_status_text(job_info.task_id, job_info.attempt_id, detail_md, summary_md)
     except Exception:
         logger.warning("Failed to report task status text to Iris controller", exc_info=True)
 

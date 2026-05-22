@@ -1,14 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.worker / iris.task stats schemas."""
+"""Tests for the iris.worker / iris.task / iris.zephyr_task_status stats schemas."""
 
 from datetime import datetime
 
+from finelog.client.log_client import schema_from_dataclass
 from iris.cluster.worker.stats import (
+    ZEPHYR_TASK_STATUS_NAMESPACE,
     IrisTaskStat,
     IrisWorkerStat,
     WorkerStatus,
+    ZephyrTaskStatusRow,
     build_task_stat,
     build_worker_stat,
 )
@@ -133,3 +136,41 @@ def test_build_task_stat_with_accelerator():
     )
     assert stat.accelerator_util_pct == 88.5
     assert stat.accelerator_mem_bytes == 2_000_000
+
+
+def test_zephyr_task_status_row_schema_is_registrable():
+    """``ZephyrTaskStatusRow`` must derive a finelog Schema with the expected columns.
+
+    Failure here means ``LogClient.get_table(ZEPHYR_TASK_STATUS_NAMESPACE,
+    ZephyrTaskStatusRow)`` will reject the dataclass at worker startup — the
+    failure mode is "every worker crashes on boot", so guard it here.
+    """
+    schema = schema_from_dataclass(ZephyrTaskStatusRow)
+    assert {c.name for c in schema.columns} == {
+        "task_id",
+        "attempt_id",
+        "ts",
+        "status_text_detail_md",
+        "status_text_summary_md",
+    }
+    # Key column is read off the ClassVar at dataclass build time.
+    assert schema.key_column == "task_id"
+    # Namespace constant must match what the controller's mounted finelog
+    # endpoint and the dashboard SQL both reference; bare strings would drift.
+    assert ZEPHYR_TASK_STATUS_NAMESPACE == "iris.zephyr_task_status"
+
+
+def test_zephyr_task_status_row_fields_are_required_str_or_int():
+    """All five fields are positional-required and typed; missing one raises."""
+    row = ZephyrTaskStatusRow(
+        ts=datetime(2026, 5, 1, 12, 0, 0),
+        task_id="/u/job/0",
+        attempt_id=3,
+        status_text_detail_md="**Stage**: 1/5",
+        status_text_summary_md="Stage 1",
+    )
+    assert row.task_id == "/u/job/0"
+    assert row.attempt_id == 3
+    assert row.ts == datetime(2026, 5, 1, 12, 0, 0)
+    assert row.status_text_detail_md == "**Stage**: 1/5"
+    assert row.status_text_summary_md == "Stage 1"

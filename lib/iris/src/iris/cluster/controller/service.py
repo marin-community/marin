@@ -90,7 +90,6 @@ from iris.cluster.types import (
     is_job_finished,
 )
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2, worker_pb2
-from iris.rpc.async_adapter import on_loop
 from iris.rpc.auth import (
     AuthzAction,
     authorize,
@@ -1508,9 +1507,6 @@ class ControllerServiceImpl:
                     jc_row.res_cpu_millicores, jc_row.res_memory_bytes, jc_row.res_disk_bytes, jc_row.res_device_json
                 )
 
-        proto.status_text_detail_md = self._transitions.get_status_text_detail(task_id.to_wire())
-        proto.status_text_summary_md = self._transitions.get_status_text_summary(task_id.to_wire())
-
         return controller_pb2.Controller.GetTaskStatusResponse(task=proto, job_resources=job_resources)
 
     def list_tasks(
@@ -1536,8 +1532,6 @@ class ControllerServiceImpl:
             # Users should check job detail page for scheduling diagnostics
             if task.state == job_pb2.TASK_STATE_PENDING:
                 proto_task_status.can_be_scheduled = task_row_can_be_scheduled(task)
-
-            proto_task_status.status_text_summary_md = self._transitions.get_status_text_summary(task.task_id.to_wire())
 
             task_statuses.append(proto_task_status)
 
@@ -2598,21 +2592,3 @@ class ControllerServiceImpl:
                 )
             self._controller.wake()
         return controller_pb2.Controller.UpdateTaskStatusResponse()
-
-    # --- Task Status Text Push ---
-
-    @on_loop
-    def set_task_status_text(
-        self,
-        request: job_pb2.SetTaskStatusTextRequest,
-        _ctx: Any,
-    ) -> job_pb2.SetTaskStatusTextResponse:
-        """Task pushes a markdown status string to the coordinator.
-
-        Status text lives entirely in the in-memory in-memory dict on ControllerTransitions; the
-        write is idempotent and stale task IDs are evicted by
-        ``remove_status_text_by_job_ids`` during pruning.
-        """
-        task_id = JobName.from_wire(request.task_id)
-        self._transitions.record_task_status_text(task_id, request.status_text_detail_md, request.status_text_summary_md)
-        return job_pb2.SetTaskStatusTextResponse()
