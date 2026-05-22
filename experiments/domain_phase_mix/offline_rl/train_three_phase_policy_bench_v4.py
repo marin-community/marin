@@ -25,8 +25,8 @@ from experiments.domain_phase_mix.offline_rl.ope import (
 )
 from experiments.domain_phase_mix.offline_rl.policy_artifact import save_policy_artifact
 from experiments.domain_phase_mix.offline_rl.train_three_phase_policy_bench_v3 import (
-    FixedSchedulePolicy,
     SEQUENCE_CHANNELS,
+    FixedSchedulePolicy,
     ThreePhasePolicyBenchV3Config,
     _canonical_initial_batch,
     _decision_state_defaults,

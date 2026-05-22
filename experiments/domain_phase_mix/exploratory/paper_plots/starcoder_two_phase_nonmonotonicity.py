@@ -19,7 +19,6 @@ from matplotlib.axes import Axes
 from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
 from mpl_toolkits.mplot3d import Axes3D, proj3d
-
 from paper_plot_style import GRP_COLOR, PAPER_AXIS, PAPER_GRID, PAPER_MUTED, PAPER_TEXT, UNIFORM_COLOR
 
 SCRIPT_DIR = Path(__file__).resolve().parent

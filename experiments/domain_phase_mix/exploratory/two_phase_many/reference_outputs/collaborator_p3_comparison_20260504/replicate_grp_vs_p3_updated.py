@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Replicate the collaborator GRP-vs-P3 comparison on the current 300M matrix.
 
 The gist notebook compares:
@@ -16,18 +19,17 @@ intersection so both models see exactly the same target rows.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import shutil
 import sys
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
 
 ROOT = Path(__file__).resolve().parent
 REPO_ROOT = ROOT.parents[5]
@@ -43,8 +45,7 @@ VARIABLE_NOISE = (
 )
 EPOCH_METADATA = REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/two_phase_many_epoch_metadata.csv"
 GRP_PACKET = (
-    REPO_ROOT
-    / "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430"
+    REPO_ROOT / "experiments/domain_phase_mix/exploratory/two_phase_many/collaborator_scaling_data_packet_20260430"
 )
 GRP_CODE = GRP_PACKET / "standalone_code"
 GRP_DATA = GRP_PACKET / "data/grp_no_l2"
@@ -195,9 +196,7 @@ def build_irt_target(raw: pd.DataFrame, noise: pd.DataFrame) -> IrtTarget:
     if present:
         present_signs = task_signs[has_noise]
         noise_matrix = noise[present].to_numpy(dtype=np.float64) * present_signs[None, :]
-        noise_share[has_noise] = (
-            noise_matrix.std(axis=0, ddof=1) / matrix[:, has_noise].std(axis=0, ddof=1)
-        ) ** 2
+        noise_share[has_noise] = (noise_matrix.std(axis=0, ddof=1) / matrix[:, has_noise].std(axis=0, ddof=1)) ** 2
 
     k_horn, loadings, psi, projection = nonnegative_factor_irt(z, noise_share)
     aggregate = z @ projection
@@ -212,7 +211,9 @@ def build_irt_target(raw: pd.DataFrame, noise: pd.DataFrame) -> IrtTarget:
     )
 
 
-def ridge_inner_cv(design: np.ndarray, target: np.ndarray, fold_seed: int, alphas: tuple[float, ...]) -> tuple[float, float]:
+def ridge_inner_cv(
+    design: np.ndarray, target: np.ndarray, fold_seed: int, alphas: tuple[float, ...]
+) -> tuple[float, float]:
     """Choose ridge alpha by 5-fold CV for one P3 nonlinear setting."""
     active = design.std(axis=0) > 1e-10
     if not active.any():
@@ -243,7 +244,9 @@ def ridge_inner_cv(design: np.ndarray, target: np.ndarray, fold_seed: int, alpha
     return best_r2, best_alpha
 
 
-def build_p3_design(w0: np.ndarray, w1: np.ndarray, c0: np.ndarray, c1: np.ndarray, eta: float, a: float, p: float) -> np.ndarray:
+def build_p3_design(
+    w0: np.ndarray, w1: np.ndarray, c0: np.ndarray, c1: np.ndarray, eta: float, a: float, p: float
+) -> np.ndarray:
     """Build P3 design: combined exposure signal plus phase penalties."""
     combined_exposure = np.maximum(w0 + eta * w1, 1e-4)
     signal = np.power(combined_exposure, a)
@@ -383,16 +386,19 @@ def prepare_grp_data_dir(raw: pd.DataFrame, domains: list[str], target: np.ndarr
     temp_dir = Path(temp_context.name)
     phase_columns = [f"phase_{phase_idx}_{domain}" for phase_idx in (0, 1) for domain in domains]
     metadata_columns = [
-        column
-        for column in ("run_id", "run_name", "source_experiment", "status")
-        if column in raw.columns
+        column for column in ("run_id", "run_name", "source_experiment", "status") if column in raw.columns
     ]
     frame = raw[metadata_columns + phase_columns].copy()
     frame["irt_neg"] = -target
     frame.to_csv(temp_dir / "two_phase_many.csv", index=False)
     shutil.copy2(EPOCH_METADATA, temp_dir / "two_phase_many_epoch_metadata.csv")
-    shutil.copy2(GRP_DATA / "grp_power_family_penalty_no_l2_retune_best.csv", temp_dir / "grp_power_family_penalty_no_l2_retune_best.csv")
-    shutil.copy2(GRP_DATA / "grp_penalty_calibration_variants_best.csv", temp_dir / "grp_penalty_calibration_variants_best.csv")
+    shutil.copy2(
+        GRP_DATA / "grp_power_family_penalty_no_l2_retune_best.csv",
+        temp_dir / "grp_power_family_penalty_no_l2_retune_best.csv",
+    )
+    shutil.copy2(
+        GRP_DATA / "grp_penalty_calibration_variants_best.csv", temp_dir / "grp_penalty_calibration_variants_best.csv"
+    )
     return temp_context
 
 
@@ -468,7 +474,9 @@ def domain_metadata(domains: list[str]) -> tuple[np.ndarray, np.ndarray]:
     return c0, c1
 
 
-def write_plot(path: Path, domains: list[str], c0: np.ndarray, c1: np.ndarray, grp_p0: np.ndarray, grp_p1: np.ndarray, p3: P3Fit) -> None:
+def write_plot(
+    path: Path, domains: list[str], c0: np.ndarray, c1: np.ndarray, grp_p0: np.ndarray, grp_p1: np.ndarray, p3: P3Fit
+) -> None:
     """Write side-by-side GRP/P3 mixture plot."""
     total_grp = grp_p0 + grp_p1
     total_p3 = p3.p0 + p3.p1
@@ -494,7 +502,14 @@ def write_plot(path: Path, domains: list[str], c0: np.ndarray, c1: np.ndarray, g
         col=1,
     )
     fig.add_trace(
-        go.Bar(x=epochs_grp[order], y=names, orientation="h", name="GRP epochs", marker_color="rgba(120,120,120,0.75)", showlegend=False),
+        go.Bar(
+            x=epochs_grp[order],
+            y=names,
+            orientation="h",
+            name="GRP epochs",
+            marker_color="rgba(120,120,120,0.75)",
+            showlegend=False,
+        ),
         row=1,
         col=2,
     )
@@ -678,9 +693,9 @@ def main() -> None:
     grp_names = set(grp_frame["run_name"])
     common_names = sorted(raw_names & grp_names)
     row_audit = {
-        "raw_rows": int(len(raw_all)),
-        "grp_packet_rows": int(len(grp_frame)),
-        "common_rows": int(len(common_names)),
+        "raw_rows": len(raw_all),
+        "grp_packet_rows": len(grp_frame),
+        "common_rows": len(common_names),
         "raw_only": sorted(raw_names - grp_names),
         "grp_only": sorted(grp_names - raw_names),
         "row_mode": args.row_mode,
@@ -689,7 +704,7 @@ def main() -> None:
         raw = raw_all[raw_all["run_name"].isin(common_names)].sort_values("run_name").reset_index(drop=True)
     else:
         raw = raw_all.sort_values("run_name").reset_index(drop=True)
-    row_audit["used_rows"] = int(len(raw))
+    row_audit["used_rows"] = len(raw)
 
     domains = sorted(column.removeprefix("phase_0_") for column in raw.columns if column.startswith("phase_0_"))
     c0, c1 = domain_metadata(domains)

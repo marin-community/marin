@@ -10,8 +10,8 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,14 +25,14 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_grp_power
     REG_FIXED,
     VARIANT_NAME,
     _no_l2_param_keys,
-    _parameter_counts,
     _pack_no_l2_params,
+    _parameter_counts,
     _unpack_no_l2_params,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.fit_grp_no_l2_benchmark_aggregates import (
-    AggregateObjective,
     DEFAULT_FAMILY_SCHEME,
     FAMILY_SCHEMES,
+    AggregateObjective,
     _expanded_start_bank,
     _family_shares,
     _model_target_to_metric,
@@ -44,6 +44,9 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.fit
 from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.materialize_fit_dataset import (
     materialize_fit_dataset,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
+    optimize_generic_family_convex_hull,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_penalty_calibration import (
     CALIBRATION_CV_WEIGHT,
     CALIBRATION_FOLDMEAN_WEIGHT,
@@ -52,9 +55,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
     build_penalty_calibration_surrogate,
     compute_penalty_calibration_metrics,
     optimize_penalty_calibration_model,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
-    optimize_generic_family_convex_hull,
 )
 from experiments.domain_phase_mix.static_batch_selection import average_phase_tv_distance
 

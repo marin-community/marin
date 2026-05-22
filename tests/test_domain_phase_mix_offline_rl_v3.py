@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 
 from experiments.domain_phase_mix.offline_rl.build_three_phase_dense_policy_dataset import (
-    BuildThreePhaseDenseDatasetConfig,
     SEQUENCE_CHANNELS,
+    BuildThreePhaseDenseDatasetConfig,
     build_three_phase_dense_policy_dataset,
 )
 from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dataset import build_wide_history
@@ -26,8 +26,8 @@ from experiments.domain_phase_mix.offline_rl.ope import (
     predict_action_indices_for_batch,
 )
 from experiments.domain_phase_mix.offline_rl.train_three_phase_policy_bench_v3 import (
-    TransformerQNetwork,
     ThreePhasePolicyBenchV3Config,
+    TransformerQNetwork,
     _canonical_initial_batch,
     _fit_discrete_bc_policy,
     _phase0_top_decile_limit,

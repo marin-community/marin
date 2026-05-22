@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Fit a compact MCT-LRQ-style joint mixture/scale law from packet CSVs.
 
 This is a self-contained reference implementation. It is intentionally smaller
@@ -16,13 +19,12 @@ E_LRQ(w). For a fixed mixture w, it reduces to a low-dimensional scaling law.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import json
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 
 PACKET_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TABLE = PACKET_ROOT / "data" / "analysis_dataset" / "nd_scale_runs.csv"
@@ -242,8 +244,8 @@ def main() -> None:
     summary: dict[str, object] = {
         "target": args.target,
         "constants": asdict(constants),
-        "rows": int(len(y)),
-        "domains": int(len(domains)),
+        "rows": len(y),
+        "domains": len(domains),
         "families": families,
         "anchor_rows": int(anchor_mask.sum()),
         "overall": metrics(y, pred),

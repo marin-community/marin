@@ -5,26 +5,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
-    PENALTY_KIND_GROUP_LOG_THRESHOLD,
-    PENALTY_KIND_PER_DOMAIN_LOG_THRESHOLD,
-    PREMIUM_MODE_GLOBAL,
-    PREMIUM_MODE_NONE,
-    SIGNAL_KIND_RETAINED_TOTAL,
-    SIGNAL_KIND_TOTAL_LOG,
-    CCPairTotalStructuredSurrogate,
-    CCPairStructuredSurrogate,
-    StructuredEpochSurrogate,
-    load_two_phase_many_packet,
-    load_two_phase_starcoder_packet,
-    optimize_cc_globalpremium_model,
-    optimize_cc_pairtotal_model,
-)
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
     GENERIC_FAMILY_NAMES,
-    GenericFamilySignalTransform,
-    GenericFamilyRetainedTotalSurrogate,
     TUNED_GENERIC_FAMILY_PARAMS,
+    GenericFamilyRetainedTotalSurrogate,
+    GenericFamilySignalTransform,
     load_generic_family_packet,
     optimize_generic_family_model,
 )
@@ -44,6 +29,21 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ph
     load_phase_composition_packet,
     optimize_phase_composition_sparse_pls_model,
     reproduction_cv_summary,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
+    PENALTY_KIND_GROUP_LOG_THRESHOLD,
+    PENALTY_KIND_PER_DOMAIN_LOG_THRESHOLD,
+    PREMIUM_MODE_GLOBAL,
+    PREMIUM_MODE_NONE,
+    SIGNAL_KIND_RETAINED_TOTAL,
+    SIGNAL_KIND_TOTAL_LOG,
+    CCPairStructuredSurrogate,
+    CCPairTotalStructuredSurrogate,
+    StructuredEpochSurrogate,
+    load_two_phase_many_packet,
+    load_two_phase_starcoder_packet,
+    optimize_cc_globalpremium_model,
+    optimize_cc_pairtotal_model,
 )
 
 

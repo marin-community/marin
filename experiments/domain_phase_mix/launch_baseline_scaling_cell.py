@@ -12,11 +12,11 @@ checkpointing, and can skip lm-eval through `LEVANTER_SKIP_EVAL_HARNESS=1`.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from enum import StrEnum
 import logging
 import os
 import sys
+from dataclasses import dataclass
+from enum import StrEnum
 
 from marin.execution.executor import ExecutorMainConfig, executor_main
 
@@ -35,8 +35,8 @@ from experiments.domain_phase_mix.qsplit240_replay import (
     Qsplit240ReplayLaunchArtifacts,
     Qsplit240ReplayRunSpec,
     add_eval_cache_dependency_to_training_step,
-    checkpoint_initialization_path,
     build_qsplit240_replay_run_specs,
+    checkpoint_initialization_path,
     create_cache_eval_datasets_step,
     create_qsplit240_replay_experiment,
     create_run_manifest_step,
@@ -49,17 +49,17 @@ from experiments.domain_phase_mix.scaling_study_recipes import (
     ScalingStudyScale,
     resolve_scale_spec,
 )
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
+    STRATIFIED_RUN_ID,
+    STRATIFIED_RUN_NAME,
+    create_stratified_weight_config,
+)
 from experiments.domain_phase_mix.two_phase_many_genericfamily_penalty_raw_optima_baselines import (
     GENERICFAMILY_PENALTY_RAW_OPTIMA_SOURCE_EXPERIMENT,
     genericfamily_penalty_raw_optimum_summary,
 )
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
     RUN_NAME as OLMIX_UNCHEATABLE_RUN_NAME,
-)
-from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
-    STRATIFIED_RUN_ID,
-    STRATIFIED_RUN_NAME,
-    create_stratified_weight_config,
 )
 
 logger = logging.getLogger(__name__)

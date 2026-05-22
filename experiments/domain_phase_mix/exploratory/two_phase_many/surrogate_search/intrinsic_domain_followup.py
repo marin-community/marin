@@ -10,14 +10,13 @@ from enum import StrEnum
 from typing import Any
 
 import numpy as np
-from scipy.optimize import minimize
-from scipy.optimize import nnls
+from scipy.optimize import minimize, nnls
 from sklearn.decomposition import NMF
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
+    TUNED_GENERIC_FAMILY_PARAMS,
     GenericFamilyPacket,
     GenericFamilySignalTransform,
-    TUNED_GENERIC_FAMILY_PARAMS,
     load_generic_family_packet,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (

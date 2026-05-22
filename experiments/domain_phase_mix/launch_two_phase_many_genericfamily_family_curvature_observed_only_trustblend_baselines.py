@@ -15,12 +15,12 @@ import fsspec
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
 
+from experiments.domain_phase_mix import (
+    two_phase_many_genericfamily_family_curvature_observed_only_trustblend_baselines as family_curvature,
+)
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     create_two_phase_dolma3_dolmino_top_level_experiment,
-)
-from experiments.domain_phase_mix import (
-    two_phase_many_genericfamily_family_curvature_observed_only_trustblend_baselines as family_curvature,
 )
 
 logger = logging.getLogger(__name__)

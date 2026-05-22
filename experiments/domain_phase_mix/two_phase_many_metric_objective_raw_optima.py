@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass
 from functools import cache
-import json
 from pathlib import Path
 from typing import Any, Literal
 

@@ -9,8 +9,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import matplotlib
@@ -21,8 +20,8 @@ from scipy.optimize import minimize
 from sklearn.model_selection import KFold
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
-    GenericFamilyRetainedTotalSurrogate,
     TUNED_GENERIC_FAMILY_PARAMS,
+    GenericFamilyRetainedTotalSurrogate,
     load_generic_family_packet,
     optimize_generic_family_convex_hull,
     optimize_generic_family_model,

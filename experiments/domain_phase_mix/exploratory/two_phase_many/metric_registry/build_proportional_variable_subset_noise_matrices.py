@@ -26,6 +26,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.build_eval_signal_t
     METRICS_WIDE_CSV,
     _add_mmlu_category_smooth_metrics,
     _default_extra_results_csvs,
+    _latest_eval_metrics_row,
     _overlay_metrics,
     _read_csv,
 )
@@ -45,6 +46,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "raw_metric_matrix_300m"
 ROW_KIND = "noise_variable_subset_proportional"
 NOISE_SUBSET_MODE = "proportional_variable"
+TARGET_FINAL_CHECKPOINT_STEP_BY_SCALE = {
+    "60m_1p2b": 4576,
+    "300m_6b": 22887,
+}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -77,6 +82,27 @@ def _load_metrics_with_overlays() -> pd.DataFrame:
     return _add_mmlu_category_smooth_metrics(frame)
 
 
+def _hydrate_training_eval_metrics(frame: pd.DataFrame, *, scale: str) -> pd.DataFrame:
+    target_step = TARGET_FINAL_CHECKPOINT_STEP_BY_SCALE[scale]
+    rows: list[dict[str, Any]] = []
+    for _, row in frame.iterrows():
+        out = row.to_dict()
+        checkpoint_root = row.get("checkpoint_root")
+        if not isinstance(checkpoint_root, str) or checkpoint_root.strip() == "":
+            raise ValueError(f"Missing checkpoint_root for proportional noise row {row.get('run_name')}")
+        metrics = _latest_eval_metrics_row(
+            f"{checkpoint_root.rstrip('/')}/checkpoints/eval_metrics.jsonl",
+            required_step=target_step,
+        )
+        for key, value in metrics.items():
+            if not key.startswith("eval/") or not isinstance(value, int | float):
+                continue
+            if key not in out or pd.isna(out[key]):
+                out[key] = float(value)
+        rows.append(out)
+    return pd.DataFrame.from_records(rows)
+
+
 def _scale_noise_frame(metrics: pd.DataFrame, scale: str) -> pd.DataFrame:
     source_experiment = source_experiment_for_scale(scale)
     frame = metrics[
@@ -101,9 +127,11 @@ def _scale_noise_frame(metrics: pd.DataFrame, scale: str) -> pd.DataFrame:
     frame["noise_simulated_epoch_subset_seed"] = pd.NA
     frame["source_cohort"] = frame.get("source_cohort", pd.Series(pd.NA, index=frame.index)).fillna("seed_sweep")
     frame["cohort"] = frame.get("cohort", pd.Series(pd.NA, index=frame.index)).fillna("seed_sweep")
-    frame["status"] = frame.get("status", pd.Series(pd.NA, index=frame.index)).fillna("completed")
+    # Local checkpoint/eval audits are fresher than the stale logical registry
+    # status for this seed sweep.
+    frame["status"] = "completed"
     frame["family"] = family_for_scale(scale)
-    return frame
+    return _hydrate_training_eval_metrics(frame, scale=scale)
 
 
 def _expected_empty_frame(metrics: pd.DataFrame) -> pd.DataFrame:

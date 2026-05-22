@@ -17,6 +17,12 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import KFold
 
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.build_grp_evaluation_table import (
+    PENALTY_CALIBRATION_BEST_CSV,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
+    load_generic_family_packet,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_penalty_calibration import (
     CALIBRATION_CV_WEIGHT,
     CALIBRATION_DEPOPT_WEIGHT,
@@ -30,15 +36,9 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
     penalty_calibration_params_from_metrics,
     penalty_calibration_variant_parameter_counts,
 )
-from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.build_grp_evaluation_table import (
-    PENALTY_CALIBRATION_BEST_CSV,
-)
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
     MANY_DOMAIN_TARGET,
     regression_metrics,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
-    load_generic_family_packet,
 )
 from experiments.domain_phase_mix.static_batch_selection import average_phase_tv_distance
 

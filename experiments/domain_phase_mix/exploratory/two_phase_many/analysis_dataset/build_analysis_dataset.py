@@ -9,20 +9,17 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
-    NAME as PENALTY_300M_SOURCE_EXPERIMENT,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
-    build_run_specs as build_penalty_300m_run_specs,
+from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.build_metric_registry import (
+    METRICS_WIDE_CSV,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_1_2b_24b import (
     NAME as PENALTY_1_2B_SOURCE_EXPERIMENT,
@@ -30,14 +27,17 @@ from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_ra
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_1_2b_24b import (
     build_run_specs as build_penalty_1_2b_run_specs,
 )
+from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
+    NAME as PENALTY_300M_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b import (
+    build_run_specs as build_penalty_300m_run_specs,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_520m_10p4b import (
     NAME as PENALTY_520M_SOURCE_EXPERIMENT,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_genericfamily_penalty_raw_optima_520m_10p4b import (
     build_run_specs as build_penalty_520m_run_specs,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.build_metric_registry import (
-    METRICS_WIDE_CSV,
 )
 from experiments.domain_phase_mix.proxy_sweep import compute_llama_non_embedding_params
 from experiments.domain_phase_mix.scaling_study_recipes import SCALE_SPECS

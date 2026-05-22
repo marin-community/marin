@@ -36,6 +36,15 @@ from experiments.domain_phase_mix.launch_baseline_scaling_cell import (
     baseline_scaling_source_experiment,
     build_baseline_scaling_run_spec,
 )
+from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
+    BASE_NAME_PREFIX as PROPORTIONAL_CONTROLLABILITY_BASE_NAME_PREFIX,
+)
+from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
+    FAMILY as PROPORTIONAL_CONTROLLABILITY_FAMILY,
+)
+from experiments.domain_phase_mix.launch_proportional_controllability_300m import (
+    build_run_specs as build_proportional_controllability_run_specs,
+)
 from experiments.domain_phase_mix.launch_proportional_perturbation_scale_transfer import (
     BASE_NAME_PREFIX as PROPORTIONAL_PERTURBATION_BASE_NAME_PREFIX,
 )
@@ -272,6 +281,14 @@ FAMILY_METADATA = {
         family="proportional_perturbation_300m_6b",
         scale="300m_6b",
         launcher_module="experiments.domain_phase_mix.launch_proportional_perturbation_scale_transfer",
+        resubmit_scope="family",
+        objective_metric=OBJECTIVE_METRIC,
+        resubmit_supported=True,
+    ),
+    "proportional_controllability_300m_6b": FamilyMetadata(
+        family="proportional_controllability_300m_6b",
+        scale="300m_6b",
+        launcher_module="experiments.domain_phase_mix.launch_proportional_controllability_300m",
         resubmit_scope="family",
         objective_metric=OBJECTIVE_METRIC,
         resubmit_supported=True,
@@ -1329,6 +1346,95 @@ def _proportional_perturbation_rows() -> tuple[pd.DataFrame, list[dict[str, Any]
     return pd.DataFrame(rows), all_attempts
 
 
+def _proportional_controllability_rows() -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    family = PROPORTIONAL_CONTROLLABILITY_FAMILY
+    metadata = FAMILY_METADATA[family]
+    source_experiment = PROPORTIONAL_CONTROLLABILITY_BASE_NAME_PREFIX
+    specs = build_proportional_controllability_run_specs()
+    run_ids_by_name = {spec.run_name: spec.run_id for spec in specs}
+    attempts_by_run_name = _scan_checkpoint_attempts_for_run_names(
+        family=family,
+        source_experiment=source_experiment,
+        run_ids_by_name=run_ids_by_name,
+        objective_metric=metadata.objective_metric,
+    )
+    rows: list[dict[str, Any]] = []
+    all_attempts: list[dict[str, Any]] = []
+    for spec in specs:
+        attempts = attempts_by_run_name[spec.run_name]
+        all_attempts.extend(attempts)
+        canonical = _canonical_attempt(attempts)
+        analysis_attempt = _analysis_attempt(attempts, num_train_steps=spec.num_train_steps)
+        rows.append(
+            {
+                "registry_id": f"{family}:{spec.run_name}",
+                "family": family,
+                "scale": metadata.scale,
+                "source_experiment": source_experiment,
+                "source_name_prefix": source_experiment,
+                "run_id": spec.run_id,
+                "run_name": spec.run_name,
+                "wandb_run_id": None if analysis_attempt is None else analysis_attempt.get("wandb_run_id"),
+                "checkpoint_root": None if analysis_attempt is None else analysis_attempt.get("checkpoint_root"),
+                "objective_metric": metadata.objective_metric,
+                "objective_metric_value": (
+                    None if analysis_attempt is None else analysis_attempt.get("objective_metric_value")
+                ),
+                "canonical_attempt_root": None if canonical is None else canonical.get("attempt_root"),
+                "attempt_count": len(attempts),
+                "successful_attempt_count": sum(1 for attempt in attempts if attempt["executor_status"] == "SUCCESS"),
+                "launcher_module": metadata.launcher_module,
+                "resubmit_supported": metadata.resubmit_supported,
+                "resubmit_scope": metadata.resubmit_scope,
+                "resubmit_selector": "--max-concurrent 8",
+                "resubmit_hint": "--tpu-type v5p-8 --tpu-region us-east5 --tpu-zone us-east5-a " "--max-concurrent 8",
+                "logical_status": (
+                    "planned" if canonical is None else _normalize_logical_status(str(canonical["executor_status"]))
+                ),
+                "source_status": None if canonical is None else canonical.get("executor_status"),
+                "experiment_budget": spec.experiment_budget,
+                "target_budget": spec.target_budget,
+                "target_budget_multiplier": spec.target_budget_multiplier,
+                "num_train_steps": spec.num_train_steps,
+                "target_final_checkpoint_step": spec.target_final_checkpoint_step,
+                "model_family": spec.model_family,
+                "trainer_seed": spec.trainer_seed,
+                "data_seed": spec.data_seed,
+                "simulated_epoch_subset_seed": spec.simulated_epoch_subset_seed,
+                "cohort": spec.cohort,
+                "study_panel": "proportional_controllability_300m",
+                "study_cohort": spec.cohort,
+                "row_kind": "proportional_controllability",
+                "source_run_id": spec.source_run_id,
+                "source_run_name": spec.source_run_name,
+                "source_two_phase_experiment": spec.source_two_phase_experiment,
+                "candidate_run_id": spec.candidate_run_id,
+                "candidate_run_name": spec.candidate_run_name,
+                "candidate_source_experiment": spec.candidate_source_experiment,
+                "intervention_index": spec.intervention_index,
+                "intervention_id": spec.intervention_id,
+                "intervention_type": spec.intervention_type,
+                "target_domain": spec.target_domain,
+                "direction_id": spec.direction_id,
+                "direction_type": spec.direction_type,
+                "tilt_sign": spec.tilt_sign,
+                "alpha": spec.alpha,
+                "base_mass": spec.base_mass,
+                "tv_distance": spec.tv_distance,
+                "renormalizer": spec.renormalizer,
+                "phase_mode": spec.phase_mode,
+                "target_mass_before": spec.target_mass_before,
+                "target_mass_after": spec.target_mass_after,
+                "direction_positive_mass": spec.direction_positive_mass,
+                "direction_negative_mass": spec.direction_negative_mass,
+                "direction_l2p_norm": spec.direction_l2p_norm,
+                "direction_l2p_mean": spec.direction_l2p_mean,
+                **_flatten_phase_weights(spec.phase_weights),
+            }
+        )
+    return pd.DataFrame(rows), all_attempts
+
+
 def _family_rows_from_attempt_scan(
     *,
     family: str,
@@ -2183,6 +2289,9 @@ def build_registry(
     proportional_perturbation_frame, proportional_perturbation_attempts = _proportional_perturbation_rows()
     logical_frames.append(proportional_perturbation_frame)
     attempts.extend(proportional_perturbation_attempts)
+    proportional_controllability_frame, proportional_controllability_attempts = _proportional_controllability_rows()
+    logical_frames.append(proportional_controllability_frame)
+    attempts.extend(proportional_controllability_attempts)
     qsplit300m_supplemental_frame, qsplit300m_supplemental_attempts = _load_qsplit300m_supplemental_rows()
     logical_frames.append(qsplit300m_supplemental_frame)
     attempts.extend(qsplit300m_supplemental_attempts)

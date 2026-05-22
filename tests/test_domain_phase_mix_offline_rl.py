@@ -10,8 +10,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from experiments.domain_phase_mix.offline_rl import evaluate_policy_two_phase_starcoder as two_phase_eval
 from experiments.domain_phase_mix.offline_rl import evaluate_policy_three_phase_starcoder as eval_runner
+from experiments.domain_phase_mix.offline_rl import evaluate_policy_two_phase_starcoder as two_phase_eval
 from experiments.domain_phase_mix.offline_rl.build_pooled_transition_dataset import (
     BuildPooledTransitionConfig,
     build_action_grid,

@@ -80,6 +80,7 @@ ALLOWED_PANELS = {
     "proportional_perturbation_300m_6b",
     "proportional_baseline_anchor_60m_1p2b",
     "proportional_baseline_anchor_300m_6b",
+    "proportional_controllability_300m_6b",
 }
 SIGNAL_SOURCE_EXPERIMENTS = {
     "pinlin_calvin_xu/data_mixture/ngd3dm2_qsplit240_300m_6b",

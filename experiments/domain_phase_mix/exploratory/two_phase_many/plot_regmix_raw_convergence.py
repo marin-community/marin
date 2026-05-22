@@ -22,8 +22,8 @@ import matplotlib.pyplot as plt
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.convergence_plot_style import (
     BEST_OBSERVED_BPB_COLOR,
-    PROPORTIONAL_BPB_COLOR,
     PREDICTED_LINESTYLE,
+    PROPORTIONAL_BPB_COLOR,
     REGMIX_COLOR,
     VALIDATED_LINESTYLE,
 )

@@ -37,11 +37,12 @@ Usage:
 """
 
 import warnings
+from pathlib import Path
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
 from scipy.stats import spearmanr
-from pathlib import Path
 
 warnings.filterwarnings("ignore", category=UserWarning)
 

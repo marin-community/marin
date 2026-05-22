@@ -48,8 +48,8 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.fit
     _write_optimum_weight_tables,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.fit_grp_no_l2_benchmark_aggregates import (
-    AggregateObjective,
     FAMILY_SCHEMES,
+    AggregateObjective,
     _expanded_start_bank,
     _family_shares,
     _model_target_to_metric,

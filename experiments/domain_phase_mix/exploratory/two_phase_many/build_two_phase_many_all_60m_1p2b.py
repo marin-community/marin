@@ -9,13 +9,13 @@
 
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 from importlib import import_module
-import json
 from pathlib import Path
-import re
-from collections.abc import Callable
 
 import fsspec
 import numpy as np

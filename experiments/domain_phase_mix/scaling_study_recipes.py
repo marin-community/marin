@@ -13,20 +13,20 @@ from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
 
 from experiments.domain_phase_mix.proxy_sweep import (
-    REGMIX_130M_CHINCHILLA_BUDGET,
     REGMIX_1_2B_CHINCHILLA_BUDGET,
+    REGMIX_130M_CHINCHILLA_BUDGET,
     REGMIX_300M_CHINCHILLA_BUDGET,
     REGMIX_520M_CHINCHILLA_BUDGET,
     get_num_train_steps,
-    regmix_130m_muonh_base,
-    regmix_130m_proxy,
     regmix_1_2b_muonh_base,
     regmix_1_2b_proxy,
+    regmix_60m_proxy,
+    regmix_130m_muonh_base,
+    regmix_130m_proxy,
     regmix_300m_muonh_base,
     regmix_300m_proxy,
     regmix_520m_muonh_base,
     regmix_520m_proxy,
-    regmix_60m_proxy,
 )
 from experiments.domain_phase_mix.qsplit240_replay import (
     BASELINES3_PANEL,
@@ -35,6 +35,8 @@ from experiments.domain_phase_mix.qsplit240_replay import (
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     EXPERIMENT_BUDGET as REGMIX_60M_1P2B_BUDGET,
+)
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     TARGET_BUDGET as BASE_TARGET_BUDGET,
 )
 

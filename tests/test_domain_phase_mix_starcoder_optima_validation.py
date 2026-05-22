@@ -1,8 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import base64
+import json
 import subprocess
 import sys
 from pathlib import Path

@@ -14,9 +14,9 @@ Models are organized as:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
-from collections.abc import Callable
 
 import numpy as np
 from scipy.optimize import minimize

@@ -9,8 +9,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
-from scipy.optimize import nnls
+from scipy.optimize import minimize, nnls
 from scipy.stats import spearmanr
 from sklearn.model_selection import KFold
 

@@ -37,14 +37,14 @@ Usage:
 import logging
 import os
 
-from experiments.evals.task_configs import CORE_TASKS
-from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
-from experiments.domain_phase_mix.analysis import create_analysis_step
 from marin.execution.executor import executor_main
 
+from experiments.domain_phase_mix.analysis import create_analysis_step
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.domains import get_three_partition_domains
 from experiments.domain_phase_mix.experiment import MixtureExperiment
+from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
+from experiments.evals.task_configs import CORE_TASKS
 
 logger = logging.getLogger(__name__)
 

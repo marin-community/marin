@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import fsspec
 import pandas as pd
 
 from experiments.domain_phase_mix.launch_proportional_variable_subset_noise_baseline import family_for_scale
@@ -54,6 +55,23 @@ def _bool_value(value: object) -> bool:
     return bool(value)
 
 
+def _path_exists(path: str) -> bool:
+    fs, _, _ = fsspec.get_fs_token_paths(path)
+    return bool(fs.exists(path))
+
+
+def _has_final_eval_checkpoint(row: pd.Series) -> bool:
+    checkpoint_root = row.get("checkpoint_root")
+    step = pd.to_numeric(row.get("target_final_checkpoint_step"), errors="coerce")
+    if not isinstance(checkpoint_root, str) or not checkpoint_root.strip() or pd.isna(step):
+        return False
+    root = checkpoint_root.rstrip("/")
+    final_step = int(step)
+    return _path_exists(f"{root}/hf/step-{final_step}/config.json") and _path_exists(
+        f"{root}/checkpoints/eval_metrics.jsonl"
+    )
+
+
 def build_candidate_frame(
     *,
     run_registry_csv: Path,
@@ -74,6 +92,7 @@ def build_candidate_frame(
         ready = frame["is_perplexity_ready"].map(_bool_value)
     else:
         ready = frame["checkpoint_root"].notna() & frame["objective_metric_value"].notna()
+    ready = ready | frame.apply(_has_final_eval_checkpoint, axis=1)
     if not allow_incomplete and int(ready.sum()) != expected_rows:
         missing = frame.loc[~ready, ["family", "run_name", "logical_status", "checkpoint_root"]]
         raise ValueError(f"Proportional noise rows are not target-ready:\n{missing.to_string(index=False)}")

@@ -91,6 +91,9 @@ class RepetitionMode(StrEnum):
     NONE = "none"
     APPLE_SHARED_R1 = "apple_shared_r1"
     APPLE_PER_DOMAIN_R1 = "apple_per_domain_r1"
+    RAML_PHI_SHARED_R1 = "raml_phi_shared_r1"
+    RAML_PHI_PER_DOMAIN_R1 = "raml_phi_per_domain_r1"
+    RAML_PHI_PER_DOMAIN_R1_EFFECTIVE_PENALTY = "raml_phi_per_domain_r1_effective_penalty"
 
 
 class PenaltyMode(StrEnum):
@@ -120,6 +123,40 @@ class DSPVariant:
     repetition_mode: RepetitionMode = RepetitionMode.NONE
 
 
+RAML_PHI_REPETITION_MODES = {
+    RepetitionMode.RAML_PHI_SHARED_R1,
+    RepetitionMode.RAML_PHI_PER_DOMAIN_R1,
+    RepetitionMode.RAML_PHI_PER_DOMAIN_R1_EFFECTIVE_PENALTY,
+}
+PER_DOMAIN_R1_REPETITION_MODES = {
+    RepetitionMode.APPLE_PER_DOMAIN_R1,
+    RepetitionMode.RAML_PHI_PER_DOMAIN_R1,
+    RepetitionMode.RAML_PHI_PER_DOMAIN_R1_EFFECTIVE_PENALTY,
+}
+SHARED_R1_REPETITION_MODES = {
+    RepetitionMode.APPLE_SHARED_R1,
+    RepetitionMode.RAML_PHI_SHARED_R1,
+}
+
+
+def _uses_rho(variant: DSPVariant) -> bool:
+    """Return whether the variant fits a per-domain exponential saturation rate."""
+
+    return variant.repetition_mode not in RAML_PHI_REPETITION_MODES
+
+
+def _uses_raml_phi_signal(variant: DSPVariant) -> bool:
+    """Return whether repetition-aware effective exposure is the benefit feature."""
+
+    return variant.repetition_mode in RAML_PHI_REPETITION_MODES
+
+
+def _uses_repetition_penalty_exposure(variant: DSPVariant) -> bool:
+    """Return whether penalty exposure is also repetition-discounted."""
+
+    return variant.repetition_mode == RepetitionMode.RAML_PHI_PER_DOMAIN_R1_EFFECTIVE_PENALTY
+
+
 @dataclass(frozen=True)
 class FittedDSPModel:
     """Fitted DSP model."""
@@ -132,7 +169,7 @@ class FittedDSPModel:
 
     @property
     def total_param_count(self) -> int:
-        per_domain = len(self.benefit_coef)  # rho
+        per_domain = len(self.benefit_coef) if _uses_rho(self.variant) else 0
         per_domain += len(self.benefit_coef)  # benefit coefficient
         if self.variant.penalty_mode != PenaltyMode.NONE:
             per_domain += len(self.benefit_coef)  # tau
@@ -141,15 +178,22 @@ class FittedDSPModel:
         global_params += len(_phase_param_names(self.variant))
         if self.variant.retention_mode != RetentionMode.NONE:
             global_params += 1
-        if self.variant.repetition_mode == RepetitionMode.APPLE_SHARED_R1:
+        if self.variant.repetition_mode in SHARED_R1_REPETITION_MODES:
             global_params += 1
-        elif self.variant.repetition_mode == RepetitionMode.APPLE_PER_DOMAIN_R1:
+        elif self.variant.repetition_mode in PER_DOMAIN_R1_REPETITION_MODES:
             per_domain += len(self.benefit_coef)
         return int(per_domain + global_params)
 
     @property
     def m_dependent_params_per_domain(self) -> int:
-        return 4 if self.variant.penalty_mode != PenaltyMode.NONE else 2
+        count = 1  # benefit coefficient
+        if _uses_rho(self.variant):
+            count += 1
+        if self.variant.repetition_mode in PER_DOMAIN_R1_REPETITION_MODES:
+            count += 1
+        if self.variant.penalty_mode != PenaltyMode.NONE:
+            count += 2  # tau and penalty coefficient
+        return count
 
 
 VARIANTS: tuple[DSPVariant, ...] = (
@@ -216,6 +260,42 @@ VARIANTS: tuple[DSPVariant, ...] = (
             "phase-1 only changes benefit amplitude and penalty uses raw physical exposure."
         ),
         repetition_mode=RepetitionMode.APPLE_PER_DOMAIN_R1,
+    ),
+    DSPVariant(
+        name="dsp_raml_phi_shared_r1_benefit_penalty_nnls",
+        phase_mode=PhaseMode.BENEFIT_GAIN,
+        retention_mode=RetentionMode.NONE,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description=(
+            "RAML-DSP: shared r1 turns physical exposure into the benefit feature directly; "
+            "phase-1 only changes benefit amplitude and penalty uses raw exposure."
+        ),
+        repetition_mode=RepetitionMode.RAML_PHI_SHARED_R1,
+    ),
+    DSPVariant(
+        name="dsp_raml_phi_per_domain_r1_benefit_penalty_nnls",
+        phase_mode=PhaseMode.BENEFIT_GAIN,
+        retention_mode=RetentionMode.NONE,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description=(
+            "RAML-DSP: per-domain r1 turns physical exposure into the benefit feature directly; "
+            "phase-1 only changes benefit amplitude and penalty uses raw exposure."
+        ),
+        repetition_mode=RepetitionMode.RAML_PHI_PER_DOMAIN_R1,
+    ),
+    DSPVariant(
+        name="dsp_raml_phi_per_domain_r1_effective_penalty_nnls",
+        phase_mode=PhaseMode.BENEFIT_GAIN,
+        retention_mode=RetentionMode.NONE,
+        penalty_mode=PenaltyMode.LOG_SOFTPLUS_SQUARED,
+        linear_mode=LinearMode.NNLS,
+        description=(
+            "RAML-DSP diagnostic: per-domain r1 drives both benefit exposure and penalty exposure, "
+            "testing whether overexposure should decay with effective repetition."
+        ),
+        repetition_mode=RepetitionMode.RAML_PHI_PER_DOMAIN_R1_EFFECTIVE_PENALTY,
     ),
     DSPVariant(
         name="dsp_effective_exposure_exp_retention_penalty_nnls",
@@ -372,9 +452,12 @@ def _load_packet() -> PacketData:
 
 def _unpack_theta(theta: np.ndarray, variant: DSPVariant, num_domains: int) -> dict[str, float | np.ndarray]:
     cursor = 0
-    log_rho = np.clip(theta[cursor : cursor + num_domains], np.log(1e-4), np.log(2.0))
-    cursor += num_domains
-    params: dict[str, float | np.ndarray] = {"rho": np.exp(log_rho)}
+    if _uses_rho(variant):
+        log_rho = np.clip(theta[cursor : cursor + num_domains], np.log(1e-4), np.log(2.0))
+        cursor += num_domains
+        params: dict[str, float | np.ndarray] = {"rho": np.exp(log_rho)}
+    else:
+        params = {"rho": np.ones(num_domains, dtype=float)}
     if variant.penalty_mode != PenaltyMode.NONE:
         params["tau"] = np.clip(theta[cursor : cursor + num_domains], -2.0, 8.0)
         cursor += num_domains
@@ -384,10 +467,10 @@ def _unpack_theta(theta: np.ndarray, variant: DSPVariant, num_domains: int) -> d
     if variant.retention_mode != RetentionMode.NONE:
         params["lam"] = float(np.exp(np.clip(theta[cursor], np.log(1e-4), np.log(100.0))))
         cursor += 1
-    if variant.repetition_mode == RepetitionMode.APPLE_SHARED_R1:
+    if variant.repetition_mode in SHARED_R1_REPETITION_MODES:
         params["r1"] = float(np.exp(np.clip(theta[cursor], np.log(1e-3), np.log(100.0))))
         cursor += 1
-    elif variant.repetition_mode == RepetitionMode.APPLE_PER_DOMAIN_R1:
+    elif variant.repetition_mode in PER_DOMAIN_R1_REPETITION_MODES:
         log_r1 = np.clip(theta[cursor : cursor + num_domains], np.log(1e-3), np.log(100.0))
         cursor += num_domains
         params["r1"] = np.exp(log_r1)
@@ -397,30 +480,34 @@ def _unpack_theta(theta: np.ndarray, variant: DSPVariant, num_domains: int) -> d
 
 
 def _pack_params(params: dict[str, float | np.ndarray], variant: DSPVariant) -> np.ndarray:
-    values: list[np.ndarray] = [np.log(np.asarray(params["rho"], dtype=float))]
+    values: list[np.ndarray] = []
+    if _uses_rho(variant):
+        values.append(np.log(np.asarray(params["rho"], dtype=float)))
     if variant.penalty_mode != PenaltyMode.NONE:
         values.append(np.asarray(params["tau"], dtype=float))
     for phase_param_name in _phase_param_names(variant):
         values.append(np.asarray([np.log(float(params[phase_param_name]))], dtype=float))
     if variant.retention_mode != RetentionMode.NONE:
         values.append(np.asarray([np.log(float(params["lam"]))], dtype=float))
-    if variant.repetition_mode == RepetitionMode.APPLE_SHARED_R1:
+    if variant.repetition_mode in SHARED_R1_REPETITION_MODES:
         values.append(np.asarray([np.log(float(params["r1"]))], dtype=float))
-    elif variant.repetition_mode == RepetitionMode.APPLE_PER_DOMAIN_R1:
+    elif variant.repetition_mode in PER_DOMAIN_R1_REPETITION_MODES:
         values.append(np.log(np.asarray(params["r1"], dtype=float)))
     return np.concatenate(values)
 
 
 def _bounds(variant: DSPVariant, num_domains: int) -> list[tuple[float, float]]:
-    bounds: list[tuple[float, float]] = [(np.log(1e-4), np.log(2.0)) for _ in range(num_domains)]
+    bounds: list[tuple[float, float]] = []
+    if _uses_rho(variant):
+        bounds.extend([(np.log(1e-4), np.log(2.0)) for _ in range(num_domains)])
     if variant.penalty_mode != PenaltyMode.NONE:
         bounds.extend([(-2.0, 8.0) for _ in range(num_domains)])
     bounds.extend([(np.log(1e-4), np.log(100.0)) for _ in _phase_param_names(variant)])
     if variant.retention_mode != RetentionMode.NONE:
         bounds.append((np.log(1e-4), np.log(100.0)))
-    if variant.repetition_mode == RepetitionMode.APPLE_SHARED_R1:
+    if variant.repetition_mode in SHARED_R1_REPETITION_MODES:
         bounds.append((np.log(1e-3), np.log(100.0)))
-    elif variant.repetition_mode == RepetitionMode.APPLE_PER_DOMAIN_R1:
+    elif variant.repetition_mode in PER_DOMAIN_R1_REPETITION_MODES:
         bounds.extend([(np.log(1e-3), np.log(100.0)) for _ in range(num_domains)])
     return bounds
 
@@ -453,6 +540,20 @@ def _maybe_repetition_discount_saturation(
     return _apple_effective_repetition(exposure, params["r1"])
 
 
+def _benefit_signal_from_saturation_exposure(
+    saturation_exposure: np.ndarray,
+    variant: DSPVariant,
+    params: dict[str, float | np.ndarray],
+) -> np.ndarray:
+    """Compute the pre-phase-amplified benefit feature."""
+
+    if _uses_raml_phi_signal(variant):
+        return _apple_effective_repetition(saturation_exposure, params["r1"])
+    rho = np.asarray(params["rho"], dtype=float)[None, :]
+    exposure = _maybe_repetition_discount_saturation(saturation_exposure, variant, params)
+    return 1.0 - np.exp(-rho * exposure)
+
+
 def _features(
     weights: np.ndarray,
     packet: PacketData,
@@ -463,7 +564,6 @@ def _features(
     p1 = weights[:, 1, :]
     e0 = p0 * packet.c0[None, :]
     e1 = p1 * packet.c1[None, :]
-    rho = np.asarray(params["rho"], dtype=float)[None, :]
     if variant.retention_mode == RetentionMode.EXP_PHASE0:
         retained_e0 = np.exp(-float(params["lam"]) * (1.0 - p1)) * e0
         overlap_bonus = 0.0
@@ -475,9 +575,8 @@ def _features(
         overlap_bonus = 0.0
     gamma_benefit, gamma_saturation, gamma_penalty = _phase_gammas(params, variant)
     saturation_exposure = retained_e0 + gamma_saturation * e1 + overlap_bonus
-    saturation_exposure = _maybe_repetition_discount_saturation(saturation_exposure, variant, params)
     penalty_exposure = retained_e0 + gamma_penalty * e1 + overlap_bonus
-    signal = 1.0 - np.exp(-rho * saturation_exposure)
+    signal = _benefit_signal_from_saturation_exposure(saturation_exposure, variant, params)
     if gamma_benefit > 0.0:
         base_exposure = retained_e0 + e1 + PHASE_EPS
         phase1_share = e1 / base_exposure
@@ -487,6 +586,8 @@ def _features(
         penalty = np.zeros_like(signal)
     else:
         tau = np.asarray(params["tau"], dtype=float)[None, :]
+        if _uses_repetition_penalty_exposure(variant):
+            penalty_exposure = _apple_effective_repetition(penalty_exposure, params["r1"])
         penalty = softplus(np.log1p(penalty_exposure) - tau) ** 2
     return signal, penalty
 
@@ -567,7 +668,9 @@ def _start_bank(packet: PacketData, variant: DSPVariant) -> tuple[np.ndarray, ..
         (2.0, 0.5, 2.0),
         (4.0, 1.0, 8.0),
     ):
-        params: dict[str, float | np.ndarray] = {"rho": np.clip(base_rho * rho_scale, 1e-4, 2.0)}
+        params: dict[str, float | np.ndarray] = {}
+        if _uses_rho(variant):
+            params["rho"] = np.clip(base_rho * rho_scale, 1e-4, 2.0)
         if variant.penalty_mode != PenaltyMode.NONE:
             params["tau"] = np.clip(base_tau + tau_shift, -2.0, 8.0)
         for phase_param_name in _phase_param_names(variant):
@@ -579,23 +682,25 @@ def _start_bank(packet: PacketData, variant: DSPVariant) -> tuple[np.ndarray, ..
                 params[phase_param_name] = gamma
         if variant.retention_mode != RetentionMode.NONE:
             params["lam"] = 1.0
-        if variant.repetition_mode == RepetitionMode.APPLE_SHARED_R1:
+        if variant.repetition_mode in SHARED_R1_REPETITION_MODES:
             params["r1"] = max(0.25, gamma)
-        elif variant.repetition_mode == RepetitionMode.APPLE_PER_DOMAIN_R1:
+        elif variant.repetition_mode in PER_DOMAIN_R1_REPETITION_MODES:
             params["r1"] = np.full(packet.m, max(0.25, gamma), dtype=float)
         starts.append(_pack_params(params, variant))
 
     for _ in range(3):
-        params = {"rho": np.clip(base_rho * np.exp(rng.normal(scale=0.7, size=packet.m)), 1e-4, 2.0)}
+        params = {}
+        if _uses_rho(variant):
+            params["rho"] = np.clip(base_rho * np.exp(rng.normal(scale=0.7, size=packet.m)), 1e-4, 2.0)
         if variant.penalty_mode != PenaltyMode.NONE:
             params["tau"] = np.clip(base_tau + rng.normal(scale=0.8, size=packet.m), -2.0, 8.0)
         for phase_param_name in _phase_param_names(variant):
             params[phase_param_name] = float(np.exp(rng.normal(loc=np.log(2.0), scale=0.9)))
         if variant.retention_mode != RetentionMode.NONE:
             params["lam"] = float(np.exp(rng.normal(loc=0.0, scale=0.9)))
-        if variant.repetition_mode == RepetitionMode.APPLE_SHARED_R1:
+        if variant.repetition_mode in SHARED_R1_REPETITION_MODES:
             params["r1"] = float(np.exp(rng.normal(loc=np.log(2.0), scale=0.9)))
-        elif variant.repetition_mode == RepetitionMode.APPLE_PER_DOMAIN_R1:
+        elif variant.repetition_mode in PER_DOMAIN_R1_REPETITION_MODES:
             params["r1"] = np.exp(rng.normal(loc=np.log(2.0), scale=0.9, size=packet.m))
         starts.append(_pack_params(params, variant))
     return tuple(starts)
@@ -728,13 +833,6 @@ def _value_grad_logits(model: FittedDSPModel, packet: PacketData, logits: np.nda
     penalty_exposure = retained_e0 + gamma_penalty * e1 + overlap
     dsaturation_dp0 = dexposure_dp0_base + doverlap_dp0
     dsaturation_dp1 = dexposure_dp1_retention + gamma_saturation * packet.c1 + doverlap_dp1
-    if model.variant.repetition_mode != RepetitionMode.NONE:
-        repetition_derivative = _apple_effective_repetition_derivative(saturation_exposure_raw, model.params["r1"])
-        saturation_exposure = _apple_effective_repetition(saturation_exposure_raw, model.params["r1"])
-        dsaturation_dp0 = repetition_derivative * dsaturation_dp0
-        dsaturation_dp1 = repetition_derivative * dsaturation_dp1
-    else:
-        saturation_exposure = saturation_exposure_raw
     dpenalty_exposure_dp0 = dexposure_dp0_base + doverlap_dp0
     dpenalty_exposure_dp1 = dexposure_dp1_retention + gamma_penalty * packet.c1 + doverlap_dp1
 
@@ -742,26 +840,51 @@ def _value_grad_logits(model: FittedDSPModel, packet: PacketData, logits: np.nda
     ddenom_dp0 = dexposure_dp0_base
     ddenom_dp1 = dexposure_dp1_retention + packet.c1
     r = e1 / denom
-    base_signal = 1.0 - np.exp(-rho * saturation_exposure)
-    dbase_signal = rho * np.exp(-rho * saturation_exposure)
+    if _uses_raml_phi_signal(model.variant):
+        repetition_derivative = _apple_effective_repetition_derivative(saturation_exposure_raw, model.params["r1"])
+        base_signal = _apple_effective_repetition(saturation_exposure_raw, model.params["r1"])
+        dbase_signal_dp0 = repetition_derivative * dsaturation_dp0
+        dbase_signal_dp1 = repetition_derivative * dsaturation_dp1
+    else:
+        if model.variant.repetition_mode != RepetitionMode.NONE:
+            repetition_derivative = _apple_effective_repetition_derivative(saturation_exposure_raw, model.params["r1"])
+            saturation_exposure = _apple_effective_repetition(saturation_exposure_raw, model.params["r1"])
+            dsaturation_dp0 = repetition_derivative * dsaturation_dp0
+            dsaturation_dp1 = repetition_derivative * dsaturation_dp1
+        else:
+            saturation_exposure = saturation_exposure_raw
+        base_signal = 1.0 - np.exp(-rho * saturation_exposure)
+        dbase_signal = rho * np.exp(-rho * saturation_exposure)
+        dbase_signal_dp0 = dbase_signal * dsaturation_dp0
+        dbase_signal_dp1 = dbase_signal * dsaturation_dp1
     signal_amp = 1.0 + gamma_benefit * r
     dsignal_amp_dp0 = gamma_benefit * (-e1 * ddenom_dp0 / (denom * denom))
     dsignal_amp_dp1 = gamma_benefit * (packet.c1 * denom - e1 * ddenom_dp1) / (denom * denom)
     signal = signal_amp * base_signal
-    dsignal_dp0 = signal_amp * dbase_signal * dsaturation_dp0 + base_signal * dsignal_amp_dp0
-    dsignal_dp1 = signal_amp * dbase_signal * dsaturation_dp1 + base_signal * dsignal_amp_dp1
+    dsignal_dp0 = signal_amp * dbase_signal_dp0 + base_signal * dsignal_amp_dp0
+    dsignal_dp1 = signal_amp * dbase_signal_dp1 + base_signal * dsignal_amp_dp1
 
     if has_penalty:
         tau = np.asarray(model.params["tau"], dtype=float)
-        u = np.log1p(penalty_exposure) - tau
+        penalty_feature_exposure = penalty_exposure
+        dpenalty_feature_dp0 = dpenalty_exposure_dp0
+        dpenalty_feature_dp1 = dpenalty_exposure_dp1
+        if _uses_repetition_penalty_exposure(model.variant):
+            repetition_derivative = _apple_effective_repetition_derivative(penalty_exposure, model.params["r1"])
+            penalty_feature_exposure = _apple_effective_repetition(penalty_exposure, model.params["r1"])
+            dpenalty_feature_dp0 = repetition_derivative * dpenalty_feature_dp0
+            dpenalty_feature_dp1 = repetition_derivative * dpenalty_feature_dp1
+        u = np.log1p(penalty_feature_exposure) - tau
         sp = softplus(u)
         penalty = sp**2
-        dpenalty = 2.0 * sp * sigmoid(u) / (1.0 + penalty_exposure)
+        dpenalty = 2.0 * sp * sigmoid(u) / (1.0 + penalty_feature_exposure)
     else:
         penalty = np.zeros_like(signal)
         dpenalty = np.zeros_like(signal)
-    grad_p0 = -benefit_coef * dsignal_dp0 + penalty_coef * dpenalty * dpenalty_exposure_dp0
-    grad_p1 = -benefit_coef * dsignal_dp1 + penalty_coef * dpenalty * dpenalty_exposure_dp1
+        dpenalty_feature_dp0 = np.zeros_like(signal)
+        dpenalty_feature_dp1 = np.zeros_like(signal)
+    grad_p0 = -benefit_coef * dsignal_dp0 + penalty_coef * dpenalty * dpenalty_feature_dp0
+    grad_p1 = -benefit_coef * dsignal_dp1 + penalty_coef * dpenalty * dpenalty_feature_dp1
     value = float(model.intercept - benefit_coef @ signal + penalty_coef @ penalty)
 
     grad_logits0 = p0 * (grad_p0 - np.dot(grad_p0, p0))

@@ -10,8 +10,7 @@ from enum import StrEnum
 from typing import Any
 
 import numpy as np
-from scipy.optimize import minimize
-from scipy.optimize import nnls
+from scipy.optimize import minimize, nnls
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
     MANY_DOMAIN_TARGET,

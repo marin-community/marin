@@ -1,0 +1,16 @@
+{
+  "basin_hopping_iters": 0,
+  "coarse_top_k": 3,
+  "dsp_beats_ridge": 187,
+  "elapsed_seconds": 768.0014357500477,
+  "maxiter": 36,
+  "median_dsp_spearman": 0.4320496553616131,
+  "median_ridge_spearman": 0.3028681551251651,
+  "metric_source": "best_by_item",
+  "ridge_fold_seed": 0,
+  "rows": 232,
+  "status_counts": {
+    "ok": 232
+  },
+  "workers": 16
+}

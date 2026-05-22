@@ -33,7 +33,7 @@ from enum import Enum
 
 import numpy as np
 
-from experiments.domain_phase_mix.config import WeightConfig, ExperimentConfig
+from experiments.domain_phase_mix.config import ExperimentConfig, WeightConfig
 
 
 class SamplingStrategy(str, Enum):

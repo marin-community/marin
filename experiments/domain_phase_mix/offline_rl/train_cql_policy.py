@@ -16,7 +16,7 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.offline_rl.contracts import DEFAULT_STATE_KEYS, DEFAULT_OBJECTIVE_METRIC
+from experiments.domain_phase_mix.offline_rl.contracts import DEFAULT_OBJECTIVE_METRIC, DEFAULT_STATE_KEYS
 from experiments.domain_phase_mix.offline_rl.policy_artifact import PolicyArtifactV1, save_policy_artifact
 
 logger = logging.getLogger(__name__)

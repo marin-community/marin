@@ -16,8 +16,8 @@ shrinkage to prevent noisy or duplicated suites from dominating the objective.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,10 @@ import pandas as pd
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry import (
     fit_grp_300m_perplexity_proxy_benchmark as proxy,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.build_metric_registry import (
+    METRICS_WIDE_CSV,
+    WEIGHT_PREFIXES,
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.fit_grp_300m_mean_choice_prob_norm import (
     _choice_prob_columns,
@@ -41,10 +45,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.fit
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.fit_grp_no_l2_benchmark_aggregates import (
     DEFAULT_FAMILY_SCHEME,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.build_metric_registry import (
-    METRICS_WIDE_CSV,
-    WEIGHT_PREFIXES,
 )
 
 COHORT = "signal"

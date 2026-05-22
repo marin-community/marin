@@ -26,12 +26,13 @@
 # ///
 """Test how sample size affects optimal mixture stability."""
 
+import warnings
+from pathlib import Path
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
 from sklearn.model_selection import KFold
-from pathlib import Path
-import warnings
 
 warnings.filterwarnings("ignore")
 

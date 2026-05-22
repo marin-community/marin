@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import re
+
 from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
 
 from experiments.domain_phase_mix.config import Domain, PhaseSchedule
 from experiments.domain_phase_mix.experiment import MixtureExperiment
+from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     BATCH_SIZE,
     EVAL_DATASETS_CACHE_PATH,
@@ -26,7 +28,6 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     build_top_level_domains,
     create_two_phase_dolma3_dolmino_top_level_optimizer_config,
 )
-from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 
 COLLAPSED_NAME = f"{NAME}_topic_collapsed"
 _CC_DOMAIN_PATTERN = re.compile(r"^(dolma3_cc/.+)_(high|low)$")

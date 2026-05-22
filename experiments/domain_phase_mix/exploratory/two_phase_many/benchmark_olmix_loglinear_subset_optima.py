@@ -10,8 +10,8 @@
 from __future__ import annotations
 
 import argparse
-from functools import cache
 import json
+from functools import cache
 from pathlib import Path
 
 import fsspec

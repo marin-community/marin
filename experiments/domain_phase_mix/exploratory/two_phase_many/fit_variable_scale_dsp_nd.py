@@ -23,6 +23,7 @@ effects.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,14 +37,22 @@ from sklearn.model_selection import GroupKFold
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = SCRIPT_DIR / "analysis_dataset"
-OUTPUT_DIR = SCRIPT_DIR / "reference_outputs" / "variable_scale_dsp_nd_20260515"
+OUTPUT_DIR = Path(
+    os.environ.get(
+        "MARIN_VARIABLE_SCALE_DSP_OUTPUT_DIR",
+        SCRIPT_DIR / "reference_outputs" / "variable_scale_dsp_nd_20260515",
+    )
+)
 IMG_DIR = OUTPUT_DIR / "img"
-FROZEN_DSP_MODEL_PATH = (
-    SCRIPT_DIR
-    / "reference_outputs"
-    / "dsp_canonical_variants_300m_20260510"
-    / "dsp_effective_exposure_penalty_nnls"
-    / "model.json"
+FROZEN_DSP_MODEL_PATH = Path(
+    os.environ.get(
+        "MARIN_FROZEN_DSP_MODEL_PATH",
+        SCRIPT_DIR
+        / "reference_outputs"
+        / "dsp_canonical_variants_300m_20260510"
+        / "dsp_effective_exposure_penalty_nnls"
+        / "model.json",
+    )
 )
 PRIMARY_METRIC = "eval/uncheatable_eval/bpb"
 N_REF = 58_998_528.0
@@ -115,13 +124,44 @@ def softplus(x: np.ndarray) -> np.ndarray:
     return np.where(x > 20.0, x, np.log1p(np.exp(np.minimum(x, 20.0))))
 
 
+def effective_repeat(exposure: np.ndarray, r1: float | np.ndarray) -> np.ndarray:
+    """Apple-style repeated exposure discount."""
+
+    r1_array = np.asarray(r1, dtype=float)
+    repeated = 1.0 + r1_array * (1.0 - np.exp(-np.maximum(exposure - 1.0, 0.0) / r1_array))
+    return np.where(exposure <= 1.0, exposure, repeated)
+
+
+def frozen_array_or_float(value: Any) -> float | np.ndarray:
+    """Decode a frozen model JSON scalar or per-domain array."""
+
+    if isinstance(value, list):
+        return np.asarray(value, dtype=float)
+    return float(value)
+
+
+def phase_gammas(params: dict[str, Any]) -> tuple[float, float, float]:
+    """Decode phase benefit/saturation/penalty multipliers from a frozen DSP model."""
+
+    variant = str(params.get("variant", ""))
+    if {"gamma_benefit", "gamma_saturation", "gamma_penalty"}.issubset(params):
+        return float(params["gamma_benefit"]), float(params["gamma_saturation"]), float(params["gamma_penalty"])
+    if {"gamma_saturation", "gamma_penalty"}.issubset(params):
+        return 0.0, float(params["gamma_saturation"]), float(params["gamma_penalty"])
+    gamma = float(params.get("gamma", 0.0))
+    if "effective_exposure" in variant:
+        return 0.0, gamma, gamma
+    return gamma, 1.0, 1.0
+
+
 def load_data() -> dict[str, Any]:
     """Load the current ND analysis packet and proportional references."""
 
     frame = pd.read_csv(DATA_DIR / "nd_scale_runs.csv", low_memory=False)
     payload = np.load(DATA_DIR / "nd_scale_packet.npz", allow_pickle=True)
     frozen_model = json.loads(FROZEN_DSP_MODEL_PATH.read_text())
-    frozen_params = frozen_model["params"]
+    frozen_params = {key: frozen_array_or_float(value) for key, value in frozen_model["params"].items()}
+    frozen_params["variant"] = str(frozen_model.get("variant", FROZEN_DSP_MODEL_PATH.parent.name))
     mask = np.asarray(payload["primary_y_mask"], dtype=bool)
     frame = frame.loc[mask].reset_index(drop=True)
     weights = np.asarray(payload["weights"], dtype=float)[mask]
@@ -160,9 +200,9 @@ def load_data() -> dict[str, Any]:
         "model_sizes": model_sizes,
         "realized_train_tokens": train_tokens,
         "frozen_params": {
+            **frozen_params,
             "rho": np.asarray(frozen_params["rho"], dtype=float),
             "tau": np.asarray(frozen_params["tau"], dtype=float),
-            "gamma": float(frozen_params["gamma"]),
         },
     }
 
@@ -198,7 +238,6 @@ def unpack_theta(
     cursor = 0
     rho = np.asarray(frozen_params["rho"], dtype=float)
     tau = np.asarray(frozen_params["tau"], dtype=float)
-    gamma = float(frozen_params["gamma"])
     if len(rho) != num_domains or len(tau) != num_domains:
         raise ValueError(f"Frozen DSP geometry has {len(rho)} rho/{len(tau)} tau values for {num_domains} domains")
     alpha = float(np.exp(theta[cursor]))
@@ -225,9 +264,9 @@ def unpack_theta(
     if cursor != len(theta):
         raise ValueError(f"unused theta values for {spec.name}: cursor={cursor}, len={len(theta)}")
     return {
+        **frozen_params,
         "rho": rho,
         "tau": tau,
-        "gamma": gamma,
         "alpha": alpha,
         "beta": beta,
         "delta": delta,
@@ -302,11 +341,18 @@ def dsp_features(
     e1 = weights[:, 1, :] * multipliers[:, 1, :]
     d = data_tokens / D_REF
     exposure_scale = np.power(np.maximum(d, 1e-12), float(params["omega"]))[:, None]
-    z = exposure_scale * (e0 + float(params["gamma"]) * e1)
+    gamma_benefit, gamma_saturation, gamma_penalty = phase_gammas(params)
+    saturation_exposure = exposure_scale * (e0 + gamma_saturation * e1)
+    penalty_exposure = exposure_scale * (e0 + gamma_penalty * e1)
+    if "apple_repetition" in str(params.get("variant", "")):
+        saturation_exposure = effective_repeat(saturation_exposure, params["r1"])
     rho = np.asarray(params["rho"], dtype=float)[None, :]
     tau = np.asarray(params["tau"], dtype=float)[None, :]
-    signal = 1.0 - np.exp(-rho * z)
-    penalty = softplus(np.log1p(z) - tau) ** 2
+    signal = 1.0 - np.exp(-rho * saturation_exposure)
+    if gamma_benefit > 0.0:
+        phase1_share = e1 / (e0 + e1 + 1e-9)
+        signal = (1.0 + gamma_benefit * phase1_share) * signal
+    penalty = softplus(np.log1p(penalty_exposure) - tau) ** 2
     return signal, penalty
 
 
@@ -510,7 +556,10 @@ def decoded_params(model: FittedVariableScaleDSP, data: dict[str, Any]) -> dict[
         "alpha": float(params["alpha"]),
         "beta": float(params["beta"]),
         "delta": float(params["delta"]),
-        "gamma": float(params["gamma"]),
+        "variant": str(params.get("variant", "")),
+        "gamma_benefit": phase_gammas(params)[0],
+        "gamma_saturation": phase_gammas(params)[1],
+        "gamma_penalty": phase_gammas(params)[2],
         "kappa_benefit": float(params["kappa_benefit"]),
         "kappa_penalty": float(params["kappa_penalty"]),
         "omega": float(params["omega"]),
@@ -520,6 +569,9 @@ def decoded_params(model: FittedVariableScaleDSP, data: dict[str, Any]) -> dict[
         "tau_min": float(np.min(params["tau"])),
         "tau_median": float(np.median(params["tau"])),
         "tau_max": float(np.max(params["tau"])),
+        "r1_min": float(np.min(params["r1"])) if "r1" in params else np.nan,
+        "r1_median": float(np.median(params["r1"])) if "r1" in params else np.nan,
+        "r1_max": float(np.max(params["r1"])) if "r1" in params else np.nan,
         "frozen_domain_geometry": True,
         "fitted_nonlinear_param_count": len(model.theta),
     }

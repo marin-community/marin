@@ -10,8 +10,8 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import matplotlib
 import numpy as np

@@ -40,20 +40,21 @@ Models tested for each feature set:
 
 import sys
 import warnings
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
 from scipy.optimize import minimize
-from sklearn.model_selection import KFold
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import (
-    Matern,
     RBF,
-    WhiteKernel,
     ConstantKernel,
+    Matern,
     RationalQuadratic,
+    WhiteKernel,
 )
+from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
 
 sys.stdout.reconfigure(line_buffering=True)

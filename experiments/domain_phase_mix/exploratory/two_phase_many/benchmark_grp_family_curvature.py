@@ -16,9 +16,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
-    load_generic_family_packet,
-)
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_flexible_signal import (
     FLEXIBLE_VARIANT_NAMES,
     GenericFamilyFlexibleSignalSurrogate,
@@ -29,6 +26,9 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
     flexible_signal_params_from_metrics,
     optimize_flexible_signal_model,
     tune_flexible_signal_params_observed_only,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
+    load_generic_family_packet,
 )
 
 DEFAULT_VARIANTS = ("log", "power", "boxcox", "power_family", "boxcox_family", "power_boxcox_family")

@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import marimo
 
 __generated_with = "0.21.0"
@@ -8,8 +11,8 @@ app = marimo.App(width="full")
 def _():
     import marimo as mo
     import numpy as np
-    import polars as pl
     import plotly.graph_objects as go
+    import polars as pl
     from plotly.subplots import make_subplots
 
     return go, make_subplots, mo, np, pl
@@ -18,8 +21,17 @@ def _():
 @app.cell
 def _():
     PALETTE = [
-        "#1877F2", "#F0701A", "#5A24C7", "#E42C97", "#00487C", "#0EAC96",
-        "#AB76FF", "#B50550", "#0099E6", "#22085F", "#783301",
+        "#1877F2",
+        "#F0701A",
+        "#5A24C7",
+        "#E42C97",
+        "#00487C",
+        "#0EAC96",
+        "#AB76FF",
+        "#B50550",
+        "#0099E6",
+        "#22085F",
+        "#783301",
     ]
     PLOTLY_TEMPLATE = "plotly_white"
 
@@ -30,8 +42,10 @@ def _():
             legend=dict(
                 font=dict(size=11),
                 orientation="h",
-                yanchor="top", y=-0.15,
-                xanchor="center", x=0.5,
+                yanchor="top",
+                y=-0.15,
+                xanchor="center",
+                x=0.5,
                 bgcolor="rgba(255,255,255,0.85)",
                 bordercolor="rgba(200,200,200,0.5)",
                 borderwidth=1,
@@ -39,8 +53,10 @@ def _():
         )
         if title is not None:
             _layout["title"] = dict(
-                text=title, font=dict(size=18),
-                x=0.5, xanchor="center",
+                text=title,
+                font=dict(size=18),
+                x=0.5,
+                xanchor="center",
             )
         fig.update_layout(**_layout)
         fig.update_xaxes(showgrid=True, gridcolor="rgba(220,220,220,0.5)")
@@ -52,7 +68,8 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     # 300M data-mixture pipeline: IRT aggregate → P3 mixture model → in-distribution candidate search
 
     Five-step pipeline:
@@ -70,13 +87,15 @@ def _(mo):
        Three nonlinear knobs (η, a, p) selected by **nested 5×5 CV**; ridge fits independent γ₀ and γ₁ so phase-0 and phase-1 over-epoching can be priced differently. The single-γ form let the optimizer dump phase-1 mass on small high-β domains (η = 5 amplifies phase-1 signal but the combined penalty wasn't η-aware). Splitting per-phase fixes that asymmetry.
     4. **Bootstrap ridge coefficients** (200 resamples) to get a posterior over the linear head, hence per-candidate predictive uncertainty.
     5. **Score 200k Dirichlet-jittered candidates** sampled around observed sweep mixtures, rank by **LCB = predicted_mean − κ · σ_bootstrap** (κ=1).
-    """)
+    """
+    )
     return
 
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ### Functional-form comparison: full GRP vs P3
 
     **Full GRP** (`grp_no_l2_exact.py` in the scaling packet) — 9 nonlinear params, 32 linear coefs, NNLS.
@@ -127,15 +146,14 @@ def _(mo):
     **Why these specific cuts.** An incremental ablation under **honest nested CV** (no hyperparameter leakage) showed the only two pieces that earned their R² were combined exposure with a single η and the global power transform E^a. Per-family curvature, family penalties, family-total signals, CC pair aggregation, and NNLS each cost 0–2pp rather than helping when the leakage from grid-tuning on the validation folds was removed.
 
     Result: 9 nonlinear knobs → **3** (η, a, p); 32 NNLS linear coefs → **39 ridge linear coefs + 2 penalty coefs (γ_0, γ_1)**. About one-third of the parameter budget for similar predictive performance.
-    """)
+    """
+    )
     return
 
 
 @app.cell
 def _(np, pl):
-    raw = pl.read_csv("raw_metric_matrix_300m.csv", infer_schema_length=500).filter(
-        pl.col("status") == "completed"
-    )
+    raw = pl.read_csv("raw_metric_matrix_300m.csv", infer_schema_length=500).filter(pl.col("status") == "completed")
     noise_df = pl.read_csv("noise_baseline_run00097_300m.csv", infer_schema_length=200)
 
     _MMLU_KEEP = {
@@ -143,9 +161,12 @@ def _(np, pl):
         "lm_eval/mmlu_sl_verb_5shot/bpb",
     }
     _AGG_DROP = {
-        "eval/bpb", "eval/macro_bpb",
-        "eval/paloma/bpb", "eval/paloma/macro_bpb",
-        "eval/uncheatable_eval/bpb", "eval/uncheatable_eval/macro_bpb",
+        "eval/bpb",
+        "eval/macro_bpb",
+        "eval/paloma/bpb",
+        "eval/paloma/macro_bpb",
+        "eval/uncheatable_eval/bpb",
+        "eval/uncheatable_eval/macro_bpb",
     }
     _TASK_DROP = {
         "teacher_forced/gsm8k_5shot_answer_hash/bpb",
@@ -157,12 +178,14 @@ def _(np, pl):
             return False
         if c in _AGG_DROP or c in _TASK_DROP:
             return False
-        if not c.startswith((
-            "eval/uncheatable_eval/",
-            "lm_eval/",
-            "mcq_smooth/",
-            "teacher_forced/",
-        )):
+        if not c.startswith(
+            (
+                "eval/uncheatable_eval/",
+                "lm_eval/",
+                "mcq_smooth/",
+                "teacher_forced/",
+            )
+        ):
             return False
         if c.startswith("lm_eval/mmlu_") and c not in _MMLU_KEEP:
             return False
@@ -209,9 +232,11 @@ def _(np, pl):
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Step 1 — IRT features and aggregate function
-    """)
+    """
+    )
     return
 
 
@@ -280,24 +305,20 @@ def _(Z_swarm, k_horn, noise_share, np):
         _ZtT = Z_swarm.T @ _Th
         _Ln = _ZtT @ np.linalg.inv(_S)
         _Ln = np.clip(_Ln, 0.0, None)
-        _Pf = (
-            (Z_swarm ** 2).mean(axis=0)
-            - 2 * (_ZtT * _Ln).sum(axis=1) / _n
-            + ((_Ln @ _S) * _Ln).sum(axis=1) / _n
-        )
+        _Pf = (Z_swarm**2).mean(axis=0) - 2 * (_ZtT * _Ln).sum(axis=1) / _n + ((_Ln @ _S) * _Ln).sum(axis=1) / _n
         _Pf = np.clip(_Pf, 1e-6, None)
         _Pn = np.where(_psi_fixed, _psi_anchor, _Pf)
         if np.max(np.abs(_Ln - Lam)) < 1e-7:
             Lam, Psi = _Ln, _Pn
             break
         Lam, Psi = _Ln, _Pn
-    _order = np.argsort(-(Lam ** 2).sum(axis=0))
+    _order = np.argsort(-(Lam**2).sum(axis=0))
     Lam = Lam[:, _order]
 
     _Lpi = Lam / Psi[:, None]
     _V = np.linalg.inv(np.eye(K) + Lam.T @ _Lpi)
     proj_to_aggregate = (_Lpi @ _V).mean(axis=1)
-    communality = (Lam ** 2).sum(axis=1) / ((Lam ** 2).sum(axis=1) + Psi)
+    communality = (Lam**2).sum(axis=1) / ((Lam**2).sum(axis=1) + Psi)
     return Lam, communality, proj_to_aggregate
 
 
@@ -306,8 +327,7 @@ def _(Lam, communality, go, np, style_fig, task_cols):
     _dom_factor = Lam.argmax(axis=1)
     _order = np.lexsort((-Lam.max(axis=1), _dom_factor))
     _labels = [
-        f"{task_cols[i].removesuffix('/bpb').removesuffix('/choice_logprob')}  (h²={communality[i]:.2f})"
-        for i in _order
+        f"{task_cols[i].removesuffix('/bpb').removesuffix('/choice_logprob')}  (h²={communality[i]:.2f})" for i in _order
     ]
     _Z = Lam[_order]
     _fig = go.Figure(
@@ -359,9 +379,11 @@ def _(np, proj_to_aggregate, swarm_mu, swarm_sd, task_signs):
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Step 2 — Noise σ² of the aggregate
-    """)
+    """
+    )
     return
 
 
@@ -396,7 +418,8 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Step 3 — P3 mixture regression with nested CV
 
     Functional form:
@@ -408,7 +431,8 @@ def _(mo):
     ```
 
     Hyperparameters `(η, a, p)` selected by **nested 5×5 cross-validation**. γ_0 and γ_1 are independent ridge coefficients fit by the linear head; per-phase split lets phase-1 over-epoching be priced separately from phase-0 (necessary because η multiplies phase-1 in the signal term but not in the penalty otherwise). `p` controls penalty shape (shared across phases): p=1 linear, p=2 Herfindahl, larger p concentrates penalty on the worst-offending domain.
-    """)
+    """
+    )
     return
 
 
@@ -524,10 +548,16 @@ def _(agg_swarm, domains, epochs_per_unit_w0, epochs_per_unit_w1, np, raw):
         _Mte_best = build_p3_design(w0_swarm[_test], w1_swarm[_test], _eta_best, _a_best, _p_best)
         _alpha_best = _ridge_pick_alpha(_Mtr_best, agg_swarm[_train], fold_seed=99 + _o, alphas=ALPHA_GRID)
         oof_p3[_test] = _ridge_predict(_Mtr_best, agg_swarm[_train], _Mte_best, _alpha_best)
-        chosen_per_fold.append({
-            "fold": _o, "eta": _eta_best, "a": _a_best, "p_pen": _p_best,
-            "alpha": _alpha_best, "inner_cv_r2": _best_score,
-        })
+        chosen_per_fold.append(
+            {
+                "fold": _o,
+                "eta": _eta_best,
+                "a": _a_best,
+                "p_pen": _p_best,
+                "alpha": _alpha_best,
+                "inner_cv_r2": _best_score,
+            }
+        )
 
     r2_cv_p3 = float(1 - ((agg_swarm - oof_p3) ** 2).sum() / ((agg_swarm - agg_swarm.mean()) ** 2).sum())
 
@@ -602,26 +632,43 @@ def _(
     _lo = min(agg_swarm.min(), oof_p3.min(), yhat_in_p3.min())
     _hi = max(agg_swarm.max(), oof_p3.max(), yhat_in_p3.max())
     _fig = go.Figure()
-    _fig.add_trace(go.Scatter(x=[_lo, _hi], y=[_lo, _hi], mode="lines", name="y = x",
-                              line=dict(color="black", dash="dot", width=1)))
-    _fig.add_trace(go.Scatter(x=agg_swarm[~_is_baseline], y=yhat_in_p3[~_is_baseline],
-                              mode="markers", name=f"in-sample (R² = {r2_in_p3:.3f})",
-                              text=[n for n, b in zip(_names, _is_baseline) if not b],
-                              marker=dict(size=5, color="#A0CBE8", opacity=0.6)))
-    _fig.add_trace(go.Scatter(x=agg_swarm[~_is_baseline], y=oof_p3[~_is_baseline],
-                              mode="markers", name=f"nested 5×5 CV (R² = {r2_cv_p3:.3f})",
-                              text=[n for n, b in zip(_names, _is_baseline) if not b],
-                              marker=dict(size=6, color=PALETTE[0], opacity=0.85)))
-    _fig.add_trace(go.Scatter(x=agg_swarm[_is_baseline], y=oof_p3[_is_baseline],
-                              mode="markers+text",
-                              text=[n.replace("baseline_", "") for n, b in zip(_names, _is_baseline) if b],
-                              textposition="top center", name="baselines (CV)",
-                              marker=dict(size=14, color=PALETTE[1], symbol="star")))
-    _fig.update_layout(xaxis_title="actual aggregate", yaxis_title="predicted aggregate",
-                       height=600, width=900)
+    _fig.add_trace(
+        go.Scatter(x=[_lo, _hi], y=[_lo, _hi], mode="lines", name="y = x", line=dict(color="black", dash="dot", width=1))
+    )
+    _fig.add_trace(
+        go.Scatter(
+            x=agg_swarm[~_is_baseline],
+            y=yhat_in_p3[~_is_baseline],
+            mode="markers",
+            name=f"in-sample (R² = {r2_in_p3:.3f})",
+            text=[n for n, b in zip(_names, _is_baseline) if not b],
+            marker=dict(size=5, color="#A0CBE8", opacity=0.6),
+        )
+    )
+    _fig.add_trace(
+        go.Scatter(
+            x=agg_swarm[~_is_baseline],
+            y=oof_p3[~_is_baseline],
+            mode="markers",
+            name=f"nested 5×5 CV (R² = {r2_cv_p3:.3f})",
+            text=[n for n, b in zip(_names, _is_baseline) if not b],
+            marker=dict(size=6, color=PALETTE[0], opacity=0.85),
+        )
+    )
+    _fig.add_trace(
+        go.Scatter(
+            x=agg_swarm[_is_baseline],
+            y=oof_p3[_is_baseline],
+            mode="markers+text",
+            text=[n.replace("baseline_", "") for n, b in zip(_names, _is_baseline) if b],
+            textposition="top center",
+            name="baselines (CV)",
+            marker=dict(size=14, color=PALETTE[1], symbol="star"),
+        )
+    )
+    _fig.update_layout(xaxis_title="actual aggregate", yaxis_title="predicted aggregate", height=600, width=900)
     _per_fold_table = " · ".join(
-        f"f{c['fold']}: η={c['eta']}, a={c['a']:.2f}, p={c['p_pen']:.1f}"
-        for c in chosen_per_fold
+        f"f{c['fold']}: η={c['eta']}, a={c['a']:.2f}, p={c['p_pen']:.1f}" for c in chosen_per_fold
     )
     style_fig(
         _fig,
@@ -638,9 +685,11 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Step 4 — Bootstrap ridge coefficients (200 resamples)
-    """)
+    """
+    )
     return
 
 
@@ -690,8 +739,9 @@ def _(
     _per_row_std = _preds.std(axis=1, ddof=1)
     _fig = go.Figure()
     _fig.add_trace(go.Histogram(x=_per_row_std, nbinsx=40, marker_color=PALETTE[0]))
-    _fig.update_layout(xaxis_title="per-row predictive std (across bootstraps)",
-                       yaxis_title="count", height=400, width=800)
+    _fig.update_layout(
+        xaxis_title="per-row predictive std (across bootstraps)", yaxis_title="count", height=400, width=800
+    )
     style_fig(
         _fig,
         title=(
@@ -741,7 +791,9 @@ def _(
     _intercept_std = float(boot_intercepts.std(ddof=1))
 
     p3_fit = {
-        "form": "y = α₀ + Σ_d β_d · (w_0,d + η · w_1,d)^a − γ_0 · Σ_d (c_0,d·w_0,d)^p − γ_1 · Σ_d (c_1,d·w_1,d)^p; phase-0 and phase-1 epoching priced by independent γ coefs sharing exponent p (1=linear, 2=Herfindahl).",
+        "form": (
+            "y = α₀ + Σ_d β_d · (w_0,d + η · w_1,d)^a − γ_0 · Σ_d (c_0,d·w_0,d)^p − γ_1 · Σ_d (c_1,d·w_1,d)^p; phase-0 and phase-1 epoching priced by independent γ coefs sharing exponent p (1=linear, 2=Herfindahl)."
+        ),
         "nonlinear_params": {
             "eta": float(eta_p3),
             "a": float(a_p3),
@@ -785,22 +837,26 @@ def _(
     with open("p3_fit_300m.json", "w") as _f:
         _json.dump(p3_fit, _f, indent=2)
 
-    p3_fit_table = pl.DataFrame({
-        "feature": _kept_labels,
-        "value": [float(v) for v in _coef_natural],
-        "bootstrap_std": [float(s) for s in _coef_std_natural],
-    }).sort("value", descending=True)
+    p3_fit_table = pl.DataFrame(
+        {
+            "feature": _kept_labels,
+            "value": [float(v) for v in _coef_natural],
+            "bootstrap_std": [float(s) for s in _coef_std_natural],
+        }
+    ).sort("value", descending=True)
     p3_fit_table
     return
 
 
 @app.cell
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     ## Step 5 — Score 200k Dirichlet-jittered candidates ranked by LCB
 
     Sample candidates around observed sweep mixtures (Dirichlet jitter at concentration α = 200), score with the P3 point-estimate model, compute predictive σ from the Step-4 bootstrap, rank by **LCB = mean − κ · σ** (κ = 1).
-    """)
+    """
+    )
     return
 
 
@@ -845,8 +901,8 @@ def _(
     _CHUNK = 4096
     cand_pred_std = np.empty(_N)
     for _i in range(0, _N, _CHUNK):
-        _pp = boot_coefs @ _Ds_cand[_i:_i + _CHUNK].T + boot_intercepts[:, None]
-        cand_pred_std[_i:_i + _CHUNK] = _pp.std(axis=0, ddof=1)
+        _pp = boot_coefs @ _Ds_cand[_i : _i + _CHUNK].T + boot_intercepts[:, None]
+        cand_pred_std[_i : _i + _CHUNK] = _pp.std(axis=0, ddof=1)
     cand_lcb = cand_pred - KAPPA * cand_pred_std
     top_idx = np.argsort(-cand_lcb)[:5]
     return KAPPA, cand_lcb, cand_pred, cand_pred_std, top_idx
@@ -867,23 +923,40 @@ def _(
     top_idx,
 ):
     _fig = go.Figure()
-    _fig.add_trace(go.Histogram(
-        x=cand_pred, name=f"Dirichlet candidates: predictive mean (n={N_CAND})",
-        marker_color=PALETTE[2], opacity=0.45, nbinsx=80,
-    ))
-    _fig.add_trace(go.Histogram(
-        x=cand_lcb, name=f"Dirichlet candidates: LCB = mean − {KAPPA}·σ",
-        marker_color=PALETTE[1], opacity=0.45, nbinsx=80,
-    ))
-    _fig.add_trace(go.Histogram(
-        x=agg_swarm, name="actual sweep aggregates (n=241)",
-        marker_color=PALETTE[0], opacity=0.85, nbinsx=40,
-    ))
+    _fig.add_trace(
+        go.Histogram(
+            x=cand_pred,
+            name=f"Dirichlet candidates: predictive mean (n={N_CAND})",
+            marker_color=PALETTE[2],
+            opacity=0.45,
+            nbinsx=80,
+        )
+    )
+    _fig.add_trace(
+        go.Histogram(
+            x=cand_lcb,
+            name=f"Dirichlet candidates: LCB = mean − {KAPPA}·σ",
+            marker_color=PALETTE[1],
+            opacity=0.45,
+            nbinsx=80,
+        )
+    )
+    _fig.add_trace(
+        go.Histogram(
+            x=agg_swarm,
+            name="actual sweep aggregates (n=241)",
+            marker_color=PALETTE[0],
+            opacity=0.85,
+            nbinsx=40,
+        )
+    )
     for _r, _i in enumerate(top_idx):
         _fig.add_vline(
-            x=float(cand_lcb[_i]), line_dash="dot",
+            x=float(cand_lcb[_i]),
+            line_dash="dot",
             line_color=PALETTE[1],
-            annotation_text=f"top-{_r + 1} LCB", annotation_position="top",
+            annotation_text=f"top-{_r + 1} LCB",
+            annotation_position="top",
         )
     _fig.update_layout(xaxis_title="aggregate", height=500, width=1100, barmode="overlay")
     style_fig(
@@ -940,47 +1013,86 @@ def _(
     _ep1_cand = best_p1_cand * epochs_per_unit_w1
 
     _fig = make_subplots(
-        rows=1, cols=2, shared_yaxes=False, horizontal_spacing=0.18,
+        rows=1,
+        cols=2,
+        shared_yaxes=False,
+        horizontal_spacing=0.18,
         subplot_titles=("weight space", "epoch space (full-source passes)"),
     )
 
-    _fig.add_trace(go.Bar(
-        x=_bp0[_order], y=_names, orientation="h",
-        name="proportional baseline (weight)",
-        marker=dict(color="rgba(140,140,140,0.55)", line=dict(width=0)),
-        legendgroup="baseline_w",
-    ), row=1, col=1)
-    _fig.add_trace(go.Bar(
-        x=best_p0_cand[_order], y=_names, orientation="h",
-        name="phase 0 (top candidate)",
-        marker=dict(color=PALETTE[0], line=dict(width=0)),
-        legendgroup="cand_p0",
-    ), row=1, col=1)
-    _fig.add_trace(go.Bar(
-        x=best_p1_cand[_order], y=_names, orientation="h",
-        name="phase 1 (top candidate)",
-        marker=dict(color=PALETTE[1], line=dict(width=0)),
-        legendgroup="cand_p1",
-    ), row=1, col=1)
+    _fig.add_trace(
+        go.Bar(
+            x=_bp0[_order],
+            y=_names,
+            orientation="h",
+            name="proportional baseline (weight)",
+            marker=dict(color="rgba(140,140,140,0.55)", line=dict(width=0)),
+            legendgroup="baseline_w",
+        ),
+        row=1,
+        col=1,
+    )
+    _fig.add_trace(
+        go.Bar(
+            x=best_p0_cand[_order],
+            y=_names,
+            orientation="h",
+            name="phase 0 (top candidate)",
+            marker=dict(color=PALETTE[0], line=dict(width=0)),
+            legendgroup="cand_p0",
+        ),
+        row=1,
+        col=1,
+    )
+    _fig.add_trace(
+        go.Bar(
+            x=best_p1_cand[_order],
+            y=_names,
+            orientation="h",
+            name="phase 1 (top candidate)",
+            marker=dict(color=PALETTE[1], line=dict(width=0)),
+            legendgroup="cand_p1",
+        ),
+        row=1,
+        col=1,
+    )
 
-    _fig.add_trace(go.Bar(
-        x=(_ep0_base + _ep1_base)[_order], y=_names, orientation="h",
-        name="proportional baseline (total epochs)",
-        marker=dict(color="rgba(140,140,140,0.55)", line=dict(width=0)),
-        legendgroup="baseline_e",
-    ), row=1, col=2)
-    _fig.add_trace(go.Bar(
-        x=_ep0_cand[_order], y=_names, orientation="h",
-        name="phase 0 epochs (top candidate)",
-        marker=dict(color=PALETTE[0], line=dict(width=0)),
-        legendgroup="cand_p0_e",
-    ), row=1, col=2)
-    _fig.add_trace(go.Bar(
-        x=_ep1_cand[_order], y=_names, orientation="h",
-        name="phase 1 epochs (top candidate)",
-        marker=dict(color=PALETTE[1], line=dict(width=0)),
-        legendgroup="cand_p1_e",
-    ), row=1, col=2)
+    _fig.add_trace(
+        go.Bar(
+            x=(_ep0_base + _ep1_base)[_order],
+            y=_names,
+            orientation="h",
+            name="proportional baseline (total epochs)",
+            marker=dict(color="rgba(140,140,140,0.55)", line=dict(width=0)),
+            legendgroup="baseline_e",
+        ),
+        row=1,
+        col=2,
+    )
+    _fig.add_trace(
+        go.Bar(
+            x=_ep0_cand[_order],
+            y=_names,
+            orientation="h",
+            name="phase 0 epochs (top candidate)",
+            marker=dict(color=PALETTE[0], line=dict(width=0)),
+            legendgroup="cand_p0_e",
+        ),
+        row=1,
+        col=2,
+    )
+    _fig.add_trace(
+        go.Bar(
+            x=_ep1_cand[_order],
+            y=_names,
+            orientation="h",
+            name="phase 1 epochs (top candidate)",
+            marker=dict(color=PALETTE[1], line=dict(width=0)),
+            legendgroup="cand_p1_e",
+        ),
+        row=1,
+        col=2,
+    )
 
     _fig.update_xaxes(title_text="weight", row=1, col=1)
     _fig.update_xaxes(title_text="epochs over full source", row=1, col=2)
@@ -1004,13 +1116,15 @@ def _(
 
 @app.cell
 def _(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Step 6 — Thompson sampling on the simplex via the bootstrap
 
     For each of the 200 bootstrap resamples of the ridge head, find the simplex (w₀, w₁) point that argmaxes predicted aggregate under that posterior sample. Frank-Wolfe stays exactly on the simplex (no projection step). Two phases handled independently.
 
     Result: a posterior distribution of optimal mixtures. Domains with negative β get pushed to 0 in most samples; domains with high β + adequate `N_d` get high weight; per-domain spread captures coefficient uncertainty.
-    """)
+    """
+    )
     return
 
 
@@ -1098,48 +1212,89 @@ def _(
     _ep1_mean = _w1_mean * epochs_per_unit_w1
 
     _fig = make_subplots(
-        rows=1, cols=2, shared_yaxes=False, horizontal_spacing=0.18,
+        rows=1,
+        cols=2,
+        shared_yaxes=False,
+        horizontal_spacing=0.18,
         subplot_titles=("weight space", "epoch space (full-source passes)"),
     )
 
-    _fig.add_trace(go.Bar(
-        x=_bp0[_order], y=_names, orientation="h",
-        name="proportional baseline (weight)",
-        marker=dict(color="rgba(140,140,140,0.55)", line=dict(width=0)),
-    ), row=1, col=1)
-    _fig.add_trace(go.Bar(
-        x=_w0_mean[_order], y=_names, orientation="h",
-        name="phase 0 (Thompson mean)",
-        marker=dict(color=PALETTE[0], line=dict(width=0)),
-    ), row=1, col=1)
-    _fig.add_trace(go.Bar(
-        x=_w1_mean[_order], y=_names, orientation="h",
-        name="phase 1 (Thompson mean)",
-        marker=dict(color=PALETTE[1], line=dict(width=0)),
-    ), row=1, col=1)
+    _fig.add_trace(
+        go.Bar(
+            x=_bp0[_order],
+            y=_names,
+            orientation="h",
+            name="proportional baseline (weight)",
+            marker=dict(color="rgba(140,140,140,0.55)", line=dict(width=0)),
+        ),
+        row=1,
+        col=1,
+    )
+    _fig.add_trace(
+        go.Bar(
+            x=_w0_mean[_order],
+            y=_names,
+            orientation="h",
+            name="phase 0 (Thompson mean)",
+            marker=dict(color=PALETTE[0], line=dict(width=0)),
+        ),
+        row=1,
+        col=1,
+    )
+    _fig.add_trace(
+        go.Bar(
+            x=_w1_mean[_order],
+            y=_names,
+            orientation="h",
+            name="phase 1 (Thompson mean)",
+            marker=dict(color=PALETTE[1], line=dict(width=0)),
+        ),
+        row=1,
+        col=1,
+    )
 
-    _fig.add_trace(go.Bar(
-        x=(_ep0_base + _ep1_base)[_order], y=_names, orientation="h",
-        name="proportional baseline (total epochs)",
-        marker=dict(color="rgba(140,140,140,0.55)", line=dict(width=0)),
-    ), row=1, col=2)
-    _fig.add_trace(go.Bar(
-        x=_ep0_mean[_order], y=_names, orientation="h",
-        name="phase 0 epochs (Thompson mean)",
-        marker=dict(color=PALETTE[0], line=dict(width=0)),
-    ), row=1, col=2)
-    _fig.add_trace(go.Bar(
-        x=_ep1_mean[_order], y=_names, orientation="h",
-        name="phase 1 epochs (Thompson mean)",
-        marker=dict(color=PALETTE[1], line=dict(width=0)),
-    ), row=1, col=2)
+    _fig.add_trace(
+        go.Bar(
+            x=(_ep0_base + _ep1_base)[_order],
+            y=_names,
+            orientation="h",
+            name="proportional baseline (total epochs)",
+            marker=dict(color="rgba(140,140,140,0.55)", line=dict(width=0)),
+        ),
+        row=1,
+        col=2,
+    )
+    _fig.add_trace(
+        go.Bar(
+            x=_ep0_mean[_order],
+            y=_names,
+            orientation="h",
+            name="phase 0 epochs (Thompson mean)",
+            marker=dict(color=PALETTE[0], line=dict(width=0)),
+        ),
+        row=1,
+        col=2,
+    )
+    _fig.add_trace(
+        go.Bar(
+            x=_ep1_mean[_order],
+            y=_names,
+            orientation="h",
+            name="phase 1 epochs (Thompson mean)",
+            marker=dict(color=PALETTE[1], line=dict(width=0)),
+        ),
+        row=1,
+        col=2,
+    )
 
     _fig.update_xaxes(title_text="weight", row=1, col=1)
     _fig.update_xaxes(title_text="epochs over full source", row=1, col=2)
     _fig.update_yaxes(tickfont=dict(size=10), gridcolor="rgba(0,0,0,0)")
     _fig.update_layout(
-        height=max(500, 26 * len(_names)), width=1500,
-        barmode="group", bargap=0.18,
+        height=max(500, 26 * len(_names)),
+        width=1500,
+        barmode="group",
+        bargap=0.18,
     )
     _n_zero_p0 = int((_w0_mean < 1e-3).sum())
     _n_zero_p1 = int((_w1_mean < 1e-3).sum())

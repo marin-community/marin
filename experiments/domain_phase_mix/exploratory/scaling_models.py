@@ -17,8 +17,8 @@ This module contains:
 No data loading, no matplotlib, no module-level side effects.
 """
 
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np

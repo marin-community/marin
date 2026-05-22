@@ -20,6 +20,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from experiments.domain_phase_mix import (
+    two_phase_many_genericfamily_power_family_observed_only_trustblend_subset_optima as power_family_subset_optima,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.convergence_plot_style import (
     BEST_OBSERVED_BPB_COLOR,
     GRP_COLOR,
@@ -37,9 +40,6 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_tru
 )
 from experiments.domain_phase_mix.two_phase_many_genericfamily_power_family_observed_only_trustblend_baseline import (
     genericfamily_power_family_observed_only_trustblend_summary,
-)
-from experiments.domain_phase_mix import (
-    two_phase_many_genericfamily_power_family_observed_only_trustblend_subset_optima as power_family_subset_optima,
 )
 from experiments.domain_phase_mix.two_phase_many_genericfamily_retuned_subset_optima import CSV_PATH
 

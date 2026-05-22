@@ -14,13 +14,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import fsspec
+from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
-
-from experiments.defaults import simulated_epoching_train
-from experiments.evals.task_configs import EvalTaskConfig, CORE_TASKS
-from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import (
     TokenizedMixtureGroup,
@@ -28,13 +24,16 @@ from marin.processing.tokenize.data_configs import (
     lm_varying_mixture_data_config,
 )
 
+from experiments.defaults import simulated_epoching_train
 from experiments.domain_phase_mix.config import (
-    ExperimentConfig,
     Domain,
+    ExperimentConfig,
     PhaseSchedule,
     WeightConfig,
 )
-from experiments.domain_phase_mix.weight_sampler import WeightSampler, DirichletSamplingParams
+from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, WeightSampler
+from experiments.evals.task_configs import CORE_TASKS, EvalTaskConfig
+from experiments.simple_train_config import SimpleTrainConfig
 
 # Default MuonH optimizer configuration from proxy_sweep.py
 # This is adapted from 130M Qwen3 config for small models

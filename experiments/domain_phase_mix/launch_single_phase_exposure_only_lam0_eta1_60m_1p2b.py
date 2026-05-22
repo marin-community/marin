@@ -6,19 +6,19 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 import json
 import logging
 import os
-from pathlib import Path
 import sys
+from dataclasses import asdict
+from pathlib import Path
 
 import fsspec
+import numpy as np
+import pandas as pd
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
 from marin.rl.placement import marin_prefix_for_region
-import numpy as np
-import pandas as pd
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (
@@ -31,6 +31,8 @@ from experiments.domain_phase_mix.determinism_analysis import (
 )
 from experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b import (
     DEFAULT_LOCAL_ARTIFACT_DIR as PREVIOUS_LOCAL_ARTIFACT_DIR,
+)
+from experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b import (
     DEFAULT_MAX_CONCURRENT,
     DEFAULT_TPU_REGION,
     DEFAULT_TPU_TYPE,
@@ -42,13 +44,13 @@ from experiments.domain_phase_mix.launch_single_phase_average_grp_no_l2_60m_1p2b
     SEQ_LEN,
     TARGET_BUDGET,
     TARGET_BUDGET_MULTIPLIER,
+    SinglePhaseGrpNoL2LaunchArtifacts,
+    SinglePhaseGrpNoL2RunSpec,
     _configure_training_env_for_step,
     _executor_prefix,
     _has_iris_context,
     _validate_training_graph,
     validate_run_spec,
-    SinglePhaseGrpNoL2LaunchArtifacts,
-    SinglePhaseGrpNoL2RunSpec,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_study import (
     WANDB_ENTITY,

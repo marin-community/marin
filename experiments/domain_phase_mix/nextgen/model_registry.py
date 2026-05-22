@@ -20,12 +20,12 @@ import pandas as pd
 from scipy.optimize import minimize
 
 from experiments.domain_phase_mix.exploratory.general_scaling_models import (
-    DatasetSpec,
     GENERAL_MODELS,
+    DatasetSpec,
     GeneralModelSpec,
 )
-from experiments.domain_phase_mix.nextgen.dataset_metadata import resolve_dataset_epoch_metadata
 from experiments.domain_phase_mix.nextgen.contracts import Candidate, LoopConfig, PolicyArtifactRef
+from experiments.domain_phase_mix.nextgen.dataset_metadata import resolve_dataset_epoch_metadata
 from experiments.domain_phase_mix.nextgen.utils import stable_hash
 
 logger = logging.getLogger(__name__)

@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import logging
 import os
 import sys
+from dataclasses import dataclass
 
 import fsspec
 from fray.cluster import ResourceConfig

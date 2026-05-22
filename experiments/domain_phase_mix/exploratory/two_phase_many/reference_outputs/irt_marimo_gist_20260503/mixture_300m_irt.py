@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import marimo
 
 __generated_with = "0.21.0"
@@ -8,8 +11,8 @@ app = marimo.App(width="full")
 def _():
     import marimo as mo
     import numpy as np
-    import polars as pl
     import plotly.graph_objects as go
+    import polars as pl
 
     return go, mo, np, pl
 
@@ -17,8 +20,17 @@ def _():
 @app.cell
 def _():
     PALETTE = [
-        "#1877F2", "#F0701A", "#5A24C7", "#E42C97", "#00487C", "#0EAC96",
-        "#AB76FF", "#B50550", "#0099E6", "#22085F", "#783301",
+        "#1877F2",
+        "#F0701A",
+        "#5A24C7",
+        "#E42C97",
+        "#00487C",
+        "#0EAC96",
+        "#AB76FF",
+        "#B50550",
+        "#0099E6",
+        "#22085F",
+        "#783301",
     ]
     PLOTLY_TEMPLATE = "plotly_white"
 
@@ -29,15 +41,19 @@ def _():
         )
         if title is not None:
             _layout["title"] = dict(
-                text=title, font=dict(size=18),
-                x=0.5, xanchor="center",
+                text=title,
+                font=dict(size=18),
+                x=0.5,
+                xanchor="center",
             )
         if legend_below:
             _layout["legend"] = dict(
                 font=dict(size=11),
                 orientation="h",
-                yanchor="top", y=-0.15,
-                xanchor="center", x=0.5,
+                yanchor="top",
+                y=-0.15,
+                xanchor="center",
+                x=0.5,
                 bgcolor="rgba(255,255,255,0.85)",
                 bordercolor="rgba(200,200,200,0.5)",
                 borderwidth=1,
@@ -52,7 +68,8 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(r"""
+    mo.md(
+        r"""
     # Aggregate capability via non-negative k-factor analysis on per-task bpb
 
     For continuous outcomes (bpb), classical IRT becomes a k-factor model:
@@ -66,16 +83,15 @@ def _(mo):
     - **k chosen by Horn's parallel analysis** in the cell above.
     - **Non-negativity** on $\Lambda$ encodes the prior that all tasks measure capability in the same direction. Fit by projected-EM (~25 lines below).
     - **Outputs:** $\theta_{r,j}$ — run-level scores on each latent factor; $\lambda_{t,j}$ — how strongly task $t$ loads on factor $j$; $h^2_t$ — communality, the share of task $t$'s variance explained by all $k$ factors combined.
-    """)
+    """
+    )
     return
 
 
 @app.cell
 def _(np, pl):
 
-    raw_fa = pl.read_csv("raw_metric_matrix_300m.csv", infer_schema_length=500).filter(
-        pl.col("status") == "completed"
-    )
+    raw_fa = pl.read_csv("raw_metric_matrix_300m.csv", infer_schema_length=500).filter(pl.col("status") == "completed")
     _MMLU_KEEP = {
         "lm_eval/mmlu_5shot/bpb",
         "lm_eval/mmlu_sl_verb_5shot/bpb",
@@ -98,13 +114,15 @@ def _(np, pl):
             return False
         if c in _AGG_DROP or c in _TASK_DROP:
             return False
-        if not c.startswith((
-            "eval/paloma/",
-            "eval/uncheatable_eval/",
-            "lm_eval/",
-            "mcq_smooth/",
-            "teacher_forced/",
-        )):
+        if not c.startswith(
+            (
+                "eval/paloma/",
+                "eval/uncheatable_eval/",
+                "lm_eval/",
+                "mcq_smooth/",
+                "teacher_forced/",
+            )
+        ):
             return False
         if c.startswith("lm_eval/mmlu_") and c not in _MMLU_KEEP:
             return False
@@ -138,23 +156,28 @@ def _(Z, go, np):
     _k_mean = int(np.sum(_real > _mean))
     _ranks = np.arange(1, _p + 1)
     _fig = go.Figure()
+    _fig.add_trace(go.Scatter(x=_ranks, y=_real, name="real eigenvalues", mode="lines+markers", marker_color="#4C78A8"))
     _fig.add_trace(
-        go.Scatter(x=_ranks, y=_real, name="real eigenvalues",
-                   mode="lines+markers", marker_color="#4C78A8")
+        go.Scatter(
+            x=_ranks,
+            y=_p95,
+            name="random 95th pct",
+            mode="lines+markers",
+            marker_color="#E45756",
+            line=dict(dash="dash"),
+        )
     )
     _fig.add_trace(
-        go.Scatter(x=_ranks, y=_p95, name="random 95th pct",
-                   mode="lines+markers", marker_color="#E45756",
-                   line=dict(dash="dash"))
-    )
-    _fig.add_trace(
-        go.Scatter(x=_ranks, y=_mean, name="random mean",
-                   mode="lines+markers", marker_color="#888",
-                   line=dict(dash="dot"))
+        go.Scatter(
+            x=_ranks, y=_mean, name="random mean", mode="lines+markers", marker_color="#888", line=dict(dash="dot")
+        )
     )
     _fig.add_vline(
-        x=k_horn + 0.5, line_dash="dot", line_color="black",
-        annotation_text=f"Horn k={k_horn}", annotation_position="top",
+        x=k_horn + 0.5,
+        line_dash="dot",
+        line_color="black",
+        annotation_text=f"Horn k={k_horn}",
+        annotation_position="top",
     )
     _fig.update_layout(
         title=(
@@ -189,7 +212,7 @@ def _(Z, k_horn, noise_share, np):
         _lam_new = _zt_th @ np.linalg.inv(_s_thth)
         _lam_new = np.clip(_lam_new, 0.0, None)
         _psi_free = (
-            (Z ** 2).mean(axis=0)
+            (Z**2).mean(axis=0)
             - 2 * (_zt_th * _lam_new).sum(axis=1) / n
             + ((_lam_new @ _s_thth) * _lam_new).sum(axis=1) / n
         )
@@ -199,12 +222,12 @@ def _(Z, k_horn, noise_share, np):
             lam_mat, psi = _lam_new, _psi_new
             break
         lam_mat, psi = _lam_new, _psi_new
-    _order = np.argsort(-(lam_mat ** 2).sum(axis=0))
+    _order = np.argsort(-(lam_mat**2).sum(axis=0))
     lam_mat = lam_mat[:, _order]
     _lam_psi_inv = lam_mat / psi[:, None]
     _v_post = np.linalg.inv(np.eye(K) + lam_mat.T @ _lam_psi_inv)
     theta_mat = Z @ _lam_psi_inv @ _v_post
-    communality = (lam_mat ** 2).sum(axis=1) / ((lam_mat ** 2).sum(axis=1) + psi)
+    communality = (lam_mat**2).sum(axis=1) / ((lam_mat**2).sum(axis=1) + psi)
     return communality, lam_mat, psi, theta_mat
 
 
@@ -212,10 +235,7 @@ def _(Z, k_horn, noise_share, np):
 def _(communality, go, lam_mat, np, task_cols):
     _dom = lam_mat.argmax(axis=1)
     _order = np.lexsort((-lam_mat.max(axis=1), _dom))
-    _labels = [
-        f"{task_cols[i].removesuffix('/bpb')}  (h²={communality[i]:.2f})"
-        for i in _order
-    ]
+    _labels = [f"{task_cols[i].removesuffix('/bpb')}  (h²={communality[i]:.2f})" for i in _order]
     _Z = lam_mat[_order]
     _fig = go.Figure(
         data=go.Heatmap(
@@ -244,12 +264,8 @@ def _(communality, go, lam_mat, np, task_cols):
 
 @app.cell
 def _(np, pl, task_cols):
-    noise_df = pl.read_csv(
-        "noise_baseline_run00097_300m.csv", infer_schema_length=200
-    )
-    sweep_df = pl.read_csv(
-        "raw_metric_matrix_300m.csv", infer_schema_length=500
-    ).filter(pl.col("status") == "completed")
+    noise_df = pl.read_csv("noise_baseline_run00097_300m.csv", infer_schema_length=200)
+    sweep_df = pl.read_csv("raw_metric_matrix_300m.csv", infer_schema_length=500).filter(pl.col("status") == "completed")
     _noise_cols = set(noise_df.columns)
     _has = np.array([c in _noise_cols for c in task_cols])
     _present = [c for c in task_cols if c in _noise_cols]
@@ -262,9 +278,7 @@ def _(np, pl, task_cols):
     noise_sd[_has] = _ns_p
     sweep_sd[_has] = _ss_p
     noise_share = (noise_sd / sweep_sd) ** 2
-    h2_ceiling = np.where(
-        np.isnan(noise_share), np.nan, np.clip(1.0 - noise_share, 0.0, 1.0)
-    )
+    h2_ceiling = np.where(np.isnan(noise_share), np.nan, np.clip(1.0 - noise_share, 0.0, 1.0))
     return h2_ceiling, noise_share
 
 
@@ -281,14 +295,18 @@ def _(communality, go, h2_ceiling, np, task_cols):
     _fig = go.Figure()
     _fig.add_trace(
         go.Bar(
-            x=_act, y=_names, orientation="h",
+            x=_act,
+            y=_names,
+            orientation="h",
             name="h² (factor model, capped at ceiling)",
             marker_color="#4C78A8",
         )
     )
     _fig.add_trace(
         go.Bar(
-            x=_gap, y=_names, orientation="h",
+            x=_gap,
+            y=_names,
+            orientation="h",
             name="ceiling − h² (room left)",
             marker_color="#E0E0E0",
         )
@@ -296,16 +314,19 @@ def _(communality, go, h2_ceiling, np, task_cols):
     if (_over > 0).any():
         _fig.add_trace(
             go.Bar(
-                x=_over, y=_names, orientation="h",
+                x=_over,
+                y=_names,
+                orientation="h",
                 name="h² > ceiling (overfit / noise estimate too low)",
                 marker_color="#E45756",
             )
         )
     _fig.add_trace(
         go.Scatter(
-            x=_ceil, y=_names, mode="markers",
-            marker=dict(symbol="line-ns-open", size=14, color="#000",
-                        line=dict(width=2)),
+            x=_ceil,
+            y=_names,
+            mode="markers",
+            marker=dict(symbol="line-ns-open", size=14, color="#000", line=dict(width=2)),
             name="h² ceiling = 1 − Var_noise / Var_sweep",
         )
     )
@@ -440,9 +461,7 @@ def _(go, lam_mat, np, pl, psi, raw_fa, task_cols, theta_mat):
     _X_signed = -raw_fa.select(task_cols).to_numpy().astype(np.float64)
     _mu = _X_signed.mean(axis=0)
     _sd = _X_signed.std(axis=0)
-    _noise_df = pl.read_csv(
-        "noise_baseline_run00097_300m.csv", infer_schema_length=200
-    )
+    _noise_df = pl.read_csv("noise_baseline_run00097_300m.csv", infer_schema_length=200)
     _ncols = set(_noise_df.columns)
     _has = np.array([c in _ncols for c in task_cols])
     _present = [c for c in task_cols if c in _ncols]
@@ -451,9 +470,7 @@ def _(go, lam_mat, np, pl, psi, raw_fa, task_cols, theta_mat):
     _nX[:, _has] = (_nX[:, _has] - _mu[_has]) / _sd[_has]
 
     _K = lam_mat.shape[1]
-    _proj = (lam_mat / psi[:, None]) @ np.linalg.inv(
-        np.eye(_K) + lam_mat.T @ (lam_mat / psi[:, None])
-    )
+    _proj = (lam_mat / psi[:, None]) @ np.linalg.inv(np.eye(_K) + lam_mat.T @ (lam_mat / psi[:, None]))
     _theta_noise = _nX @ _proj
 
     _agg_sweep = theta_mat.mean(axis=1)
@@ -511,10 +528,7 @@ def _(pl, raw_fa, theta_mat):
         )
         .with_columns(
             [pl.Series("aggregate", aggregate)]
-            + [
-                pl.Series(f"theta_{k + 1}", theta_mat[:, k])
-                for k in range(theta_mat.shape[1])
-            ]
+            + [pl.Series(f"theta_{k + 1}", theta_mat[:, k]) for k in range(theta_mat.shape[1])]
         )
         .sort("aggregate", descending=True)
     )

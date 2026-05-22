@@ -10,17 +10,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline import (
-    build_run_spec as build_stratified_run_spec,
-)
 from experiments.domain_phase_mix.exploratory.two_phase_many.run_registry.build_run_registry import (
     STRONG_TIER_PARENT_JOB_IDS,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline import (
+    build_run_spec as build_stratified_run_spec,
 )
 from experiments.domain_phase_mix.qsplit240_replay import build_qsplit240_replay_run_specs
 from experiments.domain_phase_mix.scaling_study_recipes import (

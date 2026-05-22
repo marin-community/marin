@@ -10,17 +10,19 @@ from dataclasses import replace
 
 from marin.execution.executor import ExecutorMainConfig, executor_main
 
+from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline import (
+    build_launch_artifacts as build_stratified_launch_artifacts,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study import (
     EVAL_DATASETS_CACHE_PATH,
     QSPLIT240_300M_EVAL_TASKS,
     WANDB_ENTITY,
     WANDB_PROJECT,
 )
-from experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline import (
-    build_launch_artifacts as build_stratified_launch_artifacts,
+from experiments.domain_phase_mix.qsplit240_replay import (
+    build_qsplit240_replay_launch_artifacts,
+    skip_eval_harness_for_training_step,
 )
-from experiments.domain_phase_mix.qsplit240_replay import build_qsplit240_replay_launch_artifacts
-from experiments.domain_phase_mix.qsplit240_replay import skip_eval_harness_for_training_step
 from experiments.domain_phase_mix.scaling_study_recipes import (
     ScalingStudyPath,
     build_strong_tier_cells,

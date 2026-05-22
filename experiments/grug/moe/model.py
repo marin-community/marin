@@ -71,6 +71,7 @@ class GrugModelConfig:
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
     moe_implementation: MoeImplementation | None = None
+    capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -398,7 +399,7 @@ class MoEMLP(eqx.Module):
             activation=ActivationFunctionEnum.silu,
             implementation=self.cfg.moe_implementation,
             mesh=get_abstract_mesh(),
-            capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+            capacity_factor=self.cfg.capacity_factor,
         )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)

@@ -11,10 +11,14 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata im
     append_two_phase_many_stratified_baseline,
     build_two_phase_many_loop_config,
 )
-from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import STRATIFIED_RUN_NAME
 from experiments.domain_phase_mix.nextgen.contracts import LoopConfig, LoopState, RunRecord
 from experiments.domain_phase_mix.nextgen.design import plan_new_runs
 from experiments.domain_phase_mix.nextgen.model_registry import _build_dataset_spec
+from experiments.domain_phase_mix.scaling_study_recipes import (
+    BASE_TARGET_BUDGET,
+    ScalingStudyScale,
+    resolve_scale_spec,
+)
 from experiments.domain_phase_mix.starcoder_metadata import (
     DEFAULT_STARCODER_OBJECTIVE,
     DOMAIN_NAMES,
@@ -25,22 +29,18 @@ from experiments.domain_phase_mix.starcoder_metadata import (
     load_two_phase_starcoder_dataset,
 )
 from experiments.domain_phase_mix.static_batch_selection import (
-    build_schedule_feature_matrix,
     build_dataset_spec_from_frame,
-    prospective_generic_selection,
+    build_schedule_feature_matrix,
     prospective_d_optimal_selection,
+    prospective_generic_selection,
     replay_proposals_to_observed,
-    retrospective_generic_selection,
     retrospective_d_optimal_selection,
+    retrospective_generic_selection,
     run_records_to_dataframe,
     sobol_weight_configs,
     weight_configs_to_tensor,
 )
-from experiments.domain_phase_mix.scaling_study_recipes import (
-    BASE_TARGET_BUDGET,
-    ScalingStudyScale,
-    resolve_scale_spec,
-)
+from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import STRATIFIED_RUN_NAME
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, WeightSampler
 
 

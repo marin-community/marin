@@ -10,9 +10,9 @@
 from __future__ import annotations
 
 import argparse
+import re
 from datetime import UTC, datetime
 from pathlib import Path
-import re
 
 import pandas as pd
 import wandb

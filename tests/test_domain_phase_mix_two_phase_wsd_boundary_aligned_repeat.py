@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.static_batch_selection import retrospective_generic_selection
 from experiments.domain_phase_mix.starcoder_metadata import TWO_PHASE_STARCODER, load_starcoder_dataset
+from experiments.domain_phase_mix.static_batch_selection import retrospective_generic_selection
 from experiments.domain_phase_mix.two_phase_starcoder_experiment import (
     BATCH_SIZE,
     EXPERIMENT_BUDGET,

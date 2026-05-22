@@ -8,7 +8,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import plotly.graph_objects as go
-
 from paper_plot_style import (
     PAPER_AXIS,
     PAPER_BACKGROUND,

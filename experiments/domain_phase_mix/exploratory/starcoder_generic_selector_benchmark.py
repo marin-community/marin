@@ -33,11 +33,11 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
-from collections.abc import Sequence
 
 import matplotlib
 

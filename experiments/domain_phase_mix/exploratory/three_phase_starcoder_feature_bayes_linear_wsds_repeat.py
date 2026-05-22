@@ -11,11 +11,11 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
 import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +39,7 @@ sys.path.insert(0, str(REPO_ROOT / "lib" / "levanter" / "src"))
 sys.path.insert(0, str(REPO_ROOT / "lib" / "iris" / "src"))
 sys.path.insert(0, str(REPO_ROOT / "lib" / "zephyr" / "src"))
 
+from fray.cluster import ResourceConfig
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.utils import create_cache_tokenizer_step
@@ -57,8 +58,6 @@ from experiments.domain_phase_mix.static_batch_selection import (
     replay_proposals_to_observed,
     retrospective_generic_selection,
 )
-from fray.cluster import ResourceConfig
-
 from experiments.domain_phase_mix.three_phase_starcoder_experiment import (
     EVAL_DATASETS_CACHE_PATH,
     EVAL_TASKS,

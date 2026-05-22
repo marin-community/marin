@@ -27,7 +27,6 @@ from experiments.domain_phase_mix.determinism_analysis import (
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
     EXACT_CONTROL_DATA_SEED,
     EXACT_CONTROL_NAMES,
-    NAME as BASELINE_SEED_STUDY_NAME,
     OBJECTIVE_METRIC,
     RUN_00097_PHASE_WEIGHTS,
     SEED_SWEEP_START,
@@ -35,6 +34,11 @@ from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study imp
     SWARM_COMPARISON_METRICS,
     WANDB_ENTITY,
     WANDB_PROJECT,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
+    NAME as BASELINE_SEED_STUDY_NAME,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
     build_run_specs as build_run_00097_seed_specs,
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (

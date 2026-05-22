@@ -9,26 +9,27 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
 from scipy import stats
+from scipy.optimize import minimize
 from sklearn.model_selection import KFold
 
 from experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_grp_power_family_penalty_no_l2_retune import (
     REG_FIXED,
     VARIANT_NAME,
     _no_l2_param_keys,
-    _parameter_counts,
     _pack_no_l2_params,
+    _parameter_counts,
     _start_bank,
     _unpack_no_l2_params,
 )
+from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import build_two_phase_many_loop_config
 from experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.materialize_fit_dataset import (
     materialize_fit_dataset,
 )
@@ -48,7 +49,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
     PacketData,
 )
-from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import build_two_phase_many_loop_config
 from experiments.domain_phase_mix.static_batch_selection import average_phase_tv_distance, build_dataset_spec_from_frame
 
 SCRIPT_DIR = Path(__file__).resolve().parent

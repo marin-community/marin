@@ -24,9 +24,9 @@ from experiments.domain_phase_mix.proxy_sweep import (
     regmix_520m_proxy,
 )
 from experiments.domain_phase_mix.qsplit240_replay import (
+    DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
     DEFAULT_TARGET_BUDGET,
     DEFAULT_TARGET_BUDGET_MULTIPLIER,
-    DEFAULT_REGION_AGNOSTIC_TPU_REGIONS,
     REPRESENTATIVE12_PANEL,
     build_qsplit240_replay_launch_artifacts,
     build_qsplit240_replay_run_specs,

@@ -9,8 +9,8 @@ from unittest.mock import patch
 import pytest
 from fray import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.main import train_lm
 from levanter.eval_harness import LmEvalHarnessConfig
+from levanter.main import train_lm
 from levanter.trainer import TrainerConfig
 from marin.training.training import (
     TrainLmOnPodConfig,

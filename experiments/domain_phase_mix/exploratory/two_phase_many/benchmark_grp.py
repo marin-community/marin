@@ -24,13 +24,13 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
+from experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_dsre_ceq import _fit_olmix_loglinear
 from experiments.domain_phase_mix.exploratory.two_phase_many.convergence_plot_style import (
     BEST_OBSERVED_BPB_COLOR,
     PREDICTED_LINESTYLE,
     model_bpb_color,
 )
-from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
-from experiments.domain_phase_mix.exploratory.two_phase_many.benchmark_dsre_ceq import _fit_olmix_loglinear
 from experiments.domain_phase_mix.exploratory.two_phase_many.dataset_metadata import (
     load_two_phase_many_candidate_summary_spec,
 )

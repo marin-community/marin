@@ -27,8 +27,8 @@ from scipy.optimize import minimize
 from scipy.stats import spearmanr
 
 from experiments.domain_phase_mix.exploratory.general_scaling_models import (
-    DatasetSpec,
     GENERAL_MODELS,
+    DatasetSpec,
 )
 from experiments.domain_phase_mix.nextgen.contracts import LoopConfig
 from experiments.domain_phase_mix.static_batch_selection import (

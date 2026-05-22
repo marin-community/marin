@@ -40,6 +40,8 @@ from experiments.domain_phase_mix.launch_300m_gsm8k_humaneval_evals import (
     DEFAULT_TPU_REGION,
     DEFAULT_TPU_TYPE,
     DEFAULT_TPU_ZONE,
+    EXTRA_CANDIDATES_ENV,
+    PANEL_FILTER_ENV,
     _bool_value,
     _exact_hf_checkpoint,
     _executor_prefix,
@@ -207,14 +209,19 @@ def _candidate_from_row(row: pd.Series, *, panel: str) -> RawPplCandidate:
     root = _string_value(row.get("checkpoint_root")).rstrip("/")
     if not root:
         raise ValueError(f"{panel} row is missing checkpoint_root:\n{row.to_string()}")
+    expected_checkpoint_step = pd.to_numeric(row.get("expected_checkpoint_step", 22_887), errors="coerce")
+    if pd.isna(expected_checkpoint_step):
+        expected_checkpoint_step = pd.to_numeric(row.get("target_final_checkpoint_step", 22_887), errors="coerce")
+    if pd.isna(expected_checkpoint_step):
+        raise ValueError(f"{panel} row is missing expected checkpoint step:\n{row.to_string()}")
     return RawPplCandidate(
         panel=panel,
         run_name=_string_value(row.get("run_name")),
-        registry_key=_string_value(row.get("registry_run_key")),
+        registry_key=_string_value(row.get("registry_run_key", row.get("registry_key"))),
         source_experiment=_string_value(row.get("source_experiment")),
         cohort=_string_value(row.get("cohort")),
         checkpoint_root=root,
-        expected_checkpoint_step=22_887,
+        expected_checkpoint_step=int(expected_checkpoint_step),
     )
 
 
@@ -232,17 +239,40 @@ def _matrix_candidates(path: Path, *, panel: str, expected_rows: int) -> list[Ra
     return candidates
 
 
-def _raw_ppl_candidate_records() -> list[RawPplCandidate]:
-    candidates = [
-        *_matrix_candidates(SIGNAL_MATRIX_CSV, panel="signal_300m_6b", expected_rows=242),
-        *_matrix_candidates(FIXED_NOISE_MATRIX_CSV, panel="fixed_seed_noise_300m_6b", expected_rows=10),
-        *_matrix_candidates(VARIABLE_NOISE_MATRIX_CSV, panel="variable_subset_noise_300m_6b", expected_rows=10),
-    ]
+def _raw_ppl_candidate_records(requested_panels: set[str]) -> list[RawPplCandidate]:
+    candidates: list[RawPplCandidate] = []
+    if "signal_300m_6b" in requested_panels:
+        candidates.extend(_matrix_candidates(SIGNAL_MATRIX_CSV, panel="signal_300m_6b", expected_rows=242))
+    if "fixed_seed_noise_300m_6b" in requested_panels:
+        candidates.extend(_matrix_candidates(FIXED_NOISE_MATRIX_CSV, panel="fixed_seed_noise_300m_6b", expected_rows=10))
+    if "variable_subset_noise_300m_6b" in requested_panels:
+        candidates.extend(
+            _matrix_candidates(VARIABLE_NOISE_MATRIX_CSV, panel="variable_subset_noise_300m_6b", expected_rows=10)
+        )
+    candidates.extend(candidate for candidate in _extra_candidate_records() if candidate.panel in requested_panels)
     roots = [candidate.checkpoint_root for candidate in candidates]
     duplicates = sorted(root for root in set(roots) if roots.count(root) > 1)
     if duplicates:
         raise ValueError(f"Duplicate checkpoint roots across raw-PPL candidate panels: {duplicates[:10]}")
     return sorted(candidates, key=lambda row: (row.panel, row.run_name))
+
+
+def _extra_candidate_records() -> list[RawPplCandidate]:
+    paths = [path.strip() for path in os.environ.get(EXTRA_CANDIDATES_ENV, "").split(",") if path.strip()]
+    candidates: list[RawPplCandidate] = []
+    for path in paths:
+        frame = _read_csv(path)
+        if "panel" not in frame.columns:
+            raise ValueError(f"Extra raw-PPL candidate CSV {path} is missing panel")
+        candidates.extend(_candidate_from_row(row, panel=_string_value(row.get("panel"))) for _, row in frame.iterrows())
+    return candidates
+
+
+def _requested_panels() -> set[str]:
+    raw = os.environ.get(PANEL_FILTER_ENV, "").strip()
+    if not raw:
+        return set(ALLOWED_PANELS)
+    return {part.strip() for part in raw.split(",") if part.strip()}
 
 
 def _uses_east5_checkpoint(checkpoint_root: str) -> bool:
@@ -365,13 +395,15 @@ def build_state_rows(
 ) -> list[RawPplEvalSpec]:
     """Build raw-PPL state rows for the 300M signal plus run_00097 noise panels."""
     existing_roots = _existing_result_roots(RESULTS_CSV_LOCAL, dataset_names)
+    requested_panels = _requested_panels()
     candidates = [
         candidate
-        for candidate in _raw_ppl_candidate_records()
-        if candidate.panel in ALLOWED_PANELS
+        for candidate in _raw_ppl_candidate_records(requested_panels)
+        if candidate.panel in requested_panels
         and (candidate.panel != "signal_300m_6b" or candidate.source_experiment in SIGNAL_SOURCE_EXPERIMENTS)
     ]
-    if len(candidates) != EXPECTED_CANDIDATE_COUNT and not allow_partial:
+    canonical_panel_request = requested_panels == ALLOWED_PANELS
+    if len(candidates) != EXPECTED_CANDIDATE_COUNT and canonical_panel_request and not allow_partial:
         counts = pd.Series([candidate.panel for candidate in candidates]).value_counts(dropna=False).to_dict()
         raise ValueError(
             f"Expected {EXPECTED_CANDIDATE_COUNT} 300M signal/noise candidates, found {len(candidates)}; "

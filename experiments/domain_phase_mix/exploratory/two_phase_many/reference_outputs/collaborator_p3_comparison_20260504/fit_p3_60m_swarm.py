@@ -9,8 +9,8 @@ validated GRP no-L2 optimum on the same 242-row 60M swarm.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -41,10 +41,7 @@ PREDICTED_ACTUAL_PNG = ROOT / "p3_60m_swarm_predicted_vs_actual.png"
 OPTIMUM_HTML = ROOT / "p3_60m_swarm_raw_optimum_top_domains.html"
 OPTIMUM_PNG = ROOT / "p3_60m_swarm_raw_optimum_top_domains.png"
 
-GRP_WEIGHTS_CSV = (
-    ROOT.parents[1]
-    / "grp_power_family_penalty_no_l2_60m_vs_300m_fit_weights.csv"
-)
+GRP_WEIGHTS_CSV = ROOT.parents[1] / "grp_power_family_penalty_no_l2_60m_vs_300m_fit_weights.csv"
 TARGET_METRIC = "eval/uncheatable_eval/bpb"
 SCALE = "60m_1p2b"
 COHORT = "signal"
@@ -420,7 +417,9 @@ def write_prediction_plot(data: FitData, train_pred: np.ndarray, oof_pred: np.nd
     lo = float(min(data.y.min(), train_pred.min(), oof_pred.min()))
     hi = float(max(data.y.max(), train_pred.max(), oof_pred.max()))
     for col in (1, 2):
-        fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", line={"color": "black", "dash": "dash"}), row=1, col=col)
+        fig.add_trace(
+            go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", line={"color": "black", "dash": "dash"}), row=1, col=col
+        )
     fig.update_xaxes(title_text="Actual BPB")
     fig.update_yaxes(title_text="Predicted BPB")
     fig.update_layout(title="P3 on 60M/1.2B fit swarm", width=1300, height=560, template="plotly_white")
@@ -508,10 +507,10 @@ def main() -> None:
         "target": TARGET_METRIC,
         "scale": SCALE,
         "run_set": RUN_SET,
-        "row_count": int(len(data.y)),
+        "row_count": len(data.y),
         "model": "P3",
         "parameter_count": {
-            "linear_coefficients": int(len(model.coef)),
+            "linear_coefficients": len(model.coef),
             "intercept": 1,
             "shape_parameters": 3,
             "ridge_hyperparameter": 1,

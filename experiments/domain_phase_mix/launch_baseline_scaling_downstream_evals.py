@@ -6,21 +6,19 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
-from enum import StrEnum
 import json
 import logging
 import os
-from pathlib import Path
 import re
 import sys
+from dataclasses import asdict, dataclass
+from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 import fsspec
-from fray.cluster import ResourceConfig
-from marin.rl.placement import marin_prefix_for_region
 import pandas as pd
-
+from fray.cluster import ResourceConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -29,6 +27,7 @@ from marin.execution.executor import (
     output_path_of,
     this_output_path,
 )
+from marin.rl.placement import marin_prefix_for_region
 
 logger = logging.getLogger(__name__)
 

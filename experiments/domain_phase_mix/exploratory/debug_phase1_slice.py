@@ -21,9 +21,10 @@
 # ///
 """Filter two_phase_starcoder.csv to phase_0_nemotron_full=1.0 and plot phase_1_starcoder vs programming BPB."""
 
-import pandas as pd
-import matplotlib.pyplot as plt
 from pathlib import Path
+
+import matplotlib.pyplot as plt
+import pandas as pd
 
 script_dir = Path(__file__).parent
 df = pd.read_csv(script_dir / "two_phase_starcoder_combined.csv")

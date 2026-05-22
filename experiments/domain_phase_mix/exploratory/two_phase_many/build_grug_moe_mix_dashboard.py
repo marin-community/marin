@@ -356,10 +356,9 @@ def preferred_task_values(metrics_df: pd.DataFrame) -> pd.DataFrame:
 
     cell_cols = ["track", "hidden_dim", "budget"]
     expected_cells = selected_df[cell_cols].drop_duplicates().shape[0]
+    cell_counts = selected_df.groupby("task_alias").size()
     counts = selected_df.groupby("task_alias")[cell_cols].nunique()
-    common_tasks = counts[
-        (counts["track"] >= len(TRACKS)) & (selected_df.groupby("task_alias").size() >= expected_cells)
-    ].index
+    common_tasks = counts[(counts["track"] >= len(TRACKS)) & (cell_counts >= expected_cells)].index
     common_df = selected_df[selected_df["task_alias"].isin(common_tasks)].copy()
     common_df["common_task"] = True
     selected_df = selected_df.merge(
@@ -368,6 +367,9 @@ def preferred_task_values(metrics_df: pd.DataFrame) -> pd.DataFrame:
         how="left",
     )
     selected_df["common_task"] = selected_df["common_task"].eq(True)
+    selected_df["available_cells"] = selected_df["task_alias"].map(cell_counts).astype(int)
+    selected_df["expected_cells"] = expected_cells
+    selected_df["coverage"] = selected_df["available_cells"].astype(str) + "/" + str(expected_cells)
     return selected_df
 
 
@@ -454,6 +456,9 @@ def loss_like_task_values(metrics_df: pd.DataFrame) -> pd.DataFrame:
     cell_cols = ["track", "hidden_dim", "budget"]
     expected_cells = selected_df[cell_cols].drop_duplicates().shape[0]
     common_tasks = selected_df.groupby("task_alias").size()
+    selected_df["available_cells"] = selected_df["task_alias"].map(common_tasks).astype(int)
+    selected_df["expected_cells"] = expected_cells
+    selected_df["coverage"] = selected_df["available_cells"].astype(str) + "/" + str(expected_cells)
     selected_df["common_task"] = selected_df["task_alias"].map(common_tasks).eq(expected_cells)
     return selected_df
 
@@ -461,7 +466,7 @@ def loss_like_task_values(metrics_df: pd.DataFrame) -> pd.DataFrame:
 def power_law_fits(loss_df: pd.DataFrame) -> pd.DataFrame:
     """Fit log10(loss) = intercept + beta log10(training FLOPs)."""
     rows: list[dict[str, Any]] = []
-    fit_df = loss_df[loss_df["common_task"] & (loss_df["loss_value"] > 0)].copy()
+    fit_df = loss_df[loss_df["loss_value"] > 0].copy()
     for (task_alias, track, track_label), group in fit_df.groupby(["task_alias", "track", "track_label"]):
         group = group.sort_values("budget")
         if len(group) < 3:
@@ -499,14 +504,20 @@ def write_plot(fig: go.Figure, path: Path) -> str:
 
 def task_loss_scaling_plot(loss_df: pd.DataFrame, fit_df: pd.DataFrame) -> go.Figure:
     """Create per-task small multiples with log-log power-law fits."""
-    plot_df = loss_df[loss_df["common_task"]].copy()
+    plot_df = loss_df.copy()
     tasks = sorted(plot_df["task_alias"].unique())
+    if not tasks:
+        fig = go.Figure()
+        fig.update_layout(title="Per-task Grug-MoE scaling: no task metrics available")
+        return fig
     n_cols = 4
     n_rows = math.ceil(len(tasks) / n_cols)
     subplot_titles = []
     for task in tasks:
         metric = plot_df.loc[plot_df["task_alias"].eq(task), "loss_metric"].mode().iloc[0]
-        subplot_titles.append(f"{task}<br><sup>{metric}, lower is better</sup>")
+        coverage = plot_df.loc[plot_df["task_alias"].eq(task), "coverage"].mode().iloc[0]
+        coverage_note = "complete" if plot_df.loc[plot_df["task_alias"].eq(task), "common_task"].all() else coverage
+        subplot_titles.append(f"{task}<br><sup>{metric}, lower is better; coverage {coverage_note}</sup>")
     fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=subplot_titles, horizontal_spacing=0.055)
     color_map = dict(zip([TRACK_LABELS[t] for t in TRACKS], px.colors.qualitative.D3, strict=False))
 
@@ -529,7 +540,7 @@ def task_loss_scaling_plot(loss_df: pd.DataFrame, fit_df: pd.DataFrame) -> go.Fi
                     showlegend=showlegend,
                     marker={"color": color_map.get(track_label), "size": 7},
                     customdata=np.stack(
-                        [group["hidden_dim"], group["raw_metric"], group["raw_value"]],
+                        [group["hidden_dim"], group["raw_metric"], group["raw_value"], group["coverage"]],
                         axis=-1,
                     ),
                     hovertemplate=(
@@ -538,7 +549,8 @@ def task_loss_scaling_plot(loss_df: pd.DataFrame, fit_df: pd.DataFrame) -> go.Fi
                         "loss-like=%{y:.4g}<br>"
                         "hidden_dim=%{customdata[0]}<br>"
                         "raw_metric=%{customdata[1]}<br>"
-                        "raw_value=%{customdata[2]:.4g}<extra></extra>"
+                        "raw_value=%{customdata[2]:.4g}<br>"
+                        "coverage=%{customdata[3]}<extra></extra>"
                     ),
                 ),
                 row=row,
@@ -571,7 +583,7 @@ def task_loss_scaling_plot(loss_df: pd.DataFrame, fit_df: pd.DataFrame) -> go.Fi
         fig.update_yaxes(type="log", row=row, col=col)
 
     fig.update_layout(
-        title="Per-task Grug-MoE scaling: loss-like metric vs training FLOPs",
+        title="Per-task Grug-MoE scaling: available loss-like metrics vs training FLOPs",
         height=max(760, 260 * n_rows),
         legend={"orientation": "h", "yanchor": "bottom", "y": -0.05, "xanchor": "center", "x": 0.5},
         margin={"t": 95, "b": 80, "l": 45, "r": 20},
@@ -626,19 +638,20 @@ def make_dashboard(
     else:
         accuracy_html = ""
 
-    task_plot_df = preferred_df[preferred_df["common_task"]].copy()
+    task_plot_df = preferred_df.copy()
     task_plot_df["display_value"] = task_plot_df["oriented_value"]
     fig_tasks = px.line(
         task_plot_df,
         x="scale_label",
         y="display_value",
         color="track_label",
+        line_group="task_alias",
         facet_col="task_group",
         facet_col_wrap=3,
         markers=True,
         category_orders={"track_label": track_order},
-        hover_data=["task_alias", "preferred_metric", "raw_value"],
-        title="Preferred task metrics by group (higher oriented value is better)",
+        hover_data=["task_alias", "preferred_metric", "raw_value", "coverage", "common_task"],
+        title="Available preferred task metrics by group (higher oriented value is better)",
         labels={"display_value": "Oriented selected metric", "scale_label": "Scale"},
     )
     fig_tasks.update_yaxes(matches=None)
@@ -705,6 +718,13 @@ def make_dashboard(
         " / ".join(str(part) for part in column if str(part)) if isinstance(column, tuple) else str(column)
         for column in mixture_wide.columns
     ]
+    task_coverage = (
+        loss_df[
+            ["task_alias", "task_group", "loss_metric", "available_cells", "expected_cells", "coverage", "common_task"]
+        ]
+        .drop_duplicates()
+        .sort_values(["common_task", "task_group", "task_alias"], ascending=[True, True, True])
+    )
 
     html = f"""<!doctype html>
 <html>
@@ -753,7 +773,17 @@ def make_dashboard(
   <iframe src="img/{task_html}"></iframe>
 
   <h2>Per-Task Log-Log Scaling</h2>
+  <p class="note">
+    These plots include partial task coverage. The coverage label is the number
+    of available track/scale cells over the expected full grid, so tasks with
+    one missing eval are still shown and visibly marked.
+  </p>
   <iframe class="tall" src="img/{loss_scaling_html}"></iframe>
+
+  <h2>Task Coverage</h2>
+  <div class="table-scroll">
+  {task_coverage.to_html(index=False)}
+  </div>
 
   <h2>Full Mixture Domain Heatmap</h2>
   <iframe src="img/{heat_html}"></iframe>

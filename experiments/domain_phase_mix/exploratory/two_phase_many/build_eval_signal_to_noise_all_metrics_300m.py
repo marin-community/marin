@@ -30,6 +30,10 @@ DEFAULT_EXTRA_RESULTS_CSVS = (
     / "metric_registry"
     / "300m_gsm8k_humaneval_completion"
     / "300m_gsm8k_humaneval_eval_results_variable_subset_noise.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_gsm8k_humaneval_completion"
+    / "300m_gsm8k_humaneval_eval_results_proportional_variable_subset_noise.csv",
     SCRIPT_DIR / "metric_registry" / "300m_english_lite_completion" / "300m_english_lite_eval_results_merged.csv",
     SCRIPT_DIR
     / "metric_registry"
@@ -45,25 +49,49 @@ DEFAULT_EXTRA_RESULTS_CSVS = (
     / "300m_english_lite_eval_results_variable_subset_noise_socialiqa_only.csv",
     SCRIPT_DIR
     / "metric_registry"
+    / "300m_english_lite_completion"
+    / "300m_english_lite_eval_results_proportional_variable_subset_noise.csv",
+    SCRIPT_DIR
+    / "metric_registry"
     / "300m_generative_smooth_proxy_completion"
     / "300m_generative_smooth_proxy_eval_results.csv",
     SCRIPT_DIR
     / "metric_registry"
     / "300m_generative_smooth_proxy_completion"
     / "300m_generative_smooth_proxy_eval_results_variable_subset_noise.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_generative_smooth_proxy_completion"
+    / "300m_generative_smooth_proxy_eval_results_proportional_variable_subset_noise.csv",
     SCRIPT_DIR / "metric_registry" / "300m_mcq_smooth_proxy_completion" / "300m_mcq_smooth_proxy_eval_results.csv",
     SCRIPT_DIR
     / "metric_registry"
     / "300m_mcq_smooth_proxy_completion"
     / "300m_mcq_smooth_proxy_eval_results_variable_subset_noise.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_mcq_smooth_proxy_completion"
+    / "300m_mcq_smooth_proxy_eval_results_proportional_variable_subset_noise.csv",
     SCRIPT_DIR / "metric_registry" / "300m_noise_parity_completion" / "300m_noise_parity_eval_results.csv",
     SCRIPT_DIR / "metric_registry" / "300m_noise_parity_completion" / "300m_noise_sciq0_backfill_eval_results.csv",
     SCRIPT_DIR
     / "metric_registry"
     / "300m_noise_parity_completion"
     / "300m_noise_parity_eval_results_variable_subset_mmlupro_only.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_noise_parity_completion"
+    / "300m_noise_parity_eval_results_proportional_variable_subset_noise.csv",
     SCRIPT_DIR / "metric_registry" / "300m_agentic_coding_bpb" / "300m_agentic_coding_bpb_results.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_agentic_coding_bpb"
+    / "300m_agentic_coding_bpb_results_proportional_variable_subset_noise.csv",
     SCRIPT_DIR / "metric_registry" / "300m_raw_ppl_completion" / "300m_raw_ppl_eval_results.csv",
+    SCRIPT_DIR
+    / "metric_registry"
+    / "300m_raw_ppl_completion"
+    / "300m_raw_ppl_eval_results_proportional_variable_subset_noise.csv",
 )
 RUN00097_300M_FIXED_SUBSET_RESULTS_URI = (
     "gs://marin-us-east5/pinlin_calvin_xu/data_mixture/"

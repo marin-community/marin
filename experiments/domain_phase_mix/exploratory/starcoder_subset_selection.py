@@ -22,6 +22,14 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+from experiments.domain_phase_mix.exploratory.dsre_ceq_tools import fit_dsre_ceq_artifacts
+from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
+from experiments.domain_phase_mix.starcoder_metadata import (
+    DEFAULT_STARCODER_OBJECTIVE,
+    THREE_PHASE_STARCODER,
+    TWO_PHASE_STARCODER,
+    load_starcoder_dataset,
+)
 from experiments.domain_phase_mix.static_batch_selection import (
     ReplayMatch,
     compute_subset_diagnostics,
@@ -33,16 +41,8 @@ from experiments.domain_phase_mix.static_batch_selection import (
     sampler_replay_selection,
     weight_configs_to_tensor,
 )
-from experiments.domain_phase_mix.starcoder_metadata import (
-    DEFAULT_STARCODER_OBJECTIVE,
-    THREE_PHASE_STARCODER,
-    TWO_PHASE_STARCODER,
-    load_starcoder_dataset,
-)
 from experiments.domain_phase_mix.three_phase_starcoder_experiment import create_three_phase_experiment
 from experiments.domain_phase_mix.two_phase_starcoder_experiment import create_two_phase_experiment
-from experiments.domain_phase_mix.exploratory.dsre_ceq_tools import fit_dsre_ceq_artifacts
-from experiments.domain_phase_mix.exploratory.general_scaling_models import DatasetSpec
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "starcoder_subset_selection_outputs"
 SEARCH_RESTARTS = 4

@@ -21,9 +21,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from scipy.optimize import minimize
-
 from general_scaling_models import _fit_dsre_ceq
+from scipy.optimize import minimize
 from three_phase_visualization import load_spec
 
 DEFAULT_TARGET = "eval/paloma/dolma_100_programing_languages/bpb"

@@ -10,9 +10,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from functools import cache, partial
 
+from fray.cluster import ResourceConfig
 from levanter.main.train_lm import LmConfig
 from levanter.optim import MuonHConfig
-from fray.cluster import ResourceConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.processing.tokenize.data_configs import ExistingTokenizedCacheConfig
+from marin.processing.tokenize.merge_tokenized_caches import merge_tokenized_caches
 
 from experiments.domain_phase_mix.config import DatasetComponent, Domain, PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import (
@@ -28,24 +31,21 @@ from experiments.domain_phase_mix.experiment import (
     InitialFixedWeightConfig,
     MixtureExperiment,
 )
+from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
     OLMIX_LOGLINEAR_PHASE_WEIGHTS,
     OLMIX_LOGLINEAR_RUN_NAME,
     create_olmix_loglinear_weight_config,
 )
-from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.weight_sampler import (
     DirichletSamplingParams,
     SamplingStrategy,
     compute_unimax_weights,
 )
 from experiments.evals.task_configs import MMLU_5_SHOT, MMLU_PRO_5_SHOT, MMLU_SL_VERB_5_SHOT
-from marin.evaluation.evaluation_config import EvalTaskConfig
 from experiments.marin_models import marin_tokenizer
 from experiments.pretraining_datasets.dolma3_dolmino_pool import tokenize_dolmino_pool_subset
 from experiments.pretraining_datasets.dolma3_pool import tokenize_dolma3_pool_subset
-from marin.processing.tokenize.data_configs import ExistingTokenizedCacheConfig
-from marin.processing.tokenize.merge_tokenized_caches import merge_tokenized_caches
 
 NAME = "pinlin_calvin_xu/data_mixture/two_phase_dolma3_dolmino_top_level"
 EXPERIMENT_BUDGET = 1_200_000_000

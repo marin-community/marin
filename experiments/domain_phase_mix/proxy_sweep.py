@@ -22,14 +22,14 @@ import os
 from dataclasses import replace
 from typing import Any
 
+from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.olmo3 import Olmo3Config
 from levanter.optim import MuonHConfig
+from marin.execution.executor import executor_main
 
 from experiments.llama import llama3_tokenizer_vocab_size, llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import executor_main
 
 logger = logging.getLogger(__name__)
 

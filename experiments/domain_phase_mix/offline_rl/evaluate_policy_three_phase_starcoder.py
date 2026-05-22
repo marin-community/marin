@@ -24,31 +24,30 @@ import optax
 import pandas as pd
 import torch
 from fray.cluster import ResourceConfig
-from rigging.filesystem import marin_region
 from levanter.optim.config import LrSchedule, LrScheduleContext
-
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from marin.utils import create_cache_tokenizer_step
+from rigging.filesystem import marin_region
 
 from experiments.domain_phase_mix.config import WeightConfig
+from experiments.domain_phase_mix.offline_rl.build_three_phase_dense_policy_dataset import (
+    SEQUENCE_CHANNELS,
+    build_decision_state_features,
+)
 from experiments.domain_phase_mix.offline_rl.build_transitions import _feature_defaults, extract_decision_state
 from experiments.domain_phase_mix.offline_rl.collect_pooled_starcoder_dataset import collect_history_long_rows_batched
-from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dense_dataset import (
-    collect_dense_history_from_run,
-)
 from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dataset import (
     build_wide_history,
     dedupe_history_rows,
+)
+from experiments.domain_phase_mix.offline_rl.collect_three_phase_starcoder_dense_dataset import (
+    collect_dense_history_from_run,
 )
 from experiments.domain_phase_mix.offline_rl.contracts import (
     DEFAULT_OBJECTIVE_METRIC,
     DEFAULT_PHASE_END_STEPS,
     DEFAULT_TOTAL_STEPS,
-)
-from experiments.domain_phase_mix.offline_rl.build_three_phase_dense_policy_dataset import (
-    SEQUENCE_CHANNELS,
-    build_decision_state_features,
 )
 from experiments.domain_phase_mix.offline_rl.ope import DecisionBatch
 from experiments.domain_phase_mix.offline_rl.policy_artifact import (

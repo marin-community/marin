@@ -78,6 +78,7 @@ PROPORTIONAL_PERTURBATION_PANELS = {
     "proportional_perturbation_300m_6b",
     "proportional_baseline_anchor_60m_1p2b",
     "proportional_baseline_anchor_300m_6b",
+    "proportional_controllability_300m_6b",
 }
 EXECUTOR_STATUS_FILE = ".executor_status"
 STATUS_SUCCESS = "SUCCESS"

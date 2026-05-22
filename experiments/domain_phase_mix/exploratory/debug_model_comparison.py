@@ -28,14 +28,15 @@
 """
 
 import sys
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from pathlib import Path
 from scipy.optimize import minimize
-from sklearn.model_selection import KFold
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
+from sklearn.model_selection import KFold
 
 sys.stdout.reconfigure(line_buffering=True)
 

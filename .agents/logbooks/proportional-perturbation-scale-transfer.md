@@ -595,3 +595,88 @@
   - Review agreed with the directional finite-difference framing and highlighted three issues:
     slope fallback should use `tv_distance`, redundant BPB/NLL/logprob should not be triple-counted
     in headline plots, and non-domain bars should not stack multiple metrics. All three were fixed.
+
+### 2026-05-20 - packet coverage completion pass
+- Goal: complete perturbation metric coverage before preparing the ChatGPT Pro packet for SNR and
+  projected-controllability analysis.
+- Local registry fixes:
+  - Added checkpoint-root metadata repair in
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/build_metric_registry.py`
+    so retry rows with missing `scale`/intervention metadata join against
+    `proportional_perturbation_eval_candidates.csv` instead of creating `scale=nan` registry keys.
+  - Added
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/collect_proportional_perturbation_training_eval_metrics.py`.
+  - Collected `ppert_training_eval_metrics.csv`: `112/112` rows and `60` training-time `eval/*`
+    columns from checkpoint `eval_metrics.jsonl`/`tracker_metrics.jsonl`.
+  - Local issue #5416 coverage check after the training-eval overlay: all `26` selected aggregate
+    columns are present; `15/110` perturbation rows are complete before the full parity rerun. The
+    remaining missing columns are the parity aliases `lm_eval/piqa/choice_logprob`,
+    `lm_eval/arc_easy/choice_logprob`, `lm_eval/mmlu_sl_verb_5shot/choice_logprob`, and
+    `lm_eval/hellaswag_0shot/choice_logprob`.
+- Guardrail: two direct local launcher attempts were stopped before treating them as real submissions:
+  - `ngd3dm2_ppert_noise_parity_full_20260520` fell back to `LocalClient` and began local lm-eval
+    processes, so PIDs `71093`/`71094` were killed.
+  - `ngd3dm2_ppert_raw_ppl_full_20260520` was materializing large HF-backed raw eval datasets locally
+    and had not reached a valid Iris parent submission, so PIDs `61701`/`61702` were killed.
+  - Ignore both prefixes for collection unless a later manual audit proves they contain intentional
+    complete outputs.
+- Correct full parity alias backfill submission:
+  - Intended prefix:
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry1_20260520`.
+  - Shape: `112` candidates (`55` 60M perturbations, `55` 300M perturbations, `2` proportional anchors).
+  - Tasks: `mmlu_5shot`, `mmlu_sl_verb_5shot`, `mmlu_pro_5shot`, `arc_easy` 10-shot, `piqa` 10-shot,
+    `sciq_0shot`, and `hellaswag_0shot`.
+  - Submission command wraps the launcher in `uv run iris --cluster marin job run --no-wait` with
+    parent resources `cpu=1`, `memory=16GB`, `disk=20GB`, `region=us-east5`, and `zone=us-east5-a`.
+  - Status at note time: Iris controller RPCs were timing out/resetting during `LaunchJob`; the submit
+    client was left retrying for `/calvinxu/dm-ppert-noise-parity-full-retry1-20260521-024744` rather
+    than starting duplicate parents. A read-only `iris query` for the same job prefix also timed out on
+    `ExecuteRawQuery`, so there was no confirmed controller-side parent job at this checkpoint.
+- Correct raw-PPL perturbation completion plan:
+  - Intended fresh prefix:
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry1_20260520`.
+  - Shape: `112` candidates and `55` raw-PPL datasets (`priority` plus `fineweb2-representative`).
+  - Do not start this until Iris controller RPCs are healthy enough to submit the parent job through
+    `uv run iris --cluster marin job run`; direct local launcher execution is not a valid live path.
+
+### 2026-05-21 - perturbation coverage submission after Iris recovery
+- Fieldbook tracking:
+  - Experiment: `exp_01ks48kds4x1s1gbqhg0skatdc`
+    (`Proportional perturbation coverage completion`).
+  - Ledger: `.experiments/ledger.sqlite`.
+- Shared candidate CSV:
+  - Uploaded local
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/proportional_perturbation_eval_candidates.csv`
+    to
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/proportional_perturbation_scale_transfer/proportional_perturbation_eval_candidates_20260520.csv`.
+  - Verified shape: `112` rows (`55` 60M perturbations, `55` 300M perturbations, and `2`
+    proportional baseline anchors).
+- Retry history:
+  - `dm-ppert-noise-parity-full-retry1-20260521-024744`: parent was created, but failed during Iris
+    bundle staging with a bundle fetch connection reset.
+  - `dm-ppert-noise-parity-full-retry2-20260521-034135`: parent succeeded as a no-op because the
+    perturbation candidate env was not passed to the remote parent, so it saw the default noise panels.
+  - `dm-ppert-raw-ppl-full-retry1-20260521-034249` and
+    `dm-ppert-noise-parity-full-retry3-20260521-034507`: failed because the remote parent could not
+    read the local-only perturbation candidate CSV path.
+- Correct live submissions:
+  - Parity aliases:
+    `/calvinxu/dm-ppert-noise-parity-full-retry4-20260521-034828`
+    with prefix
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry4_20260520`.
+  - Raw-PPL:
+    `/calvinxu/dm-ppert-raw-ppl-full-retry2-20260521-034828`
+    with prefix
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry2_20260520`.
+  - Both pass `MARIN_EXTRA_EVAL_CANDIDATES_CSVS` as the east5 GCS CSV URI and
+    `MARIN_300M_CANDIDATE_PANELS` as
+    `proportional_perturbation_60m_1p2b,proportional_perturbation_300m_6b,proportional_baseline_anchor_60m_1p2b,proportional_baseline_anchor_300m_6b`.
+- Current state at submission check:
+  - Parity retry4 parent is running and has created `113` child/cache jobs:
+    `102` pending, `11` running, `1` succeeded. Pending children are waiting on `v5p-8`
+    capacity in `us-east5-a`.
+  - Raw-PPL retry2 parent is running and has created `65` child jobs so far, all pending behind the
+    same `v5p-8` capacity constraint; the parent is still active.
+- Next action:
+  - After children finish, collect from retry4/retry2 prefixes, rebuild the perturbation coverage
+    overlays, and use a failure-only retry if individual children fail transiently.

@@ -27,11 +27,13 @@ from experiments.domain_phase_mix.qsplit240_replay import (
 )
 from experiments.domain_phase_mix.scaling_study_recipes import (
     ScalingStudyScale as StratifiedScale,
+)
+from experiments.domain_phase_mix.scaling_study_recipes import (
     resolve_scale_spec,
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
-    STRATIFIED_RUN_NAME,
     STRATIFIED_RUN_ID,
+    STRATIFIED_RUN_NAME,
     create_stratified_weight_config,
     create_two_phase_dolma3_dolmino_top_level_experiment,
 )

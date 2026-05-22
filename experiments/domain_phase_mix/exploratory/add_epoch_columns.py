@@ -34,8 +34,9 @@ where:
   - w_{p,d} = domain weight in phase p
 """
 
-import pandas as pd
 from pathlib import Path
+
+import pandas as pd
 
 # Constants from two_phase_starcoder_experiment.py and domains.py
 TARGET_BUDGET = 5_729_908_864_777

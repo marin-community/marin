@@ -10,55 +10,76 @@ import numpy as np
 import pandas as pd
 import pytest
 from fray.cluster import ResourceConfig
+from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
+from marin.execution.executor import Executor, InputName, collect_dependencies_and_version
+from marin.processing.tokenize import TokenizeConfig
+from rigging.filesystem import marin_prefix
 
 import experiments.domain_phase_mix.determinism_analysis as determinism_analysis
+import experiments.domain_phase_mix.exploratory.two_phase_many.analyze_qsplit240_520m_pilot as qsplit240_520m_analysis
+import experiments.domain_phase_mix.launch_two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima as grp_no_l2_raw_subset_optima_launch  # noqa: E501
+import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot as qsplit240_1_2b_pilot
+import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b as qsplit240_300m
+import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot as qsplit240_520m_pilot
+import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 as qsplit240_seedpanel
+import experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline as stratified_baseline_launch
+import experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study as strong_tier_scaling_study_launch
+import experiments.domain_phase_mix.qsplit240_replay as qsplit240_replay
+import experiments.domain_phase_mix.scaling_study_recipes as scaling_study_recipes
+from experiments.defaults import default_train
 from experiments.domain_phase_mix import (
-    launch_two_phase_many_genericfamily_subset_optima as genericfamily_subset_optima_launch,
+    launch_two_phase_many_genericfamily_no_penalty_baseline as genericfamily_no_penalty_launch,
 )
 from experiments.domain_phase_mix import (
-    launch_two_phase_many_genericfamily_retuned_subset_optima as genericfamily_retuned_subset_optima_launch,
+    launch_two_phase_many_genericfamily_observed_only_trustblend_baseline as obs_trustblend_baseline_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_observed_only_trustblend_subset_optima as obs_trustblend_subset_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b as genericfamily_penalty_raw_optima_300m_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_power_observed_only_trustblend_baseline as power_obs_trustblend_baseline_launch,
 )
 from experiments.domain_phase_mix import (
     launch_two_phase_many_genericfamily_recovered_hull_subset_optima as genericfamily_recovered_hull_launch,
 )
 from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_retuned_subset_optima as genericfamily_retuned_subset_optima_launch,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_genericfamily_subset_optima as genericfamily_subset_optima_launch,
+)
+from experiments.domain_phase_mix import (
     launch_two_phase_many_genericfamily_top8actual_hull_subset_optima as genericfamily_top8actual_hull_launch,
 )
 from experiments.domain_phase_mix import (
-    launch_two_phase_many_genericfamily_observed_only_trustblend_baseline as obs_trustblend_baseline_launch,
-    launch_two_phase_many_genericfamily_power_observed_only_trustblend_baseline as power_obs_trustblend_baseline_launch,
-    launch_two_phase_many_genericfamily_observed_only_trustblend_subset_optima as obs_trustblend_subset_launch,
+    launch_two_phase_many_olmix_loglinear_subset_optima as olmix_loglinear_subset_optima_launch,
 )
 from experiments.domain_phase_mix import (
-    launch_two_phase_many_genericfamily_no_penalty_baseline as genericfamily_no_penalty_launch,
-    launch_two_phase_many_genericfamily_penalty_raw_optima_300m_6b as genericfamily_penalty_raw_optima_300m_launch,
+    launch_two_phase_many_qsplit240_300m_6b_parity_rerun as qsplit240_300m_parity_rerun,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun as qsplit240_seedpanel_slverb_rerun,
+)
+from experiments.domain_phase_mix import (
+    launch_two_phase_many_qsplit240_olmo_base_easy_overlap_rerun as qsplit240_olmo_base_easy_overlap_rerun,
 )
 from experiments.domain_phase_mix import (
     launch_two_phase_many_regmix_raw_subset_optima as regmix_raw_subset_optima_launch,
 )
-import experiments.domain_phase_mix.launch_two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima as grp_no_l2_raw_subset_optima_launch  # noqa: E501
 from experiments.domain_phase_mix import (
-    launch_two_phase_many_qsplit240_300m_6b_parity_rerun as qsplit240_300m_parity_rerun,
     launch_two_phase_many_run_00097_300m_6b_parity_rerun as run00097_300m_parity_rerun,
 )
-
 from experiments.domain_phase_mix import (
-    launch_two_phase_many_olmix_loglinear_subset_optima as olmix_loglinear_subset_optima_launch,
+    launch_two_phase_many_run_00097_olmo_base_easy_overlap_rerun as run00097_olmo_base_easy_overlap_rerun,
 )
-import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 as qsplit240_seedpanel
-import experiments.domain_phase_mix.launch_two_phase_many_stratified_baseline as stratified_baseline_launch
-import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b as qsplit240_300m
-import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot as qsplit240_1_2b_pilot
-import experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot as qsplit240_520m_pilot
-import experiments.domain_phase_mix.launch_two_phase_many_strong_tier_scaling_study as strong_tier_scaling_study_launch
-import experiments.domain_phase_mix.qsplit240_replay as qsplit240_replay
-import experiments.domain_phase_mix.scaling_study_recipes as scaling_study_recipes
 from experiments.domain_phase_mix import (
-    launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun as qsplit240_seedpanel_slverb_rerun,
+    launch_two_phase_many_selected_baselines_olmo_base_easy_overlap_rerun as selected_overlap_rerun,
 )
-import experiments.domain_phase_mix.exploratory.two_phase_many.analyze_qsplit240_520m_pilot as qsplit240_520m_analysis
+from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (
-    CollectManifestResultsConfig,
     CONTROL_RUNS_CSV,
     DETERMINISM_CONTROL_REPORT_JSON,
     FINAL_BPB_STATS_JSON,
@@ -66,13 +87,17 @@ from experiments.domain_phase_mix.determinism_analysis import (
     FIT_DATASET_SUMMARY_JSON,
     FIXED_SUBSET_NOISE_SUMMARY_CSV,
     FIXED_SUBSET_NOISE_SUMMARY_JSON,
-    JitterReportConfig,
+    MMLU_NOISE_VS_RUNTIME_300M_6B_PNG,
+    NOISE_SUMMARY_CSV,
+    NOISE_SUMMARY_JSON,
     RESULTS_CSV,
     RUN_MANIFEST_FILE,
     SEED_RUNS_CSV,
     SWARM_COMPARISON_CSV,
     SWARM_COMPARISON_JSON,
     TRAJECTORY_BPB_STATS_CSV,
+    CollectManifestResultsConfig,
+    JitterReportConfig,
     _build_compute_scaling_summary_rows,
     _build_fixed_subset_summary_rows,
     _build_model_size_noise_summary_rows,
@@ -81,117 +106,178 @@ from experiments.domain_phase_mix.determinism_analysis import (
     create_fixed_subset_noise_report,
     create_jitter_report,
     create_model_size_noise_report,
-    NOISE_SUMMARY_CSV,
-    NOISE_SUMMARY_JSON,
-    MMLU_NOISE_VS_RUNTIME_300M_6B_PNG,
 )
-from experiments.defaults import default_train
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.domain_phase_mix.config import WeightConfig
-from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
-    EXACT_CONTROL_DATA_SEED,
-    EXACT_CONTROL_NAMES,
-    RUN_00097_PHASE_WEIGHTS,
-    SEED_SWEEP_START,
-    SOURCE_RUN_NAME,
-    build_run_specs as build_run_00097_seed_specs,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_run_00097_compute_scaling_study import (
-    OLMO3_30M_3B_BUDGET,
-    OLMO3_30M_3B_LADDER,
-    REGMIX60M_6B_BUDGET,
-    REGMIX60M_6B_LADDER,
-    build_run_specs as build_compute_scaling_run_specs,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_study import (
-    SIMULATED_EPOCH_SUBSET_SEED,
-    build_run_specs as build_fixed_subset_run_specs,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 import (
-    NAME as QSPLIT240_SEEDPANEL_NAME,
-    TRAINER_SEEDS,
-    build_run_specs as build_qsplit240_seedpanel_run_specs,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import (
-    EXPERIMENT_BUDGET as QSPLIT240_300M_6B_BUDGET,
-    MODEL_FAMILY as QSPLIT240_300M_6B_MODEL_FAMILY,
-    NUM_TRAIN_STEPS as QSPLIT240_300M_6B_NUM_TRAIN_STEPS,
-    QSPLIT240_300M_EVAL_TASKS,
-    build_run_specs as build_qsplit240_300m_run_specs,
-    create_experiment as create_qsplit240_300m_experiment,
-    select_run_specs_for_shard,
-    shard_execution_name_prefix,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b_parity_rerun import (
-    build_run_specs as build_qsplit240_300m_parity_rerun_specs,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
-    BATCH_SIZE as QSPLIT240_1_2B_BATCH_SIZE,
-    DEFAULT_PANEL as QSPLIT240_1_2B_DEFAULT_PANEL,
-    DEFAULT_TPU_REGIONS as QSPLIT240_1_2B_DEFAULT_TPU_REGIONS,
-    DEFAULT_TPU_ZONE as QSPLIT240_1_2B_DEFAULT_TPU_ZONE,
-    EXPERIMENT_BUDGET as QSPLIT240_1_2B_BUDGET,
-    MODEL_FAMILY as QSPLIT240_1_2B_MODEL_FAMILY,
-    NUM_TRAIN_STEPS as QSPLIT240_1_2B_NUM_TRAIN_STEPS,
-    build_run_specs as build_qsplit240_1_2b_pilot_run_specs,
-    create_experiment as create_qsplit240_1_2b_pilot_experiment,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
-    BATCH_SIZE as QSPLIT240_520M_BATCH_SIZE,
-    DEFAULT_PANEL as QSPLIT240_520M_DEFAULT_PANEL,
-    DEFAULT_TPU_REGIONS as QSPLIT240_520M_DEFAULT_TPU_REGIONS,
-    DEFAULT_TPU_ZONE as QSPLIT240_520M_DEFAULT_TPU_ZONE,
-    EXPERIMENT_BUDGET as QSPLIT240_520M_BUDGET,
-    MODEL_FAMILY as QSPLIT240_520M_MODEL_FAMILY,
-    NUM_TRAIN_STEPS as QSPLIT240_520M_NUM_TRAIN_STEPS,
-    build_run_specs as build_qsplit240_520m_pilot_run_specs,
-    create_experiment as create_qsplit240_520m_pilot_experiment,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_mmlu_sl_verb_rerun import (
-    build_run_specs as build_qsplit240_mmlu_sl_verb_rerun_specs,
-)
-from experiments.domain_phase_mix import (
-    launch_two_phase_many_qsplit240_olmo_base_easy_overlap_rerun as qsplit240_olmo_base_easy_overlap_rerun,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_olmo_base_easy_overlap_rerun import (
-    build_run_specs as build_qsplit240_olmo_base_easy_overlap_rerun_specs,
-)
-from experiments.domain_phase_mix import (
-    launch_two_phase_many_selected_baselines_olmo_base_easy_overlap_rerun as selected_overlap_rerun,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_selected_baselines_olmo_base_easy_overlap_rerun import (
-    build_run_specs as build_selected_baselines_olmo_base_easy_overlap_rerun_specs,
-)
-from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun import (
-    build_run_specs as build_qsplit240_seedpanel_mmlu_sl_verb_rerun_specs,
-)
+from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import TOP_LEVEL_DOMAIN_TOKEN_COUNTS
 from experiments.domain_phase_mix.launch_two_phase_many_olmix_loglinear_mmlu_sl_verb_rerun import (
     build_run_specs as build_olmix_loglinear_mmlu_sl_verb_rerun_specs,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_olmix_sl_verb_choice_logprob_norm_mmlu_sl_verb_rerun import (
     build_run_specs as build_fitted_olmix_sl_verb_mmlu_sl_verb_rerun_specs,
 )
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    BATCH_SIZE as QSPLIT240_1_2B_BATCH_SIZE,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    DEFAULT_PANEL as QSPLIT240_1_2B_DEFAULT_PANEL,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    DEFAULT_TPU_REGIONS as QSPLIT240_1_2B_DEFAULT_TPU_REGIONS,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    DEFAULT_TPU_ZONE as QSPLIT240_1_2B_DEFAULT_TPU_ZONE,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    EXPERIMENT_BUDGET as QSPLIT240_1_2B_BUDGET,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    MODEL_FAMILY as QSPLIT240_1_2B_MODEL_FAMILY,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    NUM_TRAIN_STEPS as QSPLIT240_1_2B_NUM_TRAIN_STEPS,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    build_run_specs as build_qsplit240_1_2b_pilot_run_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_1_2b_chinchilla_pilot import (
+    create_experiment as create_qsplit240_1_2b_pilot_experiment,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import (
+    EXPERIMENT_BUDGET as QSPLIT240_300M_6B_BUDGET,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import (
+    MODEL_FAMILY as QSPLIT240_300M_6B_MODEL_FAMILY,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import (
+    NUM_TRAIN_STEPS as QSPLIT240_300M_6B_NUM_TRAIN_STEPS,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import (
+    QSPLIT240_300M_EVAL_TASKS,
+    select_run_specs_for_shard,
+    shard_execution_name_prefix,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import (
+    build_run_specs as build_qsplit240_300m_run_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b import (
+    create_experiment as create_qsplit240_300m_experiment,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_300m_6b_parity_rerun import (
+    build_run_specs as build_qsplit240_300m_parity_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    BATCH_SIZE as QSPLIT240_520M_BATCH_SIZE,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    DEFAULT_PANEL as QSPLIT240_520M_DEFAULT_PANEL,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    DEFAULT_TPU_REGIONS as QSPLIT240_520M_DEFAULT_TPU_REGIONS,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    DEFAULT_TPU_ZONE as QSPLIT240_520M_DEFAULT_TPU_ZONE,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    EXPERIMENT_BUDGET as QSPLIT240_520M_BUDGET,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    MODEL_FAMILY as QSPLIT240_520M_MODEL_FAMILY,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    NUM_TRAIN_STEPS as QSPLIT240_520M_NUM_TRAIN_STEPS,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    build_run_specs as build_qsplit240_520m_pilot_run_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_520m_chinchilla_pilot import (
+    create_experiment as create_qsplit240_520m_pilot_experiment,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 import (
+    NAME as QSPLIT240_SEEDPANEL_NAME,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 import (
+    TRAINER_SEEDS,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3 import (
+    build_run_specs as build_qsplit240_seedpanel_run_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_fixed_subset_seedpanel_n3_mmlu_sl_verb_rerun import (
+    build_run_specs as build_qsplit240_seedpanel_mmlu_sl_verb_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_mmlu_sl_verb_rerun import (
+    build_run_specs as build_qsplit240_mmlu_sl_verb_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_qsplit240_olmo_base_easy_overlap_rerun import (
+    build_run_specs as build_qsplit240_olmo_base_easy_overlap_rerun_specs,
+)
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_subset_study import (
     EXPERIMENT_BUDGET as REGMIX300M_6B_BUDGET,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_subset_study import (
     MODEL_FAMILY as REGMIX300M_6B_MODEL_FAMILY,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_fixed_subset_study import (
     build_run_specs as build_regmix300m_6b_run_specs,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_parity_rerun import (
     _eval_model_name as run00097_300m_parity_eval_model_name,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_300m_6b_parity_rerun import (
     build_run_specs as build_run_00097_300m_parity_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_compute_scaling_study import (
+    OLMO3_30M_3B_BUDGET,
+    OLMO3_30M_3B_LADDER,
+    REGMIX60M_6B_BUDGET,
+    REGMIX60M_6B_LADDER,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_compute_scaling_study import (
+    build_run_specs as build_compute_scaling_run_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_mmlu_sl_verb_rerun import (
+    _eval_model_name as fixed_subset_run_00097_mmlu_sl_verb_eval_model_name,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_mmlu_sl_verb_rerun import (
+    build_run_specs as build_run_00097_fixed_subset_mmlu_sl_verb_rerun_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_study import (
+    SIMULATED_EPOCH_SUBSET_SEED,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_study import (
+    build_run_specs as build_fixed_subset_run_specs,
 )
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_mmlu_sl_verb_rerun import (
     build_run_specs as build_run_00097_mmlu_sl_verb_rerun_specs,
 )
-from experiments.domain_phase_mix import (
-    launch_two_phase_many_run_00097_olmo_base_easy_overlap_rerun as run00097_olmo_base_easy_overlap_rerun,
-)
 from experiments.domain_phase_mix.launch_two_phase_many_run_00097_olmo_base_easy_overlap_rerun import (
     build_run_specs as build_run_00097_olmo_base_easy_overlap_rerun_specs,
 )
-from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_mmlu_sl_verb_rerun import (
-    _eval_model_name as fixed_subset_run_00097_mmlu_sl_verb_eval_model_name,
-    build_run_specs as build_run_00097_fixed_subset_mmlu_sl_verb_rerun_specs,
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
+    EXACT_CONTROL_DATA_SEED,
+    EXACT_CONTROL_NAMES,
+    RUN_00097_PHASE_WEIGHTS,
+    SEED_SWEEP_START,
+    SOURCE_RUN_NAME,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_run_00097_seed_study import (
+    build_run_specs as build_run_00097_seed_specs,
+)
+from experiments.domain_phase_mix.launch_two_phase_many_selected_baselines_olmo_base_easy_overlap_rerun import (
+    build_run_specs as build_selected_baselines_olmo_base_easy_overlap_rerun_specs,
+)
+from experiments.domain_phase_mix.proxy_sweep import (
+    REGMIX_1_2B_CHINCHILLA_BUDGET,
+    REGMIX_130M_CHINCHILLA_BUDGET,
+    REGMIX_300M_CHINCHILLA_BUDGET,
+    REGMIX_520M_CHINCHILLA_BUDGET,
+    regmix_1_2b_muonh_base,
+    regmix_1_2b_proxy,
+    regmix_60m_proxy,
+    regmix_130m_muonh_base,
+    regmix_130m_proxy,
+    regmix_300m_muonh_base,
+    regmix_300m_proxy,
+    regmix_520m_muonh_base,
+    regmix_520m_proxy,
 )
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     STRATIFIED_RUN_NAME,
@@ -199,82 +285,8 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     create_stratified_weight_config,
     create_two_phase_dolma3_dolmino_top_level_experiment,
 )
-from experiments.domain_phase_mix.two_phase_starcoder_determinism_wsd import (
-    FIXED_PHASE_WEIGHTS,
-    OBJECTIVE_METRIC,
-    build_run_specs,
-    default_sweep_config,
-    resolve_wsd_schedule,
-)
-from experiments.domain_phase_mix.proxy_sweep import (
-    REGMIX_130M_CHINCHILLA_BUDGET,
-    REGMIX_300M_CHINCHILLA_BUDGET,
-    regmix_130m_muonh_base,
-    regmix_130m_proxy,
-    regmix_60m_proxy,
-    regmix_300m_muonh_base,
-    regmix_300m_proxy,
-)
-from experiments.domain_phase_mix.proxy_sweep import (
-    REGMIX_1_2B_CHINCHILLA_BUDGET,
-    regmix_1_2b_muonh_base,
-    regmix_1_2b_proxy,
-    REGMIX_520M_CHINCHILLA_BUDGET,
-    regmix_520m_muonh_base,
-    regmix_520m_proxy,
-)
-from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
-    OLMIX_LOGLINEAR_PHASE_WEIGHTS,
-    OLMIX_LOGLINEAR_RUN_NAME,
-    OLMIX_LOGLINEAR_SOURCE_EXPERIMENT,
-)
-from experiments.domain_phase_mix.two_phase_many_regmix_raw_subset_optima import (
-    REGMIX_RAW_SUBSET_OPTIMA_SUBSET_SIZES,
-    regmix_raw_subset_optima_summaries,
-)
-from experiments.domain_phase_mix.two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima import (
-    GENERICFAMILY_POWER_FAMILY_PENALTY_NO_L2_RAW_SUBSET_OPTIMA_SUBSET_SIZES,
-    genericfamily_power_family_penalty_no_l2_raw_subset_optima_summaries,
-)
-from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_subset_optima import (
-    OLMIX_LOGLINEAR_SUBSET_OPTIMA_SUBSET_SIZES,
-    olmix_loglinear_subset_optima_summaries,
-)
-from experiments.domain_phase_mix.two_phase_many_power_ridge_single import (
-    POWER_RIDGE_SINGLE_OBJECTIVE_METRIC,
-    POWER_RIDGE_SINGLE_RUN_NAME,
-    POWER_RIDGE_SINGLE_SOURCE_EXPERIMENT,
-    create_power_ridge_single_weight_config,
-    power_ridge_single_summary,
-)
-from experiments.domain_phase_mix.two_phase_many_dsre_predicted_baselines import (
-    DSRE_CEQ_PREDICTED_QUALITY_COLLAPSED_RUN_NAME,
-    DSRE_CEQ_PREDICTED_RUN_NAME,
-    DSRE_PREDICTED_BASELINES_SOURCE_EXPERIMENT,
-    create_dsre_ceq_predicted_quality_collapsed_weight_config,
-    create_dsre_ceq_predicted_weight_config,
-    dsre_ceq_predicted_quality_collapsed_summary,
-    dsre_ceq_predicted_summary,
-)
-from experiments.domain_phase_mix.two_phase_many_dsre_predicted_topic_collapsed import (
-    DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_RUN_NAME,
-    DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_SOURCE_EXPERIMENT,
-    create_dsre_ceq_predicted_topic_collapsed_weight_config,
-    dsre_ceq_predicted_topic_collapsed_summary,
-)
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level_topic_collapsed import (
     build_top_level_domains_with_collapsed_cc_topics,
-)
-from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
-    OBJECTIVE_METRIC as OLMIX_UNCHEATABLE_OBJECTIVE_METRIC,
-    fit_olmix_uncheatable_from_frame,
-)
-from experiments.domain_phase_mix.two_phase_many_thresholdtotal_overfit import (
-    THRESHOLDTOTAL_OVERFIT_OBJECTIVE_METRIC,
-    THRESHOLDTOTAL_OVERFIT_RUN_NAME,
-    THRESHOLDTOTAL_OVERFIT_SOURCE_EXPERIMENT,
-    create_thresholdtotal_overfit_weight_config,
-    thresholdtotal_overfit_summary,
 )
 from experiments.domain_phase_mix.two_phase_many_ccglobalpremium_baselines import (
     CCGLOBALPREMIUM_RETAINEDTOTAL_RUN_NAME,
@@ -291,51 +303,65 @@ from experiments.domain_phase_mix.two_phase_many_ccpairtotal_baseline import (
     ccpairtotal_retainedtotal_summary,
     create_ccpairtotal_retainedtotal_weight_config,
 )
-from experiments.domain_phase_mix.two_phase_many_genericfamily_tuned_baseline import (
-    GENERICFAMILY_TUNED_RUN_NAME,
-    GENERICFAMILY_TUNED_SOURCE_EXPERIMENT,
-    create_genericfamily_tuned_weight_config,
-    genericfamily_tuned_summary,
+from experiments.domain_phase_mix.two_phase_many_dsre_predicted_baselines import (
+    DSRE_CEQ_PREDICTED_QUALITY_COLLAPSED_RUN_NAME,
+    DSRE_CEQ_PREDICTED_RUN_NAME,
+    DSRE_PREDICTED_BASELINES_SOURCE_EXPERIMENT,
+    create_dsre_ceq_predicted_quality_collapsed_weight_config,
+    create_dsre_ceq_predicted_weight_config,
+    dsre_ceq_predicted_quality_collapsed_summary,
+    dsre_ceq_predicted_summary,
 )
-from experiments.domain_phase_mix.two_phase_many_genericfamily_subset_optima import (
-    GENERICFAMILY_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
-    genericfamily_subset_optimum_run_name,
-)
-from experiments.domain_phase_mix.two_phase_many_genericfamily_retuned_subset_optima import (
-    GENERICFAMILY_RETUNED_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
-    genericfamily_retuned_subset_optimum_run_name,
-    parse_subset_sizes as parse_retuned_subset_sizes,
-)
-from experiments.domain_phase_mix.two_phase_many_genericfamily_recovered_hull_subset_optima import (
-    GENERICFAMILY_RECOVERED_HULL_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
-    genericfamily_recovered_hull_subset_optimum_run_name,
-)
-from experiments.domain_phase_mix.two_phase_many_genericfamily_top8actual_hull_subset_optima import (
-    GENERICFAMILY_TOP8ACTUAL_HULL_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
-    genericfamily_top8actual_hull_subset_optimum_run_name,
-)
-from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_subset_optima import (
-    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
-    genericfamily_observed_only_trustblend_subset_optimum_run_name,
-)
-from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_baseline import (
-    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME,
-    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT,
-)
-from experiments.domain_phase_mix.two_phase_many_genericfamily_power_observed_only_trustblend_baseline import (
-    GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME,
-    GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT,
+from experiments.domain_phase_mix.two_phase_many_dsre_predicted_topic_collapsed import (
+    DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_RUN_NAME,
+    DSRE_CEQ_PREDICTED_TOPIC_COLLAPSED_SOURCE_EXPERIMENT,
+    create_dsre_ceq_predicted_topic_collapsed_weight_config,
+    dsre_ceq_predicted_topic_collapsed_summary,
 )
 from experiments.domain_phase_mix.two_phase_many_genericfamily_no_penalty_baseline import (
     GENERICFAMILY_NO_PENALTY_RUN_NAME,
     GENERICFAMILY_NO_PENALTY_SOURCE_EXPERIMENT,
 )
-from experiments.domain_phase_mix.dolma3_dolmino_top_level_domains import TOP_LEVEL_DOMAIN_TOKEN_COUNTS
-from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_sl_verb import (
-    NEGATED_OBJECTIVE_METRIC,
-    OBJECTIVE_METRIC as OLMIX_SL_VERB_OBJECTIVE_METRIC,
-    aggregate_candidate_mean_frame,
-    fit_olmix_sl_verb_from_frame,
+from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_baseline import (
+    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME,
+    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_subset_optima import (
+    GENERICFAMILY_OBSERVED_ONLY_TRUSTBLEND_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_observed_only_trustblend_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_power_family_penalty_no_l2_raw_subset_optima import (
+    GENERICFAMILY_POWER_FAMILY_PENALTY_NO_L2_RAW_SUBSET_OPTIMA_SUBSET_SIZES,
+    genericfamily_power_family_penalty_no_l2_raw_subset_optima_summaries,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_power_observed_only_trustblend_baseline import (
+    GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_RUN_NAME,
+    GENERICFAMILY_POWER_OBSERVED_ONLY_TRUSTBLEND_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_recovered_hull_subset_optima import (
+    GENERICFAMILY_RECOVERED_HULL_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_recovered_hull_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_retuned_subset_optima import (
+    GENERICFAMILY_RETUNED_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_retuned_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_retuned_subset_optima import (
+    parse_subset_sizes as parse_retuned_subset_sizes,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_subset_optima import (
+    GENERICFAMILY_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_top8actual_hull_subset_optima import (
+    GENERICFAMILY_TOP8ACTUAL_HULL_SUBSET_OPTIMA_SOURCE_EXPERIMENT,
+    genericfamily_top8actual_hull_subset_optimum_run_name,
+)
+from experiments.domain_phase_mix.two_phase_many_genericfamily_tuned_baseline import (
+    GENERICFAMILY_TUNED_RUN_NAME,
+    GENERICFAMILY_TUNED_SOURCE_EXPERIMENT,
+    create_genericfamily_tuned_weight_config,
+    genericfamily_tuned_summary,
 )
 from experiments.domain_phase_mix.two_phase_many_observed_runs import (
     CORE_BASELINE_RUN_NAMES,
@@ -345,10 +371,55 @@ from experiments.domain_phase_mix.two_phase_many_observed_runs import (
     load_original_qsplit240_runs,
     load_original_qsplit240_with_core_baselines,
 )
-from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
-from marin.execution.executor import Executor, InputName, collect_dependencies_and_version
-from marin.processing.tokenize import TokenizeConfig
-from rigging.filesystem import marin_prefix
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear import (
+    OLMIX_LOGLINEAR_PHASE_WEIGHTS,
+    OLMIX_LOGLINEAR_RUN_NAME,
+    OLMIX_LOGLINEAR_SOURCE_EXPERIMENT,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_sl_verb import (
+    NEGATED_OBJECTIVE_METRIC,
+    aggregate_candidate_mean_frame,
+    fit_olmix_sl_verb_from_frame,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_sl_verb import (
+    OBJECTIVE_METRIC as OLMIX_SL_VERB_OBJECTIVE_METRIC,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_subset_optima import (
+    OLMIX_LOGLINEAR_SUBSET_OPTIMA_SUBSET_SIZES,
+    olmix_loglinear_subset_optima_summaries,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
+    OBJECTIVE_METRIC as OLMIX_UNCHEATABLE_OBJECTIVE_METRIC,
+)
+from experiments.domain_phase_mix.two_phase_many_olmix_loglinear_uncheatable import (
+    fit_olmix_uncheatable_from_frame,
+)
+from experiments.domain_phase_mix.two_phase_many_power_ridge_single import (
+    POWER_RIDGE_SINGLE_OBJECTIVE_METRIC,
+    POWER_RIDGE_SINGLE_RUN_NAME,
+    POWER_RIDGE_SINGLE_SOURCE_EXPERIMENT,
+    create_power_ridge_single_weight_config,
+    power_ridge_single_summary,
+)
+from experiments.domain_phase_mix.two_phase_many_regmix_raw_subset_optima import (
+    REGMIX_RAW_SUBSET_OPTIMA_SUBSET_SIZES,
+    regmix_raw_subset_optima_summaries,
+)
+from experiments.domain_phase_mix.two_phase_many_thresholdtotal_overfit import (
+    THRESHOLDTOTAL_OVERFIT_OBJECTIVE_METRIC,
+    THRESHOLDTOTAL_OVERFIT_RUN_NAME,
+    THRESHOLDTOTAL_OVERFIT_SOURCE_EXPERIMENT,
+    create_thresholdtotal_overfit_weight_config,
+    thresholdtotal_overfit_summary,
+)
+from experiments.domain_phase_mix.two_phase_starcoder_determinism_wsd import (
+    FIXED_PHASE_WEIGHTS,
+    OBJECTIVE_METRIC,
+    build_run_specs,
+    default_sweep_config,
+    resolve_wsd_schedule,
+)
+from experiments.simple_train_config import SimpleTrainConfig
 
 
 def test_build_run_specs_has_expected_seed_and_control_cohorts():

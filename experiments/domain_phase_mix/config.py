@@ -9,8 +9,8 @@ This module provides flexible configuration primitives for defining:
 - Experiment configurations (combining domains, phases, and model settings)
 """
 
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize.tokenize import TokenizeConfigBase

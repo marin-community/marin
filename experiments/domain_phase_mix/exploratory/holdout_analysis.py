@@ -30,16 +30,16 @@ import pickle
 import sys
 import time
 import warnings
+from pathlib import Path
 
+import matplotlib as mpl
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib as mpl
-import matplotlib.pyplot as plt
+from joblib import Parallel, delayed
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
-from joblib import Parallel, delayed
-from pathlib import Path
-import matplotlib.colors as mcolors
 from scipy.optimize import minimize as sp_minimize
 
 sys.path.insert(0, str(Path(__file__).parent))

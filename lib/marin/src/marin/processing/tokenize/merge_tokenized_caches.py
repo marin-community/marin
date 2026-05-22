@@ -10,7 +10,7 @@ import json
 import logging
 import os
 
-from rigging.filesystem import open_url
+import transformers
 from levanter.data.text import (
     LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
@@ -20,7 +20,7 @@ from levanter.data.text import (
 )
 from levanter.store.cache import CacheMetadata, consolidate_shard_caches
 from levanter.store.tree_store import TreeStore
-import transformers
+from rigging.filesystem import open_url
 
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
 from marin.processing.tokenize.data_configs import TokenizerConfigLike, step_to_lm_dataset_source_config

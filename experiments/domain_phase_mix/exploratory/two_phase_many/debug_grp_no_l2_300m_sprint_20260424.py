@@ -16,9 +16,9 @@ surrogate debug pass.
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
 from datetime import datetime
-import json
 from pathlib import Path
 from typing import Any, Literal
 

@@ -6,9 +6,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from functools import cache
-from collections.abc import Iterable
 
 import numpy as np
 import pandas as pd

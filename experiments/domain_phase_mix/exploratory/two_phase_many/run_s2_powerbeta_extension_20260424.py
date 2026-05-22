@@ -36,8 +36,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.optimize import least_squares, lsq_linear
-
 from run_s2_structural_upgrade_sprint_20260424 import (
     EnhancedFeatureFactory,
     fixed_drop_summary,
@@ -46,6 +44,7 @@ from run_s2_structural_upgrade_sprint_20260424 import (
     optimum_diagnostics,
     plot_predicted_vs_actual,
 )
+from scipy.optimize import least_squares, lsq_linear
 
 SESSION2_SCRIPT = (
     Path("experiments/domain_phase_mix/exploratory/two_phase_many")

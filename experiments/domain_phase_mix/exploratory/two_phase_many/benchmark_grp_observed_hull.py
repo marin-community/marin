@@ -33,6 +33,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
     load_generic_family_packet,
     optimize_generic_family_convex_hull,
 )
+from experiments.domain_phase_mix.static_batch_selection import retrospective_generic_selection
 from experiments.domain_phase_mix.two_phase_many_ccglobalpremium_baselines import (
     ccglobalpremium_retainedtotal_summary,
 )
@@ -46,11 +47,10 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_retuned_subset_op
     VALIDATED_GLOBAL_BPB,
     VALIDATED_PAIR_BPB,
     _mean_phase_tv_distance,
-    _summary_weights,
     _subset_packet,
+    _summary_weights,
     tune_genericfamily_subset_params,
 )
-from experiments.domain_phase_mix.static_batch_selection import retrospective_generic_selection
 
 plt.rcParams["text.usetex"] = False
 

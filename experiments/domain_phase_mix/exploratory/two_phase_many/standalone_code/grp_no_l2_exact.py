@@ -28,15 +28,14 @@ The retune follows the repo procedure:
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
-from scipy.optimize import nnls
+from scipy.optimize import minimize, nnls
 from sklearn.model_selection import KFold
 
 PACKET_ROOT = Path(__file__).resolve().parents[1]

@@ -31,15 +31,13 @@ import os
 from dataclasses import dataclass, replace
 
 import fsspec
-from levanter.optim import MuonHConfig
 from fray.cluster import ResourceConfig
-
+from levanter.optim import MuonHConfig
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import executor_main
 from marin.utils import create_cache_tokenizer_step
 
 from experiments.domain_phase_mix.analysis import create_analysis_step
-from experiments.llama import llama3_tokenizer
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.domains import (
     NEMOTRON_FULL_DOMAIN,
@@ -48,7 +46,8 @@ from experiments.domain_phase_mix.domains import (
 from experiments.domain_phase_mix.experiment import DEFAULT_MUON_CONFIG, MixtureExperiment
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, SamplingStrategy, compute_unimax_weights
-from experiments.evals.task_configs import CORE_TASKS, CODE_TASKS, convert_to_task_metrics
+from experiments.evals.task_configs import CODE_TASKS, CORE_TASKS, convert_to_task_metrics
+from experiments.llama import llama3_tokenizer
 
 logger = logging.getLogger(__name__)
 

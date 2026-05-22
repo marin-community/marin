@@ -10,17 +10,17 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
 from marin.execution.remote import RemoteCallable
 
+from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness, evaluate_lm_evaluation_harness
+from experiments.evals.olmo_base_easy_overlap import (
+    OLMO_BASE_EASY_OVERLAP_TASKS,
+    add_olmo_base_easy_overlap_metrics,
+)
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     HUMANEVAL_GSM8K_TASKS,
     MMLU_SL_VERB_5_SHOT,
     MMLU_SL_VERB_DOC_TO_CHOICE,
 )
-from experiments.evals.olmo_base_easy_overlap import (
-    OLMO_BASE_EASY_OVERLAP_TASKS,
-    add_olmo_base_easy_overlap_metrics,
-)
-from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness, evaluate_lm_evaluation_harness
 
 
 @pytest.fixture

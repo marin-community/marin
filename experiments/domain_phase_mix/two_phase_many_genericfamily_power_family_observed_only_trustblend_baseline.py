@@ -11,16 +11,16 @@ from functools import cache
 import numpy as np
 
 from experiments.domain_phase_mix.config import WeightConfig
-from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
-    family_shares,
-    load_generic_family_packet,
-)
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_flexible_signal import (
     GenericFamilyFlexibleSignalSurrogate,
     compute_flexible_surrogate_metrics,
     deploy_flexible_signal_gaincapped_topkactual,
     flexible_signal_params_from_metrics,
     tune_flexible_signal_params_observed_only,
+)
+from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
+    family_shares,
+    load_generic_family_packet,
 )
 from experiments.domain_phase_mix.two_phase_many_genericfamily_observed_only_trustblend_subset_optima import (
     DEFAULT_TUNING_METHOD,

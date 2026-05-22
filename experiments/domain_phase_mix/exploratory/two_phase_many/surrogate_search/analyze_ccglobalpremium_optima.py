@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.static_batch_selection import average_phase_tv_distance
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
     MANY_DOMAIN_TARGET,
     PENALTY_KIND_GROUP_LOG_THRESHOLD,
@@ -23,6 +22,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.st
     load_two_phase_many_packet,
     optimize_cc_globalpremium_model,
 )
+from experiments.domain_phase_mix.static_batch_selection import average_phase_tv_distance
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SUMMARY_JSON = SCRIPT_DIR / "ccglobalpremium_optima_summary.json"

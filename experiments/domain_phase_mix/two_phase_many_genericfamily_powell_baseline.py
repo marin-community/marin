@@ -13,6 +13,7 @@ import numpy as np
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
+    GenericFamilyRetainedTotalSurrogate,
     family_shares,
     load_generic_family_packet,
     optimize_generic_family_model,
@@ -30,9 +31,6 @@ from experiments.domain_phase_mix.two_phase_many_genericfamily_retuned_subset_op
     VALIDATED_PAIR_BPB,
     _summary_weights,
     tune_genericfamily_subset_params,
-)
-from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_followup import (
-    GenericFamilyRetainedTotalSurrogate,
 )
 
 GENERICFAMILY_POWELL_SOURCE_EXPERIMENT = "pinlin_calvin_xu/data_mixture/ngd3dm2_genericfamily_powell_uncheatable_bpb"

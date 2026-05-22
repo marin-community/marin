@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Load and validate the core tables in the collaborator scaling packet.
 
 This file intentionally has no Marin imports. Run from the packet root:
@@ -8,12 +11,11 @@ This file intentionally has no Marin imports. Run from the packet root:
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 
 PACKET_ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,16 +51,18 @@ def summarize_table(path: Path) -> dict[str, object]:
     w0, w1 = normalized_phase_arrays(df, domains)
     return {
         "path": str(path.relative_to(PACKET_ROOT)),
-        "rows": int(len(df)),
-        "columns": int(len(df.columns)),
-        "domains": int(len(domains)),
+        "rows": len(df),
+        "columns": len(df.columns),
+        "domains": len(domains),
         "phase_0_sum_min": float(w0.sum(axis=1).min()),
         "phase_0_sum_max": float(w0.sum(axis=1).max()),
         "phase_1_sum_min": float(w1.sum(axis=1).min()),
         "phase_1_sum_max": float(w1.sum(axis=1).max()),
-        "scale_counts": df["scale_display_label"].value_counts(dropna=False).to_dict()
-        if "scale_display_label" in df
-        else df.get("scale", pd.Series(dtype=object)).value_counts(dropna=False).to_dict(),
+        "scale_counts": (
+            df["scale_display_label"].value_counts(dropna=False).to_dict()
+            if "scale_display_label" in df
+            else df.get("scale", pd.Series(dtype=object)).value_counts(dropna=False).to_dict()
+        ),
     }
 
 

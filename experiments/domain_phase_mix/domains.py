@@ -30,13 +30,13 @@ from functools import partial
 from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_tokenize
+from experiments.domain_phase_mix.config import DatasetComponent, Domain
 from experiments.marin_models import MARIN_CHAT_TEMPLATE, marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.pretraining_datasets.dolmino import tokenize_dolmino_subset
 from experiments.pretraining_datasets.nemotron import tokenize_nemotron
-from experiments.pretraining_datasets.simple import downloads as simple_downloads, _tokenize_simple
-
-from experiments.domain_phase_mix.config import Domain, DatasetComponent
+from experiments.pretraining_datasets.simple import _tokenize_simple
+from experiments.pretraining_datasets.simple import downloads as simple_downloads
 
 # ============================================================================
 # DOMAIN REGISTRY

@@ -12,8 +12,8 @@ import sys
 from marin.execution.executor import ExecutorMainConfig, executor_main
 
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
-    DOMAIN_NAMES,
     DEFAULT_RUNTIME_CACHE_REGION,
+    DOMAIN_NAMES,
     build_top_level_domain_steps,
 )
 

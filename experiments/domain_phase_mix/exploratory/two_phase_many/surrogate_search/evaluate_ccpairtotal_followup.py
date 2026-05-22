@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from experiments.domain_phase_mix.static_batch_selection import average_phase_tv_distance
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
     MANY_DOMAIN_TARGET,
     PENALTY_KIND_GROUP_LOG_THRESHOLD,
@@ -29,6 +28,7 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.st
     optimize_cc_pairtotal_model,
     regression_metrics,
 )
+from experiments.domain_phase_mix.static_batch_selection import average_phase_tv_distance
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 COMPARISON_CSV = SCRIPT_DIR / "diversity_followup_comparison.csv"

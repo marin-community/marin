@@ -7,6 +7,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from experiments.domain_phase_mix import (
+    two_phase_many_genericfamily_power_family_observed_only_trustblend_subset_optima as power_family_subset_optima,
+)
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.generic_family_flexible_signal import (
     GenericFamilyFlexibleSignalSurrogate,
     pack_flexible_signal_params_observed_only,
@@ -18,9 +21,6 @@ from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.ge
 )
 from experiments.domain_phase_mix.exploratory.two_phase_many.surrogate_search.structured_epoch_family import (
     PacketData,
-)
-from experiments.domain_phase_mix import (
-    two_phase_many_genericfamily_power_family_observed_only_trustblend_subset_optima as power_family_subset_optima,
 )
 
 

@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 

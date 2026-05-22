@@ -10,10 +10,10 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 import json
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -24,8 +24,8 @@ from sklearn.model_selection import KFold
 
 from experiments.domain_phase_mix.exploratory.paper_plots.paper_plot_style import (
     PAPER_MUTED,
-    configure_static_layout,
     configure_interactive_layout,
+    configure_static_layout,
     method_color,
     write_static_images,
 )

@@ -17,7 +17,6 @@ from typing import Any, Literal
 import fsspec
 from fray.cluster import ResourceConfig
 from levanter.optim import MuonHConfig
-
 from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import create_cache_tokenizer_step
@@ -26,8 +25,8 @@ from experiments.domain_phase_mix.analysis import create_analysis_step
 from experiments.domain_phase_mix.config import PhaseSchedule, WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import RUN_MANIFEST_FILE, create_determinism_report_step
 from experiments.domain_phase_mix.domains import NEMOTRON_FULL_DOMAIN, STARCODER_DOMAIN
-from experiments.domain_phase_mix.experiment import MixtureExperiment
 from experiments.domain_phase_mix.experiment import DEFAULT_MUON_CONFIG as BASE_MUON_CONFIG
+from experiments.domain_phase_mix.experiment import MixtureExperiment
 from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.evals.task_configs import CODE_TASKS, CORE_TASKS
 from experiments.llama import llama3_tokenizer

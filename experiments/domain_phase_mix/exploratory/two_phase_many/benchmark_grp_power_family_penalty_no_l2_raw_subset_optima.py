@@ -9,9 +9,8 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
-from concurrent.futures import as_completed
 import json
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np

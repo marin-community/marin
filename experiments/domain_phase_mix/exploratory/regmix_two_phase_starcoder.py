@@ -41,14 +41,14 @@ Usage:
 """
 
 import warnings
+from pathlib import Path
 
 import joblib
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from pathlib import Path
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import pearsonr, spearmanr
 from sklearn.model_selection import KFold
 
 warnings.filterwarnings("ignore", category=UserWarning)

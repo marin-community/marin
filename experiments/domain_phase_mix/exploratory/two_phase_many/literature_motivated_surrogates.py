@@ -27,11 +27,11 @@ It can also merge in precomputed baseline tables when available.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from collections.abc import Callable
 import argparse
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd

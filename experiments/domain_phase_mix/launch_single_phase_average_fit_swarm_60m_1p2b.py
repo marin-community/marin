@@ -10,21 +10,21 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, replace
 import json
 import logging
 import os
-from pathlib import Path
 import sys
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import fsspec
+import numpy as np
+import pandas as pd
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, executor_main, this_output_path
 from marin.rl.placement import marin_prefix_for_region
 from marin.training.training import TrainLmOnPodConfig
-import numpy as np
-import pandas as pd
 
 from experiments.domain_phase_mix.config import WeightConfig
 from experiments.domain_phase_mix.determinism_analysis import (
@@ -39,6 +39,7 @@ from experiments.domain_phase_mix.launch_two_phase_many_run_00097_fixed_subset_s
     WANDB_ENTITY,
     WANDB_PROJECT,
 )
+from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     BATCH_SIZE,
     DOMAIN_NAMES,
@@ -50,7 +51,6 @@ from experiments.domain_phase_mix.two_phase_dolma3_dolmino_top_level import (
     TARGET_BUDGET,
     create_two_phase_dolma3_dolmino_top_level_experiment,
 )
-from experiments.domain_phase_mix.proxy_sweep import regmix_60m_proxy
 
 logger = logging.getLogger(__name__)
 

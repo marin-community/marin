@@ -51,6 +51,9 @@ import os
 import sys
 
 import numpy as np
+from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
+from marin.execution.executor import executor_main
+from marin.utils import create_cache_tokenizer_step
 
 from experiments.domain_phase_mix.analysis import create_analysis_step
 from experiments.domain_phase_mix.config import WeightConfig
@@ -66,9 +69,6 @@ from experiments.domain_phase_mix.three_phase_starcoder_experiment import (
     create_three_phase_experiment,
 )
 from experiments.domain_phase_mix.weight_sampler import DirichletSamplingParams, SamplingStrategy
-from marin.evaluation.eval_dataset_cache import create_cache_eval_datasets_step
-from marin.execution.executor import executor_main
-from marin.utils import create_cache_tokenizer_step
 
 logger = logging.getLogger(__name__)
 

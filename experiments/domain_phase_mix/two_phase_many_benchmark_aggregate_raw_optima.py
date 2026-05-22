@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
-from functools import cache
 import io
 import json
 import math
+from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 

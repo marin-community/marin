@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 from pathlib import Path
-import re
 
 import fsspec
 import pandas as pd

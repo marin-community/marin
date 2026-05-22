@@ -49,6 +49,14 @@ COVERAGE_CSV = SCRIPT_DIR / "coverage.csv"
 BACKFILLS_CSV = SCRIPT_DIR / "backfills.csv"
 MANUAL_BACKFILLS_CSV = SCRIPT_DIR / "manual_backfills.csv"
 SUMMARY_JSON = SCRIPT_DIR / "summary.json"
+PROPORTIONAL_PERTURBATION_DIR = SCRIPT_DIR / "proportional_perturbation_scale_transfer"
+PROPORTIONAL_PERTURBATION_CANDIDATES_CSV = (
+    PROPORTIONAL_PERTURBATION_DIR / "proportional_perturbation_eval_candidates.csv"
+)
+PROPORTIONAL_CONTROLLABILITY_DIR = SCRIPT_DIR / "proportional_controllability_300m"
+PROPORTIONAL_CONTROLLABILITY_CANDIDATES_CSV = (
+    PROPORTIONAL_CONTROLLABILITY_DIR / "proportional_controllability_eval_candidates.csv"
+)
 DEFAULT_CHECKPOINT_BUCKET = "marin-us-east5"
 OBJECTIVE_METRIC = "eval/uncheatable_eval/bpb"
 STRATIFIED_RUN_ID = 3
@@ -73,6 +81,11 @@ SINGLE_PHASE_FAMILIES = {
 PROPORTIONAL_PERTURBATION_FAMILIES = {
     "proportional_perturbation_60m_1p2b",
     "proportional_perturbation_300m_6b",
+}
+PROPORTIONAL_CONTROLLABILITY_FAMILIES = {"proportional_controllability_300m_6b"}
+PROPORTIONAL_VARIABLE_SUBSET_NOISE_FAMILIES = {
+    "proportional_variable_subset_noise_60m_1p2b",
+    "proportional_variable_subset_noise_300m_6b",
 }
 STRONG_TIER_COHORT_BY_PATH = {
     ScalingStudyPath.QSPLIT_REPRESENTATIVE12.value: "representative12",
@@ -135,8 +148,16 @@ LOCAL_COLLECTED_EVAL_CSVS = (
         "local_collected_downstream_eval",
     ),
     (
+        "local_ppert_training_eval_completion",
+        PROPORTIONAL_PERTURBATION_DIR / "ppert_training_eval_metrics.csv",
+        "mixed",
+        "proportional_perturbation_scale_transfer_stage1",
+        128,
+        "local_collected_training_eval",
+    ),
+    (
         "local_ppert_gsm8k_humaneval_completion",
-        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_gsm8k_humaneval_eval_results.csv",
+        PROPORTIONAL_PERTURBATION_DIR / "ppert_gsm8k_humaneval_eval_results.csv",
         "mixed",
         "proportional_perturbation_scale_transfer_stage1",
         130,
@@ -144,7 +165,7 @@ LOCAL_COLLECTED_EVAL_CSVS = (
     ),
     (
         "local_ppert_english_lite_completion",
-        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_english_lite_eval_results.csv",
+        PROPORTIONAL_PERTURBATION_DIR / "ppert_english_lite_eval_results.csv",
         "mixed",
         "proportional_perturbation_scale_transfer_stage1",
         132,
@@ -152,7 +173,7 @@ LOCAL_COLLECTED_EVAL_CSVS = (
     ),
     (
         "local_ppert_generative_smooth_proxy_completion",
-        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_generative_smooth_proxy_eval_results.csv",
+        PROPORTIONAL_PERTURBATION_DIR / "ppert_generative_smooth_proxy_eval_results.csv",
         "mixed",
         "proportional_perturbation_scale_transfer_stage1",
         134,
@@ -160,7 +181,7 @@ LOCAL_COLLECTED_EVAL_CSVS = (
     ),
     (
         "local_ppert_mcq_smooth_proxy_completion",
-        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_mcq_smooth_proxy_eval_results.csv",
+        PROPORTIONAL_PERTURBATION_DIR / "ppert_mcq_smooth_proxy_eval_results.csv",
         "mixed",
         "proportional_perturbation_scale_transfer_stage1",
         136,
@@ -168,7 +189,7 @@ LOCAL_COLLECTED_EVAL_CSVS = (
     ),
     (
         "local_ppert_noise_parity_completion",
-        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_noise_parity_eval_results.csv",
+        PROPORTIONAL_PERTURBATION_DIR / "ppert_noise_parity_eval_results.csv",
         "mixed",
         "proportional_perturbation_scale_transfer_stage1",
         138,
@@ -176,11 +197,19 @@ LOCAL_COLLECTED_EVAL_CSVS = (
     ),
     (
         "local_ppert_agentic_coding_bpb_completion",
-        SCRIPT_DIR / "proportional_perturbation_scale_transfer" / "ppert_agentic_coding_bpb_results.csv",
+        PROPORTIONAL_PERTURBATION_DIR / "ppert_agentic_coding_bpb_results.csv",
         "mixed",
         "proportional_perturbation_scale_transfer_stage1",
         140,
         "local_collected_downstream_eval",
+    ),
+    (
+        "local_ppert_raw_ppl_completion",
+        PROPORTIONAL_PERTURBATION_DIR / "ppert_raw_ppl_eval_results.csv",
+        "mixed",
+        "proportional_perturbation_scale_transfer_stage1",
+        144,
+        "local_collected_raw_ppl_eval",
     ),
     (
         "local_300m_raw_ppl_completion",
@@ -247,6 +276,15 @@ KNOWN_ID_COLUMNS = (
     "bump_epsilon",
     "quality_swap_fraction",
     "quality_swap_mass",
+    "direction_id",
+    "direction_type",
+    "tilt_sign",
+    "alpha",
+    "base_mass",
+    "direction_positive_mass",
+    "direction_negative_mass",
+    "direction_l2p_norm",
+    "direction_l2p_mean",
     "renormalizer",
     "donor_pool",
     "phase_mode",
@@ -455,6 +493,78 @@ def _read_local_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def _blank_like(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return True
+    if isinstance(value, str):
+        return value.strip() == "" or value.strip().lower() in {"nan", "none", "<na>"}
+    return False
+
+
+def _candidate_metadata_files() -> tuple[Path, ...]:
+    return (
+        PROPORTIONAL_PERTURBATION_CANDIDATES_CSV,
+        PROPORTIONAL_CONTROLLABILITY_CANDIDATES_CSV,
+    )
+
+
+def _fill_candidate_metadata(frame: pd.DataFrame) -> pd.DataFrame:
+    """Fill retry-row metadata from checkpoint-root candidate manifests."""
+    if "checkpoint_root" not in frame.columns:
+        return frame
+
+    metadata_columns = [
+        "panel",
+        "family",
+        "scale",
+        "run_name",
+        "registry_key",
+        "source_experiment",
+        "cohort",
+        "checkpoint_root",
+        "expected_checkpoint_step",
+        "intervention_id",
+        "intervention_type",
+        "target_unit",
+        "target_domain",
+        "target_family",
+        "tv_distance",
+        "direction_id",
+        "direction_type",
+        "tilt_sign",
+        "alpha",
+        "base_mass",
+        "renormalizer",
+    ]
+    candidate_frames = [pd.read_csv(path, low_memory=False) for path in _candidate_metadata_files() if path.exists()]
+    if not candidate_frames:
+        return frame
+    candidates = pd.concat(candidate_frames, ignore_index=True, sort=False)
+    candidate_columns = [column for column in metadata_columns if column in candidates.columns]
+    if "checkpoint_root" not in candidate_columns:
+        return frame
+
+    merged = frame.merge(
+        candidates[candidate_columns].drop_duplicates(subset=["checkpoint_root"]),
+        on="checkpoint_root",
+        how="left",
+        suffixes=("", "_candidate"),
+    )
+    for column in candidate_columns:
+        if column == "checkpoint_root":
+            continue
+        candidate_column = f"{column}_candidate"
+        if candidate_column not in merged.columns:
+            continue
+        if column not in merged.columns:
+            merged[column] = merged[candidate_column]
+        else:
+            missing_mask = merged[column].map(_blank_like)
+            merged.loc[missing_mask, column] = merged.loc[missing_mask, candidate_column]
+        merged = merged.drop(columns=[candidate_column])
+    return merged
+
+
 def _read_strict_300m_success_csv(path: Path) -> pd.DataFrame:
     frame = pd.read_csv(path)
     qsplit_run_ids = {run.run_name: run.run_id for run in load_original_qsplit240_with_core_baselines()}
@@ -612,11 +722,25 @@ def _source_frames(*, include_gcs: bool) -> list[SourceFrame]:
         )
 
     if not include_gcs:
+        sources.extend(
+            _run_registry_checkpoint_source_frames(
+                PROPORTIONAL_VARIABLE_SUBSET_NOISE_FAMILIES,
+                default_cohort_override="seed_sweep",
+                hydrate_checkpoint_metrics=False,
+            )
+        )
         return sources
 
     sources.extend(_strong_tier_source_frames())
     sources.extend(_single_phase_exposure_average_source_frames())
     sources.extend(_run_registry_checkpoint_source_frames(PROPORTIONAL_PERTURBATION_FAMILIES))
+    sources.extend(_run_registry_checkpoint_source_frames(PROPORTIONAL_CONTROLLABILITY_FAMILIES))
+    sources.extend(
+        _run_registry_checkpoint_source_frames(
+            PROPORTIONAL_VARIABLE_SUBSET_NOISE_FAMILIES,
+            default_cohort_override="seed_sweep",
+        )
+    )
 
     sources.extend(
         [
@@ -845,7 +969,12 @@ def _single_phase_exposure_average_source_frames() -> list[SourceFrame]:
     return sources
 
 
-def _run_registry_checkpoint_source_frames(families: set[str]) -> list[SourceFrame]:
+def _run_registry_checkpoint_source_frames(
+    families: set[str],
+    *,
+    default_cohort_override: str | None = None,
+    hydrate_checkpoint_metrics: bool = True,
+) -> list[SourceFrame]:
     if not RUN_REGISTRY_LOGICAL_RUNS_CSV.exists():
         return []
 
@@ -855,19 +984,28 @@ def _run_registry_checkpoint_source_frames(families: set[str]) -> list[SourceFra
         return []
 
     frame["status"] = frame["logical_status"].fillna("planned")
-    frame = _hydrate_checkpoint_eval_metrics(frame)
+    if hydrate_checkpoint_metrics:
+        frame = _hydrate_checkpoint_eval_metrics(frame)
     sources: list[SourceFrame] = []
     for (family, scale), group in frame.groupby(["family", "scale"], sort=True):
-        default_cohort = str(group["cohort"].dropna().iloc[0]) if group["cohort"].notna().any() else str(family)
+        group = group.reset_index(drop=True)
+        if default_cohort_override is None:
+            default_cohort = str(group["cohort"].dropna().iloc[0]) if group["cohort"].notna().any() else str(family)
+        else:
+            default_cohort = default_cohort_override
+            group["cohort"] = default_cohort_override
+        source_kind = "run_registry_checkpoint_metrics"
+        if not hydrate_checkpoint_metrics:
+            source_kind = "run_registry_provenance"
         sources.append(
             SourceFrame(
                 source_name=f"run_registry_{family}",
                 source_uri=str(RUN_REGISTRY_LOGICAL_RUNS_CSV),
-                source_kind="run_registry_checkpoint_metrics",
+                source_kind=source_kind,
                 scale=str(scale),
                 default_cohort=default_cohort,
                 source_priority=95,
-                frame=group.reset_index(drop=True),
+                frame=group,
             )
         )
     return sources
@@ -889,8 +1027,20 @@ def _checkpoint_root_from_source(row: pd.Series) -> str | None:
     return f"gs://{DEFAULT_CHECKPOINT_BUCKET}/checkpoints/{source_experiment.strip('/')}/{wandb_run_id}"
 
 
+def _fill_known_run_metadata(frame: pd.DataFrame) -> pd.DataFrame:
+    """Fill stable run metadata for static baselines in eval-only source rows."""
+    if "run_name" not in frame.columns:
+        return frame
+    out = frame.copy()
+    if "run_id" not in out.columns:
+        out["run_id"] = pd.NA
+    stratified_mask = out["run_name"].eq(STRATIFIED_RUN_NAME) & out["run_id"].map(_blank_like)
+    out.loc[stratified_mask, "run_id"] = STRATIFIED_RUN_ID
+    return out
+
+
 def _normalized_source_frame(source: SourceFrame) -> pd.DataFrame:
-    frame = source.frame.copy()
+    frame = _fill_candidate_metadata(source.frame.copy())
     if source.default_source_experiment is not None:
         if "source_experiment" not in frame.columns:
             frame["source_experiment"] = source.default_source_experiment
@@ -913,7 +1063,7 @@ def _normalized_source_frame(source: SourceFrame) -> pd.DataFrame:
             frame["checkpoint_root"] = derived_checkpoint_root
         else:
             frame["checkpoint_root"] = frame["checkpoint_root"].fillna(derived_checkpoint_root)
-    return frame
+    return _fill_known_run_metadata(frame)
 
 
 def _metric_columns(frame: pd.DataFrame) -> list[str]:
