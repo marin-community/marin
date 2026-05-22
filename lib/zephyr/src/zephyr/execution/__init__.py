@@ -25,6 +25,11 @@ This package's submodules host the implementation:
 Only the genuine public surface is re-exported here; tests and internal
 callers should import private symbols (``_worker_ctx_var``, ``ShardTask``, …)
 from the submodule that owns them.
+
+``zephyr.shuffle`` is now a pure dependency below this package: the scatter
+write buffer budget is computed in ``internals._scatter_write_buffer_bytes``
+and passed into ``_write_scatter`` as an explicit parameter, so there is no
+``shuffle ↔ execution`` import cycle to break with runtime imports.
 """
 
 from zephyr.execution.context import ZephyrContext, ZephyrExecutionResult

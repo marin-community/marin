@@ -19,9 +19,10 @@ This module collects three closely-related concerns:
 
 It is a leaf module from the perspective of the other ``execution`` package
 modules: ``coordinator``, ``worker``, and ``context`` all import from here,
-never the other way around. ``zephyr.shuffle`` does take a runtime
-(in-function) import of ``_worker_ctx_var`` to size its scatter write buffer
-without forming a module-load cycle.
+never the other way around. ``zephyr.shuffle`` is a pure dependency below
+this module — the scatter write buffer budget is computed here (using the
+worker context) and passed into ``_write_scatter``, so ``shuffle`` no longer
+needs to reach back up into ``execution`` at all.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from typing import Any, Protocol
 import humanfriendly
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.env_resources import TaskResources
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
@@ -233,6 +235,36 @@ class StageRunner(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Scatter write buffer sizing
+# ---------------------------------------------------------------------------
+
+# Fraction of cgroup memory allocated to scatter write buffers.
+_SCATTER_WRITE_BUFFER_FRACTION = 0.25
+# Static fallback used when the cgroup memory limit cannot be determined.
+_SCATTER_WRITE_BUFFER_BYTES_FALLBACK = 256 * 1024 * 1024  # 256 MB
+
+
+def _scatter_write_buffer_bytes() -> int:
+    """Return the scatter write buffer budget for the current worker.
+
+    Uses 25% of the container memory limit so the budget scales with the
+    worker size, divided by the number of concurrent workers sharing this
+    actor's RAM. Falls back to 256 MB (divided by the same factor) when the
+    cgroup limit cannot be read.
+
+    Lives here (not in ``zephyr.shuffle``) so that ``shuffle`` does not have
+    to import from ``zephyr.execution`` to read ``_worker_ctx_var`` — the
+    budget is computed at the call site in ``_write_stage_output`` and passed
+    into ``_write_scatter`` as an explicit parameter.
+    """
+    num_workers = _worker_ctx_var.get().num_workers
+    memory = TaskResources.from_environment().memory_bytes
+    if memory > 0:
+        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION / num_workers)
+    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK // max(1, num_workers)
+
+
+# ---------------------------------------------------------------------------
 # Formatting / IO helpers
 # ---------------------------------------------------------------------------
 
@@ -388,6 +420,7 @@ def _write_stage_output(
             data_path,
             key_fn=scatter_op.key_fn,
             num_output_shards=num_output_shards,
+            buffer_limit_bytes=_scatter_write_buffer_bytes(),
             sort_fn=scatter_op.sort_fn,
             combiner_fn=scatter_op.combiner_fn,
         )

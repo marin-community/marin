@@ -7,10 +7,7 @@ Covers the scatter write/read roundtrip, per-shard stats, and external sort —
 without spinning up a full coordinator.
 """
 
-import pytest
-from zephyr.execution.internals import _worker_ctx_var
 from zephyr.plan import deterministic_hash
-from zephyr.runners import _InProcessWorkerContext
 from zephyr.shuffle import (
     ScatterFileIterator,
     ScatterReader,
@@ -19,14 +16,10 @@ from zephyr.shuffle import (
     _write_scatter,
 )
 
-
-@pytest.fixture(autouse=True)
-def mock_worker_ctx():
-    """Provide a dummy worker context so ScatterWriter can resolve num_workers."""
-    ctx = _InProcessWorkerContext(chunk_prefix="test", execution_id="test", num_workers=1)
-    token = _worker_ctx_var.set(ctx)
-    yield
-    _worker_ctx_var.reset(token)
+# Headroom large enough that flushing is driven by close() rather than the
+# byte-budget gate, except in the dedicated byte-budget tests which override
+# this with their own value.
+_DEFAULT_TEST_BUFFER_BYTES = 256 * 1024 * 1024  # 256 MB
 
 
 def _key(item):
@@ -46,6 +39,7 @@ def _build_shard(tmp_path, items, num_output_shards=4, source_shard=0):
         data_path=data_path,
         key_fn=_key,
         num_output_shards=num_output_shards,
+        buffer_limit_bytes=_DEFAULT_TEST_BUFFER_BYTES,
     )
     scatter_paths = list(list_shard)
     return scatter_paths

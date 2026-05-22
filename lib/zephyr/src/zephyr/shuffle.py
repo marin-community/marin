@@ -24,11 +24,14 @@ chunk's compressed bytes (typically a few MB). This bound is essential for
 skewed shuffles where one reducer pulls disproportionate data and the
 external-sort fan-in opens hundreds of chunk iterators at once.
 
-Write-side memory is bounded by a byte budget (``_SCATTER_WRITE_BUFFER_BYTES``)
-rather than a fixed row count. When the estimated total bytes across all
-shard buffers exceeds the budget, the largest buffer is flushed. This prevents
-OOM on skewed or large-item workloads where a row-count limit provides no
-reliable bound.
+Write-side memory is bounded by a caller-supplied byte budget
+(``buffer_limit_bytes``) rather than a fixed row count. When the estimated
+total bytes across all shard buffers exceeds the budget, the largest buffer
+is flushed. This prevents OOM on skewed or large-item workloads where a
+row-count limit provides no reliable bound. The budget is computed by the
+caller from worker resources (see ``zephyr.execution.internals``); keeping it
+out of this module means ``shuffle`` does not depend on the execution-side
+worker-context plumbing.
 """
 
 from __future__ import annotations
@@ -47,7 +50,6 @@ from typing import Any
 import cloudpickle
 import msgspec
 import zstandard as zstd
-from iris.env_resources import TaskResources
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
@@ -117,32 +119,11 @@ _ZSTD_COMPRESS_LEVEL = 3
 # dispatch overhead), smaller = lower per-iterator read memory.
 _SUB_BATCH_SIZE = 1024
 
-# Fraction of cgroup memory allocated to scatter write buffers.
-_SCATTER_WRITE_BUFFER_FRACTION = 0.25
-# Static fallback used when the cgroup memory limit cannot be determined.
-_SCATTER_WRITE_BUFFER_BYTES_FALLBACK = 256 * 1024 * 1024  # 256 MB
 # Minimum wall-clock seconds between per-flush progress lines per ScatterWriter.
 # High-fanout shuffles produce many tiny chunks at sub-millisecond cadence; a
 # count-based gate (e.g. % 10) still floods logs. Time-based gating bounds
 # volume to one line/minute/worker regardless of chunk rate or size.
 _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
-
-
-def _default_scatter_write_buffer_bytes() -> int:
-    """Return the scatter write buffer budget based on the cgroup memory limit.
-
-    Uses 25% of the container memory limit so the budget scales with the
-    worker size, divided by the number of concurrent workers sharing this
-    actor's RAM. Falls back to 256 MB (divided by the same factor) when the
-    cgroup limit cannot be read.
-    """
-    from zephyr.execution.internals import _worker_ctx_var  # local import breaks the shuffle↔internals cycle
-
-    num_workers = _worker_ctx_var.get().num_workers
-    memory = TaskResources.from_environment().memory_bytes
-    if memory > 0:
-        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION / num_workers)
-    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK // max(1, num_workers)
 
 
 # ---------------------------------------------------------------------------
@@ -501,19 +482,17 @@ class ScatterWriter:
         data_path: str,
         key_fn: Callable,
         num_output_shards: int,
+        buffer_limit_bytes: int,
         source_shard: int = 0,
         sort_fn: Callable | None = None,
         combiner_fn: Callable | None = None,
-        buffer_limit_bytes: int | None = None,
     ) -> None:
         self._data_path = data_path
         self._key_fn = key_fn
         self._num_output_shards = num_output_shards
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._buffer_limit_bytes = (
-            buffer_limit_bytes if buffer_limit_bytes is not None else _default_scatter_write_buffer_bytes()
-        )
+        self._buffer_limit_bytes = buffer_limit_bytes
 
         if sort_fn is not None:
             captured_sort_fn = sort_fn
@@ -670,9 +649,9 @@ def _write_scatter(
     data_path: str,
     key_fn: Callable,
     num_output_shards: int,
+    buffer_limit_bytes: int,
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
-    buffer_limit_bytes: int | None = None,
 ) -> ListShard:
     """Route items to target shards, buffer, sort, and append zstd chunks.
 
