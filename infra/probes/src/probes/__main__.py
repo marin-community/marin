@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from probes.cli import cli
+import sys
+
+from probes import main
 
 if __name__ == "__main__":
-    cli()
+    sys.exit(main())

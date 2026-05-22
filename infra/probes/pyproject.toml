@@ -14,17 +14,13 @@ dependencies = [
     "marin-iris    >= 0.99.dev0",
     "marin-finelog >= 0.99.dev0",
     "marin-rigging >= 0.99.dev0",
-    "click >= 8.3.1",
 ]
 
 [project.scripts]
-probes = "probes.cli:cli"
+probes = "probes:main"
 
 [dependency-groups]
-dev = [
-    "pytest >= 8.4",
-    "pytest-timeout",
-]
+dev = ["pytest >= 8.4"]
 
 [tool.uv]
 prerelease = "allow"
