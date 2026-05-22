@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 try:
     import kubernetes
@@ -54,6 +54,45 @@ DEFAULT_TIMEOUT: float = 60.0
 
 # Threshold for slow-operation warnings (milliseconds)
 _SLOW_THRESHOLD_MS: int = 2000
+
+
+def _sync_bearer_token_alias(configuration: kubernetes.client.Configuration) -> None:
+    token = configuration.api_key.get("authorization")
+    if token is not None:
+        # kubernetes-client/python v36 Configuration.auth_settings() reads
+        # api_key["BearerToken"], while the config loaders still write bearer
+        # tokens to api_key["authorization"].
+        configuration.api_key["BearerToken"] = token
+
+
+def _keep_bearer_token_alias_fresh(configuration: kubernetes.client.Configuration) -> None:
+    refresh_hook = configuration.refresh_api_key_hook
+    _sync_bearer_token_alias(configuration)
+
+    if refresh_hook is None:
+        return
+
+    def refresh_with_bearer_token_alias(client_configuration: kubernetes.client.Configuration) -> None:
+        refresh_hook(client_configuration)
+        _sync_bearer_token_alias(client_configuration)
+        client_configuration.refresh_api_key_hook = refresh_with_bearer_token_alias
+
+    configuration.refresh_api_key_hook = refresh_with_bearer_token_alias
+
+
+def _pod_log_response_text(response: Any) -> str:
+    data = getattr(response, "data", response)
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    if isinstance(data, str):
+        return data
+    return str(data)
+
+
+def _release_pod_log_response(response: Any) -> None:
+    release_conn = getattr(response, "release_conn", None)
+    if callable(release_conn):
+        release_conn()
 
 
 @runtime_checkable
@@ -198,15 +237,21 @@ class CloudK8sService:
 
     def create_api_client(self) -> kubernetes.client.ApiClient:
         if self.kubeconfig_path:
-            return kubernetes.config.new_client_from_config(
+            api_client = kubernetes.config.new_client_from_config(
                 config_file=self.kubeconfig_path,
             )
+            _keep_bearer_token_alias_fresh(api_client.configuration)
+            return api_client
 
         try:
-            kubernetes.config.load_incluster_config()
-            return kubernetes.client.ApiClient()
+            config = kubernetes.client.Configuration()
+            kubernetes.config.load_incluster_config(client_configuration=config)
+            _keep_bearer_token_alias_fresh(config)
+            return kubernetes.client.ApiClient(config)
         except kubernetes.config.ConfigException:
-            return kubernetes.config.new_client_from_config()
+            api_client = kubernetes.config.new_client_from_config()
+            _keep_bearer_token_alias_fresh(api_client.configuration)
+            return api_client
 
     def _resource_api(self, resource: K8sResource):
         """Get the DynamicClient resource handle for a K8sResource enum member."""
@@ -476,11 +521,16 @@ class CloudK8sService:
                     "namespace": self.namespace,
                     "tail_lines": tail,
                     "previous": previous,
+                    "_preload_content": False,
                     "_request_timeout": self.timeout,
                 }
                 if container:
                     kwargs["container"] = container
-                return self._core_v1.read_namespaced_pod_log(**kwargs)
+                response = self._core_v1.read_namespaced_pod_log(**kwargs)
+                try:
+                    return _pod_log_response_text(response)
+                finally:
+                    _release_pod_log_response(response)
             except ApiException as e:
                 if e.status == 404:
                     return ""
@@ -509,6 +559,7 @@ class CloudK8sService:
                     "name": pod_name,
                     "namespace": self.namespace,
                     "timestamps": True,
+                    "_preload_content": False,
                     "_request_timeout": 15.0,
                 }
                 if container:
@@ -520,7 +571,11 @@ class CloudK8sService:
                 if limit_bytes is not None:
                     kwargs["limit_bytes"] = limit_bytes
 
-                raw = self._core_v1.read_namespaced_pod_log(**kwargs)
+                response = self._core_v1.read_namespaced_pod_log(**kwargs)
+                try:
+                    raw = _pod_log_response_text(response)
+                finally:
+                    _release_pod_log_response(response)
             except ApiException as e:
                 if e.status == 404:
                     return KubectlLogResult(lines=[], last_timestamp=since_time)

@@ -5,8 +5,30 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
+from iris.cluster.providers.k8s import service as k8s_service
 from iris.cluster.providers.k8s.types import K8sResource
+
+
+class _LogResponse:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.released = False
+
+    def release_conn(self):
+        self.released = True
+
+
+class _CoreV1WithLogResponse:
+    def __init__(self, response: _LogResponse):
+        self.response = response
+        self.kwargs = None
+
+    def read_namespaced_pod_log(self, **kwargs):
+        self.kwargs = kwargs
+        return self.response
 
 
 # Test item_path construction for namespaced resources
@@ -126,3 +148,91 @@ def test_api_base_paths():
     assert K8sResource.DEPLOYMENTS.api_base() == "/apis/apps/v1"
     assert K8sResource.CLUSTER_ROLES.api_base() == "/apis/rbac.authorization.k8s.io/v1"
     assert K8sResource.NODE_POOLS.api_base() == "/apis/compute.coreweave.com/v1alpha1"
+
+
+def test_bearer_token_alias_is_added_for_incluster_auth():
+    if k8s_service.kubernetes is None:
+        pytest.skip("kubernetes client is not installed")
+
+    config = k8s_service.kubernetes.client.Configuration()
+    config.api_key["authorization"] = "bearer token-1"
+
+    k8s_service._keep_bearer_token_alias_fresh(config)
+
+    assert config.api_key["BearerToken"] == "bearer token-1"
+    assert config.get_api_key_with_prefix("BearerToken") == "bearer token-1"
+
+
+def test_bearer_token_alias_tracks_incluster_token_refresh():
+    if k8s_service.kubernetes is None:
+        pytest.skip("kubernetes client is not installed")
+
+    config = k8s_service.kubernetes.client.Configuration()
+    config.api_key["authorization"] = "bearer token-1"
+
+    def refresh(client_configuration):
+        client_configuration.api_key["authorization"] = "bearer token-2"
+        client_configuration.refresh_api_key_hook = refresh
+
+    config.refresh_api_key_hook = refresh
+    k8s_service._keep_bearer_token_alias_fresh(config)
+
+    assert config.get_api_key_with_prefix("BearerToken") == "bearer token-2"
+    assert config.api_key["BearerToken"] == "bearer token-2"
+    assert config.refresh_api_key_hook is not refresh
+
+
+def test_create_api_client_syncs_bearer_token_for_kubeconfig(monkeypatch):
+    if k8s_service.kubernetes is None:
+        pytest.skip("kubernetes client is not installed")
+
+    config = k8s_service.kubernetes.client.Configuration()
+    config.api_key["authorization"] = "bearer token-1"
+    api_client = k8s_service.kubernetes.client.ApiClient(config)
+
+    def new_client_from_config(config_file=None):
+        assert config_file == "/tmp/kubeconfig"
+        return api_client
+
+    monkeypatch.setattr(k8s_service.kubernetes.config, "new_client_from_config", new_client_from_config)
+    service = k8s_service.CloudK8sService.__new__(k8s_service.CloudK8sService)
+    service.kubeconfig_path = "/tmp/kubeconfig"
+
+    assert service.create_api_client() is api_client
+    assert config.api_key["BearerToken"] == "bearer token-1"
+
+
+def test_logs_decode_raw_response_bytes():
+    response = _LogResponse(b"line 1\nline 2\n")
+    core_v1 = _CoreV1WithLogResponse(response)
+    service = k8s_service.CloudK8sService.__new__(k8s_service.CloudK8sService)
+    service.namespace = "test-ns"
+    service.timeout = 60.0
+    service._core_v1 = core_v1
+
+    assert service.logs("pod-1", container="task", tail=10) == "line 1\nline 2\n"
+    assert core_v1.kwargs["_preload_content"] is False
+    assert core_v1.kwargs["container"] == "task"
+    assert response.released
+
+
+def test_stream_logs_decodes_raw_response_bytes():
+    response = _LogResponse(
+        b"2026-05-22T16:45:12.158721540Z I20260522 16:45:12 iris.test.verbose info-marker\n"
+        b"2026-05-22T16:45:12.158728857Z W20260522 16:45:12 iris.test.verbose warning-marker\n"
+    )
+    core_v1 = _CoreV1WithLogResponse(response)
+    service = k8s_service.CloudK8sService.__new__(k8s_service.CloudK8sService)
+    service.namespace = "test-ns"
+    service._core_v1 = core_v1
+
+    result = service.stream_logs("pod-1", container="task", limit_bytes=100_000)
+
+    assert core_v1.kwargs["_preload_content"] is False
+    assert core_v1.kwargs["container"] == "task"
+    assert response.released
+    assert [line.data for line in result.lines] == [
+        "I20260522 16:45:12 iris.test.verbose info-marker",
+        "W20260522 16:45:12 iris.test.verbose warning-marker",
+    ]
+    assert result.last_timestamp == datetime(2026, 5, 22, 16, 45, 12, 158728, tzinfo=timezone.utc)
