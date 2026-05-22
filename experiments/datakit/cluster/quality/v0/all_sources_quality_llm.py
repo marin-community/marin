@@ -173,7 +173,9 @@ def _run_one_source(
     # InlineRunner: required so the per-process @cache on _load_fasttext_model
     # survives across shards in the same worker.
     ctx_kwargs: dict[str, Any] = {
-        "name": f"llm-quality-{source_name}",
+        # Iris rejects job names containing '/' (validator added in #5736), so flatten
+        # registry names like ``cp/biodiversity`` to ``cp__biodiversity``.
+        "name": f"llm-quality-{source_name.replace('/', '__')}",
         "resources": worker_resources,
         "stage_runner_factory": InlineRunner,
     }
