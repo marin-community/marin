@@ -975,3 +975,37 @@
   - The correctness gate should use relative/error-norm checks for BF16, or use scaled/model-like initialization for absolute checks.
 - Next action:
   - Treat `token_ragged_a2a` as semantically correct under BF16 relative tolerance and resume performance work. The next useful B200 run is a production-ish timing comparison, but prior timing already showed the current pure-JAX token-ragged path is much slower than stream-ring and DeepEP, so optimization should focus on reducing the number of ragged exchanges or using a fused/custom transport.
+
+### 2026-05-22 10:39 - Production-ish EP4 timing confirms token-ragged is not competitive
+- Experiment ID: `B200-EP-033`
+- Hypothesis:
+  - With correctness treated as acceptable under BF16 relative tolerance, the next question is whether the pure-JAX `token_ragged_a2a` transport is performance-competitive with `stream_ring` and DeepEP on a production-ish EP4 shape.
+- Command:
+  - B200 Slurm job `50158`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Shape:
+    - EP: `4`
+    - tokens: `131072`
+    - hidden: `2048`
+    - MLP dim: `2048`
+    - experts: `256`
+    - top-k: `8`
+    - shared expert dim: `0`
+    - dtype: `bfloat16`
+    - pass: forward + backward
+- Result:
+  - Job `50158` completed and emitted timings:
+    - `stream_ring`: `0.075300 s`, `1.740673M tok/s`
+    - `token_ragged_a2a`: `0.283252 s`, `0.462740M tok/s`
+    - `deepep_transport_capped_prewarmed`: `0.067122 s`, `1.952747M tok/s`
+  - DeepEP also emitted timeout/launch-failure diagnostics during teardown after the timing result, but the Slurm job exit code was `0`.
+- Interpretation:
+  - `token_ragged_a2a` is semantically useful as a JAX prototype, but not performance-competitive in its current form:
+    - about `3.76x` slower than `stream_ring`
+    - about `4.22x` slower than DeepEP
+  - On this shape, `stream_ring` is only about `12%` slower than DeepEP, so it remains the best non-DeepEP baseline.
+  - The pure-JAX token-ragged path pays too much for multiple ragged exchanges and separate metadata movement.
+- Next action:
+  - Stop trying to optimize this exact multi-ragged JAX transport. The viable next paths are:
+    - wire DeepEP for the production path; or
+    - build a fused/custom transport that sends token payload and metadata together and avoids repeated `ragged_all_to_all` calls.
