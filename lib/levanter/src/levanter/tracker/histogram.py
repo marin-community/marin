@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import TypeAlias
+
 import equinox
 import jax
 import jax.numpy as jnp
@@ -15,6 +17,9 @@ import haliax as hax
 from haliax import NamedArray
 from haliax.partitioning import shard_map
 from levanter.kernels.pallas.cost_estimate_utils import with_io_bytes_accessed
+
+
+ReduceMesh: TypeAlias = tuple[str, ...]
 
 
 class Histogram(equinox.Module):
@@ -130,7 +135,7 @@ def sharded_histogram_array(a: jax.Array, bin_edges: ArrayLike) -> jnp.ndarray:
     if len(flattened_spec) == 0:
         return _single_shard_histogram_array(a, bin_edges, ())
 
-    def _wrapped_hist(arr, edges):
+    def _wrapped_hist(arr: jax.Array, edges: jax.Array) -> jax.Array:
         return _single_shard_histogram_array(arr, bin_edges=edges, reduce_mesh=flattened_spec)
 
     return jax.shard_map(
@@ -141,7 +146,7 @@ def sharded_histogram_array(a: jax.Array, bin_edges: ArrayLike) -> jnp.ndarray:
     )(a, bin_edges)
 
 
-def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
+def _single_shard_histogram(a: NamedArray, bin_edges: jax.Array, reduce_mesh: ReduceMesh) -> jax.Array:
     """Histogram counts for one NamedArray shard using logical axis mapping."""
     a_flat = a.array.flatten()
     left_edges = bin_edges[:-1, None]
@@ -157,7 +162,7 @@ def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
     return counts
 
 
-def _single_shard_histogram_array(a: jax.Array, bin_edges, reduce_mesh):
+def _single_shard_histogram_array(a: jax.Array, bin_edges: jax.Array, reduce_mesh: ReduceMesh) -> jax.Array:
     """Histogram counts for one shard with the last bin inclusive."""
     a = a.flatten()
     num_bins = bin_edges.shape[0] - 1
@@ -187,19 +192,19 @@ def _single_shard_histogram_array(a: jax.Array, bin_edges, reduce_mesh):
     return counts
 
 
-def _shardmap_histogram(a: NamedArray, bins):
+def _shardmap_histogram(a: NamedArray, bins: jax.Array) -> jax.Array:
     spec = hax.partitioning.pspec_for_axis(a.axes)
     flattened_spec = _flattened_spec(spec)
 
-    def _wrapped_hist(arr):
-        return _single_shard_histogram(arr, bin_edges=bins, reduce_mesh=flattened_spec)
+    def _wrapped_hist(arr: NamedArray, bin_edges: jax.Array) -> jax.Array:
+        return _single_shard_histogram(arr, bin_edges=bin_edges, reduce_mesh=flattened_spec)
 
-    shard_h = shard_map(_wrapped_hist)
-    return shard_h(a)
+    shard_h = shard_map(_wrapped_hist, in_specs=(spec, P(None)), out_specs=P(None))
+    return shard_h(a, bins)
 
 
-def _flattened_spec(spec):
-    out = []
+def _flattened_spec(spec: P) -> ReduceMesh:
+    out: list[str] = []
     for s in spec:
         if isinstance(s, tuple):
             out.extend(s)
@@ -253,9 +258,9 @@ def _histogram_cost_estimate(
     )
 
 
-def histogram_tile_kernel(a_ref, bin_edges_ref, counts_ref):
+def histogram_tile_kernel(a_ref, bin_edges_ref, counts_ref) -> None:
     @pl.when(pl.program_id(0) == 0)
-    def _():
+    def _() -> None:
         counts_ref[...] = jnp.zeros_like(counts_ref)
 
     pid = pl.program_id(0)
