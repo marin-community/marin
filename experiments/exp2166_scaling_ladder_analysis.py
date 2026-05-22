@@ -21,6 +21,7 @@ from datetime import timedelta
 import fsspec
 import jmp
 from fray.cluster import ResourceConfig
+from haliax import ScanCheckpointPolicy
 from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import DatasetComponent, LMMixtureDatasetConfig
@@ -149,8 +150,6 @@ def run_optimal_training(config: OptimalTrainingConfig) -> None:
     # Following exp1295_32b.py pattern: offload only carries, not inputs
     model_config = candidate.model_config
     if config.target_budget >= 1e21:
-        from haliax import ScanCheckpointPolicy
-
         model_config = replace(model_config, gradient_checkpointing=ScanCheckpointPolicy(save_carries="offload"))
         logger.info("Using offload carries gradient checkpointing for large model")
 
