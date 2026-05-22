@@ -16,13 +16,14 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
   - `coordinator.py` — `ZephyrCoordinator`, shard plumbing (`_build_source_shards`, `_reshard_refs`, `_compute_tasks_from_shards`, `_regroup_result_refs`)
   - `worker.py` — `ZephyrWorker`
   - `context.py` — `ZephyrContext`, `ZephyrExecutionResult`, coordinator-as-job entrypoint
+  - Callers outside this package (`zephyr.runners`, `zephyr.counters`, `zephyr.shuffle`, tests) import from `zephyr.execution` directly; submodules are an implementation detail.
 - `src/zephyr/plan.py` — `compute_plan`, `PhysicalPlan`, operation fusion
 - `src/zephyr/readers.py` — `load_jsonl`, `load_parquet`, `load_vortex`, `InputFileSpec`
 - `src/zephyr/writers.py` — `write_jsonl_file`, `write_parquet_file`, `write_vortex_file`, Levanter cache writer
 - `src/zephyr/shuffle.py` — scatter pipeline internals (`ScatterFileIterator`, `ScatterReader`, hash-routing, combiner, zstd-chunk file format with byte-range sidecar)
 - `src/zephyr/expr.py` — `Expr`, `col`, `lit` for filter expressions
 - `src/zephyr/external_sort.py` — `external_sort_merge` k-way merge of sorted runs
-- `src/zephyr/counters.py` — `increment` / `get_counters` per-worker counter API (`CounterSnapshot` lives in `execution/internals.py`)
+- `src/zephyr/counters.py` — `increment` / `get_counters` per-worker counter API (`CounterSnapshot` is re-exported by `zephyr.execution`)
 
 ## Execution Model
 

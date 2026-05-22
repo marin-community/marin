@@ -19,10 +19,11 @@ This module collects three closely-related concerns:
 
 It is a leaf module from the perspective of the other ``execution`` package
 modules: ``coordinator``, ``worker``, and ``context`` all import from here,
-never the other way around. ``zephyr.shuffle`` is a pure dependency below
-this module — the scatter write buffer budget is computed here (using the
-worker context) and passed into ``_write_scatter``, so ``shuffle`` no longer
-needs to reach back up into ``execution`` at all.
+never the other way around. Callers outside the package import from
+``zephyr.execution`` (which re-exports these symbols). ``zephyr.shuffle`` is
+a pure dependency below this module — the scatter write buffer budget is
+computed here (using the worker context) and passed into ``_write_scatter``,
+so ``shuffle`` no longer needs to reach back up into ``execution`` at all.
 """
 
 from __future__ import annotations

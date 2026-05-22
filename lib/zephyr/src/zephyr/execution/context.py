@@ -33,10 +33,10 @@ from rigging.timing import ExponentialBackoff
 from zephyr.dataset import Dataset
 from zephyr.execution.coordinator import ZephyrCoordinator, _get_stage_description
 from zephyr.execution.internals import (
+    _NON_RETRYABLE_ERRORS,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     StageRunner,
-    _NON_RETRYABLE_ERRORS,
     _cleanup_execution,
     _generate_execution_id,
     _shared_data_path,

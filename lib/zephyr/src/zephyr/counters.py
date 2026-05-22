@@ -23,7 +23,7 @@ Outside of a Zephyr worker context, all calls are silent no-ops.
 
 import logging
 
-from zephyr.execution.internals import _worker_ctx_var
+from zephyr.execution import _worker_ctx_var
 
 logger = logging.getLogger(__name__)
 
