@@ -204,7 +204,15 @@ class CloudK8sService:
 
         try:
             kubernetes.config.load_incluster_config()
-            return kubernetes.client.ApiClient()
+            api_client = kubernetes.client.ApiClient()
+            # Kubernetes client v36 DynamicClient uses "BearerToken", while
+            # load_incluster_config() stores the pod token under "authorization":
+            # https://github.com/kubernetes-client/python/blob/v36.0.0/kubernetes/base/dynamic/client.py#L274-L288
+            # https://github.com/kubernetes-client/python/blob/v36.0.0/kubernetes/base/config/incluster_config.py#L87-L92
+            auth_token = api_client.configuration.api_key.get("authorization")
+            if auth_token:
+                api_client.configuration.api_key["BearerToken"] = auth_token
+            return api_client
         except kubernetes.config.ConfigException:
             return kubernetes.config.new_client_from_config()
 
