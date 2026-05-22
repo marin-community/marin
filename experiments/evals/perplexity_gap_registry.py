@@ -29,12 +29,18 @@ from experiments.bio_chem_notation import bio_chem_raw_validation_sets
 from experiments.defaults import default_raw_validation_sets
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
 from experiments.evals.formal_hardware_ppl import formal_hardware_raw_validation_sets
+from experiments.evals.long_context_ppl import long_context_validation_sets
 from experiments.evals.web_markup_image_text_ppl import web_markup_image_text_raw_validation_sets
 from experiments.marin_models import marin_tokenizer
 
 DEFAULT_MAX_EVAL_LENGTH = 4096
 DEFAULT_MAX_DOCS_PER_DATASET = 256
 DEFAULT_MAX_DOC_BYTES = 32_768
+
+LONG_CONTEXT_32K_EVAL_LENGTH = 32_768
+LONG_CONTEXT_64K_EVAL_LENGTH = 65_536
+LONG_CONTEXT_MAX_DOC_BYTES = 1_048_576
+LONG_CONTEXT_MAX_DOCS_PER_DATASET = 32
 
 
 @dataclass(frozen=True)
@@ -110,6 +116,30 @@ def bio_chem_bundle() -> PerplexityGapBundle:
     )
 
 
+def long_context_bundle() -> PerplexityGapBundle:
+    """Default 32K long-context reading + retrieval tracking bundle."""
+    return PerplexityGapBundle(
+        key="long_context_32k",
+        description="Long-context reading + retrieval slices at 32K eval length.",
+        datasets_factory=long_context_validation_sets,
+        max_eval_length=LONG_CONTEXT_32K_EVAL_LENGTH,
+        max_docs_per_dataset=LONG_CONTEXT_MAX_DOCS_PER_DATASET,
+        max_doc_bytes=LONG_CONTEXT_MAX_DOC_BYTES,
+    )
+
+
+def long_context_64k_bundle() -> PerplexityGapBundle:
+    """Opt-in 64K diagnostic tier using the same slices as the 32K bundle."""
+    return PerplexityGapBundle(
+        key="long_context_64k",
+        description="Long-context reading + retrieval slices at 64K eval length (opt-in diagnostic).",
+        datasets_factory=long_context_validation_sets,
+        max_eval_length=LONG_CONTEXT_64K_EVAL_LENGTH,
+        max_docs_per_dataset=LONG_CONTEXT_MAX_DOCS_PER_DATASET,
+        max_doc_bytes=LONG_CONTEXT_MAX_DOC_BYTES,
+    )
+
+
 def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
     return (
         base_raw_bundle(),
@@ -117,6 +147,7 @@ def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
         web_markup_image_text_bundle(),
         formal_hardware_bundle(),
         bio_chem_bundle(),
+        long_context_bundle(),
     )
 
 
