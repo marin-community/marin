@@ -92,7 +92,6 @@ class ListShard:
 # ---------------------------------------------------------------------------
 
 _SCATTER_META_SUFFIX = ".scatter_meta"
-_SCATTER_DATA_SUFFIX = ".shuffle"
 
 # Number of parallel sidecar reads each reducer issues when building its
 # ScatterReader. Sidecars are small msgpack files (a few KB) and reads are
@@ -109,8 +108,6 @@ _ESTIMATE_WRITE_SAMPLE_INTERVAL = 10
 # EMA weight given to each new observation. 0.3 converges to a 2x step-change
 # in item size within ~3 samples while staying stable under small fluctuations.
 _ESTIMATE_EMA_ALPHA = 0.3
-# Fraction of total memory budgeted for read-side decompression buffers.
-_SCATTER_READ_BUFFER_FRACTION = 0.25
 
 _ZSTD_COMPRESS_LEVEL = 3
 # Items per pickle.dump call within a chunk. Larger = faster (less per-call
