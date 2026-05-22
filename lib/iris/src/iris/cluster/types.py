@@ -12,6 +12,7 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
+import functools
 import hashlib
 import os
 import sys
@@ -22,9 +23,10 @@ from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
+from rigging.timing import Timestamp
 
 from iris.cluster.constraints import Constraint
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,21 +59,16 @@ class JobName:
     def from_string(cls, s: str) -> "JobName":
         """Parse a job name string like '/user/root/child/grandchild'.
 
+        Parsed names are interned in a process-wide LRU cache (names are
+        immutable) so repeated decodes — the TypeDecorator path that fires
+        once per row read — collapse to a dict lookup.
+
         Examples:
             JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
             JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
             JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
-        if not s:
-            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
-        if not s.startswith("/"):
-            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
-        parts = tuple(s[1:].split("/"))
-        if len(parts) < 2:
-            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
-        if any(not part or not part.strip() for part in parts):
-            raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
-        return cls(parts)
+        return _parse_job_name(s)
 
     @classmethod
     def root(cls, user: str, name: str) -> "JobName":
@@ -112,7 +109,7 @@ class JobName:
     @property
     def namespace(self) -> str:
         """Get the actor namespace (user/root job) for actor isolation."""
-        return "/".join(self.root_job._parts)
+        return "/" + "/".join(self.root_job._parts)
 
     @property
     def name(self) -> str:
@@ -205,6 +202,26 @@ class JobName:
         return cls.from_string(s)
 
 
+@functools.lru_cache(maxsize=2**18)
+def _parse_job_name(s: str) -> JobName:
+    """Cached parser backing JobName.from_string / from_wire.
+
+    Hot SA Core read paths decode the same job_id / task_id strings on every
+    row; this collapses repeated decodes to a dict lookup. ``JobName`` is
+    frozen+slots so cached instances can be shared without aliasing risk.
+    """
+    if not s:
+        raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
+    if not s.startswith("/"):
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    parts = tuple(s[1:].split("/"))
+    if len(parts) < 2:
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    if any(not part or not part.strip() for part in parts):
+        raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
+    return JobName(parts)
+
+
 @dataclass(frozen=True, slots=True)
 class TaskAttempt:
     """A task identity combining a task-level JobName with an optional attempt qualifier.
@@ -281,14 +298,14 @@ class TaskAttempt:
         return f"TaskAttempt({self.to_wire()!r})"
 
 
-def get_gpu_count(device: cluster_pb2.DeviceConfig) -> int:
+def get_gpu_count(device: job_pb2.DeviceConfig) -> int:
     """Extract GPU count from DeviceConfig."""
     if device.HasField("gpu"):
         return device.gpu.count or 1
     return 0
 
 
-def get_tpu_count(device: cluster_pb2.DeviceConfig) -> int:
+def get_tpu_count(device: job_pb2.DeviceConfig) -> int:
     """Extract TPU count from DeviceConfig."""
     if device.HasField("tpu"):
         return device.tpu.count or 0
@@ -297,6 +314,50 @@ def get_tpu_count(device: cluster_pb2.DeviceConfig) -> int:
 
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
+AttemptUid = NewType("AttemptUid", str)
+
+
+@dataclass(frozen=True, slots=True)
+class PendingTask:
+    """Controller-side scheduling input projected from task, job, and config rows."""
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: Timestamp
+    priority_band: int
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_insertion: int
+    job_state: int
+    scheduling_deadline_epoch_ms: int | None
+    is_reservation_holder: bool
+    has_reservation: bool
+    scheduling_timeout_ms: int | None
+    has_coscheduling: bool
+    coscheduling_group_by: str | None
+    constraints_json: str | None
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+
+
+@dataclass
+class UserBudgetDefaults:
+    """Budget settings applied when a user has no override row in ``user_budgets``.
+
+    ``budget_limit=0`` means unlimited; positive values cap spend before
+    ``compute_effective_band`` downgrades INTERACTIVE work to BATCH.
+    """
+
+    budget_limit: int = 1000
+    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
 @dataclass(frozen=True)
@@ -329,9 +390,9 @@ class CoschedulingConfig:
 
     group_by: str
 
-    def to_proto(self) -> cluster_pb2.CoschedulingConfig:
+    def to_proto(self) -> job_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
-        return cluster_pb2.CoschedulingConfig(group_by=self.group_by)
+        return job_pb2.CoschedulingConfig(group_by=self.group_by)
 
 
 @dataclass(frozen=True)
@@ -343,22 +404,23 @@ class ReservationEntry:
 
     Example:
         >>> ReservationEntry(resources=ResourceSpec(cpu=2, memory="8g"))
-        >>> ReservationEntry(resources=ResourceSpec(cpu=2), constraints=[Constraint("region", value="us-central1")])
+        >>> ReservationEntry(resources=ResourceSpec(cpu=2),
+        ...                  constraints=[Constraint.create(key="region", op=ConstraintOp.EQ, value="us-central1")])
     """
 
     resources: "ResourceSpec"
     constraints: list[Constraint] | None = None
 
-    def to_proto(self) -> cluster_pb2.ReservationEntry:
+    def to_proto(self) -> job_pb2.ReservationEntry:
         """Convert to protobuf representation."""
         constraints_proto = [c.to_proto() for c in self.constraints or []]
-        return cluster_pb2.ReservationEntry(
+        return job_pb2.ReservationEntry(
             resources=self.resources.to_proto(),
             constraints=constraints_proto,
         )
 
 
-def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConfig:
+def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:
     """Create a DeviceConfig for a TPU device.
 
     Args:
@@ -382,15 +444,15 @@ def tpu_device(variant: str, count: int | None = None) -> cluster_pb2.DeviceConf
             chip_count = topo.chips_per_vm
         except ValueError:
             chip_count = 0
-    return cluster_pb2.DeviceConfig(
-        tpu=cluster_pb2.TpuDevice(
+    return job_pb2.DeviceConfig(
+        tpu=job_pb2.TpuDevice(
             variant=variant,
             count=chip_count,
         )
     )
 
 
-def gpu_device(variant: str, count: int = 1) -> cluster_pb2.DeviceConfig:
+def gpu_device(variant: str, count: int = 1) -> job_pb2.DeviceConfig:
     """Create a DeviceConfig for a GPU device.
 
     Args:
@@ -400,8 +462,8 @@ def gpu_device(variant: str, count: int = 1) -> cluster_pb2.DeviceConfig:
     Returns:
         DeviceConfig with the gpu field set.
     """
-    return cluster_pb2.DeviceConfig(
-        gpu=cluster_pb2.GpuDevice(
+    return job_pb2.DeviceConfig(
+        gpu=job_pb2.GpuDevice(
             variant=variant,
             count=count,
         )
@@ -449,19 +511,19 @@ class ResourceSpec:
     cpu: float = 0.0
     memory: str | int = 0  # "8g" or bytes
     disk: str | int = 0
-    device: cluster_pb2.DeviceConfig | None = None
+    device: job_pb2.DeviceConfig | None = None
 
     # Accelerator tasks need enough CPU to avoid bottlenecking on data loading.
     MIN_ACCELERATOR_CPU_MILLICORES = 32_000
 
-    def to_proto(self) -> cluster_pb2.ResourceSpecProto:
+    def to_proto(self) -> job_pb2.ResourceSpecProto:
         """Convert to wire format."""
         memory_bytes = self.memory if isinstance(self.memory, int) else parse_memory_string(self.memory)
         disk_bytes = self.disk if isinstance(self.disk, int) else parse_memory_string(self.disk)
         cpu_mc = int(self.cpu * 1000)
         if self.device is not None and cpu_mc < self.MIN_ACCELERATOR_CPU_MILLICORES:
             cpu_mc = self.MIN_ACCELERATOR_CPU_MILLICORES
-        spec = cluster_pb2.ResourceSpecProto(
+        spec = job_pb2.ResourceSpecProto(
             cpu_millicores=cpu_mc,
             memory_bytes=memory_bytes,
             disk_bytes=disk_bytes,
@@ -480,9 +542,9 @@ import logging
 
 # Reinitialize logging with the unified Iris format.
 # Uses single-letter level prefix: I=INFO, W=WARNING, E=ERROR, D=DEBUG, C=CRITICAL.
-# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from iris.logging
+# NOTE: This duplicates LevelPrefixFormatter and _LEVEL_PREFIX from rigging.log_setup
 # because CALLABLE_RUNNER executes inside an isolated task container that may not
-# have the iris package installed (e.g. user-provided Docker images).
+# have the rigging package installed (e.g. user-provided Docker images).
 _LEVEL_PREFIX = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
 
 class _LevelPrefixFormatter(logging.Formatter):
@@ -531,7 +593,7 @@ class EnvironmentSpec:
     env_vars: dict[str, str] | None = None
     extras: Sequence[str] | None = None
 
-    def to_proto(self) -> cluster_pb2.EnvironmentConfig:
+    def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format with sensible defaults applied."""
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
@@ -544,7 +606,7 @@ class EnvironmentSpec:
 
         py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
 
-        return cluster_pb2.EnvironmentConfig(
+        return job_pb2.EnvironmentConfig(
             pip_packages=list(self.pip_packages or []),
             env_vars=merged_env_vars,
             extras=list(self.extras or []),
@@ -586,14 +648,31 @@ class Namespace(str):
         return cls(job_id.namespace)
 
 
+TERMINAL_JOB_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.JOB_STATE_SUCCEEDED,
+        job_pb2.JOB_STATE_FAILED,
+        job_pb2.JOB_STATE_KILLED,
+        job_pb2.JOB_STATE_WORKER_FAILED,
+        job_pb2.JOB_STATE_UNSCHEDULABLE,
+    }
+)
+
+TERMINAL_TASK_STATES: frozenset[int] = frozenset(
+    {
+        job_pb2.TASK_STATE_SUCCEEDED,
+        job_pb2.TASK_STATE_FAILED,
+        job_pb2.TASK_STATE_KILLED,
+        job_pb2.TASK_STATE_UNSCHEDULABLE,
+        job_pb2.TASK_STATE_WORKER_FAILED,
+        job_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_COSCHED_FAILED,
+    }
+)
+
+
 def is_job_finished(state: int) -> bool:
-    return state in (
-        cluster_pb2.JOB_STATE_SUCCEEDED,
-        cluster_pb2.JOB_STATE_FAILED,
-        cluster_pb2.JOB_STATE_KILLED,
-        cluster_pb2.JOB_STATE_WORKER_FAILED,
-        cluster_pb2.JOB_STATE_UNSCHEDULABLE,
-    )
+    return state in TERMINAL_JOB_STATES
 
 
 def is_task_finished(state: int) -> bool:
@@ -602,22 +681,11 @@ def is_task_finished(state: int) -> bool:
     This is a simple check for whether the state is a terminal state.
     For ControllerTask, use task.is_finished() which also considers retry budgets.
     """
-    # Avoid circular import - define inline since this is a stable set
-    terminal_states = frozenset(
-        {
-            cluster_pb2.TASK_STATE_SUCCEEDED,
-            cluster_pb2.TASK_STATE_FAILED,
-            cluster_pb2.TASK_STATE_KILLED,
-            cluster_pb2.TASK_STATE_WORKER_FAILED,
-            cluster_pb2.TASK_STATE_PREEMPTED,
-            cluster_pb2.TASK_STATE_UNSCHEDULABLE,
-        }
-    )
-    return state in terminal_states
+    return state in TERMINAL_TASK_STATES
 
 
-JobState = cluster_pb2.JobState
-TaskState = cluster_pb2.TaskState
+JobState = job_pb2.JobState
+TaskState = job_pb2.TaskState
 
 
 @dataclass(frozen=True)
@@ -678,6 +746,28 @@ TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
 ]
 
 
+TPU_FAMILY_VARIANT_PREFIX: dict[str, str] = {
+    "v4": "v4",
+    "v5e": "v5litepod",
+    "v5p": "v5p",
+    "v6e": "v6e",
+}
+
+
+def tpu_variant_name(family: str, size: int) -> str:
+    """Build the device_variant string for a TPU family and chip-count size.
+
+    >>> tpu_variant_name("v5e", 16)
+    'v5litepod-16'
+    >>> tpu_variant_name("v6e", 32)
+    'v6e-32'
+    """
+    prefix = TPU_FAMILY_VARIANT_PREFIX.get(family)
+    if prefix is None:
+        raise ValueError(f"Unknown TPU family '{family}'. Known families: {sorted(TPU_FAMILY_VARIANT_PREFIX)}")
+    return f"{prefix}-{size}"
+
+
 def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     """Get TPU topology by type name."""
     for config in TPU_TOPOLOGIES:
@@ -686,7 +776,7 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-def adjust_tpu_replicas(device: "cluster_pb2.DeviceConfig | None", replicas: int) -> int:
+def adjust_tpu_replicas(device: "job_pb2.DeviceConfig | None", replicas: int) -> int:
     """Adjust replicas for multi-host TPU topologies.
 
     Multi-host TPU topologies (e.g. v6e-32 with vm_count=8) require one task
@@ -794,20 +884,20 @@ class Entrypoint:
             raise ValueError("Command must have at least one argument")
         return cls(command=list(argv), workdir_files={})
 
-    def to_proto(self) -> cluster_pb2.RuntimeEntrypoint:
+    def to_proto(self) -> job_pb2.RuntimeEntrypoint:
         """Convert to protobuf representation.
 
         Produces a RuntimeEntrypoint with no setup_commands (those are added
         by build_runtime_entrypoint when submitting to the cluster).
         """
-        proto = cluster_pb2.RuntimeEntrypoint()
+        proto = job_pb2.RuntimeEntrypoint()
         proto.run_command.argv[:] = self.command
         for name, data in self.workdir_files.items():
             proto.workdir_files[name] = data
         return proto
 
     @classmethod
-    def from_proto(cls, proto: cluster_pb2.RuntimeEntrypoint) -> "Entrypoint":
+    def from_proto(cls, proto: job_pb2.RuntimeEntrypoint) -> "Entrypoint":
         """Create from protobuf representation."""
         command = list(proto.run_command.argv)
         workdir_files = dict(proto.workdir_files) if proto.workdir_files else None

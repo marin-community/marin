@@ -3,19 +3,16 @@
 
 """Tests for Controller --dry-run mode."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
-from iris.cluster.controller.controller import Controller, ControllerConfig
-from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
+
 from tests.cluster.controller.conftest import (
-    FakeProvider,
     make_job_request,
     make_worker_metadata,
+    query_tasks_for_job,
     register_worker,
     submit_job,
 )
@@ -24,16 +21,8 @@ pytestmark = pytest.mark.timeout(15)
 
 
 @pytest.fixture
-def dry_run_controller(tmp_path):
-    db = ControllerDB(db_dir=tmp_path / "db")
-    config = ControllerConfig(
-        dry_run=True,
-        remote_state_dir=f"file://{tmp_path}/remote",
-        local_state_dir=tmp_path,
-    )
-    controller = Controller(config=config, provider=FakeProvider(), db=db)
-    yield controller
-    controller.stop()
+def dry_run_controller(make_controller):
+    return make_controller(dry_run=True)
 
 
 def test_dry_run_controller_starts_and_stops(dry_run_controller):
@@ -53,21 +42,9 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
 
     controller._run_scheduling()
 
-    with state._db.snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (JobName.root("test-user", "dry-job").to_wire(),)),
-        )
+    tasks = query_tasks_for_job(state, JobName.root("test-user", "dry-job"))
     assert len(tasks) == 1
-    assert tasks[0].state == cluster_pb2.TASK_STATE_PENDING
-
-
-def test_dry_run_provider_sync_skipped(dry_run_controller):
-    controller = dry_run_controller
-    provider = controller._provider
-
-    with patch.object(provider, "sync", wraps=provider.sync) as spy:
-        controller._sync_all_execution_units()
-        spy.assert_not_called()
+    assert tasks[0].state == job_pb2.TASK_STATE_PENDING
 
 
 def test_dry_run_autoscaler_skipped_entirely(dry_run_controller):
@@ -93,9 +70,3 @@ def test_dry_run_checkpoint_returns_sentinel(dry_run_controller):
 def test_dry_run_pruning_skipped(dry_run_controller):
     controller = dry_run_controller
     assert controller._prune_thread is None
-
-
-def test_dry_run_kill_tasks_skipped(dry_run_controller):
-    controller = dry_run_controller
-    task_id = JobName.root("test-user", "fake-job").child("t0")
-    controller.kill_tasks_on_workers({task_id})

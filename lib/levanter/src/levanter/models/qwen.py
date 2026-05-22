@@ -12,7 +12,7 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -23,7 +23,6 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.types import BlockFoldable
 
 
 silence_transformer_nag()
@@ -196,8 +195,6 @@ class QwenTransformer(LlamaTransformer):
     def init(config: QwenConfig, *, key) -> "QwenTransformer":
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         # Initialize layers with their indices
@@ -301,6 +298,7 @@ class Qwen3Config(LlamaConfig):
     """Qwen-3 configuration (Llama architecture + QK-norm + Sliding Window)."""
 
     # TODO: add sliding window attention implementation
+    reference_checkpoint: str = "Qwen/Qwen3-0.6B"
     use_sliding_window: bool = False
     sliding_window: int = 4096  # Qwen-3 uses sliding window by default
 

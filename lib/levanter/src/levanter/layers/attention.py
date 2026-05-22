@@ -271,8 +271,9 @@ def dot_product_attention(
     if attention_out is not None:
         return attention_out
     else:
-        # local import to avoid circular imports
-        from levanter.models.flash_attention import flash_attention
+        from levanter.models.flash_attention import (
+            flash_attention,
+        )  # circular import: flash_attention imports attention
 
         return flash_attention(
             QPos,
@@ -1373,7 +1374,9 @@ def _tpu_splash_attention(
     block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE
 
     # Compute sharding factors from the mesh (OUTSIDE shard_map)
-    mesh = jax.sharding.get_abstract_mesh()
+    mesh = hax.partitioning._get_mesh()
+    if mesh is None or mesh.empty:
+        raise NotImplementedError("Splash attention requires a non-empty mesh")
     head_shards = _spec_shard_factor(physical_axes_q[1], mesh)
     q_seq_shards = _spec_shard_factor(physical_axes_q[2], mesh)
     kv_seq_shards = _spec_shard_factor(physical_axes_k[2], mesh)
@@ -2119,7 +2122,7 @@ def _do_tpu_ragged_paged_attention(
 
     o = shard_map(
         _rpa_with_runtime_scale,
-        mesh=jax.sharding.get_abstract_mesh(),
+        mesh=hax.partitioning._get_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),
             haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),

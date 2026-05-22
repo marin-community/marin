@@ -4,11 +4,9 @@
 """Tests for worker environment probing."""
 
 import sys
-import time
-
-import pytest
 
 import iris.cluster.worker.env_probe as env_probe
+import pytest
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.worker.env_probe import (
     DefaultEnvironmentProvider,
@@ -130,7 +128,7 @@ def test_gpu_worker_attributes_from_config():
         accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
         accelerator_variant="H100",
         gpu_count_override=8,
-        preemptible=True,
+        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
     )
 
     # Device config for capacity accounting
@@ -159,7 +157,7 @@ def test_tpu_worker_attributes_from_config():
         hardware=hardware,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
         accelerator_variant="v5litepod-16",
-        preemptible=True,
+        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
     )
 
     attrs = metadata.attributes
@@ -189,7 +187,7 @@ def test_cpu_worker_attributes_from_config():
     metadata = build_worker_metadata(
         hardware=hardware,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
-        preemptible=False,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
 
     attrs = metadata.attributes
@@ -239,7 +237,7 @@ def test_preemptible_not_from_gcp_metadata():
         accelerator_type=config_pb2.ACCELERATOR_TYPE_GPU,
         accelerator_variant="H100",
         gpu_count_override=8,
-        preemptible=False,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
 
     assert metadata.attributes[WellKnownAttribute.PREEMPTIBLE].string_value == "false"
@@ -325,19 +323,8 @@ def test_read_net_dev_bytes_returns_nonzero_on_linux():
     assert sent >= 0
 
 
-def test_host_metrics_collector_network_first_call_returns_zero():
-    """First network collection establishes baseline and reports 0 B/s."""
-    collector = HostMetricsCollector()
-    snapshot = collector.collect()
-    assert snapshot.net_recv_bps == 0
-    assert snapshot.net_sent_bps == 0
-
-
-def test_host_metrics_collector_network_delta(monkeypatch):
-    """Second network collection computes bytes/sec from the delta."""
-    fake_time = [100.0]
-    monkeypatch.setattr(time, "monotonic", lambda: fake_time[0])
-
+def test_host_metrics_collector_network_writes_cumulative_bytes(monkeypatch):
+    """Snapshot reports cumulative byte counters straight from /proc/net/dev."""
     call_count = [0]
     net_values = [
         (1000, 2000),
@@ -354,14 +341,12 @@ def test_host_metrics_collector_network_delta(monkeypatch):
     collector = HostMetricsCollector()
 
     snapshot1 = collector.collect()
-    assert snapshot1.net_recv_bps == 0
-    assert snapshot1.net_sent_bps == 0
-
-    fake_time[0] = 105.0
+    assert snapshot1.net_recv_bytes == 1000
+    assert snapshot1.net_sent_bytes == 2000
 
     snapshot2 = collector.collect()
-    assert snapshot2.net_recv_bps == 1000
-    assert snapshot2.net_sent_bps == 2000
+    assert snapshot2.net_recv_bytes == 6000
+    assert snapshot2.net_sent_bytes == 12000
 
 
 # --- Network metrics ---
@@ -388,8 +373,46 @@ def test_health_check_writable_dir(tmp_path):
     """Health check succeeds on a writable directory."""
     result = check_worker_health(disk_path=str(tmp_path))
     assert result.healthy
-    # Probe file should be cleaned up
-    assert not (tmp_path / ".iris_health_probe").exists()
+
+
+def test_health_check_low_pct_but_high_absolute_free_is_healthy(tmp_path, monkeypatch):
+    """A large disk with <5% free but >=10 GiB free is still healthy."""
+    total = 1_000 * 1024**3
+    used = total - (12 * 1024**3)  # 1.2% free, 12 GiB free
+    monkeypatch.setattr(
+        env_probe.shutil,
+        "disk_usage",
+        lambda _: env_probe.shutil._ntuple_diskusage(total=total, used=used, free=total - used),
+    )
+    result = check_worker_health(disk_path=str(tmp_path))
+    assert result.healthy
+
+
+def test_health_check_high_pct_but_low_absolute_free_is_healthy(tmp_path, monkeypatch):
+    """A small tmpfs with >5% free but <10 GiB free is still healthy."""
+    total = 8 * 1024**3
+    used = int(total * 0.5)  # 50% free, 4 GiB free
+    monkeypatch.setattr(
+        env_probe.shutil,
+        "disk_usage",
+        lambda _: env_probe.shutil._ntuple_diskusage(total=total, used=used, free=total - used),
+    )
+    result = check_worker_health(disk_path=str(tmp_path))
+    assert result.healthy
+
+
+def test_health_check_low_pct_and_low_absolute_free_is_unhealthy(tmp_path, monkeypatch):
+    """Failing both <5% and <10 GiB triggers unhealthy."""
+    total = 200 * 1024**3
+    used = total - (5 * 1024**3)  # 2.5% free, 5 GiB free
+    monkeypatch.setattr(
+        env_probe.shutil,
+        "disk_usage",
+        lambda _: env_probe.shutil._ntuple_diskusage(total=total, used=used, free=total - used),
+    )
+    result = check_worker_health(disk_path=str(tmp_path))
+    assert not result.healthy
+    assert "5%" in result.error and "10" in result.error
 
 
 def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
@@ -398,5 +421,5 @@ def test_host_metrics_collector_network_graceful_on_non_linux(monkeypatch):
 
     collector = HostMetricsCollector()
     snapshot = collector.collect()
-    assert snapshot.net_recv_bps == 0
-    assert snapshot.net_sent_bps == 0
+    assert snapshot.net_recv_bytes == 0
+    assert snapshot.net_sent_bytes == 0

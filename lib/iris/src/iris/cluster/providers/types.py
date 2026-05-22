@@ -14,6 +14,7 @@ import logging
 import os
 import socket
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -51,6 +52,10 @@ class Labels:
         self.iris_controller = f"iris-{prefix}-controller"
         self.iris_controller_address = f"iris-{prefix}-controller-address"
         self.iris_slice_id = f"iris-{prefix}-slice-id"
+        # Marks a slice as operator-created via `iris cluster create-slice`.
+        # The autoscaler ignores these: they don't count toward demand, don't
+        # participate in scale-down, and survive `iris cluster stop`.
+        self.iris_manual = f"iris-{prefix}-manual"
 
 
 def find_free_port(start: int = -1) -> int:
@@ -83,13 +88,34 @@ def find_free_port(start: int = -1) -> int:
     raise RuntimeError(f"No free port found in range {start}-{start + 1000}")
 
 
+def port_is_open(port: int, host: str = "localhost") -> bool:
+    """Check if a TCP port is accepting connections."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.1)
+        return s.connect_ex((host, port)) == 0
+
+
+def resolve_external_host(host: str) -> str:
+    """Return an externally-reachable address for a bind host.
+
+    Workers running off-host cannot connect to the unspecified address
+    ``0.0.0.0``; probe for a real network IP instead.
+    """
+    if host != "0.0.0.0":
+        return host
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
 def wait_for_port(port: int, host: str = "localhost", timeout: float = 30.0) -> bool:
     """Wait for a TCP port to become connectable.
 
     Returns True if port is ready, False on timeout.
     """
-    import time
-
     dl = Deadline.from_seconds(timeout)
     while not dl.expired():
         try:
@@ -196,7 +222,15 @@ class RemoteWorkerHandle(Protocol):
 
     @property
     def internal_address(self) -> str:
-        """Internal/private IP address for intra-cluster communication."""
+        """Internal/private IP address (host only, no port) for intra-cluster communication."""
+        ...
+
+    @property
+    def worker_url(self) -> str:
+        """Internal HTTP base URL (``http://host:port``) for the worker's RPC and /health endpoints.
+
+        Empty string when the worker has no internal address yet (mid-boot).
+        """
         ...
 
     @property
@@ -261,7 +295,7 @@ class StandaloneWorkerHandle(RemoteWorkerHandle, Protocol):
         """Run the bootstrap script on the worker."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the worker."""
         ...
 
@@ -317,9 +351,17 @@ class SliceHandle(Protocol):
         """Query cloud state, returning status and worker handles."""
         ...
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         """Destroy the slice and all its workers."""
         ...
+
+
+@dataclass(frozen=True)
+class ListedSlice:
+    """A handle paired with the cloud state observed when it was listed."""
+
+    handle: SliceHandle
+    state: CloudSliceState
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +372,7 @@ TERMINATE_TIMEOUT_SECONDS = 60
 
 
 def default_stop_all(
-    list_all_slices: Callable[[], list[SliceHandle]],
+    list_all_slices: Callable[[], list[ListedSlice]],
     stop_controller: Callable[[], None],
     dry_run: bool = False,
 ) -> list[str]:
@@ -346,9 +388,9 @@ def default_stop_all(
     """
     target_names: list[str] = ["controller"]
     all_slices = list_all_slices()
-    for s in all_slices:
-        logger.info("Found managed slice %s", s.slice_id)
-        target_names.append(f"slice:{s.slice_id}")
+    for listed in all_slices:
+        logger.info("Found managed slice %s (state=%s)", listed.handle.slice_id, listed.state)
+        target_names.append(f"slice:{listed.handle.slice_id}")
 
     if dry_run:
         return target_names
@@ -356,8 +398,8 @@ def default_stop_all(
     targets: list[tuple[str, Callable[[], None]]] = [
         ("controller", stop_controller),
     ]
-    for s in all_slices:
-        targets.append((f"slice:{s.slice_id}", s.terminate))
+    for listed in all_slices:
+        targets.append((f"slice:{listed.handle.slice_id}", listed.handle.terminate))
 
     logger.info("Terminating %d resource(s) in parallel", len(targets))
 

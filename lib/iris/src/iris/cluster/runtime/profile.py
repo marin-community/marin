@@ -20,26 +20,81 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
+from typing import ClassVar
 
-from iris.cluster.types import TaskAttempt
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
 # Target sentinel for profiling the local worker/controller process itself.
 SYSTEM_PROCESS_TARGET = "/system/process"
 
+# finelog namespace for ``IrisProfile`` rows.
+PROFILE_NAMESPACE = "iris.profile"
+
+
+class ProfileType(StrEnum):
+    CPU = "cpu"
+    MEMORY = "memory"
+    THREAD = "thread"
+
+
+class ProfileFormat(StrEnum):
+    # CPU
+    RAW = "raw"
+    FLAMEGRAPH = "flamegraph"
+    SPEEDSCOPE = "speedscope"
+    # Memory
+    HTML = "html"
+    TABLE = "table"
+    STATS = "stats"
+
+
+class ProfileTrigger(StrEnum):
+    PERIODIC = "periodic"
+    ON_DEMAND = "on_demand"
+
+
+@dataclass
+class IrisProfile:
+    """One row per profile capture. Written by worker / k8s provider / controller; read by dashboard."""
+
+    key_column: ClassVar[str] = "captured_at"
+
+    source: str
+    attempt_id: int | None
+    vm_id: str
+    captured_at: datetime
+    duration_seconds: int
+    type: str
+    format: str
+    trigger: str
+    rate_hz: int | None = None
+    native: bool | None = None
+    leaks: bool | None = None
+    locals_dump: bool | None = None
+    profile_data: bytes = b""
+
+    def __post_init__(self) -> None:
+        ProfileType(self.type)
+        ProfileFormat(self.format)
+        ProfileTrigger(self.trigger)
+
+
 CPU_FORMAT_MAP: dict[int, tuple[str, str]] = {
-    cluster_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
-    cluster_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),
-    cluster_pb2.CpuProfile.RAW: ("raw", "txt"),
+    job_pb2.CpuProfile.FLAMEGRAPH: ("flamegraph", "svg"),
+    job_pb2.CpuProfile.SPEEDSCOPE: ("speedscope", "json"),
+    job_pb2.CpuProfile.RAW: ("raw", "txt"),
 }
 
 MEMORY_FORMAT_MAP: dict[int, tuple[str, str]] = {
-    cluster_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
-    cluster_pb2.MemoryProfile.TABLE: ("table", "txt"),
-    cluster_pb2.MemoryProfile.STATS: ("stats", "json"),
+    job_pb2.MemoryProfile.FLAMEGRAPH: ("flamegraph", "html"),
+    job_pb2.MemoryProfile.TABLE: ("table", "txt"),
+    job_pb2.MemoryProfile.STATS: ("stats", "json"),
+    job_pb2.MemoryProfile.RAW: ("raw", "bin"),
 }
 
 
@@ -62,12 +117,17 @@ class MemoryProfileSpec:
     leaks: bool
 
     @property
+    def is_raw(self) -> bool:
+        """Raw mode returns the .bin trace directly, skipping transform."""
+        return self.reporter == "raw"
+
+    @property
     def output_is_file(self) -> bool:
         """Flamegraph and stats write to a file; table writes to stdout."""
         return self.reporter in ("flamegraph", "stats")
 
 
-def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
+def resolve_cpu_spec(cpu_config: job_pb2.CpuProfile, duration_seconds: int, pid: str) -> CpuProfileSpec:
     py_spy_format, ext = CPU_FORMAT_MAP.get(cpu_config.format, ("flamegraph", "svg"))
     rate_hz = cpu_config.rate_hz if cpu_config.rate_hz > 0 else 20
     native = cpu_config.native if cpu_config.HasField("native") else True
@@ -81,7 +141,7 @@ def resolve_cpu_spec(cpu_config: cluster_pb2.CpuProfile, duration_seconds: int, 
     )
 
 
-def resolve_memory_spec(memory_config: cluster_pb2.MemoryProfile, duration_seconds: int, pid: str) -> MemoryProfileSpec:
+def resolve_memory_spec(memory_config: job_pb2.MemoryProfile, duration_seconds: int, pid: str) -> MemoryProfileSpec:
     reporter, ext = MEMORY_FORMAT_MAP.get(memory_config.format, ("flamegraph", "html"))
     return MemoryProfileSpec(
         reporter=reporter,
@@ -92,7 +152,7 @@ def resolve_memory_spec(memory_config: cluster_pb2.MemoryProfile, duration_secon
     )
 
 
-def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> list[str]:
+def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str, *, subprocesses: bool = True) -> list[str]:
     return [
         py_spy_bin,
         "record",
@@ -106,13 +166,13 @@ def build_pyspy_cmd(spec: CpuProfileSpec, py_spy_bin: str, output_path: str) -> 
         spec.py_spy_format,
         "--output",
         output_path,
-        "--subprocesses",
+        *(["--subprocesses"] if subprocesses else []),
         *(["--native"] if spec.native else []),
     ]
 
 
 def build_memray_attach_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_path: str) -> list[str]:
-    cmd = [memray_bin, "attach", spec.pid, "--duration", str(spec.duration_seconds), "--output", trace_path]
+    cmd = [memray_bin, "attach", "--native", spec.pid, "--duration", str(spec.duration_seconds), "--output", trace_path]
     if spec.leaks:
         cmd.append("--aggregate")
     return cmd
@@ -137,15 +197,19 @@ def build_memray_transform_cmd(spec: MemoryProfileSpec, memray_bin: str, trace_p
         raise RuntimeError(f"Unknown memray reporter: {spec.reporter}")
 
 
-def build_pyspy_dump_cmd(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> list[str]:
+def build_pyspy_dump_cmd(
+    pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False, subprocesses: bool = True
+) -> list[str]:
     """Build a py-spy dump command for thread-level stack traces."""
     cmd = [py_spy_bin, "dump", "--pid", pid]
+    if subprocesses:
+        cmd.append("--subprocesses")
     if include_locals:
         cmd.append("--locals")
     return cmd
 
 
-def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+def profile_local_process(duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
     """Profile the current interpreter process using py-spy or memray.
 
     Used by the controller and worker to handle /system/process targets.
@@ -155,7 +219,7 @@ def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.Profi
 
     if profile_type.HasField("threads"):
         _check_tool("py-spy")
-        return run_pyspy_dump(pid, include_locals=profile_type.threads.locals)
+        return run_pyspy_dump(pid, include_locals=profile_type.threads.locals, subprocesses=False)
     elif profile_type.HasField("cpu"):
         _check_tool("py-spy")
         return _run_pyspy_record(pid, duration_seconds, profile_type.cpu)
@@ -166,16 +230,26 @@ def profile_local_process(duration_seconds: int, profile_type: cluster_pb2.Profi
         raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
 
-def run_pyspy_dump(pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False) -> bytes:
+# Workaround for https://github.com/benfred/py-spy/issues/846: py-spy dump --subprocesses
+# exits non-zero when it walks into a non-Python child (e.g. wandb-core, a Go binary), even
+# though the parent dump already went to stdout. Drop this once py-spy fixes the upstream bug.
+_PYSPY_NON_PYTHON_CHILD_ERROR = "Failed to find python version from target process"
+
+
+def run_pyspy_dump(
+    pid: str, py_spy_bin: str = "py-spy", *, include_locals: bool = False, subprocesses: bool = True
+) -> bytes:
     """Run py-spy dump to collect thread stacks from a process."""
-    cmd = build_pyspy_dump_cmd(pid, py_spy_bin, include_locals=include_locals)
+    cmd = build_pyspy_dump_cmd(pid, py_spy_bin, include_locals=include_locals, subprocesses=subprocesses)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
-        raise RuntimeError(f"py-spy dump failed: {result.stderr}")
+        partial_ok = subprocesses and bool(result.stdout.strip()) and _PYSPY_NON_PYTHON_CHILD_ERROR in result.stderr
+        if not partial_ok:
+            raise RuntimeError(f"py-spy dump failed: {result.stderr}")
     return result.stdout.encode("utf-8")
 
 
-def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
+def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: job_pb2.CpuProfile) -> bytes:
     """Run py-spy record against a local process and return the output."""
     spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=pid)
     output_path = None
@@ -183,7 +257,7 @@ def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: cluster_pb2.C
         with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
             output_path = f.name
 
-        cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path)
+        cmd = build_pyspy_cmd(spec, py_spy_bin="py-spy", output_path=output_path, subprocesses=False)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 30)
         if result.returncode != 0:
             raise RuntimeError(f"py-spy record failed: {result.stderr}")
@@ -193,7 +267,7 @@ def _run_pyspy_record(pid: str, duration_seconds: int, cpu_config: cluster_pb2.C
             Path(output_path).unlink(missing_ok=True)
 
 
-def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
+def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
     """Profile memory of the current process using memray's in-process Tracker.
 
     Uses the programmatic Tracker API instead of ``memray attach``, avoiding
@@ -215,8 +289,12 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_
         os.unlink(trace_path)
 
         # Track allocations in-process for the requested duration.
-        with memray.Tracker(trace_path, file_format=file_format):
+        with memray.Tracker(trace_path, native_traces=True, file_format=file_format):
             time.sleep(duration_seconds)
+
+        # Raw mode: return the .bin trace directly, no transform needed.
+        if spec.is_raw:
+            return Path(trace_path).read_bytes()
 
         if spec.output_is_file:
             with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:
@@ -240,23 +318,6 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: cluster_
             Path(output_path).unlink(missing_ok=True)
 
 
-def is_system_target(target: str) -> bool:
-    """Return True if the target refers to the local process rather than a task."""
-    return target == SYSTEM_PROCESS_TARGET
-
-
-def parse_profile_target(target: str) -> TaskAttempt:
-    """Parse a task target string into a TaskAttempt.
-
-    Examples:
-        >>> parse_profile_target("/alice/job/0")
-        TaskAttempt('/alice/job/0')
-        >>> parse_profile_target("/alice/job/0:3")
-        TaskAttempt('/alice/job/0:3')
-    """
-    return TaskAttempt.from_wire(target)
-
-
 def _check_tool(name: str) -> None:
     """Raise RuntimeError if a profiling tool is not on PATH."""
     if shutil.which(name) is None:
@@ -264,3 +325,77 @@ def _check_tool(name: str) -> None:
             f"'{name}' is not installed. /system/process profiling requires "
             f"py-spy and memray to be available in the controller/worker environment."
         )
+
+
+_MEMORY_REPORTER_TO_FORMAT: dict[str, ProfileFormat] = {
+    "flamegraph": ProfileFormat.HTML,
+    "table": ProfileFormat.TABLE,
+    "stats": ProfileFormat.STATS,
+    "raw": ProfileFormat.RAW,
+}
+
+
+def build_profile_row(
+    *,
+    source: str,
+    attempt_id: int | None,
+    vm_id: str,
+    duration_seconds: int,
+    profile_type: job_pb2.ProfileType,
+    profile_data: bytes,
+    trigger: ProfileTrigger = ProfileTrigger.ON_DEMAND,
+) -> IrisProfile:
+    """Construct one ``IrisProfile`` row from a completed capture.
+
+    Single source of truth for the worker, ``K8sTaskProvider``, and the
+    controller's ``/system/controller`` self-capture path. ``type``,
+    ``format``, and the type-specific metadata fields are derived from the
+    proto oneof — callers only supply identity (``source`` / ``attempt_id``
+    / ``vm_id``), the captured bytes, and the trigger.
+    """
+    captured_at = datetime.now(UTC).replace(tzinfo=None)
+    which = profile_type.WhichOneof("profiler")
+    if which == "cpu":
+        cpu_spec = resolve_cpu_spec(profile_type.cpu, duration_seconds, pid="")
+        return IrisProfile(
+            source=source,
+            attempt_id=attempt_id,
+            vm_id=vm_id,
+            captured_at=captured_at,
+            duration_seconds=duration_seconds,
+            type=ProfileType.CPU.value,
+            format=cpu_spec.py_spy_format,
+            trigger=trigger.value,
+            rate_hz=cpu_spec.rate_hz,
+            native=cpu_spec.native,
+            profile_data=profile_data,
+        )
+    if which == "memory":
+        memory_spec = resolve_memory_spec(profile_type.memory, duration_seconds, pid="")
+        fmt = _MEMORY_REPORTER_TO_FORMAT.get(memory_spec.reporter, ProfileFormat.HTML)
+        return IrisProfile(
+            source=source,
+            attempt_id=attempt_id,
+            vm_id=vm_id,
+            captured_at=captured_at,
+            duration_seconds=duration_seconds,
+            type=ProfileType.MEMORY.value,
+            format=fmt.value,
+            trigger=trigger.value,
+            leaks=memory_spec.leaks,
+            profile_data=profile_data,
+        )
+    if which == "threads":
+        return IrisProfile(
+            source=source,
+            attempt_id=attempt_id,
+            vm_id=vm_id,
+            captured_at=captured_at,
+            duration_seconds=duration_seconds,
+            type=ProfileType.THREAD.value,
+            format=ProfileFormat.RAW.value,
+            trigger=trigger.value,
+            locals_dump=bool(profile_type.threads.locals),
+            profile_data=profile_data,
+        )
+    raise ValueError(f"ProfileType has no profiler set: {profile_type!r}")

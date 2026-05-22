@@ -8,6 +8,22 @@
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
 
+# ── Stage: dashboard ─────────────────────────────────────────────────
+# Build the Vue SPA. Output is consumed by the deps stage at
+# /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
+# (see lib/iris/src/iris/cluster/dashboard_common.py).
+FROM node:22-slim AS dashboard
+
+WORKDIR /build/dashboard
+
+# Copy manifests first so dependency install is cached across source edits.
+COPY lib/iris/dashboard/package.json lib/iris/dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY lib/iris/dashboard/ ./
+RUN npm run build
+
+
 # ── Stage: base ──────────────────────────────────────────────────────
 # System dependencies shared by controller and worker.
 FROM python:3.12-slim AS base
@@ -35,8 +51,9 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# kubectl
-RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+# kubectl — TARGETARCH is auto-set by buildx (amd64 on x86 nodes, arm64 on Grace).
+ARG TARGETARCH
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
         -o /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
     && kubectl version --client
@@ -52,28 +69,54 @@ FROM base AS deps
 WORKDIR /app
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Rigging is a workspace-local dep not on PyPI with a compatible API.
-# Copy it alongside iris and create a minimal workspace so uv resolves it
-# from source instead of downloading the unrelated "rigging" package from PyPI.
-COPY lib/rigging/ ./lib/rigging/
-COPY lib/iris/pyproject.toml lib/iris/hatch_build.py ./lib/iris/
-RUN printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging"]\n\n[tool.uv.sources]\nrigging = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package iris --no-install-project
+# Rigging and finelog are workspace-local deps not on PyPI with compatible APIs.
+# Copy only metadata first so source changes don't bust the dep cache.
+COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
+COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
+# finelog's pyproject force-includes config/ in the wheel, so the directory
+# must exist even for `uv sync --no-install-project`.
+COPY lib/finelog/config/ ./lib/finelog/config/
+COPY lib/iris/pyproject.toml ./lib/iris/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    printf '[tool.uv.workspace]\nmembers = ["lib/iris", "lib/rigging", "lib/finelog"]\n\n[tool.uv.sources]\nmarin-rigging = { workspace = true }\nmarin-finelog = { workspace = true }\n' > pyproject.toml \
+    && uv sync --package marin-iris --no-install-project
 
-# Iris source: install the project itself.
+# Now copy full source for rigging, finelog, and iris, then install.
+COPY lib/rigging/src/ ./lib/rigging/src/
+COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/iris/src/ ./lib/iris/src/
-RUN uv sync --package iris
+COPY lib/iris/config/ ./lib/iris/config/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --package marin-iris
 
 # Profiling tools — installed after uv sync so they aren't pruned by the exact sync.
-RUN uv pip install py-spy memray
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install py-spy memray
 
-# Dashboard assets (pre-built by `iris build dashboard` before docker build)
-COPY lib/iris/dashboard/dist ./lib/iris/dashboard/dist
+# Dashboard assets — built by the `dashboard` stage above.
+COPY --from=dashboard /build/dashboard/dist ./lib/iris/dashboard/dist
 
 RUN mkdir -p /var/cache/iris
 
 ARG IRIS_GIT_HASH=unknown
 ENV IRIS_GIT_HASH=${IRIS_GIT_HASH}
+
+
+# ── Stage: docker-cli ────────────────────────────────────────────────
+# Built from base (not deps) so it stays cached across source changes.
+FROM base AS docker-cli
+
+# Docker CLI and buildx (buildx required for BuildKit).
+# TODO(#3341): TPU host VMs ship Docker daemon 24.0 (API 1.43). Pinning the
+# CLI to the same major keeps client and daemon compatible. Revisit once GCP
+# updates the base TPU VM image.
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends 'docker-ce-cli=5:24.0*' 'docker-buildx-plugin=0.11*' && \
+    rm -rf /var/lib/apt/lists/*
 
 
 # ── Stage: controller ────────────────────────────────────────────────
@@ -96,17 +139,10 @@ FROM deps AS worker
 
 LABEL org.opencontainers.image.description="Iris worker image"
 
-# Docker CLI and buildx (buildx required for BuildKit).
-# TODO(#3341): TPU host VMs ship Docker daemon 24.0 (API 1.43). Pinning the
-# CLI to the same major keeps client and daemon compatible. Revisit once GCP
-# updates the base TPU VM image.
-RUN install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
-    chmod a+r /etc/apt/keyrings/docker.asc && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends 'docker-ce-cli=5:24.0*' 'docker-buildx-plugin=0.11*' && \
-    rm -rf /var/lib/apt/lists/*
+# Copy pre-built Docker CLI + buildx from the docker-cli stage (cached
+# independently of Python source changes).
+COPY --from=docker-cli /usr/bin/docker /usr/bin/docker
+COPY --from=docker-cli /usr/libexec/docker/cli-plugins/ /usr/libexec/docker/cli-plugins/
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:10001/health || exit 1

@@ -8,20 +8,6 @@ Processes HuggingFace datasets (QA, multiple choice, etc.) and converts them to:
 - Evaluation format: prompt/response pairs for perplexity evaluation
 - Decontamination format: text field for Dolma decontamination pipeline
 
-Example Usage:
-uv run zephyr --backend=sync \
-    lib/marin/src/marin/transform/huggingface/dataset_to_eval.py \
-    --dataset_name cais/mmlu \
-    --subsets all \
-    --splits train \
-    --input_path gs://bucket/raw/cais/mmlu \
-    --hf_path cais/mmlu \
-    --output_path gs://bucket/evaluation/mmlu \
-    --output_format evaluation \
-    --prompt_key question \
-    --options_key choices \
-    --answer_idx_key answer \
-    --answer_labels A B C D
 """
 
 import logging

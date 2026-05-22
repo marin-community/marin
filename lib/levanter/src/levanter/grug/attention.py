@@ -134,6 +134,20 @@ def apply_rotary_embedding(
     return _apply(q), _apply(k)
 
 
+def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[Array, "B K Hq D"]:
+    """Expand grouped-query KV heads to match query-head layout."""
+    num_kv_heads = x.shape[2]
+    if num_q_heads == num_kv_heads:
+        return x
+    if num_q_heads % num_kv_heads != 0:
+        raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
+    repeat = num_q_heads // num_kv_heads
+    # Use reshape + broadcast instead of jnp.repeat to avoid sharding issues.
+    expanded = jnp.expand_dims(x, axis=3)
+    tiled = jnp.broadcast_to(expanded, (*x.shape[:3], repeat, x.shape[3]))
+    return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
+
+
 def reference_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -144,14 +158,8 @@ def reference_attention(
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
-    num_kv_heads = k.shape[2]
-
-    if num_q_heads != num_kv_heads:
-        if num_q_heads % num_kv_heads != 0:
-            raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
-        repeat = num_q_heads // num_kv_heads
-        k = jnp.repeat(k, repeat, axis=2)
-        v = jnp.repeat(v, repeat, axis=2)
+    k = align_kv_heads(k, num_q_heads=num_q_heads)
+    v = align_kv_heads(v, num_q_heads=num_q_heads)
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
@@ -392,6 +400,7 @@ def attention(
 __all__ = [
     "AttentionMask",
     "RotaryConfig",
+    "align_kv_heads",
     "apply_rotary_embedding",
     "attention",
     "reference_attention",

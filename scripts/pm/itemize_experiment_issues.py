@@ -13,11 +13,12 @@ Usage:
 """
 
 import os
-from pathlib import Path
 import re
-from github import Github
+from pathlib import Path
 from urllib.parse import urlparse
+
 import wandb
+from github import Github
 
 
 def clean_title(title):

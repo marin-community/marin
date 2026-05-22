@@ -6,10 +6,6 @@ stackexchange/transform_stackexchange.py
 
 Performs HTML->Text/MD conversion using the specified tools over a stackexchange dump save in DOLMA format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=50 --memory=2GB --cluster=us-central2 \
-    lib/marin/src/marin/transform/stackexchange/transform_stackexchange.py \
-    --input_path gs://path/to/input --output_path gs://path/to/output ...
 """
 
 import logging
@@ -18,11 +14,10 @@ import random
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Dataset, ZephyrContext, load_jsonl
-
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
+from zephyr import Dataset, ZephyrContext, load_jsonl
 
 logger = logging.getLogger(__name__)
 

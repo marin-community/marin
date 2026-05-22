@@ -9,19 +9,19 @@ from pathlib import Path
 
 import pytest
 from iris.client import IrisClient
-from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.cluster.config import IrisConfig
 from iris.cluster.providers.local.cluster import LocalCluster
+from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import config_pb2
 
-pytestmark = pytest.mark.e2e
+pytestmark = pytest.mark.requires_cluster
 
 
 def _make_demo_config() -> config_pb2.IrisClusterConfig:
     config = config_pb2.IrisClusterConfig()
     cpu_sg = config.scale_groups["cpu"]
     cpu_sg.name = "cpu"
-    cpu_sg.min_slices = 0
+    cpu_sg.buffer_slices = 0
     cpu_sg.max_slices = 1
     cpu_sg.num_vms = 1
     cpu_sg.resources.cpu_millicores = 1000
@@ -29,6 +29,7 @@ def _make_demo_config() -> config_pb2.IrisClusterConfig:
     cpu_sg.resources.disk_bytes = 0
     cpu_sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
     cpu_sg.resources.device_count = 0
+    cpu_sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     return IrisConfig(config).as_local().proto
 
 

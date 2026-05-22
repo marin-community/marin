@@ -7,16 +7,30 @@ This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
 
+import contextlib
 import logging
 import shutil
 import socket
+import subprocess
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
+from finelog.client import LogClient, Table
+from finelog.rpc import logging_pb2
+from finelog.types import str_to_log_level
+from rigging.log_setup import parse_log_level
+from rigging.timing import Duration, ExponentialBackoff, Timestamp
+
 from iris.chaos import chaos, chaos_raise
+from iris.cluster.bundle import BundleStore
+from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.runtime.docker import DockerContainerHandle
+from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerErrorKind,
@@ -25,27 +39,32 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
-    RuntimeLogReader,
     MountKind,
     MountSpec,
+    RuntimeLogReader,
 )
 from iris.cluster.types import (
+    AttemptUid,
     JobName,
-    TaskAttempt as TaskAttemptIdentity,
     is_task_finished,
 )
-from iris.cluster.bundle import BundleStore
+from iris.cluster.types import (
+    TaskAttempt as TaskAttemptIdentity,
+)
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.log_store import LogCursor, LogStore, task_log_key
-from iris.logging import str_to_log_level
-from rigging.log_setup import parse_log_level
-from iris.rpc import cluster_pb2, logging_pb2
-from iris.rpc.cluster_pb2 import TaskState, WorkerMetadata
+from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
+from iris.cluster.worker.tpu_health import detect_tpu_init_failure
+from iris.cluster.worker.worker_types import LogLine
+from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
+from iris.rpc.job_pb2 import TaskState, WorkerMetadata
 from iris.time_proto import timestamp_to_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
+
+# Trailing stderr lines scanned for TPU bad-node signatures on non-zero exit.
+_TPU_STDERR_TAIL_LINES = 200
+
 
 # Signal numbers for interpreting exit codes > 128
 _SIGNAL_NAMES = {
@@ -54,6 +73,19 @@ _SIGNAL_NAMES = {
     11: "SIGSEGV",
     15: "SIGTERM",
 }
+
+# Max time to wait for the container to actually exit after force-kill before
+# reporting TASK_STATE_KILLED. SIGKILL is uncatchable, so a healthy runtime
+# reaps within milliseconds; the bound keeps a wedged container (uninterruptible
+# sleep, runtime daemon hang) from blocking the monitor indefinitely.
+_KILL_EXIT_WAIT_TIMEOUT = Duration.from_seconds(30.0)
+
+# States from which a kill is meaningful. Killing a terminal attempt is a no-op.
+_KILLABLE_STATES = (
+    job_pb2.TASK_STATE_RUNNING,
+    job_pb2.TASK_STATE_BUILDING,
+    job_pb2.TASK_STATE_PENDING,
+)
 
 
 def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
@@ -96,8 +128,13 @@ class TaskAttemptConfig:
 
     task_attempt: TaskAttemptIdentity
     num_tasks: int
-    request: cluster_pb2.Worker.RunTaskRequest
+    request: job_pb2.RunTaskRequest
     cache_dir: Path
+    # Controller-minted routing key. Empty (``AttemptUid("")``) when set by an
+    # older controller, or when the attempt is adopted from a container that
+    # predates the iris.attempt_uid label. Required: both call sites
+    # (Worker.submit_task and TaskAttempt.adopt) always know the value.
+    attempt_uid: AttemptUid
 
     @property
     def task_id(self) -> JobName:
@@ -134,8 +171,6 @@ def build_iris_env(
     variables (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST) and overrides port values
     with real allocated ports.
     """
-    from iris.cluster.runtime.env import build_common_iris_env
-
     req = task.request
     env = build_common_iris_env(
         task_id=req.task_id,
@@ -194,7 +229,7 @@ class TaskAttempt:
         default_task_image: str | None,
         resolve_image: Callable[[str], str] | None,
         port_allocator: PortAllocator,
-        log_store: LogStore,
+        log_client: LogClient | None,
         poll_interval_seconds: float = 5.0,
         *,
         container_handle: ContainerHandle | None = None,
@@ -222,14 +257,14 @@ class TaskAttempt:
             default_task_image: Fully-qualified task container image from cluster config
             resolve_image: Resolves image tags for the current platform (None for adopted tasks)
             port_allocator: Port allocator for releasing ports on cleanup
-            log_store: Shared LogStore for appending and querying task logs
+            log_client: Streams log entries to the central LogService.
             poll_interval_seconds: How often to poll container status
             container_handle: Pre-existing container handle for adopted tasks
             initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
         """
         self._bundle_store = bundle_store
         self._runtime = container_runtime
-        self._worker_metadata = worker_metadata or cluster_pb2.WorkerMetadata()
+        self._worker_metadata = worker_metadata or job_pb2.WorkerMetadata()
         self._worker_id = worker_id
         self._controller_address = controller_address
         self._task_env = task_env or {}
@@ -237,20 +272,31 @@ class TaskAttempt:
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
         self._poll_interval_seconds = poll_interval_seconds
-        self._log_store = log_store
+        self._log_client = log_client
         self._log_key = task_log_key(config.task_attempt)
+        # Stats Table for the iris.task namespace. Tables are cached by the
+        # LogClient by namespace, so this fetch is cheap. Schema bugs surface
+        # here at construction (the same LogClient also registered the table
+        # eagerly in Worker.start()).
+        self._task_stats_table: Table | None = (
+            log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat) if log_client is not None else None
+        )
 
         # Task identity (from config)
         self.task_attempt: TaskAttemptIdentity = config.task_attempt
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
-        self.request: cluster_pb2.Worker.RunTaskRequest = config.request
+        # Controller-minted routing key. Mutable: an attempt adopted from a
+        # pre-upgrade container starts with "" and is stamped on the first
+        # Reconcile tick that composite-matches it.
+        self.attempt_uid: AttemptUid = config.attempt_uid
+        self.request: job_pb2.RunTaskRequest = config.request
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
         self._cache_dir: Path = config.cache_dir
         # Task state
-        self.status: TaskState = initial_status or cluster_pb2.TASK_STATE_PENDING
+        self.status: TaskState = initial_status or job_pb2.TASK_STATE_PENDING
         self.exit_code: int | None = None
         self.error: str | None = None
         self.started_at: Timestamp | None = None
@@ -260,7 +306,7 @@ class TaskAttempt:
         # Resource tracking
         self.current_memory_mb: int = 0
         self.peak_memory_mb: int = 0
-        self.current_cpu_percent: int = 0
+        self.current_cpu_millicores: int = 0
         self.process_count: int = 0
         self.disk_mb: int = 0
 
@@ -276,14 +322,14 @@ class TaskAttempt:
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
         self.should_stop: bool = False
-        self._heartbeat_cursor: LogCursor = log_store.cursor(self._log_key)
+        self.on_state_change: Callable[[TaskState], None] | None = None
 
     @classmethod
     def adopt(
         cls,
         discovered: DiscoveredContainer,
         container_handle: ContainerHandle,
-        log_store: LogStore,
+        log_client: LogClient | None,
         port_allocator: PortAllocator,
         poll_interval_seconds: float = 5.0,
     ) -> "TaskAttempt":
@@ -298,7 +344,7 @@ class TaskAttempt:
         attempt_id = discovered.attempt_id
         identity = TaskAttemptIdentity(task_id=task_id, attempt_id=attempt_id)
 
-        request = cluster_pb2.Worker.RunTaskRequest(
+        request = job_pb2.RunTaskRequest(
             task_id=discovered.task_id,
             attempt_id=attempt_id,
         )
@@ -307,6 +353,7 @@ class TaskAttempt:
             num_tasks=1,
             request=request,
             cache_dir=Path(discovered.workdir_host_path).parent.parent if discovered.workdir_host_path else Path("/tmp"),
+            attempt_uid=AttemptUid(discovered.attempt_uid),
         )
 
         instance = cls(
@@ -320,10 +367,10 @@ class TaskAttempt:
             default_task_image=None,
             resolve_image=None,
             port_allocator=port_allocator,
-            log_store=log_store,
+            log_client=log_client,
             poll_interval_seconds=poll_interval_seconds,
             container_handle=container_handle,
-            initial_status=cluster_pb2.TASK_STATE_RUNNING,
+            initial_status=job_pb2.TASK_STATE_RUNNING,
         )
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
@@ -352,7 +399,7 @@ class TaskAttempt:
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             self._append_log(source="error", data=f"Monitoring failed:\n{error_msg}")
-            self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
+            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             self._cleanup()
             logger.info(
@@ -380,44 +427,47 @@ class TaskAttempt:
             return self._container_handle.container_id
         return None
 
-    def recent_logs(self, max_entries: int = 0) -> list[logging_pb2.LogEntry]:
-        """Return recent logs for this task attempt."""
-        return self._log_store.get_logs(self._log_key, tail=True, max_lines=max_entries or 1000).entries
-
-    def drain_heartbeat_logs(self, max_entries: int = 5000, final: bool = False) -> list[logging_pb2.LogEntry]:
-        """Return log entries appended since the last call, for delta forwarding.
-
-        Args:
-            max_entries: Maximum number of entries to return per call.
-            final: When True (terminal heartbeat), reads all pending entries and
-                truncates locally to *max_entries* with a marker.  When False
-                (normal heartbeat), uses the bounded cursor so undelivered rows
-                remain available for subsequent heartbeats.
-        """
-        if final:
-            entries = self._heartbeat_cursor.read(max_entries=0)
-            if len(entries) > max_entries:
-                marker = logging_pb2.LogEntry(
-                    source="iris",
-                    data=f"<logs truncated — {len(entries) - max_entries} earlier entries exceeded heartbeat log quota>",
-                )
-                marker.timestamp.epoch_ms = entries[-max_entries].timestamp.epoch_ms
-                entries = [marker, *entries[-max_entries:]]
-            return entries
-        return self._heartbeat_cursor.read(max_entries=max_entries)
-
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
         self.should_stop = True
         if self._container_handle:
             self._container_handle.stop(force=force)
 
+    def kill(self, term_timeout_ms: int = 5000) -> bool:
+        """Stop this attempt, escalating to a force-kill on timeout.
+
+        Issues SIGTERM, waits up to ``term_timeout_ms`` for the container to
+        exit, then force-kills if it is still running. Idempotent: returns
+        ``False`` without acting when the attempt is already terminal.
+        """
+        if self.status not in _KILLABLE_STATES:
+            return False
+        # Signal the execution thread immediately, even with no container yet:
+        # this bails an in-progress BUILDING-phase bundle download.
+        self.should_stop = True
+        if not self.has_container:
+            return True
+        try:
+            self.stop(force=False)
+            running = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
+            stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+                lambda: self.status not in running,
+                timeout=Duration.from_ms(term_timeout_ms),
+            )
+            if not stopped:
+                with contextlib.suppress(RuntimeError):
+                    self.stop(force=True)
+        except RuntimeError:
+            # Container was already removed or stopped.
+            pass
+        return True
+
     @property
     def has_container(self) -> bool:
         """Whether this attempt has an active container handle."""
         return self._container_handle is not None
 
-    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
         """Profile the running container process.
 
         Args:
@@ -436,47 +486,43 @@ class TaskAttempt:
 
     def exec_in_container(
         self, command: list[str], timeout_seconds: int = 60
-    ) -> cluster_pb2.Worker.ExecInContainerResponse:
+    ) -> worker_pb2.Worker.ExecInContainerResponse:
         """Execute a command in this task's container.
 
         Uses docker exec for Docker containers, subprocess for process containers.
         A negative timeout_seconds means no timeout.
         """
         if not self._container_handle:
-            return cluster_pb2.Worker.ExecInContainerResponse(error=f"Task {self.task_id} has no container handle")
-
-        import subprocess as _subprocess
+            return worker_pb2.Worker.ExecInContainerResponse(error=f"Task {self.task_id} has no container handle")
 
         container_id = self._container_handle.container_id
         if not container_id:
-            return cluster_pb2.Worker.ExecInContainerResponse(error="No container ID available")
+            return worker_pb2.Worker.ExecInContainerResponse(error="No container ID available")
 
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
 
         # Use docker exec for Docker containers, direct exec for process containers
-        from iris.cluster.runtime.docker import DockerContainerHandle
-
         if isinstance(self._container_handle, DockerContainerHandle):
-            result = _subprocess.run(
+            result = subprocess.run(
                 ["docker", "exec", container_id, *command],
                 capture_output=True,
                 text=True,
                 timeout=effective_timeout,
             )
-            return cluster_pb2.Worker.ExecInContainerResponse(
+            return worker_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
                 stdout=result.stdout,
                 stderr=result.stderr,
             )
 
         # Process runtime: run command directly
-        result = _subprocess.run(
+        result = subprocess.run(
             command,
             capture_output=True,
             text=True,
             timeout=effective_timeout,
         )
-        return cluster_pb2.Worker.ExecInContainerResponse(
+        return worker_pb2.Worker.ExecInContainerResponse(
             exit_code=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
@@ -498,6 +544,11 @@ class TaskAttempt:
                 self.error = error
             if exit_code is not None:
                 self.exit_code = exit_code
+        if self.on_state_change is not None:
+            try:
+                self.on_state_change(state)
+            except Exception:
+                logger.debug("on_state_change callback failed", exc_info=True)
 
     def duration(self) -> Duration | None:
         """Calculate how long the attempt ran.
@@ -510,8 +561,8 @@ class TaskAttempt:
         elapsed_ms = self.finished_at.epoch_ms() - self.started_at.epoch_ms()
         return Duration.from_ms(elapsed_ms)
 
-    def to_proto(self) -> cluster_pb2.TaskStatus:
-        proto = cluster_pb2.TaskStatus(
+    def to_proto(self) -> job_pb2.TaskStatus:
+        proto = job_pb2.TaskStatus(
             task_id=self.task_id.to_wire(),
             state=self.status,
             exit_code=self.exit_code or 0,
@@ -519,15 +570,14 @@ class TaskAttempt:
             ports=self.ports,
             current_attempt_id=self.attempt_id,
             container_id=self.platform_container_id or "",
-            resource_usage=cluster_pb2.ResourceUsage(
+            resource_usage=job_pb2.ResourceUsage(
                 memory_mb=self.current_memory_mb,
                 memory_peak_mb=self.peak_memory_mb,
                 disk_mb=self.disk_mb,
-                cpu_millicores=self.current_cpu_percent * 10,
-                cpu_percent=self.current_cpu_percent,
+                cpu_millicores=self.current_cpu_millicores,
                 process_count=self.process_count,
             ),
-            build_metrics=cluster_pb2.BuildMetrics(
+            build_metrics=job_pb2.BuildMetrics(
                 from_cache=self.build_from_cache,
                 image_tag=self.image_tag,
             ),
@@ -607,15 +657,15 @@ class TaskAttempt:
             self._run_container()
             self._monitor()
         except TaskCancelled:
-            self.transition_to(cluster_pb2.TASK_STATE_KILLED)
+            self.transition_to(job_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
             error_msg = format_exception_with_traceback(e)
             self._append_log(source="error", data=f"Infrastructure error:\n{error_msg}")
-            self.transition_to(cluster_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
+            self.transition_to(job_pb2.TASK_STATE_WORKER_FAILED, error=error_msg)
         except Exception as e:
             error_msg = format_exception_with_traceback(e)
             self._append_log(source="error", data=f"Task failed:\n{error_msg}")
-            self.transition_to(cluster_pb2.TASK_STATE_FAILED, error=error_msg)
+            self.transition_to(job_pb2.TASK_STATE_FAILED, error=error_msg)
         finally:
             self._cleanup()
             logger.info(
@@ -632,7 +682,7 @@ class TaskAttempt:
         Transitions task to BUILDING state and performs chaos injection checks
         for testing delayed builds.
         """
-        self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="downloading bundle")
+        self.transition_to(job_pb2.TASK_STATE_BUILDING, message="downloading bundle")
         self.started_at = Timestamp.now()
         self._build_phase_start = time.monotonic()
 
@@ -668,14 +718,23 @@ class TaskAttempt:
         )
 
     def _resolve_image(self) -> None:
-        """Resolve the task image from cluster config.
+        """Resolve the task image from the request override or cluster config.
 
-        No per-job Docker build — the pre-built base image has a pre-warmed
-        uv cache. The remote client wraps the entrypoint with uv sync.
+        Per-task ``task_image`` on the RunTaskRequest takes precedence over the
+        worker's cluster-configured ``default_task_image``. This lets jobs that
+        need a custom runtime (e.g. runsc/skopeo for sandboxing untrusted child
+        workloads) supply their own image without reconfiguring the cluster.
+
+        No per-job Docker build — the chosen image must already exist in the
+        registry. The remote client wraps the entrypoint with uv sync.
         """
-        if not self._default_task_image:
-            raise ValueError("No task image configured. Set defaults.default_task_image in cluster config.")
-        self.image_tag = self._resolve_image_fn(self._default_task_image)
+        requested = self.request.task_image or self._default_task_image
+        if not requested:
+            raise ValueError(
+                "No task image configured. Pass task_image to submit() or set "
+                "defaults.default_task_image in cluster config."
+            )
+        self.image_tag = self._resolve_image_fn(requested)
 
         logger.info("Using task image %s for task %s", self.image_tag, self.task_id)
 
@@ -692,16 +751,17 @@ class TaskAttempt:
         )
         env = dict(iris_env)
 
-        # Expose the worker's region so child jobs can inherit a region
-        # constraint (e.g. when the parent holds a reservation).
-        from iris.cluster.constraints import WellKnownAttribute
+        env.update(self._task_env)
+        env.update(dict(self.request.environment.env_vars))
 
+        # Surface the worker's region so in-task code (e.g. the Marin
+        # executor) and IrisClient.submit_job's parent->child region
+        # inheritance can read it via get_job_info().worker_region.
+        # Set last: this is a physical fact about the worker, not a
+        # user-configurable preference, so task/user env_vars cannot spoof it.
         region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
         if region_attr and region_attr.string_value:
             env["IRIS_WORKER_REGION"] = region_attr.string_value
-
-        env.update(self._task_env)
-        env.update(dict(self.request.environment.env_vars))
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint
@@ -732,6 +792,7 @@ class TaskAttempt:
             workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
+            attempt_uid=self.attempt_uid,
             job_id=job_id.to_wire(),
             worker_id=self._worker_id,
             worker_metadata=self._worker_metadata,
@@ -751,14 +812,14 @@ class TaskAttempt:
         assert self._container_handle is not None
 
         if self.request.entrypoint.setup_commands:
-            self.transition_to(cluster_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
+            self.transition_to(job_pb2.TASK_STATE_BUILDING, message="syncing dependencies")
             self.build_started = Timestamp.now()
 
-        build_logs = self._container_handle.build()
+        def on_build_logs(lines: list[LogLine]) -> None:
+            entries = [self._make_log_entry(source=line.source, data=line.data) for line in lines]
+            self._push_logs(entries)
 
-        # Capture build logs into log store
-        for log_line in build_logs:
-            self._append_log(source=log_line.source, data=log_line.data)
+        self._container_handle.build(on_logs=on_build_logs)
 
         self.build_finished = Timestamp.now()
         if self.request.entrypoint.setup_commands:
@@ -803,24 +864,39 @@ class TaskAttempt:
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
-                self.transition_to(cluster_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
+                self.transition_to(job_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
                 break
 
             # Check if we should stop
             if self.should_stop:
                 handle.stop(force=True)
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
+                # Wait for the runtime to confirm the container has actually
+                # exited before reporting KILLED. Without this, downstream
+                # consumers race the SIGKILL -> exit window: the worker tells
+                # the controller the task is dead while the container is still
+                # holding TPU/GPU/file resources during teardown.
+                exited = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+                    lambda: handle.status().phase == ContainerPhase.STOPPED,
+                    timeout=_KILL_EXIT_WAIT_TIMEOUT,
+                )
+                if not exited:
+                    logger.warning(
+                        "Task %s container did not exit within %s after SIGKILL; reporting KILLED anyway",
+                        self.task_id,
+                        _KILL_EXIT_WAIT_TIMEOUT,
+                    )
                 self._stream_logs(log_reader)  # Capture final logs
-                self.transition_to(cluster_pb2.TASK_STATE_KILLED)
+                self.transition_to(job_pb2.TASK_STATE_KILLED)
                 break
 
             # Check container status
             status = handle.status()
 
-            if self.status == cluster_pb2.TASK_STATE_BUILDING and status.phase == ContainerPhase.RUNNING:
+            if self.status == job_pb2.TASK_STATE_BUILDING and status.phase == ContainerPhase.RUNNING:
                 building_duration = time.monotonic() - self._build_phase_start
                 logger.info("Task %s BUILDING→RUNNING after %.1fs", self.task_id, building_duration)
-                self.transition_to(cluster_pb2.TASK_STATE_RUNNING)
+                self.transition_to(job_pb2.TASK_STATE_RUNNING)
 
             if status.phase == ContainerPhase.STOPPED:
                 logger.info(
@@ -835,28 +911,46 @@ class TaskAttempt:
 
                 # Container has stopped
                 if status.error:
-                    failure_state = cluster_pb2.TASK_STATE_FAILED
+                    failure_state = job_pb2.TASK_STATE_FAILED
                     if status.error_kind == ContainerErrorKind.INFRA_NOT_FOUND:
-                        failure_state = cluster_pb2.TASK_STATE_WORKER_FAILED
+                        failure_state = job_pb2.TASK_STATE_WORKER_FAILED
                     self.transition_to(failure_state, error=status.error, exit_code=status.exit_code or -1)
                 elif status.exit_code == 0:
-                    self.transition_to(cluster_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+                    self.transition_to(job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
-                    stderr_line = None
-                    for entry in reversed(log_reader.read_all()):
-                        if entry.source == "stderr" and entry.data:
-                            stderr_line = entry.data
-                            break
+                    stderr_tail: list[str] = [
+                        entry.data for entry in log_reader.read_all() if entry.source == "stderr" and entry.data
+                    ]
+                    stderr_line = stderr_tail[-1] if stderr_tail else None
                     error = _format_exit_error(status.exit_code, status.oom_killed)
                     if stderr_line:
                         error = f"{error}. stderr: {stderr_line}"
                     if status.oom_killed:
                         self._append_log(source="error", data="Container was OOM killed by the kernel")
-                    self.transition_to(
-                        cluster_pb2.TASK_STATE_FAILED,
-                        error=error,
-                        exit_code=status.exit_code or -1,
-                    )
+                    # Promote known TPU bad-node signatures to WORKER_FAILED.
+                    tpu_pattern = detect_tpu_init_failure(stderr_tail[-_TPU_STDERR_TAIL_LINES:])
+                    if tpu_pattern is not None:
+                        logger.warning(
+                            "Task %s: TPU bad-node signature %r; promoting FAILED -> WORKER_FAILED",
+                            self.task_id,
+                            tpu_pattern,
+                        )
+                        self._append_log(
+                            source="error",
+                            data=f"iris: TPU bad-node signature detected ({tpu_pattern!r}); "
+                            "reporting as worker failure",
+                        )
+                        self.transition_to(
+                            job_pb2.TASK_STATE_WORKER_FAILED,
+                            error=f"TPU init failure ({tpu_pattern!r}): {error}",
+                            exit_code=status.exit_code or -1,
+                        )
+                    else:
+                        self.transition_to(
+                            job_pb2.TASK_STATE_FAILED,
+                            error=error,
+                            exit_code=status.exit_code or -1,
+                        )
                 break
 
             # Stream logs incrementally
@@ -867,7 +961,7 @@ class TaskAttempt:
                 stats = handle.stats()
                 if stats.available:
                     self.current_memory_mb = stats.memory_mb
-                    self.current_cpu_percent = stats.cpu_percent
+                    self.current_cpu_millicores = stats.cpu_millicores
                     self.process_count = stats.process_count
                     if stats.memory_mb > self.peak_memory_mb:
                         self.peak_memory_mb = stats.memory_mb
@@ -876,25 +970,67 @@ class TaskAttempt:
                 if now - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
                     self.disk_mb = handle.disk_usage_mb()
                     last_disk_check = now
+
+                if stats.available:
+                    self._emit_task_stat()
             except Exception:
                 logger.debug("Stats collection failed for task %s", self.task_id, exc_info=True)
 
             # Sleep before next poll
             time.sleep(self._poll_interval_seconds)
 
-    def _append_log(self, *, source: str, data: str) -> None:
-        """Append a single log entry to the log store, parsing the level prefix if present."""
+    def _make_log_entry(self, *, source: str, data: str) -> logging_pb2.LogEntry:
+        """Build a LogEntry proto from a source/data pair, parsing the level prefix."""
         level_name = parse_log_level(data)
-        level = str_to_log_level(level_name) if level_name else 0
+        level = str_to_log_level(level_name)
         entry = logging_pb2.LogEntry(source=source, data=data, level=level)
         entry.timestamp.epoch_ms = Timestamp.now().epoch_ms()
-        self._log_store.append(self._log_key, [entry])
+        return entry
+
+    def _emit_task_stat(self) -> None:
+        """Append one resource-usage row to the ``iris.task`` stats namespace.
+
+        Non-blocking: queues for the LogClient bg flush. Schema-validation
+        ``TypeError`` from the row encoder deliberately propagates.
+        """
+        table = self._task_stats_table
+        if table is None or not self._worker_id:
+            return
+        usage = job_pb2.ResourceUsage(
+            memory_mb=self.current_memory_mb,
+            memory_peak_mb=self.peak_memory_mb,
+            disk_mb=self.disk_mb,
+            cpu_millicores=self.current_cpu_millicores,
+            process_count=self.process_count,
+        )
+        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
+        stat = build_task_stat(
+            task_id=self.task_id.to_wire(),
+            attempt_id=self.attempt_id,
+            worker_id=self._worker_id,
+            ts=ts,
+            usage=usage,
+        )
+        table.write([stat])
+
+    def _push_logs(self, entries: list[logging_pb2.LogEntry]) -> None:
+        """Push a batch of log entries to the central LogService."""
+        if not self._log_client or not entries:
+            return
+        try:
+            self._log_client.write_batch(self._log_key, entries)
+        except Exception:
+            logger.debug("Failed to push %d logs for task %s", len(entries), self.task_id, exc_info=True)
+
+    def _append_log(self, *, source: str, data: str) -> None:
+        """Push a single log entry (for rare events like errors)."""
+        self._push_logs([self._make_log_entry(source=source, data=data)])
 
     def _stream_logs(self, reader: RuntimeLogReader) -> None:
-        """Fetch new logs from container and append to log store."""
+        """Fetch new logs from container and push as a batch."""
         try:
-            for log_line in reader.read():
-                self._append_log(source=log_line.source, data=log_line.data)
+            entries = [self._make_log_entry(source=line.source, data=line.data) for line in reader.read()]
+            self._push_logs(entries)
         except Exception:
             logger.debug("Log streaming failed for task %s", self.task_id, exc_info=True)
 
@@ -911,6 +1047,15 @@ class TaskAttempt:
         if self.cleanup_done:
             return
         self.cleanup_done = True
+
+        # Flush buffered log entries so they reach the server before the task
+        # is reported as complete. The client is shared across tasks so we
+        # flush rather than close.
+        if self._log_client is not None:
+            try:
+                self._log_client.flush()
+            except Exception as e:
+                logger.debug("Failed to flush logs for task %s: %s", self.task_id, e)
 
         # Clean up container handle (logs already captured in monitor loop)
         if self._container_handle:

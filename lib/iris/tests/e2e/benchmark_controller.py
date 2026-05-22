@@ -43,9 +43,9 @@ import psutil
 from iris.client.client import IrisClient, Job, ResourceSpec
 from iris.cluster.config import connect_cluster, load_config, make_local_config
 from iris.cluster.types import Entrypoint, EnvironmentSpec, get_tpu_topology, tpu_device
+from iris.rpc import config_pb2, controller_pb2, job_pb2
+from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.log_setup import configure_logging
-from iris.rpc import cluster_pb2, config_pb2
-from iris.rpc.cluster_connect import ControllerServiceClientSync
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ TEST_ROOT = Path(__file__).resolve().parent.parent.parent
 class TpuJobSpec:
     """ResourceSpec + replica count for a TPU job.
 
-    Mirrors fray v2's ResourceConfig.with_tpu() without depending on fray.
+    Mirrors fray's ResourceConfig.with_tpu() without depending on fray.
     Iris's ResourceSpec doesn't carry replicas (they're a submit-time concern),
     so we bundle them here.
     """
@@ -100,7 +100,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
     Args:
         num_slices: Total number of slices to create across all groups
     """
-    config = load_config(TEST_ROOT / "examples" / "test.yaml")
+    config = load_config(TEST_ROOT / "config" / "test.yaml")
     config.scale_groups.clear()
 
     # Distribute slices across size categories
@@ -125,7 +125,7 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg = config.scale_groups[sg_name]
         sg.name = sg_name
         sg.num_vms = num_vms
-        sg.min_slices = count
+        sg.buffer_slices = count
         sg.max_slices = count
         sg.resources.cpu_millicores = int(float(cpu) * 1000)
         sg.resources.memory_bytes = _parse_size(memory)
@@ -133,7 +133,8 @@ def _make_benchmark_config(num_slices: int) -> config_pb2.IrisClusterConfig:
         sg.resources.device_count = tpu_count
         sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.resources.device_variant = variant
-        sg.slice_template.preemptible = True
+        sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
+        sg.slice_template.capacity_type = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
         sg.slice_template.num_vms = num_vms
         sg.slice_template.accelerator_type = config_pb2.ACCELERATOR_TYPE_TPU
         sg.slice_template.accelerator_variant = variant
@@ -204,7 +205,7 @@ def _wait_for_workers(controller_client: ControllerServiceClientSync, min_worker
     """Wait for workers to register with the controller."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        request = cluster_pb2.Controller.ListWorkersRequest()
+        request = controller_pb2.Controller.ListWorkersRequest()
         response = controller_client.list_workers(request)
         healthy = [w for w in response.workers if w.healthy]
         if len(healthy) >= min_workers:
@@ -225,7 +226,7 @@ class JobResult:
 
 
 def _wait_for_job(job: Job, timeout: float) -> JobResult:
-    """Wait for a single job, streaming logs including children.
+    """Wait for a single job, streaming descendant logs.
 
     Designed to be called from a thread pool. Each thread independently waits
     on its job and streams logs back through the logger.
@@ -238,7 +239,7 @@ def _wait_for_job(job: Job, timeout: float) -> JobResult:
             raise_on_failure=False,
             stream_logs=True,
         )
-        state_name = cluster_pb2.JobState.Name(status.state)
+        state_name = job_pb2.JobState.Name(status.state)
         return JobResult(job=job, state_name=state_name, elapsed=time.monotonic() - start)
     except Exception as e:
         return JobResult(job=job, state_name="UNKNOWN", elapsed=time.monotonic() - start, error=e)
@@ -307,7 +308,7 @@ def run_benchmark(num_jobs: int, num_slices: int) -> BenchmarkMetrics:
             # Wait for schedulable jobs concurrently, streaming logs from each in its own thread.
             # Unschedulable ("bad") jobs are excluded since they'll never reach a terminal state
             # in a timely manner.
-            print(f"Waiting for {len(schedulable_jobs)} schedulable jobs (streaming logs with children)...")
+            print(f"Waiting for {len(schedulable_jobs)} schedulable jobs (streaming descendant logs)...")
             wait_start = time.monotonic()
             results = _wait_all_jobs_threaded(schedulable_jobs, timeout=600.0)
             time_to_complete = time.monotonic() - wait_start
@@ -359,18 +360,19 @@ def _make_single_worker_config() -> config_pb2.IrisClusterConfig:
     controller handles a burst of task creation, scheduling, log streaming, and
     completion RPCs from a single source — the scenario that triggered #3062.
     """
-    config = load_config(TEST_ROOT / "examples" / "test.yaml")
+    config = load_config(TEST_ROOT / "config" / "test.yaml")
     config.scale_groups.clear()
 
     sg = config.scale_groups["local-cpu"]
     sg.name = "local-cpu"
     sg.num_vms = 1
-    sg.min_slices = 1
+    sg.buffer_slices = 1
     sg.max_slices = 1
     sg.resources.cpu_millicores = 128 * 1000
     sg.resources.memory_bytes = 256 * 1024**3
     sg.resources.disk_bytes = 500 * 1024**3
     sg.resources.device_type = config_pb2.ACCELERATOR_TYPE_CPU
+    sg.resources.capacity_type = config_pb2.CAPACITY_TYPE_ON_DEMAND
     sg.slice_template.local.SetInParent()
 
     return make_local_config(config)
@@ -396,11 +398,11 @@ def _cpu_burn_task(seconds: float = 1.0):
 def run_single_worker_benchmark(num_jobs: int) -> BenchmarkMetrics:
     """Submit *num_jobs* to one worker as fast as possible, streaming logs.
 
-    Every job is waited on concurrently with ``stream_logs=True`` and
-    ``include_children=True``, mirroring how Marin's ferry driver monitors a
-    batch of download tasks.  The goal is to stress the controller's RPC
-    handling and task-dispatch path when a single worker is hit with many
-    concurrent requests.
+    Every job is waited on concurrently with ``stream_logs=True``, which
+    includes descendant job task logs by default. This mirrors how Marin's
+    ferry driver monitors a batch of download tasks. The goal is to stress
+    the controller's RPC handling and task-dispatch path when a single worker
+    is hit with many concurrent requests.
     """
     print("\n" + "=" * 70)
     print("Iris Controller Benchmark — single-worker burst")
@@ -679,7 +681,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
                     ep_name = f"{job.job_id}/worker-{t}"
                     endpoint_names.append(ep_name)
                     controller_client.register_endpoint(
-                        cluster_pb2.Controller.RegisterEndpointRequest(
+                        controller_pb2.Controller.RegisterEndpointRequest(
                             name=ep_name,
                             address=f"10.0.0.{t % 256}:{10000 + t}",
                             job_id=job.job_id.to_wire(),
@@ -702,7 +704,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 "ListEndpoints (exact)",
                 lambda: controller_client.list_endpoints(
-                    cluster_pb2.Controller.ListEndpointsRequest(prefix=sample_name, exact=True)
+                    controller_pb2.Controller.ListEndpointsRequest(prefix=sample_name, exact=True)
                 ),
                 iters,
             )
@@ -712,7 +714,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 f"ListEndpoints (prefix, ~{tasks_per_job} results)",
                 lambda: controller_client.list_endpoints(
-                    cluster_pb2.Controller.ListEndpointsRequest(prefix=sample_prefix)
+                    controller_pb2.Controller.ListEndpointsRequest(prefix=sample_prefix)
                 ),
                 iters,
             )
@@ -721,7 +723,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 f"GetJobStatus ({tasks_per_job} tasks)",
                 lambda: controller_client.get_job_status(
-                    cluster_pb2.Controller.GetJobStatusRequest(job_id=jobs[0].job_id.to_wire())
+                    controller_pb2.Controller.GetJobStatusRequest(job_id=jobs[0].job_id.to_wire())
                 ),
                 iters,
             )
@@ -730,7 +732,7 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             _time_rpc(
                 f"ListTasks (job filter, {tasks_per_job} tasks)",
                 lambda: controller_client.list_tasks(
-                    cluster_pb2.Controller.ListTasksRequest(job_id=jobs[0].job_id.to_wire())
+                    controller_pb2.Controller.ListTasksRequest(job_id=jobs[0].job_id.to_wire())
                 ),
                 iters,
             )
@@ -738,14 +740,14 @@ def run_rpc_stress_benchmark(num_jobs: int, tasks_per_job: int) -> None:
             # ListTasks unfiltered (all tasks)
             _time_rpc(
                 f"ListTasks (all, {total_tasks} tasks)",
-                lambda: controller_client.list_tasks(cluster_pb2.Controller.ListTasksRequest()),
+                lambda: controller_client.list_tasks(controller_pb2.Controller.ListTasksRequest()),
                 iters,
             )
 
             # ListWorkers
             _time_rpc(
                 "ListWorkers",
-                lambda: controller_client.list_workers(cluster_pb2.Controller.ListWorkersRequest()),
+                lambda: controller_client.list_workers(controller_pb2.Controller.ListWorkersRequest()),
                 iters,
             )
 

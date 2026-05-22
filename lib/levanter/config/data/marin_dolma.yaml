@@ -3,7 +3,10 @@ cache_dir: null
 cache_options:
   batch_size: 128
   target_size_per_flush: 512MB
-shuffle: true
+shuffle:
+  io_block_size: 256
+  window_blocks: 512
+  perm_type: feistel
 stop_strategy: restart
 train_weights:
   dolma/algebraic-stack: 12.6

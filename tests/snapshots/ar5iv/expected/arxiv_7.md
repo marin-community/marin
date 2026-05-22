@@ -38,7 +38,8 @@ For an isotropic spin space, the magnetic scattering cross-section for neutrons 
 
 $${\\cal S}({\\bf q},\\omega)=\\int\_{-\\infty}^{\\infty}{\\rm d}t\\\,e^{i\\omega t}\\sum\_{\\bf RR^{\\prime}}e^{-i{\\bf q}\\cdot({\\bf R}-{\\bf R^{\\prime}})}\\left\\\<\\hat{\\bf S}\_{\\bf R}(t)\\cdot\\hat{\\bf S}\_{{\\bf R^{\\prime}}}(0)\\right\\\>.$$  
 
-(3)   
+(3)
+
 To make a connection to the SO(5) calculations we make the semiclassical approximation $\\big{\\\<}\\hat{\\bf S}\_{\\bf R}(t)\\cdot\\hat{\\bf S}\_{{\\bf R}^{\\prime}}(0)\\big{\\\>}\\approx\\big{\\\<}\\hat{\\bf S}\_{\\bf R}(t)\\big{\\\>}\\cdot\\big{\\\<}\\hat{\\bf S}\_{{\\bf R}^{\\prime}}(0)\\big{\\\>}$ so that
 
 $\\displaystyle{\\cal S}({\\bf q},\\omega)$ $\\displaystyle\\approx$ $\\displaystyle\\int\_{-\\infty}^{\\infty}{\\rm d}t\\\,e^{i\\omega t}\\sum\_{{\\bf R},{\\bf R}^{\\prime}}e^{-i\\left({\\bf q}+{\\bf Q}\\right)\\cdot({\\bf R}-{\\bf R}^{\\prime})}$ (4)   

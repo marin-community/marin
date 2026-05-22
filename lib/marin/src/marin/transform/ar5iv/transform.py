@@ -4,21 +4,19 @@
 """
 Transform ar5iv HTML to markdown in two stages: clean_html and markdownify.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=600 --memory=512MB \
-    lib/marin/src/marin/transform/ar5iv/transform.py \
-    --input_path gs://bucket/ar5iv/ \
-    --output_path gs://bucket/ar5iv-processed/ \
-    --file_size 256
 """
 
 import datetime
+import logging
 from dataclasses import dataclass
+from html import escape, unescape
 
 import draccus
 from bs4 import BeautifulSoup
 from marin import markdown
 from zephyr import Dataset, ZephyrContext, load_jsonl
+
+logger = logging.getLogger(__name__)
 
 
 def transform_abstract(html: BeautifulSoup):
@@ -107,8 +105,6 @@ def unwrap_eqn(page: BeautifulSoup) -> BeautifulSoup:
     Extract alttext from math element and convert to LaTeX format.
     Returns BeautifulSoup object with the formatted equation.
     """
-    from html import escape, unescape
-
     math_elements = page.find_all("math")
 
     for math_elem in math_elements:
@@ -233,10 +229,9 @@ def markdownify_ar5iv_record(html_blob: dict) -> dict:
     content = BeautifulSoup(html_blob["text"], "html.parser")
     try:
         content = markdown.MyMarkdownConverter().convert_soup(content)
-    except Exception as e:
-        print(f"Error converting to markdown: {e}")
-        print("content: ", content)
-        raise e
+    except Exception:
+        logger.exception("Error converting to markdown; content was: %s", content)
+        raise
     # cleanup: replace nbsp as space
     # this isn't quite right if we preserve html in places, but we currently are not doing that
     content = content.replace("\xa0", " ").strip()
@@ -265,7 +260,7 @@ def main(cfg: Config) -> None:
     """Convert ar5iv HTML to markdown in two stages."""
     ctx = ZephyrContext(name="transform-ar5iv")
     # Stage 1: Clean HTML
-    print("Stage 1: Cleaning HTML...")
+    logger.info("Stage 1: Cleaning HTML...")
     clean_pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
@@ -275,7 +270,7 @@ def main(cfg: Config) -> None:
     ctx.execute(clean_pipeline)
 
     # Stage 2: Convert to Markdown
-    print("Stage 2: Converting to markdown...")
+    logger.info("Stage 2: Converting to markdown...")
     markdown_pipeline = (
         Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
         .flat_map(load_jsonl)
@@ -284,4 +279,4 @@ def main(cfg: Config) -> None:
     )
     ctx.execute(markdown_pipeline)
 
-    print("Transformation complete!")
+    logger.info("Transformation complete!")

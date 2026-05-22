@@ -1,0 +1,173 @@
+name: "Dupekit - Release Wheels"
+
+# Triggers mirror marin-release-libs-wheels.yaml: schedule for nightlies, tag
+# push for stables, workflow_dispatch for manual cuts, pull_request for build
+# smoke. There is intentionally no `push: branches: [main]` trigger - that is
+# what previously caused the auto-pin chore PR to recursively re-trigger this
+# workflow on every merge.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build mode"
+        type: choice
+        options: [nightly, stable, manual]
+        default: manual
+      version:
+        description: "Version (required for stable mode, e.g. 0.1.7)"
+        type: string
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily nightly
+  push:
+    tags:
+      - "dupekit-v*"
+  pull_request:
+    paths:
+      - "rust/dupekit/**"
+      - ".github/workflows/dupekit-release-wheels.yaml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false  # don't kill an in-flight publish
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.pick.outputs.mode }}
+      version: ${{ steps.resolved.outputs.version }}
+      skip: ${{ steps.stale.outputs.skip || 'false' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Need recent history (~last day) for the stale-nightly check below.
+          # 50 commits is far more than a typical day's churn but cheap to
+          # fetch; falls back gracefully on quieter days.
+          fetch-depth: 50
+
+      # Skip the nightly when the package hasn't changed in the last day.
+      # Only applies to scheduled runs - manual dispatch and tag pushes always
+      # build, since the human triggering them has a reason to.
+      - id: stale
+        if: github.event_name == 'schedule'
+        run: |
+          set -euo pipefail
+          # 25h not 24h: small buffer so a cron that drifts a few minutes late
+          # still sees yesterday's commits.
+          changes=$(git log --since='25 hours ago' --format=%H -- rust/dupekit/ .github/workflows/dupekit-release-wheels.yaml)
+          if [[ -z "$changes" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::no dupekit changes in the last 25h, skipping nightly"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "dupekit changes since yesterday:"
+            echo "$changes"
+          fi
+
+      # Hoist user-supplied inputs into env so they reach the shell as
+      # variables, not as `${{ ... }}` template substitutions. Per GitHub's
+      # actions hardening guide, free-form inputs interpolated into a shell
+      # script are an injection vector even when the trigger requires write
+      # access.
+      - id: pick
+        if: steps.stale.outputs.skip != 'true'
+        env:
+          INPUT_MODE: ${{ github.event.inputs.mode }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/dupekit-v* ]]; then
+            echo "mode=stable" >> "$GITHUB_OUTPUT"
+            echo "input_version=${GITHUB_REF_NAME#dupekit-v}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            echo "mode=nightly" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "mode=${INPUT_MODE}" >> "$GITHUB_OUTPUT"
+            echo "input_version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+            echo "input_version=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Resolve the version exactly once for the whole workflow run. Matrix
+      # legs and the publish job all consume this output, so wheels and the
+      # sdist agree on a single value.
+      - id: resolved
+        if: steps.stale.outputs.skip != 'true'
+        env:
+          MODE: ${{ steps.pick.outputs.mode }}
+          INPUT_VERSION: ${{ steps.pick.outputs.input_version }}
+        run: |
+          python rust/dupekit/build_package.py \
+            --mode "$MODE" \
+            --version "$INPUT_VERSION" \
+            --resolve-only
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+          - os: macos-14
+            target: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build wheels
+        run: |
+          python rust/dupekit/build_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --build "${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*
+
+  publish:
+    # Manual mode produces local-version identifiers (`X.Y.Z+<sha>`) which PyPI
+    # rejects, so it's a build-only smoke regardless of how it was triggered.
+    # Stale nightly skip is propagated from the resolve job.
+    if: |
+      github.event_name != 'pull_request'
+      && needs.resolve.outputs.mode != 'manual'
+      && needs.resolve.outputs.skip != 'true'
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      id-token: write   # for trusted publishing
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Build sdist into the same dist/ directory the wheels were downloaded
+      # into so gh-action-pypi-publish uploads everything as one release.
+      - name: Build sdist
+        run: |
+          python rust/dupekit/build_package.py \
+            --mode "${{ needs.resolve.outputs.mode }}" \
+            --version "${{ needs.resolve.outputs.version }}" \
+            --build sdist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          packages-dir: dist/

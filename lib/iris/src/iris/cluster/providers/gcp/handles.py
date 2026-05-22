@@ -16,8 +16,17 @@ import re
 import threading
 from dataclasses import dataclass
 
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.providers._worker_base import RemoteExecWorkerBase
 from iris.cluster.providers.gcp.service import GcpService
 from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account, ssh_key_file, uses_os_login
+from iris.cluster.providers.remote_exec import (
+    DirectSshRemoteExec,
+    GceRemoteExec,
+    GcloudRemoteExec,
+    resolve_current_os_login_user,
+)
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -27,20 +36,14 @@ from iris.cluster.providers.types import (
     WorkerStatus,
 )
 from iris.cluster.types import get_tpu_topology
-from iris.cluster.providers._worker_base import RemoteExecWorkerBase
-from iris.cluster.providers.remote_exec import (
-    DirectSshRemoteExec,
-    GceRemoteExec,
-    GcloudRemoteExec,
-    resolve_current_os_login_user,
-)
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
-# GCP TPU state mapping
+# GCP TPU state mapping. States not in this map collapse to UNKNOWN; the boot
+# reconciler treats anything outside the alive set (CREATING/READY/REPAIRING)
+# as a candidate for reclaim.
 _TPU_STATE_MAP: dict[str, CloudSliceState] = {
     "CREATING": CloudSliceState.CREATING,
     "READY": CloudSliceState.READY,
@@ -57,6 +60,19 @@ _VM_STATE_MAP: dict[str, CloudSliceState] = {
 }
 
 _ACTIVE_VM_SLICE_STATES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
+
+# Queued-resource (reserved TPU) state mapping. Non-live states must surface so
+# the boot reconciler can reclaim them; ACTIVE is transient (the matching TPU
+# VM is what list_all_slices normally returns) and only appears here briefly.
+_QR_STATE_MAP: dict[str, CloudSliceState] = {
+    "QUEUED": CloudSliceState.CREATING,
+    "WAITING_FOR_RESOURCES": CloudSliceState.CREATING,
+    "PROVISIONING": CloudSliceState.CREATING,
+    "ACTIVE": CloudSliceState.READY,
+    "FAILED": CloudSliceState.FAILED,
+    "SUSPENDED": CloudSliceState.FAILED,
+    "DELETING": CloudSliceState.DELETING,
+}
 _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
@@ -65,15 +81,12 @@ _GCE_VM_SLICE_SSH_USER = "iris"
 
 def _os_login_user(
     ssh_config: config_pb2.SshConfig | None,
-    service_account: str | None = None,
 ) -> str:
     if ssh_config and ssh_config.os_login_user:
         return ssh_config.os_login_user
     if ssh_config and ssh_config.user and ssh_config.user != "root":
         return ssh_config.user
-    return resolve_current_os_login_user(
-        impersonate_service_account=ssh_impersonate_service_account(ssh_config, service_account)
-    )
+    return resolve_current_os_login_user(impersonate_service_account=ssh_impersonate_service_account(ssh_config))
 
 
 def _vm_slice_metadata_user(ssh_config: config_pb2.SshConfig | None) -> str:
@@ -182,10 +195,10 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         logger.info("Rebooting GCE instance: %s", self._gce_vm_name)
         self._gcp_service.vm_reset(self._gce_vm_name, self._zone)
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         assert self._gcp_service is not None
         logger.info("Deleting GCE instance: %s", self._gce_vm_name)
-        self._gcp_service.vm_delete(self._gce_vm_name, self._zone)
+        self._gcp_service.vm_delete(self._gce_vm_name, self._zone, wait=wait)
 
     def set_labels(self, labels: dict[str, str]) -> None:
         assert self._gcp_service is not None
@@ -202,6 +215,14 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
             self._gcp_service.vm_set_metadata(self._gce_vm_name, self._zone, metadata)
         except InfraError as e:
             logger.warning("Failed to set metadata on %s: %s", self._gce_vm_name, e)
+
+    def bootstrap(self, script: str) -> None:
+        # Persist the script as the instance's startup-script before executing it
+        # over SSH, so a future GCE-initiated reboot (host maintenance, manual
+        # reset) re-runs *this* script — not the original baked in at VM creation,
+        # which would pin the controller to the day-one image.
+        self.set_metadata({"startup-script": script})
+        super().bootstrap(script)
 
 
 class GcpSliceHandle:
@@ -220,12 +241,13 @@ class GcpSliceHandle:
         _labels: dict[str, str],
         _created_at: Timestamp,
         _label_prefix: str,
+        _worker_port: int,
         _accelerator_variant: str,
         _gcp_service: GcpService,
         _ssh_config: config_pb2.SshConfig | None = None,
         _service_account: str | None = None,
-        _state: str = "READY",
         _bootstrapping: bool = False,
+        _is_queued_resource: bool = False,
     ):
         self._slice_id = _slice_id
         self._zone = _zone
@@ -234,11 +256,12 @@ class GcpSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._worker_port = _worker_port
         self._iris_labels = Labels(_label_prefix)
         self._accelerator_variant = _accelerator_variant
         self._ssh_config = _ssh_config
         self._service_account = _service_account
-        self._state = _state
+        self.is_queued_resource: bool = _is_queued_resource
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
 
@@ -288,6 +311,8 @@ class GcpSliceHandle:
         """Query raw TPU state and VM endpoints via GcpService."""
         tpu_info = self._gcp_service.tpu_describe(self._slice_id, self._zone)
         if tpu_info is None:
+            if self.is_queued_resource:
+                return self._describe_queued_resource()
             logger.warning("Failed to describe TPU %s", self._slice_id)
             return SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0)
 
@@ -319,8 +344,11 @@ class GcpSliceHandle:
                 direct_host = external_ip or internal_ip
                 remote_exec = DirectSshRemoteExec(
                     host=direct_host,
-                    user=_os_login_user(self._ssh_config, self._service_account),
-                    key_file=ssh_key_file(self._ssh_config),
+                    user=_os_login_user(self._ssh_config),
+                    key_file=ssh_key_file(
+                        self._ssh_config,
+                        ssh_impersonate_service_account(self._ssh_config),
+                    ),
                     connect_timeout=(
                         duration_from_proto(self._ssh_config.connect_timeout)
                         if self._ssh_config and self._ssh_config.HasField("connect_timeout")
@@ -334,17 +362,18 @@ class GcpSliceHandle:
                     vm_id=self._slice_id,
                     worker_index=i,
                     ssh_user=_vm_slice_metadata_user(self._ssh_config),
-                    ssh_key_file=ssh_key_file(self._ssh_config),
-                    impersonate_service_account=ssh_impersonate_service_account(
+                    ssh_key_file=ssh_key_file(
                         self._ssh_config,
-                        self._service_account,
+                        ssh_impersonate_service_account(self._ssh_config),
                     ),
+                    impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
                     _address=internal_ip,
                 )
             workers.append(
                 GcpWorkerHandle(
                     _vm_id=f"{self._slice_id}-worker-{i}",
                     _internal_address=internal_ip,
+                    _port=self._worker_port,
                     _external_address=external_ip,
                     _remote_exec=remote_exec,
                 )
@@ -352,9 +381,28 @@ class GcpSliceHandle:
 
         return SliceStatus(state=state, worker_count=worker_count, workers=workers)
 
-    def terminate(self) -> None:
-        logger.info("Terminating TPU (async): %s", self._slice_id)
-        self._gcp_service.tpu_delete(self._slice_id, self._zone)
+    def _describe_queued_resource(self) -> SliceStatus:
+        """Query queued resource state when the TPU VM doesn't exist yet."""
+        qr = self._gcp_service.queued_resource_describe(self._slice_id, self._zone)
+        if qr is None:
+            return SliceStatus(state=CloudSliceState.UNKNOWN, worker_count=0)
+        if qr.state in ("FAILED", "SUSPENDED"):
+            return SliceStatus(state=CloudSliceState.FAILED, worker_count=0)
+        # QUEUED, PROVISIONING, WAITING_FOR_RESOURCES → still creating
+        return SliceStatus(state=CloudSliceState.CREATING, worker_count=0)
+
+    def terminate(self, *, wait: bool = False) -> None:
+        if self.is_queued_resource:
+            logger.info("Terminating queued resource (force): %s", self._slice_id)
+            self._gcp_service.queued_resource_delete(self._slice_id, self._zone)
+        else:
+            logger.info("Terminating TPU (async): %s", self._slice_id)
+            self._gcp_service.tpu_delete(self._slice_id, self._zone)
+
+    def cleanup_bootstrap_failure(self) -> None:
+        """Clean up provider state after bootstrap fails."""
+        if self.is_queued_resource:
+            self.terminate()
 
 
 class GcpVmSliceHandle:
@@ -370,6 +418,7 @@ class GcpVmSliceHandle:
         _labels: dict[str, str],
         _created_at: Timestamp,
         _label_prefix: str,
+        _worker_port: int,
         _gcp_service: GcpService,
         _ssh_config: config_pb2.SshConfig | None = None,
         _service_account: str | None = None,
@@ -383,6 +432,7 @@ class GcpVmSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._worker_port = _worker_port
         self._iris_labels = Labels(_label_prefix)
         self._ssh_config = _ssh_config
         self._service_account = _service_account
@@ -441,15 +491,16 @@ class GcpVmSliceHandle:
             zone=self._zone,
             vm_name=self._vm_name,
             ssh_user=None if uses_os_login(self._ssh_config) else _vm_slice_metadata_user(self._ssh_config),
-            ssh_key_file=ssh_key_file(self._ssh_config),
-            impersonate_service_account=ssh_impersonate_service_account(
+            ssh_key_file=ssh_key_file(
                 self._ssh_config,
-                self._service_account,
+                ssh_impersonate_service_account(self._ssh_config),
             ),
+            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
         )
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",
             _internal_address=vm_info.internal_ip,
+            _port=self._worker_port,
             _external_address=vm_info.external_ip,
             _gce_vm_name=self._vm_name,
             _zone=self._zone,
@@ -460,6 +511,9 @@ class GcpVmSliceHandle:
         )
         return SliceStatus(state=state, worker_count=1, workers=[worker])
 
-    def terminate(self) -> None:
+    def terminate(self, *, wait: bool = False) -> None:
         logger.info("Terminating VM slice: %s (vm=%s)", self._slice_id, self._vm_name)
-        self._gcp_service.vm_delete(self._vm_name, self._zone)
+        self._gcp_service.vm_delete(self._vm_name, self._zone, wait=wait)
+
+    def cleanup_bootstrap_failure(self) -> None:
+        """Clean up provider state after bootstrap fails."""

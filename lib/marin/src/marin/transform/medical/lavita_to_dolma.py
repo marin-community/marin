@@ -6,21 +6,17 @@
 Note: It may not be a good idea to use lavita's allprocessed subset since it is contaminated
 with MMLU. We need to run it through a decontamination pipeline.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
-    lib/marin/src/marin/transform/medical/lavita_to_dolma.py \
-    --input_path gs://marin-us-central2/raw/medical/lavita-medical-qa-datasets/ \
-    --output_path gs://marin-data/processed/medical/lavita-v1.0/ \
-    --subset pubmed-qa \
-    --split train
 """
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass
 
 import draccus
 from zephyr import Dataset, ZephyrContext, load_parquet
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,8 +54,8 @@ def lavita_pubmedqa_to_dolma(row):
             ),
             "source": "lavita/medical-qa-datasets/pubmed-qa",
         }
-    except Exception as e:
-        print(e)
+    except Exception:
+        logger.exception("Failed to transform pubmed-qa record")
         return None
 
 
@@ -70,8 +66,8 @@ def lavita_allprocessed_to_dolma(row):
             "text": row["instruction"] + "\n\n" + "Context: \n" + row["input"] + "\n\n" + "Answer: \n" + row["output"],
             "source": "lavita/medical-qa-datasets/all-processed",
         }
-    except Exception as e:
-        print(e)
+    except Exception:
+        logger.exception("Failed to transform all-processed record")
         return None
 
 
@@ -80,10 +76,7 @@ def lavita_medmcqa_to_dolma(row):
         answer_list = ["a", "b", "c", "d"]
         answer_str = answer_list[int(row["cop"])]
 
-        if row["exp"] is None:
-            explanation = ""
-        else:
-            explanation = row["exp"]
+        explanation = row["exp"] if row["exp"] is not None else ""
 
         return {
             "id": row["id"],
@@ -104,9 +97,8 @@ def lavita_medmcqa_to_dolma(row):
             ),
             "source": "lavita/medical-qa-datasets/medmcqa",
         }
-    except Exception as e:
-        print(e)
-        print(row)
+    except Exception:
+        logger.exception("Failed to transform medmcqa record: %r", row)
         return None
 
 
@@ -147,7 +139,7 @@ def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
         .write_parquet(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
     ctx = ZephyrContext(name="lavita-to-dolma")
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 if __name__ == "__main__":

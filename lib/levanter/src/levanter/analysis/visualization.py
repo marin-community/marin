@@ -8,6 +8,7 @@ from functools import partial
 from typing import Any, List, Optional
 
 import jax
+import wandb
 from rigging.filesystem import open_url
 import jax.numpy as jnp
 import numpy as np
@@ -15,7 +16,7 @@ from jax.experimental import multihost_utils
 
 from levanter.callbacks import StepInfo
 from levanter.data import DataLoader
-from levanter.utils.hf_utils import HfTokenizer
+from levanter.tokenizers import MarinTokenizer
 
 
 def visualize_log_probs(
@@ -80,6 +81,13 @@ def _escape(s: str) -> str:
     return out
 
 
+def _split_logprobs_argmaxes(out):
+    """Normalize log_prob_fn output to (log_probs, argmaxes-or-None)."""
+    if isinstance(out, tuple):
+        return out[0], out[1]
+    return out, None
+
+
 def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, test_data, max_docs=128):
     """
     Compute and visualize log probabilities for a given model and dataset.
@@ -94,18 +102,14 @@ def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, te
     Returns:
 
     """
-    log_probs = []
-    targets = []
+    log_probs: list = []
+    targets: list = []
     argmaxes: list = []
     for batch in test_data:
-        out = log_prob_fn(model, batch)
-        if len(out) == 2:
-            b_logprobs, b_argmaxes = out
-            log_probs.append(b_logprobs)
+        b_logprobs, b_argmaxes = _split_logprobs_argmaxes(log_prob_fn(model, batch))
+        log_probs.append(b_logprobs)
+        if b_argmaxes is not None:
             argmaxes.append(b_argmaxes)
-        else:
-            b_logprobs = out
-            log_probs.append(b_logprobs)
 
         targets.append(batch)
 
@@ -114,10 +118,7 @@ def compute_and_visualize_log_probs(path: str, model, tokenizer, log_prob_fn, te
             break
     log_probs = _concatenate(log_probs)
     targets = _concatenate([t.tokens.array for t in targets])
-    if argmaxes:
-        argmaxes_array = _concatenate(argmaxes)
-    else:
-        argmaxes_array = None
+    argmaxes_array = _concatenate(argmaxes) if argmaxes else None
     # gather the log probs and targets
     # TODO: is this still necessary?
     (targets, log_probs, argmaxes_array) = multihost_utils.process_allgather(
@@ -262,29 +263,19 @@ def compute_and_diff_log_probs(path: str, model, comparison_model, tokenizer, lo
         max_docs: Maximum number of documents to visualize.
     """
 
-    log_probs_a = []
-    log_probs_b = []
-    targets = []
+    log_probs_a: list = []
+    log_probs_b: list = []
+    targets: list = []
     for batch in test_data:
         targets.append(batch)
 
-        out = log_prob_fn(model, batch)
-        if len(out) == 2:
-            b_logprobs, b_argmaxes = out
-            log_probs_a.append(b_logprobs)
-        else:
-            b_logprobs = out
-            log_probs_a.append(b_logprobs)
+        b_logprobs_a, _ = _split_logprobs_argmaxes(log_prob_fn(model, batch))
+        log_probs_a.append(b_logprobs_a)
 
-        compare_out = log_prob_fn(comparison_model, batch)
-        if len(compare_out) == 2:
-            b_logprobs, b_argmaxes = compare_out
-            log_probs_b.append(b_logprobs)
-        else:
-            b_logprobs = compare_out
-            log_probs_b.append(b_logprobs)
+        b_logprobs_b, _ = _split_logprobs_argmaxes(log_prob_fn(comparison_model, batch))
+        log_probs_b.append(b_logprobs_b)
 
-        if len(targets) * b_logprobs.shape[0] >= max_docs:
+        if len(targets) * b_logprobs_b.shape[0] >= max_docs:
             break
 
     log_probs_a = _concatenate(log_probs_a)
@@ -304,17 +295,12 @@ def _concatenate(x):
     return jnp.concatenate(x)
 
 
-def _decode_tokens_pretty(tok, ids):
-    # we want to make sure we don't have any weird characters in the output
-    # so we'll decode the tokens and then escape them
-    if hasattr(tok, "convert_ids_to_tokens"):
-        return [str(t) for t in tok.convert_ids_to_tokens(ids)]
-    else:
-        return [str(t) for t in tok.decode(ids)]
+def _decode_tokens_pretty(tok: MarinTokenizer, ids):
+    return [str(t) for t in tok.convert_ids_to_tokens(list(ids))]
 
 
 def cb_compute_and_visualize_log_probs(
-    test_data: DataLoader, tokenizer: HfTokenizer, log_prob_fn, html_dir: str, max_docs=128
+    test_data: DataLoader, tokenizer: MarinTokenizer, log_prob_fn, html_dir: str, max_docs=128
 ):
     """
         Computes log probabilities for a dataset and visualizes them using visdom.
@@ -337,8 +323,6 @@ def cb_compute_and_visualize_log_probs(
 
         compute_and_visualize_log_probs(path, model, tokenizer, log_prob_fn, test_data, max_docs=max_docs)
         # TODO: convert to generic logging
-        import wandb
-
         wandb.log({"log_probs": wandb.Html(path)}, step=step.step)
 
     return compute_and_viz_log_probs

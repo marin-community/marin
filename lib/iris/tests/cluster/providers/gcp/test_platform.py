@@ -15,17 +15,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-
 from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
-from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
     _run_vm_slice_bootstrap,
     _validate_slice_config,
 )
 from iris.cluster.providers.manual.provider import ManualControllerProvider, ManualWorkerProvider
+from iris.cluster.providers.remote_exec import DirectSshRemoteExec, GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.types import (
     CloudSliceState,
     InfraError,
@@ -96,11 +95,12 @@ def platform_env(request) -> Iterator[PlatformEnv]:
     if name == "gcp":
         gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
         gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-        platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+        platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
         yield PlatformEnv(platform=platform, zone="us-central2-b", name="gcp", label_prefix="iris")
     else:
         platform = ManualWorkerProvider(
             label_prefix="iris",
+            worker_port=10001,
             hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"],
         )
         yield PlatformEnv(platform=platform, zone="manual", name="manual", label_prefix="iris")
@@ -177,7 +177,7 @@ def test_shutdown_completes_without_error(platform_env: PlatformEnv):
 
 def test_terminate_then_status_is_deleting():
     """After terminate(), slice status reports DELETING."""
-    platform = ManualWorkerProvider(label_prefix="iris", hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3"])
+    platform = ManualWorkerProvider(label_prefix="iris", worker_port=10001, hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3"])
     cfg = config_pb2.SliceConfig(name_prefix="iris-term-group", num_vms=2)
     cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
     cfg.labels[Labels("iris").iris_managed] = "true"
@@ -190,7 +190,7 @@ def test_terminate_then_status_is_deleting():
 
 def test_tunnel_returns_address_directly():
     """tunnel() is a passthrough on ManualControllerProvider (no SSH)."""
-    worker_provider = ManualWorkerProvider(label_prefix="iris", hosts=["10.0.0.1"])
+    worker_provider = ManualWorkerProvider(label_prefix="iris", worker_port=10001, hosts=["10.0.0.1"])
     controller = ManualControllerProvider(worker_provider=worker_provider)
     addr = "http://10.0.0.1:10000"
     with controller.tunnel(addr) as tunneled:
@@ -205,7 +205,9 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
         key_file="/tmp/iris-oslogin",
         impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
     )
-    worker_provider = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    worker_provider = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
     controller = GcpControllerProvider(
         worker_provider=worker_provider,
         controller_service_account="iris-worker@test-project.iam.gserviceaccount.com",
@@ -290,7 +292,7 @@ def test_gcp_quota_error_raises_quota_exhausted():
     gcp_service.inject_failure("tpu_create", QuotaExhaustedError("RESOURCE_EXHAUSTED: no capacity"))
 
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu-group",
@@ -327,18 +329,18 @@ def test_gcp_validate_vm_slice_config_requires_machine_type():
         _validate_slice_config(cfg)
 
 
-def test_gcp_validate_vm_slice_config_rejects_preemptible():
-    """VM slice mode rejects preemptible instances."""
+def test_gcp_validate_vm_slice_config_rejects_non_on_demand():
+    """VM slice mode rejects non-on-demand capacity types."""
     cfg = config_pb2.SliceConfig(
         name_prefix="test",
         num_vms=1,
-        preemptible=True,
+        capacity_type=config_pb2.CAPACITY_TYPE_PREEMPTIBLE,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
     cfg.gcp.machine_type = "n2-standard-4"
 
-    with pytest.raises(ValueError, match="does not support preemptible"):
+    with pytest.raises(ValueError, match="only supports capacity_type on-demand"):
         _validate_slice_config(cfg)
 
 
@@ -360,12 +362,13 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
     """VM slice mode creates a single-worker slice that is discoverable and terminable."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -381,11 +384,11 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
     assert handle.scale_group == "cpu-vm"
 
     listed = platform.list_all_slices()
-    assert handle.slice_id in {s.slice_id for s in listed}
+    assert handle.slice_id in {s.handle.slice_id for s in listed}
 
     handle.terminate()
     listed_after = platform.list_all_slices()
-    assert handle.slice_id not in {s.slice_id for s in listed_after}
+    assert handle.slice_id not in {s.handle.slice_id for s in listed_after}
 
 
 def test_gcp_build_gce_resource_name_bounds_and_normalizes():
@@ -402,12 +405,13 @@ def test_gcp_build_gce_resource_name_bounds_and_normalizes():
 def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="smoke-cpu_vm_e2_standard_4_ondemand-europe-west4-b",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -422,7 +426,7 @@ def test_gcp_create_vm_slice_mode_with_long_prefix_uses_valid_slice_id():
     assert len(status.workers) == 1
     assert status.workers[0]._remote_exec.ssh_user == "iris"
     listed = platform.list_all_slices()
-    assert handle.slice_id in {s.slice_id for s in listed}
+    assert handle.slice_id in {s.handle.slice_id for s in listed}
 
 
 def test_gcp_vm_slice_os_login_sets_metadata_and_uses_gcloud_default_user():
@@ -432,12 +436,15 @@ def test_gcp_vm_slice_os_login_sets_metadata_and_uses_gcloud_default_user():
         auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
         key_file="/tmp/iris-oslogin",
     )
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    platform = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -461,12 +468,15 @@ def test_gcp_vm_slice_os_login_uses_service_account_impersonation():
         auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
         key_file="/tmp/iris-oslogin",
     )
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    platform = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -475,7 +485,7 @@ def test_gcp_vm_slice_os_login_uses_service_account_impersonation():
 
     handle = platform.create_slice(cfg)
     status = handle.describe()
-    assert status.workers[0]._remote_exec.impersonate_service_account == cfg.gcp.service_account
+    assert status.workers[0]._remote_exec.impersonate_service_account is None
 
 
 def test_gcp_vm_slice_os_login_prefers_explicit_ssh_impersonation_account():
@@ -486,12 +496,15 @@ def test_gcp_vm_slice_os_login_prefers_explicit_ssh_impersonation_account():
         key_file="/tmp/iris-oslogin",
         impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
     )
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    platform = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -508,7 +521,7 @@ def test_gcp_empty_accelerator_variant_rejected():
     """create_slice with empty accelerator_variant raises ValueError."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu-group",
@@ -525,7 +538,7 @@ def test_gcp_create_vm_validates_config():
     """create_vm with empty zone raises ValueError."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.VmConfig(name="test-vm")
 
@@ -537,7 +550,7 @@ def test_gcp_list_slices_skips_deleting_tpus():
     """list_slices omits TPUs in DELETING state."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
@@ -565,7 +578,7 @@ def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
     """create_slice rewrites GHCR images in worker_config via resolve_image."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="my-proj")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="my-proj")
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
@@ -588,16 +601,18 @@ def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
     assert wc.docker_image == "europe-docker.pkg.dev/my-proj/ghcr-mirror/marin-community/iris-worker:latest"
 
 
-def test_gcp_list_slices_skips_inactive_vm_instances():
-    """list_slices omits VM-backed slices for instances in inactive states."""
+def test_gcp_list_all_slices_includes_terminated_vm_instances():
+    """list_all_slices surfaces VM-backed slices in non-live states so the boot
+    reconciler can reclaim them. list_slices (live discovery) still filters."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -612,19 +627,25 @@ def test_gcp_list_slices_skips_inactive_vm_instances():
             break
 
     listed = platform.list_all_slices()
-    assert handle.slice_id not in {s.slice_id for s in listed}
+    by_id = {s.handle.slice_id: s for s in listed}
+    assert handle.slice_id in by_id
+    assert by_id[handle.slice_id].state == CloudSliceState.DELETING
+
+    live = platform.list_slices(zones=["us-central2-b"])
+    assert handle.slice_id not in {s.slice_id for s in live}
 
 
 def test_gcp_list_slices_preserves_vm_slice_discovery():
     """VM-backed slices are discoverable via list_all_slices after creation."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-cpu-vm",
         num_vms=1,
         accelerator_type=config_pb2.ACCELERATOR_TYPE_CPU,
+        capacity_type=config_pb2.CAPACITY_TYPE_ON_DEMAND,
     )
     cfg.gcp.zone = "us-central2-b"
     cfg.gcp.mode = config_pb2.GcpSliceConfig.GCP_SLICE_MODE_VM
@@ -634,7 +655,7 @@ def test_gcp_list_slices_preserves_vm_slice_discovery():
 
     handle = platform.create_slice(cfg)
     listed = platform.list_all_slices()
-    listed_by_id = {s.slice_id: s for s in listed}
+    listed_by_id = {s.handle.slice_id: s.handle for s in listed}
     assert handle.slice_id in listed_by_id
     assert listed_by_id[handle.slice_id].created_at.epoch_ms() > 0
 
@@ -648,7 +669,7 @@ def test_gcp_list_slices_preserves_vm_slice_discovery():
 
 def test_manual_host_pool_exhaustion_raises():
     """create_slice raises when not enough hosts are available."""
-    platform = ManualWorkerProvider(label_prefix="iris", hosts=["10.0.0.1"])
+    platform = ManualWorkerProvider(label_prefix="iris", worker_port=10001, hosts=["10.0.0.1"])
     cfg = config_pb2.SliceConfig(name_prefix="iris-group", num_vms=3)
     cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
 
@@ -658,7 +679,7 @@ def test_manual_host_pool_exhaustion_raises():
 
 def test_manual_host_exclusivity():
     """A host allocated to one VM cannot be allocated to another."""
-    platform = ManualWorkerProvider(label_prefix="iris", hosts=["10.0.0.1", "10.0.0.2"])
+    platform = ManualWorkerProvider(label_prefix="iris", worker_port=10001, hosts=["10.0.0.1", "10.0.0.2"])
 
     cfg1 = config_pb2.VmConfig(name="ctrl-1")
     cfg1.manual.host = "10.0.0.1"
@@ -672,7 +693,7 @@ def test_manual_host_exclusivity():
 
 def test_manual_terminated_host_returns_to_pool():
     """After terminating a VM, its host can be reallocated."""
-    platform = ManualWorkerProvider(label_prefix="iris", hosts=["10.0.0.1"])
+    platform = ManualWorkerProvider(label_prefix="iris", worker_port=10001, hosts=["10.0.0.1"])
 
     cfg = config_pb2.VmConfig(name="ctrl")
     cfg.manual.host = "10.0.0.1"
@@ -690,7 +711,7 @@ def test_manual_terminated_host_returns_to_pool():
 
 def test_manual_slice_terminate_returns_hosts():
     """Terminating a slice returns all its hosts to the pool."""
-    platform = ManualWorkerProvider(label_prefix="iris", hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3"])
+    platform = ManualWorkerProvider(label_prefix="iris", worker_port=10001, hosts=["10.0.0.1", "10.0.0.2", "10.0.0.3"])
 
     cfg = config_pb2.SliceConfig(name_prefix="iris-group", num_vms=2)
     cfg.manual.CopyFrom(config_pb2.ManualSliceConfig())
@@ -711,7 +732,7 @@ def test_list_all_slices_returns_created_slices(platform_env: PlatformEnv):
     cfg = _make_slice_config(platform_env, "group-a")
     handle = platform_env.platform.create_slice(cfg)
     all_slices = platform_env.platform.list_all_slices()
-    assert handle.slice_id in {s.slice_id for s in all_slices}
+    assert handle.slice_id in {s.handle.slice_id for s in all_slices}
 
 
 def test_list_all_slices_returns_all_managed(platform_env: PlatformEnv):
@@ -725,6 +746,27 @@ def test_list_all_slices_returns_all_managed(platform_env: PlatformEnv):
     assert len(all_slices) == 2
 
 
+def test_list_all_slices_excludes_manual_slices(platform_env: PlatformEnv):
+    """list_all_slices drops slices labeled iris_manual=true so the autoscaler ignores them."""
+    labels = Labels(platform_env.label_prefix)
+
+    cfg_auto = _make_slice_config(platform_env, "auto-group")
+    handle_auto = platform_env.platform.create_slice(cfg_auto)
+
+    cfg_manual = _make_slice_config(platform_env, "auto-group")
+    cfg_manual.labels[labels.iris_manual] = "true"
+    handle_manual = platform_env.platform.create_slice(cfg_manual)
+
+    all_slices = platform_env.platform.list_all_slices()
+    slice_ids = {s.handle.slice_id for s in all_slices}
+    assert handle_auto.slice_id in slice_ids
+    assert handle_manual.slice_id not in slice_ids
+
+    # Manual slices are still discoverable when explicitly asked for (delete-slice path).
+    manual_only = platform_env.platform.list_slices(zones=[platform_env.zone], labels={labels.iris_manual: "true"})
+    assert {s.slice_id for s in manual_only} == {handle_manual.slice_id}
+
+
 def test_gcp_list_all_slices_multi_zone():
     """GcpWorkerProvider.list_all_slices returns slices across multiple zones."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
@@ -734,7 +776,7 @@ def test_gcp_list_all_slices_multi_zone():
         project_id="test-project",
         zones=["zone-a", "zone-b"],
     )
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     iris_labels = Labels("iris")
     cfg_a = config_pb2.SliceConfig(
@@ -759,7 +801,7 @@ def test_gcp_list_all_slices_multi_zone():
     handle_b = platform.create_slice(cfg_b)
 
     all_slices = platform.list_all_slices()
-    slice_ids = {s.slice_id for s in all_slices}
+    slice_ids = {s.handle.slice_id for s in all_slices}
     assert handle_a.slice_id in slice_ids
     assert handle_b.slice_id in slice_ids
 
@@ -773,7 +815,7 @@ def test_gcp_tpu_slice_passes_startup_script_metadata():
     """_create_tpu_slice with worker_config embeds startup-script in TPU metadata."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", gcp_service=gcp_service)
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
@@ -810,7 +852,9 @@ def test_gcp_tpu_slice_os_login_sets_metadata_and_uses_direct_ssh():
         os_login_user="ci-user",
         key_file="/tmp/iris-oslogin",
     )
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    platform = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
@@ -839,7 +883,9 @@ def test_gcp_tpu_slice_os_login_resolves_user_from_service_account():
         auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
         key_file="/tmp/iris-oslogin",
     )
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    platform = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
@@ -857,7 +903,7 @@ def test_gcp_tpu_slice_os_login_resolves_user_from_service_account():
         handle = platform.create_slice(cfg)
         status = handle.describe()
 
-    resolve_user.assert_called_with(impersonate_service_account=cfg.gcp.service_account)
+    resolve_user.assert_called_with(impersonate_service_account=None)
     assert status.workers[0]._remote_exec.user == "svc-user"
 
 
@@ -869,7 +915,9 @@ def test_gcp_tpu_slice_os_login_prefers_explicit_ssh_impersonation_account():
         key_file="/tmp/iris-oslogin",
         impersonate_service_account="iris-controller@test-project.iam.gserviceaccount.com",
     )
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    platform = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
@@ -899,7 +947,9 @@ def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
         os_login_user="svc-user",
         key_file="/tmp/iris-oslogin",
     )
-    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", ssh_config=ssh_config, gcp_service=gcp_service)
+    platform = GcpWorkerProvider(
+        gcp_config, label_prefix="iris", worker_port=10001, ssh_config=ssh_config, gcp_service=gcp_service
+    )
 
     cfg = config_pb2.SliceConfig(
         name_prefix="iris-tpu",
@@ -923,12 +973,10 @@ def test_gcp_tpu_slice_os_login_prefers_external_ip_for_direct_ssh():
 
 
 # =============================================================================
-# Section 6: VM Slice Bootstrap Tests
+# Section 6: TPU/VM Bootstrap Tests
 #
-# Tests for _run_vm_slice_bootstrap with split timeouts and health probing.
+# Tests for bootstrap timeout sizing, diagnostics, and VM health probing.
 # =============================================================================
-
-
 def _make_vm_slice_for_bootstrap(
     gcp_service: InMemoryGcpService,
     zone: str = "us-central2-b",
@@ -954,6 +1002,7 @@ def _make_vm_slice_for_bootstrap(
         _labels={Labels("iris").iris_slice_id: vm_name},
         _created_at=Timestamp.now(),
         _label_prefix="iris",
+        _worker_port=10001,
         _bootstrapping=True,
     )
     return handle, vm_name
@@ -963,7 +1012,6 @@ def test_vm_bootstrap_health_probe_succeeds_without_serial_port():
     """Bootstrap completes when health probe succeeds, even if serial port never shows 'Bootstrap complete'."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     handle, _vm_name = _make_vm_slice_for_bootstrap(gcp_service)
-    worker_config = config_pb2.WorkerConfig(port=10001)
 
     with unittest.mock.patch(
         "iris.cluster.providers.gcp.workers._probe_worker_health",
@@ -972,7 +1020,6 @@ def test_vm_bootstrap_health_probe_succeeds_without_serial_port():
         _run_vm_slice_bootstrap(
             gcp_service,
             handle,
-            worker_config,
             poll_interval=0.01,
             cloud_ready_timeout=5.0,
             bootstrap_timeout=5.0,
@@ -985,7 +1032,6 @@ def test_vm_bootstrap_serial_port_succeeds_without_health_probe():
     """Bootstrap completes via serial port 'Bootstrap complete' when health probe fails."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     handle, vm_name = _make_vm_slice_for_bootstrap(gcp_service)
-    worker_config = config_pb2.WorkerConfig(port=10001)
 
     gcp_service.set_serial_port_output(
         vm_name,
@@ -1000,7 +1046,6 @@ def test_vm_bootstrap_serial_port_succeeds_without_health_probe():
         _run_vm_slice_bootstrap(
             gcp_service,
             handle,
-            worker_config,
             poll_interval=0.01,
             cloud_ready_timeout=5.0,
             bootstrap_timeout=5.0,
@@ -1013,7 +1058,6 @@ def test_vm_bootstrap_serial_port_error_raises():
     """Bootstrap fails immediately when serial port shows '[iris-init] ERROR'."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     handle, vm_name = _make_vm_slice_for_bootstrap(gcp_service)
-    worker_config = config_pb2.WorkerConfig(port=10001)
 
     gcp_service.set_serial_port_output(
         vm_name,
@@ -1029,7 +1073,6 @@ def test_vm_bootstrap_serial_port_error_raises():
             _run_vm_slice_bootstrap(
                 gcp_service,
                 handle,
-                worker_config,
                 poll_interval=0.01,
                 cloud_ready_timeout=5.0,
                 bootstrap_timeout=5.0,
@@ -1040,7 +1083,6 @@ def test_vm_bootstrap_phase2_has_independent_timeout():
     """Phase 2 uses its own timeout, not the remainder from phase 1."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     handle, _vm_name = _make_vm_slice_for_bootstrap(gcp_service)
-    worker_config = config_pb2.WorkerConfig(port=10001)
 
     # Health probe never succeeds, serial port never shows complete.
     # With a very short bootstrap_timeout, this should fail with phase 2 message.
@@ -1052,7 +1094,6 @@ def test_vm_bootstrap_phase2_has_independent_timeout():
             _run_vm_slice_bootstrap(
                 gcp_service,
                 handle,
-                worker_config,
                 poll_interval=0.01,
                 cloud_ready_timeout=600.0,
                 bootstrap_timeout=0.05,
@@ -1087,15 +1128,14 @@ def test_vm_bootstrap_cloud_not_ready_raises_phase1_timeout():
         _labels={Labels("iris").iris_slice_id: vm_name},
         _created_at=Timestamp.now(),
         _label_prefix="iris",
+        _worker_port=10001,
         _bootstrapping=True,
     )
-    worker_config = config_pb2.WorkerConfig(port=10001)
 
     with pytest.raises(InfraError, match=r"did not reach cloud READY within 0\.05s"):
         _run_vm_slice_bootstrap(
             gcp_service,
             handle,
-            worker_config,
             poll_interval=0.01,
             cloud_ready_timeout=0.05,
             bootstrap_timeout=300.0,

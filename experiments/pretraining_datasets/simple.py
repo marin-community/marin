@@ -12,6 +12,7 @@ import os.path
 
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
+from marin.datakit.canonical.fineweb_edu import download as fineweb_edu_download
 from marin.datakit.download.huggingface import download_hf_step
 from marin.execution.executor import ExecutorStep, InputName, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -72,7 +73,7 @@ def _dl(
 
 
 def _build_downloads() -> dict[str, ExecutorStep | InputName]:
-    fineweb_edu_base = _dl("raw/fineweb-edu", "HuggingFaceFW/fineweb-edu", "87f0914", "raw/fineweb-edu-87f0914")
+    fineweb_edu_base = fineweb_edu_download().as_executor_step()
 
     return {
         "fineweb_edu": fineweb_edu_base.cd("data"),

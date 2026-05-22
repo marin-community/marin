@@ -1,0 +1,22 @@
+[project]
+name = "delete-o-tron"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "click",
+    "duckdb",
+    "fastapi",
+    "fsspec",
+    "gcsfs",
+    "google-auth",
+    "google-cloud-storage",
+    "pyarrow",
+    "pydantic",
+    "rich",
+    "starlette",
+    "tqdm",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+distributed = ["iris"]

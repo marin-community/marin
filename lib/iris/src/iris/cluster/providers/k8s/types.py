@@ -7,10 +7,78 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 
 class KubectlError(RuntimeError):
     """Error raised for kubectl command failures."""
+
+
+class K8sResource(Enum):
+    """Kubernetes resource type with API metadata.
+
+    Each member carries the information needed to construct API URL paths:
+    (api_group, api_version, is_namespaced, plural, kind).
+
+    Use the enum members instead of freeform strings when calling K8sService
+    methods like get_json, list_json, delete, etc.
+    """
+
+    # Core v1
+    PODS = ("", "v1", True, "pods", "Pod")
+    CONFIGMAPS = ("", "v1", True, "configmaps", "ConfigMap")
+    SERVICES = ("", "v1", True, "services", "Service")
+    SECRETS = ("", "v1", True, "secrets", "Secret")
+    EVENTS = ("", "v1", True, "events", "Event")
+    NAMESPACES = ("", "v1", False, "namespaces", "Namespace")
+    NODES = ("", "v1", False, "nodes", "Node")
+    SERVICE_ACCOUNTS = ("", "v1", True, "serviceaccounts", "ServiceAccount")
+
+    # Apps v1
+    DEPLOYMENTS = ("apps", "v1", True, "deployments", "Deployment")
+    STATEFULSETS = ("apps", "v1", True, "statefulsets", "StatefulSet")
+
+    # Policy v1
+    PDBS = ("policy", "v1", True, "poddisruptionbudgets", "PodDisruptionBudget")
+
+    # RBAC v1
+    CLUSTER_ROLES = ("rbac.authorization.k8s.io", "v1", False, "clusterroles", "ClusterRole")
+    CLUSTER_ROLE_BINDINGS = ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings", "ClusterRoleBinding")
+
+    # CoreWeave custom resources
+    NODE_POOLS = ("compute.coreweave.com", "v1alpha1", False, "nodepools", "NodePool")
+
+    def __init__(self, api_group: str, api_version: str, is_namespaced: bool, plural: str, kind: str) -> None:
+        self.api_group = api_group
+        self.api_version = api_version
+        self.is_namespaced = is_namespaced
+        self.plural = plural
+        self.kind = kind
+
+    def api_base(self) -> str:
+        """URL prefix for this resource type (e.g. '/api/v1' or '/apis/apps/v1')."""
+        if self.api_group:
+            return f"/apis/{self.api_group}/{self.api_version}"
+        return f"/api/{self.api_version}"
+
+    def collection_path(self, namespace: str | None = None) -> str:
+        """URL path for listing/creating resources."""
+        base = self.api_base()
+        if self.is_namespaced and namespace:
+            return f"{base}/namespaces/{namespace}/{self.plural}"
+        return f"{base}/{self.plural}"
+
+    def item_path(self, name: str, namespace: str | None = None) -> str:
+        """URL path for a specific resource by name."""
+        return f"{self.collection_path(namespace)}/{name}"
+
+    @classmethod
+    def from_kind(cls, kind: str) -> K8sResource:
+        """Look up a resource by its manifest kind string."""
+        for member in cls:
+            if member.kind == kind:
+                return member
+        raise ValueError(f"Unknown kind: {kind!r}")
 
 
 @dataclass
@@ -27,7 +95,7 @@ class KubectlLogResult:
     """Result of an incremental log fetch."""
 
     lines: list[KubectlLogLine]
-    byte_offset: int
+    last_timestamp: datetime | None
 
 
 @dataclass(frozen=True)
@@ -37,6 +105,14 @@ class ExecResult:
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True)
+class PodResourceUsage:
+    """CPU and memory usage for a single pod."""
+
+    cpu_millicores: int
+    memory_bytes: int
 
 
 def parse_k8s_quantity(val: str) -> int:
@@ -68,20 +144,3 @@ def parse_k8s_cpu(value: str) -> int:
     if value.endswith("m"):
         return int(value[:-1])
     return int(float(value) * 1000)
-
-
-def parse_k8s_memory(value: str) -> int:
-    """Parse Kubernetes memory notation to bytes.
-
-    Examples: '512Mi' -> 536870912, '1Gi' -> 1073741824, '100Ki' -> 102400,
-              '1000' -> 1000 (raw bytes)
-    """
-    units = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4}
-    for suffix, multiplier in units.items():
-        if value.endswith(suffix):
-            return int(value[: -len(suffix)]) * multiplier
-    si_units = {"K": 1000, "M": 1000**2, "G": 1000**3, "T": 1000**4}
-    for suffix, multiplier in si_units.items():
-        if value.endswith(suffix) and not value.endswith("i"):
-            return int(value[: -len(suffix)]) * multiplier
-    return int(value)

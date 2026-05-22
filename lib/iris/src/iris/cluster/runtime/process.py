@@ -17,8 +17,6 @@ Lifecycle management includes:
 from __future__ import annotations
 
 import atexit
-import ctypes
-import ctypes.util
 import logging
 import os
 import select
@@ -30,8 +28,8 @@ import tempfile
 import threading
 import uuid
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
 from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
@@ -42,8 +40,8 @@ from iris.cluster.runtime.profile import (
     build_pyspy_cmd,
     resolve_cpu_spec,
     resolve_memory_spec,
+    run_pyspy_dump,
 )
-from iris.cluster.runtime.profile import run_pyspy_dump
 from iris.cluster.runtime.types import (
     ContainerConfig,
     ContainerPhase,
@@ -54,8 +52,8 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.worker.worker_types import LogLine
-from iris.managed_thread import ManagedThread, get_thread_container
-from iris.rpc import cluster_pb2
+from iris.managed_thread import get_thread_container
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -85,22 +83,16 @@ atexit.register(_cleanup_all_runtimes)
 # =============================================================================
 
 
-def set_pdeathsig_preexec():
-    """Use prctl(PR_SET_PDEATHSIG, SIGKILL) to kill subprocess if parent dies.
-
-    This is a Linux-specific feature that ensures container processes are
-    automatically killed if the worker process dies unexpectedly. On other
-    platforms, this is a no-op.
-    """
-    if sys.platform == "linux":
-        PR_SET_PDEATHSIG = 1
-        try:
-            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-            if libc.prctl(PR_SET_PDEATHSIG, signal.SIGKILL) != 0:
-                errno = ctypes.get_errno()
-                logger.warning(f"Failed to set parent death signal: errno {errno}")
-        except Exception as e:
-            logger.debug(f"Could not set parent death signal: {e}")
+# Set PR_SET_PDEATHSIG in a tiny launcher then exec the real command.
+# ``preexec_fn`` would force CPython onto fork()+exec, which trips Linux's
+# overcommit heuristic on workers with large VMS; this path keeps
+# vfork()/posix_spawn. PDEATHSIG survives execve.
+_PDEATHSIG_LAUNCHER_CODE = (
+    "import ctypes,ctypes.util,os,signal,sys;"
+    "ctypes.CDLL(ctypes.util.find_library('c'),use_errno=True)"
+    ".prctl(1,signal.SIGKILL,0,0,0);"
+    "os.execvp(sys.argv[1],sys.argv[1:])"
+)
 
 
 # =============================================================================
@@ -120,7 +112,6 @@ class ProcessContainer:
     config: ContainerConfig
     command: list[str]  # Pre-computed command with remapped paths
     _process: subprocess.Popen | None = field(default=None, repr=False)
-    _log_thread: ManagedThread | None = field(default=None, repr=False)
     _running: bool = False
     _exit_code: int | None = None
     _error: str | None = None
@@ -149,8 +140,6 @@ class ProcessContainer:
             prefix = os.pathsep.join(p for p in extra_paths if p not in existing.split(os.pathsep))
             env["PYTHONPATH"] = f"{prefix}{os.pathsep}{existing}" if existing else prefix
 
-            # Use process groups on Unix for clean termination
-            # Set PR_SET_PDEATHSIG on Linux for automatic cleanup if parent dies
             popen_kwargs: dict[str, object] = {
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
@@ -160,16 +149,21 @@ class ProcessContainer:
             }
 
             if sys.platform != "win32":
-                # Create new process group for clean termination
+                # New session/process group for clean termination.
                 popen_kwargs["start_new_session"] = True
-                # Set up automatic termination if parent dies (Linux only)
-                popen_kwargs["preexec_fn"] = set_pdeathsig_preexec
+
+            # On Linux, wrap the command in a tiny Python launcher that sets
+            # PR_SET_PDEATHSIG before exec'ing the user command. We avoid
+            # preexec_fn because that forces fork()+exec, which fails with
+            # ENOMEM on workers with large VMS under default overcommit.
+            if sys.platform == "linux":
+                cmd = [sys.executable, "-c", _PDEATHSIG_LAUNCHER_CODE, *cmd]
 
             self._process = subprocess.Popen(cmd, **popen_kwargs)
 
             # Spawn thread to stream logs asynchronously
             name_suffix = self.config.task_id or self.config.job_id or "unnamed"
-            self._log_thread = get_thread_container().spawn(
+            get_thread_container().spawn(
                 target=self._stream_logs,
                 name=f"logs-{name_suffix}",
             )
@@ -188,47 +182,30 @@ class ProcessContainer:
         if not self._process:
             return
 
+        assert self._process.stdout is not None
+        assert self._process.stderr is not None
+        stdout, stderr = self._process.stdout, self._process.stderr
+
+        def emit(source: str, line: str) -> None:
+            self._logs.append(LogLine.now(source, line.rstrip()))
+
         try:
             while self._process.poll() is None:
                 if stop_event.is_set():
                     break
 
                 # Non-blocking read with timeout
-                assert self._process.stdout is not None
-                assert self._process.stderr is not None
-                ready, _, _ = select.select([self._process.stdout, self._process.stderr], [], [], 0.1)
-
+                ready, _, _ = select.select([stdout, stderr], [], [], 0.1)
                 for stream in ready:
                     line = stream.readline()
                     if line:
-                        source = "stdout" if stream == self._process.stdout else "stderr"
-                        self._logs.append(
-                            LogLine(
-                                timestamp=datetime.now(timezone.utc),
-                                source=source,
-                                data=line.rstrip(),
-                            )
-                        )
+                        emit("stdout" if stream is stdout else "stderr", line)
 
             # Process exited - drain remaining output
-            if self._process.stdout:
-                for line in self._process.stdout:
-                    self._logs.append(
-                        LogLine(
-                            timestamp=datetime.now(timezone.utc),
-                            source="stdout",
-                            data=line.rstrip(),
-                        )
-                    )
-            if self._process.stderr:
-                for line in self._process.stderr:
-                    self._logs.append(
-                        LogLine(
-                            timestamp=datetime.now(timezone.utc),
-                            source="stderr",
-                            data=line.rstrip(),
-                        )
-                    )
+            for line in stdout:
+                emit("stdout", line)
+            for line in stderr:
+                emit("stderr", line)
 
             self._exit_code = self._process.returncode
             self._running = False
@@ -301,15 +278,15 @@ def _read_proc_memory_mb(pid: int) -> int | None:
             return None
 
 
-def _read_proc_cpu_percent(
+def _read_proc_cpu_millicores(
     pid: int,
     prev_total: float,
     prev_utime: float,
 ) -> tuple[int, float, float]:
-    """Compute delta CPU usage percentage between calls.
+    """Compute delta CPU usage in millicores between calls.
 
     On Linux reads /proc/{pid}/stat and /proc/stat. On other platforms returns 0.
-    Returns (cpu_percent, new_total, new_utime).
+    Returns (cpu_millicores, new_total, new_utime).
     """
     if sys.platform != "linux":
         return (0, prev_total, prev_utime)
@@ -326,20 +303,21 @@ def _read_proc_cpu_percent(
         delta_utime = utime - prev_utime
         if delta_total <= 0 or prev_total == 0:
             return (0, total, utime)
-        pct = int((delta_utime / delta_total) * 100)
-        return (pct, total, utime)
+        cpu_count = os.cpu_count() or 1
+        millicores = int((delta_utime / delta_total) * cpu_count * 1000)
+        return (millicores, total, utime)
     except (FileNotFoundError, ProcessLookupError, IndexError, ValueError):
         return (0, prev_total, prev_utime)
 
 
 def _cpu_profile_stub(cpu_format: int) -> bytes:
     """Return a minimal stub CPU profile for when py-spy is unavailable."""
-    if cpu_format == cluster_pb2.CpuProfile.FLAMEGRAPH:
+    if cpu_format == job_pb2.CpuProfile.FLAMEGRAPH:
         return (
             b'<svg xmlns="http://www.w3.org/2000/svg" width="400" height="50">'
             b'<text x="10" y="30" font-size="14">py-spy unavailable in local mode</text></svg>'
         )
-    elif cpu_format == cluster_pb2.CpuProfile.SPEEDSCOPE:
+    elif cpu_format == job_pb2.CpuProfile.SPEEDSCOPE:
         return (
             b'{"version":"0.1.0","$schema":"https://www.speedscope.app/file-format-schema.json",'
             b'"profiles":[],"shared":{"frames":[]}}'
@@ -350,13 +328,15 @@ def _cpu_profile_stub(cpu_format: int) -> bytes:
 
 def _memory_profile_stub(memory_format: int) -> bytes:
     """Return a minimal stub memory profile for when memray is unavailable."""
-    if memory_format == cluster_pb2.MemoryProfile.FLAMEGRAPH:
+    if memory_format == job_pb2.MemoryProfile.FLAMEGRAPH:
         return (
             b"<!DOCTYPE html><html><head><title>Memory Profile</title></head><body>"
             b"<p>memray unavailable in local mode</p></body></html>"
         )
-    elif memory_format == cluster_pb2.MemoryProfile.TABLE:
+    elif memory_format == job_pb2.MemoryProfile.TABLE:
         return b"memray unavailable in local mode\n"
+    elif memory_format == job_pb2.MemoryProfile.RAW:
+        return b""
     else:  # STATS
         return b'{"error": "memray unavailable in local mode"}'
 
@@ -423,7 +403,7 @@ class ProcessContainerHandle:
         """Return the container ID, if any."""
         return self._container_id
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """No-op for local execution - host is already configured.
 
         In local/test mode, the environment is already set up with the
@@ -507,16 +487,16 @@ class ProcessContainerHandle:
     def stats(self) -> ContainerStats:
         """Get resource usage statistics from the underlying subprocess."""
         if not self._container or not self._container._process or self._container._process.poll() is not None:
-            return ContainerStats(memory_mb=0, cpu_percent=0, process_count=0, available=False)
+            return ContainerStats(memory_mb=0, cpu_millicores=0, process_count=0, available=False)
 
         pid = self._container._process.pid
         memory_mb = _read_proc_memory_mb(pid)
-        cpu_pct, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_percent(
+        cpu_millicores, self._prev_cpu_total, self._prev_cpu_utime = _read_proc_cpu_millicores(
             pid, self._prev_cpu_total, self._prev_cpu_utime
         )
         return ContainerStats(
             memory_mb=memory_mb or 0,
-            cpu_percent=cpu_pct,
+            cpu_millicores=cpu_millicores,
             process_count=1,
             available=memory_mb is not None,
         )
@@ -527,7 +507,7 @@ class ProcessContainerHandle:
             return int(shutil.disk_usage(self.config.workdir_host_path).used / (1024 * 1024))
         return 0
 
-    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump."""
 
         if not self._container or not self._container._process:
@@ -543,7 +523,7 @@ class ProcessContainerHandle:
         else:
             raise RuntimeError("ProfileType must specify cpu, memory, or threads profiler")
 
-    def _profile_cpu(self, duration_seconds: int, cpu_config: cluster_pb2.CpuProfile) -> bytes:
+    def _profile_cpu(self, duration_seconds: int, cpu_config: job_pb2.CpuProfile) -> bytes:
         """Profile CPU using py-spy, with fallback stub."""
         pid = self._container._process.pid
         spec = resolve_cpu_spec(cpu_config, duration_seconds, pid=str(pid))
@@ -569,7 +549,7 @@ class ProcessContainerHandle:
 
         return _cpu_profile_stub(cpu_config.format)
 
-    def _profile_memory(self, duration_seconds: int, memory_config: cluster_pb2.MemoryProfile) -> bytes:
+    def _profile_memory(self, duration_seconds: int, memory_config: job_pb2.MemoryProfile) -> bytes:
         """Profile memory using memray, with fallback stub."""
         pid = self._container._process.pid
         spec = resolve_memory_spec(memory_config, duration_seconds, pid=str(pid))
@@ -584,6 +564,9 @@ class ProcessContainerHandle:
             result = subprocess.run(attach_cmd, capture_output=True, text=True, timeout=duration_seconds + 10)
             if result.returncode != 0:
                 raise RuntimeError(f"memray attach failed: {result.stderr}")
+
+            if spec.is_raw:
+                return Path(trace_path).read_bytes()
 
             if spec.output_is_file:
                 with tempfile.NamedTemporaryFile(suffix=f".{spec.ext}", delete=False) as f:

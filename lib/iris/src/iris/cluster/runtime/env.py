@@ -16,7 +16,7 @@ from pathlib import Path
 from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +50,16 @@ def build_common_iris_env(
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
-    environment: cluster_pb2.EnvironmentConfig,
-    constraints: Sequence[cluster_pb2.Constraint],
+    environment: job_pb2.EnvironmentConfig,
+    constraints: Sequence[job_pb2.Constraint],
     ports: Sequence[str],
-    resources: cluster_pb2.ResourceSpecProto | None,
+    resources: job_pb2.ResourceSpecProto | None,
 ) -> dict[str, str]:
     """Build the Iris system env vars shared by both worker and k8s paths.
 
     This is the single source of truth for env vars derived from a
-    RunTaskRequest. Path-specific additions (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST,
-    IRIS_WORKER_REGION) are layered on by each caller.
+    RunTaskRequest. Path-specific additions (IRIS_WORKER_ID, IRIS_ADVERTISE_HOST)
+    are layered on by each caller.
 
     All arguments are keyword-only primitives extracted from the proto so that
     callers from both paths can supply them without importing the full request.

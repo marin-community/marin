@@ -16,7 +16,7 @@ from __future__ import annotations
 from contextlib import AbstractContextManager
 from typing import Protocol
 
-from iris.cluster.providers.types import SliceHandle, StandaloneWorkerHandle
+from iris.cluster.providers.types import ListedSlice, SliceHandle, StandaloneWorkerHandle
 from iris.rpc import config_pb2
 
 
@@ -35,8 +35,12 @@ class ControllerProvider(Protocol):
         """
         ...
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
-        """Start or discover existing controller. Returns address (host:port)."""
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
+        """Start or discover existing controller. Returns address (host:port).
+
+        If fresh=True, the controller starts with an empty database instead
+        of restoring from a remote checkpoint.
+        """
         ...
 
     def restart_controller(self, config: config_pb2.IrisClusterConfig) -> str:
@@ -119,8 +123,8 @@ class WorkerInfraProvider(Protocol):
         """List existing slices, filtered by zone and optionally by labels."""
         ...
 
-    def list_all_slices(self) -> list[SliceHandle]:
-        """List all slices managed by this cluster across all zones."""
+    def list_all_slices(self) -> list[ListedSlice]:
+        """List every iris-managed slice across all zones, paired with its cloud state."""
         ...
 
     def list_vms(

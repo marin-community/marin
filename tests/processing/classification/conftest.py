@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import os
 import tempfile
-from zephyr import write_jsonl_file
+
+import pytest
+from zephyr import write_parquet_file
 
 
 @pytest.fixture
@@ -126,13 +127,13 @@ def fox_corpus():
     ):
         # Write train data across multiple shards
         for i, shard_docs in enumerate([train[:4], train[4:]]):
-            train_file = os.path.join(train_dir, f"train_shard_{i}.jsonl.gz")
-            write_jsonl_file(shard_docs, train_file)
+            train_file = os.path.join(train_dir, f"train_shard_{i}.parquet")
+            write_parquet_file(shard_docs, train_file)
 
         # Write test data across multiple shards
         for i, shard_docs in enumerate([test[:6], test[6:]]):
-            test_file = os.path.join(test_dir, f"test_shard_{i}.jsonl.gz")
-            write_jsonl_file(shard_docs, test_file)
+            test_file = os.path.join(test_dir, f"test_shard_{i}.parquet")
+            write_parquet_file(shard_docs, test_file)
 
         yield {
             "train": train,

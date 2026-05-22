@@ -16,6 +16,7 @@ tasks are in the BUILDING state per worker, preventing resource exhaustion from
 too many concurrent uv sync operations.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Protocol
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 
 class ContainerInfraError(RuntimeError):
@@ -81,19 +82,20 @@ class ContainerConfig:
     """Configuration for running a container."""
 
     image: str
-    entrypoint: cluster_pb2.RuntimeEntrypoint
+    entrypoint: job_pb2.RuntimeEntrypoint
     env: dict[str, str]
     workdir: str = "/app"
-    resources: cluster_pb2.ResourceSpecProto | None = None
+    resources: job_pb2.ResourceSpecProto | None = None
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = "host"  # e.g. "host" for --network=host
     workdir_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
+    attempt_uid: str | None = None
     job_id: str | None = None
     worker_id: str | None = None
-    worker_metadata: cluster_pb2.WorkerMetadata | None = None
+    worker_metadata: job_pb2.WorkerMetadata | None = None
 
     def get_cpu_millicores(self) -> int | None:
         if not self.resources or not self.resources.cpu_millicores:
@@ -125,7 +127,7 @@ class ContainerStats:
     """Parsed container statistics."""
 
     memory_mb: int
-    cpu_percent: int
+    cpu_millicores: int
     process_count: int
     available: bool
 
@@ -194,11 +196,16 @@ class ContainerHandle(Protocol):
         """
         ...
 
-    def build(self) -> list[LogLine]:
+    def build(self, on_logs: Callable[[list[LogLine]], None] | None = None) -> list[LogLine]:
         """Run setup_commands (uv sync, pip install, etc).
 
         Blocks until setup completes. If there are no setup_commands,
         this is a no-op.
+
+        Args:
+            on_logs: Optional callback invoked with each incremental batch of
+                log lines as they arrive. Enables streaming logs to callers
+                during long builds.
 
         Returns:
             List of log lines captured during the build phase.
@@ -244,7 +251,7 @@ class ContainerHandle(Protocol):
         """
         ...
 
-    def profile(self, duration_seconds: int, profile_type: cluster_pb2.ProfileType) -> bytes:
+    def profile(self, duration_seconds: int, profile_type: job_pb2.ProfileType) -> bytes:
         """Profile the running process using py-spy (CPU), memray (memory), or thread dump.
 
         Args:
@@ -275,6 +282,7 @@ class DiscoveredContainer:
     container_id: str
     task_id: str
     attempt_id: int
+    attempt_uid: str
     job_id: str
     worker_id: str
     phase: ExecutionStage

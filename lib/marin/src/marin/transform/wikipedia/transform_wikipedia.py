@@ -6,11 +6,6 @@ wikipedia/transform_wikipedia.py
 
 Performs HTML->Text/MD conversion using the specified tools over a wiki dump save in DOLMA format.
 
-Example Usage:
-uv run zephyr --backend=ray --max-parallelism=400 --memory=2GB --cluster=us-central2 \
-    lib/marin/src/marin/transform/wikipedia/transform_wikipedia.py \
-    --input_path gs://path/to/input --output_path gs://path/to/output \
-    --revision v1.0 --extract_method readability ...
 """
 
 import logging
@@ -19,6 +14,7 @@ import re
 from dataclasses import dataclass
 
 import draccus
+from bs4 import BeautifulSoup
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
@@ -61,8 +57,6 @@ def remove_and_append_infobox(html: str) -> str:
     """
     Wraps the infobox in a new section with heading 'InfoBox' and appends it to the end of the article.
     """
-    from bs4 import BeautifulSoup
-
     soup = BeautifulSoup(html, "html.parser")
 
     infobox = soup.find("table", {"class": "infobox"})
@@ -94,8 +88,6 @@ def remove_references_from_html(html: str) -> str:
     """
     Removes the references list and heading from the article.
     """
-    from bs4 import BeautifulSoup
-
     soup = BeautifulSoup(html, "html.parser")
 
     reflist = soup.find("div", {"class": "reflist"})
@@ -112,8 +104,6 @@ def remove_references_from_html(html: str) -> str:
 def unwrap_eqn(html: str):
     """Extract equations from math elements and convert to LaTeX inline/block quotes,
     wrapping display math in <p> tags."""
-    from bs4 import BeautifulSoup
-
     html = BeautifulSoup(html, "html.parser")
     # Find all annotations containing equations
     annotations = html.findAll("annotation", {"encoding": "application/x-tex"})
@@ -305,4 +295,4 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
     ctx = ZephyrContext(name="transform-wikipedia")
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)

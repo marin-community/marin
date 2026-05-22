@@ -6,11 +6,9 @@ import os
 from pathlib import Path
 
 import cloudpickle
-
 from marin.execution.artifact import Artifact
 from marin.execution.disk_cache import disk_cache
-from marin.execution.executor_step_status import distributed_lock
-from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile
+from marin.execution.executor_step_status import STATUS_SUCCESS, StatusFile, distributed_lock
 from marin.execution.step_spec import StepSpec
 
 
@@ -85,7 +83,7 @@ def test_composition_with_save_load(tmp_path: Path):
         distributed_lock(counting_fn),
         output_path=output_path,
         save_fn=Artifact.save,
-        load_fn=Artifact.load,
+        load_fn=Artifact.from_path,
     )
 
     result1 = cached_fn(output_path)

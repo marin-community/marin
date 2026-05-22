@@ -5,15 +5,24 @@
 
 from collections import defaultdict
 
-from iris.cluster.controller.budget import UserTask, compute_effective_band, compute_user_spend, interleave_by_user
-from iris.cluster.controller.controller import _schedulable_tasks
-from iris.cluster.types import JobName
-from iris.rpc import cluster_pb2
+from iris.cluster.controller import reads
+from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user
+from iris.cluster.controller.controller import (
+    SchedulingOutcome,
+    _pending_tasks_with_jobs,
+    _sort_pending_tasks_by_resolved_band,
+)
+from iris.cluster.controller.schema import user_budgets_table
+from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
+from sqlalchemy import select
 
 from .conftest import (
+    inject_device_constraints,
     make_controller_state,
     make_job_request,
+    make_worker_metadata,
     query_task,
     query_tasks_for_job,
     submit_job,
@@ -26,17 +35,31 @@ def _submit_user_job(state, user: str, name: str, replicas: int = 1, band: int |
     return submit_job(state, f"/{user}/{name}", req)
 
 
+def _pending(state):
+    """Test helper: read pending tasks within a fresh snapshot."""
+    with state._db.read_snapshot() as tx:
+        return _pending_tasks_with_jobs(tx)
+
+
+def _pending_sorted(state):
+    """Test helper: pending tasks resorted by resolved priority band."""
+    with state._db.read_snapshot() as tx:
+        tasks = _pending_tasks_with_jobs(tx)
+        bands = reads.get_priority_bands(tx, {t.job_id for t in tasks})
+    return _sort_pending_tasks_by_resolved_band(tasks, bands)
+
+
 def test_production_scheduled_before_interactive():
     """PRODUCTION band tasks appear before INTERACTIVE in schedulable order."""
     with make_controller_state() as state:
         # Submit interactive tasks first
         interactive_tasks = _submit_user_job(
-            state, "alice", "interactive-job", replicas=3, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE
+            state, "alice", "interactive-job", replicas=3, band=job_pb2.PRIORITY_BAND_INTERACTIVE
         )
         # Submit production tasks second
-        prod_tasks = _submit_user_job(state, "bob", "prod-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_PRODUCTION)
+        prod_tasks = _submit_user_job(state, "bob", "prod-job", replicas=2, band=job_pb2.PRIORITY_BAND_PRODUCTION)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending_sorted(state)
         task_ids = [t.task_id for t in schedulable]
 
         # All production tasks should come before all interactive tasks
@@ -57,12 +80,12 @@ def test_production_scheduled_before_interactive():
 def test_batch_scheduled_after_interactive():
     """BATCH band tasks appear after INTERACTIVE in schedulable order."""
     with make_controller_state() as state:
-        batch_tasks = _submit_user_job(state, "alice", "batch-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_BATCH)
+        batch_tasks = _submit_user_job(state, "alice", "batch-job", replicas=2, band=job_pb2.PRIORITY_BAND_BATCH)
         interactive_tasks = _submit_user_job(
-            state, "bob", "interactive-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE
+            state, "bob", "interactive-job", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE
         )
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending_sorted(state)
         task_ids = [t.task_id for t in schedulable]
 
         batch_ids = {t.task_id for t in batch_tasks}
@@ -86,7 +109,7 @@ def test_single_task_user_beats_hundred_task_user():
         # User A submits 1 task second
         a_tasks = _submit_user_job(state, "user-a", "small-job", replicas=1)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending(state)
 
         # Simulate user-b having higher spend (e.g. from running other tasks)
         user_spend = {"user-b": 5000, "user-a": 0}
@@ -110,39 +133,6 @@ def test_single_task_user_beats_hundred_task_user():
         assert interleaved[1].user == "user-b"
 
 
-def test_per_user_cap():
-    """max_tasks_per_user_per_cycle limits how many tasks per user are scheduled."""
-    with make_controller_state() as state:
-        cap = 3
-        # User submits 10 tasks
-        _submit_user_job(state, "greedy", "many-tasks", replicas=10)
-
-        schedulable = _schedulable_tasks(state._db)
-        with state._db.snapshot() as snap:
-            user_spend = compute_user_spend(snap)
-
-        # Interleave
-        tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
-        for task in schedulable:
-            tasks_by_band[task.priority_band].append(task)
-        interleaved: list[JobName] = []
-        for band_key in sorted(tasks_by_band.keys()):
-            band_tasks = tasks_by_band[band_key]
-            user_tasks = [UserTask(user_id=t.task_id.user, task=t.task_id) for t in band_tasks]
-            interleaved.extend(interleave_by_user(user_tasks, user_spend))
-
-        # Apply cap
-        tasks_per_user: dict[str, int] = defaultdict(int)
-        capped: list[JobName] = []
-        for task_id in interleaved:
-            if tasks_per_user[task_id.user] < cap:
-                capped.append(task_id)
-                tasks_per_user[task_id.user] += 1
-
-        assert len(capped) == cap
-        assert all(tid.user == "greedy" for tid in capped)
-
-
 def test_depth_boost_within_band():
     """Deeper tasks (child jobs) are still prioritized within the same band."""
     with make_controller_state() as state:
@@ -153,17 +143,18 @@ def test_depth_boost_within_band():
 
         # Submit child (deeper) job
         child_id = parent_id.child("child")
-        child_req = cluster_pb2.Controller.LaunchJobRequest(
+        child_req = controller_pb2.Controller.LaunchJobRequest(
             name=child_id.to_wire(),
             entrypoint=parent_req.entrypoint,
             resources=parent_req.resources,
             environment=parent_req.environment,
             replicas=1,
         )
-        state.submit_job(child_id, child_req, Timestamp.now())
+        with state._db.transaction() as cur:
+            state.submit_job(cur, child_id, child_req, Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending(state)
         task_ids = [t.task_id for t in schedulable]
 
         child_task_ids = {t.task_id for t in child_tasks}
@@ -181,49 +172,55 @@ def test_depth_boost_within_band():
         )
 
 
-def test_child_inherits_parent_band():
-    """Child job inherits parent's priority band."""
+def test_child_resolves_parent_band_from_job_config():
+    """Child job resolves its parent's priority band from job_config."""
     with make_controller_state() as state:
         # Submit parent as PRODUCTION
         parent_id = JobName.root("alice", "parent-prod")
         parent_req = make_job_request(
-            name="/alice/parent-prod", cpu=1, replicas=1, priority_band=cluster_pb2.PRIORITY_BAND_PRODUCTION
+            name="/alice/parent-prod", cpu=1, replicas=1, priority_band=job_pb2.PRIORITY_BAND_PRODUCTION
         )
         submit_job(state, "/alice/parent-prod", parent_req)
 
         # Submit child job
         child_id = parent_id.child("child")
-        child_req = cluster_pb2.Controller.LaunchJobRequest(
+        child_req = controller_pb2.Controller.LaunchJobRequest(
             name=child_id.to_wire(),
             entrypoint=parent_req.entrypoint,
             resources=parent_req.resources,
             environment=parent_req.environment,
             replicas=1,
         )
-        state.submit_job(child_id, child_req, Timestamp.now())
+        with state._db.transaction() as cur:
+            state.submit_job(cur, child_id, child_req, Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
-        # Child should have inherited PRODUCTION band
+        # Pending rows no longer inherit by reading parent task rows; the
+        # scheduler resolves inheritance from immutable job_config.
         for ct in child_tasks:
             task = query_task(state, ct.task_id)
-            assert task.priority_band == cluster_pb2.PRIORITY_BAND_PRODUCTION, (
-                f"Child task {ct.task_id} has band {task.priority_band}, "
-                f"expected {cluster_pb2.PRIORITY_BAND_PRODUCTION} (PRODUCTION)"
-            )
+            assert task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+        with state._db.read_snapshot() as snap:
+            requested = reads.get_priority_bands(snap, [child_id])
+        assert requested == {child_id: job_pb2.PRIORITY_BAND_PRODUCTION}
 
 
-def test_user_budget_row_created_on_submit():
-    """Submitting a job creates a user_budgets row with defaults."""
+def test_submit_does_not_create_user_budgets_row():
+    """Submitting a job does NOT create a user_budgets row; absence = defaults."""
     with make_controller_state() as state:
         _submit_user_job(state, "newuser", "first-job")
 
-        row = state._db.fetchone(
-            "SELECT budget_limit, max_band FROM user_budgets WHERE user_id = ?",
-            ("newuser",),
+        with state._db.read_snapshot() as tx:
+            row = tx.execute(
+                select(user_budgets_table.c.budget_limit, user_budgets_table.c.max_band).where(
+                    user_budgets_table.c.user_id == "newuser"
+                )
+            ).first()
+        assert row is None, (
+            "user_budgets row should NOT be created on first job submission; "
+            "unlisted users fall through to UserBudgetDefaults at read time"
         )
-        assert row is not None, "user_budgets row should be created on first job submission"
-        assert row["budget_limit"] == 0  # default unlimited
-        assert row["max_band"] == cluster_pb2.PRIORITY_BAND_INTERACTIVE  # default
 
 
 def test_default_band_is_interactive():
@@ -232,19 +229,17 @@ def test_default_band_is_interactive():
         tasks = _submit_user_job(state, "alice", "default-band")
         for t in tasks:
             task = query_task(state, t.task_id)
-            assert task.priority_band == cluster_pb2.PRIORITY_BAND_INTERACTIVE
+            assert task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
 def test_user_over_budget_tasks_become_batch():
     """User exceeding budget has INTERACTIVE tasks treated as BATCH in scheduling order."""
     with make_controller_state() as state:
         # Submit interactive tasks for alice (over budget) and bob (within budget)
-        alice_tasks = _submit_user_job(
-            state, "alice", "alice-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE
-        )
-        bob_tasks = _submit_user_job(state, "bob", "bob-job", replicas=2, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE)
+        alice_tasks = _submit_user_job(state, "alice", "alice-job", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+        bob_tasks = _submit_user_job(state, "bob", "bob-job", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending(state)
 
         # Simulate alice being over budget
         user_spend = {"alice": 10000, "bob": 1000}
@@ -253,15 +248,17 @@ def test_user_over_budget_tasks_become_batch():
         # Compute effective bands — alice's tasks should become BATCH
         tasks_by_band: dict[int, list[JobName]] = defaultdict(list)
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
             tasks_by_band[band].append(task.task_id)
 
         alice_ids = {t.task_id for t in alice_tasks}
         bob_ids = {t.task_id for t in bob_tasks}
 
         # Bob's tasks should be INTERACTIVE, alice's should be BATCH
-        interactive_ids = set(tasks_by_band.get(cluster_pb2.PRIORITY_BAND_INTERACTIVE, []))
-        batch_ids = set(tasks_by_band.get(cluster_pb2.PRIORITY_BAND_BATCH, []))
+        interactive_ids = set(tasks_by_band.get(job_pb2.PRIORITY_BAND_INTERACTIVE, []))
+        batch_ids = set(tasks_by_band.get(job_pb2.PRIORITY_BAND_BATCH, []))
         assert bob_ids <= interactive_ids, "Bob's tasks should remain INTERACTIVE"
         assert alice_ids <= batch_ids, "Alice's tasks should be downgraded to BATCH"
 
@@ -269,54 +266,188 @@ def test_user_over_budget_tasks_become_batch():
 def test_user_within_budget_keeps_interactive():
     """User within budget keeps INTERACTIVE band."""
     with make_controller_state() as state:
-        _submit_user_job(state, "alice", "within-budget", replicas=2, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE)
+        _submit_user_job(state, "alice", "within-budget", replicas=2, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending(state)
         user_spend = {"alice": 3000}
         user_budget_limits = {"alice": 50000}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
-            assert band == cluster_pb2.PRIORITY_BAND_INTERACTIVE
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
+            assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
 def test_production_never_downgraded_by_budget():
     """PRODUCTION tasks are never downgraded even when user exceeds budget."""
     with make_controller_state() as state:
-        _submit_user_job(state, "alice", "prod-job", replicas=1, band=cluster_pb2.PRIORITY_BAND_PRODUCTION)
+        _submit_user_job(state, "alice", "prod-job", replicas=1, band=job_pb2.PRIORITY_BAND_PRODUCTION)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending(state)
         user_spend = {"alice": 999999}
         user_budget_limits = {"alice": 100}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
-            assert band == cluster_pb2.PRIORITY_BAND_PRODUCTION
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
+            assert band == job_pb2.PRIORITY_BAND_PRODUCTION
+
+
+def test_get_priority_bands_resolves_via_parent_chain():
+    """``JobStore.get_priority_bands`` mirrors ``submit_job``'s resolution at read time.
+
+    ``job_config.priority_band`` is the raw user request and can be
+    UNSPECIFIED (0) for jobs that didn't pass ``--priority``. The scheduler
+    feeds the result of this lookup into ``compute_effective_band``, so a
+    raw 0 here would let the task sort ahead of PRODUCTION. The lookup
+    must instead walk the parent chain (matching ``submit_job``'s
+    submit-time resolution) and fall back to INTERACTIVE only if the entire
+    chain is UNSPECIFIED.
+    """
+    with make_controller_state() as state:
+        # Top-level with no band → INTERACTIVE default.
+        plain = _submit_user_job(state, "alice", "plain-job")
+        plain_job_id = plain[0].job_id
+
+        # Top-level PRODUCTION → returns PRODUCTION.
+        prod_req = make_job_request(
+            name="/alice/prod-job", cpu=1, replicas=1, priority_band=job_pb2.PRIORITY_BAND_PRODUCTION
+        )
+        submit_job(state, "/alice/prod-job", prod_req)
+        prod_job_id = JobName.from_string("/alice/prod-job")
+
+        # Sub-job of PRODUCTION parent, no band of its own → must inherit PRODUCTION.
+        sub_id = prod_job_id.child("subtask")
+        sub_req = controller_pb2.Controller.LaunchJobRequest(
+            name=sub_id.to_wire(),
+            entrypoint=prod_req.entrypoint,
+            resources=prod_req.resources,
+            environment=prod_req.environment,
+            replicas=1,
+        )
+        with state._db.transaction() as cur:
+            state.submit_job(cur, sub_id, sub_req, Timestamp.now())
+
+        # Sub-job with its own explicit BATCH → BATCH (own band wins, no walk).
+        batch_sub_id = prod_job_id.child("batch-sub")
+        batch_sub_req = controller_pb2.Controller.LaunchJobRequest(
+            name=batch_sub_id.to_wire(),
+            entrypoint=prod_req.entrypoint,
+            resources=prod_req.resources,
+            environment=prod_req.environment,
+            replicas=1,
+            priority_band=job_pb2.PRIORITY_BAND_BATCH,
+        )
+        with state._db.transaction() as cur:
+            state.submit_job(cur, batch_sub_id, batch_sub_req, Timestamp.now())
+
+        with state._db.read_snapshot() as snap:
+            bands = reads.get_priority_bands(snap, [plain_job_id, prod_job_id, sub_id, batch_sub_id])
+
+        assert bands[plain_job_id] == job_pb2.PRIORITY_BAND_INTERACTIVE
+        assert bands[prod_job_id] == job_pb2.PRIORITY_BAND_PRODUCTION
+        assert bands[sub_id] == job_pb2.PRIORITY_BAND_PRODUCTION
+        assert bands[batch_sub_id] == job_pb2.PRIORITY_BAND_BATCH
+
+
+def test_compute_effective_band_normalizes_unspecified():
+    """Defense-in-depth: UNSPECIFIED (0) must never leak through as a real band.
+
+    Returning 0 would sort the task ahead of PRODUCTION (1) under the
+    scheduler's ``ORDER BY priority_band ASC``. The proper resolution
+    (parent inheritance, then INTERACTIVE) lives in
+    ``JobStore.get_priority_bands``; this is a last-resort guard.
+    """
+    defaults = UserBudgetDefaults()
+    band = compute_effective_band(job_pb2.PRIORITY_BAND_UNSPECIFIED, "alice", {"alice": 0}, {"alice": 5000}, defaults)
+    assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
+    band = compute_effective_band(
+        job_pb2.PRIORITY_BAND_UNSPECIFIED, "alice", {"alice": 10000}, {"alice": 5000}, defaults
+    )
+    assert band == job_pb2.PRIORITY_BAND_BATCH
 
 
 def test_zero_budget_means_unlimited():
     """budget_limit=0 means no down-weighting regardless of spend."""
     with make_controller_state() as state:
-        _submit_user_job(state, "alice", "unlimited", replicas=1, band=cluster_pb2.PRIORITY_BAND_INTERACTIVE)
+        _submit_user_job(state, "alice", "unlimited", replicas=1, band=job_pb2.PRIORITY_BAND_INTERACTIVE)
 
-        schedulable = _schedulable_tasks(state._db)
+        schedulable = _pending(state)
         user_spend = {"alice": 999999}
         user_budget_limits = {"alice": 0}
 
         for task in schedulable:
-            band = compute_effective_band(task.priority_band, task.task_id.user, user_spend, user_budget_limits)
-            assert band == cluster_pb2.PRIORITY_BAND_INTERACTIVE
+            band = compute_effective_band(
+                task.priority_band, task.task_id.user, user_spend, user_budget_limits, UserBudgetDefaults()
+            )
+            assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
+def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_path):
+    """A user's CPU task is scheduled even when they have many unplaceable TPU tasks.
+
+    Regression test: a per-user input cap (max_tasks_per_user_per_cycle) applied before
+    scheduling let unplaceable TPU tasks consume all per-user slots, permanently blocking
+    CPU tasks for the same user that had available workers.  The cap must only apply to
+    actual assignments, not scheduling candidates.
+    """
+    OLD_CAP = 8  # historical default — must exceed this many TPU tasks
+    ctrl = make_controller(local_state_dir=tmp_path / "local")
+
+    # Submit OLD_CAP+2 unplaceable TPU tasks for alice (no TPU workers will be registered)
+    for i in range(OLD_CAP + 2):
+        tpu_req = controller_pb2.Controller.LaunchJobRequest(
+            name=f"/alice/tpu-job-{i}",
+            entrypoint=make_job_request().entrypoint,
+            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+            environment=job_pb2.EnvironmentConfig(),
+            replicas=1,
+        )
+        tpu_req.resources.device.tpu.variant = "v5p-8"
+        inject_device_constraints(tpu_req)
+        jid = JobName.from_string(f"/alice/tpu-job-{i}")
+        with ctrl._transitions._db.transaction() as cur:
+            ctrl._transitions.submit_job(cur, jid, tpu_req, Timestamp.now())
+
+    # Submit 1 CPU task for alice — this should be placeable on the CPU worker
+    cpu_jid = JobName.from_string("/alice/cpu-job")
+    cpu_req = make_job_request(name="/alice/cpu-job", cpu=1, replicas=1)
+    inject_device_constraints(cpu_req)
+    with ctrl._transitions._db.transaction() as cur:
+        ctrl._transitions.submit_job(cur, cpu_jid, cpu_req, Timestamp.now())
+
+    # Register exactly 1 CPU worker — no TPU workers
+    with ctrl._transitions._db.transaction() as cur:
+        ctrl._transitions.register_or_refresh_worker(
+            cur,
+            worker_id=WorkerId("cpu-worker"),
+            address="cpu-worker:8080",
+            metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
+            ts=Timestamp.now(),
+        )
+
+    outcome = ctrl._run_scheduling()
+
+    assert outcome == SchedulingOutcome.ASSIGNMENTS_MADE, f"Expected ASSIGNMENTS_MADE, got {outcome}"
+
+    cpu_tasks = query_tasks_for_job(ctrl._transitions, cpu_jid)
+    assert len(cpu_tasks) == 1
+    assert (
+        cpu_tasks[0].state == job_pb2.TASK_STATE_ASSIGNED
+    ), f"CPU task state={cpu_tasks[0].state}; unplaceable TPU tasks may be blocking it"
 
 
 def test_submit_with_explicit_band_stores_band():
     """Submitting a job with an explicit priority_band stores it in task rows."""
     with make_controller_state() as state:
-        req = make_job_request(name="/alice/batch-job", cpu=1, replicas=2, priority_band=cluster_pb2.PRIORITY_BAND_BATCH)
+        req = make_job_request(name="/alice/batch-job", cpu=1, replicas=2, priority_band=job_pb2.PRIORITY_BAND_BATCH)
         tasks = submit_job(state, "/alice/batch-job", req)
 
         assert len(tasks) == 2
         for t in tasks:
             task = query_task(state, t.task_id)
             assert (
-                task.priority_band == cluster_pb2.PRIORITY_BAND_BATCH
+                task.priority_band == job_pb2.PRIORITY_BAND_BATCH
             ), f"Task {t.task_id} has band {task.priority_band}, expected PRIORITY_BAND_BATCH"

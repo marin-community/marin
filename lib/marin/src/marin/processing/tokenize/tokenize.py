@@ -1,54 +1,71 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Tokenize datasets using zephyr pipeline and write to Levanter cache format.
+"""Tokenize datasets directly into a Levanter cache (legacy end-to-end path).
 
 Supports both regular file paths and HuggingFace datasets. For HF datasets, downloads
-them first then tokenizes the downloaded files.
+them first then tokenizes the downloaded files. The output is a Levanter cache per
+split (train/validation): a top-level sharded ``shard_ledger.json`` plus per-shard
+subdirectories under ``cache_path/<split>/part-NNNNN-of-MMMMM/``. No intermediate
+parquet round-trip is performed on this path.
+
+For datakit-style separation (per-doc attribute parquet → store assembly), see
+:mod:`marin.processing.tokenize.attributes` and :mod:`marin.processing.tokenize.store_builder`.
+The shared tokenization core lives in :mod:`marin.processing.tokenize._core`.
 """
 import abc
 import dataclasses
-import json
 import logging
 import os
 import re
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 
 import draccus
-import transformers
-from rigging.filesystem import open_url
 from datasets import load_dataset_builder
-from fray.v2 import ResourceConfig
+from fray import ResourceConfig
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
     LmDatasetSourceConfigBase,
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
-    preprocessor_for_format,
 )
-from levanter.store.cache import consolidate_shard_caches
-from levanter.store.tree_store import TreeStore
-from zephyr import Dataset, ZephyrContext, zephyr_worker_ctx
+from levanter.tokenizers import TokenizerBackend
+from rigging.log_setup import configure_logging
+from zephyr import Dataset, ZephyrContext
+from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
 
-from marin.execution.executor import ExecutorStep, InputName, VersionedValue
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
-from rigging.log_setup import configure_logging
+from marin.execution.executor import InputName, VersionedValue
+from marin.processing.tokenize._core import (
+    MIN_GROUP_BYTES,
+    bundle_files_by_size,
+    compute_target_group_bytes,
+    drop_sidecars,
+    expand_tokenize_paths,
+    glob_with_sizes,
+    parquet_window_hint,
+    tokenize_pipeline,
+)
+from marin.processing.tokenize.store_builder import build_from_datasets, write_stats_json
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger(__name__)
 
-MIN_GROUP_BYTES = 100_000_000  # 100 MB floor to avoid degenerate tiny shards
 
-
-def _compute_target_group_bytes(total_input_bytes: int, max_workers: int) -> int:
-    """Compute target group size to produce approximately max_workers groups.
-
-    Applies a floor of MIN_GROUP_BYTES to avoid degenerate tiny shards.
-    """
-    return max(total_input_bytes // max_workers, MIN_GROUP_BYTES)
+# Re-exports for callers / tests that import these from tokenize.py.
+__all__ = [
+    "MIN_GROUP_BYTES",
+    "HfDatasetSpec",
+    "HfTokenizeConfig",
+    "TokenizeConfig",
+    "TokenizeConfigBase",
+    "bundle_files_by_size",
+    "compute_target_group_bytes",
+    "main",
+    "tokenize",
+]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -57,6 +74,7 @@ class HfDatasetSpec:
 
     id: str
     name: str | None = None
+    revision: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -64,13 +82,20 @@ class TokenizeConfigBase(abc.ABC):
     """Base class for tokenize configs."""
 
     max_workers: int = 4096
-    cache_copy_max_workers: int = 128
     worker_resources: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig(ram="10g", disk="5g"))
+
+    tokenizer_backend: TokenizerBackend = TokenizerBackend.HF
+    """Backend to use for tokenization. HF uses the HuggingFace tokenizers library directly.
+    KITOKEN uses the kitoken library."""
 
     num_shards: int | None = None
     """Override the number tokenize shards. When set, files are grouped to produce approximately
     this many shards instead of deriving the count from max_workers. This can be useful if you want
     more shards than max_workers, for example to mitigate the cost of retrying a single shard."""
+
+    levanter_batch_size: int | None = None
+    """Number of tokenized records to accumulate before flushing to disk. Defaults to 16384.
+    Lower values reduce peak memory for datasets with large documents."""
 
     @abc.abstractmethod
     def as_lm_dataset_source_config(
@@ -197,113 +222,152 @@ def _validate_train_urls(train_paths: list[str | InputName], warn):
                 )
 
 
-def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> list[str]:
-    """
-    Get a list of all filepaths with the specified extension from the input paths.
-    """
-    output_paths = []
-    for path in input_paths:
-        assert path != "/"
-        if path.endswith("/") or fsspec_isdir(path):
-            logger.info(f"Getting all {extensions} files in {path}")
-            for ex in extensions:
-                output_paths.extend(fsspec_glob(os.path.join(path, f"**/*.{ex}")))
-        else:
-            output_paths.extend(fsspec_glob(path))
-
-    return output_paths
-
-
-def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
-    """
-    Get all file paths to tokenize from the input paths.
-    Handles json/jsonl.{gz,zst,zstd}, and parquet.
-    """
+def _resolve_input_paths(input_paths: list[str] | VersionedValue) -> list[str]:
+    """Unwrap a ``VersionedValue`` if needed and return the concrete path list."""
     if isinstance(input_paths, VersionedValue):
-        input_paths = input_paths.value
-
-    if len(input_paths) == 0:
-        return []
-    elif any(isinstance(x, InputName | ExecutorStep) for x in input_paths):
-        return input_paths
-
-    out = _get_files_by_extensions(input_paths, ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet", "json"])
-    out = [x for x in out if "provenance.json" not in x]
-
-    if not len(out):
-        raise ValueError(
-            f"No valid jsonl or parquet files found in {input_paths}. "
-            "Please provide a path to a directory containing jsonl or parquet files."
-        )
-
-    return out
+        return list(input_paths.value)
+    return list(input_paths)
 
 
-def _bundle_files_by_size(file_infos, max_bytes: int):
-    """Bundle files into groups, with each group having a total size less than max_bytes."""
-    current_group = []
-    current_size = 0
-
-    for info in file_infos:
-        if current_size + info["size"] >= max_bytes and current_group:
-            yield current_group
-            current_group = []
-            current_size = 0
-        current_group.append(info["filename"])
-        current_size += info["size"]
-
-    if current_group:
-        yield current_group
-
-
-def _tokenize_batches(*, config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[Sequence[dict]]) -> Iterator[dict]:
-    """Tokenize a list of batches using the specified tokenizer and format."""
-    tokenizer: transformers.PreTrainedTokenizer = zephyr_worker_ctx().get_shared("tokenizer")
-    batch_processor = preprocessor_for_format(config.format, tokenizer)
-
-    batch_count = 0
-    record_count = 0
-    token_count = 0
-    start_time = time.monotonic()
-
-    for batch in batches:
-        batch_count += 1
-        for record in batch_processor(batch):
-            record_count += 1
-            token_count += len(record.get("input_ids", []))
-            yield record
-        if batch_count % 10 == 0:
-            elapsed = time.monotonic() - start_time
-            tok_per_sec = token_count / elapsed if elapsed > 0 else 0
-            doc_per_sec = record_count / elapsed if elapsed > 0 else 0
-            avg_tok_per_doc = token_count / record_count if record_count > 0 else 0
-            logger.info(
-                f"Tokenized {batch_count:,} batches, {record_count:,} docs, {token_count:,} tokens in {elapsed:.1f}s "
-                f"({tok_per_sec:,.0f} tokens/s, {doc_per_sec:,.1f} docs/s, {avg_tok_per_doc:,.0f} avg tokens/doc)"
-            )
-
-    elapsed = time.monotonic() - start_time
-    tok_per_sec = token_count / elapsed if elapsed > 0 else 0
-    doc_per_sec = record_count / elapsed if elapsed > 0 else 0
-    avg_tok_per_doc = token_count / record_count if record_count > 0 else 0
+def _local_preprocess_paths(files: list[FileEntry], config: TokenizeConfigBase) -> list[list[str]]:
+    """Bundle files into size-balanced groups for distributed processing."""
+    files = sorted(files, key=lambda f: f.path)
+    total_input_bytes = sum(f.size for f in files)
+    if config.num_shards is not None:
+        target_group_bytes = compute_target_group_bytes(total_input_bytes, config.num_shards)
+    else:
+        target_group_bytes = compute_target_group_bytes(total_input_bytes, config.max_workers)
+    file_groups = list(bundle_files_by_size(files, target_group_bytes))
     logger.info(
-        f"Tokenization done: {batch_count:,} batches, {record_count:,} docs, {token_count:,} tokens in {elapsed:.1f}s "
-        f"({tok_per_sec:,.0f} tokens/s, {doc_per_sec:,.1f} docs/s, {avg_tok_per_doc:,.0f} avg tokens/doc)"
+        f"Grouped {len(files):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
+        f"(target {target_group_bytes / 1e9:.2f} GB/group)."
+    )
+    return file_groups
+
+
+def _split_already_done(cache_path: str, split_name: str) -> bool:
+    ledger_path = os.path.join(cache_path, split_name, "shard_ledger.json")
+    if fsspec_exists(ledger_path):
+        logger.info("Shard ledger already exists for %s at %s; skipping", split_name, ledger_path)
+        return True
+    return False
+
+
+def _exemplar_for(
+    file_groups: list[list[str]],
+    *,
+    config: TokenizeConfigBase,
+) -> dict:
+    """Compute a post-tokenize exemplar by running one record through the pipeline.
+
+    The exemplar still carries ``id`` (because the shared tokenize pipeline emits
+    ``{id, input_ids, ...}``); :func:`build_from_datasets` strips it before
+    writing the cache.
+
+    Scans input files in order until one yields a record. Tolerates sparse
+    inputs (e.g. filtered ``write_parquet`` output where leading shards happen
+    to be empty) instead of failing on ``results[0]``.
+    """
+    sample_path = parquet_window_hint(file_groups)
+    candidates = [path for group in file_groups for path in group]
+    if not candidates:
+        raise ValueError("_exemplar_for: file_groups is empty")
+
+    first_non_empty: str | None = None
+    for path in candidates:
+        if next(iter(load_file(path)), None) is not None:
+            first_non_empty = path
+            break
+    if first_non_empty is None:
+        raise ValueError(f"_exemplar_for: no records found across {len(candidates)} input files")
+
+    ds = Dataset.from_list([first_non_empty]).flat_map(load_file)
+    pipeline, _ = tokenize_pipeline(
+        ds,
+        data_format=config.format,
+        sample_count=1,
+        sample_parquet_path=sample_path,
+        levanter_batch_size=None,
+    )
+    ctx = ZephyrContext(
+        resources=config.worker_resources,
+        max_workers=1,
+        name="tokenize-exemplar",
+    )
+    ctx.put("tokenizer_name", config.tokenizer)
+    ctx.put("tokenizer_backend", config.tokenizer_backend)
+    return ctx.execute(pipeline, verbose=False).results[0]
+
+
+def _strip_id(record: dict) -> dict:
+    if "id" not in record:
+        return record
+    return {k: v for k, v in record.items() if k != "id"}
+
+
+def _run_split(
+    *,
+    config: TokenizeConfigBase,
+    file_groups: list[list[str]],
+    split_name: str,
+) -> None:
+    """End-to-end pipeline for one split: glob → tokenize → consolidate → stats."""
+    prefix = os.path.join(config.cache_path, split_name)
+    pipeline_start = time.monotonic()
+
+    sample_path = parquet_window_hint(file_groups)
+    ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
+    tokenized_ds, batch_size = tokenize_pipeline(
+        ds,
+        data_format=config.format,
+        sample_count=config.sample_count,
+        sample_parquet_path=sample_path,
+        levanter_batch_size=config.levanter_batch_size,
+    )
+
+    ctx = ZephyrContext(
+        resources=config.worker_resources,
+        max_workers=min(config.max_workers, len(file_groups)),
+        name=f"tokenize-{split_name}",
+    )
+    # Broadcast tokenizer config to workers. We send name + backend rather than
+    # the tokenizer object because not all backends support pickling.
+    ctx.put("tokenizer_name", config.tokenizer)
+    ctx.put("tokenizer_backend", config.tokenizer_backend)
+
+    logger.info("Computing exemplar for cache consolidation")
+    exemplar = _strip_id(_exemplar_for(file_groups, config=config))
+
+    ledger = build_from_datasets(
+        ctx=ctx,
+        dataset=tokenized_ds,
+        output_path=prefix,
+        exemplar=exemplar,
+        batch_size=batch_size,
+    )
+
+    stats_path, _ = write_stats_json(prefix, ledger)
+    pipeline_elapsed = time.monotonic() - pipeline_start
+    logger.info(
+        "%s pipeline complete: %d docs in %.1fs. Wrote stats to %s",
+        split_name,
+        ledger.total_num_rows,
+        pipeline_elapsed,
+        stats_path,
     )
 
 
-def tokenize(config: TokenizeConfigBase):
+def tokenize(config: TokenizeConfigBase) -> None:
     """Tokenize datasets using zephyr pipeline.
 
     Processes train and validation splits separately, writing to Levanter cache format.
     For HuggingFace datasets, downloads them first then tokenizes the downloaded files.
     """
-
     if isinstance(config, TokenizeConfig):
-        train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
-        validation_paths = _get_filepaths_to_tokenize(config.validation_paths) if config.validation_paths else []
-        # Validate expanded paths to catch validation/test files that were inside directories
-        _validate_train_urls(train_paths, warn=config.allow_test_in_train)
+        train_patterns = expand_tokenize_paths(_resolve_input_paths(config.train_paths)) if config.train_paths else []
+        validation_patterns = (
+            expand_tokenize_paths(_resolve_input_paths(config.validation_paths)) if config.validation_paths else []
+        )
     elif isinstance(config, HfTokenizeConfig):
         logger.info(f"Loading dataset metadata for {config.id}" + (f" (config: {config.name})" if config.name else ""))
 
@@ -316,145 +380,38 @@ def tokenize(config: TokenizeConfigBase):
                 "This might be a dataset that requires custom loading logic."
             )
 
-        train_paths = data_files.get("train", [])
-        validation_paths = data_files.get("validation", data_files.get("test", []))
-
-        if train_paths:
-            logger.info(f"Found {len(train_paths)} training files in {config.id}")
-        if validation_paths:
-            logger.info(f"Found {len(validation_paths)} validation files in {config.id}")
+        train_patterns = list(data_files.get("train", []))
+        validation_patterns = list(data_files.get("validation", data_files.get("test", [])))
     else:
         raise ValueError(f"Unknown config type: {type(config)}")
 
-    if not train_paths and not validation_paths:
+    # Resolve patterns → concrete files with sizes (single list-objects call per pattern)
+    train_files = drop_sidecars(glob_with_sizes(train_patterns))
+    validation_files = drop_sidecars(glob_with_sizes(validation_patterns))
+
+    if isinstance(config, TokenizeConfig):
+        _validate_train_urls([f.path for f in train_files], warn=config.allow_test_in_train)
+
+    if train_files:
+        logger.info(f"Found {len(train_files)} training files")
+    if validation_files:
+        logger.info(f"Found {len(validation_files)} validation files")
+
+    if train_patterns and not train_files:
+        raise ValueError(f"No training files matched configured patterns: {train_patterns}")
+    if validation_patterns and not validation_files:
+        raise ValueError(f"No validation files matched configured patterns: {validation_patterns}")
+    if not train_files and not validation_files:
         raise ValueError("No input files specified. Nothing to do.")
 
-    def local_preprocess_paths(paths: list[str]) -> list[list[str]]:
-        """Scan file sizes locally and bundle into groups for distributed processing."""
-        filescan_start = time.monotonic()
-        # Sort for deterministic batching, then chunk into groups of 64.
-        paths = sorted(paths)
-        batched_paths = [paths[i : i + 64] for i in range(0, len(paths), 64)]
-        scan_ctx = ZephyrContext(
-            max_workers=32,
-            resources=ResourceConfig(cpu=1, ram="1g"),
-            name="tokenize-filescan",
-        )
-        file_stats = list(
-            scan_ctx.execute(
-                Dataset.from_list(batched_paths).flat_map(
-                    lambda batch: [{"filename": p, "size": fsspec_size(p)} for p in batch]
-                ),
-                verbose=False,
-            )
-        )
-        total_input_bytes = sum(f["size"] for f in file_stats)
-        if config.num_shards is not None:
-            target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.num_shards)
-        else:
-            target_group_bytes = _compute_target_group_bytes(total_input_bytes, config.max_workers)
-        file_groups = list(_bundle_files_by_size(file_stats, target_group_bytes))
-        logger.info(
-            f"Grouped {len(paths):,} files ({total_input_bytes / 1e9:.2f} GB) into {len(file_groups):,} groups "
-            f"(target {target_group_bytes / 1e9:.2f} GB/group) in {time.monotonic() - filescan_start:.1f}s."
-        )
-        return file_groups
-
-    def split_already_done(split_name: str) -> bool:
-        ledger_path = os.path.join(config.cache_path, split_name, "shard_ledger.json")
-        if fsspec_exists(ledger_path):
-            logger.info(
-                "Shard ledger already exists for %s at %s; skipping",
-                split_name,
-                ledger_path,
-            )
-            return True
-        return False
-
-    def run_pipeline(ctx: ZephyrContext, file_groups: list[list[str]], split_name: str) -> None:
-        prefix = os.path.join(config.cache_path, split_name)
-        pipeline_start = time.monotonic()
-
-        ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
-
-        if config.sample_count is not None:
-            logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
-            ds = ds.take_per_shard(config.sample_count)
-
-        temp_shards = (
-            # NOTE: https://github.com/marin-community/marin/issues/2829#issuecomment-3963661943
-            # Window set to 64 ^
-            ds.window(64)
-            .map_shard(lambda batches, _: _tokenize_batches(config=config, batches=batches))
-            .write_levanter_cache(
-                f"{prefix}/part-{{shard:05d}}-of-{{total:05d}}",
-                metadata={},
-                skip_existing=True,
-            )
-        )
-
-        # Broadcast the tokenizer to all workers via ZephyrContext
-        ctx.put("tokenizer", transformers.AutoTokenizer.from_pretrained(config.tokenizer))
-
-        tokenize_start = time.monotonic()
-        shard_paths = ctx.execute(temp_shards)
-        tokenize_elapsed = time.monotonic() - tokenize_start
-
-        logger.info("Computing exemplar for cache consolidation")
-        exemplar = ctx.execute(
-            Dataset.from_list(file_groups[0][0:1])
-            .flat_map(load_file)
-            .take_per_shard(1)
-            .map_shard(lambda example, _: _tokenize_batches(config=config, batches=[example])),
-            verbose=False,
-        )[0]
-
-        consolidate_start = time.monotonic()
-        logger.info(f"Consolidating {len(shard_paths)} shards into {prefix}")
-        ledger = consolidate_shard_caches(
-            shard_cache_paths=shard_paths,
-            output_path=prefix,
-            exemplar=exemplar,
-            copy_max_workers=config.cache_copy_max_workers,
-        )
-        consolidate_elapsed = time.monotonic() - consolidate_start
-
-        total_elements = ledger.total_num_rows
-        store = TreeStore.open(exemplar, prefix, mode="r", cache_metadata=True)
-        total_tokens = store.tree["input_ids"].data_size if "input_ids" in store.tree else 0
-
-        stats_path = os.path.join(prefix, ".stats.json")
-        with open_url(stats_path, "w") as f:
-            json.dump({"total_tokens": total_tokens, "total_elements": total_elements}, f)
-
-        pipeline_elapsed = time.monotonic() - pipeline_start
-        overall_tok_per_sec = total_tokens / tokenize_elapsed if tokenize_elapsed > 0 else 0
-        overall_doc_per_sec = total_elements / tokenize_elapsed if tokenize_elapsed > 0 else 0
-        logger.info(
-            f"{split_name} pipeline complete: {total_elements:,} docs, {total_tokens:,} tokens "
-            f"in {pipeline_elapsed:.1f}s (tokenize: {tokenize_elapsed:.1f}s at {overall_tok_per_sec:,.0f} tokens/s "
-            f"{overall_doc_per_sec:,.1f} docs/s, consolidate: {consolidate_elapsed:.1f}s). "
-            f"Wrote stats to {stats_path}"
-        )
-
     # TODO (rav): both train and val could run at the same time
-    if train_paths and not split_already_done("train"):
-        train_groups = local_preprocess_paths(train_paths)
-        ctx = ZephyrContext(
-            resources=config.worker_resources,
-            max_workers=min(config.max_workers, len(train_groups)),
-            name="tokenize-train",
-        )
-        run_pipeline(ctx, train_groups, "train")
+    if train_files and not _split_already_done(config.cache_path, "train"):
+        train_groups = _local_preprocess_paths(train_files, config)
+        _run_split(config=config, file_groups=train_groups, split_name="train")
 
-    if validation_paths and not split_already_done("validation"):
-        validation_groups = local_preprocess_paths(validation_paths)
-        ctx = ZephyrContext(
-            resources=config.worker_resources,
-            max_workers=min(config.max_workers, len(validation_groups)),
-            name="tokenize-validation",
-        )
-        run_pipeline(ctx, validation_groups, "validation")
+    if validation_files and not _split_already_done(config.cache_path, "validation"):
+        validation_groups = _local_preprocess_paths(validation_files, config)
+        _run_split(config=config, file_groups=validation_groups, split_name="validation")
 
 
 @draccus.wrap()

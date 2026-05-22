@@ -6,10 +6,10 @@
 For the full IrisContext with client/registry/resolver, use iris.client.
 """
 
-import json
-import os
 import getpass
+import json
 import logging
+import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
@@ -17,7 +17,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint
 from iris.cluster.types import JobName, TaskAttempt
-from iris.rpc import cluster_pb2
+from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,11 @@ class JobInfo:
     """Explicit job constraints for child job inheritance."""
 
     worker_region: str | None = None
-    """Region of the worker running this task, for child region constraint inheritance."""
+    """Region of the worker running this task.
+
+    Surfaced via the ``IRIS_WORKER_REGION`` env var so legacy clients (e.g. the
+    Marin executor's region-pinning path) can inspect where they are running.
+    Iris itself no longer auto-inherits this onto child jobs — see #5279."""
 
     @property
     def task_attempt(self) -> TaskAttempt:
@@ -104,7 +108,7 @@ def get_job_info() -> JobInfo | None:
         constraints: list[Constraint] = []
         if constraints_json:
             for item in json.loads(constraints_json):
-                constraints.append(Constraint.from_proto(json_format.ParseDict(item, cluster_pb2.Constraint())))
+                constraints.append(Constraint.from_proto(json_format.ParseDict(item, job_pb2.Constraint())))
 
         info = JobInfo(
             task_id=task_id,

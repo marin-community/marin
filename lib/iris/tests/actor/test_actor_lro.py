@@ -6,7 +6,6 @@
 import time
 
 import pytest
-
 from iris.actor import ActorClient, ActorServer
 from iris.actor.resolver import FixedResolver
 from iris.rpc import actor_pb2

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
@@ -13,11 +14,67 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
 from braceexpand import braceexpand
+from pyarrow import RecordBatch
 from rigging.filesystem import url_to_fs
 
 from zephyr.expr import Expr
+from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GlobSource:
+    """Lazy file source resolved at plan time via a bulk list-objects call.
+
+    Stores the glob pattern and defers expansion to compute_plan(), where
+    fsspec glob(detail=True) returns paths and sizes in a single RPC.
+    """
+
+    pattern: str
+    empty_glob_ok: bool = False
+
+
+@dataclass(frozen=True)
+class FileEntry:
+    """A discovered input file: read-spec plus metadata from the bulk listing.
+
+    ``spec`` is the pure read-specification (how to read the file); ``size`` is
+    discovered metadata (from glob ``detail=True``). Keeping these separate means
+    readers only depend on ``InputFileSpec`` while planners can still size shards.
+    """
+
+    spec: InputFileSpec
+    size: int
+
+    @property
+    def path(self) -> str:
+        return self.spec.path
+
+
+def resolve_glob(source: GlobSource) -> list[FileEntry]:
+    """Expand a GlobSource into FileEntry objects with sizes.
+
+    Uses fsspec glob(detail=True) which returns file metadata from the same
+    list-objects API call — no extra per-file stat RPCs.
+    """
+    pattern = re.sub(r"(?<!:)//+", "/", source.pattern)
+
+    fs, _ = url_to_fs(pattern)
+    protocol = fsspec.core.split_protocol(pattern)[0]
+
+    entries: list[FileEntry] = []
+    for expanded in braceexpand(pattern):
+        detail = fs.glob(expanded, detail=True)
+        for path, info in detail.items():
+            full = f"{protocol}://{path}" if protocol else path
+            entries.append(FileEntry(spec=InputFileSpec(path=full), size=info.get("size", 0)))
+    entries.sort(key=lambda e: e.path)
+
+    if not entries and not source.empty_glob_ok:
+        raise FileNotFoundError(f"No files found matching pattern: {source.pattern}")
+
+    return entries
 
 
 @dataclass(frozen=True)
@@ -71,8 +128,7 @@ def _normalize_output_pattern(output_pattern: str | Callable[[int, int], str]) -
         Callable that takes (shard_idx, total_shards) and returns the output path
     """
     if isinstance(output_pattern, str):
-        pattern_str = output_pattern
-        return lambda shard_idx, total: format_shard_path(pattern_str, shard_idx, total)
+        return functools.partial(format_shard_path, output_pattern)
     return output_pattern
 
 
@@ -150,17 +206,16 @@ class WindowOp:
 class WriteOp:
     """Unified write operation for all output formats.
 
-    Supports writing to JSONL, Parquet, Levanter cache, or binary formats.
+    Supports writing to JSONL, Parquet, or binary formats.
     The writer_type determines which writer function is used.
     Supports path patterns with {shard}, {total}, {basename} substitutions,
     or a callable that takes (shard_idx, total_shards) and returns the output path.
     """
 
     output_pattern: Callable[[int, int], str]
-    writer_type: Literal["jsonl", "parquet", "levanter_cache", "binary", "vortex"]
+    writer_type: Literal["jsonl", "parquet", "binary", "vortex"]
 
     # Format-specific parameters (only used by relevant writer)
-    levanter_metadata: dict[str, Any] | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
     skip_existing: bool = False  # Skip writing if output file already exists
 
@@ -184,6 +239,10 @@ class LoadFileOp:
 
     format: Literal["auto", "parquet", "jsonl", "vortex"] = "auto"
     columns: list[str] | None = None
+    approx_shard_bytes: int | None = None
+    include_file_paths: bool = False
+    file_path_column: str = DEFAULT_FILE_PATH_COLUMN
+    batch_mode: bool = False
 
     def __repr__(self):
         return f"LoadFileOp(format={self.format}, columns={self.columns})"
@@ -309,7 +368,7 @@ class Dataset(Generic[T]):
         ...     .filter(lambda x: x % 2 == 0)
         ...     .map(lambda x: x * 2)
         ... )
-        >>> results = ctx.execute(ds)
+        >>> results = ctx.execute(ds).results
         [4, 8]
     """
 
@@ -359,27 +418,9 @@ class Dataset(Generic[T]):
             ...     .map(lambda path: process_file(path))
             ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
-        # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
-        pattern = re.sub(r"(?<!:)//+", "/", pattern)
-
-        fs, _ = url_to_fs(pattern)
-        protocol = fsspec.core.split_protocol(pattern)[0]
-
-        files = []
-        for expanded in braceexpand(pattern):
-            for f in fs.glob(expanded):
-                if protocol:
-                    files.append(f"{protocol}://{f}")
-                else:
-                    files.append(f)
-        files = sorted(files)
-
-        if len(files) == 0 and not empty_glob_ok:
-            raise FileNotFoundError(f"No files found matching pattern: {pattern}")
-
-        return Dataset.from_list(files)
+        return Dataset(GlobSource(pattern, empty_glob_ok))
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
@@ -415,9 +456,7 @@ class Dataset(Generic[T]):
             >>> from zephyr.expr import col
             >>> ds = Dataset.from_list([{"score": 80}, {"score": 60}]).filter(col("score") > 70)
         """
-        from zephyr.expr import Expr as ExprType
-
-        if isinstance(predicate, ExprType):
+        if isinstance(predicate, Expr):
             return Dataset(self.source, [*self.operations, FilterOp(predicate.evaluate, expr=predicate)])
         return Dataset(self.source, [*self.operations, FilterOp(predicate)])
 
@@ -526,15 +565,27 @@ class Dataset(Generic[T]):
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
-    def load_file(self, columns: list[str] | None = None) -> Dataset[dict]:
+    def load_file(
+        self,
+        columns: list[str] | None = None,
+        approx_shard_bytes: int | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+    ) -> Dataset[dict]:
         """Load records from file sources, auto-detecting format.
 
         Args:
             columns: Optional column projection (for parquet files)
+            approx_shard_bytes: If set, split parquet files into approximately this many
+                bytes per shard, aligned to row-group boundaries. Best-effort: a single
+                row group will never be split, so shards may exceed this size.
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
 
         Returns:
             Dataset yielding records as dictionaries
@@ -546,21 +597,101 @@ class Dataset(Generic[T]):
             ...     .filter(lambda r: r["score"] > 0.5)
             ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
-        return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("auto", columns, approx_shard_bytes, include_file_paths, file_path_column)],
+        )
 
-    def load_parquet(self, columns: list[str] | None = None) -> Dataset[dict]:
-        """Load records from parquet files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("parquet", columns)])
+    @overload
+    def load_parquet(
+        self,
+        columns: list[str] | None = ...,
+        approx_shard_bytes: int | None = ...,
+        include_file_paths: bool = ...,
+        file_path_column: str = ...,
+        *,
+        batch_mode: Literal[False] = ...,
+    ) -> Dataset[dict]: ...
 
-    def load_jsonl(self) -> Dataset[dict]:
-        """Load records from JSONL files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("jsonl", None)])
+    @overload
+    def load_parquet(
+        self,
+        columns: list[str] | None = ...,
+        approx_shard_bytes: int | None = ...,
+        include_file_paths: bool = ...,
+        file_path_column: str = ...,
+        *,
+        batch_mode: Literal[True],
+    ) -> Dataset[RecordBatch]: ...
 
-    def load_vortex(self, columns: list[str] | None = None) -> Dataset[dict]:
-        """Load records from Vortex files."""
-        return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns)])
+    def load_parquet(
+        self,
+        columns: list[str] | None = None,
+        approx_shard_bytes: int | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+        *,
+        batch_mode: bool = False,
+    ) -> Dataset[dict] | Dataset[RecordBatch]:
+        """Load records from parquet files.
+
+        Args:
+            columns: Optional column projection.
+            approx_shard_bytes: If set, split each file into approximately this many
+                bytes per shard, aligned to row-group boundaries. Best-effort: a single
+                row group will never be split, so shards may exceed this size.
+            include_file_paths: If True, add a column containing the source file path
+                for each record or batch.
+            file_path_column: Name of the column to add when include_file_paths is True.
+            batch_mode: If True, yield ``pa.RecordBatch`` objects instead of dicts.
+        """
+        op = LoadFileOp(
+            format="parquet",
+            columns=columns,
+            approx_shard_bytes=approx_shard_bytes,
+            include_file_paths=include_file_paths,
+            file_path_column=file_path_column,
+            batch_mode=batch_mode,
+        )
+        return Dataset(self.source, [*self.operations, op])
+
+    def load_jsonl(
+        self,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+    ) -> Dataset[dict]:
+        """Load records from JSONL files.
+
+        Args:
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
+        """
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("jsonl", None, None, include_file_paths, file_path_column)],
+        )
+
+    def load_vortex(
+        self,
+        columns: list[str] | None = None,
+        include_file_paths: bool = False,
+        file_path_column: str = DEFAULT_FILE_PATH_COLUMN,
+    ) -> Dataset[dict]:
+        """Load records from Vortex files.
+
+        Args:
+            columns: Optional column projection.
+            include_file_paths: If True, add a column containing the source file path
+                for each record.
+            file_path_column: Name of the column to add when include_file_paths is True.
+        """
+        return Dataset(
+            self.source,
+            [*self.operations, LoadFileOp("vortex", columns, None, include_file_paths, file_path_column)],
+        )
 
     def map_shard(
         self,
@@ -597,7 +728,7 @@ class Dataset(Generic[T]):
             ...     .map_shard(deduplicate_shard)
             ...     .write_jsonl("output/deduped-{shard:05d}.jsonl.gz")
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
@@ -624,7 +755,7 @@ class Dataset(Generic[T]):
             ...     .reshard(num_shards=20)              # Redistribute to 20 shards
             ...     .map(expensive_transform)            # Now uses up to 20 workers
             ... )
-            >>> output_files = ctx.execute(ds)
+            >>> output_files = ctx.execute(ds).results
         """
         if num_shards is not None and num_shards <= 0:
             raise ValueError(f"num_shards must be positive, got {num_shards}")
@@ -717,32 +848,6 @@ class Dataset(Generic[T]):
                     _normalize_output_pattern(output_pattern),
                     writer_type="vortex",
                     schema=schema,
-                    skip_existing=skip_existing,
-                ),
-            ],
-        )
-
-    def write_levanter_cache(
-        self,
-        output_pattern: str | Callable[[int, int], str],
-        metadata: dict[str, Any],
-        skip_existing: bool = False,
-    ) -> Dataset[str]:
-        """Write tokenized records to Levanter cache format.
-
-        Writes records to Levanter's TreeStore/JaggedArrayStore format for use
-        in training. Each shard creates a separate cache directory.
-        The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}
-        or can be a callable that takes (shard_idx, total_shards) and returns the output path.
-        """
-        return Dataset(
-            self.source,
-            [
-                *self.operations,
-                WriteOp(
-                    _normalize_output_pattern(output_pattern),
-                    writer_type="levanter_cache",
-                    levanter_metadata=metadata,
                     skip_existing=skip_existing,
                 ),
             ],
@@ -850,7 +955,7 @@ class Dataset(Generic[T]):
 
         def keep_first(k, items: Iterator[T]) -> T:
             """Reducer that keeps the first item."""
-            return next(iter(items))
+            return next(items)
 
         return self.map_shard(streaming_dedup).group_by(key=key, reducer=keep_first, num_output_shards=num_output_shards)
 
@@ -873,7 +978,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).reduce(sum)
-            >>> result = list(ctx.execute(ds))[0]
+            >>> result = ctx.execute(ds).results[0]
             4950
         """
         if global_reducer is None:
@@ -889,7 +994,7 @@ class Dataset(Generic[T]):
 
         Example:
             >>> ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0)
-            >>> count = list(ctx.execute(ds.count()))[0]
+            >>> count = ctx.execute(ds.count()).results[0]
             50
         """
         return self.reduce(
