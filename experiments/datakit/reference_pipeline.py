@@ -126,7 +126,7 @@ TOKENIZE_MAX_WORKERS = 1024
 
 # Embed / assign resource shapes mirror exp_full_clusters defaults
 # (region is unpinned -- iris's --region flag drives scheduling).
-EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="64g")
+EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="128g")
 ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="8g")
 COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g")
 EMBED_MAX_WORKERS_PER_SOURCE = 512
