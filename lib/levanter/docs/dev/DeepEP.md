@@ -51,15 +51,14 @@ so the cached object targets the right device.
 
 ## Backend Selection
 
-For a Grug MoE block with an expert mesh axis, select:
+For a Grug MoE block with an expert mesh axis, set the config object field:
 
-```yaml
-model:
-  moe_implementation: deepep
+```python
+config = dataclasses.replace(config, moe_implementation="deepep")
 ```
 
 The backend currently targets intranode expert parallelism: the expert group must span all visible local GPUs in the
-process, and the hidden dimension must be divisible by 8. If those constraints do not hold, use `implementation: ring`
+process, and the hidden dimension must be divisible by 8. If those constraints do not hold, use `moe_implementation="ring"`
 as the built-in fallback.
 
 The benchmark harness also contains capped DeepEP variants that precompute tighter receive capacities for comparing
