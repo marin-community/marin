@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -29,12 +30,29 @@ def _deadline_error(method: str) -> ConnectError:
     return ConnectError(Code.DEADLINE_EXCEEDED, f"RPC {method}: deadline exceeded before handler ran")
 
 
-class ConcurrencyLimitInterceptor:
-    """Caps the number of in-flight RPCs per method on an ASGI connectrpc mount.
+def _release_if_acquired(fut: asyncio.Future) -> None:
+    """Release the semaphore returned by a late-completing ``_try_acquire``.
 
-    Callers exceeding the limit await the semaphore until a slot frees up;
-    Connect/gRPC deadlines already cover the case where a caller gave up
-    waiting. Methods absent from ``limits`` are passed through unchanged.
+    Used when the awaiting coroutine was cancelled before the off-loop
+    acquire finished. ``threading.Semaphore.acquire`` has no cancellation
+    hook, so the worker thread keeps blocking and eventually takes the
+    permit — release on the original waiter's behalf so it doesn't leak.
+    """
+    try:
+        sem = fut.result()
+    except BaseException:
+        return
+    if sem is not None:
+        sem.release()
+
+
+class ConcurrencyLimitInterceptor:
+    """Caps the number of in-flight RPCs per method.
+
+    Callers exceeding the limit park on a per-method semaphore until a slot
+    frees up; Connect/gRPC deadlines already cover the case where a caller
+    gave up waiting. Methods absent from ``limits`` are passed through
+    unchanged.
 
     After the semaphore releases we re-check the Connect deadline: if the
     client's timeout has already elapsed (common under overload, where
@@ -43,27 +61,58 @@ class ConcurrencyLimitInterceptor:
     stops stale RPCs from piling more load onto an already-overloaded
     server.
 
-    Only the async path is implemented; ``asyncio.Semaphore`` cannot serve
-    a WSGI mount. If a sync caller ever appears, add ``intercept_unary_sync``
-    with a parallel ``threading.Semaphore`` — the two primitives do not
-    share state.
+    Both ``intercept_unary_sync`` and ``intercept_unary`` are implemented
+    against a single ``threading.Semaphore`` per method. An interceptor
+    instance is expected to be wired to one transport (WSGI sync OR ASGI
+    async) — the cap is not designed to coordinate across both.
     """
 
     def __init__(self, limits: dict[str, int]):
-        self._semaphores: dict[str, asyncio.Semaphore] = {method: asyncio.Semaphore(n) for method, n in limits.items()}
+        self._semaphores: dict[str, threading.Semaphore] = {
+            method: threading.Semaphore(n) for method, n in limits.items()
+        }
+
+    def _try_acquire(self, method: str) -> threading.Semaphore | None:
+        sem = self._semaphores.get(method)
+        if sem is None:
+            return None
+        if not sem.acquire(blocking=False):
+            logger.debug("RPC %s blocked waiting for concurrency slot", method)
+            sem.acquire()
+        return sem
+
+    def intercept_unary_sync(self, call_next, request, ctx):
+        method = ctx.method().name
+        if _deadline_expired(ctx):
+            raise _deadline_error(method)
+        sem = self._try_acquire(method)
+        try:
+            if _deadline_expired(ctx):
+                raise _deadline_error(method)
+            return call_next(request, ctx)
+        finally:
+            if sem is not None:
+                sem.release()
 
     async def intercept_unary(self, call_next, request, ctx):
         method = ctx.method().name
         if _deadline_expired(ctx):
             raise _deadline_error(method)
-        sem = self._semaphores.get(method)
-        if sem is None:
-            return await call_next(request, ctx)
-        if sem.locked():
-            logger.debug("RPC %s blocked waiting for concurrency slot", method)
-        # ``async with`` yields to the loop on contention and releases on any
-        # exit, including ``CancelledError`` raised mid-wait.
-        async with sem:
+        # Hop the blocking acquire off the loop so other in-flight handlers
+        # keep running while we wait. Shield it so a cancellation delivered
+        # mid-wait doesn't strand the worker thread — it can't be cancelled
+        # and will eventually take the permit. The done callback releases on
+        # the cancelled waiter's behalf.
+        acquire_task = asyncio.ensure_future(asyncio.to_thread(self._try_acquire, method))
+        try:
+            sem = await asyncio.shield(acquire_task)
+        except asyncio.CancelledError:
+            acquire_task.add_done_callback(_release_if_acquired)
+            raise
+        try:
             if _deadline_expired(ctx):
                 raise _deadline_error(method)
             return await call_next(request, ctx)
+        finally:
+            if sem is not None:
+                sem.release()

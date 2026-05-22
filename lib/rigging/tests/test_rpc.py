@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import threading
 from dataclasses import dataclass
 from unittest.mock import Mock
 
@@ -153,13 +154,21 @@ async def test_concurrency_limit_async_does_not_block_event_loop():
 
 @pytest.mark.asyncio
 async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot():
-    """Cancelling a queued async caller must not leak a permit."""
+    """Cancelling a queued async caller must not leak a permit.
+
+    Worker threads keep blocking on ``threading.Semaphore.acquire`` past
+    the awaiter's cancellation. The shield + late-release callback is what
+    prevents the permit from leaking once the thread finally takes it.
+    """
     limit = 2
     interceptor = ConcurrencyLimitInterceptor({"FetchLogs": limit})
-    holder_release = asyncio.Event()
+    holder_release = threading.Event()
+    holders_started = 0
 
     async def held_handler(req, ctx):
-        await holder_release.wait()
+        nonlocal holders_started
+        holders_started += 1
+        await asyncio.to_thread(holder_release.wait)
         return "ok"
 
     async def never_runs(req, ctx):  # pragma: no cover -- must not execute
@@ -169,12 +178,17 @@ async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot():
         asyncio.create_task(interceptor.intercept_unary(held_handler, "req", _make_ctx("FetchLogs")))
         for _ in range(limit)
     ]
-    await asyncio.sleep(0)
+    # Wait until both holders are inside the handler (i.e. own a permit).
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if holders_started == limit:
+            break
+    assert holders_started == limit
 
     waiters = [
         asyncio.create_task(interceptor.intercept_unary(never_runs, "req", _make_ctx("FetchLogs"))) for _ in range(5)
     ]
-    await asyncio.sleep(0)
+    await asyncio.sleep(0.05)  # let the waiter threads enter sem.acquire()
     for w in waiters:
         w.cancel()
     for w in waiters:
@@ -188,8 +202,11 @@ async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot():
     async def quick(req, ctx):
         return "fast"
 
-    results = await asyncio.gather(
-        *(interceptor.intercept_unary(quick, "req", _make_ctx("FetchLogs")) for _ in range(limit))
+    # If a permit leaked, this gather would hang. wait_for gives us a clean
+    # failure instead of the worker-level timeout.
+    results = await asyncio.wait_for(
+        asyncio.gather(*(interceptor.intercept_unary(quick, "req", _make_ctx("FetchLogs")) for _ in range(limit))),
+        timeout=5.0,
     )
     assert results == ["fast"] * limit
 
