@@ -244,7 +244,6 @@ members = [
     "marin-haliax",
     "marin-iris",
     "marin-levanter",
-    "marin-probes",
     "marin-rigging",
     "marin-root",
     "marin-zephyr",
@@ -5777,37 +5776,6 @@ test = [
     { name = "tensorboardx", specifier = ">=2.6" },
     { name = "torchcodec", specifier = ">=0.10,<0.11" },
     { name = "trackio", specifier = ">=0.5.0" },
-]
-
-[[package]]
-name = "marin-probes"
-version = "0.1.0"
-source = { editable = "infra/probes" }
-dependencies = [
-    { name = "click" },
-    { name = "marin-finelog" },
-    { name = "marin-iris" },
-    { name = "marin-rigging" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-timeout" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.3.1" },
-    { name = "marin-finelog", editable = "lib/finelog" },
-    { name = "marin-iris", editable = "lib/iris" },
-    { name = "marin-rigging", editable = "lib/rigging" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.4" },
-    { name = "pytest-timeout" },
 ]
 
 [[package]]

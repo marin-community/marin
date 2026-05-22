@@ -1,29 +1,26 @@
 # probes daemon image — synthetic infra canary.
 #
-# Build context must be the marin repo root:
-#   docker build -f infra/probes/deploy/Dockerfile -t probes:dev .
+# Build context is THIS directory's parent (infra/probes/):
+#   docker build -f deploy/Dockerfile -t probes:dev infra/probes
 #
-# The daemon makes outbound RPCs to Iris and Finelog. No inbound network
-# surface; it exposes nothing.
+# marin-iris, marin-finelog, marin-rigging come from the per-package rolling
+# GitHub releases (see pyproject.toml [tool.uv] find-links). No marin source
+# is required in the build context.
 
-# ── Stage: base ──────────────────────────────────────────────────────
 FROM python:3.11-slim AS base
 
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
 LABEL org.opencontainers.image.description="probes daemon image"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# uv (matches the version pinned by lib/finelog/Dockerfile)
 COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /uvx /bin/
 
 
-# ── Stage: deps ──────────────────────────────────────────────────────
-# Install Python dependencies. Mirrors the finelog Dockerfile pattern: copy
-# pyproject metadata first so source edits don't bust the dep cache.
+# ── deps stage ───────────────────────────────────────────────────────
+# Install dependencies first so source edits don't bust the dep cache.
 FROM base AS deps
 
 WORKDIR /app
@@ -31,26 +28,17 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Workspace metadata for every member marin-probes transitively depends on.
-COPY lib/rigging/pyproject.toml ./lib/rigging/pyproject.toml
-COPY lib/iris/pyproject.toml ./lib/iris/pyproject.toml
-COPY lib/finelog/pyproject.toml ./lib/finelog/pyproject.toml
-COPY infra/probes/pyproject.toml ./infra/probes/pyproject.toml
-
+COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    printf '[tool.uv.workspace]\nmembers = ["infra/probes", "lib/iris", "lib/finelog", "lib/rigging"]\n\n[tool.uv.sources]\nmarin-probes = { workspace = true }\nmarin-iris = { workspace = true }\nmarin-finelog = { workspace = true }\nmarin-rigging = { workspace = true }\n' > pyproject.toml \
-    && uv sync --package marin-probes --no-install-project
+    uv sync --frozen --no-install-project --no-dev
 
-# Full source, then install the project.
-COPY lib/rigging/src/ ./lib/rigging/src/
-COPY lib/iris/src/ ./lib/iris/src/
-COPY lib/finelog/src/ ./lib/finelog/src/
-COPY infra/probes/src/ ./infra/probes/src/
+# Project source, then install the project itself.
+COPY src/ ./src/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --package marin-probes
+    uv sync --frozen --no-dev
 
 
-# ── Stage: runtime ───────────────────────────────────────────────────
+# ── runtime stage ────────────────────────────────────────────────────
 FROM deps AS runtime
 
 # SQLite database lives on a PD-SSD mounted at /var/lib/probes by the VM.

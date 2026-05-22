@@ -7,11 +7,14 @@ name = "marin-probes"
 version = "0.1.0"
 description = "Synthetic infra monitoring: continuously exercises Iris and Finelog, records latency and error samples."
 requires-python = ">=3.11,<3.13"
+# marin-* libs are not published to PyPI past a one-time bootstrap; the real
+# distribution channel is the per-package rolling GH release. Pinning the
+# floor at 0.99.dev0 + prerelease=allow + find-links picks up today's nightly.
 dependencies = [
-    "marin-iris",
-    "marin-finelog",
-    "marin-rigging",
-    "click>=8.3.1",
+    "marin-iris    >= 0.99.dev0",
+    "marin-finelog >= 0.99.dev0",
+    "marin-rigging >= 0.99.dev0",
+    "click >= 8.3.1",
 ]
 
 [project.scripts]
@@ -19,8 +22,16 @@ probes = "probes.cli:cli"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.4",
+    "pytest >= 8.4",
     "pytest-timeout",
+]
+
+[tool.uv]
+prerelease = "allow"
+find-links = [
+    "https://github.com/marin-community/marin/releases/expanded_assets/marin-iris-latest",
+    "https://github.com/marin-community/marin/releases/expanded_assets/marin-finelog-latest",
+    "https://github.com/marin-community/marin/releases/expanded_assets/marin-rigging-latest",
 ]
 
 [tool.hatch.build.targets.wheel]

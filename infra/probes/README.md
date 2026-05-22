@@ -20,9 +20,10 @@ Design + spec: `.agents/projects/infra_canary/`.
 
 ```
 infra/probes/
-├── pyproject.toml          # marin-probes workspace member
+├── pyproject.toml          # standalone; not a root workspace member
+├── uv.lock                 # own lockfile, pinned to today's marin-* nightly wheels
 ├── deploy/
-│   ├── Dockerfile          # multi-stage; build context = repo root
+│   ├── Dockerfile          # multi-stage; build context = infra/probes/
 │   ├── Dockerfile.dockerignore
 │   └── deploy.sh           # build / apply / status
 ├── src/probes/
@@ -34,12 +35,15 @@ infra/probes/
 └── tests/
 ```
 
+This package is **standalone** — not a member of the root marin uv workspace. It pulls `marin-iris`, `marin-finelog`, and `marin-rigging` from the per-package rolling GitHub releases (`marin-iris-latest`, `marin-finelog-latest`, `marin-rigging-latest`) via `find-links` in its own `pyproject.toml`. To bump to today's nightly: `uv lock -U` inside `infra/probes/`.
+
 ## Running locally
 
 `--once` runs each spec once (ignoring cadence), flushes stores, exits 0. This is the path CI uses as a pre-push gate.
 
 ```bash
-uv run --package marin-probes python -m probes \
+cd infra/probes
+uv run python -m probes \
   --iris-endpoint https://iris-controller.internal:10001 \
   --zone us-central1-a --zone europe-west4-b \
   --sqlite-path /tmp/samples.sqlite \
@@ -137,7 +141,8 @@ Finelog (secondary): query namespace `marin.canary` via the standard Finelog SQL
 ## Tests
 
 ```bash
-uv run --package marin-probes pytest infra/probes/tests
+cd infra/probes
+uv run pytest tests
 ```
 
 No external dependencies. The integration test that runs the daemon against a live Iris dev cluster is the CI pre-push gate (`python -m probes --once`).

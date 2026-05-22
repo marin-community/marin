@@ -108,7 +108,6 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
-    "infra/probes",
 ]
 
 [tool.uv.sources]
@@ -120,7 +119,6 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
-marin-probes = { workspace = true }
 # NOTE: harbor is a pinned git dependency (not a workspace member).
 # harbor lives in marin-community/harbor as a pinned git dependency.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "354692d9c0eab497b05f266aa0dff30e2a238d2e" }

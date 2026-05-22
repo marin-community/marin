@@ -46,27 +46,27 @@ if [[ -z "${cmd}" ]]; then
     usage
 fi
 
-# Build context is the marin repo root.
-REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+# Build context is infra/probes/ — no marin sibling source needed.
+PROBES_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 build() {
     local sha
-    sha="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+    sha="$(git -C "${PROBES_DIR}" rev-parse --short HEAD)"
     local image_sha="${ARTIFACT_REGISTRY}:${sha}"
     local image_latest="${ARTIFACT_REGISTRY}:latest"
 
     echo "==> Building ${image_sha}"
     docker build \
         --platform=linux/amd64 \
-        -f "${REPO_ROOT}/infra/probes/deploy/Dockerfile" \
+        -f "${PROBES_DIR}/deploy/Dockerfile" \
         -t "${image_sha}" \
         -t "${image_latest}" \
-        "${REPO_ROOT}"
+        "${PROBES_DIR}"
 
     echo "==> Pushing ${image_sha} and :latest"
     docker push "${image_sha}"
     docker push "${image_latest}"
-    echo "${image_sha}" > "${REPO_ROOT}/infra/probes/deploy/.last-image"
+    echo "${image_sha}" > "${PROBES_DIR}/deploy/.last-image"
 }
 
 apply() {
