@@ -20,6 +20,7 @@ Pick the runner pipeline-wide via ``ZephyrContext(stage_runner_factory=...)``.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import re
@@ -30,7 +31,7 @@ import tempfile
 import threading
 import time
 import traceback
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from typing import Any, TypeVar
 
@@ -43,6 +44,8 @@ from zephyr.execution import (
     ZEPHYR_STAGE_BYTES_PROCESSED_KEY,
     ZEPHYR_STAGE_ITEM_COUNT_KEY,
     CounterSnapshot,
+    ListShard,
+    PickleDiskChunk,
     ShardTask,
     StageRunner,
     TaskResult,
@@ -51,9 +54,10 @@ from zephyr.execution import (
     _shared_data_path,
     _stage_throughput,
     _worker_ctx_var,
-    _write_stage_output,
 )
 from zephyr.plan import Scatter, StageContext, run_stage
+from zephyr.shuffle import _write_scatter
+from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +71,80 @@ SUBPROCESS_COUNTER_FLUSH_INTERVAL = 5.0
 Matches the parent's heartbeat cadence so each beat reads at most one stale
 snapshot before a fresh flush lands.
 """
+
+
+# ---------------------------------------------------------------------------
+# Stage-output writers (called by ``_run_stage_with_ctx`` below)
+# ---------------------------------------------------------------------------
+
+
+def _write_pickle_chunks(
+    items: Iterator,
+    source_shard: int,
+    chunk_path_fn: Callable[[int], str],
+) -> ListShard:
+    """Batch a plain item stream into pickle chunk files.
+
+    Returns a ListShard containing PickleDiskChunk references.
+    """
+    chunks: list[Iterable] = []
+    for pidx, batch in enumerate(batchify(items, n=INTERMEDIATE_CHUNK_SIZE)):
+        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
+        chunks.append(chunk_ref)
+        written = pidx + 1
+        if written % 10 == 0:
+            logger.info(
+                "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
+                source_shard,
+                written,
+                chunk_ref.count,
+            )
+
+    return ListShard(refs=chunks)
+
+
+def _write_stage_output(
+    stage_gen: Iterator,
+    source_shard: int,
+    stage_dir: str,
+    shard_idx: int,
+    scatter_op: Scatter | None,
+    total_shards: int,
+) -> TaskResult:
+    """Write stage output to disk.
+
+    For scatter stages (``scatter_op`` is set), routes items through
+    ``_write_scatter`` which builds the zstd-chunked data file plus
+    ``.scatter_meta`` sidecar; the buffer budget defaults to the
+    worker-context-sized value computed by ``shuffle``.
+
+    For non-scatter stages, batches items into pickle chunk files. Returns
+    TaskResult with a ListShard.
+    """
+    if scatter_op is not None:
+        first_item = next(stage_gen, None)
+        if first_item is None:
+            return TaskResult(shard=ListShard(refs=[]))
+
+        full_gen = itertools.chain([first_item], stage_gen)
+
+        num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
+        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
+        shard = _write_scatter(
+            full_gen,
+            source_shard,
+            data_path,
+            key_fn=scatter_op.key_fn,
+            num_output_shards=num_output_shards,
+            sort_fn=scatter_op.sort_fn,
+            combiner_fn=scatter_op.combiner_fn,
+        )
+        return TaskResult(shard=shard)
+
+    def chunk_path_fn(idx: int) -> str:
+        return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
+
+    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))
 
 
 # ---------------------------------------------------------------------------

@@ -13,23 +13,20 @@ This module collects three closely-related concerns:
   the ``_worker_ctx_var`` ``ContextVar`` plumbing exposed via
   ``zephyr_worker_ctx()``. ``zephyr.counters`` and the runners read this.
 * **Formatting / IO helpers** — humanized count and byte formatting, status
-  text pushing to Iris, execution-id generation, chunk path computation, and
-  the disk-backed stage-output writers (``_write_pickle_chunks`` /
-  ``_write_stage_output``).
+  text pushing to Iris, execution-id generation, and chunk path computation.
 
-It is a leaf module from the perspective of the other ``execution`` package
-modules: ``coordinator``, ``worker``, and ``context`` all import from here,
-never the other way around. Callers outside the package import from
-``zephyr.execution`` (which re-exports these symbols). ``zephyr.shuffle`` is
-a pure dependency below this module — the scatter write buffer budget is
-computed here (using the worker context) and passed into ``_write_scatter``,
-so ``shuffle`` no longer needs to reach back up into ``execution`` at all.
+It is the leaf module of the ``zephyr.execution`` package: ``coordinator``,
+``worker``, and ``context`` all import from here, never the other way around.
+This module has no dependency on ``zephyr.shuffle`` — the stage-output
+writers that produce ``ListShard`` instances live in ``zephyr.runners`` (the
+only call site), and ``zephyr.shuffle`` imports ``_worker_ctx_var`` from
+``zephyr.execution`` to size its scatter write buffer. Callers outside the
+package import from ``zephyr.execution`` (which re-exports these symbols).
 """
 
 from __future__ import annotations
 
 import enum
-import itertools
 import logging
 import pickle
 import uuid
@@ -42,13 +39,11 @@ from typing import Any, Protocol
 import humanfriendly
 from iris.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.env_resources import TaskResources
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
-from zephyr.plan import PhysicalOp, Scatter, Shard
-from zephyr.shuffle import ListShard, _write_scatter
-from zephyr.writers import INTERMEDIATE_CHUNK_SIZE, batchify, ensure_parent_dir, unique_temp_path
+from zephyr.plan import PhysicalOp, Shard
+from zephyr.writers import ensure_parent_dir, unique_temp_path
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +96,31 @@ class PullStatus(enum.StrEnum):
     NO_WORK_BACKOFF = enum.auto()
     STAGE_COMPLETED = enum.auto()
     SHUTDOWN = enum.auto()
+
+
+@dataclass
+class MemChunk:
+    """In-memory chunk."""
+
+    items: list[Any]
+
+    def __iter__(self) -> Iterator:
+        return iter(self.items)
+
+
+@dataclass
+class ListShard:
+    """Shard backed by a list of iterable references (PickleDiskChunk, MemChunk, etc.)."""
+
+    refs: list[Iterable]
+
+    def __iter__(self) -> Iterator:
+        for ref in self.refs:
+            yield from ref
+
+    def get_iterators(self) -> Iterator[Iterator]:
+        for ref in self.refs:
+            yield iter(ref)
 
 
 @dataclass(frozen=True)
@@ -236,36 +256,6 @@ class StageRunner(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Scatter write buffer sizing
-# ---------------------------------------------------------------------------
-
-# Fraction of cgroup memory allocated to scatter write buffers.
-_SCATTER_WRITE_BUFFER_FRACTION = 0.25
-# Static fallback used when the cgroup memory limit cannot be determined.
-_SCATTER_WRITE_BUFFER_BYTES_FALLBACK = 256 * 1024 * 1024  # 256 MB
-
-
-def _scatter_write_buffer_bytes() -> int:
-    """Return the scatter write buffer budget for the current worker.
-
-    Uses 25% of the container memory limit so the budget scales with the
-    worker size, divided by the number of concurrent workers sharing this
-    actor's RAM. Falls back to 256 MB (divided by the same factor) when the
-    cgroup limit cannot be read.
-
-    Lives here (not in ``zephyr.shuffle``) so that ``shuffle`` does not have
-    to import from ``zephyr.execution`` to read ``_worker_ctx_var`` — the
-    budget is computed at the call site in ``_write_stage_output`` and passed
-    into ``_write_scatter`` as an explicit parameter.
-    """
-    num_workers = _worker_ctx_var.get().num_workers
-    memory = TaskResources.from_environment().memory_bytes
-    if memory > 0:
-        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION / num_workers)
-    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK // max(1, num_workers)
-
-
-# ---------------------------------------------------------------------------
 # Formatting / IO helpers
 # ---------------------------------------------------------------------------
 
@@ -362,72 +352,3 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
                 fs.rm(exec_dir, recursive=True)
             except Exception as e:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
-
-
-def _write_pickle_chunks(
-    items: Iterator,
-    source_shard: int,
-    chunk_path_fn: Callable[[int], str],
-) -> ListShard:
-    """Batch a plain item stream into pickle chunk files.
-
-    Returns a ListShard containing PickleDiskChunk references.
-    """
-    chunks: list[Iterable] = []
-    for pidx, batch in enumerate(batchify(items, n=INTERMEDIATE_CHUNK_SIZE)):
-        chunk_ref = PickleDiskChunk.write(chunk_path_fn(pidx), batch)
-        chunks.append(chunk_ref)
-        written = pidx + 1
-        if written % 10 == 0:
-            logger.info(
-                "[shard %d] Wrote %d pickle chunks so far (latest: %d items)",
-                source_shard,
-                written,
-                chunk_ref.count,
-            )
-
-    return ListShard(refs=chunks)
-
-
-def _write_stage_output(
-    stage_gen: Iterator,
-    source_shard: int,
-    stage_dir: str,
-    shard_idx: int,
-    scatter_op: Scatter | None,
-    total_shards: int,
-) -> TaskResult:
-    """Write stage output to disk.
-
-    For scatter stages (``scatter_op`` is set), writes Parquet with envelope
-    wrapping and ``.scatter_meta`` sidecars. Returns TaskResult with compact
-    scatter metadata.
-
-    For non-scatter stages, batches items into pickle chunk files. Returns
-    TaskResult with a ListShard.
-    """
-    if scatter_op is not None:
-        first_item = next(stage_gen, None)
-        if first_item is None:
-            return TaskResult(shard=ListShard(refs=[]))
-
-        full_gen = itertools.chain([first_item], stage_gen)
-
-        num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
-        shard = _write_scatter(
-            full_gen,
-            source_shard,
-            data_path,
-            key_fn=scatter_op.key_fn,
-            num_output_shards=num_output_shards,
-            buffer_limit_bytes=_scatter_write_buffer_bytes(),
-            sort_fn=scatter_op.sort_fn,
-            combiner_fn=scatter_op.combiner_fn,
-        )
-        return TaskResult(shard=shard)
-
-    def chunk_path_fn(idx: int) -> str:
-        return f"{stage_dir}/shard-{shard_idx:04d}/chunk-{idx:04d}.pkl"
-
-    return TaskResult(shard=_write_pickle_chunks(stage_gen, source_shard, chunk_path_fn))

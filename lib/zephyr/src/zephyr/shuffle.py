@@ -24,14 +24,18 @@ chunk's compressed bytes (typically a few MB). This bound is essential for
 skewed shuffles where one reducer pulls disproportionate data and the
 external-sort fan-in opens hundreds of chunk iterators at once.
 
-Write-side memory is bounded by a caller-supplied byte budget
-(``buffer_limit_bytes``) rather than a fixed row count. When the estimated
-total bytes across all shard buffers exceeds the budget, the largest buffer
-is flushed. This prevents OOM on skewed or large-item workloads where a
-row-count limit provides no reliable bound. The budget is computed by the
-caller from worker resources (see ``zephyr.execution.internals``); keeping it
-out of this module means ``shuffle`` does not depend on the execution-side
-worker-context plumbing.
+Write-side memory is bounded by a byte budget (``buffer_limit_bytes``)
+rather than a fixed row count. When the estimated total bytes across all
+shard buffers exceeds the budget, the largest buffer is flushed. This
+prevents OOM on skewed or large-item workloads where a row-count limit
+provides no reliable bound. ``_scatter_write_buffer_bytes()`` computes a
+default from the cgroup memory limit divided by the number of concurrent
+workers in this actor; callers may also pass an explicit value (tests do).
+
+The default-budget helper reads ``_worker_ctx_var`` from
+``zephyr.execution`` directly. This is a one-way dependency: nothing in
+``zephyr.execution`` imports from ``zephyr.shuffle``, so there is no
+import cycle to break.
 """
 
 from __future__ import annotations
@@ -43,50 +47,22 @@ import logging
 import os
 import pickle
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import cloudpickle
 import msgspec
 import zstandard as zstd
+from iris.env_resources import TaskResources
 from rigging.filesystem import open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
+from zephyr.execution import ListShard, MemChunk, _worker_ctx_var
 from zephyr.plan import deterministic_hash
 from zephyr.writers import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Core shard data types
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class MemChunk:
-    """In-memory chunk."""
-
-    items: list[Any]
-
-    def __iter__(self) -> Iterator:
-        return iter(self.items)
-
-
-@dataclass
-class ListShard:
-    """Shard backed by a list of iterable references (PickleDiskChunk, MemChunk, etc.)."""
-
-    refs: list[Iterable]
-
-    def __iter__(self) -> Iterator:
-        for ref in self.refs:
-            yield from ref
-
-    def get_iterators(self) -> Iterator[Iterator]:
-        for ref in self.refs:
-            yield iter(ref)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +100,31 @@ _SUB_BATCH_SIZE = 1024
 # count-based gate (e.g. % 10) still floods logs. Time-based gating bounds
 # volume to one line/minute/worker regardless of chunk rate or size.
 _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
+
+# Fraction of cgroup memory allocated to scatter write buffers.
+_SCATTER_WRITE_BUFFER_FRACTION = 0.25
+# Static fallback used when the cgroup memory limit cannot be determined.
+_SCATTER_WRITE_BUFFER_BYTES_FALLBACK = 256 * 1024 * 1024  # 256 MB
+
+
+def _scatter_write_buffer_bytes() -> int:
+    """Return the default scatter write buffer budget for the current worker.
+
+    Uses 25% of the container memory limit so the budget scales with the
+    worker size, divided by the number of concurrent workers sharing this
+    actor's RAM. Falls back to 256 MB (divided by the same factor) when the
+    cgroup limit cannot be read.
+
+    Reads ``_worker_ctx_var`` from ``zephyr.execution`` at call time, so the
+    helper can only be invoked inside a worker task. Tests bypass this by
+    passing ``buffer_limit_bytes`` to ``_write_scatter`` / ``ScatterWriter``
+    explicitly.
+    """
+    num_workers = _worker_ctx_var.get().num_workers
+    memory = TaskResources.from_environment().memory_bytes
+    if memory > 0:
+        return int(memory * _SCATTER_WRITE_BUFFER_FRACTION / num_workers)
+    return _SCATTER_WRITE_BUFFER_BYTES_FALLBACK // max(1, num_workers)
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +476,11 @@ class ScatterWriter:
     Flushing is byte-budget-based: when the estimated total bytes across all
     shard buffers exceeds ``buffer_limit_bytes``, the largest buffer is flushed.
     This bounds peak RSS regardless of item count or output shard count.
+
+    ``buffer_limit_bytes`` defaults to ``_scatter_write_buffer_bytes()``,
+    which sizes the budget from the current worker's cgroup memory and slot
+    count. Tests pass an explicit value to make the byte-budget gate
+    deterministic without needing a worker context.
     """
 
     def __init__(
@@ -482,17 +488,19 @@ class ScatterWriter:
         data_path: str,
         key_fn: Callable,
         num_output_shards: int,
-        buffer_limit_bytes: int,
         source_shard: int = 0,
         sort_fn: Callable | None = None,
         combiner_fn: Callable | None = None,
+        buffer_limit_bytes: int | None = None,
     ) -> None:
         self._data_path = data_path
         self._key_fn = key_fn
         self._num_output_shards = num_output_shards
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._buffer_limit_bytes = buffer_limit_bytes
+        self._buffer_limit_bytes = (
+            buffer_limit_bytes if buffer_limit_bytes is not None else _scatter_write_buffer_bytes()
+        )
 
         if sort_fn is not None:
             captured_sort_fn = sort_fn
@@ -649,13 +657,15 @@ def _write_scatter(
     data_path: str,
     key_fn: Callable,
     num_output_shards: int,
-    buffer_limit_bytes: int,
     sort_fn: Callable | None = None,
     combiner_fn: Callable | None = None,
+    buffer_limit_bytes: int | None = None,
 ) -> ListShard:
     """Route items to target shards, buffer, sort, and append zstd chunks.
 
     Writes one binary data file plus one ``.scatter_meta`` sidecar.
+    ``buffer_limit_bytes`` defaults to ``_scatter_write_buffer_bytes()``;
+    tests pass an explicit value.
 
     Returns:
         A ListShard wrapping the data file path (as the existing scatter

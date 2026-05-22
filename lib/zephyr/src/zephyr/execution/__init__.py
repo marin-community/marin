@@ -12,7 +12,8 @@ bugs where orphaned coordinators and workers consume resources indefinitely.
 
 This package's submodules host the implementation:
 
-- :mod:`zephyr.execution.internals` — shared types, the ``WorkerContext`` /
+- :mod:`zephyr.execution.internals` — shared types (incl. ``ListShard`` /
+  ``MemChunk`` / ``PickleDiskChunk``), the ``WorkerContext`` /
   ``StageRunner`` protocols, ``_worker_ctx_var``, and formatting/IO helpers.
 - :mod:`zephyr.execution.coordinator` — ``ZephyrCoordinator`` and shard
   plumbing (``_regroup_result_refs``, ``_build_source_shards``,
@@ -28,10 +29,12 @@ that ``zephyr.runners`` (loaded transitively through ``context`` → ``worker``)
 can resolve its ``zephyr.execution`` imports against this partially-loaded
 package.
 
-``zephyr.shuffle`` is a pure dependency below this package: the scatter
-write buffer budget is computed in ``internals._scatter_write_buffer_bytes``
-and passed into ``_write_scatter`` as an explicit parameter, so there is no
-``shuffle ↔ execution`` import cycle to break with runtime imports.
+``zephyr.shuffle`` depends on ``zephyr.execution`` (it imports ``ListShard``,
+``MemChunk``, and ``_worker_ctx_var`` for ``_scatter_write_buffer_bytes``),
+and nothing in ``zephyr.execution`` imports from ``zephyr.shuffle`` — the
+stage-output writers (``_write_stage_output`` / ``_write_pickle_chunks``)
+that call ``_write_scatter`` live in ``zephyr.runners`` (their only caller).
+That one-way edge is what lets ``shuffle`` use a normal top-level import.
 """
 
 # isort: off
@@ -45,6 +48,8 @@ from zephyr.execution.internals import (
     ZEPHYR_STAGE_ITEM_COUNT_KEY,
     CoordinatorUnreachable,
     CounterSnapshot,
+    ListShard,
+    MemChunk,
     PickleDiskChunk,
     PullStatus,
     ShardTask,
@@ -58,7 +63,6 @@ from zephyr.execution.internals import (
     _shared_data_path,
     _stage_throughput,
     _worker_ctx_var,
-    _write_stage_output,
     zephyr_worker_ctx,
 )
 from zephyr.execution.coordinator import ZephyrCoordinator
@@ -70,6 +74,8 @@ from zephyr.execution.context import ZephyrContext, ZephyrExecutionResult
 __all__ = [
     "CoordinatorUnreachable",
     "CounterSnapshot",
+    "ListShard",
+    "MemChunk",
     "PickleDiskChunk",
     "PullStatus",
     "ShardTask",

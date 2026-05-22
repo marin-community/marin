@@ -27,6 +27,8 @@ from zephyr.execution.internals import (
     MAX_SHARD_INFRA_FAILURES,
     MAX_STATUS_TEXT_LENGTH,
     CounterSnapshot,
+    ListShard,
+    MemChunk,
     PullStatus,
     ShardFailureKind,
     ShardTask,
@@ -48,7 +50,6 @@ from zephyr.plan import (
     SourceItem,
     StageType,
 )
-from zephyr.shuffle import ListShard, MemChunk
 
 logger = logging.getLogger(__name__)
 
