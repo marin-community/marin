@@ -2633,8 +2633,8 @@ class Controller:
     def external_host(self) -> str:
         """Externally-reachable host address.
 
-        When bound to 0.0.0.0, probes for the real network IP (same technique
-        workers use in env_probe._get_ip_address).
+        When bound to 0.0.0.0, probes for the real network IP via
+        ``probe_outbound_ip``.
         """
         return resolve_external_host(self._config.host)
 
