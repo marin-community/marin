@@ -25,7 +25,14 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
+from levanter.grug.attention import (
+    AttentionMask,
+    GrugAttentionImplementation,
+    RotaryConfig,
+    align_kv_heads,
+    apply_rotary_embedding,
+    attention,
+)
 from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
@@ -75,6 +82,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -147,7 +155,7 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask)
+        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
