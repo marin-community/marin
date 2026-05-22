@@ -9,7 +9,7 @@ import threading
 import time
 
 import pytest
-from probes import ProbeResult, ProbeRunner
+from probes.__main__ import ProbeResult, ProbeRunner
 
 
 def _runner_with(probes, on_result):

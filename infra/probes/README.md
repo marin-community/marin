@@ -24,8 +24,8 @@ infra/probes/
 │   ├── Dockerfile.dockerignore
 │   └── deploy.sh           # build / apply / status
 ├── src/probes/
-│   ├── __init__.py         # ProbeResult, ProbeRunner, the three probes, main()
-│   └── __main__.py         # `python -m probes` entry point
+│   ├── __init__.py         # empty (package marker)
+│   └── __main__.py         # ProbeResult, ProbeRunner, the three probes, main()
 └── tests/test_runner.py
 ```
 
@@ -33,7 +33,7 @@ The package is **standalone** — not a member of the root marin uv workspace. I
 
 ## Public API
 
-`src/probes/__init__.py` exports four symbols and three probe functions:
+`src/probes/__main__.py` defines:
 
 ```python
 @dataclass

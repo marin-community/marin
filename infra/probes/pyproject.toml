@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-probes = "probes:main"
+probes = "probes.__main__:main"
 
 [dependency-groups]
 dev = ["pytest >= 8.4"]
