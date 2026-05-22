@@ -1,0 +1,23 @@
+# Only the four packages marin-probes touches need to be in the build context.
+*
+
+!infra/probes/pyproject.toml
+!infra/probes/src/
+
+!lib/rigging/pyproject.toml
+!lib/rigging/src/
+
+!lib/iris/pyproject.toml
+!lib/iris/src/
+
+!lib/finelog/pyproject.toml
+!lib/finelog/src/
+
+# Exclude build artifacts within included paths
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/node_modules
+**/.venv

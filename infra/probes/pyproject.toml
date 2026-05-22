@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marin-probes"
+version = "0.1.0"
+description = "Synthetic infra monitoring: continuously exercises Iris and Finelog, records latency and error samples."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "marin-iris",
+    "marin-finelog",
+    "marin-rigging",
+    "click>=8.3.1",
+]
+
+[project.scripts]
+probes = "probes.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-timeout",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/probes"]
+
+[tool.pytest.ini_options]
+timeout = 30
+timeout_method = "thread"
+addopts = "--durations=10 -v"
+filterwarnings = ["ignore::DeprecationWarning"]
+log_level = "INFO"
+log_format = "%(asctime)s %(levelname)s %(name)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
