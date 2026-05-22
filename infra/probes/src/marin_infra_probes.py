@@ -49,12 +49,12 @@ class Probe:
 class ProbeRunner:
     """Register probes, then ``run()`` to execute each one forever on its own
     cadence. Ctrl-C kills the process — there is no graceful shutdown path;
-    samples are stateless so there's nothing to clean up. Results are emitted
-    via ``on_result(name, result)``; default just logs."""
+    samples are stateless so there's nothing to clean up. Each result is
+    logged as ``probe <name>: ok|fail [<wall_ms>ms]`` and that's the only
+    output — operator log aggregation does the rest."""
 
-    def __init__(self, on_result: Callable[[str, ProbeResult], None] | None = None):
+    def __init__(self) -> None:
         self._probes: list[Probe] = []
-        self._on_result = on_result or _log_result
 
     def add_probe(self, name: str, fn: ProbeFn, *, timeout: float, cadence: float) -> None:
         self._probes.append(Probe(name, fn, timeout, cadence))
@@ -78,15 +78,10 @@ class ProbeRunner:
                 logger.exception("probe %s raised", probe.name)
                 result = ProbeResult(is_success=False)
             result.wall_time = time.monotonic() - start
-            self._on_result(probe.name, result)
+            level = logging.INFO if result.is_success else logging.ERROR
+            status = "ok" if result.is_success else "fail"
+            logger.log(level, "probe %s: %s [%dms]", probe.name, status, result.wall_time * 1000)
             await asyncio.sleep(probe.cadence)
-
-
-def _log_result(name: str, result: ProbeResult) -> None:
-    status = "ok" if result.is_success else "fail"
-    wt = f"{result.wall_time * 1000:.0f}ms" if result.wall_time is not None else "-"
-    level = logging.INFO if result.is_success else logging.ERROR
-    logger.log(level, "probe %s: %s [%s]", name, status, wt)
 
 
 # ---- probes ---------------------------------------------------------------

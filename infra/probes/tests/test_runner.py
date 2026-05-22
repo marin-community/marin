@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""ProbeRunner basics. The runner has no shutdown; tests bound its duration
-with asyncio.wait_for and treat the resulting CancelledError as completion."""
+"""ProbeRunner basics. Output is hardcoded to the ``probes`` logger; tests
+use pytest's ``caplog`` to assert on it. asyncio.wait_for bounds duration."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 import pytest
@@ -22,45 +23,42 @@ def _run_briefly(runner, duration=0.15):
         pass
 
 
-def test_success_probe_emits_ok_result():
-    seen: list[tuple[str, ProbeResult]] = []
-    runner = ProbeRunner(on_result=lambda n, r: seen.append((n, r)))
+def _messages(caplog) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "probes"]
+
+
+def test_success_probe_logs_ok(caplog):
+    runner = ProbeRunner()
     runner.add_probe("ok", lambda: ProbeResult(is_success=True), timeout=1.0, cadence=0.05)
-    _run_briefly(runner)
-    assert seen, "expected at least one probe result"
-    name, result = seen[0]
-    assert name == "ok"
-    assert result.is_success is True
-    assert result.wall_time is not None and result.wall_time >= 0
+    with caplog.at_level(logging.INFO, logger="probes"):
+        _run_briefly(runner)
+    msgs = _messages(caplog)
+    assert any(m.startswith("probe ok: ok [") for m in msgs), msgs
 
 
-def test_raising_probe_records_failure():
-    seen: list[ProbeResult] = []
-
+def test_raising_probe_logs_fail(caplog):
     def boom():
         raise RuntimeError("nope")
 
-    runner = ProbeRunner(on_result=lambda _n, r: seen.append(r))
+    runner = ProbeRunner()
     runner.add_probe("boom", boom, timeout=1.0, cadence=0.05)
-    _run_briefly(runner)
-    assert seen
-    assert all(r.is_success is False for r in seen)
-    assert all(r.wall_time is not None for r in seen)
+    with caplog.at_level(logging.INFO, logger="probes"):
+        _run_briefly(runner)
+    msgs = _messages(caplog)
+    assert any(m.startswith("probe boom: fail [") for m in msgs), msgs
 
 
-def test_timeout_probe_records_failure():
-    seen: list[ProbeResult] = []
-
+def test_timeout_probe_logs_fail(caplog):
     def slow():
         time.sleep(1.0)
         return ProbeResult(is_success=True)
 
-    runner = ProbeRunner(on_result=lambda _n, r: seen.append(r))
+    runner = ProbeRunner()
     runner.add_probe("slow", slow, timeout=0.05, cadence=0.05)
-    _run_briefly(runner, duration=0.25)
-    assert seen
-    assert seen[0].is_success is False
-    assert seen[0].wall_time is not None and seen[0].wall_time >= 0.05
+    with caplog.at_level(logging.INFO, logger="probes"):
+        _run_briefly(runner, duration=0.25)
+    msgs = _messages(caplog)
+    assert any(m.startswith("probe slow: fail [") for m in msgs), msgs
 
 
 def test_run_with_no_probes_raises():
@@ -68,10 +66,12 @@ def test_run_with_no_probes_raises():
         ProbeRunner().run()
 
 
-def test_multiple_probes_run_independently():
-    seen: list[str] = []
-    runner = ProbeRunner(on_result=lambda n, _r: seen.append(n))
+def test_multiple_probes_run_independently(caplog):
+    runner = ProbeRunner()
     runner.add_probe("a", lambda: ProbeResult(is_success=True), timeout=1.0, cadence=0.05)
     runner.add_probe("b", lambda: ProbeResult(is_success=True), timeout=1.0, cadence=0.05)
-    _run_briefly(runner, duration=0.2)
-    assert set(seen) == {"a", "b"}
+    with caplog.at_level(logging.INFO, logger="probes"):
+        _run_briefly(runner, duration=0.2)
+    msgs = _messages(caplog)
+    assert any(m.startswith("probe a: ") for m in msgs), msgs
+    assert any(m.startswith("probe b: ") for m in msgs), msgs
