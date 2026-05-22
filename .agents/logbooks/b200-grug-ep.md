@@ -779,3 +779,22 @@
   - The TPU payload-only check still shows the token-rank exchange order can be correct in isolation, so the remaining bug is more likely in the full return/combine path or local token-to-assignment expansion under the real CUDA execution.
 - Next action:
   - Submit a new short two-GPU debug/sanity path that prints token payload order, returned source-token order, per-rank counts, and local assignment counts for a tiny deterministic case before running the full MLP comparison.
+
+### 2026-05-22 00:38 - B200 payload-order check hit shard_map API mismatch
+- Experiment ID: `B200-EP-024`
+- Hypothesis:
+  - The full B200 `token_ragged_a2a` mismatch may come from CUDA `ragged_all_to_all` payload ordering, so isolate the token-rank payload exchange before debugging the return/combine path.
+- Command:
+  - B200 Slurm job `50045`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Two-GPU payload-order diagnostic for x, top-k metadata, weights, and source-token metadata.
+- Result:
+  - Job `50045` allocated two B200 GPUs but failed before running the exchange:
+    - failure: `TypeError: shard_map() got an unexpected keyword argument 'check_vma'`
+  - No `B200_PAYLOAD_CHECK` result was emitted.
+- Interpretation:
+  - This is an operational/API-compatibility failure, not evidence for or against the token-rank payload-order hypothesis.
+  - The diagnostic script needs to use the local JAX-compatible `shard_map` signature before the B200 payload-order question can be answered.
+- Next action:
+  - Resubmitted the same payload-order diagnostic without the unsupported `shard_map` keyword as B200 Slurm job `50053`.
+  - Use job `50053` to decide whether the remaining full-MoE mismatch is in exchange ordering or return/combine logic.
