@@ -207,6 +207,11 @@ _INFRA_THREAD_PREFIXES = (
     # cluster fixture and torn down with the cluster.
     "task-/",
     "logs-/",
+    # Iris worker profiling thread and controller RPC thread pool — created
+    # lazily when the cluster handles its first job but torn down with the
+    # module-scoped iris_cluster fixture, not with individual tests.
+    "profile-loop",
+    "rpc-handler",
 )
 
 

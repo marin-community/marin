@@ -140,9 +140,11 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
                 fs: AbstractFileSystem
                 fs, fs_path = url_to_fs(config_path)
                 temp_file = tempfile.NamedTemporaryFile(prefix="config", suffix=".yaml", delete=False)
-                atexit.register(lambda: os.unlink(temp_file.name))
-                fs.get(fs_path, temp_file.name)
-                config_path = temp_file.name
+                temp_config_path = temp_file.name
+                temp_file.close()
+                atexit.register(lambda path=temp_config_path: os.unlink(path))
+                fs.get(fs_path, temp_config_path)
+                config_path = temp_config_path
 
             config_paths.append(config_path)
             del args[config_path_index]
@@ -154,12 +156,13 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
         elif len(config_paths) > 1:
             # merge the configs by concatenating them
             temp_merged_config_path = tempfile.NamedTemporaryFile(prefix="config_merged", suffix=".yaml", delete=False)
-            atexit.register(lambda: os.unlink(temp_merged_config_path.name))
-            with open(temp_merged_config_path.name, "w") as f:
+            merged_config_path = temp_merged_config_path.name
+            temp_merged_config_path.close()
+            atexit.register(lambda path=merged_config_path: os.unlink(path))
+            with open(merged_config_path, "w") as f:
                 for config_path in config_paths:
                     with open(config_path) as config_file:
                         f.write(config_file.read())
-            merged_config_path = temp_merged_config_path.name
         else:
             raise ValueError("No config path found in args")
 

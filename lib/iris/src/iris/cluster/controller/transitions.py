@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple
+from typing import Any
 
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import bindparam, case, delete, func, insert, select, text
@@ -40,6 +40,7 @@ from iris.cluster.controller.reads import (
     TaskDetailRow,
     TaskScope,
 )
+from iris.cluster.controller.reconcile import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.schema import (
     job_config_table,
     job_workdir_files_table,
@@ -52,28 +53,28 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_is_finished, task_row_can_be_scheduled
+from iris.cluster.controller.task_state import (
+    ACTIVE_TASK_STATES,
+    EXECUTING_TASK_STATES,
+    RunningTaskEntry,
+    task_is_finished,
+    task_row_can_be_scheduled,
+)
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
+    AttemptUid,
     JobName,
     WorkerId,
     get_gpu_count,
     get_tpu_count,
 )
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
-# Tasks executing on a worker (subset of ACTIVE that excludes ASSIGNED).
-EXECUTING_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_BUILDING,
-        job_pb2.TASK_STATE_RUNNING,
-    }
-)
 
 # All non-terminal task states (ACTIVE plus PENDING).
 NON_TERMINAL_TASK_STATES: frozenset[int] = ACTIVE_TASK_STATES | {job_pb2.TASK_STATE_PENDING}
@@ -416,13 +417,6 @@ class WorkerFailureBatchResult(TxResult):
 
     removed_workers: list[tuple[WorkerId, str | None]] = field(default_factory=list)
     results: list[WorkerFailureResult] = field(default_factory=list)
-
-
-class RunningTaskEntry(NamedTuple):
-    """Task ID and attempt ID pair captured at snapshot time."""
-
-    task_id: JobName
-    attempt_id: int
 
 
 @dataclass(frozen=True)
@@ -1974,6 +1968,163 @@ class ControllerTransitions:
                 attempt_keys.append((update.task_id, task.current_attempt_id))
         attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
         return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+    def apply_reconcile_result(
+        self,
+        cur: Tx,
+        plan: WorkerReconcilePlan,
+        result: ReconcileResult,
+        now: Timestamp,
+    ) -> TxResult:
+        """Apply one worker's reconcile outcome within the caller's transaction.
+
+        On RPC failure, bounces only the rows the controller intended to
+        dispatch this tick (ASSIGNED with inline spec); the outcome for
+        already-running attempts is unknown and is left to the next pass.
+        On success, heartbeats the worker, translates observations to
+        updates (MISSING becomes ``FAILED("worker_lost_spec")``), and runs
+        the standard transition pipeline.
+        """
+        worker_id = plan.worker_id
+        now_ms = now.epoch_ms()
+
+        if result.error is not None:
+            log_event(
+                "reconcile_rpc_failed",
+                str(worker_id),
+                error=result.error,
+            )
+            assigned_updates = self._assigned_updates_from_plan(plan, result.error, cur)
+            if not assigned_updates:
+                return TxResult()
+            task_ids = [u.task_id for u in assigned_updates]
+            task_map = reads.bulk_get_task_detail(cur, task_ids)
+            attempt_keys = [(u.task_id, u.attempt_id) for u in assigned_updates]
+            attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+            req = HeartbeatApplyRequest(worker_id=worker_id, updates=assigned_updates)
+            return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+        existing = reads.filter_existing_workers(cur, [worker_id])
+        if str(worker_id) not in existing:
+            logger.warning(
+                "apply_reconcile_result: worker %s no longer present; dropping %d observations",
+                worker_id,
+                len(result.observations),
+            )
+            return TxResult()
+        self._health.heartbeat([worker_id], now_ms)
+
+        all_updates = self._observations_to_updates(cur, result.observations)
+        if not all_updates:
+            return TxResult()
+
+        all_task_ids = [u.task_id for u in all_updates]
+        task_map = reads.bulk_get_task_detail(cur, all_task_ids)
+        attempt_keys: list[tuple[JobName, int]] = []
+        for u in all_updates:
+            attempt_keys.append((u.task_id, u.attempt_id))
+            task = task_map.get(u.task_id)
+            if task is not None and task.current_attempt_id != u.attempt_id:
+                attempt_keys.append((u.task_id, task.current_attempt_id))
+        attempt_map = reads.bulk_get_attempts(cur, attempt_keys)
+
+        req = HeartbeatApplyRequest(worker_id=worker_id, updates=all_updates)
+        return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+    def _assigned_updates_from_plan(
+        self,
+        plan: WorkerReconcilePlan,
+        error: str,
+        cur: Tx,
+    ) -> list[TaskUpdate]:
+        """Return synthetic WORKER_FAILED updates for ASSIGNED attempts in the plan.
+
+        Rows whose attempt has already moved out of ASSIGNED (concurrent
+        state changes) are skipped.
+        """
+        candidates: list[tuple[JobName, int]] = []
+        for desired in plan.request.desired:
+            if not desired.HasField("run") or not desired.run.HasField("request"):
+                continue
+            candidates.append((JobName.from_wire(desired.task_id), desired.attempt_id))
+
+        if not candidates:
+            return []
+
+        task_map = reads.bulk_get_task_detail(cur, [task_id for task_id, _ in candidates])
+
+        updates: list[TaskUpdate] = []
+        for task_id, attempt_id in candidates:
+            task = task_map.get(task_id)
+            if task is None:
+                continue
+            if task.state != job_pb2.TASK_STATE_ASSIGNED:
+                continue
+            updates.append(
+                TaskUpdate(
+                    task_id=task_id,
+                    attempt_id=attempt_id,
+                    new_state=job_pb2.TASK_STATE_WORKER_FAILED,
+                    error=f"Reconcile RPC failed: {error}",
+                )
+            )
+        return updates
+
+    def _observations_to_updates(
+        self,
+        cur: Tx,
+        observations: list[worker_pb2.Worker.AttemptObservation],
+    ) -> list[TaskUpdate]:
+        """Translate ``AttemptObservation`` protos into ``TaskUpdate`` list.
+
+        MISSING becomes ``FAILED("worker_lost_spec")``. Routing prefers the
+        ``attempt_uid`` when set: the UID is resolved to its ``(task_id,
+        attempt_id)`` composite through the ``idx_task_attempts_uid`` index.
+        Observations from pre-UID workers carry an empty ``attempt_uid`` and
+        fall back to the composite key the worker reports directly. A UID that
+        resolves to nothing (e.g. its attempt row was deleted) likewise falls
+        back to the reported composite.
+        """
+        uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
+        uid_to_composite = reads.resolve_attempt_uids(cur, uids)
+
+        updates: list[TaskUpdate] = []
+        for obs in observations:
+            resolved = uid_to_composite.get(AttemptUid(obs.attempt_uid)) if obs.attempt_uid else None
+            if resolved is not None:
+                task_id, attempt_id = resolved
+            else:
+                if obs.attempt_uid:
+                    logger.debug(
+                        "AttemptObservation uid=%s did not resolve; falling back to composite key",
+                        obs.attempt_uid,
+                    )
+                task_id = JobName.from_wire(obs.task_id)
+                attempt_id = obs.attempt_id
+            exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
+            error: str | None = obs.error or None
+            container_id: str | None = obs.container_id or None
+            if obs.state == job_pb2.TASK_STATE_MISSING:
+                updates.append(
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=attempt_id,
+                        new_state=job_pb2.TASK_STATE_FAILED,
+                        error="worker_lost_spec",
+                    )
+                )
+            else:
+                updates.append(
+                    TaskUpdate(
+                        task_id=task_id,
+                        attempt_id=attempt_id,
+                        new_state=obs.state,
+                        error=error,
+                        exit_code=exit_code,
+                        container_id=container_id,
+                    )
+                )
+        return updates
 
     def apply_heartbeats_batch(self, cur: Tx, requests: list[HeartbeatApplyRequest]) -> list[TxResult]:
         """Apply multiple heartbeats in a single transaction.

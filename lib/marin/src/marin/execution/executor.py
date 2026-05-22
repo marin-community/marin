@@ -643,6 +643,7 @@ def resolve_executor_step(
             original,
             deps=deps or list(original.deps),
             override_output_path=original.output_path,
+            resources=original.resources,
         )
 
     remote_callable = step.fn if isinstance(step.fn, RemoteCallable) else None
@@ -1298,6 +1299,11 @@ class Executor:
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
         self._depth_cache: dict[ExecutorStep, int] = {}
+        # Dedupe advisory warnings emitted from compute_version. Shared upstream
+        # DAG chains (e.g. nemotron download/normalize reused across 100+ sources)
+        # otherwise repeat the same warning thousands of times.
+        self._warned_duplicate_versions: set[str] = set()
+        self._warned_override_mismatches: set[tuple[str, str]] = set()
 
     def run(
         self,
@@ -1510,10 +1516,13 @@ class Executor:
             override_path = _make_prefix_absolute_path(self.prefix, override_path)
 
             if output_path != override_path:
-                logger.warning(
-                    f"Output path {output_path} doesn't match given "
-                    f"override {step.override_output_path}, using the latter."
-                )
+                mismatch_key = (output_path, override_path)
+                if mismatch_key not in self._warned_override_mismatches:
+                    self._warned_override_mismatches.add(mismatch_key)
+                    logger.warning(
+                        f"Output path {output_path} doesn't match given "
+                        f"override {step.override_output_path}, using the latter."
+                    )
                 output_path = override_path
 
         # Record everything
@@ -1524,7 +1533,8 @@ class Executor:
         if version_str not in self.version_str_to_step:
             self.steps.append(step)
             self.version_str_to_step[version_str] = step
-        else:
+        elif version_str not in self._warned_duplicate_versions:
+            self._warned_duplicate_versions.add(version_str)
             logger.warning(
                 f"Multiple `ExecutorStep`s (named {step.name}) have the same version; try to instantiate only once."
             )

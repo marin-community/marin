@@ -108,6 +108,7 @@ class ManualSliceHandle:
         _labels: dict[str, str],
         _created_at: Timestamp,
         _label_prefix: str,
+        _worker_port: int,
         _ssh_connections: list[DirectSshRemoteExec],
         _on_terminate: Callable[[list[str]], None] | None = None,
         _bootstrapping: bool = False,
@@ -117,6 +118,7 @@ class ManualSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._worker_port = _worker_port
         self._iris_labels = Labels(_label_prefix)
         self._ssh_connections = _ssh_connections
         self._on_terminate = _on_terminate
@@ -154,6 +156,7 @@ class ManualSliceHandle:
             ManualWorkerHandle(
                 _vm_id=construct_worker_id(self._slice_id, i),
                 _internal_address=host,
+                _port=self._worker_port,
                 _remote_exec=ssh,
             )
             for i, (host, ssh) in enumerate(zip(self._hosts, self._ssh_connections, strict=True))
@@ -201,10 +204,12 @@ class ManualWorkerProvider:
     def __init__(
         self,
         label_prefix: str,
+        worker_port: int,
         ssh_config: config_pb2.SshConfig | None = None,
         hosts: list[str] | None = None,
     ):
         self._label_prefix = label_prefix
+        self._worker_port = worker_port
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._all_hosts = list(hosts or [])
@@ -248,6 +253,7 @@ class ManualWorkerProvider:
         handle = ManualStandaloneWorkerHandle(
             _vm_id=config.name,
             _internal_address=host,
+            _port=self._worker_port,
             _remote_exec=remote_exec,
             _labels=dict(config.labels),
             _metadata=dict(config.metadata),
@@ -296,6 +302,7 @@ class ManualWorkerProvider:
             _labels=dict(config.labels),
             _created_at=Timestamp.now(),
             _label_prefix=self._label_prefix,
+            _worker_port=self._worker_port,
             _ssh_connections=ssh_connections,
             _on_terminate=on_terminate,
             _bootstrapping=worker_config is not None,

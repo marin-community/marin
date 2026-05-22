@@ -135,6 +135,12 @@ gpu = [
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
+  # 0.3.0 is missing the CUDA backend API needed by our current stack.
+  "jax-triton==0.3.1; sys_platform == 'linux'",
+  # This module imports Triton directly; stay on the tested minor without
+  # forcing an exact patch version.
+  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
   "torch==2.11.0",
   "torchvision==0.26.0",
 ]

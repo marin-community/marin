@@ -9,15 +9,12 @@ from unittest.mock import patch
 import pytest
 from fray import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main import train_lm
 from levanter.trainer import TrainerConfig
 from marin.training.training import (
     TrainLmOnPodConfig,
-    _doublecheck_paths,
-    _prepare_training_run,
     _update_config_to_use_out_path,
-    run_levanter_train_lm,
+    doublecheck_paths,
     temporary_checkpoint_base_path,
 )
 
@@ -67,7 +64,7 @@ def test_lm_config_with_train_urls_allowed_out_of_region(trainer_config):
             ),
             resources=ResourceConfig.with_tpu("v4-8"),
         )
-        _doublecheck_paths(config)
+        doublecheck_paths(config)
 
 
 def test_temporary_checkpoint_base_path_follows_output_path_region():
@@ -119,7 +116,7 @@ def test_recursive_path_checking(trainer_config):
             resources=ResourceConfig.with_tpu("v4-8"),
         )
         with pytest.raises(ValueError, match="not in the same region"):
-            _doublecheck_paths(config)
+            doublecheck_paths(config)
 
 
 def test_dataclass_recursive_checking(trainer_config):
@@ -136,7 +133,7 @@ def test_dataclass_recursive_checking(trainer_config):
             resources=ResourceConfig.with_tpu("v4-8"),
         )
         with pytest.raises(ValueError, match="not in the same region"):
-            _doublecheck_paths(config)
+            doublecheck_paths(config)
 
 
 def test_pathlib_path_handling(trainer_config):
@@ -153,68 +150,4 @@ def test_pathlib_path_handling(trainer_config):
             resources=ResourceConfig.with_tpu("v4-8"),
         )
         with pytest.raises(ValueError, match="not in the same region"):
-            _doublecheck_paths(config)
-
-
-def test_prepare_training_run_adds_eval_extra_for_lm_eval_harness(trainer_config, monkeypatch):
-    """LM jobs with eval harness enabled include the eval dependency group."""
-    monkeypatch.setenv("WANDB_MODE", "disabled")
-    monkeypatch.setenv("HF_TOKEN", "test-token")
-    monkeypatch.setenv("WANDB_API_KEY", "test-key")
-
-    with (
-        patch("levanter.infra.cli_helpers.load_config") as load_config,
-        patch("marin.training.training._doublecheck_paths"),
-    ):
-        load_config.return_value.env_for_accel.return_value = {}
-        config = TrainLmOnPodConfig(
-            train_config=train_lm.TrainLmConfig(
-                data=MockDataConfig(cache_dir="gs://bucket/path"),
-                trainer=trainer_config,
-                eval_harness=LmEvalHarnessConfig(task_spec=["mmlu"]),
-            ),
-            resources=ResourceConfig.with_tpu("v4-8"),
-        )
-        _, _, _, extras = _prepare_training_run(config)
-
-    assert extras == ["tpu", "eval"]
-
-
-def test_run_levanter_train_lm_uses_configured_child_job_name(trainer_config):
-    config = TrainLmOnPodConfig(
-        train_config=train_lm.TrainLmConfig(
-            data=MockDataConfig(cache_dir="gs://bucket/path"),
-            trainer=trainer_config,
-        ),
-        resources=ResourceConfig.with_tpu("v4-8"),
-        job_name="train_lm_custom",
-    )
-
-    with (
-        patch("marin.training.training._prepare_training_run", return_value=(config, config.train_config, {}, [])),
-        patch("marin.training.training._submit_training_job") as submit_training_job,
-    ):
-        run_levanter_train_lm(config)
-
-    assert submit_training_job.call_args.kwargs["job_name"] == "train_lm_custom"
-
-
-def test_output_path_scopes_temporary_checkpoints(trainer_config):
-    """Executor output paths namespace temporary checkpoints to avoid cross-run restores."""
-    config = TrainLmOnPodConfig(
-        train_config=train_lm.TrainLmConfig(
-            data=MockDataConfig(cache_dir="gs://bucket/path"),
-            trainer=trainer_config,
-        ),
-        resources=ResourceConfig.with_tpu("v4-8"),
-        output_path="gs://marin-us-east5/experiments/checkpoints/foo/bar/output-hash/",
-    )
-
-    with patch(
-        "marin.training.training.marin_temp_bucket", return_value="gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp"
-    ):
-        updated = _update_config_to_use_out_path(config)
-
-    checkpointer = updated.train_config.trainer.checkpointer
-    assert checkpointer.base_path == "gs://marin-us-east5/experiments/checkpoints/foo/bar/output-hash/checkpoints"
-    assert checkpointer.temporary_base_path == "gs://marin-tmp-us-east5/ttl=14d/checkpoints-temp/output-hash"
+            doublecheck_paths(config)

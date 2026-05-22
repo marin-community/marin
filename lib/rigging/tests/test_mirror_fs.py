@@ -10,6 +10,7 @@ from rigging.filesystem import (
     TransferBudget,
     TransferBudgetExceeded,
     _mirror_remote_prefixes,
+    mirror_budget,
     resolve_mirror_url,
 )
 
@@ -187,8 +188,6 @@ def test_glob_discovers_remote_files(mirror_fs, mirror_env):
 
 def test_mirror_budget_context_manager(mirror_fs, mirror_env):
     """Transfer budget set via context manager is used for copies."""
-    from rigging.filesystem import mirror_budget
-
     _write_file(mirror_env["remote1"], "data/big.bin", b"x" * 1000)
 
     with mirror_budget(budget_gb=0.001):  # ~1MB
@@ -196,8 +195,6 @@ def test_mirror_budget_context_manager(mirror_fs, mirror_env):
 
 
 def test_mirror_budget_context_manager_blocks_over_budget(mirror_fs, mirror_env):
-    from rigging.filesystem import mirror_budget
-
     mirror_fs._budget.reset(limit_bytes=10 * 1024 * 1024 * 1024)  # high instance budget
     _write_file(mirror_env["remote1"], "data/big.bin", b"x" * 2000)
 

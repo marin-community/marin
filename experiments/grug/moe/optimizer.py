@@ -17,7 +17,8 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     """AdamH for Grug MoE. Four optimizer groups, no flags.
 
     - adamh: attention weights, dense MLP weights (2D matrices)
-    - adamh_expert: expert MLP weights (mlp.w_gate_up, mlp.w_down, shared.w_*)
+    - adamh_expert: expert MLP weights (mlp.expert_mlp.w_gate_up,
+      mlp.expert_mlp.w_down, shared.w_*)
     - adam: norms, biases, router, embeddings, attention gates (1D / small params)
     """
 
@@ -82,7 +83,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
-            if ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
+            if ".mlp.expert_mlp.w_" in path_lower or ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
             if hasattr(param, "ndim") and param.ndim >= 2:
                 return "adamh"

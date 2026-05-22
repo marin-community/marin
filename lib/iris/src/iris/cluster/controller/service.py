@@ -78,13 +78,13 @@ from iris.cluster.runtime.profile import (
     PROFILE_NAMESPACE,
     IrisProfile,
     build_profile_row,
-    parse_profile_target,
     profile_local_process,
 )
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
+    TaskAttempt,
     UserBudgetDefaults,
     WorkerId,
     is_job_finished,
@@ -286,6 +286,7 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
             exit_code=attempt.exit_code or 0,
             error=attempt.error or "",
             is_worker_failure=attempt_is_worker_failure(attempt.state),
+            attempt_uid=attempt.attempt_uid,
         )
         if attempt.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
@@ -835,6 +836,7 @@ def _attempts_for_worker(
             exit_code=row.exit_code or 0,
             error=row.error or "",
             is_worker_failure=attempt_is_worker_failure(row.state),
+            attempt_uid=row.attempt_uid,
         )
         if row.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))
@@ -1553,7 +1555,7 @@ class ControllerServiceImpl:
         Worker registers once, then waits for heartbeats from the controller.
         """
         if self._auth.provider is not None:
-            authorize(AuthzAction.REGISTER_WORKER)
+            authorize(AuthzAction.ACT_AS_WORKER)
 
         if not request.worker_id:
             logger.error("Worker at %s registered without worker_id", request.address)
@@ -1936,7 +1938,7 @@ class ControllerServiceImpl:
 
         # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
-            target = parse_profile_target(request.target)
+            target = TaskAttempt.from_wire(request.target)
             target.task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc
