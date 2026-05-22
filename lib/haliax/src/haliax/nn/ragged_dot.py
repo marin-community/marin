@@ -42,6 +42,7 @@ _AUTO_FALLBACK_EXCEPTIONS = (NotImplementedError, RuntimeError)
 _HAS_WARNED_AUTO_FALLBACK = False
 _TRITON_DEFAULT_BLOCK_N = 128
 _TRITON_BLACKWELL_BLOCK_N = 256
+_TPU_MEGABLOX_MIN_AUTODIFF_DIM = 128
 
 
 def _is_blackwell_gpu_backend() -> bool:
@@ -67,6 +68,11 @@ def _is_blackwell_gpu_backend() -> bool:
 def _ragged_dot_megablox_impl(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) -> jax.Array:
     if _gmm_megablox is None:
         raise NotImplementedError("megablox GMM is not available (TPU-only)")
+    if jax.default_backend() == "tpu" and min(lhs.shape[1], rhs.shape[2]) < _TPU_MEGABLOX_MIN_AUTODIFF_DIM:
+        raise NotImplementedError(
+            "megablox GMM is not selected for TPU ragged_dot shapes with contracting or output dimensions "
+            f"below {_TPU_MEGABLOX_MIN_AUTODIFF_DIM}; use the XLA implementation for these narrow shapes."
+        )
     tile_size = (512, 1024, 1024)  # (m, k, n)
     m, k, n = lhs.shape[0], lhs.shape[1], rhs.shape[2]
     return _gmm_megablox(

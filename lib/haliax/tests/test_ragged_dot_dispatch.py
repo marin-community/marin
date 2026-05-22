@@ -73,6 +73,27 @@ def test_ragged_dot_gpu_auto_uses_triton_when_available(monkeypatch):
     assert jnp.array_equal(auto_out, expected)
 
 
+def test_tpu_auto_uses_xla_for_narrow_megablox_shapes(monkeypatch):
+    lhs, rhs, group_sizes = _inputs()
+    xla_out = jnp.full((lhs.shape[0], rhs.shape[2]), 23.0, dtype=lhs.dtype)
+    monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "tpu")
+    monkeypatch.setattr(ragged_dot_module, "_gmm_megablox", object())
+    monkeypatch.setattr(ragged_dot_module, "_ragged_dot_xla_impl", lambda *_: xla_out)
+
+    auto_out = ragged_dot(lhs, rhs, group_sizes, implementation="auto")
+
+    assert jnp.array_equal(auto_out, xla_out)
+
+
+def test_explicit_megablox_rejects_narrow_shapes(monkeypatch):
+    lhs, rhs, group_sizes = _inputs()
+    monkeypatch.setattr(ragged_dot_module.jax, "default_backend", lambda: "tpu")
+    monkeypatch.setattr(ragged_dot_module, "_gmm_megablox", object())
+
+    with pytest.raises(NotImplementedError, match="below 128"):
+        ragged_dot(lhs, rhs, group_sizes, implementation="megablox")
+
+
 def test_triton_default_block_sizes_use_blackwell_n_tile(monkeypatch):
     monkeypatch.setattr(ragged_dot_module, "_is_blackwell_gpu_backend", lambda: True)
 

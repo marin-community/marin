@@ -712,3 +712,28 @@
   - This does not yet prove the B200 full `token_ragged_a2a` path correct; the pending B200 jobs are still needed for CUDA correctness and timing.
 - Next action:
   - Use the held TPU to reduce the Megablox/Pallas GMM compile failure separately, while waiting for the B200 two-GPU correctness jobs.
+
+### 2026-05-21 17:22 - Diagnose TPU Megablox GMM compile failure
+- Experiment ID: `B200-EP-021`
+- Hypothesis:
+  - The TPU Mosaic `Bad lhs type` failure in the full `token_ragged_a2a` sanity path may be a narrow-shape Megablox autodiff lowering issue rather than a token exchange bug.
+- Command:
+  - Reduced the failure on the held TPU by comparing:
+    - direct Megablox `gmm` calls;
+    - minimal `shard_map` calls through `haliax.nn.ragged_dot(..., implementation="megablox")`;
+    - full `token_ragged_a2a` forward and forward+backward with a pure-JAX dispatch-layout shim.
+  - Ran the focused dispatch test:
+    - `uv run pytest -o addopts='' lib/haliax/tests/test_ragged_dot_dispatch.py`
+- Result:
+  - Direct Megablox `gmm` compiled on TPU for BF16 and FP32 inputs, with both FP32 and input-dtype outputs.
+  - Minimal `shard_map` Megablox `ragged_dot` compiled for small and production-like dimensions.
+  - Full `token_ragged_a2a` forward compiled for tested hidden sizes, but the forward+backward narrow sanity shape failed before correctness comparison.
+  - Added a pre-lowering guard in `haliax.nn.ragged_dot` so automatic TPU dispatch falls back to XLA for narrow Megablox shapes; explicit `implementation="megablox"` now rejects those shapes early with a clear error.
+  - Reduced TPU forward+backward sanity then completed:
+    - `TOKEN_RAGGED_GMM_CHECK loss=183.443726 grad_l1=2677.305054`
+- Interpretation:
+  - The TPU failure is separate from the payload exchange. It is a narrow-shape Megablox/Pallas lowering constraint in the sanity path.
+  - Production-sized TPU Megablox GMM is not generally broken by this observation, so the workaround is intentionally narrow.
+  - B200 CUDA correctness remains pending on jobs `49916` and `49917`.
+- Next action:
+  - Wait for the B200 correctness jobs. If they remain pending, use the held GPU debug allocation once available to inspect full `token_ragged_a2a` value/gradient mismatch directly.
