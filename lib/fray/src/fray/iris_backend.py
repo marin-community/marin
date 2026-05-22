@@ -246,6 +246,9 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     shutdown_event.wait()
     logger.info(f"Actor {actor_name} shutting down")
     server.stop()
+    if actor_ctx._errors:
+        logger.error("Actor %s recorded %d failure(s); raising the first", actor_name, len(actor_ctx._errors))
+        raise actor_ctx._errors[0]
 
 
 class IrisActorHandle:
