@@ -916,3 +916,62 @@
   - The remaining reproduction gap is likely tied to production-ish BF16/topk=8 shape, capacity/segment pressure, or the benchmark's `stream_ring` comparison path rather than the basic token-rank protocol.
 - Next action:
   - Run a reduced BF16/topk=8 reproduction that compares `token_ragged_a2a` and `stream_ring` at a smaller but less toy shape, then bisect shape/capacity if the mismatch appears.
+
+### 2026-05-22 08:40 - Reduced BF16 top-k=8 reproduction shows large absolute mismatch
+- Experiment ID: `B200-EP-031`
+- Hypothesis:
+  - The full `token_ragged_a2a` mismatch may require a less toy BF16/top-k=8 shape even though the tiny float32 diagnostics passed.
+- Command:
+  - B200 Slurm jobs `50133` and `50134`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Shape:
+    - EP: `2`
+    - tokens: `8192`
+    - hidden: `1024`
+    - MLP dim: `1024`
+    - experts: `64`
+    - top-k: `8`
+    - shared expert dim: `0`
+    - dtype: `bfloat16`
+  - Compared `token_ragged_a2a` against `stream_ring` for forward output and loss gradients.
+- Result:
+  - Job `50133` failed in the measurement script while taking a max over zero-size shared-expert gradients.
+  - Corrected job `50134` completed successfully:
+    - `B200_BF16_REPRO tokens=8192 hidden=1024 mlp_dim=1024 experts=64 topk=8 out_max_abs=5.120000e+02 grad_max_abs=6.000000e+00 stream_loss=7.645470e+07 token_loss=7.645422e+07`
+- Interpretation:
+  - This reduced BF16/top-k=8 shape reproduces the large absolute error seen in the original B200 sanity checks.
+  - The losses are still very close in relative terms, so the next question is whether this is true semantic mismatch or BF16 numeric amplification from unscaled random weights and different ragged matmul ordering.
+- Next action:
+  - Run a normalized-error follow-up that prints output norms, relative error, and a scaled-weight case. If relative error stays small and scaled weights reduce absolute error, treat this as a tolerance/reference issue; if not, bisect shape and capacity.
+
+### 2026-05-22 08:40 - BF16 mismatch scales with output magnitude
+- Experiment ID: `B200-EP-032`
+- Hypothesis:
+  - If the reduced BF16/top-k=8 mismatch is numeric amplification rather than token-routing semantics, the relative error should stay small and the absolute error should shrink when weights are scaled down.
+- Command:
+  - B200 Slurm job `50136`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Same EP2 BF16/top-k=8 shape as job `50134`.
+  - Compared unscaled random weights with weights scaled by `1 / sqrt(hidden)`.
+- Result:
+  - Job `50136` completed successfully.
+  - Unscaled:
+    - output max-absolute error: `5.120000e+02`
+    - stream max absolute output: `5.248000e+04`
+    - diff RMS: `3.349279e+01`
+    - stream RMS: `8.743832e+03`
+    - relative L2: `3.830448e-03`
+    - relative max: `9.756098e-03`
+  - Scaled by `1 / sqrt(hidden)`:
+    - output max-absolute error: `1.562500e-02`
+    - stream max absolute output: `1.375000e+00`
+    - diff RMS: `8.601259e-04`
+    - stream RMS: `2.249349e-01`
+    - relative L2: `3.823887e-03`
+    - relative max: `1.136364e-02`
+- Interpretation:
+  - The large absolute BF16 mismatch scales with output magnitude. Relative RMS error is stable at about `0.38%` across unscaled and scaled weights.
+  - Combined with the passing payload, no-GMM, identity `ragged_dot`, and tiny full-MLP checks, this points to BF16 numeric differences between the token-rank path and stream-ring path, not a semantic token routing bug.
+  - The correctness gate should use relative/error-norm checks for BF16, or use scaled/model-like initialization for absolute checks.
+- Next action:
+  - Treat `token_ragged_a2a` as semantically correct under BF16 relative tolerance and resume performance work. The next useful B200 run is a production-ish timing comparison, but prior timing already showed the current pure-JAX token-ragged path is much slower than stream-ring and DeepEP, so optimization should focus on reducing the number of ragged exchanges or using a fused/custom transport.
