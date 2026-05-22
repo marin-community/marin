@@ -835,3 +835,84 @@
   - The remaining likely bug is after the dispatch payload exchange: local token-to-assignment expansion, assignment collapse, return exchange, scatter-add combine, or interaction with `ragged_dot` ordering.
 - Next action:
   - Stop debugging the dispatch payload exchange. Next B200 diagnostic should isolate the no-GMM path: dispatch tokens, expand assignments, collapse weighted identity outputs, return them, and compare against a direct per-token weighted reference.
+
+### 2026-05-22 02:09 - B200 no-GMM return/combine path passes
+- Experiment ID: `B200-EP-027`
+- Hypothesis:
+  - If dispatch, local assignment expansion, assignment collapse, return exchange, and scatter-add combine are correct, then replacing the expert computation with an identity should return `x * sum(topk_weights)` for each token.
+- Command:
+  - B200 Slurm job `50060`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Two-GPU no-GMM token-ragged diagnostic.
+- Result:
+  - Job `50060` completed successfully.
+  - No-GMM identity path matched the direct per-token reference:
+    - `B200_NO_GMM_CHECK max_abs=9.536743e-07`
+    - actual L1: `1.544883e+03`
+    - expected L1: `1.544883e+03`
+- Interpretation:
+  - The full `token_ragged_a2a` mismatch is not explained by dispatch payload ordering, return exchange ordering, source-token return metadata, assignment collapse, or source scatter-add combine.
+  - The remaining likely source is the expert computation stage, especially `ragged_dot` ordering/segment semantics under the token-rank-expanded layout, or the two-matmul gated MLP composition.
+- Next action:
+  - Submitted an identity `ragged_dot` diagnostic in the same token-rank path as B200 Slurm job `50061`. If that passes, reduce the full two-matmul gated MLP stage with deterministic small weights and compare against a host reference.
+
+### 2026-05-22 02:10 - B200 identity ragged-dot diagnostic hit shard_map VMA check
+- Experiment ID: `B200-EP-028`
+- Hypothesis:
+  - An identity `ragged_dot` inside the already-validated token-rank dispatch/return path should isolate whether `ragged_dot` ordering or segment semantics are the remaining source of the full `token_ragged_a2a` mismatch.
+- Command:
+  - B200 Slurm job `50061`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Two-GPU identity `ragged_dot` diagnostic.
+- Result:
+  - Job `50061` allocated two B200 GPUs but failed before producing a semantic result.
+  - Failure:
+    - `ValueError: When check_vma=True on jax.shard_map, manual_axis_type on jax.ShapeDtypeStruct must not be None`
+  - No `B200_RDOT_ID_CHECK` result was emitted.
+- Interpretation:
+  - This is another diagnostic-wrapper issue, not evidence about `ragged_dot` ordering.
+  - The Pallas-backed `ragged_dot` path needs the outer `shard_map` VMA check disabled in this standalone diagnostic.
+- Next action:
+  - Resubmitted the same identity `ragged_dot` diagnostic with `jax.shard_map(..., check_vma=False)` as B200 Slurm job `50127`.
+
+### 2026-05-22 02:34 - B200 identity ragged-dot path is close but not exact
+- Experiment ID: `B200-EP-029`
+- Hypothesis:
+  - If a single identity `ragged_dot` preserves assignment ordering in the token-rank path, the returned result should match the direct `x * sum(topk_weights)` reference up to matmul precision.
+- Command:
+  - B200 Slurm job `50127`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Two-GPU identity `ragged_dot` diagnostic with `jax.shard_map(..., check_vma=False)`.
+- Result:
+  - Job `50127` completed successfully.
+  - Identity `ragged_dot` path:
+    - `B200_RDOT_ID_CHECK max_abs=2.838612e-03`
+    - actual L1: `1.544884e+03`
+    - expected L1: `1.544883e+03`
+- Interpretation:
+  - A single identity `ragged_dot` does not show an ordering-scale failure. The residual is small compared with the full `token_ragged_a2a` mismatch and is consistent with low-level matmul precision rather than swapped or missing assignments.
+  - The remaining likely source is the full two-matmul gated MLP composition, its `ragged_dot` segment boundaries across the two calls, or the benchmark's reference comparison path.
+- Next action:
+  - Submitted a deterministic full two-matmul gated MLP check on the same tiny two-GPU token-rank shape against a direct host reference as B200 Slurm job `50128`.
+
+### 2026-05-22 02:35 - B200 tiny deterministic full MLP is close to host reference
+- Experiment ID: `B200-EP-030`
+- Hypothesis:
+  - If the full two-ragged-dot gated MLP composition is the source of the large `token_ragged_a2a` mismatch, a tiny deterministic two-GPU full-MLP check should show a semantic-scale error against a direct host reference.
+- Command:
+  - B200 Slurm job `50128`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Two-GPU deterministic full two-matmul gated MLP check with float32 inputs/weights.
+- Result:
+  - Job `50128` completed successfully.
+  - Full tiny MLP against direct host reference:
+    - `B200_FULL_MLP_REF_CHECK max_abs=2.333984e-01`
+    - actual L1: `1.291824e+05`
+    - expected L1: `1.291821e+05`
+    - dropped: `0`
+- Interpretation:
+  - The tiny float32 full-MLP path does not reproduce the large production correctness failure. The error is small relative to output scale and consistent with GPU matmul precision.
+  - Dispatch payload exchange, no-GMM return/combine, identity `ragged_dot`, and tiny deterministic full MLP are now all free of ordering-scale errors.
+  - The remaining reproduction gap is likely tied to production-ish BF16/topk=8 shape, capacity/segment pressure, or the benchmark's `stream_ring` comparison path rather than the basic token-rank protocol.
+- Next action:
+  - Run a reduced BF16/topk=8 reproduction that compares `token_ragged_a2a` and `stream_ring` at a smaller but less toy shape, then bisect shape/capacity if the mismatch appears.
