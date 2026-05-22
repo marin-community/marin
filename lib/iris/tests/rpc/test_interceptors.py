@@ -3,8 +3,6 @@
 
 import asyncio
 import logging
-import threading
-import time
 from dataclasses import dataclass
 from unittest.mock import Mock
 
@@ -104,90 +102,84 @@ def test_interceptor_logs_traceback_regardless_of_flag(caplog):
     assert any("kaboom" in r.message and r.exc_info is not None for r in caplog.records)
 
 
-def test_concurrency_limit_passes_through_unlimited_methods():
+@pytest.mark.asyncio
+async def test_concurrency_limit_passes_through_unlimited_methods():
     interceptor = ConcurrencyLimitInterceptor({"FetchLogs": 1})
-    ctx = _make_ctx("LaunchJob")
-    result = interceptor.intercept_unary_sync(lambda req, ctx: "ok", "request", ctx)
+
+    async def handler(req, ctx):
+        return "ok"
+
+    result = await interceptor.intercept_unary(handler, "request", _make_ctx("LaunchJob"))
     assert result == "ok"
 
 
-def test_concurrency_limit_caps_in_flight_calls():
+@pytest.mark.asyncio
+async def test_concurrency_limit_caps_in_flight_calls():
     limit = 3
     interceptor = ConcurrencyLimitInterceptor({"FetchLogs": limit})
-    release = threading.Event()
+    release = asyncio.Event()
     in_flight = 0
     peak = 0
-    lock = threading.Lock()
 
-    def handler(req, ctx):
+    async def handler(req, ctx):
         nonlocal in_flight, peak
-        with lock:
-            in_flight += 1
-            peak = max(peak, in_flight)
+        in_flight += 1
+        peak = max(peak, in_flight)
         try:
-            assert release.wait(timeout=5.0), "handler never released"
+            await release.wait()
             return "ok"
         finally:
-            with lock:
-                in_flight -= 1
+            in_flight -= 1
 
     num_callers = limit + 3
+    callers = [
+        asyncio.create_task(interceptor.intercept_unary(handler, "request", _make_ctx("FetchLogs")))
+        for _ in range(num_callers)
+    ]
 
-    def run():
-        interceptor.intercept_unary_sync(handler, "request", _make_ctx("FetchLogs"))
-
-    threads = [threading.Thread(target=run) for _ in range(num_callers)]
-    for t in threads:
-        t.start()
-
-    # Wait for the first wave to saturate the semaphore.
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline:
-        with lock:
-            if in_flight >= limit:
-                break
-
-    with lock:
-        assert in_flight == limit
+    # Let the loop run until the first wave saturates the semaphore.
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if in_flight >= limit:
+            break
+    assert in_flight == limit
 
     release.set()
-    for t in threads:
-        t.join(timeout=5.0)
-        assert not t.is_alive()
-
+    results = await asyncio.gather(*callers)
+    assert results == ["ok"] * num_callers
     assert peak == limit
 
 
-def test_concurrency_limit_sheds_when_deadline_expired_before_acquire():
+@pytest.mark.asyncio
+async def test_concurrency_limit_sheds_when_deadline_expired_before_acquire():
     interceptor = ConcurrencyLimitInterceptor({"FetchLogs": 1})
-    ctx = _make_ctx("FetchLogs", timeout_ms=0)
     called = False
 
-    def handler(req, ctx):
+    async def handler(req, ctx):
         nonlocal called
         called = True
         return "ok"
 
     with pytest.raises(ConnectError) as exc_info:
-        interceptor.intercept_unary_sync(handler, "request", ctx)
+        await interceptor.intercept_unary(handler, "request", _make_ctx("FetchLogs", timeout_ms=0))
     assert exc_info.value.code == Code.DEADLINE_EXCEEDED
     assert not called
 
 
-def test_concurrency_limit_sheds_when_deadline_expires_during_wait():
+@pytest.mark.asyncio
+async def test_concurrency_limit_sheds_when_deadline_expires_during_wait():
     """Deadline check after semaphore acquire: caller queues, then deadline lapses."""
     interceptor = ConcurrencyLimitInterceptor({"FetchLogs": 1})
-    release = threading.Event()
+    release = asyncio.Event()
 
-    def blocking_handler(req, ctx):
-        assert release.wait(timeout=5.0)
+    async def blocking_handler(req, ctx):
+        await release.wait()
         return "ok"
 
-    # Hold the single slot with one thread.
-    holder = threading.Thread(
-        target=lambda: interceptor.intercept_unary_sync(blocking_handler, "req", _make_ctx("FetchLogs", timeout_ms=5000))
+    holder = asyncio.create_task(
+        interceptor.intercept_unary(blocking_handler, "req", _make_ctx("FetchLogs", timeout_ms=5000))
     )
-    holder.start()
+    await asyncio.sleep(0)  # let the holder grab the slot
 
     # A ctx whose timeout_ms flips to 0 after the semaphore finally releases.
     expired_ctx = Mock()
@@ -196,29 +188,19 @@ def test_concurrency_limit_sheds_when_deadline_expires_during_wait():
 
     late_called = False
 
-    def late_handler(req, ctx):
+    async def late_handler(req, ctx):
         nonlocal late_called
         late_called = True
         return "ok"
 
-    result: list = []
-
-    def run_late():
-        try:
-            interceptor.intercept_unary_sync(late_handler, "req", expired_ctx)
-        except ConnectError as e:
-            result.append(e)
-
-    late = threading.Thread(target=run_late)
-    late.start()
-    # Let the late caller block on the semaphore, then free the holder.
-    time.sleep(0.1)
+    late = asyncio.create_task(interceptor.intercept_unary(late_handler, "req", expired_ctx))
+    await asyncio.sleep(0)  # let the late caller queue on the semaphore
     release.set()
-    holder.join(timeout=5.0)
-    late.join(timeout=5.0)
 
-    assert len(result) == 1
-    assert result[0].code == Code.DEADLINE_EXCEEDED
+    assert await holder == "ok"
+    with pytest.raises(ConnectError) as exc_info:
+        await late
+    assert exc_info.value.code == Code.DEADLINE_EXCEEDED
     assert not late_called
 
 
@@ -315,19 +297,23 @@ async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot():
     assert results == ["fast"] * limit
 
 
-def test_concurrency_limit_releases_slot_on_exception():
+@pytest.mark.asyncio
+async def test_concurrency_limit_releases_slot_on_exception():
     interceptor = ConcurrencyLimitInterceptor({"FetchLogs": 1})
 
-    def boom(req, ctx):
+    async def boom(req, ctx):
         raise ValueError("nope")
+
+    async def ok(req, ctx):
+        return "ok"
 
     ctx = _make_ctx("FetchLogs")
     for _ in range(3):
         with pytest.raises(ValueError):
-            interceptor.intercept_unary_sync(boom, "request", ctx)
+            await interceptor.intercept_unary(boom, "request", ctx)
     # If the slot leaked, the fourth call would deadlock — a successful
     # passthrough proves the semaphore was released on each exception.
-    assert interceptor.intercept_unary_sync(lambda req, ctx: "ok", "request", ctx) == "ok"
+    assert await asyncio.wait_for(interceptor.intercept_unary(ok, "request", ctx), timeout=1.0) == "ok"
 
 
 # --- Stats collector integration -------------------------------------------
