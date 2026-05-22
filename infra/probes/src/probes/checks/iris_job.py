@@ -30,14 +30,17 @@ _USER = "probes"
 
 
 class IrisJobSubmit:
-    """Submits a one-task CPU job constrained to ``zone`` and polls to terminal."""
+    """Submits a one-task CPU job constrained to ``zone`` and polls to terminal.
 
-    def __init__(self, client: RemoteClusterClient, zone: str, image: str):
+    No ``task_image`` is supplied — the worker falls back to its cluster
+    ``default_task_image``, so the canary exercises whatever image real jobs
+    in this cluster would default to."""
+
+    def __init__(self, client: RemoteClusterClient, zone: str):
         if not zone:
             raise ValueError("zone must be non-empty")
         self._client = client
         self._zone = zone
-        self._image = image
 
     def run(self, deadline_seconds: float) -> ProbeResult:
         job_id = JobName.root(_USER, f"canary-{self._zone}-{int(time.time())}")
@@ -57,7 +60,6 @@ class IrisJobSubmit:
                 max_retries_failure=0,
                 max_retries_preemption=0,
                 timeout=Duration.from_seconds(60),
-                task_image=self._image,
             )
         except Exception as exc:
             return ProbeResult.remote_error(ErrorClass.SUBMIT_REJECTED, f"{type(exc).__name__}: {exc}")

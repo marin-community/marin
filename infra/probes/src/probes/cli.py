@@ -53,13 +53,6 @@ from probes.probe import ProbeSpec
     help="GCP zone(s) to submit canary jobs into. Repeat for multiple zones; " "env var is comma-separated.",
 )
 @click.option(
-    "--dummy-image",
-    envvar="MARIN_PROBES_DUMMY_IMAGE",
-    default="marin-base:latest",
-    show_default=True,
-    help="Container image for the canary Iris job.",
-)
-@click.option(
     "--heartbeat-seconds",
     envvar="MARIN_PROBES_HEARTBEAT_SECONDS",
     default=30,
@@ -81,7 +74,6 @@ def cli(
     iris_endpoint: str,
     finelog_endpoint: str | None,
     zones: tuple[str, ...],
-    dummy_image: str,
     heartbeat_seconds: int,
     once: bool,
     log_level: str,
@@ -101,7 +93,6 @@ def cli(
         iris_endpoint=iris_endpoint,
         finelog_endpoint=finelog_endpoint,
         zones=zones,
-        dummy_image=dummy_image,
     )
 
     exit_code = run_canary(
@@ -119,7 +110,6 @@ def _build_specs(
     iris_endpoint: str,
     finelog_endpoint: str,
     zones: tuple[str, ...],
-    dummy_image: str,
 ) -> list[ProbeSpec]:
     iris_client = RemoteClusterClient(controller_address=iris_endpoint)
     specs: list[ProbeSpec] = [
@@ -148,7 +138,7 @@ def _build_specs(
                 location=zone,
                 cadence_seconds=300,
                 deadline_seconds=120.0,
-                probe=IrisJobSubmit(iris_client, zone=zone, image=dummy_image),
+                probe=IrisJobSubmit(iris_client, zone=zone),
             )
         )
     return specs

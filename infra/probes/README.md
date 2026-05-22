@@ -63,7 +63,6 @@ instance metadata, so the container starts with no per-deploy config file.
 | `--finelog-endpoint`    | `MARIN_PROBES_FINELOG_ENDPOINT`    | falls back to `--iris-endpoint`     |
 | `--zone` (repeatable)   | `MARIN_PROBES_ZONES` (comma-sep)   | *(required)*                        |
 | `--sqlite-path`         | `MARIN_PROBES_SQLITE_PATH`         | `/var/lib/probes/samples.sqlite`    |
-| `--dummy-image`         | `MARIN_PROBES_DUMMY_IMAGE`         | `marin-base:latest`                 |
 | `--heartbeat-seconds`   | `MARIN_PROBES_HEARTBEAT_SECONDS`   | `30`                                |
 | `--once`                | —                                  | (off)                               |
 | `--log-level`           | —                                  | `INFO`                              |
@@ -116,13 +115,12 @@ gcloud compute instances create-with-container ${VM} \
   --container-env=MARIN_PROBES_IRIS_ENDPOINT=https://iris-controller.internal:10001 \
   --container-env=MARIN_PROBES_FINELOG_ENDPOINT=https://iris-controller.internal:10001 \
   --container-env=MARIN_PROBES_ZONES=us-central1-a,europe-west4-b \
-  --container-env=MARIN_PROBES_DUMMY_IMAGE=marin-base:latest \
   --disk=name=probes-state,device-name=probes-state \
   --tags=probes
 ```
 
 After this, every rollout is `infra/probes/deploy/deploy.sh apply`. To
-change zones / endpoints / image, `gcloud compute instances update-container ${VM} --container-env=...` (or recreate).
+change zones / endpoints, `gcloud compute instances update-container ${VM} --container-env=...` (or recreate).
 
 ## Querying samples
 
