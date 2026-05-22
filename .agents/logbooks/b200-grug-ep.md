@@ -798,3 +798,21 @@
 - Next action:
   - Resubmitted the same payload-order diagnostic without the unsupported `shard_map` keyword as B200 Slurm job `50053`.
   - Use job `50053` to decide whether the remaining full-MoE mismatch is in exchange ordering or return/combine logic.
+
+### 2026-05-22 01:08 - B200 payload-order check hit shard_map output spec mismatch
+- Experiment ID: `B200-EP-025`
+- Hypothesis:
+  - The corrected two-GPU payload-order diagnostic should isolate whether CUDA `ragged_all_to_all` preserves token-rank payload order.
+- Command:
+  - B200 Slurm job `50053`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Two-GPU payload-order diagnostic for x, top-k metadata, weights, and source-token metadata.
+- Result:
+  - Job `50053` allocated two B200 GPUs but failed before running the exchange:
+    - failure: `ValueError: shard_map applied to the function '<lambda>' was given out_specs which require replication which can't be statically inferred`
+  - No `B200_PAYLOAD_CHECK` result was emitted.
+- Interpretation:
+  - This is still a diagnostic-wrapper issue, not payload-order evidence.
+  - The local output sharding spec was too narrow for the inferred data/expert variation in the returned `recv_sizes`.
+- Next action:
+  - Resubmitted the payload-order diagnostic with output specs that include the data and expert mesh axes where inference requires them as B200 Slurm job `50059`.
