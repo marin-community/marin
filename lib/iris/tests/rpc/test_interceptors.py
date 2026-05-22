@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import logging
 import threading
 import time
@@ -219,6 +220,45 @@ def test_concurrency_limit_sheds_when_deadline_expires_during_wait():
     assert len(result) == 1
     assert result[0].code == Code.DEADLINE_EXCEEDED
     assert not late_called
+
+
+@pytest.mark.asyncio
+async def test_concurrency_limit_async_does_not_block_event_loop():
+    """Regression: a saturated semaphore must not freeze the asyncio loop.
+
+    The async interceptor is invoked directly on the event loop (connectrpc
+    ASGI server). If the threading semaphore is acquired synchronously, a
+    waiting RPC parks the loop and starves every other coroutine until a
+    slot frees up. This test asserts the loop keeps making progress while
+    one async caller is queued behind a held slot.
+    """
+    interceptor = ConcurrencyLimitInterceptor({"FetchLogs": 1})
+    holder_release = asyncio.Event()
+
+    async def held_handler(req, ctx):
+        await holder_release.wait()
+        return "ok"
+
+    async def quick_handler(req, ctx):
+        return "fast"
+
+    holder = asyncio.create_task(interceptor.intercept_unary(held_handler, "req", _make_ctx("FetchLogs")))
+    # Yield so the holder grabs the only slot before the waiter arrives.
+    await asyncio.sleep(0)
+    waiter = asyncio.create_task(interceptor.intercept_unary(quick_handler, "req", _make_ctx("FetchLogs")))
+
+    # While the waiter is parked on the semaphore, an unrelated coroutine
+    # must still get scheduled. With the buggy blocking acquire, this
+    # ``asyncio.sleep`` never fires because the loop is wedged.
+    ticked = False
+    for _ in range(10):
+        await asyncio.sleep(0.01)
+        ticked = True
+    assert ticked
+
+    holder_release.set()
+    assert await holder == "ok"
+    assert await waiter == "fast"
 
 
 def test_concurrency_limit_releases_slot_on_exception():
