@@ -126,6 +126,22 @@ class WandbTracker(Tracker):
             type=type,
         )
 
+    def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
+        import wandb
+
+        if step is None and not commit:
+            step = self.run.step
+        if step is not None and step < self.run.step:
+            if step - self._last_warning_step > 500:
+                logger.warning(
+                    f"Step {step} is less than the current step {self.run.step}. Cowardly refusing to log HTML."
+                )
+                self._last_warning_step = step
+            return
+
+        wandb_step = None if step is None else int(step)
+        self.run.log({key: wandb.Html(str(html_path))}, step=wandb_step, commit=commit)
+
     def finish(self):
         if self._suppress_logging:
             return
