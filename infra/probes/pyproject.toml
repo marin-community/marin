@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-probes = "probes.__main__:main"
+probes = "marin_infra_probes:main"
 
 [dependency-groups]
 dev = ["pytest >= 8.4"]
@@ -31,7 +31,8 @@ find-links = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/probes"]
+only-include = ["src/marin_infra_probes.py"]
+sources = ["src"]
 
 [tool.pytest.ini_options]
 timeout = 30

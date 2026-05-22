@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import signal
 import time
 import uuid
 from collections.abc import Callable
@@ -37,7 +36,10 @@ ProbeFn = Callable[[], ProbeResult]
 
 
 @dataclass
-class _Spec:
+class Probe:
+    """A registered probe: a callable to run, a name to report it under, and
+    timing (per-run timeout, between-runs cadence)."""
+
     name: str
     fn: ProbeFn
     timeout: float
@@ -46,55 +48,38 @@ class _Spec:
 
 class ProbeRunner:
     """Register probes, then ``run()`` to execute each one forever on its own
-    cadence. SIGTERM/SIGINT (or ``stop()`` from another thread) stops cleanly.
-    Results are emitted via ``on_result(name, result)``; default just logs."""
+    cadence. Ctrl-C kills the process — there is no graceful shutdown path;
+    samples are stateless so there's nothing to clean up. Results are emitted
+    via ``on_result(name, result)``; default just logs."""
 
     def __init__(self, on_result: Callable[[str, ProbeResult], None] | None = None):
-        self._specs: list[_Spec] = []
+        self._probes: list[Probe] = []
         self._on_result = on_result or _log_result
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._shutdown: asyncio.Event | None = None
 
     def add_probe(self, name: str, fn: ProbeFn, *, timeout: float, cadence: float) -> None:
-        self._specs.append(_Spec(name, fn, timeout, cadence))
-
-    def stop(self) -> None:
-        """Request graceful shutdown; safe to call from any thread."""
-        if self._loop is not None and self._shutdown is not None:
-            self._loop.call_soon_threadsafe(self._shutdown.set)
+        self._probes.append(Probe(name, fn, timeout, cadence))
 
     def run(self) -> None:
-        if not self._specs:
+        if not self._probes:
             raise ValueError("no probes registered")
         asyncio.run(self._run_async())
 
     async def _run_async(self) -> None:
-        self._loop = asyncio.get_running_loop()
-        self._shutdown = asyncio.Event()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
-                self._loop.add_signal_handler(sig, self._shutdown.set)
-            except (NotImplementedError, ValueError, RuntimeError):
-                pass  # non-main thread, or platform doesn't support it
-        await asyncio.gather(*(self._run_probe(spec) for spec in self._specs))
+        await asyncio.gather(*(self._run_probe(probe) for probe in self._probes))
 
-    async def _run_probe(self, spec: _Spec) -> None:
-        assert self._shutdown is not None
-        while not self._shutdown.is_set():
+    async def _run_probe(self, probe: Probe) -> None:
+        while True:
             start = time.monotonic()
             try:
-                result = await asyncio.wait_for(asyncio.to_thread(spec.fn), timeout=spec.timeout)
+                result = await asyncio.wait_for(asyncio.to_thread(probe.fn), timeout=probe.timeout)
             except asyncio.TimeoutError:
                 result = ProbeResult(is_success=False)
             except Exception:
-                logger.exception("probe %s raised", spec.name)
+                logger.exception("probe %s raised", probe.name)
                 result = ProbeResult(is_success=False)
             result.wall_time = time.monotonic() - start
-            self._on_result(spec.name, result)
-            try:
-                await asyncio.wait_for(self._shutdown.wait(), timeout=spec.cadence)
-            except asyncio.TimeoutError:
-                pass
+            self._on_result(probe.name, result)
+            await asyncio.sleep(probe.cadence)
 
 
 def _log_result(name: str, result: ProbeResult) -> None:

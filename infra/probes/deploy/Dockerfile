@@ -51,5 +51,4 @@ VOLUME ["/var/lib/probes"]
 
 USER probes
 
-# All flags read from MARIN_PROBES_* env vars set on the VM.
-CMD ["python", "-m", "probes"]
+CMD ["python", "-m", "marin_infra_probes"]

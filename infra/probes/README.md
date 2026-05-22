@@ -23,9 +23,8 @@ infra/probes/
 │   ├── Dockerfile          # build context = infra/probes/
 │   ├── Dockerfile.dockerignore
 │   └── deploy.sh           # build / apply / status
-├── src/probes/
-│   ├── __init__.py         # empty (package marker)
-│   └── __main__.py         # ProbeResult, ProbeRunner, the three probes, main()
+├── src/
+│   └── marin_infra_probes.py  # ProbeResult, Probe, ProbeRunner, the three probes, main()
 └── tests/test_runner.py
 ```
 
@@ -33,7 +32,7 @@ The package is **standalone** — not a member of the root marin uv workspace. I
 
 ## Public API
 
-`src/probes/__main__.py` defines:
+`src/marin_infra_probes.py` defines:
 
 ```python
 @dataclass
@@ -41,11 +40,17 @@ class ProbeResult:
     is_success: bool
     wall_time: float | None = None
 
+@dataclass
+class Probe:
+    name: str
+    fn: Callable[[], ProbeResult]
+    timeout: float
+    cadence: float
+
 class ProbeRunner:
     def __init__(self, on_result: Callable[[str, ProbeResult], None] | None = None): ...
     def add_probe(self, name: str, fn: Callable[[], ProbeResult], *, timeout: float, cadence: float) -> None: ...
-    def run(self) -> None: ...       # blocks until SIGTERM/SIGINT or stop()
-    def stop(self) -> None: ...      # thread-safe
+    def run(self) -> None: ...   # blocks forever; Ctrl-C (KeyboardInterrupt) kills the process
 
 # Concrete probes (callables you pass to add_probe):
 def probe_controller_ping(iris: RemoteClusterClient) -> ProbeResult: ...
@@ -59,7 +64,7 @@ To add a probe, write a function returning `ProbeResult` and call `runner.add_pr
 
 ```bash
 cd infra/probes
-uv run python -m probes \
+uv run python -m marin_infra_probes \
   --iris-endpoint https://iris-controller.internal:10001 \
   --zone us-central1-a --zone europe-west4-b
 ```
