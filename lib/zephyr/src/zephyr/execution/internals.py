@@ -73,12 +73,12 @@ class ShardFailureKind(enum.StrEnum):
     INFRA = enum.auto()
 
 
-class WorkerState(enum.Enum):
-    INIT = "init"
-    READY = "ready"
-    BUSY = "busy"
-    FAILED = "failed"
-    DEAD = "dead"
+class WorkerState(enum.StrEnum):
+    INIT = enum.auto()
+    READY = enum.auto()
+    BUSY = enum.auto()
+    FAILED = enum.auto()
+    DEAD = enum.auto()
 
 
 class PullStatus(enum.StrEnum):
