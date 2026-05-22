@@ -860,7 +860,7 @@ def _run_tpu_bootstrap(
 
     while not cloud_deadline.expired():
         cloud_status = handle._describe_cloud()
-        if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
+        if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.PREEMPTED, CloudSliceState.DELETING):
             raise InfraError(f"Slice {handle.slice_id} entered {cloud_status.state} while waiting for cloud READY")
         if cloud_status.state == CloudSliceState.READY:
             all_have_ips = all(w.internal_address for w in cloud_status.workers)
@@ -983,7 +983,7 @@ def _run_vm_slice_bootstrap(
     # Phase 1: wait for cloud READY with an internal IP
     while not cloud_deadline.expired():
         cloud_status = handle._describe_cloud()
-        if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.DELETING):
+        if cloud_status.state in (CloudSliceState.FAILED, CloudSliceState.PREEMPTED, CloudSliceState.DELETING):
             raise InfraError(f"VM slice {handle.slice_id} entered {cloud_status.state} while waiting for cloud READY")
         if cloud_status.state == CloudSliceState.READY and cloud_status.workers:
             if cloud_status.workers[0].internal_address:

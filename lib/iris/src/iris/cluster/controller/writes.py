@@ -18,7 +18,7 @@ Areas covered (previously split across writes/<entity>.py):
 """
 
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from rigging.timing import Timestamp
 from sqlalchemy import Table, delete, func, insert, select, update
@@ -32,6 +32,7 @@ from iris.cluster.controller.schema import (
     job_config_table,
     jobs_table,
     meta_table,
+    node_lifecycle_events_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -69,6 +70,67 @@ def writes_to(
         return fn
 
     return deco
+
+
+# ---------------------------------------------------------------------------
+# Node lifecycle events
+# ---------------------------------------------------------------------------
+
+
+@writes_to(node_lifecycle_events_table)
+def record_node_lifecycle_event(
+    tx: Tx,
+    *,
+    observed_at_ms: int,
+    source: str,
+    reason: str,
+    confidence: str,
+    event_id: str | None = None,
+    event_time_ms: int | None = None,
+    provider: str = "",
+    scale_group: str = "",
+    slice_id: str = "",
+    worker_id: str = "",
+    node_name: str = "",
+    zone: str = "",
+    device_type: str = "",
+    device_variant: str = "",
+    capacity_type: str = "",
+    task_id: str = "",
+    attempt_id: int | None = None,
+    cloud_state: str = "",
+    previous_state: str = "",
+    message: str = "",
+    raw_json: Mapping[str, object] | None = None,
+) -> str:
+    """Append a controller-observed node/slice lifecycle event."""
+    event_id = event_id or secrets.token_hex(16)
+    tx.execute(
+        insert(node_lifecycle_events_table).values(
+            event_id=event_id,
+            observed_at_ms=observed_at_ms,
+            event_time_ms=event_time_ms,
+            provider=provider,
+            source=str(source),
+            reason=str(reason),
+            confidence=str(confidence),
+            scale_group=scale_group,
+            slice_id=slice_id,
+            worker_id=worker_id,
+            node_name=node_name,
+            zone=zone,
+            device_type=device_type,
+            device_variant=device_variant,
+            capacity_type=capacity_type,
+            task_id=task_id,
+            attempt_id=attempt_id,
+            cloud_state=cloud_state,
+            previous_state=previous_state,
+            message=message,
+            raw_json=dict(raw_json or {}),
+        )
+    )
+    return event_id
 
 
 # ---------------------------------------------------------------------------

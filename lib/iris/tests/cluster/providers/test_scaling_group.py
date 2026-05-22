@@ -19,6 +19,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
     _zones_from_config,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.node_lifecycle import NodeLifecycleConfidence, NodeLifecycleReason, NodeLifecycleSource
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -221,6 +222,54 @@ class TestScalingGroupVmGroupOwnership:
         assert handle.terminated
         assert group.slice_count() == 0
         assert group.get_slice("slice-001") is None
+
+    def test_scale_down_records_node_lifecycle_event(self, scale_group_config: config_pb2.ScaleGroupConfig, tmp_path):
+        """scale_down() snapshots the slice before removing it from the controller DB."""
+        db = ControllerDB(db_dir=Path(tmp_path))
+        handle = make_fake_slice_handle("slice-001", all_ready=True)
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform, db=db)
+        group.reconcile()
+        _mark_discovered_ready(group, [handle], timestamp=Timestamp.from_ms(1000))
+
+        group.scale_down(
+            "slice-001",
+            Timestamp.from_ms(2000),
+            lifecycle_reason=NodeLifecycleReason.GCP_PREEMPTION,
+            lifecycle_source=NodeLifecycleSource.GCP_TPU_API,
+            lifecycle_confidence=NodeLifecycleConfidence.REPORTED,
+            lifecycle_message="GCP reported TPU PREEMPTED",
+            lifecycle_cloud_state="PREEMPTED",
+        )
+
+        raw_conn = db._sa_write_engine.raw_connection()
+        try:
+            row = raw_conn.execute(
+                """
+                SELECT observed_at_ms, source, reason, confidence, provider, scale_group, slice_id,
+                       node_name, zone, device_type, device_variant, cloud_state, previous_state, raw_json
+                FROM node_lifecycle_events
+                """
+            ).fetchone()
+        finally:
+            raw_conn.close()
+            db.close()
+
+        assert row is not None
+        assert row[0] == 2000
+        assert row[1] == "gcp_tpu_api"
+        assert row[2] == "gcp_preemption"
+        assert row[3] == "reported"
+        assert row[4] == "gcp"
+        assert row[5] == "test-group"
+        assert row[6] == "slice-001"
+        assert row[7] == "slice-001"
+        assert row[8] == "us-central1-a"
+        assert row[9] == "tpu"
+        assert row[10] == "v5p-8"
+        assert row[11] == "PREEMPTED"
+        assert row[12] == "ready"
+        assert "slice-001-vm-0" in row[13]
 
     def test_terminate_all_continues_on_individual_failure(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """terminate_all() terminates remaining slices even if one fails."""

@@ -9,8 +9,10 @@ import logging
 import threading
 from dataclasses import dataclass
 
+from rigging.timing import Timestamp
 from sqlalchemy import select
 
+from iris.cluster.controller import writes
 from iris.cluster.controller.autoscaler.scaling_group import (
     GroupSnapshot,
     ScalingGroup,
@@ -19,6 +21,7 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 )
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, TrackedWorkerRow, restore_tracked_workers
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.node_lifecycle import NodeLifecycleConfidence, NodeLifecycleReason, NodeLifecycleSource
 from iris.cluster.controller.schema import scaling_groups_table, slices_table, workers_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import CloudSliceState, SliceHandle
@@ -112,12 +115,15 @@ def restore_autoscaler_state(
     groups: dict[str, ScalingGroup],
     checkpoint: AutoscalerCheckpoint,
     platform: WorkerInfraProvider,
+    db: ControllerDB | None = None,
 ) -> dict[str, TrackedWorker]:
     """Restore scaling groups and tracked workers from a checkpoint."""
 
     cloud_by_group: dict[str, list[SliceHandle]] = {}
+    timestamp = Timestamp.now()
     for listed in platform.list_all_slices():
         if listed.state not in _LIVE_CLOUD_STATES:
+            _record_reclaimed_node_lifecycle_event(db, listed.handle, listed.state, timestamp)
             _reclaim_dead_slice(listed.handle, listed.state)
             continue
         cloud_by_group.setdefault(listed.handle.scale_group, []).append(listed.handle)
@@ -143,6 +149,50 @@ def restore_autoscaler_state(
         group.purge_persisted_slice_rows(restore_result.discarded_slice_ids)
 
     return restore_tracked_workers(checkpoint.tracked_worker_rows)
+
+
+def _record_reclaimed_node_lifecycle_event(
+    db: ControllerDB | None,
+    handle: SliceHandle,
+    state: CloudSliceState,
+    timestamp: Timestamp,
+) -> None:
+    """Record non-live cloud slices seen during startup recovery."""
+    if db is None:
+        return
+    source = NodeLifecycleSource.GCP_TPU_API
+    reason = NodeLifecycleReason.CLOUD_DELETED_OR_MISSING
+    confidence = NodeLifecycleConfidence.INFERRED
+    if state == CloudSliceState.PREEMPTED:
+        reason = NodeLifecycleReason.GCP_PREEMPTION
+        confidence = NodeLifecycleConfidence.REPORTED
+    elif state == CloudSliceState.DELETING:
+        reason = NodeLifecycleReason.CLOUD_DELETING
+        confidence = NodeLifecycleConfidence.REPORTED
+    elif state == CloudSliceState.FAILED:
+        if getattr(handle, "is_queued_resource", False):
+            source = NodeLifecycleSource.GCP_QUEUED_RESOURCE
+            reason = NodeLifecycleReason.QUEUED_RESOURCE_FAILED
+            confidence = NodeLifecycleConfidence.REPORTED
+        else:
+            source = NodeLifecycleSource.IRIS_BOOTSTRAP
+            reason = NodeLifecycleReason.BOOTSTRAP_FAILED
+    with db.transaction() as cur:
+        writes.record_node_lifecycle_event(
+            cur,
+            observed_at_ms=timestamp.epoch_ms(),
+            source=source,
+            reason=reason,
+            confidence=confidence,
+            provider="gcp" if str(source).startswith("gcp_") else "",
+            scale_group=handle.scale_group,
+            slice_id=handle.slice_id,
+            node_name=handle.slice_id,
+            zone=handle.zone,
+            cloud_state=state.value,
+            message=f"reclaiming non-live cloud slice during autoscaler restore: {state.value}",
+            raw_json={"labels": handle.labels, "reclaimed": True},
+        )
 
 
 def _reclaim_dead_slice(handle: SliceHandle, state: CloudSliceState) -> None:

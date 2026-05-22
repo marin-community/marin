@@ -246,6 +246,92 @@ def test_fresh_db_schema_matches_0027_end_state(tmp_path: Path) -> None:
     db.close()
 
 
+# =============================================================================
+# Migration 0028_node_lifecycle_events
+# =============================================================================
+
+
+def test_fresh_db_schema_includes_node_lifecycle_events(tmp_path: Path) -> None:
+    db = ControllerDB(db_dir=tmp_path)
+    raw_conn = db._sa_write_engine.raw_connection()
+    try:
+        cols = {row[1]: row for row in _table_info(raw_conn, "node_lifecycle_events")}
+        assert {
+            "event_id",
+            "observed_at_ms",
+            "event_time_ms",
+            "provider",
+            "source",
+            "reason",
+            "confidence",
+            "scale_group",
+            "slice_id",
+            "worker_id",
+            "node_name",
+            "zone",
+            "device_type",
+            "device_variant",
+            "capacity_type",
+            "task_id",
+            "attempt_id",
+            "cloud_state",
+            "previous_state",
+            "message",
+            "raw_json",
+        }.issubset(cols)
+        assert cols["event_id"][5] == 1, "event_id must be the primary key"
+        assert cols["observed_at_ms"][3] == 1, "observed_at_ms must be NOT NULL"
+
+        indexes = {row[1]: row for row in _index_list(raw_conn, "node_lifecycle_events")}
+        assert "idx_node_lifecycle_observed_at" in indexes
+        assert "idx_node_lifecycle_slice_observed" in indexes
+        assert "idx_node_lifecycle_worker_observed" in indexes
+        assert "idx_node_lifecycle_reason_observed" in indexes
+
+        recorded = {row[0] for row in raw_conn.execute("SELECT name FROM schema_migrations").fetchall()}
+        assert "0028_node_lifecycle_events.py" in recorded
+    finally:
+        raw_conn.close()
+    db.close()
+
+
+def test_migration_0028_is_idempotent(tmp_path: Path) -> None:
+    import importlib.util
+
+    db = ControllerDB(db_dir=tmp_path)
+    migration_path = Path(__file__).parents[3] / "src/iris/cluster/controller/migrations/0028_node_lifecycle_events.py"
+    spec = importlib.util.spec_from_file_location("m0028", migration_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    raw_conn = db._sa_write_engine.raw_connection()
+    try:
+        module.migrate(raw_conn)
+        module.migrate(raw_conn)
+        raw_conn.execute(
+            """
+            INSERT INTO node_lifecycle_events (
+                event_id, observed_at_ms, source, reason, confidence
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("evt-1", 1234, "gcp_tpu_api", "gcp_preemption", "reported"),
+        )
+        with pytest.raises(Exception, match="CHECK"):
+            raw_conn.execute(
+                """
+                INSERT INTO node_lifecycle_events (
+                    event_id, observed_at_ms, source, reason, confidence
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                ("evt-2", 1235, "gcp_tpu_api", "not-a-reason", "reported"),
+            )
+        raw_conn.rollback()
+    finally:
+        raw_conn.close()
+    db.close()
+
+
 def _create_simple_table(db: ControllerDB) -> None:
     """Create a simple key/value table for testing mutation helpers."""
     with db.transaction() as cur:

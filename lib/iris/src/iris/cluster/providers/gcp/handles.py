@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 _TPU_STATE_MAP: dict[str, CloudSliceState] = {
     "CREATING": CloudSliceState.CREATING,
     "READY": CloudSliceState.READY,
+    "PREEMPTED": CloudSliceState.PREEMPTED,
     "REPAIRING": CloudSliceState.REPAIRING,
     "DELETING": CloudSliceState.DELETING,
 }

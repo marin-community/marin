@@ -13,6 +13,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.node_lifecycle import NodeLifecycleConfidence, NodeLifecycleReason, NodeLifecycleSource
 from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.providers.types import SliceHandle
 from iris.rpc import config_pb2, vm_pb2
@@ -123,7 +124,15 @@ def terminate_slices_for_workers(
             reason=f"workers failed: {', '.join(failed_workers)}",
         )
         group.record_slice_preempted(slice_id, timestamp)
-        handle = group.detach_slice(slice_id)
+        handle = group.detach_slice(
+            slice_id,
+            timestamp,
+            lifecycle_reason=NodeLifecycleReason.HEARTBEAT_LOST,
+            lifecycle_source=NodeLifecycleSource.IRIS_WORKER_HEALTH,
+            lifecycle_confidence=NodeLifecycleConfidence.INFERRED,
+            lifecycle_message=f"workers failed: {', '.join(failed_workers)}",
+            lifecycle_raw_json={"failed_worker_ids": failed_workers},
+        )
         unregister_slice_workers(slice_id, worker_ids=slice_worker_ids)
         if handle is not None:
             termination_requests.append(SliceTerminationRequest(slice_id=slice_id, group=group, handle=handle))

@@ -50,6 +50,7 @@ from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build
 from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.node_lifecycle import NodeLifecycleConfidence, NodeLifecycleReason, NodeLifecycleSource
 from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import (
@@ -467,12 +468,66 @@ class Autoscaler:
                     )
                 elif status.state == CloudSliceState.FAILED:
                     group.mark_slice_failed(slice_id, error_message=status.error_message)
-                    group.scale_down(slice_id)
+                    reason = status.error_message if status.error_message else "bootstrap failed"
+                    group.scale_down(
+                        slice_id,
+                        timestamp,
+                        lifecycle_reason=NodeLifecycleReason.BOOTSTRAP_FAILED,
+                        lifecycle_source=NodeLifecycleSource.IRIS_BOOTSTRAP,
+                        lifecycle_confidence=NodeLifecycleConfidence.INFERRED,
+                        lifecycle_message=reason,
+                        lifecycle_cloud_state=status.state.value,
+                    )
                     self._unregister_slice_workers(slice_id)
                     group.record_slice_boot_failed(slice_id, timestamp)
-                    reason = status.error_message if status.error_message else "bootstrap failed"
                     self._log_action(
                         "slice_failed",
+                        group.name,
+                        slice_id,
+                        reason=reason,
+                        status="failed",
+                    )
+                elif status.state == CloudSliceState.PREEMPTED:
+                    reason = "GCP reported TPU PREEMPTED"
+                    group.mark_slice_failed(slice_id, error_message=reason)
+                    group.scale_down(
+                        slice_id,
+                        timestamp,
+                        lifecycle_reason=NodeLifecycleReason.GCP_PREEMPTION,
+                        lifecycle_source=NodeLifecycleSource.GCP_TPU_API,
+                        lifecycle_confidence=NodeLifecycleConfidence.REPORTED,
+                        lifecycle_message=reason,
+                        lifecycle_cloud_state=status.state.value,
+                    )
+                    self._unregister_slice_workers(slice_id)
+                    group.record_slice_preempted(slice_id, timestamp)
+                    self._log_action(
+                        "slice_preempted",
+                        group.name,
+                        slice_id,
+                        reason=reason,
+                        status="failed",
+                    )
+                elif status.state == CloudSliceState.DELETING:
+                    reason = "cloud slice entered DELETING"
+                    group.mark_slice_failed(slice_id, error_message=reason)
+                    group.scale_down(
+                        slice_id,
+                        timestamp,
+                        lifecycle_reason=NodeLifecycleReason.CLOUD_DELETING,
+                        lifecycle_source=(
+                            NodeLifecycleSource.GCP_TPU_API
+                            if group.provider_kind == "gcp"
+                            else NodeLifecycleSource.IRIS_AUTOSCALER
+                        ),
+                        lifecycle_confidence=NodeLifecycleConfidence.REPORTED,
+                        lifecycle_message=reason,
+                        lifecycle_cloud_state=status.state.value,
+                    )
+                    self._unregister_slice_workers(slice_id)
+                    group.record_slice_preempted(slice_id, timestamp)
+                    self._log_action(
+                        "slice_deleting",
                         group.name,
                         slice_id,
                         reason=reason,
@@ -482,7 +537,20 @@ class Autoscaler:
                     age = Duration.from_ms(timestamp.epoch_ms() - handle.created_at.epoch_ms())
                     if age >= self._unresolvable_timeout:
                         group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
-                        group.scale_down(slice_id)
+                        group.scale_down(
+                            slice_id,
+                            timestamp,
+                            lifecycle_reason=NodeLifecycleReason.CLOUD_DELETED_OR_MISSING,
+                            lifecycle_source=(
+                                NodeLifecycleSource.GCP_TPU_API
+                                if group.provider_kind == "gcp"
+                                else NodeLifecycleSource.IRIS_AUTOSCALER
+                            ),
+                            lifecycle_confidence=NodeLifecycleConfidence.INFERRED,
+                            lifecycle_message=f"cloud slice unresolved for {age}",
+                            lifecycle_cloud_state=status.state.value,
+                            lifecycle_raw_json={"age_ms": age.to_ms()},
+                        )
                         self._unregister_slice_workers(slice_id)
                         group.record_slice_boot_failed(slice_id, timestamp)
                         self._log_action(
@@ -564,7 +632,14 @@ class Autoscaler:
         # runtime, so the BackoffDetector's scale-up budget shouldn't decay.
         for slice_id, (group, reason) in tripped.items():
             group.mark_slice_failed(slice_id, error_message=reason)
-            group.scale_down(slice_id, timestamp)
+            group.scale_down(
+                slice_id,
+                timestamp,
+                lifecycle_reason=NodeLifecycleReason.HEALTH_PROBE_FAILED,
+                lifecycle_source=NodeLifecycleSource.IRIS_WORKER_HEALTH,
+                lifecycle_confidence=NodeLifecycleConfidence.INFERRED,
+                lifecycle_message=reason,
+            )
             self._unregister_slice_workers(slice_id)
             self._log_action(
                 "slice_failed",
@@ -651,7 +726,7 @@ class Autoscaler:
         tracked workers. Call at startup before loops begin.
         """
         checkpoint = load_autoscaler_checkpoint(db)
-        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform)
+        restored_workers = restore_autoscaler_state(self._groups, checkpoint, platform, db=db)
         self.restore_tracked_workers(restored_workers)
         logger.info("Restored %d tracked workers", len(restored_workers))
 

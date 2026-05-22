@@ -31,12 +31,20 @@ from sqlalchemy import (
 )
 from sqlalchemy.types import TypeDecorator
 
+from iris.cluster.controller.node_lifecycle import (
+    NODE_LIFECYCLE_CONFIDENCES,
+    NODE_LIFECYCLE_REASONS,
+    NODE_LIFECYCLE_SOURCES,
+)
 from iris.cluster.types import JobName, WorkerId
 
 USER_ROLE_DEFAULT = "user"
 USER_ROLE_CHECK = "role IN ('admin', 'user', 'worker')"
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
 IS_RESERVATION_HOLDER_CHECK = "is_reservation_holder IN (0, 1)"
+NODE_LIFECYCLE_EVENT_SOURCE_CHECK = "source IN (" + ", ".join(repr(v) for v in NODE_LIFECYCLE_SOURCES) + ")"
+NODE_LIFECYCLE_REASON_CHECK = "reason IN (" + ", ".join(repr(v) for v in NODE_LIFECYCLE_REASONS) + ")"
+NODE_LIFECYCLE_CONFIDENCE_CHECK = "confidence IN (" + ", ".join(repr(v) for v in NODE_LIFECYCLE_CONFIDENCES) + ")"
 
 
 class JobNameType(TypeDecorator):
@@ -491,6 +499,41 @@ slices_table = Table(
     Column("created_at_ms", Integer, nullable=False, server_default="0"),
     Column("error_message", String, nullable=False, server_default="''"),
     Index("idx_slices_scale_group", "scale_group"),
+)
+
+
+node_lifecycle_events_table = Table(
+    "node_lifecycle_events",
+    metadata,
+    Column("event_id", String, primary_key=True),
+    Column("observed_at_ms", Integer, nullable=False),
+    Column("event_time_ms", Integer),
+    Column("provider", String, nullable=False, server_default="''"),
+    Column("source", String, nullable=False),
+    Column("reason", String, nullable=False),
+    Column("confidence", String, nullable=False),
+    Column("scale_group", String, nullable=False, server_default="''"),
+    Column("slice_id", String, nullable=False, server_default="''"),
+    Column("worker_id", String, nullable=False, server_default="''"),
+    Column("node_name", String, nullable=False, server_default="''"),
+    Column("zone", String, nullable=False, server_default="''"),
+    Column("device_type", String, nullable=False, server_default="''"),
+    Column("device_variant", String, nullable=False, server_default="''"),
+    Column("capacity_type", String, nullable=False, server_default="''"),
+    Column("task_id", String, nullable=False, server_default="''"),
+    Column("attempt_id", Integer),
+    Column("cloud_state", String, nullable=False, server_default="''"),
+    Column("previous_state", String, nullable=False, server_default="''"),
+    Column("message", String, nullable=False, server_default="''"),
+    Column("raw_json", JSONDict(), nullable=False, server_default="'{}'"),
+    CheckConstraint(NODE_LIFECYCLE_EVENT_SOURCE_CHECK, name="node_lifecycle_events_source_check"),
+    CheckConstraint(NODE_LIFECYCLE_REASON_CHECK, name="node_lifecycle_events_reason_check"),
+    CheckConstraint(NODE_LIFECYCLE_CONFIDENCE_CHECK, name="node_lifecycle_events_confidence_check"),
+    Index("idx_node_lifecycle_observed_at", "observed_at_ms"),
+    Index("idx_node_lifecycle_scale_group_observed", "scale_group", "observed_at_ms"),
+    Index("idx_node_lifecycle_slice_observed", "slice_id", "observed_at_ms"),
+    Index("idx_node_lifecycle_worker_observed", "worker_id", "observed_at_ms"),
+    Index("idx_node_lifecycle_reason_observed", "reason", "observed_at_ms"),
 )
 
 

@@ -34,12 +34,18 @@ from iris.cluster.constraints import (
     evaluate_constraint,
     is_cpu_device_type_constraint,
 )
+from iris.cluster.controller import writes
 from iris.cluster.controller.autoscaler.backoff_detector import (
     BackoffDetector,
     GroupHealth,
     SliceFate,
 )
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.node_lifecycle import (
+    NodeLifecycleConfidence,
+    NodeLifecycleReason,
+    NodeLifecycleSource,
+)
 from iris.cluster.controller.schema import scaling_groups_table, slices_table
 from iris.cluster.providers.protocols import WorkerInfraProvider
 from iris.cluster.providers.types import Labels, QuotaExhaustedError, SliceHandle
@@ -112,6 +118,16 @@ DEFAULT_SCALE_UP_RATE_LIMIT = 16  # per minute
 DEFAULT_SCALE_DOWN_RATE_LIMIT = 32  # per minute
 DEFAULT_IDLE_THRESHOLD = Duration.from_minutes(10)
 DEFAULT_QUOTA_TIMEOUT = Duration.from_minutes(5)
+_ACCELERATOR_TYPE_LABELS = {
+    config_pb2.ACCELERATOR_TYPE_CPU: "cpu",
+    config_pb2.ACCELERATOR_TYPE_GPU: "gpu",
+    config_pb2.ACCELERATOR_TYPE_TPU: "tpu",
+}
+_CAPACITY_TYPE_LABELS = {
+    config_pb2.CAPACITY_TYPE_PREEMPTIBLE: "preemptible",
+    config_pb2.CAPACITY_TYPE_ON_DEMAND: "on-demand",
+    config_pb2.CAPACITY_TYPE_RESERVED: "reserved",
+}
 
 
 @dataclass
@@ -185,6 +201,12 @@ def _zone_from_template(template: config_pb2.SliceConfig) -> str | None:
     if template.HasField("coreweave") and template.coreweave.region:
         return template.coreweave.region
     return None
+
+
+def _provider_from_template(template: config_pb2.SliceConfig) -> str:
+    """Provider name derived from a scale group's slice template."""
+    platform = template.WhichOneof("platform")
+    return platform or ""
 
 
 def build_worker_config_for_group(
@@ -418,6 +440,57 @@ class ScalingGroup:
         with self._db.transaction() as cur:
             cur.execute(delete(slices_table).where(slices_table.c.scale_group == self.name))
 
+    def _db_record_node_lifecycle_event(
+        self,
+        *,
+        slice_id: str,
+        state: SliceState,
+        timestamp: Timestamp,
+        source: NodeLifecycleSource | str,
+        reason: NodeLifecycleReason | str,
+        confidence: NodeLifecycleConfidence | str,
+        message: str = "",
+        cloud_state: str = "",
+        raw_json: dict[str, object] | None = None,
+    ) -> str | None:
+        if self._db is None:
+            return None
+        resources = self.resources
+        device_type = ""
+        device_variant = ""
+        capacity_type = ""
+        if resources is not None:
+            device_type = _ACCELERATOR_TYPE_LABELS.get(resources.device_type, "")
+            device_variant = resources.device_variant
+            capacity_type = _CAPACITY_TYPE_LABELS.get(resources.capacity_type, "")
+        worker_ids = list(state.worker_ids)
+        raw: dict[str, object] = {
+            "worker_ids": worker_ids,
+            "slice_created_at_ms": state.handle.created_at.epoch_ms(),
+        }
+        if raw_json:
+            raw.update(raw_json)
+        with self._db.transaction() as cur:
+            return writes.record_node_lifecycle_event(
+                cur,
+                observed_at_ms=timestamp.epoch_ms(),
+                source=str(source),
+                reason=str(reason),
+                confidence=str(confidence),
+                provider=self.provider_kind,
+                scale_group=self.name,
+                slice_id=slice_id,
+                node_name=state.handle.slice_id,
+                zone=getattr(state.handle, "zone", "") or self.zone or "",
+                device_type=device_type,
+                device_variant=device_variant,
+                capacity_type=capacity_type,
+                cloud_state=cloud_state,
+                previous_state=state.lifecycle.value,
+                message=message,
+                raw_json=raw,
+            )
+
     def purge_persisted_slice_rows(self, slice_ids: Sequence[str]) -> None:
         """Delete the named slice rows from the slices table in a single transaction."""
         if self._db is None or not slice_ids:
@@ -486,6 +559,11 @@ class ScalingGroup:
         if template.HasField("coreweave") and template.coreweave.region:
             return template.coreweave.region
         return None
+
+    @property
+    def provider_kind(self) -> str:
+        """Cloud/provider kind derived from the slice template."""
+        return _provider_from_template(self._config.slice_template)
 
     @property
     def current_demand(self) -> int:
@@ -665,7 +743,18 @@ class ScalingGroup:
 
         return self._platform.create_slice(slice_config, worker_config=worker_config)
 
-    def scale_down(self, slice_id: str, timestamp: Timestamp | None = None) -> None:
+    def scale_down(
+        self,
+        slice_id: str,
+        timestamp: Timestamp | None = None,
+        *,
+        lifecycle_reason: NodeLifecycleReason | str | None = None,
+        lifecycle_source: NodeLifecycleSource | str = NodeLifecycleSource.IRIS_AUTOSCALER,
+        lifecycle_confidence: NodeLifecycleConfidence | str = NodeLifecycleConfidence.CONTROLLER_ACTION,
+        lifecycle_message: str = "",
+        lifecycle_cloud_state: str = "",
+        lifecycle_raw_json: dict[str, object] | None = None,
+    ) -> None:
         """Terminate a slice.
 
         Always removes the slice from in-memory tracking and the DB, even if
@@ -677,17 +766,49 @@ class ScalingGroup:
             slice_id: ID of the slice to terminate
             timestamp: Optional timestamp (for testing)
         """
-        handle = self.detach_slice(slice_id, timestamp=timestamp)
+        handle = self.detach_slice(
+            slice_id,
+            timestamp=timestamp,
+            lifecycle_reason=lifecycle_reason,
+            lifecycle_source=lifecycle_source,
+            lifecycle_confidence=lifecycle_confidence,
+            lifecycle_message=lifecycle_message,
+            lifecycle_cloud_state=lifecycle_cloud_state,
+            lifecycle_raw_json=lifecycle_raw_json,
+        )
         if handle is not None:
             self._terminate_slice_handle(handle, context="cleaning up anyway")
 
-    def detach_slice(self, slice_id: str, timestamp: Timestamp | None = None) -> SliceHandle | None:
+    def detach_slice(
+        self,
+        slice_id: str,
+        timestamp: Timestamp | None = None,
+        *,
+        lifecycle_reason: NodeLifecycleReason | str | None = None,
+        lifecycle_source: NodeLifecycleSource | str = NodeLifecycleSource.IRIS_AUTOSCALER,
+        lifecycle_confidence: NodeLifecycleConfidence | str = NodeLifecycleConfidence.CONTROLLER_ACTION,
+        lifecycle_message: str = "",
+        lifecycle_cloud_state: str = "",
+        lifecycle_raw_json: dict[str, object] | None = None,
+    ) -> SliceHandle | None:
         """Remove a slice from tracking and persistence without terminating it."""
         timestamp = timestamp or Timestamp.now()
         with self._slices_lock:
             state = self._slices.pop(slice_id, None)
         if state is None:
             return None
+        if lifecycle_reason is not None:
+            self._db_record_node_lifecycle_event(
+                slice_id=slice_id,
+                state=state,
+                timestamp=timestamp,
+                source=lifecycle_source,
+                reason=lifecycle_reason,
+                confidence=lifecycle_confidence,
+                message=lifecycle_message,
+                cloud_state=lifecycle_cloud_state,
+                raw_json=lifecycle_raw_json,
+            )
         self._last_scale_down = timestamp
         self._db_remove_slice(slice_id)
         self._db_update_group()
@@ -953,7 +1074,15 @@ class ScalingGroup:
                 pending,
                 target_capacity,
             )
-            self.scale_down(slice_state.handle.slice_id, timestamp)
+            self.scale_down(
+                slice_state.handle.slice_id,
+                timestamp,
+                lifecycle_reason=NodeLifecycleReason.IRIS_SCALE_DOWN,
+                lifecycle_source=NodeLifecycleSource.IRIS_AUTOSCALER,
+                lifecycle_confidence=NodeLifecycleConfidence.CONTROLLER_ACTION,
+                lifecycle_message=f"idle for {idle_ms}ms; target={target_capacity}; ready={ready}; pending={pending}",
+                lifecycle_raw_json={"idle_ms": idle_ms, "target_capacity": target_capacity},
+            )
             terminated.append(slice_state.handle)
 
         return terminated

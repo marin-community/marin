@@ -574,6 +574,31 @@ def test_gcp_list_slices_skips_deleting_tpus():
     assert handle.slice_id not in slice_ids
 
 
+def test_gcp_list_all_slices_surfaces_preempted_tpus():
+    """list_all_slices exposes GCP TPU PREEMPTED for autoscaler recovery."""
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project")
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
+
+    cfg = config_pb2.SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=config_pb2.ACCELERATOR_TYPE_TPU,
+        accelerator_variant="v5litepod-8",
+    )
+    cfg.gcp.zone = "us-central2-b"
+    cfg.gcp.runtime_version = "tpu-ubuntu2204-base"
+    cfg.labels[Labels("iris").iris_managed] = "true"
+    cfg.labels[Labels("iris").iris_scale_group] = "tpu-group"
+
+    handle = platform.create_slice(cfg)
+    gcp_service.advance_tpu_state(handle.slice_id, "us-central2-b", "PREEMPTED")
+
+    all_slices = platform.list_all_slices()
+    by_id = {s.handle.slice_id: s for s in all_slices}
+    assert by_id[handle.slice_id].state == CloudSliceState.PREEMPTED
+    assert by_id[handle.slice_id].handle.describe().state == CloudSliceState.PREEMPTED
+
+
 def test_gcp_create_slice_resolves_ghcr_image_in_worker_config():
     """create_slice rewrites GHCR images in worker_config via resolve_image."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="my-proj")

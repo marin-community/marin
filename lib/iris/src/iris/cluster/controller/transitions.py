@@ -31,6 +31,7 @@ from iris.cluster.controller.codec import (
 )
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.lru_cache import LRUCache
+from iris.cluster.controller.node_lifecycle import NodeLifecycleConfidence, NodeLifecycleReason, NodeLifecycleSource
 from iris.cluster.controller.projections.endpoints import AddEndpointOutcome, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import (
@@ -2318,6 +2319,30 @@ class ControllerTransitions:
         last_hb = liveness.last_heartbeat_ms
         last_contact_age_ms = None if not last_hb else max(0, now_ms - last_hb)
         self._health.mark_unhealthy(worker_id)
+        worker_row = (
+            cur.execute(select(workers_table).where(workers_table.c.worker_id == worker_id)).mappings().fetchone()
+        )
+        if worker_row is not None:
+            writes.record_node_lifecycle_event(
+                cur,
+                observed_at_ms=now_ms,
+                source=NodeLifecycleSource.IRIS_WORKER_HEALTH,
+                reason=NodeLifecycleReason.HEARTBEAT_LOST,
+                confidence=NodeLifecycleConfidence.INFERRED,
+                provider="gcp" if worker_row["md_gce_zone"] or worker_row["md_tpu_name"] else "",
+                scale_group=worker_row["scale_group"],
+                slice_id=worker_row["slice_id"],
+                worker_id=str(worker_id),
+                node_name=worker_row["md_tpu_name"] or worker_row["md_gce_instance_name"] or worker_row["address"],
+                zone=worker_row["md_gce_zone"],
+                device_type=worker_row["device_type"],
+                device_variant=worker_row["device_variant"],
+                message=error,
+                raw_json={
+                    "address": worker_row["address"],
+                    "last_contact_age_ms": last_contact_age_ms,
+                },
+            )
         removal = self._remove_failed_worker(cur, worker_id, error, now_ms=now_ms)
         # _remove_failed_worker deletes the worker row (via write_workers.remove_worker),
         # which FK-cascades into worker_attributes and calls

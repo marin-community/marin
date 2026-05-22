@@ -15,11 +15,14 @@ import time
 import pytest
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
+from iris.cluster.controller.autoscaler import recovery as autoscaler_recovery
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
 from iris.cluster.controller.autoscaler.routing import route_demand
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.providers.types import (
     CloudSliceState,
+    ListedSlice,
     QuotaExhaustedError,
     SliceStatus,
 )
@@ -1548,6 +1551,39 @@ class TestAutoscalerUnresolvableTimeout:
         assert group.slice_count() == 0
         autoscaler.shutdown()
 
+    def test_preempted_slice_records_reported_lifecycle_event(
+        self, scale_group_config: config_pb2.ScaleGroupConfig, tmp_path
+    ):
+        """A cloud PREEMPTED state becomes a reported GCP preemption event."""
+        db = ControllerDB(db_dir=tmp_path)
+        handle = make_mock_slice_handle("slice-001", created_at_ms=0)
+        handle._status = SliceStatus(state=CloudSliceState.PREEMPTED, worker_count=0, workers=[])
+        platform = make_mock_platform(slices_to_discover=[handle])
+        group = ScalingGroup(scale_group_config, platform, db=db)
+        group.reconcile()
+        autoscaler = Autoscaler(
+            scale_groups={"test-group": group},
+            evaluation_interval=Duration.from_seconds(0.1),
+            platform=platform,
+        )
+
+        autoscaler.refresh({}, timestamp=Timestamp.from_ms(1_000))
+
+        assert group.slice_count() == 0
+        raw_conn = db._sa_write_engine.raw_connection()
+        try:
+            row = raw_conn.execute(
+                """
+                SELECT source, reason, confidence, cloud_state, scale_group, slice_id
+                FROM node_lifecycle_events
+                """
+            ).fetchone()
+        finally:
+            raw_conn.close()
+            db.close()
+            autoscaler.shutdown()
+        assert row == ("gcp_tpu_api", "gcp_preemption", "reported", "PREEMPTED", "test-group", "slice-001")
+
     def test_unknown_then_ready_before_timeout_recovers(self, scale_group_config: config_pb2.ScaleGroupConfig):
         """A slice that was UNKNOWN but becomes READY before timeout is marked ready."""
         created_at_ms = 0
@@ -1575,6 +1611,45 @@ class TestAutoscalerUnresolvableTimeout:
 
         assert group.ready_slice_count() == 1
         autoscaler.shutdown()
+
+
+class TestAutoscalerRecoveryNodeLifecycle:
+    """Tests for node lifecycle events emitted during startup recovery."""
+
+    def test_restore_records_preempted_reclaim_event(
+        self, scale_group_config: config_pb2.ScaleGroupConfig, tmp_path, monkeypatch
+    ):
+        db = ControllerDB(db_dir=tmp_path)
+        handle = make_mock_slice_handle("slice-001", created_at_ms=0)
+        platform = make_mock_platform()
+        platform.list_all_slices.return_value = [ListedSlice(handle=handle, state=CloudSliceState.PREEMPTED)]
+        reclaimed: list[tuple[str, CloudSliceState]] = []
+        monkeypatch.setattr(
+            autoscaler_recovery,
+            "_reclaim_dead_slice",
+            lambda h, state: reclaimed.append((h.slice_id, state)),
+        )
+
+        autoscaler_recovery.restore_autoscaler_state(
+            groups={},
+            checkpoint=autoscaler_recovery.AutoscalerCheckpoint(group_snapshots={}, tracked_worker_rows=[]),
+            platform=platform,
+            db=db,
+        )
+
+        raw_conn = db._sa_write_engine.raw_connection()
+        try:
+            row = raw_conn.execute(
+                """
+                SELECT source, reason, confidence, cloud_state, scale_group, slice_id
+                FROM node_lifecycle_events
+                """
+            ).fetchone()
+        finally:
+            raw_conn.close()
+            db.close()
+        assert row == ("gcp_tpu_api", "gcp_preemption", "reported", "PREEMPTED", "test-group", "slice-001")
+        assert reclaimed == [("slice-001", CloudSliceState.PREEMPTED)]
 
 
 class TestAutoscalerHealthProbe:
