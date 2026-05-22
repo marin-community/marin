@@ -816,3 +816,22 @@
   - The local output sharding spec was too narrow for the inferred data/expert variation in the returned `recv_sizes`.
 - Next action:
   - Resubmitted the payload-order diagnostic with output specs that include the data and expert mesh axes where inference requires them as B200 Slurm job `50059`.
+
+### 2026-05-22 01:28 - B200 token-rank payload exchange passes
+- Experiment ID: `B200-EP-026`
+- Hypothesis:
+  - If CUDA `ragged_all_to_all` is preserving the packed token-rank payload order, the isolated two-GPU payload diagnostic should exactly match the NumPy reference order for x, top-k metadata, weights, and source-token metadata.
+- Command:
+  - B200 Slurm job `50059`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Two-GPU payload-order diagnostic after fixing the local `shard_map` wrapper.
+- Result:
+  - Job `50059` completed successfully.
+  - Isolated payload exchange matched exactly:
+    - `B200_PAYLOAD_CHECK max_abs=0.000000e+00`
+    - received sizes: `[[32, 32], [32, 32]]`
+- Interpretation:
+  - The B200 mismatch in the full `token_ragged_a2a` MoE path is not explained by CUDA `ragged_all_to_all` reordering the token-rank payloads in the dispatch exchange.
+  - The remaining likely bug is after the dispatch payload exchange: local token-to-assignment expansion, assignment collapse, return exchange, scatter-add combine, or interaction with `ragged_dot` ordering.
+- Next action:
+  - Stop debugging the dispatch payload exchange. Next B200 diagnostic should isolate the no-GMM path: dispatch tokens, expand assignments, collapse weighted identity outputs, return them, and compare against a direct per-token weighted reference.
