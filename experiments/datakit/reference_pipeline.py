@@ -111,6 +111,11 @@ from experiments.datakit.store.datakit_store import (
 logger = logging.getLogger(__name__)
 
 
+# Sources to skip. ``numinamath-1.5`` is a fresh add (#5841) and not yet
+# included in the trained domain centroids -- assigning it would just produce
+# garbage cluster ids until we retrain.
+_EXCLUDE_SOURCES: frozenset[str] = frozenset({"numinamath-1.5"})
+
 # Clustering knobs. Must match the centroids file passed in.
 K_TRAIN = 5000
 K_VIEWS: tuple[int, ...] = (40, 1000)
@@ -164,8 +169,12 @@ def build_steps(
             and ``lookup_<K_TRAIN>_to_<k>.npy`` for each K in ``K_VIEWS``.
         quality_model_bin: GCS path to the trained fasttext quality ``.bin``.
     """
-    sources = all_sources()
-    logger.info("Reference pipeline: %d sources", len(sources))
+    sources = {name: src for name, src in all_sources().items() if name not in _EXCLUDE_SOURCES}
+    logger.info(
+        "Reference pipeline: %d sources (excluded: %s)",
+        len(sources),
+        sorted(_EXCLUDE_SOURCES),
+    )
 
     centroids_uri = f"{domain_centroids_dir.rstrip('/')}/centroids_{K_TRAIN}.npy"
     lookup_uris = {k: f"{domain_centroids_dir.rstrip('/')}/lookup_{K_TRAIN}_to_{k}.npy" for k in K_VIEWS}
