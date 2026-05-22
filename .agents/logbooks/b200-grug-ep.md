@@ -759,3 +759,23 @@
   - This is not a DeepEP parity measurement. It is a TPU transport-scaling probe for token-rank ragged exchange versus the stream-ring baseline at `topk=8`.
 - Next action:
   - Babysit `/dlwh/token-ragged-tpu32-v5lite`; if it fails during compile or runtime, fall back to a payload-only token ragged A2A microbenchmark on the same TPU topology.
+
+### 2026-05-21 21:44 - B200 float-metadata token-ragged retry
+- Experiment ID: `B200-EP-023`
+- Hypothesis:
+  - If the B200 `token_ragged_a2a` mismatch came from integer payload handling through `ragged_all_to_all`, carrying top-k and source-token metadata as `float32` payloads should fix the two-GPU correctness check.
+- Command:
+  - B200 Slurm job `49916`.
+  - Code commit: `9887b433b09cf4e20e80de0c4795f1ebd0934e5c`.
+  - Two-GPU correctness-only sanity check comparing `token_ragged_a2a` against `stream_ring`.
+- Result:
+  - Job `49916` completed with exit code `0`.
+  - Result stayed incorrect:
+    - output max-absolute error vs `stream_ring`: `1.280000e+02`
+    - gradient max-absolute error vs `stream_ring`: `8.000000e+00`
+  - The paired two-GPU debug hold job `49917` failed/cancelled after allocation and did not provide an interactive debug window.
+- Interpretation:
+  - The B200 correctness bug is not explained by int32 token metadata payloads alone. The float-metadata diagnostic reproduced the same output and gradient errors as the prior two-GPU run.
+  - The TPU payload-only check still shows the token-rank exchange order can be correct in isolation, so the remaining bug is more likely in the full return/combine path or local token-to-assignment expansion under the real CUDA execution.
+- Next action:
+  - Submit a new short two-GPU debug/sanity path that prints token payload order, returned source-token order, per-rank counts, and local assignment counts for a tiny deterministic case before running the full MLP comparison.
