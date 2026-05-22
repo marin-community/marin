@@ -23,6 +23,17 @@ import jax
 import jax.numpy as jnp
 import jaxlib
 import numpy as np
+from levanter.kernels.deepep.availability import (
+    BUILD_WITH_TORCH_EXTENSION_ENV,
+    DISABLE_SM90_ENV,
+    LOAD_AS_PYTHON_MODULE_ENV,
+    TRANSPORT_REQUIRED_FILES,
+    deepep_cache_root,
+    deepep_cuda_arch_flag,
+    deepep_source_root,
+    deepep_torch_cuda_arch_list,
+    env_flag,
+)
 
 _DISPATCH_TARGET = "levanter_deepep_dispatch_intranode"
 _DISPATCH_CACHED_TARGET = "levanter_deepep_dispatch_intranode_cached"
@@ -32,11 +43,6 @@ _SHUTDOWN_SYMBOL = "levanter_deepep_shutdown_intranode_runtime"
 _LAST_ERROR_SYMBOL = "levanter_deepep_last_error"
 _PROBE_DISPATCH_SYMBOL = "levanter_deepep_probe_dispatch_kernel_attributes"
 _RUN_HOST_DISPATCH_SYMBOL = "levanter_deepep_run_host_dispatch_round"
-_DEEPEP_SRC_ENV = "DEEPEP_SRC_ROOT"
-_DEEPEP_CUDA_ARCH_ENV = "DEEPEP_CUDA_ARCH"
-_DISABLE_SM90_ENV = "DISABLE_SM90_FEATURES"
-_BUILD_WITH_TORCH_EXTENSION_ENV = "DEEPEP_BUILD_WITH_TORCH_EXTENSION"
-_LOAD_AS_PYTHON_MODULE_ENV = "DEEPEP_LOAD_AS_PYTHON_MODULE"
 _EXTENDED_INTRNODE_DISPATCH_MACRO = "LEVANTER_DEEPEP_EXTENDED_INTRNODE_DISPATCH"
 _PYEXT_MODULE_NAME_MACRO = "LEVANTER_DEEPEP_PYEXT_MODULE_NAME"
 _BUILD_CACHE_SCHEMA_VERSION = "transport_ffi_raw_dlink_v5"
@@ -91,24 +97,11 @@ def _cuda_sources(deepep_root: Path) -> tuple[Path, ...]:
 
 
 def _deepep_source_root() -> Path:
-    raw = os.environ.get(_DEEPEP_SRC_ENV)
-    if not raw:
-        raise RuntimeError(
-            f"{_DEEPEP_SRC_ENV} must point at a DeepEP checkout before using the DeepEP JAX FFI transport kernels."
-        )
-    root = Path(raw).expanduser().resolve()
-    required = (
-        root / "csrc" / "kernels" / "layout.cu",
-        root / "csrc" / "kernels" / "runtime.cu",
-        root / "csrc" / "kernels" / "intranode.cu",
-    )
-    if not all(path.is_file() for path in required):
-        raise RuntimeError(f"{_DEEPEP_SRC_ENV}={root} does not look like a DeepEP source checkout")
-    return root
+    return deepep_source_root(required_files=TRANSPORT_REQUIRED_FILES, purpose="the DeepEP JAX FFI transport kernels")
 
 
 def _cache_root() -> Path:
-    return Path.home() / ".cache" / "marin" / "deepep_transport_ffi"
+    return deepep_cache_root("deepep_transport_ffi")
 
 
 def _python_extension_suffix() -> str:
@@ -135,38 +128,25 @@ def _python_include_dirs() -> tuple[Path, ...]:
 
 
 def _cuda_arch_flag() -> list[str]:
-    arch = os.environ.get(_DEEPEP_CUDA_ARCH_ENV, "sm_90").strip()
-    if not arch.startswith("sm_"):
-        raise RuntimeError(f"{_DEEPEP_CUDA_ARCH_ENV} must look like sm_90, sm_90a, or sm_100, got {arch!r}")
-    compute = arch.replace("sm_", "compute_", 1)
-    return [f"-gencode=arch={compute},code={arch}"]
+    return deepep_cuda_arch_flag()
 
 
 def _sm90_compile_flags() -> list[str]:
-    if int(os.environ.get(_DISABLE_SM90_ENV, "0")):
+    if env_flag(DISABLE_SM90_ENV):
         return ["-DDISABLE_SM90_FEATURES"]
     return []
 
 
 def _use_torch_extension_build() -> bool:
-    return bool(int(os.environ.get(_BUILD_WITH_TORCH_EXTENSION_ENV, "0")))
+    return env_flag(BUILD_WITH_TORCH_EXTENSION_ENV)
 
 
 def _load_as_python_module() -> bool:
-    return bool(int(os.environ.get(_LOAD_AS_PYTHON_MODULE_ENV, "0")))
+    return env_flag(LOAD_AS_PYTHON_MODULE_ENV)
 
 
 def _torch_cuda_arch_list() -> str:
-    if int(os.environ.get(_DISABLE_SM90_ENV, "0")):
-        return "8.0"
-    arch = os.environ.get(_DEEPEP_CUDA_ARCH_ENV, "sm_90").strip()
-    if arch == "sm_90":
-        return "9.0"
-    if arch == "sm_90a":
-        return "9.0a"
-    if arch == "sm_100":
-        return "10.0"
-    raise RuntimeError(f"Unsupported {_DEEPEP_CUDA_ARCH_ENV}={arch!r} for torch extension build")
+    return deepep_torch_cuda_arch_list()
 
 
 def _preload_torch_shared_libraries() -> None:
@@ -348,7 +328,7 @@ def _link_shared_library(
 def _build_raw_shared_library(artifact: BuildArtifact, deepep_root: Path, compatibility_flags: list[str]) -> None:
     if _use_torch_extension_build() and _load_as_python_module():
         raise RuntimeError(
-            f"{_BUILD_WITH_TORCH_EXTENSION_ENV}=1 is not yet supported with {_LOAD_AS_PYTHON_MODULE_ENV}=1"
+            f"{BUILD_WITH_TORCH_EXTENSION_ENV}=1 is not yet supported with {LOAD_AS_PYTHON_MODULE_ENV}=1"
         )
     out_path = artifact.library_path
     build_dir = out_path.parent / "raw_build"
@@ -383,7 +363,7 @@ def _build_shared_library(artifact: BuildArtifact) -> None:
     out_path = artifact.library_path
     if _use_torch_extension_build() and _load_as_python_module():
         raise RuntimeError(
-            f"{_BUILD_WITH_TORCH_EXTENSION_ENV}=1 is not yet supported with {_LOAD_AS_PYTHON_MODULE_ENV}=1"
+            f"{BUILD_WITH_TORCH_EXTENSION_ENV}=1 is not yet supported with {LOAD_AS_PYTHON_MODULE_ENV}=1"
         )
     if _use_torch_extension_build():
         _build_with_torch_extension(out_path, deepep_root, compatibility_flags)

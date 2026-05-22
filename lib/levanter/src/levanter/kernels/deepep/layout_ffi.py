@@ -12,24 +12,24 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
-import os
 import subprocess
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import jaxlib
+from levanter.kernels.deepep.availability import (
+    LAYOUT_REQUIRED_FILES,
+    deepep_cache_root,
+    deepep_cuda_arch_flag,
+    deepep_source_root,
+)
 
 _TARGET_NAME = "levanter_deepep_get_dispatch_layout"
-_DEEPEP_SRC_ENV = "DEEPEP_SRC_ROOT"
 
 
 def _jaxlib_include_dir() -> Path:
     return Path(jaxlib.__file__).resolve().parent / "include"
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[6]
 
 
 def _ffi_source() -> Path:
@@ -37,19 +37,11 @@ def _ffi_source() -> Path:
 
 
 def _deepep_source_root() -> Path:
-    raw = os.environ.get(_DEEPEP_SRC_ENV)
-    if not raw:
-        raise RuntimeError(
-            f"{_DEEPEP_SRC_ENV} must point at a DeepEP checkout before using the DeepEP JAX FFI layout kernel."
-        )
-    root = Path(raw).expanduser().resolve()
-    if not (root / "csrc" / "kernels" / "layout.cu").is_file():
-        raise RuntimeError(f"{_DEEPEP_SRC_ENV}={root} does not look like a DeepEP source checkout")
-    return root
+    return deepep_source_root(required_files=LAYOUT_REQUIRED_FILES, purpose="the DeepEP JAX FFI layout kernel")
 
 
 def _cache_root() -> Path:
-    return Path.home() / ".cache" / "marin" / "deepep_layout_ffi"
+    return deepep_cache_root("deepep_layout_ffi")
 
 
 def _shared_library_path() -> Path:
@@ -59,6 +51,7 @@ def _shared_library_path() -> Path:
         key.update(path.read_bytes())
     key.update(str(_jaxlib_include_dir()).encode("utf-8"))
     key.update(str(deepep_root).encode("utf-8"))
+    key.update(" ".join(deepep_cuda_arch_flag()).encode("utf-8"))
     digest = key.hexdigest()[:16]
     out_dir = _cache_root() / digest
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -76,6 +69,7 @@ def _build_shared_library(out_path: Path) -> None:
         "-fPIC",
         "-O3",
         "-DDISABLE_NVSHMEM",
+        *deepep_cuda_arch_flag(),
         "-I",
         str(jax_include),
         "-I",
