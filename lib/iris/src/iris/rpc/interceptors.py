@@ -49,16 +49,6 @@ class ConcurrencyLimitInterceptor:
     """
 
     def __init__(self, limits: dict[str, int]):
-        # Separate semaphores per transport: ``threading.Semaphore`` for the
-        # WSGI/sync path (handler thread parks on it), ``asyncio.Semaphore``
-        # for the ASGI/async path (cancellation-safe and yields to the loop).
-        # An interceptor instance is wired to a single transport in practice,
-        # so the two counts never need to stay in sync. Mixing a single
-        # ``threading.Semaphore`` into the async path is unsafe: blocking on
-        # it freezes the loop, and ``await asyncio.to_thread(sem.acquire)``
-        # leaks a permit if the coroutine is cancelled while the worker
-        # thread is still waiting — the thread cannot be cancelled and will
-        # acquire after the awaiter has gone.
         self._sync_semaphores: dict[str, threading.Semaphore] = {
             method: threading.Semaphore(n) for method, n in limits.items()
         }
