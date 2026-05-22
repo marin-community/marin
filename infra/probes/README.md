@@ -12,7 +12,6 @@ v1 probes:
 - **`finelog-write`** — pushes a unique-nonce `LogEntry` and reads it back to verify the indexer is alive.
 
 Samples land in local SQLite (canonical) and are mirrored best-effort to Finelog under `marin.canary` for query.
-Heartbeat rows land in `marin.canary.meta` so an external `absent()` alarm can detect a dead daemon.
 
 Design + spec: `.agents/projects/infra_canary/`.
 
@@ -28,7 +27,7 @@ infra/probes/
 │   └── deploy.sh           # build / apply / status
 ├── src/probes/
 │   ├── probe.py            # Probe protocol + dataclasses
-│   ├── daemon.py           # scheduler loop, hard-deadline cancellation, heartbeat
+│   ├── daemon.py           # one async loop per spec; asyncio.wait_for enforces deadline + grace
 │   ├── cli.py              # click CLI, builds the 3 probes inline
 │   ├── checks/             # ControllerPing, IrisJobSubmit, FinelogWrite
 │   └── store/              # sqlite (canonical) + finelog (secondary)
@@ -134,7 +133,7 @@ gcloud compute ssh probes -- \
      FROM probe_samples ORDER BY timestamp_us DESC LIMIT 20;"
 ```
 
-Finelog (secondary): query namespace `marin.canary` via the standard Finelog SQL surface; heartbeat rows are under `marin.canary.meta`.
+Finelog (secondary): query namespace `marin.canary` via the standard Finelog SQL surface.
 
 ## Tests
 

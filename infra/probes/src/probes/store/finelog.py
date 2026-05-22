@@ -29,17 +29,13 @@ from probes.store.sqlite import SqliteSampleStore
 logger = logging.getLogger(__name__)
 
 
-# Namespaces a probe sample can land in. We use "source" (per-row) to scope to
-# probe instance; the key is the namespace passed to write_batch.
 DEFAULT_PROBE_NAMESPACE = "marin.canary"
-DEFAULT_META_NAMESPACE = "marin.canary.meta"
 
 
 @dataclass(frozen=True)
 class FinelogStoreConfig:
     endpoint: str
     probe_namespace: str = DEFAULT_PROBE_NAMESPACE
-    meta_namespace: str = DEFAULT_META_NAMESPACE
     push_timeout_ms: int = 10_000
 
 
@@ -56,13 +52,12 @@ class FinelogSampleStore:
         self._fallback = fallback_store
         self._client = LogClient.connect(config.endpoint, timeout_ms=config.push_timeout_ms)
 
-    def write(self, sample: ProbeSample, *, is_meta: bool = False) -> None:
+    def write(self, sample: ProbeSample) -> None:
         """Push one sample to Finelog. Best-effort; records a synthetic
         failure sample to SQLite (and logs) on any exception."""
         entry = _sample_to_log_entry(sample)
-        key = self._config.meta_namespace if is_meta else self._config.probe_namespace
         try:
-            self._client.write_batch(key=key, messages=[entry])
+            self._client.write_batch(key=self._config.probe_namespace, messages=[entry])
         except Exception as exc:
             self._record_push_failure(sample, exc)
 

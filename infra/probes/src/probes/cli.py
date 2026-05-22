@@ -53,13 +53,6 @@ from probes.probe import ProbeSpec
     help="GCP zone(s) to submit canary jobs into. Repeat for multiple zones; " "env var is comma-separated.",
 )
 @click.option(
-    "--heartbeat-seconds",
-    envvar="MARIN_PROBES_HEARTBEAT_SECONDS",
-    default=30,
-    show_default=True,
-    type=int,
-)
-@click.option(
     "--once",
     is_flag=True,
     help="Run each probe once (ignoring cadence), flush stores, exit 0.",
@@ -74,7 +67,6 @@ def cli(
     iris_endpoint: str,
     finelog_endpoint: str | None,
     zones: tuple[str, ...],
-    heartbeat_seconds: int,
     once: bool,
     log_level: str,
 ) -> None:
@@ -99,7 +91,6 @@ def cli(
         specs,
         sqlite_path=sqlite_path,
         finelog_endpoint=finelog_endpoint,
-        heartbeat_seconds=heartbeat_seconds,
         once=once,
     )
     sys.exit(exit_code)

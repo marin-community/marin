@@ -1,8 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scheduler loop. Dispatches probes on worker threads, enforces deadlines
-with a hard grace, emits scheduler-tick heartbeats.
+"""Async per-probe loops. One coroutine per spec, run forever, persist
+each sample, sleep cadence_seconds.
+
+Probes are sync (their RPC clients are sync). We bridge to async via
+``asyncio.to_thread`` and enforce a wall-clock deadline with
+``asyncio.wait_for``. wait_for cancels the *coroutine*; the underlying
+thread keeps running until the sync RPC returns. That's an honest
+limitation — Python can't kill threads — but it gives us a TIMEOUT
+sample on time even when the probe is wedged. A persistently wedged
+probe leaks one ThreadPoolExecutor worker per cycle; the supervisor
+is expected to recycle the process if that becomes pathological.
 
 Exit codes:
     0 — graceful shutdown via SIGTERM/SIGINT.
@@ -12,6 +21,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -19,14 +29,12 @@ import signal
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
 from probes.probe import (
     ErrorClass,
     ProbeOutcome,
-    ProbeResult,
     ProbeSample,
     ProbeSpec,
 )
@@ -37,10 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 _GRACE_SECONDS = 5.0
-_HEARTBEAT_TICK_KIND = "heartbeat"
-_HEARTBEAT_NAME = "scheduler"
 DEFAULT_FINELOG_NAMESPACE = "marin.canary"
-DEFAULT_META_NAMESPACE = "marin.canary.meta"
 
 
 def run_canary(
@@ -49,20 +54,13 @@ def run_canary(
     sqlite_path: Path,
     finelog_endpoint: str | None = None,
     finelog_namespace: str = DEFAULT_FINELOG_NAMESPACE,
-    finelog_meta_namespace: str = DEFAULT_META_NAMESPACE,
-    heartbeat_seconds: int = 30,
     daemon_instance: str = "",
     once: bool = False,
 ) -> int:
     """Run the canary daemon.
 
-    Args:
-        specs: probes to run; must be non-empty with unique names.
-        sqlite_path: absolute path to the SQLite store; parent dir must exist.
-        finelog_endpoint: Finelog URL; None disables the secondary sink.
-        once: dispatch each spec exactly once and exit; for tests + ops.
-
-    Returns: process exit code.
+    Blocks on the event loop until SIGTERM/SIGINT (or all probes finish, in
+    --once mode). Returns process exit code.
     """
     if not specs:
         logger.error("no specs configured")
@@ -87,127 +85,108 @@ def run_canary(
             FinelogStoreConfig(
                 endpoint=finelog_endpoint,
                 probe_namespace=finelog_namespace,
-                meta_namespace=finelog_meta_namespace,
             ),
             fallback_store=sqlite_store,
         )
 
-    state = _SchedulerState(
-        specs=specs,
-        sqlite=sqlite_store,
-        finelog=finelog_store,
-        daemon_instance=daemon_instance or _default_daemon_instance(),
-        heartbeat_seconds=heartbeat_seconds,
-    )
+    instance = daemon_instance or _default_daemon_instance()
+    write_lock = threading.Lock()  # SQLite + LogClient called from to_thread workers
 
     try:
-        if once:
-            _run_once(state)
-            return 0
-        return _run_forever(state)
+        return asyncio.run(_main(specs, sqlite_store, finelog_store, instance, write_lock, once))
     finally:
         sqlite_store.close()
         if finelog_store is not None:
             finelog_store.close()
 
 
-class _SchedulerState:
-    def __init__(
-        self,
-        *,
-        specs: list[ProbeSpec],
-        sqlite: SqliteSampleStore,
-        finelog: FinelogSampleStore | None,
-        daemon_instance: str,
-        heartbeat_seconds: int,
-    ):
-        self.specs = specs
-        self.sqlite = sqlite
-        self.finelog = finelog
-        self.daemon_instance = daemon_instance
-        self.heartbeat_seconds = heartbeat_seconds
-        self.abandoned_threads = 0
-        self.loop_iteration = 0
-        self.shutdown = threading.Event()
+async def _main(
+    specs: list[ProbeSpec],
+    sqlite: SqliteSampleStore,
+    finelog: FinelogSampleStore | None,
+    instance: str,
+    write_lock: threading.Lock,
+    once: bool,
+) -> int:
+    shutdown = asyncio.Event()
+
+    if not once:
+        _install_signal_handlers(shutdown)
+
+    fatal: list[Exception] = []
+    coros = [_probe_loop(spec, sqlite, finelog, instance, write_lock, shutdown, once, fatal) for spec in specs]
+    await asyncio.gather(*coros)
+    return 2 if fatal else 0
 
 
-def _run_once(state: _SchedulerState) -> None:
-    for spec in state.specs:
-        sample = _execute(state, spec)
-        _persist(state, sample)
-    _persist(state, _heartbeat_sample(state, last_tick_ms=0), is_meta=True)
+async def _probe_loop(
+    spec: ProbeSpec,
+    sqlite: SqliteSampleStore,
+    finelog: FinelogSampleStore | None,
+    instance: str,
+    write_lock: threading.Lock,
+    shutdown: asyncio.Event,
+    once: bool,
+    fatal: list[Exception],
+) -> None:
+    """Forever-loop one probe. Each iteration: run probe (with deadline+grace),
+    persist sample, sleep cadence (or exit if shutdown). In --once mode, run
+    exactly once and return."""
+    while not shutdown.is_set():
+        sample = await _execute(spec, instance)
+        try:
+            await asyncio.to_thread(_persist, sample, sqlite, finelog, write_lock)
+        except Exception as exc:
+            logger.exception("fatal: failed to write sample for %s", spec.name)
+            fatal.append(exc)
+            shutdown.set()
+            return
+        if once:
+            return
+        try:
+            await asyncio.wait_for(shutdown.wait(), timeout=spec.cadence_seconds)
+        except asyncio.TimeoutError:
+            pass  # cadence elapsed, next iteration
 
 
-def _run_forever(state: _SchedulerState) -> int:
-    _install_signal_handlers(state)
-
-    next_run: dict[str, float] = {spec.name: time.monotonic() for spec in state.specs}
-    next_heartbeat = time.monotonic()
-
-    with ThreadPoolExecutor(max_workers=max(1, len(state.specs))) as executor:
-        while not state.shutdown.is_set():
-            state.loop_iteration += 1
-            now = time.monotonic()
-            tick_start = time.monotonic()
-
-            ready = [s for s in state.specs if next_run[s.name] <= now]
-            if ready:
-                futures = {s.name: executor.submit(_execute, state, s) for s in ready}
-                for spec in ready:
-                    fut = futures[spec.name]
-                    try:
-                        sample = fut.result(timeout=spec.deadline_seconds + _GRACE_SECONDS)
-                    except Exception as exc:
-                        sample = _local_error_sample(state, spec, f"{type(exc).__name__}: {exc}")
-                        state.abandoned_threads += 1
-                    try:
-                        _persist(state, sample)
-                    except Exception:
-                        logger.exception("fatal: failed to write probe sample to SQLite")
-                        return 2
-                    next_run[spec.name] = now + spec.cadence_seconds
-
-            if time.monotonic() >= next_heartbeat:
-                tick_ms = int((time.monotonic() - tick_start) * 1000)
-                try:
-                    _persist(state, _heartbeat_sample(state, last_tick_ms=tick_ms), is_meta=True)
-                except Exception:
-                    logger.exception("fatal: heartbeat write to SQLite failed")
-                    return 2
-                next_heartbeat = time.monotonic() + state.heartbeat_seconds
-
-            now = time.monotonic()
-            sleep_for = min(
-                min(next_run.values()) - now if next_run else state.heartbeat_seconds,
-                next_heartbeat - now,
-                1.0,
-            )
-            if sleep_for > 0:
-                state.shutdown.wait(timeout=sleep_for)
-
-    return 0
-
-
-def _execute(state: _SchedulerState, spec: ProbeSpec) -> ProbeSample:
-    """Execute one probe, measure latency, build a ProbeSample. Never raises."""
+async def _execute(spec: ProbeSpec, instance: str) -> ProbeSample:
+    """Run one probe with a hard deadline + grace. Always returns a sample."""
     started_at = datetime.now(UTC)
     started_mono = time.monotonic()
+    outcome: ProbeOutcome
+    error_class: ErrorClass | None
+    error_detail: str | None
+    target_id: str | None = None
+    extras: dict[str, str | int | float] | None = None
+
     try:
-        result = spec.probe.run(spec.deadline_seconds)
+        result = await asyncio.wait_for(
+            asyncio.to_thread(spec.probe.run, spec.deadline_seconds),
+            timeout=spec.deadline_seconds + _GRACE_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        outcome = ProbeOutcome.TIMEOUT
+        error_class = ErrorClass.TIMEOUT
+        error_detail = (
+            f"daemon hard-deadline reached at {int((spec.deadline_seconds + _GRACE_SECONDS) * 1000)} ms; "
+            "the worker thread may still be running"
+        )
     except Exception as exc:
         logger.exception("probe %s leaked exception", spec.name)
-        result = ProbeResult(
-            outcome=ProbeOutcome.LOCAL_ERROR,
-            error_class=ErrorClass.LOCAL_CONFIG_ERROR,
-            error_detail=f"{type(exc).__name__}: {exc}",
-        )
+        outcome = ProbeOutcome.LOCAL_ERROR
+        error_class = ErrorClass.LOCAL_CONFIG_ERROR
+        error_detail = f"{type(exc).__name__}: {exc}"
+    else:
+        outcome = result.outcome
+        error_class = result.error_class
+        error_detail = result.error_detail
+        target_id = result.target_id
+        extras = result.extras
+
     latency_ms = int((time.monotonic() - started_mono) * 1000)
 
-    # If a probe declares SUCCESS past its declared deadline, the daemon
-    # promotes the outcome to TIMEOUT — mis-classifying late SUCCESS hides drift.
-    outcome = result.outcome
-    error_class = result.error_class
-    error_detail = result.error_detail
+    # A probe that returns SUCCESS past its declared deadline is suspect;
+    # mis-classifying late SUCCESS hides drift.
     if outcome is ProbeOutcome.SUCCESS and latency_ms > spec.deadline_seconds * 1000:
         outcome = ProbeOutcome.TIMEOUT
         error_class = ErrorClass.TIMEOUT
@@ -222,65 +201,43 @@ def _execute(state: _SchedulerState, spec: ProbeSpec) -> ProbeSample:
         latency_ms=latency_ms,
         error_class=error_class,
         error_detail=error_detail,
-        target_id=result.target_id,
-        extras_json=json.dumps(result.extras or {}),
-        daemon_instance=state.daemon_instance,
+        target_id=target_id,
+        extras_json=json.dumps(extras or {}),
+        daemon_instance=instance,
     )
 
 
-def _local_error_sample(state: _SchedulerState, spec: ProbeSpec, detail: str) -> ProbeSample:
-    """Worker thread itself failed to deliver a result within deadline + grace."""
-    return ProbeSample(
-        timestamp=datetime.now(UTC),
-        probe_name=spec.name,
-        probe_kind=spec.kind,
-        location=spec.location,
-        outcome=ProbeOutcome.TIMEOUT,
-        latency_ms=int((spec.deadline_seconds + _GRACE_SECONDS) * 1000),
-        error_class=ErrorClass.TIMEOUT,
-        error_detail=detail,
-        target_id=None,
-        extras_json="{}",
-        daemon_instance=state.daemon_instance,
-    )
+def _persist(
+    sample: ProbeSample,
+    sqlite: SqliteSampleStore,
+    finelog: FinelogSampleStore | None,
+    write_lock: threading.Lock,
+) -> None:
+    """SQLite first (must succeed); Finelog secondary (best-effort).
+
+    The lock serializes writes from concurrent ``to_thread`` workers; SQLite
+    is opened with ``check_same_thread=False`` but only one writer at a time
+    is supported under WAL.
+    """
+    with write_lock:
+        sqlite.write(sample)
+        if finelog is not None:
+            finelog.write(sample)
 
 
-def _heartbeat_sample(state: _SchedulerState, *, last_tick_ms: int) -> ProbeSample:
-    extras = {
-        "disk_free_bytes": state.sqlite.disk_free_bytes(),
-        "loop_iteration": state.loop_iteration,
-        "abandoned_threads": state.abandoned_threads,
-        "specs_count": len(state.specs),
-    }
-    return ProbeSample(
-        timestamp=datetime.now(UTC),
-        probe_name=_HEARTBEAT_NAME,
-        probe_kind=_HEARTBEAT_TICK_KIND,
-        location=None,
-        outcome=ProbeOutcome.SUCCESS,
-        latency_ms=last_tick_ms,
-        error_class=None,
-        error_detail=None,
-        target_id=None,
-        extras_json=json.dumps(extras),
-        daemon_instance=state.daemon_instance,
-    )
+def _install_signal_handlers(shutdown: asyncio.Event) -> None:
+    loop = asyncio.get_running_loop()
 
-
-def _persist(state: _SchedulerState, sample: ProbeSample, *, is_meta: bool = False) -> None:
-    """SQLite first (must succeed); Finelog secondary (best-effort)."""
-    state.sqlite.write(sample)
-    if state.finelog is not None:
-        state.finelog.write(sample, is_meta=is_meta)
-
-
-def _install_signal_handlers(state: _SchedulerState) -> None:
-    def _handle(signum: int, _frame: object) -> None:
+    def _handle(signum: int) -> None:
         logger.info("received signal %s, shutting down", signum)
-        state.shutdown.set()
+        shutdown.set()
 
-    signal.signal(signal.SIGTERM, _handle)
-    signal.signal(signal.SIGINT, _handle)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _handle, sig)
+        except NotImplementedError:
+            # add_signal_handler is unix-only; fall back to signal.signal for portability.
+            signal.signal(sig, lambda s, _f: shutdown.set())
 
 
 def _default_daemon_instance() -> str:

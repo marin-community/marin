@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Daemon --once mode: each spec runs exactly once, samples land in SQLite,
-heartbeat row emitted, failed probes don't kill the run."""
+failed probes don't kill the run."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from probes.daemon import run_canary
@@ -65,15 +65,16 @@ def _read_rows(path: Path) -> list[dict]:
         conn.close()
 
 
-def test_once_runs_each_spec_and_writes_heartbeat(tmp_path):
+def test_once_runs_each_spec(tmp_path):
     ok = _AlwaysSuccess()
     sqlite_path = tmp_path / "samples.sqlite"
     exit_code = run_canary(_specs(ok), sqlite_path=sqlite_path, once=True)
     assert exit_code == 0
     assert ok.calls == 1
     rows = _read_rows(sqlite_path)
-    assert len(rows) == 2
-    assert {r["probe_kind"] for r in rows} == {"_AlwaysSuccess", "heartbeat"}
+    assert len(rows) == 1
+    assert rows[0]["probe_kind"] == "_AlwaysSuccess"
+    assert rows[0]["outcome"] == ProbeOutcome.SUCCESS.value
 
 
 def test_once_records_remote_error_outcome(tmp_path):
@@ -81,7 +82,7 @@ def test_once_records_remote_error_outcome(tmp_path):
     sqlite_path = tmp_path / "samples.sqlite"
     exit_code = run_canary(_specs(fail), sqlite_path=sqlite_path, once=True)
     assert exit_code == 0
-    rows = [r for r in _read_rows(sqlite_path) if r["probe_kind"] != "heartbeat"]
+    rows = _read_rows(sqlite_path)
     assert len(rows) == 1
     assert rows[0]["outcome"] == ProbeOutcome.REMOTE_ERROR.value
     assert rows[0]["error_class"] == ErrorClass.RPC_ERROR.value
@@ -92,7 +93,7 @@ def test_once_converts_leaked_exception_to_local_error(tmp_path):
     sqlite_path = tmp_path / "samples.sqlite"
     exit_code = run_canary(_specs(raises), sqlite_path=sqlite_path, once=True)
     assert exit_code == 0
-    rows = [r for r in _read_rows(sqlite_path) if r["probe_kind"] != "heartbeat"]
+    rows = _read_rows(sqlite_path)
     assert len(rows) == 1
     assert rows[0]["outcome"] == ProbeOutcome.LOCAL_ERROR.value
     assert "RuntimeError: boom" in (rows[0]["error_detail"] or "")
@@ -108,21 +109,8 @@ def test_once_continues_past_failing_probe(tmp_path):
     assert ok1.calls == 1
     assert raises.calls == 1
     assert ok2.calls == 1
-    rows = [r for r in _read_rows(sqlite_path) if r["probe_kind"] != "heartbeat"]
+    rows = _read_rows(sqlite_path)
     assert len(rows) == 3
-
-
-def test_heartbeat_extras_include_disk_and_iteration(tmp_path):
-    ok = _AlwaysSuccess()
-    sqlite_path = tmp_path / "samples.sqlite"
-    run_canary(_specs(ok), sqlite_path=sqlite_path, once=True)
-    rows = [r for r in _read_rows(sqlite_path) if r["probe_kind"] == "heartbeat"]
-    assert len(rows) == 1
-    extras = json.loads(rows[0]["extras_json"])
-    assert "disk_free_bytes" in extras
-    assert "loop_iteration" in extras
-    assert "specs_count" in extras
-    assert extras["specs_count"] == 1
 
 
 def test_rejects_empty_specs(tmp_path):
@@ -133,9 +121,6 @@ def test_rejects_empty_specs(tmp_path):
 def test_rejects_duplicate_spec_names(tmp_path):
     ok = _AlwaysSuccess()
     specs = _specs(ok, ok)
-    # _specs assigns unique names; force a duplicate.
-    from dataclasses import replace
-
     specs[1] = replace(specs[1], name=specs[0].name)
     exit_code = run_canary(specs, sqlite_path=tmp_path / "samples.sqlite", once=True)
     assert exit_code == 1
