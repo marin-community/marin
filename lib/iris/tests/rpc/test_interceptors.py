@@ -261,6 +261,60 @@ async def test_concurrency_limit_async_does_not_block_event_loop():
     assert await waiter == "fast"
 
 
+@pytest.mark.asyncio
+async def test_concurrency_limit_async_cancelled_waiter_does_not_leak_slot():
+    """Regression: cancelling a queued async caller must not leak a permit.
+
+    Prior implementation parked the wait on ``asyncio.to_thread(sem.acquire)``
+    against a ``threading.Semaphore``. Cancellation raised ``CancelledError``
+    before the ``try/finally`` ran, while the off-loop thread kept blocking
+    and eventually acquired the permit — a permanent leak. ``asyncio.Semaphore``
+    + ``async with`` is cancellation-safe.
+    """
+    limit = 2
+    interceptor = ConcurrencyLimitInterceptor({"FetchLogs": limit})
+    holder_release = asyncio.Event()
+
+    async def held_handler(req, ctx):
+        await holder_release.wait()
+        return "ok"
+
+    async def never_runs(req, ctx):  # pragma: no cover -- must not execute
+        raise AssertionError("waiter handler ran despite cancellation")
+
+    holders = [
+        asyncio.create_task(interceptor.intercept_unary(held_handler, "req", _make_ctx("FetchLogs")))
+        for _ in range(limit)
+    ]
+    await asyncio.sleep(0)  # let holders grab both slots
+
+    # Queue several waiters, then cancel them all before any slot frees.
+    waiters = [
+        asyncio.create_task(interceptor.intercept_unary(never_runs, "req", _make_ctx("FetchLogs"))) for _ in range(5)
+    ]
+    await asyncio.sleep(0)
+    for w in waiters:
+        w.cancel()
+    for w in waiters:
+        with pytest.raises(asyncio.CancelledError):
+            await w
+
+    # Free the holders. A leaked permit would mean the next caller blocks
+    # forever waiting on a slot that the cancelled waiter "stole".
+    holder_release.set()
+    for h in holders:
+        assert await h == "ok"
+
+    async def quick(req, ctx):
+        return "fast"
+
+    # All `limit` slots must be available again.
+    results = await asyncio.gather(
+        *(interceptor.intercept_unary(quick, "req", _make_ctx("FetchLogs")) for _ in range(limit))
+    )
+    assert results == ["fast"] * limit
+
+
 def test_concurrency_limit_releases_slot_on_exception():
     interceptor = ConcurrencyLimitInterceptor({"FetchLogs": 1})
 

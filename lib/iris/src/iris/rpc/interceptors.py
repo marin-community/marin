@@ -49,28 +49,29 @@ class ConcurrencyLimitInterceptor:
     """
 
     def __init__(self, limits: dict[str, int]):
-        self._semaphores: dict[str, threading.Semaphore] = {
+        # Separate semaphores per transport: ``threading.Semaphore`` for the
+        # WSGI/sync path (handler thread parks on it), ``asyncio.Semaphore``
+        # for the ASGI/async path (cancellation-safe and yields to the loop).
+        # An interceptor instance is wired to a single transport in practice,
+        # so the two counts never need to stay in sync. Mixing a single
+        # ``threading.Semaphore`` into the async path is unsafe: blocking on
+        # it freezes the loop, and ``await asyncio.to_thread(sem.acquire)``
+        # leaks a permit if the coroutine is cancelled while the worker
+        # thread is still waiting — the thread cannot be cancelled and will
+        # acquire after the awaiter has gone.
+        self._sync_semaphores: dict[str, threading.Semaphore] = {
             method: threading.Semaphore(n) for method, n in limits.items()
         }
-
-    def _try_acquire(self, method: str) -> tuple[threading.Semaphore | None, bool]:
-        """Return ``(sem, got_slot)`` for ``method``.
-
-        ``got_slot`` is True iff a slot was already free. Callers that get
-        ``got_slot=False`` must wait for the slot themselves — synchronously
-        on a worker thread, or asynchronously off the event loop.
-        """
-        sem = self._semaphores.get(method)
-        if sem is None:
-            return None, True
-        return sem, sem.acquire(blocking=False)
+        self._async_semaphores: dict[str, asyncio.Semaphore] = {
+            method: asyncio.Semaphore(n) for method, n in limits.items()
+        }
 
     def intercept_unary_sync(self, call_next, request, ctx):
         method = ctx.method().name
         if _deadline_expired(ctx):
             raise _deadline_error(method)
-        sem, got_slot = self._try_acquire(method)
-        if sem is not None and not got_slot:
+        sem = self._sync_semaphores.get(method)
+        if sem is not None and not sem.acquire(blocking=False):
             logger.debug("RPC %s blocked waiting for concurrency slot", method)
             sem.acquire()
         try:
@@ -85,22 +86,17 @@ class ConcurrencyLimitInterceptor:
         method = ctx.method().name
         if _deadline_expired(ctx):
             raise _deadline_error(method)
-        # Run the blocking ``threading.Semaphore.acquire`` off the asyncio
-        # loop: connectrpc's ASGI server invokes this interceptor directly on
-        # the event loop, so a synchronous ``sem.acquire()`` here would freeze
-        # every other coroutine on the loop (dashboard, health, sibling RPCs)
-        # until a slot freed up.
-        sem, got_slot = self._try_acquire(method)
-        if sem is not None and not got_slot:
+        sem = self._async_semaphores.get(method)
+        if sem is None:
+            return await call_next(request, ctx)
+        if sem.locked():
             logger.debug("RPC %s blocked waiting for concurrency slot", method)
-            await asyncio.to_thread(sem.acquire)
-        try:
+        # ``async with`` yields to the loop on contention and releases on any
+        # exit, including ``CancelledError`` raised mid-wait.
+        async with sem:
             if _deadline_expired(ctx):
                 raise _deadline_error(method)
             return await call_next(request, ctx)
-        finally:
-            if sem is not None:
-                sem.release()
 
 
 class RequestTimingInterceptor:
