@@ -79,6 +79,9 @@ class ReplayBuffer:
 
     _total_batches_added: int = 0
     _total_batches_sampled: int = 0
+    _total_groups_seen: int = 0
+    _total_dead_groups_seen: int = 0
+    _last_group_reward_std: float = 0.0
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
     _current_step: int = 0
     _rng: np.random.Generator = dataclasses.field(init=False)
@@ -216,16 +219,19 @@ class ReplayBuffer:
                     maybe_used_rollouts.append(individual)
                     batch_rewards[group_idx, rollout_idx] = rollout.episode_reward
 
+                self._total_groups_seen += 1
                 if np.std(batch_rewards[group_idx]) > 0.0:
                     env_examples[rollout.env_name].extend(maybe_used_rollouts)
                 else:  # group has no variance in rewards
+                    self._total_dead_groups_seen += 1
                     if not self.filter_out_groups_with_no_variance:
                         env_examples[rollout.env_name].extend(maybe_used_rollouts)
 
                     logger.info(f"Group {group_idx} has no variance in rewards")
 
+            self._last_group_reward_std = float(batch_rewards.std(axis=1).mean())
             logger.info(f"Reward mean across all groups: {batch_rewards.mean()}")
-            logger.info(f"Reward std across all groups: {batch_rewards.std(axis=1).mean()}")
+            logger.info(f"Reward std across all groups: {self._last_group_reward_std}")
 
         with self._lock:
             for env_name, examples in env_examples.items():
@@ -305,12 +311,20 @@ class ReplayBuffer:
         """Get buffer statistics for monitoring."""
         with self._lock:
             env_sizes = {env: len(rollouts) for env, rollouts in self.rollout_storage.items()}
+            total_groups = self._total_groups_seen
+            dead_groups = self._total_dead_groups_seen
+            dead_fraction = (dead_groups / total_groups) if total_groups > 0 else 0.0
             return {
                 "total_size": sum(env_sizes.values()),
                 "env_sizes": env_sizes,
                 "num_environments": len(self.rollout_storage),
                 "total_batches_added": self._total_batches_added,
                 "total_batches_sampled": self._total_batches_sampled,
+                "total_groups_seen": total_groups,
+                "dead_groups_seen": dead_groups,
+                "dead_groups_fraction": dead_fraction,
+                "last_group_reward_std": self._last_group_reward_std,
+                "filter_dead_groups": float(self.filter_out_groups_with_no_variance),
             }
 
 

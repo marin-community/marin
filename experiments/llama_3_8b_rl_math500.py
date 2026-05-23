@@ -58,15 +58,45 @@ LLAMA_3_1_8B_INSTRUCT = ModelConfig(
 
 
 def _default_rl_loss() -> RLOOLoss:
+    """RLOO + importance-sampling hybrid.
+
+    RLOO (Reward Leave-One-Out, Ahmadian et al. 2024, arXiv:2402.14740) provides
+    the variance-reduced REINFORCE baseline. PPO-style clipped importance
+    sampling (Schulman et al. 2017) handles the off-policy correction needed
+    when rollouts arrive with bounded staleness via the replay buffer.
+
+    Clip-higher (epsilon_low=0.2, epsilon_high=0.28) follows DAPO
+    (Yu et al. 2025, arXiv:2503.14476) to slow PPO-clip-induced entropy
+    collapse.
+
+    KL is intentionally OFF: with clip-higher providing the trust region and
+    Iris weight-transfer keeping rollouts close to on-policy, the held-out
+    decay we care about is more cheaply fought via clip + dynamic sampling.
+    Re-enable KL only after the per-token aggregator in
+    ``marin.rl.kl_regularization.masked_response_mean`` is fixed to match the
+    token-level loss form (see rl_blog logbook F5).
+    """
     return RLOOLoss(
         kl=KLConfig(mode=KLMode.NONE, beta=0.0),
         clip_epsilon_low=0.2,
         clip_epsilon_high=0.28,
-        synchronous=True,
+        # IS hybrid: ratio is computed against the sampler's stored logprobs so
+        # that PPO clipping actually fires for stale tokens (synchronous=True
+        # forced ratio == 1, which made clip-* dead code).
+        synchronous=False,
         do_trainer_inference_mismatch_importance_sampling=True,
         tis_importance_sampling_ratio_max=2.0,
         do_overlong_filtering=True,
         vocab_tile_size=32064,
+        # log_policy_entropy=True is the cleaner entropy diagnostic but is
+        # currently incompatible with vocab_tile_size (RLOOLoss raises a
+        # ValueError when both are set). Disabling vocab_tile_size would
+        # materialize a [batch, seq, vocab] logits tensor (~67 GiB/chip on
+        # v5p-8 at batch=1024/seq=512/vocab=128k), which OOMs. Keep the
+        # tiling and rely on policy_entropy / current_entropy (NLL of
+        # sampled tokens) as a noisier-but-correlated proxy. Re-enable once
+        # chunked entropy is implemented (see rl_blog logbook F3 follow-up).
+        log_policy_entropy=False,
     )
 
 
@@ -240,7 +270,13 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         ),
         train_batch_size=1024,
         per_device_parallelism=16,
-        learning_rate=2e-6,
+        # Was 2e-6 before the F1 fix to compute_dapo_loss. That bug silently
+        # divided the loss by batch_size (1024), so the effective LR was
+        # ~2e-9. After the fix, the canonical token-level normalization
+        # restores ~1024x the per-step gradient magnitude. Starting from a
+        # conservative 5e-7 (≈ DAPO paper's 1e-6 / 2) and letting clip-higher
+        # bound per-step drift; sweep up to 1e-6 if training is too slow.
+        learning_rate=5e-7,
         max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
         max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
         n_prompts=args.n_prompts,

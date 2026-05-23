@@ -270,9 +270,17 @@ def compute_dapo_loss(
 ) -> jax.Array:
     """Compute DAPO-like loss (global token normalization).
 
-    Divides by total tokens across all examples in the batch, not per-example.
+    Sums the per-token loss objective across the entire batch and divides by the
+    total number of response tokens. Matches the DAPO paper form
+    (Yu et al., 2025, arXiv:2503.14476):
+
+        L = -(1 / sum_i |o_i|) * sum_i sum_t L_{i,t}
+
+    A previous form wrapped this in jnp.mean over the batch axis, which silently
+    divided the loss (and gradient) by an extra factor of batch size. That made
+    the effective learning rate ~1/B times the nominal value.
     """
-    return -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
+    return -jnp.sum(loss_objective * loss_masks) / jnp.sum(loss_masks)
 
 
 def compute_grpo_loss(

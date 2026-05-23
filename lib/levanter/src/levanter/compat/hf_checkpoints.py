@@ -1515,12 +1515,47 @@ def _patch_hf_hub_download():
                 local_path = os.path.join(
                     cache_dir, repo_folder_name(repo_id=repo_id, repo_type=repo_type), "snapshots", revision, filename
                 )
+                # Ensure parent dir exists — fsspec.get does NOT auto-create
+                # the destination directory; without this, downloads to a
+                # not-yet-existing snapshots/revision/ subtree silently fail.
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
-                if not fs.exists(remote_path):
+                # exists() and get() both go through gcsfs which occasionally
+                # returns an empty (None) response body that gcsfs's
+                # validate_response can't parse — raises TypeError from
+                # json.loads(None). Retry both with exponential backoff so a
+                # transient empty body doesn't cascade into a fake
+                # EntryNotFoundError at the transformers layer (see
+                # rl_blog logbook F15).
+                _backoffs = (0.5, 1.0, 2.0, 4.0, 8.0)
+                last_exc: Exception | None = None
+                exists_result: bool | None = None
+                for attempt, delay in enumerate(_backoffs):
+                    try:
+                        exists_result = fs.exists(remote_path)
+                        break
+                    except Exception as e:
+                        last_exc = e
+                        time.sleep(delay)
+                else:
+                    raise EntryNotFoundError(
+                        f"fs.exists({remote_path}) failed after {len(_backoffs)} attempts: {last_exc!r}"
+                    ) from last_exc
+
+                if not exists_result:
                     raise EntryNotFoundError(f"File {remote_path} not found")
 
-                fs.get(remote_path, local_path)
-                return local_path
+                last_exc = None
+                for attempt, delay in enumerate(_backoffs):
+                    try:
+                        fs.get(remote_path, local_path)
+                        return local_path
+                    except Exception as e:
+                        last_exc = e
+                        time.sleep(delay)
+                raise OSError(
+                    f"fs.get({remote_path} -> {local_path}) failed after {len(_backoffs)} attempts: {last_exc!r}"
+                ) from last_exc
 
             # Fallback to the original implementation
             return original_hf_hub_download(*args, **kwargs)

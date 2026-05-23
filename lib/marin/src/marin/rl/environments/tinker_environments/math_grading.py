@@ -225,16 +225,30 @@ TUPLE_CHARS = "()[]"
 
 _SYMPY_TIMEOUT = 10  # seconds; sympy can hang on pathological expressions like 2**999999
 
+# Disable the sympy fallback entirely on Iris workers: ``multiprocessing.get_context("spawn")``
+# cold-start in the current vllm-tpu / jax / libtpu image consistently exceeds the 10s
+# timeout for every parse, even on trivial integer inputs like ``(0)-(1)``. The result was
+# 1024-grade batches taking ~3 hours per rollout, blocking the trainer indefinitely.
+#
+# Skipping sympy is safe: ``are_equal_under_sympy`` catches ``Exception`` and returns False,
+# so a timed-out parse already counts as "not equal" — making this a hard short-circuit
+# changes nothing about correctness, only latency. The fast paths in ``grade_answer``
+# (mathd normalize, _normalize, fraction match, integer match) still catch the vast
+# majority of correct answers; sympy was only the last resort for "0.5 == 1/2"-style
+# symbolic simplifications, which were never going to land within the 10s budget anyway.
+_SYMPY_DISABLED = True
+
 
 def _run_in_process_with_timeout(fn, args, timeout):
-    """Run fn(*args) in a subprocess with a hard timeout.
+    """Short-circuit when sympy fallback is disabled; otherwise spawn subprocess.
 
-    ThreadPoolExecutor can't kill CPU-bound Python threads (GIL never yields),
-    so we use multiprocessing which can actually terminate the stuck worker.
-
-    Uses 'spawn' context to avoid forking after JAX/libtpu initialization,
-    which deadlocks on TPU device locks (/dev/vfio).
+    The active path on Iris workers takes the short-circuit branch — see
+    ``_SYMPY_DISABLED`` above for rationale. The subprocess path is preserved
+    so the module remains usable in environments with fast spawn cold-start
+    (local dev, CI) without further code changes.
     """
+    if _SYMPY_DISABLED:
+        raise TimeoutError("sympy fallback disabled (spawn cold-start exceeds budget on this image)")
     ctx = multiprocessing.get_context("spawn")
     with ctx.Pool(processes=1) as pool:
         result = pool.apply_async(fn, args)
@@ -245,15 +259,13 @@ def _run_in_process_with_timeout(fn, args, timeout):
             raise TimeoutError(f"timed out after {timeout}s")
 
 
-def _parse_expr_worker(py_expr: str):
-    """Worker function for subprocess — must be top-level for pickling."""
-    return sympy_parser.parse_expr(
-        py_expr,
-        transformations=(
-            sympy_parser.standard_transformations
-            + (sympy_parser.implicit_multiplication_application,)
-        ),
-    )
+# Imported from a JAX-free leaf module so the spawn subprocess can pickle/
+# unpickle the worker without dragging ``marin.rl.environments.__init__`` into
+# the import chain. That __init__ imports .base which does ``import jax`` —
+# under jax 0.9.2 + libtpu 0.0.39, the TPU plugin's import-time init blocks
+# on libtpu locks held by the parent rollout worker, so every parse_expr call
+# hits the 10s timeout. See rl_blog logbook F12.
+from marin.rl._sympy_worker import parse_expr_worker as _parse_expr_worker
 
 
 def _sympy_parse(expr: str):

@@ -699,6 +699,40 @@ def _try_load_tokenizer_from_dir(local_dir: str) -> bool:
         return False
 
 
+def _stage_from_remote_url(name_or_path: str, local_dir: str) -> bool:
+    """Copy tokenizer files from a fsspec-compatible URL (gs://, s3://, etc.) to *local_dir*.
+
+    Used when ``name_or_path`` is an explicit remote path rather than an HF Hub
+    repo id. ``_stage_from_hf`` would reject these via ``snapshot_download`` /
+    ``validate_repo_id``, and the mirror layout doesn't apply.
+    """
+    import fnmatch
+    from urllib.parse import urlparse
+
+    if urlparse(name_or_path).scheme not in ("gs", "s3"):
+        return False
+
+    copied = False
+    try:
+        fs, root = fsspec.core.url_to_fs(name_or_path)
+        if not fs.exists(root):
+            return False
+        for entry in fs.ls(root, detail=False):
+            filename = os.path.basename(entry.rstrip("/"))
+            if not filename:
+                continue
+            if not any(fnmatch.fnmatch(filename, pat) for pat in _TOKENIZER_ALLOW_PATTERNS):
+                continue
+            src_url = entry if "://" in entry else f"{name_or_path.rstrip('/')}/{filename}"
+            if _fetch_file_atomic(src_url, os.path.join(local_dir, filename)):
+                copied = True
+        if copied:
+            logger.info("Copied %s tokenizer files from remote URL %s", name_or_path, name_or_path)
+    except Exception as e:
+        logger.warning("Could not stage tokenizer from remote URL %s: %s", name_or_path, e)
+    return copied
+
+
 def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     """Copy tokenizer files from mirror:// to *local_dir*.
 
@@ -785,11 +819,23 @@ def _stage_tokenizer(name_or_path: str) -> str:
     if _try_load_tokenizer_from_dir(local_dir):
         return local_dir
 
-    # 2. Mirror: copy whatever files are present, then try loading.
+    # 2. Remote URL (gs://, s3://): copy tokenizer files directly. Skip mirror
+    # and HF — those reject URL-shaped inputs (snapshot_download → HFValidationError).
+    from urllib.parse import urlparse
+
+    if urlparse(name_or_path).scheme in ("gs", "s3"):
+        if _stage_from_remote_url(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
+            return local_dir
+        raise FileNotFoundError(
+            f"Could not stage tokenizer from {name_or_path}: missing or unloadable tokenizer.json. "
+            "Verify the bucket path contains tokenizer.json + special_tokens_map.json + tokenizer_config.json."
+        )
+
+    # 3. Mirror: copy whatever files are present, then try loading.
     if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
         return local_dir
 
-    # 3. HF Hub: full download, populate mirror as side-effect.
+    # 4. HF Hub: full download, populate mirror as side-effect.
     _stage_from_hf(name_or_path, local_dir)
     return local_dir
 

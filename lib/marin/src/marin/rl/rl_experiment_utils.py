@@ -101,6 +101,11 @@ class RLExperimentConfig:
     replay_buffer_capacity: int = 4096
     replay_buffer_alpha: float = 3.0
     replay_buffer_max_samples: int = 1
+    # Drop groups whose rollouts all have the same reward (advantage=0 ⇒ no
+    # learning signal). DAPO-style dynamic sampling. Critical for RLOO because
+    # the leave-one-out baseline collapses to the reward when there's no
+    # within-group variance.
+    filter_out_groups_with_no_variance: bool = True
 
     # execution
     debug_mode: bool = False
@@ -281,6 +286,7 @@ def _build_rl_job_config(
                 alpha=config.replay_buffer_alpha,
                 max_samples=config.replay_buffer_max_samples,
                 max_rollout_step_delay=config.max_rollout_step_delay,
+                filter_out_groups_with_no_variance=config.filter_out_groups_with_no_variance,
             ),
         ),
         curriculum=curriculum_config,
