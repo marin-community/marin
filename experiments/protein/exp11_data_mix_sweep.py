@@ -17,11 +17,11 @@ use ``BATCH_SIZE`` (set below) with LR rescaled via
 Subcommands (``COMMAND`` env var):
 
 * ``tokenize`` — one Fray job per (quality, split) cell.
-* ``run_smoke`` — single trial: m9 (staged), 100M, ~800M tokens; m9
+* ``run_smoke`` — single trial: m9 (staged), 100M, ~400M tokens; m9
   exercises the staged-mixture path.
 * ``run_mix_sweep`` — all 9 mix mixtures (m1..m9) at 100M, ~4.3B tokens each.
-* ``run_scale_sweep`` — 4 scale mixtures (m10..m13) at 1.5B on v5p-8,
-  ~43.3B tokens each (one job per mixture).
+* ``run_scale_sweep`` — 6 scale mixtures (m10..m15) at 1.5B on v5p-8,
+  ~21.5B tokens each (one job per mixture).
 
 Env vars: ``COMMAND`` (required), ``RUNS`` (CSV substring filter on target
 ids), ``PREVIEW=yes`` (list targets, submit nothing), ``NUM_WORKERS``
@@ -210,11 +210,11 @@ def scaled_lr(batch_size: int, hidden_size: int) -> float:
 
 # Operating point for all sweeps. LR scales by sqrt(BATCH_SIZE/128) via
 # scaled_lr; beta2 follows the noise-scale heuristic
-# beta2 = 0.98 ** (BATCH_SIZE / 128). At BATCH_SIZE=512 these resolve to:
-#   smoke/mix (HIDDEN_100M=768):  lr = 1.87e-3
-#   scale     (HIDDEN_1_5B=2048): lr = 7.00e-4
-#   beta2 (all sweeps): 0.9224
-BATCH_SIZE: int = 512
+# beta2 = 0.98 ** (BATCH_SIZE / 128). At BATCH_SIZE=256 these resolve to:
+#   smoke/mix (HIDDEN_100M=768):  lr = 1.32e-3
+#   scale     (HIDDEN_1_5B=2048): lr = 4.95e-4
+#   beta2 (all sweeps): 0.9604
+BATCH_SIZE: int = 256
 BETA2: float = 0.98 ** (BATCH_SIZE / 128)
 
 WEIGHT_DECAY: float = 0.01
@@ -240,8 +240,8 @@ PROTEIN_VOCAB_SIZE: int = 2840
 # IID held-out sequences carved per train cell; ~4096 ≈ 33.5M tokens / cell.
 IID_EVAL_SEQS_PER_TRAIN: int = 4096
 
-# At BATCH_SIZE=512, seq=8192: 8 * 512 = 4096 examples, ~33.6M tokens / component.
-MAX_EVAL_BATCHES: int = 8
+# At BATCH_SIZE=256, seq=8192: 16 * 256 = 4096 examples, ~33.6M tokens / component.
+MAX_EVAL_BATCHES: int = 16
 
 # Pinned so cross-run comparisons share the same data permutation.
 DATA_SEED: int = 1729
@@ -359,6 +359,7 @@ MIX_MIXTURES: tuple[Mixture, ...] = (
 # (L→H staged). m13 is the staged analogue of m11: a three-stage L→M→H
 # curriculum whose per-stage fractions match m6/m11 (L=0.43, M=0.26,
 # H=0.31), so transitions land at 0.43 and 0.43+0.26=0.69.
+# m14 == m2 (M-only), m15 == m3 (L-only) — single-quality scale baselines.
 SCALE_MIXTURES: tuple[Mixture, ...] = (
     Mixture(id="m10", static={"H": 1.0}),
     Mixture(id="m11", static={"H": 0.31, "M": 0.26, "L": 0.43}),
@@ -371,6 +372,8 @@ SCALE_MIXTURES: tuple[Mixture, ...] = (
             (0.69, {"H": 1.0}),
         ),
     ),
+    Mixture(id="m14", static={"M": 1.0}),
+    Mixture(id="m15", static={"L": 1.0}),
 )
 MIXTURE_BY_ID: dict[str, Mixture] = {m.id: m for m in (*MIX_MIXTURES, *SCALE_MIXTURES)}
 
@@ -717,10 +720,11 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
 
 
 def _make_stage_specs() -> dict[str, StageSpec]:
-    # cd train = 43.301B packed tokens (user-confirmed face value, no recount).
-    smoke_steps, smoke_spe = _schedule(800_000_000, num_evals=2, batch_size=BATCH_SIZE)
+    # Full cd-train size = 43_301_511_168 packed tokens; scale target is 5x
+    # the mix schedule (~half-epoch coverage), not full cd-train.
+    smoke_steps, smoke_spe = _schedule(400_000_000, num_evals=2, batch_size=BATCH_SIZE)
     mix_steps, mix_spe = _schedule(4_300_000_000, num_evals=8, batch_size=BATCH_SIZE)
-    scale_steps, scale_spe = _schedule(43_301_511_168, num_evals=32, batch_size=BATCH_SIZE)
+    scale_steps, scale_spe = _schedule(5 * 4_300_000_000, num_evals=32, batch_size=BATCH_SIZE)
     return {
         # m9 exercises MixtureDataset's weight_stages path (alignment + rescaling).
         "run_smoke": StageSpec(
@@ -763,9 +767,9 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             num_train_steps=scale_steps,
             steps_per_eval=scale_spe,
             learning_rate=scaled_lr(BATCH_SIZE, HIDDEN_1_5B),
-            version="v4",
-            # 4 trials, one v5p-8 per worker → 1 trial each.
-            num_workers=4,
+            version="v6",
+            # 6 trials, one v5p-8 per worker → 1 trial each.
+            num_workers=6,
             heldout_cells=(Cell("H", "val"), Cell("H", "test")),
             include_cd_val_unmasked=False,
             steps_per_export=scale_steps // NUM_PERMANENT_CHECKPOINTS,
