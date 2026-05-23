@@ -232,6 +232,28 @@ ANCHORS: tuple[ThroughputAnchor, ...] = (
             "``throughput/duration``."
         ),
     ),
+    # NOTE on the ``1e22-v5`` anchors below:
+    #
+    # The ``-v5`` in this key looks like it implies a v5-heuristic 1e22 base
+    # different from the canonical v6 Delphi 1e22, but that is NOT the case.
+    # There is only one Delphi 1e22 (see ``DELPHI_1E22`` in
+    # ``experiments/delphi_models.py``: d=3840, L=37, 9.7 B params, batch=1024,
+    # gcs_run_root=``adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e``).
+    # The ``-v5-`` in the GCS run name comes from a hardcoded experiment-
+    # iteration tag (``exp1337_delphi_suite.py:232``: literal
+    # ``f"-v5{suffix}"``) and is unrelated to the v5/v6 scaling-heuristic
+    # generation — those runs internally use ``LABEL = "adamh_scaling_v6"``
+    # and are canonical AdamH-v6 Delphi.
+    #
+    # The ``-v5`` lives in the throughput-anchor key only because the source
+    # W&B run names contain ``-v5-``; per the ``model_flops_key`` docstring
+    # we keep those exact keys. Treat these anchors as direct, not proxy,
+    # measurements for canonical 1e22 K=0.20 planning.
+    #
+    # See ``.agents/projects/delphi_midtraining.md`` (Trap #2) for the full
+    # naming-overlap explanation. (Trap #1 in the same doc — the real
+    # 1e20/3e20 base substitution — is a *different* situation specific to
+    # the 1e20 stand-in and does not apply at 1e22.)
     ThroughputAnchor(
         model_flops_key="1e22-v5",
         tpu_type="v5p-64",
