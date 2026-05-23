@@ -9,14 +9,14 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+from experiments.marin_models import marin_tokenizer
+
 molmo2_cap_normalized = molmo2_cap_normalize_steps()[-1].as_executor_step()
 
 
 def tokenize_molmo2_cap(*, tokenizer: str | None = None) -> TokenizerStep:
     """Tokenize the normalized Molmo2-Cap captions."""
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
-
         tokenizer = marin_tokenizer
 
     return ExecutorStep(

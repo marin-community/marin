@@ -18,6 +18,7 @@ from functools import lru_cache
 
 from fray.cluster import ResourceConfig
 from marin.datakit.download.uncheatable_eval import make_uncheatable_eval_step
+from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep, mixture_for_evaluation
@@ -78,8 +79,6 @@ def uncheatable_eval_tokenized(
 
 
 def uncheatable_eval_raw_validation_sets(*, uncheatable_eval_raw: ExecutorStep = uncheatable_eval):
-    from marin.evaluation.perplexity_gap import raw_text_dataset
-
     return {
         os.path.join("uncheatable_eval", dataset): raw_text_dataset(uncheatable_eval_raw.cd(path_part))
         for dataset, path_part in ((dataset, ALL_UNCHEATABLE_EVAL_DATASETS[dataset]) for dataset in ACTIVE_DATASETS)

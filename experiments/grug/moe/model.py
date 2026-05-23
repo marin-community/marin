@@ -25,7 +25,14 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
+from levanter.grug.attention import (
+    AttentionMask,
+    GrugAttentionImplementation,
+    RotaryConfig,
+    align_kv_heads,
+    apply_rotary_embedding,
+    attention,
+)
 from levanter.grug.grug_moe import (
     MoeActivation,
     MoEExpertMlp,
@@ -34,7 +41,7 @@ from levanter.grug.grug_moe import (
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
@@ -75,6 +82,7 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     router_z_loss_coef: float = 0.001
+    attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
@@ -147,7 +155,7 @@ class CausalSelfAttention(eqx.Module):
         k = rms_norm(k)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
         q = q * self.cfg.qk_mult
-        attn_out = attention(q, k, v, mask)
+        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
         aligned_v = reshard(aligned_v, P(("data", "expert"), None, "model", None))
         # Exclusive Self Attention: subtract the component of yᵢ parallel to vᵢ.
@@ -267,14 +275,14 @@ def _routing_stats(
     }
 
 
-def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | Histogram]:
+def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
     routing_entropy = router_metrics["routing_entropy_per_layer"]
     routing_counts = router_metrics["routing_counts_per_layer"]
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
-    out: dict[str, jax.Array | Histogram] = {
+    out: dict[str, jax.Array | SummaryStats] = {
         "train/router/routing_entropy_mean": jnp.mean(routing_entropy),
         "train/router/load_balancing_loss": jnp.mean(load_balancing_loss),
         "train/router/router_z_loss": jnp.mean(router_z_loss),
@@ -289,7 +297,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     return out
 
 
-def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
+def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     counts = jnp.asarray(expert_counts, dtype=jnp.float32)
     num_experts = counts.shape[0]
     expert_ids = jnp.arange(num_experts, dtype=jnp.float32)
@@ -302,14 +310,15 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
     min_value = jnp.where(num > 0, min_value, 0.0)
     max_value = jnp.where(num > 0, max_value, 0.0)
     bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
-    return Histogram(
+    histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
+    return SummaryStats(
         min=min_value,
         max=max_value,
         num=num,
+        nonzero_count=jnp.sum(nonzero),
         sum=sum_values,
         sum_squares=sum_squares,
-        bucket_limits=bucket_limits,
-        bucket_counts=counts,
+        histogram=histogram,
     )
 
 
@@ -534,7 +543,7 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
-    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | Histogram]]:
+    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)

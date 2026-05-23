@@ -364,6 +364,10 @@ class ZephyrWorkerError(RuntimeError):
     """Raised when a worker encounters a fatal (non-transient) error."""
 
 
+class CoordinatorUnreachable(RuntimeError):
+    """Worker lost contact with the coordinator. Retryable at the iris task level."""
+
+
 # Application errors that should never be retried by the execute() retry loop.
 # These are deterministic errors (bad plan, invalid config, programming bugs)
 # that would fail identically on every attempt. Infrastructure errors (OSError,
@@ -441,7 +445,7 @@ class JobStatus:
     in_flight: int
     queue_depth: int
     done: bool
-    fatal_error: str
+    fatal_error: str | None
     workers: dict[str, dict[str, Any]]
 
 
@@ -727,7 +731,7 @@ class ZephyrCoordinator:
             dead,
         )
 
-        # Map-only stages don't yield through ``_StageStatsGenerator`` and never
+        # Map-only stages don't yield through ``_wrap_stage_stats`` and never
         # populate these counters. Drop the items/bytes_processed segment for
         # those stages.
         elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
@@ -852,15 +856,6 @@ class ZephyrCoordinator:
     def _maybe_requeue_worker_task(self, worker_id: str) -> None:
         """Requeue the worker's in-flight task as an INFRA failure (preemption/heartbeat)."""
         self._record_shard_failure(worker_id, ShardFailureKind.INFRA)
-
-    def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
-        """Internal heartbeat check (called with lock held)."""
-        now = time.monotonic()
-        for worker_id, last in list(self._last_seen.items()):
-            if now - last > timeout and self._worker_states.get(worker_id) not in {WorkerState.FAILED, WorkerState.DEAD}:
-                logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
-                self._worker_states[worker_id] = WorkerState.FAILED
-                self._maybe_requeue_worker_task(worker_id)
 
     def pull_task(self, worker_id: str, epoch: int | None = None) -> tuple[ShardTask, int, dict] | PullStatus:
         """Called by workers to get next task.
@@ -1306,7 +1301,15 @@ class ZephyrCoordinator:
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
-            self._check_worker_heartbeats(timeout)
+            now = time.monotonic()
+            for worker_id, last in list(self._last_seen.items()):
+                if now - last > timeout and self._worker_states.get(worker_id) not in {
+                    WorkerState.FAILED,
+                    WorkerState.DEAD,
+                }:
+                    logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
+                    self._worker_states[worker_id] = WorkerState.FAILED
+                    self._maybe_requeue_worker_task(worker_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1361,10 +1364,10 @@ class ZephyrWorker:
 
         # Capture actor context while ContextVar is still set (child threads
         # in Python <3.12 don't inherit it).
-        actor_ctx = current_actor()
-        self._host_shutdown_event = actor_ctx.shutdown_event
-        self._worker_id = f"{actor_ctx.group_name}-{actor_ctx.index}"
-        self._actor_handle = actor_ctx.handle
+        self._actor_ctx = current_actor()
+        self._host_shutdown_event = self._actor_ctx.shutdown_event
+        self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
+        self._actor_handle = self._actor_ctx.handle
 
         threading.Thread(
             target=self._heartbeat_loop,
@@ -1539,6 +1542,9 @@ class ZephyrWorker:
                         "[%s] %d consecutive heartbeat failures — coordinator unreachable, shutting down",
                         self._worker_id,
                         consecutive_failures,
+                    )
+                    self._actor_ctx.fail(
+                        CoordinatorUnreachable(f"{consecutive_failures} consecutive heartbeat failures")
                     )
                     self._shutdown_event.set()
                     break

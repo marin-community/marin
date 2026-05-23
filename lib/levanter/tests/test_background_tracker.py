@@ -25,7 +25,7 @@ import jax.numpy as jnp
 import pytest
 
 from levanter.tracker import BackgroundTracker, CompositeTracker
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import Tracker
 
 
@@ -365,22 +365,22 @@ def test_background_tracker_materializes_jax_arrays_before_enqueue():
     assert list(logged["steps"]) == [0, 1, 2]
 
 
-def test_background_tracker_materializes_histogram_leaves():
-    """Histogram is a pytree; its jax.Array leaves must be materialized too.
+def test_background_tracker_materializes_summary_stats_leaves():
+    """SummaryStats is a pytree; its jax.Array leaves must be materialized too.
 
-    Grug MoE logs per-layer routing Histograms every step. Their scalar
+    Grug MoE logs per-layer routing SummaryStats every step. Their scalar
     fields are sharded jax.Arrays, so leaving them for the worker thread to
     convert is exactly the multi-host hazard this materialization prevents.
     """
     inner = RecordingTracker()
     bt = BackgroundTracker(inner)
     try:
-        bt.log({"grads/hist": Histogram.from_array(jnp.arange(100.0))}, step=0)
+        bt.log({"grads/hist": SummaryStats.from_array(jnp.arange(100.0))}, step=0)
         assert bt._wait_until_idle(timeout=5)
     finally:
         bt.finish()
 
     logged = inner.logs[0][0]["grads/hist"]
-    assert isinstance(logged, Histogram)
+    assert isinstance(logged, SummaryStats)
     for leaf in jax.tree_util.tree_leaves(logged):
         assert not isinstance(leaf, jax.Array)

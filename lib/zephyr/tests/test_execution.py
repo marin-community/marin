@@ -11,17 +11,20 @@ import os
 import threading
 import time
 import uuid
+from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from fray import ResourceConfig
+from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from zephyr import counters
 from zephyr.dataset import Dataset
 from zephyr.execution import (
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
+    CoordinatorUnreachable,
     CounterSnapshot,
     ListShard,
     PickleDiskChunk,
@@ -31,6 +34,7 @@ from zephyr.execution import (
     WorkerState,
     ZephyrContext,
     ZephyrCoordinator,
+    ZephyrWorker,
     ZephyrWorkerError,
     zephyr_worker_ctx,
 )
@@ -1291,6 +1295,53 @@ def test_stage_index_correct_with_join(local_client, tmp_path):
         # stage_label format: "stage{stage_idx}-{stage_name}"
         expected_idx = int(main_name.split("-")[0].replace("stage", ""))
         assert main_idx == expected_idx, f"{main_name!r} has current_stage_index={main_idx}, expected {expected_idx}"
+
+
+def test_heartbeat_failures_fail_actor_context():
+    """After max consecutive heartbeat failures, the worker records a
+    ``CoordinatorUnreachable`` on its actor context and sets the host
+    shutdown event so ``_host_actor`` re-raises it.
+
+    Without this, the worker would set only its internal ``_shutdown_event``
+    and exit cleanly — iris would mark the task SUCCEEDED and never retry.
+    """
+
+    class _FailingMethod:
+        def remote(self, *args, **kwargs):
+            f: Future = Future()
+            f.set_exception(ConnectionError("simulated coordinator unreachable"))
+            return f
+
+    class _FailingCoordinator:
+        def __getattr__(self, name):
+            return _FailingMethod()
+
+    shutdown_event = threading.Event()
+    actor_ctx = ActorContext(
+        handle=MagicMock(),
+        index=0,
+        group_name="test-worker",
+        shutdown_event=shutdown_event,
+    )
+
+    worker = ZephyrWorker.__new__(ZephyrWorker)
+    worker._actor_ctx = actor_ctx
+    worker._shutdown_event = threading.Event()
+    worker._active_sub_ids = []
+    worker._worker_id = "test-worker-0"
+    worker._report_worker_iris_status = lambda: None
+
+    t = threading.Thread(
+        target=worker._heartbeat_loop,
+        kwargs={"coordinator": _FailingCoordinator(), "interval": 0.01, "max_consecutive_failures": 3},
+    )
+    t.start()
+    t.join(timeout=5.0)
+
+    assert not t.is_alive(), "heartbeat loop did not exit after exhausting failure budget"
+    assert shutdown_event.is_set(), "actor_ctx.shutdown_event should have been set by fail()"
+    assert actor_ctx._errors, "expected at least one error recorded on actor_ctx"
+    assert isinstance(actor_ctx._errors[0], CoordinatorUnreachable)
 
 
 # --- Integration tests (all backends) ---

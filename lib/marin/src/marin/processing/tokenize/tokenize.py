@@ -74,6 +74,7 @@ class HfDatasetSpec:
 
     id: str
     name: str | None = None
+    revision: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
