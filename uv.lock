@@ -5792,6 +5792,7 @@ name = "marin-rigging"
 version = "0.99"
 source = { editable = "lib/rigging" }
 dependencies = [
+    { name = "connect-python" },
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "s3fs" },
@@ -5800,11 +5801,13 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "connect-python", specifier = ">=0.9.0" },
     { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "gcsfs", specifier = ">=2024.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
@@ -5813,6 +5816,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
 ]
 
