@@ -135,7 +135,7 @@ EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="64g")
 ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="32g")
 COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g")
 EMBED_MAX_WORKERS_PER_SOURCE = 512
-ASSIGN_MAX_WORKERS_PER_SOURCE = 128
+ASSIGN_MAX_WORKERS_PER_SOURCE = 1024
 
 # Minhash / dedup mirror all_sources_fuzzy defaults.
 MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=5, ram="32g", disk="5g")
@@ -147,8 +147,8 @@ DEDUP_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="3.5g", preemptible=Fals
 DECONTAM_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
 
 # Store.
-STORE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
-STORE_MAX_WORKERS = 4096
+STORE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
+STORE_MAX_WORKERS = 2048
 SPLIT = "train"
 
 
@@ -269,6 +269,7 @@ def build_steps(
             name=f"datakit/quality/{name}",
             normalized=normalize_step,
             model_step=quality_model_step,
+            max_workers=ASSIGN_MAX_WORKERS_PER_SOURCE,
         )
 
         decontam = decon_step(
