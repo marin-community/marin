@@ -156,6 +156,7 @@ def build_steps(
     *,
     domain_centroids_dir: str,
     quality_model_bin: str,
+    store_shards_per_task: int = 1,
 ) -> list[StepSpec]:
     """Build the full DAG of StepSpecs.
 
@@ -328,6 +329,7 @@ def build_steps(
             split=SPLIT,
             worker_resources=STORE_WORKER_RESOURCES,
             max_workers=STORE_MAX_WORKERS,
+            shards_per_task=store_shards_per_task,
         )
 
     store_deps: list[StepSpec] = []
@@ -338,6 +340,7 @@ def build_steps(
     store = StepSpec(
         name="datakit/store",
         deps=store_deps,
+        hash_attrs={"shards_per_task": store_shards_per_task},
         fn=_store_fn,
     )
 
@@ -367,12 +370,25 @@ def main() -> None:
         metavar="N",
         help="Max steps StepRunner runs concurrently. Defaults to StepRunner's default (8).",
     )
+    parser.add_argument(
+        "--store-shards-per-task",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Group N source-shard tuples into one store task so each task writes one part file "
+            "per (cluster, quality) it touches instead of one per input shard. Reduces output "
+            "file count by ~N x at the cost of N x longer per-task runtime and proportionally "
+            "more in-flight per-bucket writer state. Defaults to 1 (no batching)."
+        ),
+    )
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
     steps = build_steps(
         domain_centroids_dir=args.domain_centroids,
         quality_model_bin=args.quality_model_bin,
+        store_shards_per_task=args.store_shards_per_task,
     )
     StepRunner().run(steps, max_concurrent=args.max_concurrent)
 
