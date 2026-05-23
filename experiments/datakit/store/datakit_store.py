@@ -174,7 +174,12 @@ def _per_source_shard_tuples(
             "tokenize": tok_path,
             "decontam": f"{decon_dir}/{os.path.basename(tok_path)}",
             "cluster": f"{cluster_dir}/{os.path.basename(tok_path)}",
-            "quality": f"{quality_dir}/{os.path.basename(tok_path)}",
+            # Quality's writer uses ``data-NNNNN-of-MMMMM.parquet`` (set in
+            # cluster/quality/v0/all_sources_quality_llm.py) while every
+            # other co-partitioned step uses ``part-NNNNN-of-MMMMM.parquet``.
+            # Map the basename so the join stays purely basename-keyed
+            # without invalidating the existing quality cache.
+            "quality": f"{quality_dir}/{os.path.basename(tok_path).replace('part-', 'data-', 1)}",
             # ``dedup`` may legitimately be absent for shards with zero
             # non-singletons. Worker checks existence before opening.
             "dedup": f"{dedup_dir}/{os.path.basename(tok_path)}",
