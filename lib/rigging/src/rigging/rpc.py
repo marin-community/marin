@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from contextlib import asynccontextmanager
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -94,25 +95,34 @@ class ConcurrencyLimitInterceptor:
             if sem is not None:
                 sem.release()
 
+    @asynccontextmanager
+    async def _slot(self, method: str):
+        """Acquire a method slot off the loop, cancellation-safe.
+
+        ``asyncio.shield`` keeps the worker thread running past a cancelled
+        awaiter; the done callback releases the permit it eventually takes
+        so it can't leak. ``threading.Semaphore.acquire`` has no
+        cancellation hook, so this dance is the price of sharing one
+        semaphore type with the sync path.
+        """
+        sem: threading.Semaphore | None = None
+        acquire_task = asyncio.ensure_future(asyncio.to_thread(self._try_acquire, method))
+        try:
+            sem = await asyncio.shield(acquire_task)
+            yield
+        except asyncio.CancelledError:
+            if sem is None:
+                acquire_task.add_done_callback(_release_if_acquired)
+            raise
+        finally:
+            if sem is not None:
+                sem.release()
+
     async def intercept_unary(self, call_next, request, ctx):
         method = ctx.method().name
         if _deadline_expired(ctx):
             raise _deadline_error(method)
-        # Hop the blocking acquire off the loop so other in-flight handlers
-        # keep running while we wait. Shield it so a cancellation delivered
-        # mid-wait doesn't strand the worker thread — it can't be cancelled
-        # and will eventually take the permit. The done callback releases on
-        # the cancelled waiter's behalf.
-        acquire_task = asyncio.ensure_future(asyncio.to_thread(self._try_acquire, method))
-        try:
-            sem = await asyncio.shield(acquire_task)
-        except asyncio.CancelledError:
-            acquire_task.add_done_callback(_release_if_acquired)
-            raise
-        try:
+        async with self._slot(method):
             if _deadline_expired(ctx):
                 raise _deadline_error(method)
             return await call_next(request, ctx)
-        finally:
-            if sem is not None:
-                sem.release()
