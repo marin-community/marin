@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MoE grug variant model.
+"""May MoE Recipe.
 
-Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
-No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
+QB-routed MoE with GatedNorm, XSA, sigmoid combine weights, PKO every-4th
++ last-layer, half-rope on non-PKO layers, split ``w_gate``/``w_up``,
+``routing_renorm_sum=2.5``. No load-balancing or z-loss. All layers are MoE.
 """
 
 import dataclasses
@@ -46,20 +47,25 @@ def _batch_spec() -> P:
     return P(("data", "expert"))
 
 
+_ROUTING_RENORM_SUM = 2.5
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
-    Only shape/size knobs live here. All layers are MoE.
+    Architecture choices (GatedNorm, XSA, QB routing, PKO every-4th + last,
+    half-rope on non-PKO layers, split ``w_gate``/``w_up``,
+    ``routing_renorm_sum=2.5``, ``router_z_loss=0``) are hard-coded. Only
+    shape/size knobs live here. All layers are MoE.
     """
 
     vocab_size: int
     hidden_dim: int = 2048
     intermediate_dim: int = 5632
     shared_expert_intermediate_dim: int = 5632
-    num_experts: int = 8
-    num_experts_per_token: int = 2
+    num_experts: int = 256
+    num_experts_per_token: int = 4
     num_layers: int = 24
     num_heads: int = 16
     num_kv_heads: int = 16
@@ -69,32 +75,7 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.0
-    router_z_loss_coef: float = 0.001
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
-    # Attention gate mode: "full" (default), "none", "truncated", "lora".
-    attn_gate_mode: str = "full"
-    # Fraction of hidden_dim for truncated gate_dim or LoRA low_rank.
-    # Only used when attn_gate_mode is "truncated" or "lora".
-    attn_gate_fraction: float = 1.0
-    # Partial key offset: "none" (default), "every_4th", "every_layer".
-    # Applies partial RoPE (first half of head_dim) and shifts stationary
-    # key dims forward by one position to enable 1-layer induction.
-    partial_key_offset: str = "none"
-    # Partial rope on non-PKO layers: only rotate half the head dims.
-    use_partial_rope: bool = False
-    # Force the last layer to use long sliding window + PKO.
-    last_layer_pko: bool = False
-    # If set, the per-token MoE combine weights ``sigmoid(unbiased_topk)``
-    # are rescaled to sum to this value across the K selected experts.
-    routing_renorm_sum: float | None = None
-    # MoEMLP storage layout. ``True``: store ``w_gate`` and ``w_up`` as
-    # separate ``(e, d, i)`` tensors, concat on forward.
-    split_w_gate_up: bool = False
-    # PKO ordering vs qk-norm.
-    # ``"norm_first"`` (default): rms_norm(q,k) -> PKO shift -> partial RoPE.
-    # ``"pko_first_bos_zero"``: PKO shift -> zero k.stationary at doc-starts
-    #     (segment_ids) -> rms_norm(q,k) -> partial RoPE.
-    pko_norm_order: str = "norm_first"
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -112,10 +93,6 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
-        if self.routing_renorm_sum is not None and self.routing_renorm_sum <= 0:
-            raise ValueError("routing_renorm_sum must be positive when set")
-        if self.pko_norm_order not in ("norm_first", "pko_first_bos_zero"):
-            raise ValueError(f"pko_norm_order must be 'norm_first' or 'pko_first_bos_zero'; got {self.pko_norm_order!r}")
 
     @property
     def inferred_head_dim(self) -> int:
@@ -139,41 +116,21 @@ class CausalSelfAttention(eqx.Module):
     w_k: Float[Array, "D MH"]
     w_v: Float[Array, "D MH"]
     w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "... N"] | None
-    attn_gate_up: Float[Array, "R N"] | None
+    attn_gate: Float[Array, "D N"]
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
-
-        gate_mode = cfg.attn_gate_mode
-        gate_frac = cfg.attn_gate_fraction
-        attn_gate: jax.Array | None = None
-        attn_gate_up: jax.Array | None = None
-
-        if gate_mode == "full":
-            attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
-        elif gate_mode == "truncated":
-            gate_dim = max(1, int(d * gate_frac))
-            attn_gate = reshard(jnp.zeros((gate_dim, n)), P(None, None))
-        elif gate_mode == "lora":
-            low_rank = max(1, int(d * gate_frac))
-            attn_gate = reshard(jnp.zeros((d, low_rank)), P(None, None))
-            attn_gate_up = reshard(jnp.zeros((low_rank, n)), P(None, None))
-        elif gate_mode == "none":
-            pass
-        else:
-            raise ValueError(f"Unknown attn_gate_mode: {gate_mode!r}")
-
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
             w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
-            attn_gate=attn_gate,
-            attn_gate_up=attn_gate_up,
+            # Full headwise gate: zero-init (d, n) projection. Sigmoid * 2 gating
+            # applied per head before the output projection.
+            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
 
@@ -182,8 +139,7 @@ class CausalSelfAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        use_partial_key_offset: bool = False,
-        use_partial_rope: bool = False,
+        use_pko: bool = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -193,59 +149,32 @@ class CausalSelfAttention(eqx.Module):
         k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
 
-        # ``pko_first_bos_zero``: shift k.stationary + zero at doc-starts
+        # PKO + ``pko_first_bos_zero``: shift k.stationary + zero at doc-starts
         # BEFORE rms_norm. The joint k is then normalised as a whole.
-        if use_partial_key_offset and self.cfg.pko_norm_order == "pko_first_bos_zero":
+        if use_pko:
             half = head_dim // 2
             k_stationary = k[..., half:]
             k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
-            if seg is not None:
-                q_seg = seg[0]
-                if q_seg.ndim == 1:
-                    is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
-                    is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
-                else:
-                    is_doc_start = jnp.concatenate(
-                        [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
-                        axis=1,
-                    )
-                k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
+            q_seg = mask.segment_ids[0]
+            if q_seg.ndim == 1:
+                is_doc_start_seq = jnp.concatenate([jnp.ones((1,), dtype=bool), q_seg[1:] != q_seg[:-1]])
+                is_doc_start = jnp.broadcast_to(is_doc_start_seq, k_shifted.shape[:2])
+            else:
+                is_doc_start = jnp.concatenate(
+                    [jnp.ones_like(q_seg[:, :1], dtype=bool), q_seg[:, 1:] != q_seg[:, :-1]],
+                    axis=1,
+                )
+            k_shifted = jnp.where(is_doc_start[..., None, None], jnp.zeros_like(k_shifted), k_shifted)
             k = jnp.concatenate([k[..., :half], k_shifted], axis=-1)
 
         q = rms_norm(q)
         k = rms_norm(k)
-        if use_partial_key_offset and self.cfg.pko_norm_order == "pko_first_bos_zero":
-            # PKO shift + bos-zero already applied above; just partial RoPE now.
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-            )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        elif use_partial_key_offset:
-            # Partial RoPE: only rotate the first half of head dims.
-            # Concatenate rotated and stationary halves to avoid sharding issues
-            # with .at[].set() on model-sharded arrays.
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-            )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            # Shift stationary key dims forward by one position (enables 1-layer induction).
-            k_stationary = k[..., half:]
-            k_shifted = jnp.concatenate([k_stationary[:, :1, :, :], k_stationary[:, :-1, :, :]], axis=1)
-            k = jnp.concatenate([k_rot, k_shifted], axis=-1)
-        elif use_partial_rope:
-            # Partial RoPE only (no key shift): rotate first half, leave rest stationary.
-            half = head_dim // 2
-            q_rot, k_rot = apply_rotary_embedding(
-                q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-            )
-            q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-            k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
-        else:
-            q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=self.cfg.rope)
+        half = head_dim // 2
+        q_rot, k_rot = apply_rotary_embedding(
+            q[..., :half], k[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
+        )
+        q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
+        k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -255,22 +184,10 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid produces one scalar per head.
-        if self.attn_gate is not None:
-            if self.attn_gate_up is not None:
-                # LoRA: x @ W_down @ W_up -> [B, S, N]
-                gate_logits = jnp.einsum("bsd,dr->bsr", x, self.attn_gate)
-                gate_logits = jnp.einsum("bsr,rn->bsn", gate_logits, self.attn_gate_up)
-            else:
-                gate_dim = self.attn_gate.shape[0]
-                if gate_dim < x.shape[-1]:
-                    # Truncated: use first gate_dim elements of activation
-                    gate_logits = jnp.einsum("bsg,gn->bsn", x[..., :gate_dim], self.attn_gate)
-                else:
-                    # Full: x @ attn_gate -> [B, S, N]
-                    gate_logits = jnp.einsum("bsd,dn->bsn", x, self.attn_gate)
-            gate = 2 * jax.nn.sigmoid(gate_logits)[..., None]
-            attn_out = gate * attn_out
+        # Full headwise gating: x @ attn_gate -> [B, S, N], sigmoid * 2 per head.
+        gate_logits = jnp.einsum("bsd,dn->bsn", x, self.attn_gate)
+        gate = 2 * jax.nn.sigmoid(gate_logits)[..., None]
+        attn_out = gate * attn_out
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
@@ -431,9 +348,8 @@ class MoEMLP(eqx.Module):
 
     router: jax.Array
     router_bias: jax.Array
-    w_gate_up: jax.Array | None
-    w_gate: jax.Array | None
-    w_up: jax.Array | None
+    w_gate: jax.Array
+    w_up: jax.Array
     w_down: jax.Array
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -447,20 +363,13 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e, i = cfg.hidden_dim, cfg.num_experts, cfg.intermediate_dim
-        w_gate_full = _init_weight(k_gate, (e, d, i), cfg.initializer_std)
-        w_up_full = _init_weight(k_up, (e, d, i), cfg.initializer_std)
-        if cfg.split_w_gate_up:
-            w_gate_up: jax.Array | None = None
-            w_gate: jax.Array | None = reshard(w_gate_full, P("expert", "data", "model"))
-            w_up: jax.Array | None = reshard(w_up_full, P("expert", "data", "model"))
-        else:
-            w_gate_up = reshard(jnp.concatenate([w_gate_full, w_up_full], axis=-1), P("expert", "data", "model"))
-            w_gate = None
-            w_up = None
+        # Split-w_gate-up layout (baked in): store w_gate / w_up as separate
+        # ``(e, d, i)`` tensors, concat on forward.
+        w_gate = reshard(_init_weight(k_gate, (e, d, i), cfg.initializer_std), P("expert", "data", "model"))
+        w_up = reshard(_init_weight(k_up, (e, d, i), cfg.initializer_std), P("expert", "data", "model"))
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            w_gate_up=w_gate_up,
             w_gate=w_gate,
             w_up=w_up,
             w_down=reshard(_init_weight(k_down, (e, i, d), cfg.initializer_std), P("expert", "model", "data")),
@@ -485,9 +394,9 @@ class MoEMLP(eqx.Module):
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        if self.cfg.routing_renorm_sum is not None:
-            denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-            combine_weights_f = combine_weights_f * (self.cfg.routing_renorm_sum / (denom + 1e-9))
+        # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
+        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
+        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
         combine_weights = combine_weights_f.astype(x.dtype)
         router_stats = _routing_stats(
             selected_experts,
@@ -519,10 +428,7 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        if self.w_gate_up is not None:
-            w_gate_up = self.w_gate_up
-        else:
-            w_gate_up = reshard(jnp.concatenate([self.w_gate, self.w_up], axis=-1), P("expert", "data", "model"))
+        w_gate_up = reshard(jnp.concatenate([self.w_gate, self.w_up], axis=-1), P("expert", "data", "model"))
         routed_flat = moe_mlp(
             x_flat,
             selected_experts.astype(jnp.int32),
@@ -571,13 +477,10 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        use_partial_key_offset: bool = False,
-        use_partial_rope: bool = False,
+        use_pko: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(
-            attn_in, mask, use_partial_key_offset=use_partial_key_offset, use_partial_rope=use_partial_rope
-        )
+        x = x + self.attn(attn_in, mask, use_pko=use_pko)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
@@ -633,16 +536,14 @@ class Transformer(eqx.Module):
         short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window // 2, segment_ids=segment_ids)
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
-        pko_mode = cfg.partial_key_offset
         num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
         for i, block in enumerate(self.blocks):
             is_last = i == num_blocks - 1
-            is_long = i % 4 == 3 or (cfg.last_layer_pko and is_last)
+            is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
-            use_pko = (pko_mode == "every_layer") or (pko_mode == "every_4th" and is_long)
-            partial_rope = cfg.use_partial_rope and not use_pko
-            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko, partial_rope)
+            use_pko = is_long
+            hidden, router_stats = eqx.filter_checkpoint(block)(hidden, layer_mask, use_pko)
             moe_router_stats.append(router_stats)
 
         router_metrics = {
@@ -689,15 +590,10 @@ class Transformer(eqx.Module):
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
         )
-        # No load-balancing loss; router z-loss only.
-        num_moe_layers = router_metrics["router_z_loss_per_layer"].shape[0]
-        rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
-        aux_loss = self.config.router_z_loss_coef * rzl
-        loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
+        loss = cross_entropy_loss
         if return_router_metrics:
             summarized_metrics = _summarize_router_metrics(router_metrics)
             summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
-            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
             return loss, summarized_metrics
         return loss
 
