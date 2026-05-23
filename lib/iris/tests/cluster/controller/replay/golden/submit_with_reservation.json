@@ -109,6 +109,7 @@
       "value": 2
     }
   ],
+  "node_lifecycle_events": [],
   "reservation_claims": [],
   "scaling_groups": [],
   "slices": [],

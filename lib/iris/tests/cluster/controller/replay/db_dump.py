@@ -30,7 +30,7 @@ from sqlalchemy import text
 EXCLUDED_TABLES: frozenset[str] = frozenset({"schema_migrations"})
 """Tables ignored by ``deterministic_dump`` — schema bookkeeping only."""
 
-MASKED_COLUMNS: frozenset[str] = frozenset({"attempt_uid"})
+MASKED_COLUMNS: frozenset[str] = frozenset({"attempt_uid", "event_id"})
 """Columns holding non-deterministic minted IDs; masked per-row in the dump."""
 
 

@@ -62,13 +62,38 @@
       "value": 1
     }
   ],
+  "node_lifecycle_events": [
+    {
+      "attempt_id": null,
+      "capacity_type": "",
+      "cloud_state": "",
+      "confidence": "inferred",
+      "device_type": "",
+      "device_variant": "",
+      "event_id": "<masked-0>",
+      "event_time_ms": null,
+      "message": "node lost",
+      "node_name": "w-doomed:8080",
+      "observed_at_ms": 1704067200001,
+      "previous_state": "",
+      "provider": "",
+      "raw_json": "{\"address\": \"w-doomed:8080\", \"last_contact_age_ms\": 1}",
+      "reason": "heartbeat_lost",
+      "scale_group": "",
+      "slice_id": "",
+      "source": "iris_worker_health",
+      "task_id": "",
+      "worker_id": "w-doomed",
+      "zone": ""
+    }
+  ],
   "reservation_claims": [],
   "scaling_groups": [],
   "slices": [],
   "task_attempts": [
     {
       "attempt_id": 0,
-      "attempt_uid": "<masked-0>",
+      "attempt_uid": "<masked-1>",
       "created_at_ms": 1704067200000,
       "error": "Worker w-doomed failed: node lost",
       "exit_code": null,
