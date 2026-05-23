@@ -969,54 +969,6 @@ class TestConfigValidation:
 
         validate_config(config)
 
-    def test_rejects_reserved_capacity_with_nonzero_buffer(self):
-        """Reserved-capacity groups must keep buffer_slices=0; the autoscaler target is demand-only."""
-        config = config_pb2.IrisClusterConfig()
-        config.platform.gcp.project_id = "test"
-        config.platform.gcp.zones.append("us-central2-b")
-        sg = config_pb2.ScaleGroupConfig(
-            name="tpu-reserved",
-            num_vms=8,
-            buffer_slices=1,
-            max_slices=1,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000,
-                memory_bytes=16 * 1024**3,
-                device_count=4,
-                device_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                capacity_type=config_pb2.CAPACITY_TYPE_RESERVED,
-            ),
-        )
-        sg.slice_template.gcp.zone = "us-central2-b"
-        sg.slice_template.gcp.runtime_version = "tpu-ubuntu2204-base"
-        config.scale_groups["tpu-reserved"].CopyFrom(sg)
-
-        with pytest.raises(ValueError, match=r"buffer_slices must be 0 for reserved-capacity groups"):
-            validate_config(config)
-
-    def test_accepts_reserved_capacity_with_zero_buffer(self):
-        config = config_pb2.IrisClusterConfig()
-        config.platform.gcp.project_id = "test"
-        config.platform.gcp.zones.append("us-central2-b")
-        sg = config_pb2.ScaleGroupConfig(
-            name="tpu-reserved",
-            num_vms=8,
-            buffer_slices=0,
-            max_slices=1,
-            resources=config_pb2.ScaleGroupResources(
-                cpu_millicores=8000,
-                memory_bytes=16 * 1024**3,
-                device_count=4,
-                device_type=config_pb2.ACCELERATOR_TYPE_TPU,
-                capacity_type=config_pb2.CAPACITY_TYPE_RESERVED,
-            ),
-        )
-        sg.slice_template.gcp.zone = "us-central2-b"
-        sg.slice_template.gcp.runtime_version = "tpu-ubuntu2204-base"
-        config.scale_groups["tpu-reserved"].CopyFrom(sg)
-
-        validate_config(config)
-
 
 def _gcp_scale_group(
     zone: str, *, capacity_type: int = config_pb2.CAPACITY_TYPE_PREEMPTIBLE
@@ -1694,7 +1646,7 @@ tpu_pools:
       gcp:
         runtime_version: v2-alpha-tpuv5-lite
     sizes:
-      128: { buffer_slices: 0, max_slices: 4 }
+      128: { buffer_slices: 1, max_slices: 4 }
 """
         p = tmp_path / "config.yaml"
         p.write_text(config_content)
