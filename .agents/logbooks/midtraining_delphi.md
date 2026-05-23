@@ -9954,3 +9954,85 @@ Verification:
 - `uv run python scripts/analysis/delphi_within_run_prediction.py --use-cache`
 - `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
 - `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
+
+## 2026-05-23T06:49Z — 3e20 K=0.20 sweep complete (12/12)
+
+Last cell (`p33m67-lr33`) reached step 7081 at `2026-05-23T05:47Z`. All
+12 cells finished cleanly at `final_step=7081` (`num_train_steps=7082`,
+last logged is the step before the end-of-training boundary). Closes out
+the v6 isoflop-bucket-winner ladder (`3e18 -> 3e20`).
+
+### Wall-clock
+
+| | Value |
+|---|---|
+| iris submit (per launch entry above) | `2026-05-20T20:30Z` |
+| last cell finish (W&B heartbeat)     | `2026-05-23T05:47Z` |
+| **total wall-clock**                  | **57.3 h** |
+| per-cell `_runtime` min / med / max  | 15.03 / 15.30 / 16.07 h |
+| sum of per-cell runtime              | ~ 185 cell-h = 1482 chip-h wall |
+| pure-compute reference               | 920 chip-h (anchor 4.87 s/step on v5p-16) |
+| preemption overhead                  | ~ 61 % |
+
+For comparison the 2e20 sweep on v5p-8 was ~ 24.6 h wall / ~ 80 %
+overhead (logbook §`2026-05-21T01:35Z`). 3e20 took 2.3x the wall for
+2.8x the chip-h pure compute and a slightly cleaner queue.
+
+### Final train losses (last logged step, by mix)
+
+| Cell | step | `train/loss` |
+|---|---:|---:|
+| p33m67-lr33 | 7081 | 1.4097 |
+| p33m67-lr50 | 7081 | 1.4013 |
+| p33m67-lr67 | 7081 | 1.4017 |
+| p33m67-lr83 | 7081 | 1.4066 |
+| p50m50-lr33 | 7081 | 1.7309 |
+| p50m50-lr50 | 7081 | 1.7283 |
+| p50m50-lr67 | 7081 | 1.7318 |
+| p50m50-lr83 | 7081 | 1.7395 |
+| p67m33-lr33 | 7081 | 2.0512 |
+| p67m33-lr50 | 7081 | 2.0514 |
+| p67m33-lr67 | 7081 | 2.0569 |
+| p67m33-lr83 | 7081 | 2.0648 |
+
+Within-mix LR variance is tight (spread < 0.014 `train/loss` across all
+4 LR factors at every mix). Don't over-interpret: these are last-step
+`train/loss`, not held-out eval. Run the same val/eval post-processing
+the other isoflop-bucket-winner sweeps used before treating any LR as
+the best.
+
+### Notable scheduler events during the run
+
+- **3 cells starved at `--priority batch`** for ~2 days before getting
+  picked: `p33m67-lr33` (the post-orphan resubmit), `p67m33-lr67`,
+  `p67m33-lr83`. None were ever bumped to interactive priority; all
+  three eventually drained from the iris queue and finished naturally.
+  Diagnosis at the time (launch entry + handoff): BATCH band ends up
+  below every default-priority user, so cluster contention determines
+  when these get picked, not retry budget.
+- **2 cells "killed" mid-run** by
+  `/tonyhlee/eval-still_rstarcoder_n8_vr5_round1-step-{100,200}-code/0`:
+  `p50m50-lr50` and `p50m50-lr67` showed iris `job_state=6` (terminal)
+  on their `midtrain-...` child at ~`2026-05-22T12Z`. Both cells
+  nonetheless reached step 7081. Either the parent coordinator
+  re-spawned the child, or iris re-allocated despite the "terminal"
+  state. **Don't trust `JOB_STATE_KILLED` on a child as
+  terminal-for-cell without inspecting the parent.**
+
+### Throughput anchor
+
+Median clean step-time on v5p-16: 4.87 s/step, ~108k tok/s, ~47 % MFU.
+Anchor refreshed at commit `66badd834` (`3e20 / v5p-16`, sourced from
+`delphi-3e20-p33m67-k0p20-lr67-a001`, which was the highest-progress
+cell at measurement time).
+
+### Next steps
+
+- Refresh the scaling-law fit framework from `§2026-05-21T01:52Z` with
+  the full 7 v6 bucket-winner ladder x 3 mixes x 4 LRs = 84 data
+  points now that 3e20 is in.
+- HF export status not yet checked across all 12 cells.
+- Memory `[[reference-legacy-1e20-means-3e20-iso]]` (saved
+  `2026-05-22`) captures why `delphi-1e20-*` (without `true-midtrain`)
+  is the v5-isoflop-3e20 stand-in usable as a throughput proxy for
+  canonical 3e20 with a ~1.39x param-ratio scale-up.
