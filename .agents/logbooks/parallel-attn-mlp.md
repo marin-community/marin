@@ -2,7 +2,7 @@
 
 Experiment ID prefix: `MOE-PAM`
 
-Linked issue: TBD (filled in after `gh issue create`).
+Linked issue: marin-community/marin#5932 (sub-issue of #5358).
 
 ## Scope
 - Goal: Determine whether running attention and MLP in parallel against the
