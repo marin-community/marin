@@ -147,8 +147,8 @@ DEDUP_COORDINATOR_RESOURCES = ResourceConfig(cpu=1, ram="3.5g", preemptible=Fals
 DECONTAM_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
 
 # Store.
-STORE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
-STORE_MAX_WORKERS = 2048
+STORE_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="32g")
+STORE_MAX_WORKERS = 2048 + 1024
 SPLIT = "train"
 
 
