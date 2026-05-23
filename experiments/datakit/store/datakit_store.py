@@ -9,8 +9,10 @@ for the datakit attribute datasets that the global pipelines produce:
     tokenize        per-source ``{id, input_ids}``, dense, sorted by id
     decontam        per-source ``{id, attributes: {contaminated, ...}}``, dense
     cluster_assign  per-source ``{id, cluster_<K>, ...}``, dense
-    quality         per-source ``{id, attributes: {score: float}}``, dense
-                    (dolma3 fasttext-quality classifier output)
+    quality         per-source ``{id, score: float}``, dense (flat schema;
+                    output of fasttext quality classifier via
+                    ``score_target_label`` path which writes a scalar
+                    directly under ``output_field_name="score"``)
     dedup           per-source ``{id, attributes: {is_cluster_canonical, ...}}``,
                     SPARSE -- singletons omitted by ``compute_fuzzy_dups_attrs``
 
@@ -224,13 +226,17 @@ def _load_cluster_table(path: str, cluster_col: str) -> tuple[pa.Array, np.ndarr
 
 
 def _load_quality_table(path: str) -> tuple[pa.Array, np.ndarray]:
-    """Return ``(ids, score)`` for one quality shard. ids is pyarrow, scores are float64 numpy."""
-    table = pq.read_table(path, columns=["id", "attributes"])
+    """Return ``(ids, score)`` for one quality shard. ids is pyarrow, scores are float64 numpy.
+
+    Quality parquets have a flat ``{id: string, score: double}`` schema --
+    unlike decon/dedup which nest under ``attributes`` -- because the
+    fasttext quality classifier's ``score_target_label`` path writes the
+    extracted scalar directly via ``output_field_name``. Read the flat
+    ``score`` column, no struct field access.
+    """
+    table = pq.read_table(path, columns=["id", "score"])
     ids = table.column("id").combine_chunks()
-    score = np.asarray(
-        table.column("attributes").combine_chunks().field("score"),
-        dtype=np.float64,
-    )
+    score = np.asarray(table.column("score"), dtype=np.float64)
     return ids, score
 
 
