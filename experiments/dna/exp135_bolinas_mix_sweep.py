@@ -816,15 +816,16 @@ def _checkpointer(num_train_steps: int, checkpoints_per_run: int) -> Checkpointe
     )
 
 
-def _patch_optimizer_for_continuation(optimizer: AdamHConfig, mix: MixConfig) -> AdamHConfig:
-    """Reshape AdamH's LR schedule to span [0, parent_step + new_steps] in two cycles.
+def _set_continuation_schedule(optimizer: AdamHConfig, mix: MixConfig) -> AdamHConfig:
+    """Return ``optimizer`` shaped so its LR schedule spans [0, parent_step + new_steps] in two cycles.
 
     Cycle 0 ``[0, parent_step]`` was traversed by the parent; the child's restored
     ``inject_hyperparams.count`` starts at ``parent_step``, landing on the cycle 0/1
     boundary. Cycle 1 ``[parent_step, parent_step + new_steps]`` is what the child
     actually trains; its shape (rewarmup, plateau, decay) is set per continuation
     mode. Peak LR is unchanged (anchored by the heuristic on the new portion's
-    tokens), so cycle 1's plateau matches the parent's plateau.
+    tokens), so cycle 1's plateau matches the parent's plateau. No-op when
+    ``mix.continuation is None``.
     """
     if mix.continuation is None:
         return optimizer
@@ -849,7 +850,7 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
     new_steps = _num_train_steps(mix)
     absolute_steps = _absolute_num_train_steps(mix)
     steps_per_eval = _steps_per_eval(new_steps)
-    optimizer = _patch_optimizer_for_continuation(_build_optimizer(mix), mix)
+    optimizer = _set_continuation_schedule(_build_optimizer(mix), mix)
     target_tokens = _full_target_tokens(mix, per_epoch=False)
     num_params = _num_params()
     params_label = _format_params(num_params)
@@ -962,7 +963,7 @@ def _print_preview(selected: tuple[MixConfig, ...]) -> None:
         absolute_steps = _absolute_num_train_steps(mix)
         opt_tokens = _full_target_tokens(mix, per_epoch=True)
         total_tokens = _full_target_tokens(mix, per_epoch=False)
-        opt = _patch_optimizer_for_continuation(_build_optimizer(mix), mix)
+        opt = _set_continuation_schedule(_build_optimizer(mix), mix)
         print(
             f"Mix {mix.name}: active=[{','.join(mix.active_regions)}]  "
             f"epoch_steps={full_steps}  new_steps={new_steps}  absolute_steps={absolute_steps}  "
