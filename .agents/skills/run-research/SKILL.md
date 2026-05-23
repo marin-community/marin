@@ -1,6 +1,6 @@
 ---
 name: run-research
-description: Multi-session research workflow: logbooks, experiment issues, and W&B.
+description: "Multi-session research workflow: logbooks, experiment issues, and W&B."
 ---
 
 # Skill: Agent-Directed Research

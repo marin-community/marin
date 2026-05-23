@@ -7,14 +7,14 @@ from marin.datakit.download.diagnostic_logs import ghalogs_public_normalize_step
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 
+from experiments.marin_models import marin_tokenizer
+
 ghalogs_normalized = ghalogs_public_normalize_steps()[-1].as_executor_step()
 
 
 def tokenize_ghalogs(*, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
     """Tokenize the normalized GHALogs public training partition."""
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
-
         tokenizer = marin_tokenizer
 
     return ExecutorStep(

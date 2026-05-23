@@ -267,6 +267,7 @@ class HfDatasetSourceConfig(LmDatasetSourceConfigBase):
 
     id: str = dataclasses.field(kw_only=True)
     name: str | None = None  # name for hf dataset
+    revision: str | None = None  # revision, branch, or tag for hf dataset
     stream: bool = True  # whether to use streaming when doing hf
     splits: list[str] | None = None
 
@@ -276,7 +277,13 @@ class HfDatasetSourceConfig(LmDatasetSourceConfigBase):
             return None
         if self.id is not None:
             try:
-                ds = WrappedHFDataSource(self.id, split=split, name=self.name, streaming=self.stream)
+                ds = WrappedHFDataSource(
+                    self.id,
+                    split=split,
+                    name=self.name,
+                    revision=self.revision,
+                    streaming=self.stream,
+                )
             except ValueError as e:
                 # if the message starts with Bad split, then just return None
                 if str(e).startswith("Bad split"):

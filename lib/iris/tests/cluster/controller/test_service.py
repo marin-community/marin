@@ -16,10 +16,14 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.server import LogServiceImpl
+from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, device_variant_constraint
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller import service as service_module
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.codec import constraints_from_json
+from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.schema import jobs_table, task_attempts_table
 from iris.cluster.controller.service import (
@@ -29,6 +33,7 @@ from iris.cluster.controller.service import (
     ControllerServiceImpl,
     _check_client_freshness,
     _job_status_counts,
+    _live_user_stats,
 )
 from iris.cluster.controller.transitions import (
     Assignment,
@@ -36,8 +41,11 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
+from iris.cluster.controller.worker_health import WorkerHealthTracker
+from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
 from sqlalchemy import update as sa_update
@@ -474,8 +482,6 @@ def test_get_job_status_not_found(service):
 
 def test_redact_request_env_vars_does_not_mutate_original():
     """Verify redact_request_env_vars returns a copy and does not mutate the input."""
-    from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
-
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
         entrypoint=make_test_entrypoint(),
@@ -529,8 +535,6 @@ def test_submit_argv_empty_when_omitted(service):
 
 def test_get_job_status_redacts_sensitive_env_vars(service):
     """Verify get_job_status redacts env var values whose keys match sensitive patterns."""
-    from iris.cluster.redaction import REDACTED_VALUE
-
     job_name = JobName.root("test-user", "redact-test")
     launch_req = controller_pb2.Controller.LaunchJobRequest(
         name=job_name.to_wire(),
@@ -723,8 +727,6 @@ def test_terminate_job_skips_already_finished_children(service, state):
 
 def test_terminate_job_allowed_by_owner(service):
     """Job owner can terminate their own job."""
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     service.launch_job(make_job_request("/alice/my-job"), None)
 
     token = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
@@ -740,13 +742,6 @@ def test_terminate_job_allowed_by_owner(service):
 
 def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Non-owner gets PERMISSION_DENIED when trying to terminate another user's job."""
-    from iris.cluster.bundle import BundleStore
-    from iris.cluster.controller.auth import ControllerAuth
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     auth_service = ControllerServiceImpl(
         state,
         controller=mock_controller,
@@ -777,13 +772,6 @@ def test_terminate_job_rejected_for_non_owner(state, mock_controller, tmp_path):
 
 def test_launch_child_job_rejected_for_non_owner(state, mock_controller, tmp_path):
     """Cannot submit a child job under another user's hierarchy."""
-    from iris.cluster.bundle import BundleStore
-    from iris.cluster.controller.auth import ControllerAuth
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     auth_service = ControllerServiceImpl(
         state,
         controller=mock_controller,
@@ -1164,8 +1152,6 @@ def test_task_summaries_sql_group_by(state, service):
 
 def test_live_user_stats_sql_aggregation(state, service):
     """_live_user_stats SQL GROUP BY produces correct per-user counts."""
-    from iris.cluster.controller.service import _live_user_stats
-
     service.launch_job(make_job_request("job-x", replicas=2), None)
     service.launch_job(make_job_request("job-y"), None)
 
@@ -1192,8 +1178,6 @@ def test_live_user_stats_sql_aggregation(state, service):
 
 def test_list_workers_returns_all(service, state):
     """Verify list_workers returns all registered workers."""
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     db = state._db
     with db.transaction() as _tx:
         writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
@@ -1222,8 +1206,6 @@ def test_list_workers_returns_all(service, state):
 
 
 def _register_workers_for_query(service, state, *, count_cpu: int, count_gpu: int) -> None:
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     with state._db.transaction() as _tx:
         writes.ensure_user(_tx, "system:worker", Timestamp.now(), role="worker")
     token = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
@@ -1396,13 +1378,6 @@ def test_launch_job_cpu_resource_no_constraints_injected(service, state):
 
 def test_register_requires_worker_role(state, mock_controller, tmp_path):
     """Non-worker user gets PERMISSION_DENIED on register()."""
-    from iris.cluster.bundle import BundleStore
-    from iris.cluster.controller.auth import ControllerAuth
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     db = state._db
     now = Timestamp.now()
     with db.transaction() as _tx:
@@ -1439,13 +1414,6 @@ def test_register_requires_worker_role(state, mock_controller, tmp_path):
 
 def test_register_allows_worker_role(state, mock_controller, tmp_path):
     """Worker-role user can call register()."""
-    from iris.cluster.bundle import BundleStore
-    from iris.cluster.controller.auth import ControllerAuth
-    from iris.cluster.controller.projections.endpoints import EndpointsProjection
-    from iris.cluster.controller.projections.worker_attrs import WorkerAttrsProjection
-    from iris.cluster.controller.worker_health import WorkerHealthTracker
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     db = state._db
     now = Timestamp.now()
     with db.transaction() as _tx:
@@ -1481,8 +1449,6 @@ def test_register_allows_worker_role(state, mock_controller, tmp_path):
 
 def test_get_scheduler_state_with_running_task(controller_service, state):
     """get_scheduler_state aggregates a running task into a (band, user, worker, job) bucket."""
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity
-
     # Submit a job and move a task to RUNNING
     job_id = JobName.root("alice", "sched-test")
     request = controller_pb2.Controller.LaunchJobRequest(

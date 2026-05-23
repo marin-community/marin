@@ -1785,8 +1785,21 @@ class ControllerTransitions:
             # The attempt is already terminal (e.g. preempted, killed) but the task has
             # been rolled back to PENDING for retry and current_attempt_id still points
             # at the dead attempt. Reviving it would produce an inconsistent row where
-            # state contradicts finished_at_ms/error.
+            # state contradicts finished_at_ms/error. We still complete the deferred
+            # finalization the producing transition (preempt_task / cancel_*) is waiting
+            # for: stamp ``finished_at_ms`` when the worker confirms a terminal state.
+            # Without this the attempt row stays counted by ``resource_usage_by_worker``
+            # and ghost-pins the worker's capacity (see #5918).
             if attempt.state in TERMINAL_TASK_STATES:
+                if attempt.finished_at_ms is None and int(update.new_state) in TERMINAL_TASK_STATES:
+                    cur.execute(
+                        sa_update(task_attempts_table)
+                        .where(
+                            task_attempts_table.c.task_id == update.task_id,
+                            task_attempts_table.c.attempt_id == update.attempt_id,
+                        )
+                        .values(finished_at_ms=now_ms)
+                    )
                 logger.debug(
                     "Dropping late update for terminal attempt: task=%s attempt=%d attempt_state=%d reported=%d",
                     update.task_id,

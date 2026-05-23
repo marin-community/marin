@@ -19,6 +19,7 @@ from typing import Protocol
 from rigging.timing import Timestamp
 
 from iris.cluster.constraints import WellKnownAttribute, accelerator_type_to_string
+from iris.cluster.providers.types import probe_outbound_ip
 from iris.cluster.types import get_tpu_topology
 from iris.rpc import config_pb2, job_pb2
 from iris.time_proto import timestamp_to_proto
@@ -212,10 +213,8 @@ def _get_cpu_count() -> int:
 
 def _get_ip_address() -> str:
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-    except Exception:
+        return probe_outbound_ip()
+    except OSError:
         return "127.0.0.1"
 
 

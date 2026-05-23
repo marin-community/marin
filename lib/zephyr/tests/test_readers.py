@@ -4,10 +4,18 @@
 """Tests for parquet reader (load_parquet)."""
 
 
+import itertools
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 from zephyr.expr import ColumnExpr, CompareExpr, LiteralExpr
-from zephyr.readers import InputFileSpec, iter_parquet_row_groups, load_parquet
+from zephyr.readers import (
+    InputFileSpec,
+    compute_parquet_splits,
+    iter_parquet_row_groups,
+    load_parquet,
+    load_parquet_batch,
+)
 
 
 def _write_test_parquet(path: str, records: list[dict], row_group_size: int = 2) -> None:
@@ -174,6 +182,56 @@ def test_iter_parquet_row_groups_predicate_columns_dropped(tmp_path):
     assert tables[0].column("data").to_pylist() == ["d2"]
 
 
+def test_compute_parquet_splits_single(tmp_path):
+    """File smaller than approx_shard_bytes returns one split covering all rows."""
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS, row_group_size=5)
+
+    splits = compute_parquet_splits(path, approx_shard_bytes=256 * 1024 * 1024)
+    assert splits == [(0, len(RECORDS))]
+
+
+def test_compute_parquet_splits_multiple(tmp_path):
+    """File whose row groups exceed approx_shard_bytes returns multiple splits."""
+    path = str(tmp_path / "data.parquet")
+    # Write 10 row groups of 1 row each with a large-ish payload so we can
+    # force splits at a small byte threshold.
+    records = [{"id": i, "payload": "x" * 1000} for i in range(10)]
+    table = pa.Table.from_pylist(records)
+    pq.write_table(table, path, row_group_size=1)
+
+    pf = pq.ParquetFile(path)
+    single_rg_bytes = pf.metadata.row_group(0).total_byte_size
+    # Threshold just above one row group forces a split after every row group.
+    threshold = single_rg_bytes + 1
+
+    splits = compute_parquet_splits(path, approx_shard_bytes=threshold)
+    assert len(splits) > 1
+    # Splits must be contiguous and cover all rows.
+    assert splits[0][0] == 0
+    assert splits[-1][1] == 10
+    for (_, end), (start, _) in itertools.pairwise(splits):
+        assert end == start
+
+
+def test_compute_parquet_splits_row_ranges_are_readable(tmp_path):
+    """Each split returned by compute_parquet_splits can be read back via load_parquet."""
+    path = str(tmp_path / "data.parquet")
+    records = [{"id": i} for i in range(20)]
+    pq.write_table(pa.Table.from_pylist(records), path, row_group_size=2)
+
+    pf = pq.ParquetFile(path)
+    single_rg_bytes = pf.metadata.row_group(0).total_byte_size
+    splits = compute_parquet_splits(path, approx_shard_bytes=single_rg_bytes * 3 + 1)
+
+    all_ids = []
+    for row_start, row_end in splits:
+        spec = InputFileSpec(path=path, row_start=row_start, row_end=row_end)
+        all_ids.extend(r["id"] for r in load_parquet(spec))
+
+    assert sorted(all_ids) == list(range(20))
+
+
 def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
     """Verify that load_parquet does NOT import pyarrow.dataset."""
     import sys
@@ -188,3 +246,25 @@ def test_load_parquet_no_dataset_api(tmp_path, monkeypatch):
     # Should succeed without pyarrow.dataset
     result = list(load_parquet(path))
     assert len(result) == len(RECORDS)
+
+
+def test_load_parquet_batch_returns_record_batches(tmp_path):
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS, row_group_size=4)
+
+    batches = list(load_parquet_batch(path))
+    assert all(isinstance(b, pa.RecordBatch) for b in batches)
+    # All rows present across batches
+    all_rows = [row for b in batches for row in b.to_pylist()]
+    assert sorted(all_rows, key=lambda r: r["id"]) == RECORDS
+
+
+def test_load_parquet_batch_consistent_with_load_parquet(tmp_path):
+    """load_parquet_batch + to_pylist must equal load_parquet."""
+    path = str(tmp_path / "data.parquet")
+    _write_test_parquet(path, RECORDS, row_group_size=3)
+
+    spec = InputFileSpec(path=path, row_start=2, row_end=8)
+    via_batch = [row for b in load_parquet_batch(spec) for row in b.to_pylist()]
+    via_dict = list(load_parquet(spec))
+    assert via_batch == via_dict

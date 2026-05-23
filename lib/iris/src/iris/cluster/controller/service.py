@@ -78,13 +78,13 @@ from iris.cluster.runtime.profile import (
     PROFILE_NAMESPACE,
     IrisProfile,
     build_profile_row,
-    parse_profile_target,
     profile_local_process,
 )
 from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     TERMINAL_TASK_STATES,
     JobName,
+    TaskAttempt,
     UserBudgetDefaults,
     WorkerId,
     is_job_finished,
@@ -1938,7 +1938,7 @@ class ControllerServiceImpl:
 
         # Task target: parse optional :attempt_id, validate, proxy to worker
         try:
-            target = parse_profile_target(request.target)
+            target = TaskAttempt.from_wire(request.target)
             target.task_id.require_task()
         except ValueError as exc:
             raise ConnectError(Code.INVALID_ARGUMENT, str(exc)) from exc

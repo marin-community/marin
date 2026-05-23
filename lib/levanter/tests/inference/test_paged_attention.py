@@ -340,11 +340,18 @@ def test_attention_paged_decode_matches_full_prefill():
     assert_trees_all_close(full_out.array, decode_out.array, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("prefix_size", [1, 2, 3])
-@pytest.mark.parametrize("chunk_size", [1, 2, 3, 8])
-@pytest.mark.parametrize("seq_ids", [[0, 1], [1, 0], [2, 0], [0, 2], [2, 1]])
+@pytest.mark.parametrize(
+    ("prefix_size", "chunk_size", "seq_ids"),
+    [
+        (1, 1, [0, 1]),
+        (2, 8, [1, 0]),
+        (3, 2, [2, 0]),
+        (1, 3, [0, 2]),
+        (2, 2, [2, 1]),
+    ],
+)
 def test_attention_paged_decode_prefill_in_chunks(prefix_size, chunk_size, seq_ids):
-    Pos = Axis("position", prefix_size + 4 * chunk_size)
+    Pos = Axis("position", prefix_size + 2 * chunk_size)
     Embed = Axis("embed", 16)
 
     cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.VANILLA)

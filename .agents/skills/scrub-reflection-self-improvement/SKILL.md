@@ -1,6 +1,6 @@
 ---
 name: scrub-reflection-self-improvement
-description: Scheduled scrub: repository self-improvement.
+description: "Scheduled scrub: repository self-improvement."
 schedule_cron: "0 10 2 * * *"
 schedule_tz: America/New_York
 ---

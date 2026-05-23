@@ -17,6 +17,7 @@ import traceback
 
 import fsspec
 import pandas as pd
+import wandb
 from marin.evaluation.evaluation_config import WANDB_PROJECT
 from rigging.filesystem import filesystem as marin_filesystem
 from rigging.filesystem import open_url
@@ -179,7 +180,6 @@ def _log_averaged_results_to_wandb(
     config_task_name: str | None,
 ) -> None:
     """Log averaged results to wandb, one run per base model."""
-    import wandb
 
     num_seeds = len(seeds_config) if seeds_config else avg_df["num_seeds"].max()
     wandb_entity = os.environ.get("WANDB_ENTITY", "marin-community")

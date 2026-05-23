@@ -45,9 +45,9 @@ from zephyr.dataset import (
     WriteOp,
     resolve_glob,
 )
-from zephyr.expr import Expr
+from zephyr.expr import Expr, referenced_columns
 from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
-from zephyr.readers import InputFileSpec, load_file
+from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
 
 logger = logging.getLogger(__name__)
 
@@ -194,10 +194,19 @@ def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
         yield {k: item[k] for k in columns if k in item}
 
 
-def _load_file_gen(stream: Iterator) -> Iterator:
+def _load_file_batch_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
     for spec in stream:
         try:
-            yield from load_file(spec)
+            yield from load_file_batch(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
+        except Exception as e:
+            e.add_note(f"While loading from {spec}")
+            raise
+
+
+def _load_file_gen(stream: Iterator, *, include_file_paths: bool = False, file_path_column: str) -> Iterator:
+    for spec in stream:
+        try:
+            yield from load_file(spec, include_file_paths=include_file_paths, file_path_column=file_path_column)
         except Exception as e:
             e.add_note(f"While loading from {spec}")
             raise
@@ -217,7 +226,14 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
     def pipeline(stream: Iterator, *, shard_idx: int = 0, total_shards: int = 1) -> Iterator:
         for op in operations:
             if isinstance(op, LoadFileOp):
-                stream = _load_file_gen(stream)
+                if op.batch_mode:
+                    stream = _load_file_batch_gen(
+                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
+                    )
+                else:
+                    stream = _load_file_gen(
+                        stream, include_file_paths=op.include_file_paths, file_path_column=op.file_path_column
+                    )
             elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):
@@ -496,6 +512,11 @@ def _compute_file_pushdown(
 
     for i, op in enumerate(operations):
         if isinstance(op, FilterOp) and op.expr is not None and filter_expr is None:
+            if load_op.include_file_paths and load_op.file_path_column in referenced_columns(op.expr):
+                # The filter references the injected file path column, which doesn't
+                # exist in the source files. Stop pushdown so the filter runs normally
+                # in the pipeline after the column has been injected.
+                break
             filter_expr = op.expr
             ops_to_skip.add(i)
         elif isinstance(op, SelectOp) and select_columns is None:
@@ -511,19 +532,41 @@ def _compute_file_pushdown(
         else:
             break
 
-    # Create InputFileSpecs with final columns/filter
-    source_items = [
-        SourceItem(
-            shard_idx=i,
-            data=InputFileSpec(
-                path=entry.path,
-                format=load_op.format,
-                columns=select_columns,
-                filter_expr=filter_expr,
-            ),
-        )
-        for i, entry in enumerate(files)
-    ]
+    # Create InputFileSpecs with final columns/filter.
+    # When approx_shard_bytes is set, parquet files are split at row-group boundaries
+    # into multiple SourceItems. Splits are best-effort: a row group is never divided,
+    # so a shard can exceed approx_shard_bytes when a single row group is larger.
+    source_items: list[SourceItem] = []
+    for entry in files:
+        path = entry.path
+        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
+        if load_op.approx_shard_bytes is not None and is_parquet:
+            for row_start, row_end in compute_parquet_splits(path, load_op.approx_shard_bytes):
+                source_items.append(
+                    SourceItem(
+                        shard_idx=len(source_items),
+                        data=InputFileSpec(
+                            path=path,
+                            format=load_op.format,
+                            columns=select_columns,
+                            row_start=row_start,
+                            row_end=row_end,
+                            filter_expr=filter_expr,
+                        ),
+                    )
+                )
+        else:
+            source_items.append(
+                SourceItem(
+                    shard_idx=len(source_items),
+                    data=InputFileSpec(
+                        path=path,
+                        format=load_op.format,
+                        columns=select_columns,
+                        filter_expr=filter_expr,
+                    ),
+                )
+            )
 
     # Build final operations list: LoadFileOp + remaining ops
     final_ops = [load_op] + [op for i, op in enumerate(operations) if i not in ops_to_skip]

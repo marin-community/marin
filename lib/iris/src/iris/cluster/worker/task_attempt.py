@@ -10,7 +10,6 @@ bundle download -> image build -> container run -> monitor -> cleanup.
 import contextlib
 import logging
 import shutil
-import socket
 import subprocess
 import threading
 import time
@@ -29,6 +28,7 @@ from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.providers.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.runtime.types import (
@@ -145,21 +145,6 @@ class TaskAttemptConfig:
         return self.task_attempt.require_attempt()
 
 
-def _get_host_ip() -> str:
-    """Get the routable IP of this host via the default route.
-
-    Opens a UDP socket to a public IP (no traffic sent) and reads back the
-    local address the OS selected. With --network=host this returns the real
-    machine IP visible to other machines in the same VPC.
-    """
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    finally:
-        s.close()
-
-
 def build_iris_env(
     task: "TaskAttempt",
     worker_id: str | None,
@@ -190,7 +175,7 @@ def build_iris_env(
     # With --network=host, containers share the host's network stack.
     # Compute the host's routable IP so container code can read it via
     # get_job_info().advertise_host without needing its own socket tricks.
-    env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
+    env["IRIS_ADVERTISE_HOST"] = probe_outbound_ip()
 
     # Override port placeholders with real allocated values
     for name, port in task.ports.items():

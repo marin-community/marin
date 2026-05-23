@@ -3,13 +3,13 @@
 
 """Decontaminate normalized data against eval sources.
 
-Reads datakit-normalized Parquet (``id``, ``text``, ``partition_id``), builds an
-in-memory bloom filter from the eval text, and emits a co-partitioned Parquet
+Reads datakit-normalized Parquet (``id``, ``text``), builds an in-memory
+bloom filter from the eval text, and emits a co-partitioned Parquet
 attributes dataset marking which records overlap with eval text.
 
 Schema of the emitted Parquet attributes:
     id             : string         — matches source document id
-    partition_id   : int            — matches source partition
+    partition_id   : int            — source partition index (from sorted file order)
     contaminated   : bool           — max paragraph overlap meets the threshold
     max_overlap    : float          — highest paragraph overlap fraction in [0, 1]
     matched_hashes : list[uint64]   — bloom-hit ngram hashes from this record
@@ -317,12 +317,11 @@ def _make_marker(
                         matched.update(hits)
                     contaminated = max_score > 0 and max_score >= threshold
                     counters.increment("decon/contaminated" if contaminated else "decon/clean")
-                    # Fall back to shard.shard_idx for legacy v1 NormalizedData (pre-partition_id).
-                    # With reshard(num_shards=N) on a sorted file list, shard.shard_idx matches
-                    # the input's "part-NNNNN-of-NNNNN" partition number.
+                    # With reshard(num_shards=N) on a sorted file list, shard.shard_idx
+                    # matches the input's "part-NNNNN-of-NNNNN" partition number.
                     yield {
                         "id": record["id"],
-                        "partition_id": record.get("partition_id", shard.shard_idx),
+                        "partition_id": shard.shard_idx,
                         "contaminated": contaminated,
                         "max_overlap": max_score,
                         "matched_hashes": list(matched),

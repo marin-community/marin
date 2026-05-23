@@ -331,6 +331,23 @@ class WorkerState(enum.Enum):
     DEAD = "dead"
 
 
+class PullStatus(enum.StrEnum):
+    """Control signals returned by ``ZephyrCoordinator.pull_task`` in place of a task.
+
+    Three explicit states make the slot's required response unambiguous:
+
+    - ``NO_WORK_BACKOFF``: queue is empty mid-stage; slot sleeps and retries.
+    - ``STAGE_COMPLETED``: this stage's pool is done (boundary or epoch-stale slot);
+      slot exits and the worker re-pools for the next stage.
+    - ``SHUTDOWN``: pipeline is finished or the coordinator is shutting down;
+      slot exits and the worker breaks its outer loop.
+    """
+
+    NO_WORK_BACKOFF = enum.auto()
+    STAGE_COMPLETED = enum.auto()
+    SHUTDOWN = enum.auto()
+
+
 @dataclass
 class ShardTask:
     """Describes a unit of work for a worker: one shard through one stage."""
@@ -345,6 +362,10 @@ class ShardTask:
 
 class ZephyrWorkerError(RuntimeError):
     """Raised when a worker encounters a fatal (non-transient) error."""
+
+
+class CoordinatorUnreachable(RuntimeError):
+    """Worker lost contact with the coordinator. Retryable at the iris task level."""
 
 
 # Application errors that should never be retried by the execute() retry loop.
@@ -424,7 +445,7 @@ class JobStatus:
     in_flight: int
     queue_depth: int
     done: bool
-    fatal_error: str
+    fatal_error: str | None
     workers: dict[str, dict[str, Any]]
 
 
@@ -461,6 +482,9 @@ class ZephyrCoordinator:
         self._chunk_prefix: str = ""
         self._execution_id: str = ""
         self._no_workers_timeout: float = 60.0
+        self._heartbeat_timeout: float = 120.0
+        self._max_shard_failures: int = MAX_SHARD_FAILURES
+        self._max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
         # Per-worker in-flight counter snapshots and completed snapshots.
         # Each snapshot carries a monotonic generation so the coordinator
         # can discard stale or out-of-order heartbeats.
@@ -505,6 +529,9 @@ class ZephyrCoordinator:
         chunk_prefix: str,
         coordinator_handle: ActorHandle,
         no_workers_timeout: float = 60.0,
+        heartbeat_timeout: float = 120.0,
+        max_shard_failures: int = MAX_SHARD_FAILURES,
+        max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
     ) -> None:
         """Initialize coordinator for push-based worker registration.
 
@@ -515,10 +542,17 @@ class ZephyrCoordinator:
             chunk_prefix: Storage prefix for intermediate chunks
             coordinator_handle: Handle to this coordinator actor (passed from context)
             no_workers_timeout: Seconds to wait for at least one worker before failing.
+            heartbeat_timeout: Seconds without a worker heartbeat before requeue.
+            max_shard_failures: Per-shard cap on explicit task errors before abort.
+            max_shard_infra_failures: Per-shard cap on infra failures (preemption /
+                heartbeat) observed while the same shard is in flight before abort.
         """
         self._chunk_prefix = chunk_prefix
         self._self_handle = coordinator_handle
         self._no_workers_timeout = no_workers_timeout
+        self._heartbeat_timeout = heartbeat_timeout
+        self._max_shard_failures = max_shard_failures
+        self._max_shard_infra_failures = max_shard_infra_failures
 
         logger.info("Coordinator initialized")
 
@@ -589,7 +623,7 @@ class ZephyrCoordinator:
             if sys.is_finalizing():
                 return
             try:
-                self.check_heartbeats()
+                self.check_heartbeats(self._heartbeat_timeout)
                 self._check_worker_group()
 
                 now = time.monotonic()
@@ -697,7 +731,7 @@ class ZephyrCoordinator:
             dead,
         )
 
-        # Map-only stages don't yield through ``_StageStatsGenerator`` and never
+        # Map-only stages don't yield through ``_wrap_stage_stats`` and never
         # populate these counters. Drop the items/bytes_processed segment for
         # those stages.
         elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
@@ -760,19 +794,19 @@ class ZephyrCoordinator:
         if kind is ShardFailureKind.TASK:
             self._task_error_attempts[shard_idx] += 1
             error_attempts = self._task_error_attempts[shard_idx]
-            if error_attempts >= MAX_SHARD_FAILURES:
+            if error_attempts >= self._max_shard_failures:
                 errors = self._shard_errors.get(shard_idx, [])
                 error_detail = f"\nLast error:\n{errors[-1]}" if errors else ""
                 logger.error(
                     "Shard %d has failed %d times (max %d), last failure on worker %s, aborting pipeline.",
                     shard_idx,
                     error_attempts,
-                    MAX_SHARD_FAILURES,
+                    self._max_shard_failures,
                     worker_id,
                 )
                 self._fatal_error = (
                     f"Shard {shard_idx} failed {error_attempts} times "
-                    f"(max {MAX_SHARD_FAILURES}), last failure on worker {worker_id}.{error_detail}"
+                    f"(max {self._max_shard_failures}), last failure on worker {worker_id}.{error_detail}"
                 )
                 return True
 
@@ -781,24 +815,24 @@ class ZephyrCoordinator:
                 shard_idx,
                 worker_id,
                 error_attempts,
-                MAX_SHARD_FAILURES,
+                self._max_shard_failures,
             )
         else:
             self._task_infra_attempts[shard_idx] += 1
             infra_attempts = self._task_infra_attempts[shard_idx]
-            if infra_attempts >= MAX_SHARD_INFRA_FAILURES:
+            if infra_attempts >= self._max_shard_infra_failures:
                 logger.error(
                     "Shard %d has been in flight during %d infra failures (max %d); "
                     "treating as a deterministic crasher (likely native SIGSEGV / OOM in shard "
                     "code) and aborting pipeline. Last failure on worker %s.",
                     shard_idx,
                     infra_attempts,
-                    MAX_SHARD_INFRA_FAILURES,
+                    self._max_shard_infra_failures,
                     worker_id,
                 )
                 self._fatal_error = (
                     f"Shard {shard_idx} crashed its worker {infra_attempts} times "
-                    f"(max {MAX_SHARD_INFRA_FAILURES} infra failures while in flight); "
+                    f"(max {self._max_shard_infra_failures} infra failures while in flight); "
                     f"last failure on worker {worker_id}."
                 )
                 return True
@@ -810,9 +844,9 @@ class ZephyrCoordinator:
                 worker_id,
                 self._task_attempts[shard_idx],
                 self._task_error_attempts[shard_idx],
-                MAX_SHARD_FAILURES,
+                self._max_shard_failures,
                 infra_attempts,
-                MAX_SHARD_INFRA_FAILURES,
+                self._max_shard_infra_failures,
             )
 
         self._task_queue.append(task)
@@ -823,28 +857,25 @@ class ZephyrCoordinator:
         """Requeue the worker's in-flight task as an INFRA failure (preemption/heartbeat)."""
         self._record_shard_failure(worker_id, ShardFailureKind.INFRA)
 
-    def _check_worker_heartbeats(self, timeout: float = 120.0) -> None:
-        """Internal heartbeat check (called with lock held)."""
-        now = time.monotonic()
-        for worker_id, last in list(self._last_seen.items()):
-            if now - last > timeout and self._worker_states.get(worker_id) not in {WorkerState.FAILED, WorkerState.DEAD}:
-                logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
-                self._worker_states[worker_id] = WorkerState.FAILED
-                self._maybe_requeue_worker_task(worker_id)
-
-    def pull_task(self, worker_id: str, epoch: int | None = None) -> tuple[ShardTask, int, dict] | str | None:
+    def pull_task(self, worker_id: str, epoch: int | None = None) -> tuple[ShardTask, int, dict] | PullStatus:
         """Called by workers to get next task.
 
         Args:
             worker_id: Unique ID for this worker slot.
             epoch: Stage epoch the slot was registered under. If provided and it
                 no longer matches the coordinator's current epoch, the slot has
-                survived into a later stage and receives SHUTDOWN immediately.
+                survived into a later stage and is told STAGE_COMPLETED so the
+                worker re-registers under the new epoch.
 
         Returns:
-            - (task, attempt, config) tuple if task available
-            - "SHUTDOWN" string if coordinator is shutting down or epoch is stale
-            - None if no task available (worker should backoff and retry)
+            - ``(task, attempt, config)`` if a task is available.
+            - ``PullStatus.SHUTDOWN`` if the coordinator is shutting down or the
+              last stage has no more work to hand out — the worker should exit.
+            - ``PullStatus.STAGE_COMPLETED`` at a non-last stage boundary or when
+              the slot's epoch is stale — slot exits, worker re-pools for the
+              next stage.
+            - ``PullStatus.NO_WORK_BACKOFF`` if the queue is empty mid-stage —
+              slot should sleep and retry.
         """
         with self._lock:
             self._last_seen[worker_id] = time.monotonic()
@@ -852,28 +883,33 @@ class ZephyrCoordinator:
 
             if self._shutdown_event.is_set():
                 self._worker_states[worker_id] = WorkerState.DEAD
-                return "SHUTDOWN"
+                return PullStatus.SHUTDOWN
 
             if epoch is not None and epoch != self._stage_epoch:
-                # This slot was created for an earlier stage and missed its SHUTDOWN
+                # Slot was created for an earlier stage and missed its STAGE_COMPLETED
                 # (e.g. it was sleeping through the _mark_stage_complete window).
-                # Send SHUTDOWN now so it exits before picking up next-stage tasks.
+                # Tell it the stage is over so the worker re-registers under the new epoch.
                 self._worker_states[worker_id] = WorkerState.DEAD
-                return "SHUTDOWN"
+                return PullStatus.STAGE_COMPLETED
 
             if self._fatal_error:
-                return None
+                return PullStatus.NO_WORK_BACKOFF
 
             if not self._task_queue:
-                if self._is_last_stage or self._stage_complete:
-                    # No more work to hand out — exit immediately.  If an
-                    # in-flight worker crashes and its shard is requeued, Iris
-                    # restarts the worker which re-registers and picks it up.
-                    # _check_worker_group() detects permanent worker-job death
-                    # as a failsafe so we never deadlock.
+                if self._is_last_stage:
+                    # Last stage has no more tasks to hand out — pipeline is winding
+                    # down for this worker. If an in-flight peer crashes and its
+                    # shard is requeued, Iris restarts the worker which re-registers
+                    # and picks it up. _check_worker_group() detects permanent
+                    # worker-job death as a failsafe so we never deadlock.
                     self._worker_states[worker_id] = WorkerState.DEAD
-                    return "SHUTDOWN"
-                return None
+                    return PullStatus.SHUTDOWN
+                if self._stage_complete:
+                    # Non-last stage boundary — slot exits so the worker can re-pool
+                    # at the size required by the next stage (map vs reduce).
+                    self._worker_states[worker_id] = WorkerState.DEAD
+                    return PullStatus.STAGE_COMPLETED
+                return PullStatus.NO_WORK_BACKOFF
 
             task = self._task_queue.popleft()
             attempt = self._task_attempts[task.shard_idx]
@@ -980,14 +1016,12 @@ class ZephyrCoordinator:
                 snap = self._worker_counters.get(worker_id)
                 return dict(snap.counters) if snap is not None else {}
 
-            totals: dict[str, int] = {}
+            totals: Counter[str] = Counter()
             for snap in self._completed_counters:
-                for name, value in snap.counters.items():
-                    totals[name] = totals.get(name, 0) + value
+                totals.update(snap.counters)
             for snap in self._worker_counters.values():
-                for name, value in snap.counters.items():
-                    totals[name] = totals.get(name, 0) + value
-            return totals
+                totals.update(snap.counters)
+            return dict(totals)
 
     def get_fatal_error(self) -> str | None:
         with self._lock:
@@ -1267,7 +1301,15 @@ class ZephyrCoordinator:
     def check_heartbeats(self, timeout: float = 120.0) -> None:
         """Marks stale workers as FAILED, re-queues their in-flight tasks."""
         with self._lock:
-            self._check_worker_heartbeats(timeout)
+            now = time.monotonic()
+            for worker_id, last in list(self._last_seen.items()):
+                if now - last > timeout and self._worker_states.get(worker_id) not in {
+                    WorkerState.FAILED,
+                    WorkerState.DEAD,
+                }:
+                    logger.warning(f"Zephyr worker {worker_id} failed to heartbeat within timeout ({now - last:.1f}s)")
+                    self._worker_states[worker_id] = WorkerState.FAILED
+                    self._maybe_requeue_worker_task(worker_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1322,10 +1364,10 @@ class ZephyrWorker:
 
         # Capture actor context while ContextVar is still set (child threads
         # in Python <3.12 don't inherit it).
-        actor_ctx = current_actor()
-        self._host_shutdown_event = actor_ctx.shutdown_event
-        self._worker_id = f"{actor_ctx.group_name}-{actor_ctx.index}"
-        self._actor_handle = actor_ctx.handle
+        self._actor_ctx = current_actor()
+        self._host_shutdown_event = self._actor_ctx.shutdown_event
+        self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
+        self._actor_handle = self._actor_ctx.handle
 
         threading.Thread(
             target=self._heartbeat_loop,
@@ -1389,14 +1431,17 @@ class ZephyrWorker:
             num_active_workers = len(self._active_sub_ids)
             self._active_runners = [self._stage_runner_factory(num_active_workers) for _ in range(num_active_workers)]
 
+            # Slots write their final PullStatus here before returning so we can
+            # tell a stage-boundary exit from a pipeline-shutdown exit.
+            slot_statuses: list[PullStatus | None] = [None] * num_active_workers
             threads = [
                 threading.Thread(
                     target=self._poll_loop,
-                    args=(self._coordinator, sub_id, runner, stage_epoch),
+                    args=(self._coordinator, sub_id, runner, stage_epoch, slot_statuses, i),
                     daemon=True,
                     name=f"zephyr-poll-{sub_id}",
                 )
-                for sub_id, runner in zip(self._active_sub_ids, self._active_runners, strict=True)
+                for i, (sub_id, runner) in enumerate(zip(self._active_sub_ids, self._active_runners, strict=True))
             ]
             for t in threads:
                 t.start()
@@ -1412,6 +1457,12 @@ class ZephyrWorker:
                     self._coordinator.deregister_worker.remote(sub_id).result(timeout=10.0)
                 except Exception:
                     logger.warning("[%s] deregister_worker failed for %s (ignoring)", self._worker_id, sub_id)
+
+            # Any slot seeing SHUTDOWN means the pipeline is done for this worker
+            # — no next stage will come, so break instead of polling forever.
+            if any(s == PullStatus.SHUTDOWN for s in slot_statuses):
+                logger.info("[%s] Pipeline shutdown signaled by slot — exiting stage manager", self._worker_id)
+                break
 
         logger.info("[%s] Stage manager exiting", self._worker_id)
         if self._host_shutdown_event is not None:
@@ -1443,15 +1494,14 @@ class ZephyrWorker:
     def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
         """Aggregate live counters from all active runners; return None if unchanged."""
         runners = list(self._active_runners)  # GIL-safe snapshot
-        current: dict[str, int] = {}
+        current: Counter[str] = Counter()
         for r in runners:
-            for k, v in r.live_counters().items():
-                current[k] = current.get(k, 0) + v
+            current.update(r.live_counters())
         if current == self._last_reported_counters:
             return None
-        self._last_reported_counters = current
+        self._last_reported_counters = dict(current)
         self._counter_generation += 1
-        return CounterSnapshot(counters=current, generation=self._counter_generation)
+        return CounterSnapshot(counters=dict(current), generation=self._counter_generation)
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -1493,17 +1543,33 @@ class ZephyrWorker:
                         self._worker_id,
                         consecutive_failures,
                     )
+                    self._actor_ctx.fail(
+                        CoordinatorUnreachable(f"{consecutive_failures} consecutive heartbeat failures")
+                    )
                     self._shutdown_event.set()
                     break
             self._shutdown_event.wait(timeout=interval)
         logger.debug("[%s] Heartbeat loop exiting after %d beats", self._worker_id, heartbeat_count)
 
-    def _poll_loop(self, coordinator: ActorHandle, worker_id: str, stage_runner: StageRunner, epoch: int = 0) -> None:
-        """Single-slot polling loop. Exits on SHUTDOWN signal or coordinator death.
+    def _poll_loop(
+        self,
+        coordinator: ActorHandle,
+        worker_id: str,
+        stage_runner: StageRunner,
+        epoch: int,
+        status_holder: list[PullStatus | None],
+        slot_idx: int,
+    ) -> None:
+        """Single-slot polling loop. Exits on STAGE_COMPLETED / SHUTDOWN or coordinator death.
 
         ``epoch`` is the stage epoch returned by ``register_worker``; it is passed
         on every ``pull_task`` call so the coordinator can detect slots that survived
-        past stage completion and send them SHUTDOWN before they pick up next-stage tasks.
+        past stage completion and send STAGE_COMPLETED before they pick up next-stage tasks.
+
+        On exit, the slot writes its final ``PullStatus`` to
+        ``status_holder[slot_idx]`` so the stage manager can distinguish a
+        stage-boundary exit (re-pool for next stage) from a pipeline-shutdown
+        exit (break the outer loop).
         """
         task_count = 0
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
@@ -1533,13 +1599,14 @@ class ZephyrWorker:
 
             future = None
 
-            if response == "SHUTDOWN":
-                logger.info("[%s] Received SHUTDOWN", worker_id)
-                break
-
-            if response is None:
+            if response == PullStatus.NO_WORK_BACKOFF:
                 time.sleep(backoff.next_interval())
                 continue
+
+            if isinstance(response, PullStatus):
+                logger.debug("[%s] Received %s", worker_id, response.name)
+                status_holder[slot_idx] = response
+                return
 
             backoff.reset()
             task, attempt, config = response
@@ -1688,6 +1755,9 @@ class _CoordinatorJobConfig:
     # cloudpickled and re-invoked per worker slot, so per-runner mutable
     # state is per-slot.
     stage_runner_factory: Callable[[int], StageRunner] | None = None
+    heartbeat_timeout: float = 120.0
+    max_shard_failures: int = MAX_SHARD_FAILURES
+    max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
 
 
 def _run_coordinator_job(config_path: str, result_path: str) -> None:
@@ -1732,6 +1802,9 @@ def _run_coordinator_job(config_path: str, result_path: str) -> None:
             config.chunk_storage_prefix,
             coordinator,
             config.no_workers_timeout,
+            config.heartbeat_timeout,
+            config.max_shard_failures,
+            config.max_shard_infra_failures,
         ).result()
 
         # Create workers (child jobs)
@@ -1858,6 +1931,16 @@ class ZephyrContext:
             for map-type stages (Map, Write). Defaults to 1.
         reduce_workers_per_actor: Number of concurrent subprocess workers per actor
             for reduce-type stages (Scatter, Reduce, Fold, Join). Defaults to 1.
+        heartbeat_timeout: Seconds without a worker heartbeat before the coordinator
+            marks the worker FAILED and requeues its in-flight shard. Defaults to 120.
+            Long-running stages (e.g. vLLM inference with cold XLA compile) may need
+            to raise this; the JAX/XLA tracer can starve the worker's heartbeat thread
+            during compile.
+        max_shard_failures: Maximum explicit task-error retries per shard before the
+            pipeline aborts. Defaults to ``MAX_SHARD_FAILURES``.
+        max_shard_infra_failures: Maximum infra failures (preemption / heartbeat timeout)
+            observed while the same shard was in flight before treating the shard payload
+            as a deterministic crasher and aborting. Defaults to ``MAX_SHARD_INFRA_FAILURES``.
     """
 
     client: Client | None = None
@@ -1874,6 +1957,9 @@ class ZephyrContext:
     stage_runner_factory: Callable[[int], StageRunner] | None = None
     map_workers_per_actor: int = 1
     reduce_workers_per_actor: int = 1
+    heartbeat_timeout: float = 120.0
+    max_shard_failures: int = MAX_SHARD_FAILURES
+    max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
 
     # Shared data staged by put(), uploaded to disk at the start of execute()
     _shared_data: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -1994,6 +2080,9 @@ class ZephyrContext:
                     map_workers_per_actor=self.map_workers_per_actor,
                     reduce_workers_per_actor=self.reduce_workers_per_actor,
                     stage_runner_factory=self.stage_runner_factory,
+                    heartbeat_timeout=self.heartbeat_timeout,
+                    max_shard_failures=self.max_shard_failures,
+                    max_shard_infra_failures=self.max_shard_infra_failures,
                 )
                 ensure_parent_dir(config_path)
                 with open_url(config_path, "wb") as f:
