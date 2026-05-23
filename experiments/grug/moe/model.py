@@ -10,6 +10,7 @@ QB-routed MoE with GatedNorm, XSA, sigmoid combine weights, PKO every-4th
 
 import dataclasses
 from dataclasses import dataclass
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -50,6 +51,19 @@ def _batch_spec() -> P:
 _ROUTING_RENORM_SUM = 2.5
 
 
+class ParallelMode(StrEnum):
+    """How attention and MLP combine within a block.
+
+    SERIAL: x' = x + attn(norm_a(x));  x'' = x' + mlp(norm_m(x'))   (baseline)
+    PARALLEL: x' = x + attn(norm_a(x)) + mlp(norm_m(x))             (variant A/B)
+    PARALLEL_MERGED_NORM: x' = x + attn(norm(x)) + mlp(norm(x))     (variant C: one norm pair)
+    """
+
+    SERIAL = "serial"
+    PARALLEL = "parallel"
+    PARALLEL_MERGED_NORM = "parallel_merged_norm"
+
+
 @dataclass(frozen=True)
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
@@ -76,6 +90,12 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Parallel-block knobs (see ``ParallelMode``). ``parallel_mode`` is the mode
+    # applied to layers in scope. ``parallel_second_half_only=True`` restricts
+    # the non-SERIAL mode to layers ``i >= num_layers // 2``; the first half
+    # stays SERIAL. When ``parallel_mode == SERIAL``, the flag has no effect.
+    parallel_mode: ParallelMode = ParallelMode.SERIAL
+    parallel_second_half_only: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -449,27 +469,36 @@ class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
     attn: CausalSelfAttention
-    rms_mlp: RMSNorm
-    mlp_gated_norm: GatedNorm
+    # ``rms_mlp`` and ``mlp_gated_norm`` are ``None`` only in
+    # ``PARALLEL_MERGED_NORM`` mode, where attn and mlp share the attn norms.
+    rms_mlp: RMSNorm | None
+    mlp_gated_norm: GatedNorm | None
     mlp: MoEMLP
     shared: DenseMLP | None
+    mode: ParallelMode = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(cfg: GrugModelConfig, *, mode: ParallelMode, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        rms_mlp: RMSNorm | None = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+        mlp_gated_norm: GatedNorm | None = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key)
+        if mode is ParallelMode.PARALLEL_MERGED_NORM:
+            rms_mlp = None
+            mlp_gated_norm = None
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
-            rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            rms_mlp=rms_mlp,
+            mlp_gated_norm=mlp_gated_norm,
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            mode=mode,
         )
 
     @named_call
@@ -479,14 +508,27 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         use_pko: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        attn_norm_in = self.attn_gated_norm(self.rms_attn(x))
+        if self.mode is ParallelMode.SERIAL:
+            x = x + self.attn(attn_norm_in, mask, use_pko=use_pko)
+            mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+            mlp_out, router_stats = self.mlp(mlp_in)
+            if self.shared is not None:
+                mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            x = x + mlp_out
+            return x, router_stats
+
+        # Parallel: attn and mlp both read the residual ``x`` (not the post-attn
+        # stream). Outputs are added together back into the residual.
+        if self.mode is ParallelMode.PARALLEL_MERGED_NORM:
+            mlp_in = attn_norm_in
+        else:
+            mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        attn_out = self.attn(attn_norm_in, mask, use_pko=use_pko)
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
-        return x, router_stats
+        return x + attn_out + mlp_out, router_stats
 
 
 class Transformer(eqx.Module):
@@ -506,7 +548,15 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        half = cfg.num_layers // 2
+        blocks = tuple(
+            Block.init(
+                cfg,
+                mode=cfg.parallel_mode if (not cfg.parallel_second_half_only or i >= half) else ParallelMode.SERIAL,
+                key=block_keys[i],
+            )
+            for i in range(cfg.num_layers)
+        )
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -628,6 +678,7 @@ __all__ = [
     "GrugModelConfig",
     "MoEMLP",
     "MoeActivation",
+    "ParallelMode",
     "RMSNorm",
     "Transformer",
     "debug_mesh_and_token_pspec",

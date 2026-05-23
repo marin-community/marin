@@ -2,16 +2,19 @@
 
 ## Autonomy
 
-This workflow is designed to run end-to-end without human confirmation. The
-agent is authorized to:
+The agent is authorized to act without confirmation **only through initial
+kickoff**:
 
-- Create branches, commit, and push without asking
-- Create GitHub experiment issues and post comments
-- Submit Iris jobs and kill only jobs submitted by self
-- Run experiments through both gates autonomously
+- Create the branch (off `main`) and commit/push code changes
+- Create the GitHub experiment issue and attach it as a sub-issue of #5358
+- Submit the first Iris job (gate 1)
 
-Do not stop to ask for confirmation at any step. If something fails, diagnose
-and retry or report the failure — do not block waiting for input.
+After the gate 1 job is submitted, **stop and return control to the user**.
+Do not auto-promote to gate 2, do not launch follow-up runs, and do not
+make further architectural decisions without explicit user direction.
+
+If something fails before kickoff completes, diagnose and retry — do not
+block waiting for input on the kickoff path.
 
 ## Objective
 
@@ -166,7 +169,7 @@ Jobs in this directory are submitted to **Iris** on a **v5p-8**.
 ```bash
 .venv/bin/iris --cluster=marin job run \
   --no-wait \
-  --reserve v5p-8 \
+  --zone us-east5-a \
   -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.grug.moe.launch
 ```
