@@ -135,7 +135,7 @@ EMBED_WORKER_RESOURCES = ResourceConfig(cpu=8, ram="64g")
 ASSIGN_WORKER_RESOURCES = ResourceConfig(cpu=4, ram="32g")
 COORDINATOR_RESOURCES = ResourceConfig.with_cpu(cpu=2, ram="4g")
 EMBED_MAX_WORKERS_PER_SOURCE = 512
-ASSIGN_MAX_WORKERS_PER_SOURCE = 1024
+ASSIGN_MAX_WORKERS_PER_SOURCE = 512
 
 # Minhash / dedup mirror all_sources_fuzzy defaults.
 MINHASH_WORKER_RESOURCES = ResourceConfig(cpu=5, ram="32g", disk="5g")
