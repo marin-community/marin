@@ -220,5 +220,6 @@ user_budgets:
       - kaiyue
       - ryan
       - marinazh
+      - benjaminfeuer
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
