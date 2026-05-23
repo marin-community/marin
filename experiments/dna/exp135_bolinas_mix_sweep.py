@@ -225,6 +225,69 @@ logging.getLogger("marin.processing.tokenize.data_configs").addFilter(
 # =============================================================================
 
 
+# =============================================================================
+# Continuation modes
+# =============================================================================
+#
+# Continuation runs load a Levanter checkpoint via ``TrainerConfig.initialize_from``,
+# which preserves both ``state.step`` and the ``inject_hyperparams.count`` that
+# drives the AdamH LR schedule. The trainer's ``num_train_steps`` is set to the
+# absolute span ``parent_step + new_steps``, and AdamH's ``cycle_length`` is
+# ``[parent_step, new_steps]`` so the parent's checkpoint count lands precisely
+# at the boundary between cycle 0 and cycle 1. The child only ever traverses
+# cycle 1, whose shape (warmup, plateau, decay) is what these two modes control.
+
+
+@dataclass(frozen=True)
+class ResumeBeforeCooldown:
+    """Continuation: parent checkpoint taken mid-training, before its cooldown.
+
+    Child continues at peak LR (no rewarmup); the combined run cools down over
+    its last ``cooldown_fraction``. Cycle 1's decay segment is sized so that
+    its absolute step length equals ``cooldown_fraction * (parent_step + new_steps)``.
+    """
+
+    checkpoint_path: str
+    parent_step: int
+    cooldown_fraction: float = 0.2  # fraction of the combined (parent + new) run
+
+    def __post_init__(self):
+        if self.parent_step <= 0:
+            raise ValueError(f"parent_step must be positive, got {self.parent_step}")
+        if not 0.0 < self.cooldown_fraction < 1.0:
+            raise ValueError(f"cooldown_fraction must be in (0, 1), got {self.cooldown_fraction}")
+
+
+@dataclass(frozen=True)
+class RewarmupFromCompleted:
+    """Continuation: parent checkpoint is from a fully-completed run.
+
+    Child gets a fresh warmup → plateau → decay schedule over its new portion.
+    ``rewarmup_fraction`` and ``decay_fraction`` are fractions of the new portion
+    (i.e., cycle 1's length).
+    """
+
+    checkpoint_path: str
+    parent_step: int  # final step of the parent run
+    rewarmup_fraction: float = 0.1
+    decay_fraction: float = 0.2
+
+    def __post_init__(self):
+        if self.parent_step <= 0:
+            raise ValueError(f"parent_step must be positive, got {self.parent_step}")
+        if not 0.0 <= self.rewarmup_fraction < 1.0:
+            raise ValueError(f"rewarmup_fraction must be in [0, 1), got {self.rewarmup_fraction}")
+        if not 0.0 < self.decay_fraction < 1.0:
+            raise ValueError(f"decay_fraction must be in (0, 1), got {self.decay_fraction}")
+        if self.rewarmup_fraction + self.decay_fraction >= 1.0:
+            raise ValueError(
+                f"rewarmup_fraction + decay_fraction must be < 1, " f"got {self.rewarmup_fraction + self.decay_fraction}"
+            )
+
+
+Continuation = ResumeBeforeCooldown | RewarmupFromCompleted
+
+
 @dataclass(frozen=True)
 class MixConfig:
     """One run in the sweep: a name and per-region training weights.
@@ -244,17 +307,12 @@ class MixConfig:
     Only the model is loaded; optimizer state, step, and RNG keys stay fresh,
     so the LR schedule starts at the beginning of warmup.
 
-    ``initialize_from_checkpoint_path``, when set, is forwarded to
-    ``TrainLmConfig.initialize_from_checkpoint_path`` and loads a
-    Levanter-format checkpoint (model + optimizer state + training RNG key).
-    The training step is reset to 0 and the data loader is restarted from
-    step 0 with a data key derived from ``trainer.seed`` (or ``data_seed``
-    if set) rather than from the checkpoint, so data ordering is fresh.
-    Optimizer state — including the ``inject_hyperparams`` step counter that
-    drives the LR schedule — IS restored from the checkpoint; if the prior
-    run reached the end of its schedule, the new run continues at the final
-    (decayed) LR rather than re-warming. Mutually exclusive with
-    ``initialize_from_hf``.
+    ``continuation``, when set, attaches a Levanter checkpoint via
+    ``TrainerConfig.initialize_from`` (model + opt state + RNG + step all
+    restored) and patches the AdamH schedule so the child trains a fresh
+    cycle 1 over its new portion. Choose ``ResumeBeforeCooldown`` for parents
+    interrupted before their cooldown or ``RewarmupFromCompleted`` for parents
+    that fully cooled. Mutually exclusive with ``initialize_from_hf``.
 
     ``data_seed``, when set, is forwarded to ``TrainLmConfig.data_seed`` and
     overrides only the data shuffle / mixture sampling key. Model init and
@@ -263,14 +321,15 @@ class MixConfig:
 
     ``checkpoints_per_run``, when set, overrides the module-level
     ``CHECKPOINTS_PER_RUN`` for this mix and controls how many permanent
-    checkpoints are kept (one every ``num_train_steps // checkpoints_per_run``).
+    checkpoints are kept over the new portion only (one every
+    ``new_steps // checkpoints_per_run``).
     """
 
     name: str
     weights: dict[str, float]
     max_train_examples: int | None = None
     initialize_from_hf: str | None = None
-    initialize_from_checkpoint_path: str | None = None
+    continuation: Continuation | None = None
     data_seed: int | None = None
     checkpoints_per_run: int | None = None
 
@@ -284,10 +343,8 @@ class MixConfig:
             raise ValueError(f"{self.name}: max_train_examples must be positive, got {self.max_train_examples}")
         if self.checkpoints_per_run is not None and self.checkpoints_per_run <= 0:
             raise ValueError(f"{self.name}: checkpoints_per_run must be positive, got {self.checkpoints_per_run}")
-        if self.initialize_from_hf is not None and self.initialize_from_checkpoint_path is not None:
-            raise ValueError(
-                f"{self.name}: initialize_from_hf and initialize_from_checkpoint_path are mutually exclusive"
-            )
+        if self.initialize_from_hf is not None and self.continuation is not None:
+            raise ValueError(f"{self.name}: initialize_from_hf and continuation are mutually exclusive")
 
     @property
     def active_regions(self) -> tuple[str, ...]:
@@ -302,9 +359,7 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
     # Continuation run: warm-start model weights from the final HF checkpoint
     # of the i=2 upstream_only run and train a 50/50 cds+upstream mixture for
     # ~one downstream-dataset worth of examples (~20.5M → ~5.25B tokens). We
-    # load via the HF path (model-only) so the LR schedule starts fresh; see
-    # the ``MixConfig`` docstring for why ``initialize_from_checkpoint_path``
-    # is unsuitable here.
+    # load via the HF path (model-only) so the LR schedule starts fresh.
     MixConfig(
         name="cont_upstream_to_cds_2",
         weights={"cds": 0.5, "upstream": 0.5},
@@ -508,10 +563,10 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         data_seed=17,
         checkpoints_per_run=5,
     ),
-    # Chained continuation from exp135-zoonomia-m2's final Levanter checkpoint;
-    # warm-starts model + optimizer state (LR schedule continues at its decayed
-    # endpoint), resets step to 0, and re-shuffles data via ``data_seed``. Same
-    # uniform 1/5 mixture and upstream-sized token budget as m2.
+    # Continuation from exp135-zoonomia-m2 at step-6668 (80% through m2, just
+    # before its cooldown starts). Same uniform 1/5 mixture and upstream-sized
+    # new portion as m2. No rewarmup — picks up at peak LR; combined run cools
+    # down over its last 20%.
     MixConfig(
         name="exp135-zoonomia-m4",
         weights={
@@ -522,15 +577,19 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
             "ccre_non_promoter": 1 / 5,
         },
         max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["upstream"],
-        initialize_from_checkpoint_path=(
-            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i21-exp135-zoonomia-m2-2215c3/checkpoints/step-6668/"
+        continuation=ResumeBeforeCooldown(
+            checkpoint_path=(
+                "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i21-exp135-zoonomia-m2-2215c3/checkpoints/step-6668/"
+            ),
+            parent_step=6668,
         ),
         data_seed=18,
         checkpoints_per_run=5,
     ),
-    # Continuation from uniform_to_uniform_1's final Levanter checkpoint with
-    # the zoonomia uniform 1/5 mixture (adds ncrna_exon + ccre_non_promoter on
-    # top of the 3-region uniform parent) at the cds-sized token budget.
+    # Continuation from uniform_to_uniform_1's final Levanter checkpoint (parent
+    # fully cooled). Zoonomia uniform 1/5 mixture (adds ncrna_exon + ccre_non_promoter
+    # on top of the 3-region uniform parent) at the cds-sized new portion. Fresh
+    # warmup + plateau + decay over the new portion.
     MixConfig(
         name="exp135-zoonomia-m5",
         weights={
@@ -541,8 +600,11 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
             "ccre_non_promoter": 1 / 5,
         },
         max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
-        initialize_from_checkpoint_path=(
-            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i18-uniform_to_uniform_1-84cd83/checkpoints/step-29579/"
+        continuation=RewarmupFromCompleted(
+            checkpoint_path=(
+                "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i18-uniform_to_uniform_1-84cd83/checkpoints/step-29579/"
+            ),
+            parent_step=29579,
         ),
         data_seed=19,
         checkpoints_per_run=5,
@@ -675,9 +737,25 @@ def _full_num_train_steps(mix: MixConfig) -> int:
 
 
 def _num_train_steps(mix: MixConfig) -> int:
+    """Steps the child actually trains (the new portion, excluding any parent prefix)."""
     if _warmup_mode():
         return WARMUP_NUM_TRAIN_STEPS
     return EPOCHS * _full_num_train_steps(mix)
+
+
+def _absolute_num_train_steps(mix: MixConfig) -> int:
+    """Trainer-facing ``num_train_steps`` including the parent prefix for continuation runs.
+
+    Continuation runs load via ``TrainerConfig.initialize_from``, which preserves the
+    parent's ``state.step`` and the optimizer's ``inject_hyperparams.count``. The
+    trainer's ``num_train_steps`` must span the absolute interval so the LR schedule's
+    cycle boundaries line up with the restored count. For non-continuation runs this
+    equals ``_num_train_steps(mix)``.
+    """
+    new_steps = _num_train_steps(mix)
+    if mix.continuation is None:
+        return new_steps
+    return mix.continuation.parent_step + new_steps
 
 
 def _full_target_tokens(mix: MixConfig, *, per_epoch: bool) -> int:
@@ -738,10 +816,40 @@ def _checkpointer(num_train_steps: int, checkpoints_per_run: int) -> Checkpointe
     )
 
 
+def _patch_optimizer_for_continuation(optimizer: AdamHConfig, mix: MixConfig) -> AdamHConfig:
+    """Reshape AdamH's LR schedule to span [0, parent_step + new_steps] in two cycles.
+
+    Cycle 0 ``[0, parent_step]`` was traversed by the parent; the child's restored
+    ``inject_hyperparams.count`` starts at ``parent_step``, landing on the cycle 0/1
+    boundary. Cycle 1 ``[parent_step, parent_step + new_steps]`` is what the child
+    actually trains; its shape (rewarmup, plateau, decay) is set per continuation
+    mode. Peak LR is unchanged (anchored by the heuristic on the new portion's
+    tokens), so cycle 1's plateau matches the parent's plateau.
+    """
+    if mix.continuation is None:
+        return optimizer
+    new_steps = _num_train_steps(mix)
+    absolute_steps = _absolute_num_train_steps(mix)
+    match mix.continuation:
+        case ResumeBeforeCooldown(cooldown_fraction=cf):
+            rewarmup_steps = 0
+            decay_steps = round(cf * absolute_steps)
+        case RewarmupFromCompleted(rewarmup_fraction=rf, decay_fraction=df):
+            rewarmup_steps = round(rf * new_steps)
+            decay_steps = round(df * new_steps)
+    return replace(
+        optimizer,
+        cycle_length=[mix.continuation.parent_step, new_steps],
+        rewarmup=rewarmup_steps,
+        decay=decay_steps,
+    )
+
+
 def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
-    num_train_steps = _num_train_steps(mix)
-    steps_per_eval = _steps_per_eval(num_train_steps)
-    optimizer = _build_optimizer(mix)
+    new_steps = _num_train_steps(mix)
+    absolute_steps = _absolute_num_train_steps(mix)
+    steps_per_eval = _steps_per_eval(new_steps)
+    optimizer = _patch_optimizer_for_continuation(_build_optimizer(mix), mix)
     target_tokens = _full_target_tokens(mix, per_epoch=False)
     num_params = _num_params()
     params_label = _format_params(num_params)
@@ -771,6 +879,8 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
     if _warmup_mode():
         tags.append("warmup")
 
+    trainer_initialize_from = mix.continuation.checkpoint_path if mix.continuation is not None else None
+
     inner = TrainLmConfig(
         data=_build_data_mixture(mix),
         model=_model_config(),
@@ -778,7 +888,6 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
         z_loss_weight=REFERENCE_HPARAMS.z_loss_weight,
         optimizer=optimizer,
         initialize_from_hf=mix.initialize_from_hf or False,
-        initialize_from_checkpoint_path=mix.initialize_from_checkpoint_path,
         data_seed=mix.data_seed,
         eval_harness=_eval_harness_config(),
         eval_harness_steps=steps_per_eval,
@@ -792,12 +901,13 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=BATCH_SIZE,
-            num_train_steps=num_train_steps,
+            num_train_steps=absolute_steps,
             steps_per_eval=steps_per_eval,
-            checkpointer=_checkpointer(num_train_steps, mix.checkpoints_per_run or CHECKPOINTS_PER_RUN),
+            checkpointer=_checkpointer(new_steps, mix.checkpoints_per_run or CHECKPOINTS_PER_RUN),
             mesh=MeshConfig(axes={"replica": 1, "data": -1, "model": 1}),
             allow_nondivisible_batch_size=True,
             per_device_parallelism=PER_DEVICE_PARALLELISM,
+            initialize_from=trainer_initialize_from,
         ),
     )
     train_resources = ResourceConfig.with_tpu(TPU_TYPES, ram="128g")
@@ -848,19 +958,23 @@ def _print_preview(selected: tuple[MixConfig, ...]) -> None:
     print()
     for mix in selected:
         full_steps = _full_num_train_steps(mix)
+        new_steps = _num_train_steps(mix)
+        absolute_steps = _absolute_num_train_steps(mix)
         opt_tokens = _full_target_tokens(mix, per_epoch=True)
         total_tokens = _full_target_tokens(mix, per_epoch=False)
-        opt = _build_optimizer(mix)
+        opt = _patch_optimizer_for_continuation(_build_optimizer(mix), mix)
         print(
             f"Mix {mix.name}: active=[{','.join(mix.active_regions)}]  "
-            f"epoch_steps={full_steps}  total_steps={EPOCHS * full_steps} (EPOCHS={EPOCHS})  "
+            f"epoch_steps={full_steps}  new_steps={new_steps}  absolute_steps={absolute_steps}  "
             f"opt_T={opt_tokens:.3e}  total_T={total_tokens:.3e} "
             f"(~{opt_tokens / num_params:.1f} tok/param/epoch)"
         )
         if mix.initialize_from_hf is not None:
             print(f"    init_from_hf        {mix.initialize_from_hf}")
-        if mix.initialize_from_checkpoint_path is not None:
-            print(f"    init_from_ckpt      {mix.initialize_from_checkpoint_path}")
+        if mix.continuation is not None:
+            c = mix.continuation
+            print(f"    continuation        {type(c).__name__}  parent_step={c.parent_step}")
+            print(f"    init_from_ckpt      {c.checkpoint_path}")
         for field, value in (
             ("lr", opt.learning_rate),
             ("adam_lr", opt.adam_lr),
@@ -870,10 +984,12 @@ def _print_preview(selected: tuple[MixConfig, ...]) -> None:
             ("max_grad_norm", opt.max_grad_norm),
             ("z_loss_weight", REFERENCE_HPARAMS.z_loss_weight),
             ("warmup", opt.warmup),
+            ("rewarmup", opt.rewarmup),
             ("decay", opt.decay),
             ("min_lr_ratio", opt.min_lr_ratio),
         ):
             print(f"    {field:20s} {value:.6g}")
+        print(f"    {'cycle_length':20s} {opt.cycle_length}")
         print(f"    {'lr_schedule':20s} {opt.lr_schedule}")
         print(f"    {'nesterov':20s} {opt.nesterov}")
         print()
