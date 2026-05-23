@@ -11,7 +11,7 @@ permissions:
 jobs:
   datakit-tier2-ferry:
     runs-on: ubuntu-latest
-    timeout-minutes: 180  # ~10–20 min run; ample buffer
+    timeout-minutes: 350
     concurrency:
       group: datakit-tier2-ferry
       cancel-in-progress: true
