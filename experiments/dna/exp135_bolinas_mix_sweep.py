@@ -242,15 +242,24 @@ class MixConfig:
     ``TrainLmConfig.initialize_from_hf`` so the run warm-starts model weights
     from a HuggingFace-format checkpoint (config.json + model.safetensors).
     Only the model is loaded; optimizer state, step, and RNG keys stay fresh,
-    so the LR schedule starts at the beginning of warmup. The Levanter-format
-    counterpart (``initialize_from_checkpoint_path``) is not used here because
-    it deserializes the full state including the ``inject_hyperparams`` count
-    in ``opt_state``, which would leave the new run's schedule clamped at 0.
+    so the LR schedule starts at the beginning of warmup.
+
+    ``initialize_from_checkpoint_path``, when set, is forwarded to
+    ``TrainLmConfig.initialize_from_checkpoint_path`` and loads a
+    Levanter-format checkpoint (model + optimizer state + training RNG key).
+    The training step is reset to 0 and the data loader is restarted from
+    step 0 with a data key derived from ``trainer.seed`` (or ``data_seed``
+    if set) rather than from the checkpoint, so data ordering is fresh.
+    Optimizer state — including the ``inject_hyperparams`` step counter that
+    drives the LR schedule — IS restored from the checkpoint; if the prior
+    run reached the end of its schedule, the new run continues at the final
+    (decayed) LR rather than re-warming. Mutually exclusive with
+    ``initialize_from_hf``.
 
     ``data_seed``, when set, is forwarded to ``TrainLmConfig.data_seed`` and
     overrides only the data shuffle / mixture sampling key. Model init and
     training noise are unaffected. Useful for continuation runs that share an
-    HF init but want a distinct data ordering.
+    init but want a distinct data ordering.
 
     ``checkpoints_per_run``, when set, overrides the module-level
     ``CHECKPOINTS_PER_RUN`` for this mix and controls how many permanent
@@ -261,6 +270,7 @@ class MixConfig:
     weights: dict[str, float]
     max_train_examples: int | None = None
     initialize_from_hf: str | None = None
+    initialize_from_checkpoint_path: str | None = None
     data_seed: int | None = None
     checkpoints_per_run: int | None = None
 
@@ -274,6 +284,10 @@ class MixConfig:
             raise ValueError(f"{self.name}: max_train_examples must be positive, got {self.max_train_examples}")
         if self.checkpoints_per_run is not None and self.checkpoints_per_run <= 0:
             raise ValueError(f"{self.name}: checkpoints_per_run must be positive, got {self.checkpoints_per_run}")
+        if self.initialize_from_hf is not None and self.initialize_from_checkpoint_path is not None:
+            raise ValueError(
+                f"{self.name}: initialize_from_hf and initialize_from_checkpoint_path are mutually exclusive"
+            )
 
     @property
     def active_regions(self) -> tuple[str, ...]:
@@ -492,6 +506,26 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         },
         max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
         data_seed=17,
+        checkpoints_per_run=5,
+    ),
+    # Chained continuation from exp135-zoonomia-m2's final Levanter checkpoint;
+    # warm-starts model + optimizer state (LR schedule continues at its decayed
+    # endpoint), resets step to 0, and re-shuffles data via ``data_seed``. Same
+    # uniform 1/5 mixture and upstream-sized token budget as m2.
+    MixConfig(
+        name="exp135-zoonomia-m4",
+        weights={
+            "cds": 1 / 5,
+            "upstream": 1 / 5,
+            "downstream": 1 / 5,
+            "ncrna_exon": 1 / 5,
+            "ccre_non_promoter": 1 / 5,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["upstream"],
+        initialize_from_checkpoint_path=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i21-exp135-zoonomia-m2-2215c3/checkpoints/step-6668/"
+        ),
+        data_seed=18,
         checkpoints_per_run=5,
     ),
 )
@@ -725,6 +759,7 @@ def _build_train_step(index: int, mix: MixConfig) -> ExecutorStep:
         z_loss_weight=REFERENCE_HPARAMS.z_loss_weight,
         optimizer=optimizer,
         initialize_from_hf=mix.initialize_from_hf or False,
+        initialize_from_checkpoint_path=mix.initialize_from_checkpoint_path,
         data_seed=mix.data_seed,
         eval_harness=_eval_harness_config(),
         eval_harness_steps=steps_per_eval,
@@ -805,6 +840,8 @@ def _print_preview(selected: tuple[MixConfig, ...]) -> None:
         )
         if mix.initialize_from_hf is not None:
             print(f"    init_from_hf        {mix.initialize_from_hf}")
+        if mix.initialize_from_checkpoint_path is not None:
+            print(f"    init_from_ckpt      {mix.initialize_from_checkpoint_path}")
         for field, value in (
             ("lr", opt.learning_rate),
             ("adam_lr", opt.adam_lr),
