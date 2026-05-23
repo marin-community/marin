@@ -2,7 +2,7 @@
 
 Experiment ID prefix: `MOE-MEPS`
 
-Linked issue: TBD (filled in after `gh issue create`).
+Linked issue: marin-community/marin#5933 (sub-issue of #5358).
 
 ## Scope
 - Goal: Determine the sensitivity of the May MoE Recipe to the MuonH
