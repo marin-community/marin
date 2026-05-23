@@ -528,6 +528,25 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         data_seed=18,
         checkpoints_per_run=5,
     ),
+    # Continuation from uniform_to_uniform_1's final Levanter checkpoint with
+    # the zoonomia uniform 1/5 mixture (adds ncrna_exon + ccre_non_promoter on
+    # top of the 3-region uniform parent) at the cds-sized token budget.
+    MixConfig(
+        name="exp135-zoonomia-m5",
+        weights={
+            "cds": 1 / 5,
+            "upstream": 1 / 5,
+            "downstream": 1 / 5,
+            "ncrna_exon": 1 / 5,
+            "ccre_non_promoter": 1 / 5,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        initialize_from_checkpoint_path=(
+            "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i18-uniform_to_uniform_1-84cd83/checkpoints/step-29579/"
+        ),
+        data_seed=19,
+        checkpoints_per_run=5,
+    ),
 )
 
 
