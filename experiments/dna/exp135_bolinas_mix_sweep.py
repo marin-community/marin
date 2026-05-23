@@ -568,7 +568,7 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
     # new portion as m2. No rewarmup — picks up at peak LR; combined run cools
     # down over its last 20%.
     MixConfig(
-        name="exp135-zoonomia-m4",
+        name="exp135-zoonomia-m4.1",
         weights={
             "cds": 1 / 5,
             "upstream": 1 / 5,
@@ -591,7 +591,7 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
     # on top of the 3-region uniform parent) at the cds-sized new portion. Fresh
     # warmup + plateau + decay over the new portion.
     MixConfig(
-        name="exp135-zoonomia-m5",
+        name="exp135-zoonomia-m5.1",
         weights={
             "cds": 1 / 5,
             "upstream": 1 / 5,
