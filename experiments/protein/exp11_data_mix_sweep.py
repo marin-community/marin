@@ -50,7 +50,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
-from draccus.parsers.encoding import CHOICE_TYPE_KEY, encode
 from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.callbacks.watch import WatchConfig
@@ -73,22 +72,6 @@ from experiments.protein.train_protein_100m_distance_masked import protein_llama
 from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger(__name__)
-
-
-@encode.register(DatasetComponent)
-def _encode_dataset_component(obj: DatasetComponent, declared_type=None) -> dict:
-    # draccus has no encoder for arbitrary Python callables; substitute the
-    # function's qualified name so wandb's config.yaml artifact upload doesn't
-    # crash on ``loss_weight_fn``. Must emit the choice tag manually because
-    # registering here bypasses ``encode_choice``.
-    out: dict = {CHOICE_TYPE_KEY: obj.get_choice_name(type(obj))}
-    for f in dataclasses.fields(obj):
-        value = getattr(obj, f.name)
-        if f.name == "loss_weight_fn":
-            out[f.name] = None if value is None else f"{value.__module__}.{value.__qualname__}"
-        else:
-            out[f.name] = encode(value, f.type)
-    return out
 
 
 # --- Data source -------------------------------------------------------------
@@ -659,6 +642,9 @@ class StageSpec:
     heldout_cells: tuple[Cell, ...] = HELDOUT_CELLS
     include_cd_val_unmasked: bool = True
     steps_per_export: int | None = None  # None = keep no permanent intermediates
+    # 1 = no grad accum (microbatch == batch_size). >1 splits each step into N
+    # microbatches; per_device_parallelism is derived from chip_count below.
+    grad_accum_steps: int = 1
 
 
 def _trial_name(spec: StageSpec, mixture_id: str) -> str:
@@ -682,8 +668,21 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         heldout_cells=spec.heldout_cells,
         include_cd_val_unmasked=spec.include_cd_val_unmasked,
     )
+    resources = spec.resources_fn()
+    if spec.grad_accum_steps <= 1:
+        per_device_parallelism = -1
+    else:
+        microbatch = spec.batch_size // spec.grad_accum_steps
+        chips = resources.chip_count()
+        if spec.batch_size % spec.grad_accum_steps != 0:
+            raise ValueError(
+                f"batch_size ({spec.batch_size}) not divisible by grad_accum_steps ({spec.grad_accum_steps})"
+            )
+        if microbatch % chips != 0:
+            raise ValueError(f"microbatch ({microbatch}) not divisible by chip_count ({chips}) for {spec.name}")
+        per_device_parallelism = microbatch // chips
     train_config = SimpleTrainConfig(
-        resources=spec.resources_fn(),
+        resources=resources,
         train_batch_size=spec.batch_size,
         num_train_steps=spec.num_train_steps,
         learning_rate=versioned(spec.learning_rate),
@@ -697,6 +696,7 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         steps_per_export=spec.steps_per_export,
         max_eval_batches=MAX_EVAL_BATCHES,
         data_seed=DATA_SEED,
+        per_device_parallelism=per_device_parallelism,
     )
     params = compute_num_parameters(spec.model_config, PROTEIN_VOCAB_SIZE)
     tokens = spec.batch_size * SEQ_LEN * spec.num_train_steps
@@ -794,6 +794,9 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             heldout_cells=(Cell("H", "val"), Cell("H", "test")),
             include_cd_val_unmasked=False,
             steps_per_export=scale_steps // NUM_PERMANENT_CHECKPOINTS,
+            # 2 microbatches halve activation HBM at compile to dodge the
+            # post-May-2026 v5p-8 CompileTimeHbmOom on the 1.5B compile.
+            grad_accum_steps=2,
         ),
     }
 

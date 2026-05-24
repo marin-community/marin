@@ -24,6 +24,7 @@ from copy import deepcopy
 
 import jax
 import jax.numpy as jnp
+from draccus.parsers.encoding import CHOICE_TYPE_KEY, encode
 from fray import ResourceConfig
 from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
@@ -47,6 +48,27 @@ from experiments.simple_train_config import SimpleTrainConfig
 # Pinning is supported by levanter's load_tokenizer via a ``repo@revision``
 # suffix; cache key includes the revision so different revs don't collide.
 PROTEIN_TOKENIZER = "timodonnell/protein-docs-tokenizer@83f597d88e9b"
+
+
+@encode.register(DatasetComponent)
+def _encode_dataset_component(obj: DatasetComponent, declared_type=None) -> dict:
+    # draccus has no encoder for arbitrary Python callables; substitute the
+    # function's qualified name so wandb's config.yaml artifact upload doesn't
+    # crash on ``loss_weight_fn``. Registered here (not in any sweep entrypoint)
+    # so the worker process picks it up — workers import this module to load
+    # ``distance_bin_only_loss_weight`` but never import the sweep launcher.
+    # Must emit the choice tag manually because registering here bypasses
+    # ``encode_choice``.
+    out: dict = {CHOICE_TYPE_KEY: obj.get_choice_name(type(obj))}
+    for f in dataclasses.fields(obj):
+        value = getattr(obj, f.name)
+        if f.name == "loss_weight_fn":
+            out[f.name] = None if value is None else f"{value.__module__}.{value.__qualname__}"
+        else:
+            out[f.name] = encode(value, f.type)
+    return out
+
+
 DISTANCE_TOKEN_ID: int = create_protein_tokenizer().convert_tokens_to_ids("<distance>")
 
 # A distance statement is 6 tokens: <distance> <p_i> <p_j> <atom_i> <atom_j> <d_value>.
