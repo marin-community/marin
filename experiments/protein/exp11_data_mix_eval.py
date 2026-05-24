@@ -7,19 +7,14 @@ Designed to run directly on a TPU VM (no Fray coordinator). Each invocation
 evaluates exactly one (stage, mixture) trial. Parallelize at the top level by
 submitting separate ``iris job run`` commands, one per mixture.
 
-Reuses :func:`build_mixture` via :func:`_build_trial` so the ``LmDataConfig``
-(heldout cells, IID-carve permutation, masking) matches training exactly.
-W&B run name is ``<training run id>-eval-<EVAL_VERSION>`` so eval lands in a
-fresh run that doesn't collide with the training run's step axis. Bump
-``EVAL_VERSION`` to fork eval runs when eval semantics change.
+Reuses :func:`build_mixture` via :func:`_build_trial` so the data config matches
+training. W&B run name is ``<training run id>-eval-<EVAL_VERSION>-mb<N|full>``.
+The ``mb`` suffix encodes the per-component batch cap (``EVAL_MAX_BATCHES``).
 
 Env vars:
 
 * ``COMMAND`` (required) — ``"run_mix_sweep"`` or ``"run_scale_sweep"``.
-* ``RUN`` (required) — mixture id (e.g. ``"m10"``); must exactly match one
-  of the stage's mixtures.
-* ``EVAL_MAX_BATCHES`` (optional) — cap on batches per heldout component.
-  Unset = no cap (evaluate every batch). Set to an int for smoke tests.
+* ``RUN`` (required) — exact mixture id (e.g. ``"m10"``).
 * ``PREVIEW=yes`` (optional) — describe target, don't run.
 
 Submission example::
@@ -61,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 # Bump to fork eval runs without touching training-run versions. Goes into the
 # W&B run name suffix.
-EVAL_VERSION: str = "v2"
+EVAL_VERSION: str = "v3"
 
 # Stages eligible for eval. Smoke is excluded — it's a 400M-token sanity run.
 EVAL_STAGES: tuple[str, ...] = ("run_mix_sweep", "run_scale_sweep")
@@ -117,10 +112,10 @@ assert STAGE_SPECS["run_scale_sweep"].version == SCALE_TRAIN_VERSION or _STAGE_S
     f"!= SCALE_TRAIN_VERSION={SCALE_TRAIN_VERSION!r}; add an override entry."
 )
 
-# Default eval batch count. ``None`` = evaluate every batch in every heldout
-# component (no truncation). Override via ``EVAL_MAX_BATCHES`` if you want to
-# cap eval cost — e.g. for quick smoke tests.
-DEFAULT_EVAL_MAX_BATCHES: int | None = None
+# Total examples per component = EVAL_MAX_BATCHES * spec.batch_size. When
+# capping to match another experiment, account for its train batch — same
+# cap at a different batch gives a different count. Bump EVAL_VERSION on change.
+EVAL_MAX_BATCHES: int | None = None  # None = no cap (full dataset)
 
 # W&B group for eval runs. Distinct from training's "exp11-data-mix" so they
 # don't clutter the same group view. Runs land under the wandb API key owner's
@@ -135,18 +130,14 @@ def _required_env(name: str) -> str:
     return value
 
 
-def _eval_max_batches() -> int | None:
-    raw = os.environ.get("EVAL_MAX_BATCHES")
-    return DEFAULT_EVAL_MAX_BATCHES if raw is None else int(raw)
-
-
 def _preview() -> bool:
     return os.environ.get("PREVIEW", "").strip().lower() in {"yes", "true", "1"}
 
 
-def _eval_run_name(spec: StageSpec, mixture_id: str) -> str:
-    """Eval run id: ``<training run id>-eval-<EVAL_VERSION>``."""
-    return f"{_trial_name(spec, mixture_id)}-eval-{EVAL_VERSION}"
+def _eval_run_name(spec: StageSpec, mixture_id: str, max_eval_batches: int | None) -> str:
+    """Eval run id: ``<training run id>-eval-<EVAL_VERSION>-mb<N|full>``."""
+    mb = "full" if max_eval_batches is None else str(max_eval_batches)
+    return f"{_trial_name(spec, mixture_id)}-eval-{EVAL_VERSION}-mb{mb}"
 
 
 def _resolve_mixture(spec: StageSpec, run: str) -> str:
@@ -160,20 +151,18 @@ def _resolve_mixture(spec: StageSpec, run: str) -> str:
     return run
 
 
-def _build_eval_config(spec: StageSpec, mixture_id: str, *, max_eval_batches: int) -> EvalLmConfig:
+def _build_eval_config(spec: StageSpec, mixture_id: str, *, max_eval_batches: int | None) -> EvalLmConfig:
     """Build an :class:`EvalLmConfig` for one trial.
 
-    Reuses ``_build_trial`` so the data config is bit-identical to training's:
-    same heldout cells, same ``num_validation_sequences`` (IID-carve), same
-    ``data_seed``. ``per_device_eval_parallelism`` is left at -1 so
-    eval_batch_size resolves to ``train_batch_size``, matching the eval batch
-    the training loop used (so ``max_eval_batches`` semantics are directly
-    comparable across train and eval).
+    Reuses ``_build_trial`` so the data config (heldout cells, IID-carve,
+    data_seed) is bit-identical to training. Per-component example count =
+    ``max_eval_batches * spec.batch_size`` — see EVAL_MAX_BATCHES at module top.
     """
     name, raw_config = _build_trial(spec, mixture_id)
     output_path = compute_output_path(name, raw_config, override_output_path=None)
     checkpoint_dir = f"{output_path}/checkpoints"
-    run_name = _eval_run_name(spec, mixture_id)
+    run_name = _eval_run_name(spec, mixture_id, max_eval_batches)
+    mb_tag = "full" if max_eval_batches is None else str(max_eval_batches)
 
     return EvalLmConfig(
         checkpoint_path=checkpoint_dir,
@@ -194,11 +183,13 @@ def _build_eval_config(spec: StageSpec, mixture_id: str, *, max_eval_batches: in
                     spec.model_tag,
                     mixture_id,
                     f"eval={EVAL_VERSION}",
+                    f"train={spec.version}",
+                    f"mb={mb_tag}",
                 ],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
-            # Match training's eval batch so EVAL_MAX_BATCHES counts the same
-            # number of examples per component as the training-time eval.
+            # Eval batch = train_batch_size (per Levanter default), so this
+            # pins per-iter eval examples. Don't change without bumping EVAL_VERSION.
             train_batch_size=spec.batch_size,
             max_eval_batches=max_eval_batches,
         ),
@@ -212,9 +203,8 @@ def main() -> None:
         raise ValueError(f"COMMAND must be one of {EVAL_STAGES}. Got {command!r}.")
     spec = _resolve_spec(command)
     mixture_id = _resolve_mixture(spec, _required_env("RUN"))
-    max_eval_batches = _eval_max_batches()
-    config = _build_eval_config(spec, mixture_id, max_eval_batches=max_eval_batches)
-    run_name = _eval_run_name(spec, mixture_id)
+    config = _build_eval_config(spec, mixture_id, max_eval_batches=EVAL_MAX_BATCHES)
+    run_name = _eval_run_name(spec, mixture_id, EVAL_MAX_BATCHES)
 
     if _preview():
         print(f"PREVIEW: eval {command} ({spec.version}/{EVAL_VERSION})", flush=True)
@@ -225,7 +215,7 @@ def main() -> None:
             print(f"  resolved:       {resolved}", flush=True)
         except FileNotFoundError as e:
             print(f"  resolved:       <not found: {e}>", flush=True)
-        print(f"  max_eval_batches: {max_eval_batches}", flush=True)
+        print(f"  max_eval_batches: {EVAL_MAX_BATCHES}", flush=True)
         return
 
     logger.info("Running eval for %s from %s", run_name, config.checkpoint_path)
