@@ -13,12 +13,16 @@
 # limitations under the License.
 
 """
-Fine-tunes Qwen3-0.6B (Qwen/Qwen3-0.6B) on the self-instilled rStarCoder dataset
-(teetone/qwen3_0.6b_rstarcoder_instill_n8_valredundancy5_round1).
+Fine-tunes Qwen3-8B (Qwen/Qwen3-8B) on the self-instilled rStarCoder dataset
+(teetone/qwen3_8b_rstarcoder_instill_n8_valredundancy5_round1).
 
-Same hyperparameters as
-exp_instilloracle_sft_qwen3_0_6b_selfinstill_ot4_code9k_n8_vr5_round1_lr3e5_wd01_2ksteps.py.
-Only the dataset (and tags) change so this is a clean domain-only ablation.
+LR ablation of exp_sft_qwen3_8b_selfinstill_rstarcoder_n8_vr5_round1 — same
+config except learning_rate raised from 5e-6 to 1e-5. Hypothesis: the original
+LR was too conservative for rstarcoder's larger dataset (28850 vs code9k's
+4739 examples), leading to insufficient per-step weight updates and a noisy
+plateau in eval scores. The "lr1e5" suffix is in the name to force a distinct
+executor hash so the new run gets a fresh GCS folder (no clobbering of the
+original lr=5e-6 checkpoints).
 """
 import dataclasses
 import math
@@ -31,27 +35,27 @@ from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,
 )
-from experiments.qwen3 import qwen3_0_6b, qwen3_0_6b_tokenizer
+from experiments.qwen3 import qwen3_8b, qwen3_8b_tokenizer
 from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.simple_sft_config import SimpleSFTConfig, compute_per_device_parallelism
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
-EXPERIMENT_NAME = "exp_sft_qwen3_0_6b_selfinstill_rstarcoder_n8_vr5_round1"
+EXPERIMENT_NAME = "exp_sft_qwen3_8b_selfinstill_lr1e5_rstarcoder_n8_vr5_round1"
 
 # Dataset configuration
-DATASET_ID = "teetone/qwen3_0.6b_rstarcoder_instill_n8_valredundancy5_round1"
-DATASET_SHORT_NAME = "qwen3_0_6b_rstarcoder_n8_vr5_round1"
-DATASET_SIZE = 9_404
+DATASET_ID = "teetone/qwen3_8b_rstarcoder_instill_n8_valredundancy5_round1"
+DATASET_SHORT_NAME = "qwen3_8b_rstarcoder_n8_vr5_round1"
+DATASET_SIZE = 28_850
 
 dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[DATASET_ID]
 dataset = get_instruction_dataset(DATASET_ID, splits=dataset_config.splits)
 
 tokenized_selfinstill_code = default_tokenize(
-    name=f"{DATASET_SHORT_NAME}_qwen3_0_6b_tokenizer",
+    name=f"{DATASET_SHORT_NAME}_qwen3_8b_tokenizer",
     dataset=dataset / "**/*.jsonl.gz",
-    tokenizer=qwen3_0_6b_tokenizer,
+    tokenizer=qwen3_8b_tokenizer,
     format=ChatLmDatasetFormat(chat_template=QWEN_3_CHAT_TEMPLATE),
 )
 
@@ -61,23 +65,25 @@ mixture_weights = {DATASET_SHORT_NAME: DATASET_SIZE}
 # Training configuration
 TARGET_EPOCHS = 8
 TRAIN_BATCH_SIZE = 64
-MICROBATCH_SIZE = 64  # No gradient accumulation — 0.6B fits easily
+MICROBATCH_SIZE = 32  # 2 gradient accumulation steps (v4-64 OOMs at 64)
 
+# Fix at 4000 instead of using the number of epochs
+# NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * DATASET_SIZE / TRAIN_BATCH_SIZE)
 NUM_TRAIN_STEPS = 2000
 
-RESOURCES = ResourceConfig.with_tpu("v5p-32")
+RESOURCES = ResourceConfig.with_tpu("v5p-64", ram="400g")
 
 mixture_sft_config = SimpleSFTConfig(
     resources=RESOURCES,
-    tokenizer=qwen3_0_6b_tokenizer,
-    initialize_from_hf="Qwen/Qwen3-0.6B",
+    tokenizer=qwen3_8b_tokenizer,
+    initialize_from_hf="Qwen/Qwen3-8B",
     train_batch_size=TRAIN_BATCH_SIZE,
     per_device_parallelism=compute_per_device_parallelism(TRAIN_BATCH_SIZE, MICROBATCH_SIZE, RESOURCES),
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=3e-5,
+    learning_rate=1e-5,  # raised from 5e-6 (the original 8B code9k recipe was too conservative for 28K examples)
     max_seq_len=32768,  # 32K context length
     seed=42,
-    steps_per_checkpoint=(DATASET_SIZE / TRAIN_BATCH_SIZE) // 4,  # Every quarter epoch
+    steps_per_checkpoint=20,  # frequent saves so preemptible v5p-32 bouncing doesn't wipe progress
     lr_schedule="cosine",
     warmup=0.05,
     decay=0.9,
@@ -99,20 +105,20 @@ mixture_config = lm_mixture_data_config(
 )
 
 # Model config with 32K context length
-qwen3_0_6b_32k_tokens = dataclasses.replace(
-    qwen3_0_6b,
+qwen3_8b_32k_tokens = dataclasses.replace(
+    qwen3_8b,
     max_seq_len=32768,
     rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
 )
 
-exp_instilloracle_sft_qwen3_0_6b_selfinstill_rstarcoder_n8_vr5_round1 = default_sft(
+exp_instilloracle_sft_qwen3_8b_selfinstill_lr1e5_rstarcoder_n8_vr5_round1 = default_sft(
     name=EXPERIMENT_NAME,
     tokenized=mixture_config,
-    model_config=qwen3_0_6b_32k_tokens,
+    model_config=qwen3_8b_32k_tokens,
     sft_config=mixture_sft_config,
-    tags=["qwen", "qwen3-0.6b", "rstarcoder", "code", "sft", "self-distillation"],
+    tags=["qwen", "qwen3-8b", "rstarcoder", "code", "sft", "self-distillation", "lr1e5"],
 )
 
 
 if __name__ == "__main__":
-    executor_main(steps=[exp_instilloracle_sft_qwen3_0_6b_selfinstill_rstarcoder_n8_vr5_round1])
+    executor_main(steps=[exp_instilloracle_sft_qwen3_8b_selfinstill_lr1e5_rstarcoder_n8_vr5_round1])
