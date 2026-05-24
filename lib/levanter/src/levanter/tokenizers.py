@@ -409,7 +409,11 @@ class HfMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer
 
-        return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        # Strip the branch-local ``@revision`` suffix; HF's repo-id validator
+        # rejects "@" in pretrained_model_name_or_path. Pass the revision via
+        # the dedicated kwarg instead.
+        repo, revision = _parse_repo_revision(self._name_or_path)
+        return AutoTokenizer.from_pretrained(repo, revision=revision, trust_remote_code=True)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -570,7 +574,11 @@ class KitokenMarinTokenizer:
     def as_hf_tokenizer(self) -> Any:
         from transformers import AutoTokenizer
 
-        return AutoTokenizer.from_pretrained(self._name_or_path, trust_remote_code=True)
+        # Strip the branch-local ``@revision`` suffix; HF's repo-id validator
+        # rejects "@" in pretrained_model_name_or_path. Pass the revision via
+        # the dedicated kwarg instead.
+        repo, revision = _parse_repo_revision(self._name_or_path)
+        return AutoTokenizer.from_pretrained(repo, revision=revision, trust_remote_code=True)
 
 
 class TokenizerBackend(StrEnum):
