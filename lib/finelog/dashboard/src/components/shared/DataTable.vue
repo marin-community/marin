@@ -121,14 +121,17 @@ function hasSlot(name: string): boolean {
                 v-for="col in columns"
                 :key="col.key"
                 :class="[
-                  'px-3 py-2 text-[13px]',
+                  'px-3 py-2 text-[13px] align-top',
                   alignClass(col.align),
                   col.mono ? 'font-mono' : '',
                 ]"
+                :title="hasSlot(`cell-${col.key}`) ? undefined : String(cellValue(row, col.key) ?? '')"
               >
-                <slot :name="`cell-${col.key}`" :value="cellValue(row, col.key)" :row="row">
-                  {{ cellValue(row, col.key) ?? '—' }}
-                </slot>
+                <div class="max-w-[40ch] truncate">
+                  <slot :name="`cell-${col.key}`" :value="cellValue(row, col.key)" :row="row">
+                    {{ cellValue(row, col.key) ?? '—' }}
+                  </slot>
+                </div>
               </td>
             </tr>
             <!-- Expanded row content -->

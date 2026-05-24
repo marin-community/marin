@@ -122,7 +122,7 @@ class StepSpec:
         caching identity via ``override_output_path``. Round-tripping through
         ``resolve_executor_step`` returns the original ``StepSpec``.
         """
-        from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
+        from marin.execution.executor import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue  # circular import
 
         dep_steps = [dep.as_executor_step() for dep in self.deps]
 
@@ -137,6 +137,7 @@ class StepSpec:
             fn=self.fn,
             config=config,
             override_output_path=self.output_path,
+            resources=self.resources,
         )
         # ExecutorStep is frozen; object.__setattr__ stashes the original
         # StepSpec for round-trip recovery in resolve_executor_step.

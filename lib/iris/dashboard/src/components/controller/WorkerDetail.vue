@@ -21,6 +21,7 @@ import MetricCard from '@/components/shared/MetricCard.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
+import ProfileHistory from '@/components/shared/ProfileHistory.vue'
 
 const props = defineProps<{
   workerId: string
@@ -46,6 +47,7 @@ async function fetchWorkerLogs() {
   try {
     const resp = await logServiceRpcCall<FetchLogsResponse>('FetchLogs', {
       source: `/system/worker/${props.workerId}`,
+      matchScope: 'MATCH_SCOPE_EXACT',
       maxLines: 200,
       tail: true,
     })
@@ -166,6 +168,7 @@ const diskFreePercent = computed(() => {
 const taskColumns: Column[] = [
   { key: 'taskId', label: 'Task ID', mono: true },
   { key: 'attempt', label: 'Attempt', align: 'right' },
+  { key: 'uid', label: 'UID', mono: true },
   { key: 'state', label: 'State' },
   { key: 'duration', label: 'Duration', align: 'right' },
 ]
@@ -419,6 +422,11 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
             <template #cell-attempt="{ row }">
               <span class="font-mono text-xs">{{ (row as WorkerTaskAttempt).attempt?.attemptId ?? '-' }}</span>
             </template>
+            <template #cell-uid="{ row }">
+              <span class="font-mono text-xs text-text-muted">
+                {{ (row as WorkerTaskAttempt).attempt?.attemptUid?.slice(0, 8) ?? '-' }}
+              </span>
+            </template>
             <template #cell-state="{ row }">
               <StatusBadge :status="(row as WorkerTaskAttempt).attempt?.state ?? 0" size="sm" />
             </template>
@@ -454,6 +462,8 @@ function attributeDisplay(val: { stringValue?: string; intValue?: string; floatV
           </div>
         </div>
       </div>
+
+      <ProfileHistory :source="`/system/worker/${workerId}`" class="mb-6" />
 
       <!-- Bootstrap logs (raw text) -->
       <div v-if="data.bootstrapLogs" class="mb-6">

@@ -68,7 +68,7 @@ class FuzzyDupsAttrData(BaseModel):
     """Co-partitioned fuzzy-duplicate marker attrs for one or more sources.
 
     Persisted as the step's ``.artifact``. Load via
-    ``Artifact.load(step, FuzzyDupsAttrData)``.
+    ``Artifact.from_path(step, FuzzyDupsAttrData)``.
 
     Attributes:
         version: Schema version of this artifact.
@@ -374,7 +374,7 @@ def compute_fuzzy_dups_attrs_step(
         name=name,
         deps=list(minhash_steps),
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.load(s, MinHashAttrData) for s in minhash_steps],
+            inputs=[Artifact.from_path(s, MinHashAttrData) for s in minhash_steps],
             output_path=output_path,
             cc_max_iterations=cc_max_iterations,
             max_parallelism=max_parallelism,

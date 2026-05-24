@@ -11,9 +11,11 @@ store.
 
 Levels are time-ordered: every fresh flush emits an L0 segment. The
 planner promotes L_n → L_{n+1} when the longest contiguous run of L_n
-segments hits the byte target for that tier (or, for L0 only, when the
-oldest run has been sitting longer than ``max_l0_age_sec`` — the lever
-that keeps low-volume namespaces from leaking small files).
+segments hits the byte target for that tier, or when its length hits
+``max_segments_per_level``. The count trigger directly bounds per-read
+fanout, which scales with the live non-terminal segment count — without
+it, the byte-target alone strands hundreds of sub-target files for
+namespaces whose L0 flushes are small.
 
 The terminal level is ``len(level_targets)``: segments at that tier
 never re-compact. They are also the only tier eligible for eviction
@@ -31,9 +33,9 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from finelog.store.catalog import SegmentRow
 from finelog.store.schema import IMPLICIT_SEQ_COLUMN, Schema, duckdb_type_for
 from finelog.store.sql_escape import quote_ident, quote_literal
+from finelog.store.types import SegmentRow
 
 _MiB = 1024 * 1024
 
@@ -63,9 +65,29 @@ class CompactionConfig:
     re-compacted (and become eviction candidates).
     """
 
-    level_targets: tuple[int, ...] = (64 * _MiB, 256 * _MiB)
+    # L0→L1 at 64 MiB, L1→L2 at 256 MiB, L2→L3 (terminal) at 256 MiB.
+    # L2 and L3 targets are intentionally equal: an L2 segment produced by
+    # L1 compaction already meets the L3 threshold on its own, so the
+    # planner emits a single-input job and the executor renames the file
+    # in place rather than rewriting it. Low-activity namespaces whose L2
+    # segments are individually below 256 MiB get consolidated into L3 by
+    # the count cap below.
+    level_targets: tuple[int, ...] = (64 * _MiB, 256 * _MiB, 256 * _MiB)
     check_interval_sec: float = 30.0
-    max_l0_age_sec: float = 300.0
+    # Per-level fanout cap. Promotes a non-terminal level once its
+    # contiguous run reaches this many segments, even if the byte target
+    # isn't met. Bounds per-query parquet-open overhead. Low-volume
+    # namespaces deliberately leave small segments at L0 until either
+    # byte target or this count fires — L0 is local-only and disk loss
+    # is acceptable (durability comes from L>=1 GCS sync).
+    #
+    # Tuned for a slow namespace at ~1 L0/min (1440 L0/day): with three
+    # non-terminal tiers (L0, L1, L2) the total fan-in factor is count^3,
+    # so 1440 / 32^3 ≈ 0.04 L3/day — small namespaces park their data at
+    # L2 indefinitely and only spill into L3 once the count cap fires,
+    # consolidating sub-target L2s. Worst-case non-terminal read fanout
+    # is 3*count parquet files.
+    max_segments_per_level: int = 32
     max_segments_per_namespace: int = 1000
     max_bytes_per_namespace: int = 100 * 1024**3
 
@@ -96,7 +118,7 @@ class Compactor:
         """Segments at this level are never re-compacted."""
         return len(self.config.level_targets)
 
-    def plan(self, segments: Sequence[SegmentRow], now_ms: int) -> CompactionJob | None:
+    def plan(self, segments: Sequence[SegmentRow]) -> CompactionJob | None:
         """Return the next merge job, or ``None`` if nothing is due.
 
         Walks tiers from L0 upward and returns the first promotable run.
@@ -117,10 +139,8 @@ class Compactor:
             for run in _contiguous_runs(at_level):
                 if _run_bytes(run) >= target:
                     return _build_job(_take_until_target(run, target), output_level=n + 1)
-                if n == 0 and self.config.max_l0_age_sec > 0:
-                    oldest_age_sec = (now_ms - run[0].created_at_ms) / 1000.0
-                    if oldest_age_sec >= self.config.max_l0_age_sec:
-                        return _build_job(_take_until_target(run, target), output_level=n + 1)
+                if len(run) >= self.config.max_segments_per_level:
+                    return _build_job(_take_until_target(run, target), output_level=n + 1)
         return None
 
     def merge_sql(self, job: CompactionJob, *, schema: Schema, staging_path: Path) -> str:

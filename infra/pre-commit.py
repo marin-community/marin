@@ -84,37 +84,70 @@ def run_cmd(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=ROOT_DIR, capture_output=True, text=True, check=check)
 
 
-def get_all_files(all_files: bool, file_args: list[str]) -> list[pathlib.Path]:
-    """Get list of files to check, excluding deleted files."""
-    if file_args:
-        files = []
-        for f in file_args:
-            path = ROOT_DIR / f
-            if not path.exists():
-                click.echo(f"Warning: Skipping non-existent file: {f}")
-                continue
-            files.append(path)
-        return files
-    if all_files:
-        result = subprocess.run(
-            ["git", "ls-files"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    else:
-        # Use ACM filter to only get Added, Copied, Modified files (not Deleted)
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+def get_staged_files() -> list[pathlib.Path]:
+    """Get list of staged changes."""
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
 
+
+def get_unstaged_files() -> list[pathlib.Path]:
+    """Get list of unstaged (tracked) changes."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=ACM"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
+
+
+def get_branch_files() -> list[pathlib.Path]:
+    """Get list of branch-specific changes (compared to merge-base with origin/main)."""
+    base_result = subprocess.run(
+        ["git", "merge-base", "origin/main", "HEAD"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    merge_base = base_result.stdout.strip()
+
+    result = subprocess.run(
+        ["git", "diff", f"{merge_base}...HEAD", "--name-only", "--diff-filter=ACM"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
+
+
+def get_changed_files() -> list[pathlib.Path]:
+    """Get list of staged, unstaged (tracked), and branch-specific changes."""
+    files: set[pathlib.Path] = set()
+    files.update(get_staged_files())
+    files.update(get_unstaged_files())
+    files.update(get_branch_files())
+    return [f for f in files if f.exists()]
+
+
+def get_all_files() -> list[pathlib.Path]:
+    """Get list of all tracked files in the repository."""
+    result = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     files = [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
-    # Filter to only include files that exist on disk
     return [f for f in files if f.exists()]
 
 
@@ -569,6 +602,145 @@ def check_markdown_precommit_invocation(files: list[pathlib.Path], fix: bool) ->
     return _record("Markdown pre-commit command", 0)
 
 
+SKILL_REFERENCE_PATTERNS = [
+    re.compile(r"`((?:\.agents|\.claude|lib|experiments|docs|scripts|infra|src|tests)/[^`\s,;:)]+)`"),
+    re.compile(r"\]\(((?:\.agents|\.claude|lib|experiments|docs|scripts|infra|src|tests)/[^)]+)\)"),
+]
+SKILL_REFERENCE_PLACEHOLDERS = [
+    "<",
+    "YYYY",
+    "...",
+    "foo.md",
+    "profile_summary.v1",
+    "summary.md",
+    "graphs.jsonl",
+    "tasks.jsonl",
+]
+SKILL_REFERENCE_ALLOWLIST = {
+    ".agents/ops/logs/",
+}
+
+
+def _is_skill_file(file_path: pathlib.Path) -> bool:
+    relative_parts = file_path.relative_to(ROOT_DIR).parts
+    return file_path.name == "SKILL.md" and len(relative_parts) == 4 and relative_parts[:2] == (".agents", "skills")
+
+
+def _skill_reference_exists(skill_path: pathlib.Path, reference: str) -> bool:
+    candidates = [skill_path.parent / reference, ROOT_DIR / reference]
+    return any(candidate.exists() for candidate in candidates)
+
+
+def _should_skip_skill_reference(reference: str) -> bool:
+    return (
+        reference in SKILL_REFERENCE_ALLOWLIST
+        or any(token in reference for token in SKILL_REFERENCE_PLACEHOLDERS)
+        or any(character in reference for character in "*{}")
+    )
+
+
+def check_skill_metadata(files: list[pathlib.Path], fix: bool) -> int:
+    skill_files = [f for f in files if _is_skill_file(f)]
+    if not skill_files:
+        return 0
+
+    all_skill_files = sorted((ROOT_DIR / ".agents" / "skills").glob("*/SKILL.md"))
+    errors: list[tuple[pathlib.Path, str]] = []
+    names: dict[str, list[pathlib.Path]] = {}
+
+    for file_path in all_skill_files:
+        try:
+            text = file_path.read_text()
+        except Exception as e:
+            errors.append((file_path, f"could not read file: {e}"))
+            continue
+
+        if re.search(r"\.agents/project(?!s)", text):
+            errors.append((file_path, "use .agents/projects/, not .agents/project/"))
+
+        if "lib/finelog/src/finelog/proto/stats.proto" in text:
+            errors.append(
+                (
+                    file_path,
+                    "finelog stats proto path is lib/finelog/src/finelog/proto/finelog_stats.proto",
+                )
+            )
+
+        for pattern in SKILL_REFERENCE_PATTERNS:
+            for match in pattern.finditer(text):
+                reference = match.group(1).split("#", 1)[0]
+                if _should_skip_skill_reference(reference):
+                    continue
+                if not _skill_reference_exists(file_path, reference):
+                    errors.append((file_path, f"missing local reference: {reference}"))
+
+        if not text.startswith("---\n"):
+            errors.append((file_path, "missing opening frontmatter delimiter"))
+            continue
+
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            errors.append((file_path, "missing closing frontmatter delimiter"))
+            continue
+
+        try:
+            metadata = yaml.safe_load(parts[1])
+        except Exception as e:
+            errors.append((file_path, f"invalid YAML frontmatter: {e}"))
+            continue
+
+        if not isinstance(metadata, dict):
+            errors.append((file_path, f"frontmatter must be a YAML mapping, got {type(metadata).__name__}"))
+            continue
+
+        name = metadata.get("name")
+        description = metadata.get("description")
+
+        if not isinstance(name, str) or not name.strip():
+            errors.append((file_path, f"frontmatter must include a non-empty string name, got {name!r}"))
+        else:
+            if name != file_path.parent.name:
+                errors.append((file_path, f"name {name!r} must match directory name {file_path.parent.name!r}"))
+            names.setdefault(name, []).append(file_path)
+
+        if not isinstance(description, str) or not description.strip():
+            errors.append((file_path, f"frontmatter must include a non-empty string description, got {description!r}"))
+        elif "\n" in description:
+            errors.append((file_path, "description must be a single-line string"))
+
+        for key in ("schedule_cron", "schedule_tz"):
+            value = metadata.get(key)
+            if value is not None and not isinstance(value, str):
+                errors.append((file_path, f"{key} must be a string, got {type(value).__name__}"))
+
+        if ("schedule_cron" in metadata) != ("schedule_tz" in metadata):
+            errors.append((file_path, "schedule_cron and schedule_tz must be specified together"))
+
+        allowed_tools = metadata.get("allowed-tools")
+        if allowed_tools is not None and not isinstance(allowed_tools, str):
+            errors.append((file_path, f"allowed-tools must be a string, got {type(allowed_tools).__name__}"))
+
+    for name, paths in names.items():
+        if len(paths) <= 1:
+            continue
+        joined_paths = ", ".join(str(p.relative_to(ROOT_DIR)) for p in paths)
+        for path in paths:
+            errors.append((path, f"duplicate skill name {name!r}: {joined_paths}"))
+
+    if errors:
+        checked_paths = {path for path in skill_files}
+        relevant_errors = [(path, error) for path, error in errors if path in checked_paths]
+        if not relevant_errors:
+            relevant_errors = errors
+
+        buf = io.StringIO()
+        for path, error in relevant_errors:
+            buf.write(f"  - {path.relative_to(ROOT_DIR)}: {error}\n")
+        return _record("Skill metadata", 1, buf.getvalue())
+
+    return _record("Skill metadata", 0)
+
+
 def _ensure_iris_protos() -> None:
     """Generate iris protobuf files if they are missing and npx is available.
 
@@ -685,15 +857,59 @@ PRECOMMIT_CONFIGS = [
             check_markdown_precommit_invocation,
         ],
     ),
+    PrecommitConfig(
+        patterns=[".agents/skills/*/SKILL.md"],
+        checks=[
+            check_skill_metadata,
+        ],
+    ),
 ]
 
 
 @click.command()
 @click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
-@click.option("--all-files", is_flag=True, help="Run checks on all files, not just staged")
+@click.option("--all-files", is_flag=True, help="Run checks on all files, not just changed")
+@click.option(
+    "--changed-files",
+    "changed_files",
+    is_flag=True,
+    help="Run checks on uncommitted and branch-specific changes",
+)
+@click.option(
+    "--pre-commit",
+    is_flag=True,
+    help="Run checks on staged changes only (for git pre-commit hook)",
+)
+@click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
 @click.argument("files", nargs=-1)
-def main(fix: bool, all_files: bool, files: tuple[str, ...]):
-    all_files_list = get_all_files(all_files, list(files))
+def main(
+    fix: bool,
+    all_files: bool,
+    changed_files: bool,
+    pre_commit: bool,
+    files_opt: tuple[str, ...],
+    files: tuple[str, ...],
+):
+    all_files_set: set[pathlib.Path] = set()
+    input_files = files_opt + files
+
+    if all_files:
+        all_files_set.update(get_all_files())
+    elif pre_commit:
+        all_files_set.update(get_staged_files())
+    elif changed_files or not input_files:
+        # This is the default behavior if no arguments are provided.
+        all_files_set.update(get_changed_files())
+
+    if input_files:
+        for f in input_files:
+            path = ROOT_DIR / f
+            if path.exists():
+                all_files_set.add(path)
+            else:
+                click.echo(f"Warning: Skipping non-existent file: {f}")
+
+    all_files_list = sorted(list(all_files_set))
     exit_codes = []
 
     for config in PRECOMMIT_CONFIGS:

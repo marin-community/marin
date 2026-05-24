@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from typing import Sequence
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.tree_util import register_dataclass
 
 import haliax as hax
@@ -13,6 +15,45 @@ from haliax import Axis, AxisSelector, NamedArray, NamedOrNumeric
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
+
+
+LOSS_IGNORE_LABEL = 0
+
+
+@dataclass(frozen=True)
+class LossLabelSpan:
+    """An exclusive typed span used to evaluate per-span-type LM loss.
+
+    The span is over next-token loss positions, not raw token positions:
+    `[start, end)` labels losses for predicting `tokens[start + 1]` through
+    `tokens[end]`. Spans are intentionally exclusive so each loss position has
+    one semantic type before aggregate metrics roll those types up.
+    """
+
+    start: int
+    end: int
+    label: int
+
+
+def loss_labels_from_spans(
+    seq_len: int,
+    spans: Sequence[LossLabelSpan],
+    *,
+    default_label: int = LOSS_IGNORE_LABEL,
+) -> jax.Array:
+    labels = np.full(seq_len, default_label, dtype=np.int32)
+    claimed = np.zeros(seq_len, dtype=bool)
+
+    for span in spans:
+        if span.start < 0 or span.end > seq_len or span.start >= span.end:
+            raise ValueError(f"Invalid label span [{span.start}, {span.end}) for sequence length {seq_len}")
+        if np.any(claimed[span.start : span.end]):
+            raise ValueError(f"Label span [{span.start}, {span.end}) overlaps a previous span")
+
+        labels[span.start : span.end] = span.label
+        claimed[span.start : span.end] = True
+
+    return jnp.asarray(labels)
 
 
 @register_dataclass
@@ -105,6 +146,23 @@ class GrugLmExample:
         return loss_weight
 
 
+@register_dataclass
+@dataclass(frozen=True)
+class LabeledLmExample:
+    """A grug-conformant LM example with exclusive labels for loss evaluation.
+
+    Use this when an eval needs to report loss by token or span type, such as
+    assistant text, tool calls, observations, or derived answer spans.
+    `loss_labels[i]` labels the loss for predicting `tokens[i + 1]`; the final
+    position should normally use `LOSS_IGNORE_LABEL` because it has no next
+    token to predict.
+    """
+
+    tokens: jax.Array
+    loss_labels: jax.Array
+    attn_mask: GrugAttentionMask = GrugAttentionMask.causal()
+
+
 def grug_attention_mask_from_named(mask: AttentionMask) -> GrugAttentionMask:
     if mask.explicit_mask is not None:
         raise NotImplementedError("Explicit attention masks are not supported by GrugAttentionMask.")
@@ -189,6 +247,54 @@ def grug_lm_example_from_named(example: LmExample) -> GrugLmExample:
         loss_weight=example.loss_weight.array,
         attn_mask=grug_attention_mask_from_named(example.attn_mask),
     )
+
+
+def named_lm_example_from_labeled(
+    example: LabeledLmExample,
+    Pos: Axis,
+    batch_axis: AxisSelector | None = None,
+    *,
+    scored_labels: Sequence[int] | None = None,
+) -> tuple[LmExample, NamedArray]:
+    if example.tokens.shape != example.loss_labels.shape:
+        raise ValueError(
+            f"LabeledLmExample token shape {example.tokens.shape} must match loss_labels shape "
+            f"{example.loss_labels.shape}."
+        )
+
+    if example.tokens.ndim == 1:
+        if example.tokens.shape[0] != Pos.size:
+            raise ValueError(
+                f"LabeledLmExample token length ({example.tokens.shape[0]}) must match Pos axis size ({Pos.size})"
+            )
+        token_axes: tuple[Axis, ...] = (Pos,)
+        resolved_batch_axis: AxisSelector | None = None
+    elif example.tokens.ndim == 2:
+        Batch = _resolve_batch_axis(batch_axis, example.tokens.shape[0])
+        if example.tokens.shape[1] != Pos.size:
+            raise ValueError(
+                f"LabeledLmExample position length ({example.tokens.shape[1]}) must match Pos axis size ({Pos.size})"
+            )
+        token_axes = (Batch, Pos)
+        resolved_batch_axis = Batch
+    else:
+        raise ValueError(f"LabeledLmExample tokens must be rank-1 or rank-2, got rank={example.tokens.ndim}")
+
+    labels = hax.named(example.loss_labels.astype(jnp.int32), token_axes)
+    if scored_labels is None:
+        loss_weight_array = example.loss_labels != LOSS_IGNORE_LABEL
+    else:
+        label_ids = jnp.asarray(tuple(scored_labels), dtype=example.loss_labels.dtype)
+        if label_ids.size == 0:
+            raise ValueError("scored_labels must contain at least one label id")
+        loss_weight_array = jnp.isin(example.loss_labels, label_ids)
+
+    lm_example = LmExample(
+        tokens=hax.named(example.tokens, token_axes),
+        loss_weight=hax.named(loss_weight_array.astype(jnp.float32), token_axes),
+        attn_mask=named_attention_mask_from_grug(example.attn_mask, Pos, batch_axis=resolved_batch_axis),
+    )
+    return lm_example, labels
 
 
 def named_lm_example_from_grug(

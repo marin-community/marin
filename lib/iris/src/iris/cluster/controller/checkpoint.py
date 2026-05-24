@@ -9,7 +9,6 @@ to remote storage and restoring the DB file from a remote checkpoint.
 Checkpoint layout (remote):
     {remote_state_dir}/controller-state/{epoch_ms}/controller.sqlite3.zst
     {remote_state_dir}/controller-state/{epoch_ms}/auth.sqlite3.zst
-    {remote_state_dir}/controller-state/{epoch_ms}/profiles.sqlite3.zst
 
 Files are compressed with zstandard (level 3) before upload.  On download,
 compressed (.zst) files are preferred; uncompressed files are accepted as
@@ -38,8 +37,10 @@ from pathlib import Path
 import fsspec.core
 import zstandard
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import func, select
 
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import jobs_table, tasks_table, workers_table
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,6 @@ class DatabaseBackup:
 
     main_path: Path
     auth_path: Path | None
-    profiles_path: Path | None
     created_at: Timestamp
 
     def cleanup(self) -> None:
@@ -125,8 +125,6 @@ class DatabaseBackup:
         self.main_path.unlink(missing_ok=True)
         if self.auth_path is not None:
             self.auth_path.unlink(missing_ok=True)
-        if self.profiles_path is not None:
-            self.profiles_path.unlink(missing_ok=True)
 
 
 @contextmanager
@@ -180,18 +178,12 @@ def backup_databases(db: ControllerDB) -> DatabaseBackup:
             auth_tmp = stack.enter_context(_reserved_tmp_sqlite(tmp_dir))
             _backup_sqlite_file(db.auth_db_path, auth_tmp)
 
-        profiles_tmp: Path | None = None
-        if db.profiles_db_path.exists():
-            profiles_tmp = stack.enter_context(_reserved_tmp_sqlite(tmp_dir))
-            _backup_sqlite_file(db.profiles_db_path, profiles_tmp)
-
         # Success: transfer temp-file ownership to the returned DatabaseBackup,
         # whose .cleanup() is the caller's responsibility.
         stack.pop_all()
         return DatabaseBackup(
             main_path=main_tmp,
             auth_path=auth_tmp,
-            profiles_path=profiles_tmp,
             created_at=created_at,
         )
 
@@ -228,18 +220,14 @@ def upload_checkpoint(
     _compress_and_upload_db(backup.main_path, f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst", "main")
     if backup.auth_path is not None:
         _compress_and_upload_db(backup.auth_path, f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst", "auth")
-    if backup.profiles_path is not None:
-        _compress_and_upload_db(
-            backup.profiles_path, f"{checkpoint_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst", "profiles"
-        )
 
     # Row counts are read from the live DB (not the backup) for convenience.
     # They may diverge slightly from the backup contents if writes occurred
     # between backup and upload, but this is acceptable for checkpoint metadata.
     with db.read_snapshot() as snapshot:
-        job_count = snapshot.fetchone("SELECT COUNT(*) FROM jobs")[0]  # type: ignore[index]
-        task_count = snapshot.fetchone("SELECT COUNT(*) FROM tasks")[0]  # type: ignore[index]
-        worker_count = snapshot.fetchone("SELECT COUNT(*) FROM workers")[0]  # type: ignore[index]
+        job_count = snapshot.execute(select(func.count()).select_from(jobs_table)).scalar()
+        task_count = snapshot.execute(select(func.count()).select_from(tasks_table)).scalar()
+        worker_count = snapshot.execute(select(func.count()).select_from(workers_table)).scalar()
     result = CheckpointResult(
         created_at=backup.created_at,
         job_count=job_count,

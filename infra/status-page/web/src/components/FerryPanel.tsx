@@ -104,10 +104,10 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
     (r) => r.status === "completed" && r.conclusion !== null,
   ).length;
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-      <div className="flex items-baseline justify-between gap-4">
-        <h3 className="text-lg font-semibold text-slate-100">{wf.name}</h3>
-        <span className="text-xs text-slate-500">{wf.file}</span>
+    <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+      <div className="min-w-0">
+        <h3 className="truncate text-base font-semibold text-slate-100">{wf.name}</h3>
+        <div className="truncate text-xs text-slate-500">{wf.file}</div>
       </div>
 
       {wf.error ? (
@@ -141,8 +141,7 @@ function WorkflowCard({ wf }: { wf: FerryWorkflowStatus }) {
           </div>
 
           {/* Single-row strip — dots and inter-dot gap shrink on mobile
-              so all 30 fit on a ~340px phone content area without
-              wrapping to a second row. */}
+              so the visible window fits without wrapping to a second row. */}
           <div className="mt-3 flex gap-px sm:gap-1">
             {visualHistory.map(({ run, index }) => {
               const a = runAppearance(run);
@@ -196,14 +195,20 @@ export function FerryPanel() {
     <section>
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-xl font-semibold text-slate-200">Ferries</h2>
-        <span className="text-xs text-slate-500">
-          {dataUpdatedAt ? `updated ${formatRelative(new Date(dataUpdatedAt).toISOString())}` : ""}
-        </span>
+        <div className="text-right text-xs text-slate-500">
+          {data && <span>last {data.windowDays}d</span>}
+          {dataUpdatedAt && (
+            <span>
+              {data ? " · " : ""}
+              updated {formatRelative(new Date(dataUpdatedAt).toISOString())}
+            </span>
+          )}
+        </div>
       </div>
       {isLoading && <div className="text-slate-400">loading…</div>}
       {error && <div className="text-rose-400">failed to load: {(error as Error).message}</div>}
       {data && (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-3">
           {data.workflows.map((wf) => (
             <WorkflowCard key={wf.file} wf={wf} />
           ))}

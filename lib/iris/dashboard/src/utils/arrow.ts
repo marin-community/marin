@@ -40,7 +40,6 @@ export function decodeArrowIpc(arrowIpc: string | undefined | null): ArrowResult
 function normalize(v: unknown): unknown {
   if (v === null || v === undefined) return null
   if (typeof v === 'bigint') return Number(v)
-  if (v instanceof Uint8Array) return `<bytes ${v.byteLength}>`
   if (v instanceof Date) return v.toISOString()
   return v
 }

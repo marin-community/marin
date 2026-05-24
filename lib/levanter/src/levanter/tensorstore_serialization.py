@@ -22,6 +22,7 @@ import tensorstore as ts
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
+from jax._src.mesh import get_concrete_mesh
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
 
@@ -218,8 +219,6 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
             concrete_mesh = mesh or hax.partitioning._get_mesh()
             if isinstance(concrete_mesh, jax.sharding.AbstractMesh) or concrete_mesh is None or concrete_mesh.empty:
                 # Fall back to JAX's concrete mesh getter when available.
-                from jax._src.mesh import get_concrete_mesh
-
                 concrete_mesh = get_concrete_mesh()
 
             if concrete_mesh is not None and not concrete_mesh.empty:

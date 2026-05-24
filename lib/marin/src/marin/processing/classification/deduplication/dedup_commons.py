@@ -8,6 +8,7 @@ from enum import StrEnum, auto
 
 import pyarrow as pa
 import pyarrow.json as pa_json
+import pyarrow.parquet as pq
 import wandb
 from zephyr import counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
@@ -53,12 +54,13 @@ def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) 
     """Given an input path or list of paths, collect all matching files and return them sorted."""
     input_paths = input_paths if isinstance(input_paths, list) else [input_paths]
     all_files = []
-    ext_glob = ",".join(set(filetypes))
     for path in input_paths:
         logger.info(f"Collecting files from path: {path}")
-        files = fsspec_glob(f"{path.rstrip('/')}/**/*.{{{ext_glob}}}")
-        if files:
-            all_files.extend(files)
+        path_files: list[str] = []
+        for ext in filetypes:
+            path_files.extend(fsspec_glob(f"{path.rstrip('/')}/**/*.{ext}"))
+        if path_files:
+            all_files.extend(path_files)
         else:
             if not any(path.endswith(ext) for ext in filetypes):
                 raise FileNotFoundError(f"No files found in path: {path}")
@@ -105,8 +107,6 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
         raise ValueError(f"Unsupported extension: {file_path}.")
     with open_file(file_path, "rb") as f:
         if file_path.endswith(".parquet"):
-            import pyarrow.parquet as pq
-
             if columns is not None:
                 parquet_kwargs = {**parquet_kwargs, "columns": columns}
 

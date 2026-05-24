@@ -16,6 +16,8 @@ from marin.execution.executor import ExecutorStep, output_path_of, this_output_p
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+from experiments.marin_models import marin_tokenizer
+
 HPLT_DATASETS = {
     "all": ["*.parquet"],
 }
@@ -32,8 +34,6 @@ def tokenize_hplt_v3(
 ) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for the HPLT v3 dataset."""
     if tokenizer is None:
-        from experiments.marin_models import marin_tokenizer
-
         tokenizer = marin_tokenizer
 
     output_path = os.path.join("tokenized", "hplt_v3", "all")

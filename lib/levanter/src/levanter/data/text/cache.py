@@ -60,4 +60,4 @@ def load_lm_dataset_cache(
 def cached_token_count(cache_path: str, field: str = "input_ids") -> int:
     """Return the total number of tokens stored in a finished TreeCache."""
     cache = TreeCache.load(cache_path, {field: np.zeros((0,), dtype=np.int32)})
-    return cache.store.tree[field].data_size
+    return cache.flat_field_length(field)

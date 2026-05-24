@@ -19,6 +19,7 @@ import numpy as np
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 from rigging.filesystem import url_to_fs
+from scipy import stats as scipy_stats
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +251,7 @@ def update_performance_stats(
     )
 
 
-def compute_success_ratio(stats: LessonStats, current_step: int, max_staleness: int = 1000) -> float:
+def compute_success_ratio(stats: LessonStats) -> float:
     """Get success rate for a lesson."""
     return compute_smoothed_success(stats.training_stats.reward_history)
 
@@ -275,8 +276,6 @@ def is_plateaued(stats: LessonStats, window: int = 100, threshold: float = 0.01)
 
     # Linear regression to measure trend
     x = np.arange(len(recent))
-    from scipy import stats as scipy_stats
-
     result = scipy_stats.linregress(x, recent)
     slope = result.slope
     p_value = result.pvalue
@@ -361,7 +360,7 @@ class Curriculum:
             stats = self.stats[name]
 
             # Get success rate for decisions
-            success_rate = compute_success_ratio(stats, self.current_step)
+            success_rate = compute_success_ratio(stats)
 
             # Quadratic weight peaking at 50% success
             base_weight = max(0.0, -4 * success_rate**2 + 4 * success_rate)
@@ -454,9 +453,7 @@ class Curriculum:
             "graduated_lessons": len(self.graduated),
             "sampling_entropy": entropy,
             "effective_lessons": effective,
-            "mean_success": (
-                np.mean([compute_success_ratio(self.stats[n], self.current_step) for n in active]) if active else 0
-            ),
+            "mean_success": np.mean([compute_success_ratio(self.stats[n]) for n in active]) if active else 0,
             "sampling_weights": weights,
         }
 
@@ -470,7 +467,7 @@ class Curriculum:
             dep_config = self.config.lessons[dep_id]
 
             # Check if dependency has reached required threshold
-            dep_success_rate = compute_success_ratio(dep_stats, self.current_step)
+            dep_success_rate = compute_success_ratio(dep_stats)
             if dep_success_rate < dep.reward_threshold:
                 return False
 
@@ -481,7 +478,7 @@ class Curriculum:
 
         logger.info("All dependencies satisfied for lesson '%s'", lesson_id)
         for dep in lesson_config.dependencies:
-            success_rate = compute_success_ratio(self.stats[dep.dependency_id], self.current_step)
+            success_rate = compute_success_ratio(self.stats[dep.dependency_id])
             logger.info(
                 f"  Dependency '{dep.dependency_id}' met. Success ratio: {success_rate}, recent rewards: %s",
                 self.stats[dep.dependency_id].training_stats.reward_history[-10:],
@@ -500,7 +497,7 @@ class Curriculum:
             return False
 
         # Check if performance meets graduation threshold
-        lesson_success_rate = compute_success_ratio(stats, self.current_step)
+        lesson_success_rate = compute_success_ratio(stats)
         if lesson_success_rate < lesson_config.stop_threshold:
             logger.info(
                 "Lesson '%s' cannot graduate: success rate %f < threshold %f",

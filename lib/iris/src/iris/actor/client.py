@@ -22,6 +22,7 @@ Custom backoff behavior:
 """
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -81,6 +82,7 @@ class ActorClient:
 
         self._rpc_client: ActorServiceClientSync | None = None
         self._rpc_headers: dict[str, str] = {}
+        self._rpc_client_lock = threading.Lock()
 
     def rpc_client(self) -> ActorServiceClientSync:
         """Resolve actor name to an RPC client (single attempt).
@@ -98,29 +100,33 @@ class ActorClient:
         if self._rpc_client:
             return self._rpc_client
 
-        logger.info("Resolving name %s via %s", self._name, self._resolver)
-        result = self._resolver.resolve(self._name)
+        with self._rpc_client_lock:
+            if self._rpc_client:
+                return self._rpc_client
 
-        if result.is_empty:
-            raise ConnectError(
-                Code.UNAVAILABLE,
-                f"No endpoints found for actor '{self._name}'",
+            logger.info("Resolving name %s via %s", self._name, self._resolver)
+            result = self._resolver.resolve(self._name)
+
+            if result.is_empty:
+                raise ConnectError(
+                    Code.UNAVAILABLE,
+                    f"No endpoints found for actor '{self._name}'",
+                )
+
+            logger.info(
+                "Resolved actor '%s' to %d endpoint(s)",
+                self._name,
+                len(result.endpoints),
             )
-
-        logger.info(
-            "Resolved actor '%s' to %d endpoint(s)",
-            self._name,
-            len(result.endpoints),
-        )
-        endpoint = result.first()
-        logger.info("First endpoint: url=%s, actor_id=%s", endpoint.url, endpoint.actor_id)
-        self._rpc_headers = dict(endpoint.metadata)
-        self._rpc_client = ActorServiceClientSync(
-            address=endpoint.url,
-            timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
-            accept_compression=[],
-        )
-        return self._rpc_client
+            endpoint = result.first()
+            logger.info("First endpoint: url=%s, actor_id=%s", endpoint.url, endpoint.actor_id)
+            self._rpc_headers = dict(endpoint.metadata)
+            self._rpc_client = ActorServiceClientSync(
+                address=endpoint.url,
+                timeout_ms=None if self._call_timeout is None else int(self._call_timeout * 1000),
+                accept_compression=[],
+            )
+            return self._rpc_client
 
     def _clear_connection(self, _exc: Exception) -> None:
         self._rpc_client = None

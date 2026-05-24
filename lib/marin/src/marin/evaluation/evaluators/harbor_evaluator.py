@@ -24,6 +24,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+import wandb
+from huggingface_hub import snapshot_download
 from rigging.filesystem import open_url
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -389,8 +392,6 @@ class HarborEvaluator(Evaluator):
             else:
                 hf_repo_id = dataset
 
-            from huggingface_hub import snapshot_download
-
             # Use stable cache directories inside workdir
             hf_cache_dir = workdir / "hf_cache"
             hf_local_dir = workdir / "hf_dataset"
@@ -648,8 +649,6 @@ class HarborEvaluator(Evaluator):
 
         # Log to W&B
         try:
-            import wandb
-
             wandb.init(
                 project=os.environ.get("WANDB_PROJECT") or "harbor",
                 name=f"{model_name}-{dataset}",
@@ -666,8 +665,6 @@ class HarborEvaluator(Evaluator):
             wandb.log(results["aggregate"])
 
             # Log table of per-trial results
-            import pandas as pd
-
             trials_df = pd.DataFrame.from_dict(trials_for_output, orient="index")
             wandb.log({"trials": wandb.Table(dataframe=trials_df)})
 

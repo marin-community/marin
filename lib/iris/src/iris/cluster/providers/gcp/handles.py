@@ -41,7 +41,9 @@ from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
-# GCP TPU state mapping
+# GCP TPU state mapping. States not in this map collapse to UNKNOWN; the boot
+# reconciler treats anything outside the alive set (CREATING/READY/REPAIRING)
+# as a candidate for reclaim.
 _TPU_STATE_MAP: dict[str, CloudSliceState] = {
     "CREATING": CloudSliceState.CREATING,
     "READY": CloudSliceState.READY,
@@ -58,6 +60,19 @@ _VM_STATE_MAP: dict[str, CloudSliceState] = {
 }
 
 _ACTIVE_VM_SLICE_STATES = frozenset({"PROVISIONING", "STAGING", "RUNNING"})
+
+# Queued-resource (reserved TPU) state mapping. Non-live states must surface so
+# the boot reconciler can reclaim them; ACTIVE is transient (the matching TPU
+# VM is what list_all_slices normally returns) and only appears here briefly.
+_QR_STATE_MAP: dict[str, CloudSliceState] = {
+    "QUEUED": CloudSliceState.CREATING,
+    "WAITING_FOR_RESOURCES": CloudSliceState.CREATING,
+    "PROVISIONING": CloudSliceState.CREATING,
+    "ACTIVE": CloudSliceState.READY,
+    "FAILED": CloudSliceState.FAILED,
+    "SUSPENDED": CloudSliceState.FAILED,
+    "DELETING": CloudSliceState.DELETING,
+}
 _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
@@ -201,6 +216,14 @@ class GcpStandaloneWorkerHandle(RemoteExecWorkerBase):
         except InfraError as e:
             logger.warning("Failed to set metadata on %s: %s", self._gce_vm_name, e)
 
+    def bootstrap(self, script: str) -> None:
+        # Persist the script as the instance's startup-script before executing it
+        # over SSH, so a future GCE-initiated reboot (host maintenance, manual
+        # reset) re-runs *this* script — not the original baked in at VM creation,
+        # which would pin the controller to the day-one image.
+        self.set_metadata({"startup-script": script})
+        super().bootstrap(script)
+
 
 class GcpSliceHandle:
     """Handle to a GCP TPU slice (pod).
@@ -218,11 +241,11 @@ class GcpSliceHandle:
         _labels: dict[str, str],
         _created_at: Timestamp,
         _label_prefix: str,
+        _worker_port: int,
         _accelerator_variant: str,
         _gcp_service: GcpService,
         _ssh_config: config_pb2.SshConfig | None = None,
         _service_account: str | None = None,
-        _state: str = "READY",
         _bootstrapping: bool = False,
         _is_queued_resource: bool = False,
     ):
@@ -233,11 +256,11 @@ class GcpSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._worker_port = _worker_port
         self._iris_labels = Labels(_label_prefix)
         self._accelerator_variant = _accelerator_variant
         self._ssh_config = _ssh_config
         self._service_account = _service_account
-        self._state = _state
         self.is_queued_resource: bool = _is_queued_resource
         self._bootstrap_state: CloudSliceState | None = None if _bootstrapping else CloudSliceState.READY
         self._bootstrap_lock = threading.Lock()
@@ -350,6 +373,7 @@ class GcpSliceHandle:
                 GcpWorkerHandle(
                     _vm_id=f"{self._slice_id}-worker-{i}",
                     _internal_address=internal_ip,
+                    _port=self._worker_port,
                     _external_address=external_ip,
                     _remote_exec=remote_exec,
                 )
@@ -394,6 +418,7 @@ class GcpVmSliceHandle:
         _labels: dict[str, str],
         _created_at: Timestamp,
         _label_prefix: str,
+        _worker_port: int,
         _gcp_service: GcpService,
         _ssh_config: config_pb2.SshConfig | None = None,
         _service_account: str | None = None,
@@ -407,6 +432,7 @@ class GcpVmSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._worker_port = _worker_port
         self._iris_labels = Labels(_label_prefix)
         self._ssh_config = _ssh_config
         self._service_account = _service_account
@@ -474,6 +500,7 @@ class GcpVmSliceHandle:
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",
             _internal_address=vm_info.internal_ip,
+            _port=self._worker_port,
             _external_address=vm_info.external_ip,
             _gce_vm_name=self._vm_name,
             _zone=self._zone,

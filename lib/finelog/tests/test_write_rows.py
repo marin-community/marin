@@ -35,8 +35,9 @@ def test_write_rows_append_round_trip(store: DuckDBLogStore):
             ]
         ),
     )
-    n = store.write_rows("iris.worker", _ipc_bytes(batch))
+    n, last_seq = store.write_rows("iris.worker", _ipc_bytes(batch))
     assert n == 2
+    assert last_seq == 2
 
     _seal(store, "iris.worker")
     table = store.query('SELECT * FROM "iris.worker" ORDER BY timestamp_ms')
@@ -131,7 +132,7 @@ def test_write_rows_dictionary_encoded_column_decoded(store: DuckDBLogStore):
             ]
         ),
     )
-    n = store.write_rows("iris.worker", _ipc_bytes(batch))
+    n, _ = store.write_rows("iris.worker", _ipc_bytes(batch))
     assert n == 3
     _seal(store, "iris.worker")
     table = store.query('SELECT worker_id FROM "iris.worker" ORDER BY timestamp_ms')

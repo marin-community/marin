@@ -29,11 +29,13 @@ from marin.datakit.download.bio_chem.rcsb_pdb import rcsb_pdb_step
 from marin.datakit.download.bio_chem.refseq import refseq_viral_step
 from marin.datakit.download.bio_chem.rnacentral import rnacentral_step
 from marin.datakit.download.bio_chem.uniprot import uniprot_sprot_step
+from marin.evaluation.perplexity_gap import raw_text_dataset
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize import TokenizeConfig
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 
 
@@ -96,7 +98,6 @@ def bio_chem_tokenized(
     *, tokenizer: str = llama3_tokenizer, slices: tuple[BioChemSlice, ...] = BIO_CHEM_SLICES
 ) -> dict[str, TokenizerStep]:
     """Tokenize every bio/chem slice for the regular validation-loss flow."""
-    from experiments.defaults import default_tokenize
 
     out: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for slice_ in slices:
@@ -114,7 +115,6 @@ def bio_chem_raw_validation_sets(
     slices: tuple[BioChemSlice, ...] = BIO_CHEM_SLICES,
 ):
     """Wire bio/chem slices into the perplexity-gap raw-text dataset registry."""
-    from marin.evaluation.perplexity_gap import raw_text_dataset
 
     return {
         _slice_key(slice_): raw_text_dataset(slice_.step.as_executor_step().cd(_slice_glob(slice_))) for slice_ in slices

@@ -12,6 +12,7 @@ from marin.execution.remote import remote
 from marin.processing.tokenize import TokenizeConfig, lm_mixture_data_config, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.dclm import dclm_components_llama3
 
 # Fray resources for running a single Nemotron tokenize split as a remote job.
@@ -70,7 +71,6 @@ def tokenize_nemotron(
     *,
     tokenizer: str | None = None,
     max_workers: int = 4096,
-    cache_copy_max_workers: int = 128,
 ) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Nemotron CC dataset splits.
 
@@ -80,8 +80,6 @@ def tokenize_nemotron(
     entrypoint restarts.
     """
     if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
-
         tokenizer = llama3_tokenizer
 
     tokenize_fn = remote(tokenize, resources=NEMOTRON_SPLIT_TOKENIZE_RESOURCES)
@@ -99,14 +97,11 @@ def tokenize_nemotron(
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
                 max_workers=max_workers,
-                cache_copy_max_workers=cache_copy_max_workers,
             ),
         )
 
         # Check if we need to use override path for llama3
-        from experiments.llama import llama3_tokenizer as _llama3_tokenizer
-
-        if tokenizer == _llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERRIDES:
+        if tokenizer == llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERRIDES:
             step = step.with_output_path(NEMOTRON_LLAMA3_OVERRIDES[split])
 
         nemotron_steps[os.path.join("nemotron_cc", split)] = step

@@ -75,6 +75,7 @@ class FakeContainerHandle:
         self.stop_hook: object = None  # Callable[[bool], None] | None — set by tests for slow_stop etc.
         self.stop_calls: list[dict[str, object]] = []
         self._cleaned_up = False
+        self._killed = False
 
     @property
     def container_id(self) -> str | None:
@@ -93,8 +94,15 @@ class FakeContainerHandle:
         self.stop_calls.append({"force": force})
         if self.stop_hook is not None:
             self.stop_hook(force)  # type: ignore[operator]
+        if force:
+            # Model real runtimes: once SIGKILL has been delivered the container
+            # reports STOPPED on the next inspect. Tests that need to simulate a
+            # wedged container should override _killed back to False.
+            self._killed = True
 
     def status(self) -> ContainerStatus:
+        if self._killed:
+            return ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=137)
         idx = min(self._status_cursor, len(self._status_sequence) - 1)
         self._status_cursor += 1
         return self._status_sequence[idx]
@@ -167,6 +175,7 @@ def create_run_task_request(
     ports: list[str] | None = None,
     attempt_id: int = 0,
     task_image: str = "",
+    attempt_uid: str = "",
 ):
     def test_fn():
         print("Hello from test")
@@ -188,6 +197,7 @@ def create_run_task_request(
         task_id=task_id,
         num_tasks=num_tasks,
         attempt_id=attempt_id,
+        attempt_uid=attempt_uid,
         entrypoint=entrypoint_proto,
         environment=env_config,
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
