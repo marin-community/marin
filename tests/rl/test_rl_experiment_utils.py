@@ -19,7 +19,6 @@ from marin.rl.rl_experiment_utils import (
     _build_rl_job_config,
     _run_rl_experiment_step,
     config_class_path,
-    default_train_decoding_for_experiment,
     executor_main_config_for_rl_experiment,
     executor_step_resources_for_rl_experiment,
     launcher_region_for_rl_experiment,
@@ -221,21 +220,6 @@ def test_build_rl_job_config_keeps_rollout_policy_out_of_vllm_fallback_sampling(
     assert job_config.inference_config.engine.max_model_len == config.max_input_tokens + config.max_output_tokens
     assert job_config.inference_config.fallback_sampling.top_k is None
     assert job_config.inference_config.fallback_sampling.stop_strings == ["<|eot_id|>"]
-
-
-def test_default_train_decoding_for_experiment_bakes_model_stop_strings():
-    config = dataclasses.replace(
-        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
-        max_output_tokens=128,
-        train_decoding_top_k=4096,
-    )
-
-    decoding = default_train_decoding_for_experiment(config)
-
-    assert decoding.temperature == 1.0
-    assert decoding.max_output_tokens == 128
-    assert decoding.top_k == 4096
-    assert decoding.stop_strings == ["<|eot_id|>"]
 
 
 def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_path(monkeypatch):

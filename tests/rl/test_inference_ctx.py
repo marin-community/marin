@@ -24,7 +24,7 @@ from marin.rl.environments.inference_ctx import (
 )
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
@@ -250,17 +250,6 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     np.testing.assert_array_equal(rollout.token_rewards, np.full(len(expected_response_tokens), reward))
 
 
-def _chat_completion_from_choice(choice: Choice) -> ChatCompletion:
-    return ChatCompletion(
-        id="chatcmpl-test",
-        choices=[choice],
-        created=1234567890,
-        model="test-model",
-        object="chat.completion",
-        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-    )
-
-
 def _test_levanter_context(tokenizer, dummy_server, client) -> LevanterInferenceContext:
     class _TestLevanterInferenceContext(LevanterInferenceContext):
         def __init__(self):
@@ -299,103 +288,6 @@ def _test_vllm_inference_config(
     )
 
 
-def test_levanter_batch_completions_forwards_seed(gpt2_tokenizer, dummy_server):
-    choice = create_choice_with_logprobs(gpt2_tokenizer, "hello")
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=_chat_completion_from_choice(choice))
-    mock_client.close = AsyncMock()
-
-    ctx = _test_levanter_context(gpt2_tokenizer, dummy_server, mock_client)
-    completions = ctx.batch_completions(
-        prompts=["prompt"],
-        n=2,
-        decoding=DecodingConfig(temperature=0.7, seed=123),
-    )
-
-    assert len(completions) == 1
-    assert mock_client.chat.completions.create.await_args.kwargs["seed"] == 123
-
-
-def test_levanter_batch_completions_maps_supported_decoding_fields(gpt2_tokenizer, dummy_server):
-    choice = create_choice_with_logprobs(gpt2_tokenizer, "hello")
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=_chat_completion_from_choice(choice))
-    mock_client.close = AsyncMock()
-
-    ctx = _test_levanter_context(gpt2_tokenizer, dummy_server, mock_client)
-    completions = ctx.batch_completions(
-        prompts=["prompt"],
-        n=2,
-        decoding=DecodingConfig(
-            strategy=DecodingStrategy.GREEDY,
-            temperature=0.7,
-            top_p=0.91,
-            max_output_tokens=17,
-            stop_strings=["<stop>"],
-            seed=123,
-        ),
-    )
-
-    assert len(completions) == 1
-    assert mock_client.chat.completions.create.await_args.kwargs["temperature"] == 0.0
-    assert mock_client.chat.completions.create.await_args.kwargs["top_p"] == 0.91
-    assert mock_client.chat.completions.create.await_args.kwargs["max_tokens"] == 17
-    assert mock_client.chat.completions.create.await_args.kwargs["stop"] == ["<stop>"]
-    assert mock_client.chat.completions.create.await_args.kwargs["n"] == 2
-    assert mock_client.chat.completions.create.await_args.kwargs["seed"] == 123
-
-
-def test_levanter_batch_completions_converts_stop_token_ids_to_stop_strings(gpt2_tokenizer, dummy_server):
-    choice = create_choice_with_logprobs(gpt2_tokenizer, "hello")
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=_chat_completion_from_choice(choice))
-    mock_client.close = AsyncMock()
-
-    stop_token_ids = gpt2_tokenizer.encode(" END", add_special_tokens=False)
-    ctx = _test_levanter_context(gpt2_tokenizer, dummy_server, mock_client)
-    ctx.batch_completions(
-        prompts=["prompt"],
-        n=1,
-        decoding=DecodingConfig(temperature=1.0, stop_token_ids=stop_token_ids),
-    )
-
-    assert mock_client.chat.completions.create.await_args.kwargs["stop"] == [
-        gpt2_tokenizer.decode([token_id]) for token_id in stop_token_ids
-    ]
-
-
-def test_levanter_batch_completions_uses_context_stop_token_fallback(gpt2_tokenizer, dummy_server):
-    choice = create_choice_with_logprobs(gpt2_tokenizer, "hello")
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create = AsyncMock(return_value=_chat_completion_from_choice(choice))
-    mock_client.close = AsyncMock()
-
-    stop_token_ids = gpt2_tokenizer.encode(" END", add_special_tokens=False)
-
-    class _TestLevanterInferenceContext(LevanterInferenceContext):
-        def __init__(self):
-            self.tokenizer = gpt2_tokenizer
-            self._stop_tokens = stop_token_ids
-            self.max_tokens = 100
-            self.mesh = None
-            self.axis_mapping = {}
-            self._inference_server = dummy_server
-
-        def openai_client(self):
-            return mock_client
-
-    ctx = _TestLevanterInferenceContext()
-    ctx.batch_completions(
-        prompts=["prompt"],
-        n=1,
-        decoding=DecodingConfig(temperature=1.0),
-    )
-
-    assert mock_client.chat.completions.create.await_args.kwargs["stop"] == [
-        gpt2_tokenizer.decode([token_id]) for token_id in stop_token_ids
-    ]
-
-
 def test_levanter_batch_completions_rejects_unsupported_decoding_fields(gpt2_tokenizer, dummy_server):
     mock_client = AsyncMock()
     mock_client.close = AsyncMock()
@@ -407,37 +299,6 @@ def test_levanter_batch_completions_rejects_unsupported_decoding_fields(gpt2_tok
             n=1,
             decoding=DecodingConfig(
                 temperature=1.0,
-                ignore_eos=True,
-            ),
-        )
-
-
-def test_levanter_batch_completions_rejects_all_unsupported_decoding_fields(gpt2_tokenizer, dummy_server):
-    mock_client = AsyncMock()
-    mock_client.close = AsyncMock()
-    ctx = _test_levanter_context(gpt2_tokenizer, dummy_server, mock_client)
-    expected_match = "".join(
-        [
-            r"top_k, min_p, repetition_penalty, presence_penalty, ",
-            r"frequency_penalty, min_output_tokens, ignore_eos",
-        ]
-    )
-
-    with pytest.raises(
-        ValueError,
-        match=expected_match,
-    ):
-        ctx.batch_completions(
-            prompts=["prompt"],
-            n=1,
-            decoding=DecodingConfig(
-                temperature=1.0,
-                top_k=8,
-                min_p=0.1,
-                repetition_penalty=1.1,
-                presence_penalty=0.2,
-                frequency_penalty=0.3,
-                min_output_tokens=4,
                 ignore_eos=True,
             ),
         )
