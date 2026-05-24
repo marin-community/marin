@@ -360,9 +360,7 @@ def test_rloo_loss_uses_token_weighted_entropy_bonus_mean():
         max_output_tokens=4,
     )
     current_logprobs = jnp.zeros((2, 4), dtype=jnp.float32)
-    current_policy_entropy = jnp.array(
-        [[100.0, 1.0, 3.0, 100.0], [100.0, 5.0, 100.0, 100.0]], dtype=jnp.float32
-    )
+    current_policy_entropy = jnp.array([[100.0, 1.0, 3.0, 100.0], [100.0, 5.0, 100.0, 100.0]], dtype=jnp.float32)
 
     def compute_policy_stats_fn(_model, _batch, _key, *, compute_entropy: bool):
         assert compute_entropy
