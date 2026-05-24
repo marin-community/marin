@@ -678,7 +678,6 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         steps_per_export=spec.steps_per_export,
         max_eval_batches=MAX_EVAL_BATCHES,
         data_seed=DATA_SEED,
-        env_vars={"WANDB_ENTITY": "timodonnell"},
     )
     params = compute_num_parameters(spec.model_config, PROTEIN_VOCAB_SIZE)
     tokens = spec.batch_size * SEQ_LEN * spec.num_train_steps
