@@ -273,8 +273,22 @@ def _predict_batch(
     if not texts:
         return
 
-    labels_list, probs_list = model.predict(texts, k=k, threshold=threshold)
-    for record, labels, probs in zip(records_to_predict, labels_list, probs_list, strict=True):
+    # IMPORTANT: per-text predict, NOT batch predict.
+    #
+    # ``model.predict(list_of_texts, k=-1, threshold=0.0)`` is broken in
+    # fasttext-wheel 0.9.2: it returns each text's top-label probability
+    # duplicated across BOTH labels (e.g. ``[__label__0, __label__1]`` with
+    # probs ``[0.97, 0.97]``) instead of the per-label softmax. The
+    # corresponding single-text call ``model.predict(text, k=-1, ...)``
+    # returns the correct per-label distribution (probs sum to ~1.0).
+    #
+    # Net effect on the LLM-quality binary classifier: every record's
+    # ``P(label="1")`` collapses to ~``max(P(0), P(1)) >= 0.5`` regardless of
+    # which class actually wins, destroying the score distribution
+    # downstream consumers bin on. See full bench in the regression test
+    # ``test_predict_batch_is_per_text``.
+    for record, text in zip(records_to_predict, texts, strict=True):
+        labels, probs = model.predict(text, k=k, threshold=threshold)
         stripped = [_strip_label_prefix(label) for label in labels]
         counters.increment("classify/predicted")
         yield {**record, output_field_name: _value_from_prediction(stripped, probs, score_target_label)}

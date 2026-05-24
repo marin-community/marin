@@ -27,9 +27,11 @@ def flow_backend_ctx():
 class _FakeModel:
     """Deterministic stand-in for the fasttext model object.
 
-    ``predict(texts, k, threshold)`` returns ``(labels_list, probs_list)``
-    parallel to *texts*. The caller hands in fixed per-text ``labels`` /
-    ``probs`` lookups so tests can choose what the model "sees".
+    ``predict(text, k, threshold)`` returns ``(labels, probs)`` for the single
+    input text -- mirrors fasttext-wheel's single-string ``predict`` contract.
+    The wrapper calls this once per text (not in batch) because batch
+    ``predict(list, k=-1)`` returns duplicated probs in fasttext-wheel 0.9.2;
+    see ``_predict_batch`` and ``test_predict_batch_is_per_text``.
     """
 
     def __init__(
@@ -42,10 +44,8 @@ class _FakeModel:
         self._labels = labels if labels is not None else ["__label__1", "__label__0"]
         self._probs = probs if probs is not None else [0.7, 0.3]
 
-    def predict(
-        self, texts: list[str], k: int = -1, threshold: float = 0.0
-    ) -> tuple[list[list[str]], list[list[float]]]:
-        return [list(self._labels) for _ in texts], [list(self._probs) for _ in texts]
+    def predict(self, text: str, k: int = -1, threshold: float = 0.0) -> tuple[list[str], list[float]]:
+        return list(self._labels), list(self._probs)
 
 
 def _fake_loader(model: _FakeModel) -> Any:
@@ -176,12 +176,12 @@ def test_all_empty_batch_does_not_call_model():
 
 
 def test_max_text_chars_truncates_input_passed_to_model():
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, list[str]] = {"texts": []}
 
     class _CaptureModel:
-        def predict(self, texts: list[str], k: int = -1, threshold: float = 0.0) -> Any:
-            captured["texts"] = list(texts)
-            return [["__label__1", "__label__0"] for _ in texts], [[0.7, 0.3] for _ in texts]
+        def predict(self, text: str, k: int = -1, threshold: float = 0.0) -> Any:
+            captured["texts"].append(text)
+            return ["__label__1", "__label__0"], [0.7, 0.3]
 
     fn = get_fasttext_batch_predict(
         model_path="ignored",
@@ -191,3 +191,73 @@ def test_max_text_chars_truncates_input_passed_to_model():
     )
     list(fn([{"id": "a", "text": "abcdefghij"}]))
     assert captured["texts"] == ["abcde"]
+
+
+# ---------- per-text predict (fasttext-wheel 0.9.2 batch quirk regression) ----------
+
+
+def test_predict_batch_is_per_text():
+    """``_predict_batch`` must call ``model.predict`` once per text, not in batch.
+
+    fasttext-wheel 0.9.2 returns duplicate probs across labels when handed a
+    list (e.g. ``predict([t1, t2], k=-1)`` -> ``[[0.97, 0.97], [0.97, 0.97]]``
+    instead of the per-label softmax), so the only correct invocation is one
+    text at a time. This test wires up a model that returns DIFFERENT probs
+    per call, then asserts every record in the input batch gets its own
+    distinct prediction -- impossible if the wrapper had reverted to
+    ``predict(list)``.
+    """
+    call_log: list[str] = []
+
+    class _PerTextModel:
+        """Returns a different ``P(label="1")`` for each text based on length."""
+
+        def predict(self, text: str, k: int = -1, threshold: float = 0.0) -> Any:
+            call_log.append(text)
+            # Make the prob depend on the text -- one-shot batch predict would
+            # collapse them to a single repeated value.
+            p_one = (len(text) % 7) / 10.0  # 0.0, 0.1, ... 0.6 -- deterministic per text
+            return ["__label__1", "__label__0"], [p_one, 1.0 - p_one]
+
+    fn = get_fasttext_batch_predict(
+        model_path="ignored",
+        max_text_chars=None,
+        score_target_label="1",
+        output_field_name="score",
+        model_load_fn=_fake_loader(_PerTextModel()),
+    )
+    inputs = [
+        {"id": "a", "text": "x"},  # len 1 -> p=0.1
+        {"id": "b", "text": "xxx"},  # len 3 -> p=0.3
+        {"id": "c", "text": "xxxxx"},  # len 5 -> p=0.5
+    ]
+    out = list(fn(inputs))
+
+    # One predict call per surviving text, in the same order.
+    assert call_log == ["x", "xxx", "xxxxx"]
+    # Each record gets its own distinct score derived from its own text.
+    assert [r["score"] for r in out] == [pytest.approx(0.1), pytest.approx(0.3), pytest.approx(0.5)]
+
+
+def test_predict_batch_rejects_batch_predict_call():
+    """If the wrapper ever regresses to ``model.predict(list_of_texts, ...)`` again,
+    we want the test suite to scream. ``_PoisonBatchModel.predict`` raises on
+    list inputs but accepts strings, so any list-mode call kills the test.
+    """
+
+    class _PoisonBatchModel:
+        def predict(self, text: str, k: int = -1, threshold: float = 0.0) -> Any:
+            assert isinstance(
+                text, str
+            ), f"_predict_batch must call model.predict with a single str; got {type(text).__name__}: {text!r}"
+            return ["__label__1", "__label__0"], [0.6, 0.4]
+
+    fn = get_fasttext_batch_predict(
+        model_path="ignored",
+        max_text_chars=None,
+        score_target_label="1",
+        output_field_name="score",
+        model_load_fn=_fake_loader(_PoisonBatchModel()),
+    )
+    out = list(fn([{"id": "a", "text": "alpha"}, {"id": "b", "text": "beta"}]))
+    assert [r["score"] for r in out] == [pytest.approx(0.6), pytest.approx(0.6)]
