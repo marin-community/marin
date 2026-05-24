@@ -30,6 +30,7 @@ class ActivationFunctionEnum(StrEnum):
     relu2 = "relu2"
     silu = "silu"
     swish = "swish"
+    sigmoid = "sigmoid"
     gelu = "gelu"
     gelu_new = "gelu_new"
     quick_gelu = "quick_gelu"
@@ -53,6 +54,7 @@ TO_FN: dict[ActivationFunctionEnum, ActivationFunction] = {
     ActivationFunctionEnum.relu2: hnn.relu_squared,
     ActivationFunctionEnum.silu: hnn.silu,
     ActivationFunctionEnum.swish: hnn.swish,
+    ActivationFunctionEnum.sigmoid: hnn.sigmoid,
     ActivationFunctionEnum.gelu: partial(hnn.gelu, approximate=False),
     ActivationFunctionEnum.gelu_new: partial(hnn.gelu, approximate=True),
     ActivationFunctionEnum.quick_gelu: hnn.quick_gelu,
@@ -65,6 +67,7 @@ TO_JAX_FN: dict[ActivationFunctionEnum, JaxActivationFunction] = {
     ActivationFunctionEnum.relu2: _relu2_jax,
     ActivationFunctionEnum.silu: jax.nn.silu,
     ActivationFunctionEnum.swish: jax.nn.swish,
+    ActivationFunctionEnum.sigmoid: jax.nn.sigmoid,
     ActivationFunctionEnum.gelu: partial(jax.nn.gelu, approximate=False),
     ActivationFunctionEnum.gelu_new: partial(jax.nn.gelu, approximate=True),
     ActivationFunctionEnum.quick_gelu: _quick_gelu_jax,

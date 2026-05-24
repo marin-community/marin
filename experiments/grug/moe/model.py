@@ -76,6 +76,9 @@ class GrugModelConfig:
     initializer_std: float = 0.02
     qk_mult: float = 1.0
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Activation applied to the gate side of the GLU MLP, in both routed (MoE)
+    # and shared experts. ``silu`` → SwiGLU (baseline); ``sigmoid`` → plain GLU.
+    mlp_gate_activation: ActivationFunctionEnum = ActivationFunctionEnum.silu
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -435,7 +438,7 @@ class MoEMLP(eqx.Module):
             combine_weights,
             w_gate_up,
             self.w_down,
-            activation=ActivationFunctionEnum.silu,
+            activation=self.cfg.mlp_gate_activation,
             mesh=get_abstract_mesh(),
             capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
         )
@@ -484,7 +487,7 @@ class Block(eqx.Module):
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
+            mlp_out = mlp_out + self.shared(mlp_in, activation=self.mlp.cfg.mlp_gate_activation)
         x = x + mlp_out
         return x, router_stats
 
