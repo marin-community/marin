@@ -9,6 +9,12 @@ from typing import Protocol
 import jax
 import jax.numpy as jnp
 from levanter.metrics import Metric, ReductionType
+from marin.rl.kl_regularization import (
+    kl_penalty_from_log_ratio,
+    kl_statistics_from_log_ratio,
+    masked_response_mean,
+    token_log_ratio,
+)
 from marin.rl.scoring import ScoreBundle, ScoreRequirements
 from marin.rl.types import SequenceBatch
 
@@ -107,6 +113,7 @@ class PolicyGradientTerm:
     def score_requirements(self) -> ScoreRequirements:
         return ScoreRequirements(
             student_logprobs=True,
+            student_entropy=self.config.log_policy_entropy,
             behavior_logprobs=True,
         )
 
@@ -206,6 +213,15 @@ class PolicyGradientTerm:
             "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss).astype(jnp.float32), ReductionType.MEAN),
             **compute_metadata_metrics(current_logprobs, behavior_logprobs, loss_weights_array, loss_masks_array),
         }
+        if self.config.log_policy_entropy:
+            if scores.student_entropy is None:
+                raise ValueError("student entropy is required when log_policy_entropy=True")
+            policy_entropy = masked_response_mean(scores.student_entropy, loss_masks_array)
+            metrics["current_policy_entropy"] = Metric.from_value(
+                jax.lax.stop_gradient(policy_entropy).astype(jnp.float32),
+                ReductionType.MEAN,
+            )
+
         return LossTermResult(loss=reinforce_loss, metrics=metrics)
 
 
@@ -217,19 +233,25 @@ class ReferenceKLTerm:
 
     def score_requirements(self) -> ScoreRequirements:
         return ScoreRequirements(
-            student_logprobs=self.config.kl_coef > 0,
-            reference_logprobs=self.config.kl_coef > 0,
+            student_logprobs=self.config.kl.enabled(),
+            reference_logprobs=self.config.kl.enabled(),
         )
 
     def compute(self, batch: SequenceBatch, signals: PreparedSignals, scores: ScoreBundle) -> LossTermResult:
         del batch
 
-        if self.config.kl_coef <= 0:
+        if not self.config.kl.enabled():
             zero = jnp.asarray(0.0, dtype=jnp.float32)
             return LossTermResult(
                 loss=zero,
                 metrics={
                     "kl_loss": Metric.from_value(zero, ReductionType.MEAN),
+                    "kl_beta": Metric.from_value(
+                        jnp.asarray(self.config.kl.beta, dtype=jnp.float32), ReductionType.MEAN
+                    ),
+                    "kl_k1_mean": Metric.from_value(zero, ReductionType.MEAN),
+                    "kl_k2_mean": Metric.from_value(zero, ReductionType.MEAN),
+                    "kl_k3_mean": Metric.from_value(zero, ReductionType.MEAN),
                     "kl_penalty": Metric.from_value(zero, ReductionType.MEAN),
                 },
             )
@@ -243,17 +265,26 @@ class ReferenceKLTerm:
         current_logprobs = scores.student_logprobs * loss_masks_array
         reference_logprobs = scores.reference_logprobs * loss_masks_array
 
-        kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
-        kl_loss = jnp.mean(jnp.sum(kl_penalty * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1))
-        kl_loss = self.config.kl_coef * kl_loss
+        log_ratio = token_log_ratio(current_logprobs, reference_logprobs)
+        kl_penalty = kl_penalty_from_log_ratio(log_ratio, self.config.kl.mode)
+        kl_statistics = kl_statistics_from_log_ratio(log_ratio, loss_masks_array)
+        kl_loss = self.config.kl.beta * masked_response_mean(kl_penalty, loss_masks_array)
 
-        kl_penalty_over_responses_only = jnp.mean(
-            jnp.sum(kl_penalty * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
-        )
+        kl_penalty_over_responses_only = masked_response_mean(kl_penalty, loss_masks_array)
         return LossTermResult(
             loss=kl_loss,
             metrics={
                 "kl_loss": Metric.from_value(jnp.asarray(kl_loss, dtype=jnp.float32), ReductionType.MEAN),
+                "kl_beta": Metric.from_value(jnp.asarray(self.config.kl.beta, dtype=jnp.float32), ReductionType.MEAN),
+                "kl_k1_mean": Metric.from_value(
+                    jnp.asarray(kl_statistics.k1_mean, dtype=jnp.float32), ReductionType.MEAN
+                ),
+                "kl_k2_mean": Metric.from_value(
+                    jnp.asarray(kl_statistics.k2_mean, dtype=jnp.float32), ReductionType.MEAN
+                ),
+                "kl_k3_mean": Metric.from_value(
+                    jnp.asarray(kl_statistics.k3_mean, dtype=jnp.float32), ReductionType.MEAN
+                ),
                 "kl_penalty": Metric.from_value(
                     jnp.asarray(kl_penalty_over_responses_only, dtype=jnp.float32),
                     ReductionType.MEAN,

@@ -42,6 +42,7 @@ from marin.rl.environments.inference_ctx import (
     VLLMFallbackSamplingConfig,
     vLLMInferenceContextConfig,
 )
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.objectives import make_rloo_objective
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -315,7 +316,11 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             max_samples=1,
             max_rollout_step_delay=0,
         ),
-        objective=make_rloo_objective(kl_coef=0.0, clip_epsilon_low=5.0, clip_epsilon_high=5.0),
+        objective=make_rloo_objective(
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+            clip_epsilon_low=5.0,
+            clip_epsilon_high=5.0,
+        ),
         scorer_vocab_tile_size=None,
         initial_checkpoint=None,
     )

@@ -114,6 +114,7 @@ def _merge_score_requirements(requirements: tuple[ScoreRequirements, ...]) -> Sc
 
     return ScoreRequirements(
         student_logprobs=any(requirement.student_logprobs for requirement in requirements),
+        student_entropy=any(requirement.student_entropy for requirement in requirements),
         behavior_logprobs=any(requirement.behavior_logprobs for requirement in requirements),
         reference_logprobs=any(requirement.reference_logprobs for requirement in requirements),
         teacher_token_logprobs=any(requirement.teacher_token_logprobs for requirement in requirements),
@@ -126,6 +127,8 @@ def _validate_score_source_requirements(provided: ScoreRequirements, required: S
     missing: list[str] = []
     if required.student_logprobs and not provided.student_logprobs:
         missing.append("student_logprobs")
+    if required.student_entropy and not provided.student_entropy:
+        missing.append("student_entropy")
     if required.behavior_logprobs and not provided.behavior_logprobs:
         missing.append("behavior_logprobs")
     if required.reference_logprobs and not provided.reference_logprobs:

@@ -3,6 +3,8 @@
 
 """Named objective recipes built on the compositional objective surface."""
 
+from marin.rl.kl_regularization import KLConfig
+
 from .spec import (
     BatchView,
     ObjectiveSpec,
@@ -17,13 +19,14 @@ from .spec import (
 
 def make_rloo_objective(
     *,
-    kl_coef: float = 0.1,
+    kl: KLConfig,
     clip_epsilon_low: float = 0.2,
     clip_epsilon_high: float = 0.2,
     tis_importance_sampling_ratio_max: float = 2.0,
     synchronous: bool = False,
     do_trainer_inference_mismatch_importance_sampling: bool = False,
     do_overlong_filtering: bool = False,
+    log_policy_entropy: bool = False,
     reduction_kind: ReductionKind = ReductionKind.DAPO,
 ) -> ObjectiveSpec:
     """Return the current RLOO recipe on the new objective surface."""
@@ -34,10 +37,11 @@ def make_rloo_objective(
             tis_importance_sampling_ratio_max=tis_importance_sampling_ratio_max,
             do_trainer_inference_mismatch_importance_sampling=do_trainer_inference_mismatch_importance_sampling,
             synchronous=synchronous,
+            log_policy_entropy=log_policy_entropy,
         )
     ]
-    if kl_coef > 0:
-        terms.append(ReferenceKLTermConfig(kl_coef=kl_coef))
+    if kl.enabled():
+        terms.append(ReferenceKLTermConfig(kl=kl))
 
     truncation_policy = TruncationPolicy.KEEP
     if do_overlong_filtering:

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeAlias
 
+from marin.rl.kl_regularization import KLConfig
+
 
 class BatchView(StrEnum):
     """Batch view consumed by an objective runtime."""
@@ -56,13 +58,14 @@ class PolicyGradientTermConfig:
     tis_importance_sampling_ratio_max: float
     do_trainer_inference_mismatch_importance_sampling: bool = False
     synchronous: bool = False
+    log_policy_entropy: bool = False
 
 
 @dataclass(frozen=True)
 class ReferenceKLTermConfig:
     """Reference-model KL penalty."""
 
-    kl_coef: float
+    kl: KLConfig
 
 
 LossTermConfig: TypeAlias = PolicyGradientTermConfig | ReferenceKLTermConfig

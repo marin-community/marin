@@ -11,6 +11,7 @@ import pytest
 try:
     from marin.rl import train_batch
     from marin.rl.decoding import DecodingConfig
+    from marin.rl.kl_regularization import KLConfig, KLMode
     from marin.rl.replay_buffer import ReplayBuffer, ReplayDataLoader, StoredTrajectory
     from marin.rl.rl_losses import RLOOLoss
 except ImportError:
@@ -29,7 +30,7 @@ def sampled_trajectories_to_training_batch(
     pad_token_id: int = 0,
 ) -> object:
     """Build the current trainer-compatible batch from neutral replay samples."""
-    loss_module = RLOOLoss()
+    loss_module = RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0))
     advantages_by_key: dict[tuple[str, str, str], float] = {}
 
     seen_groups: set[str] = set()

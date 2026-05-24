@@ -33,6 +33,7 @@ class ScoreRequirements:
     """Scores required by an objective runtime."""
 
     student_logprobs: bool = True
+    student_entropy: bool = False
     behavior_logprobs: bool = False
     reference_logprobs: bool = False
     teacher_token_logprobs: bool = False
@@ -45,6 +46,7 @@ class ScoreBundle:
     """Resolved scores plus compact execution metadata."""
 
     student_logprobs: jax.Array | None = None
+    student_entropy: jax.Array | None = None
     behavior_logprobs: jax.Array | None = None
     reference_logprobs: jax.Array | None = None
     teacher_logprobs: jax.Array | None = None
@@ -121,6 +123,18 @@ def compute_logprobs(
     key: jax.Array | None,
 ) -> jax.Array:
     """Compute token log probabilities for the observed next-token targets."""
+    logprobs, _entropy = compute_logprobs_and_entropy(model, batch, key, compute_entropy=False)
+    return logprobs
+
+
+def compute_logprobs_and_entropy(
+    model: LmHeadModel,
+    batch: TokenScoreInputs,
+    key: jax.Array | None,
+    *,
+    compute_entropy: bool,
+) -> tuple[jax.Array, jax.Array | None]:
+    """Compute selected-token logprobs and optional full-vocabulary policy entropy."""
     batch_size, _seq_len = batch.input_ids.array.shape
 
     model_output = model(
@@ -139,10 +153,20 @@ def compute_logprobs(
 
     log_probs = jax.nn.log_softmax(logits_array, axis=-1)
     logprobs_shifted = jnp.take_along_axis(log_probs, target_ids_array[..., None], axis=-1).squeeze(-1)
-    return jnp.concatenate(
+    logprobs = jnp.concatenate(
         [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted],
         axis=1,
     )
+    if not compute_entropy:
+        return logprobs, None
+
+    probs = jax.nn.softmax(logits_array, axis=-1)
+    entropy_shifted = jax.nn.logsumexp(logits_array, axis=-1) - jnp.sum(probs * logits_array, axis=-1)
+    entropy = jnp.concatenate(
+        [jnp.zeros((entropy_shifted.shape[0], 1), dtype=entropy_shifted.dtype), entropy_shifted],
+        axis=1,
+    )
+    return logprobs, entropy
 
 
 def chunked_compute_logprobs(
@@ -197,10 +221,32 @@ def compute_model_logprobs(
     vocab_tile_size: int | None = None,
 ) -> jax.Array:
     """Compute logprobs using either the eager or chunked backend."""
+    logprobs, _entropy = compute_model_logprobs_and_entropy(
+        model,
+        batch,
+        key,
+        vocab_tile_size=vocab_tile_size,
+        compute_entropy=False,
+    )
+    return logprobs
+
+
+def compute_model_logprobs_and_entropy(
+    model: LmHeadModel,
+    batch: ScoredBatch,
+    key: jax.Array | None,
+    *,
+    vocab_tile_size: int | None = None,
+    compute_entropy: bool = False,
+) -> tuple[jax.Array, jax.Array | None]:
+    """Compute model token logprobs and optional exact entropy for scored batches."""
     score_inputs = token_score_inputs_from_batch(batch)
+    if compute_entropy and vocab_tile_size is not None:
+        raise ValueError("Exact policy entropy is not supported with vocab_tile_size yet")
+
     if vocab_tile_size is None:
-        return compute_logprobs(model, score_inputs, key)
-    return chunked_compute_logprobs(model, score_inputs, key, vocab_tile_size)
+        return compute_logprobs_and_entropy(model, score_inputs, key, compute_entropy=compute_entropy)
+    return chunked_compute_logprobs(model, score_inputs, key, vocab_tile_size), None
 
 
 @dataclass(frozen=True)
@@ -234,13 +280,16 @@ class LocalScoreSource:
         if requirements.behavior_logprobs:
             score_bundle.behavior_logprobs = behavior_logprobs_from_batch(batch)
 
-        if requirements.student_logprobs:
-            score_bundle.student_logprobs = compute_model_logprobs(
+        if requirements.student_logprobs or requirements.student_entropy:
+            student_logprobs, student_entropy = compute_model_logprobs_and_entropy(
                 roles.student,
                 batch,
                 key,
                 vocab_tile_size=self.vocab_tile_size,
+                compute_entropy=requirements.student_entropy,
             )
+            score_bundle.student_logprobs = student_logprobs
+            score_bundle.student_entropy = student_entropy
             score_bundle.student_pass_count = 1
 
         if requirements.reference_logprobs:

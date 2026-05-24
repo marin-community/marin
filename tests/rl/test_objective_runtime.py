@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import jax
 import numpy as np
 import pytest
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.objectives.recipes import make_rloo_objective
 from marin.rl.objectives.runtime import ObjectiveRuntimeConfig, build_objective_runtime
 from marin.rl.objectives.signals import compute_rloo_advantages_from_rewards
@@ -58,6 +59,7 @@ def create_test_rollout(
 class StaticScoreSource:
     score_requirements: ScoreRequirements
     student_logprobs: jax.Array
+    student_entropy: jax.Array | None = None
     behavior_logprobs: jax.Array | None = None
     reference_logprobs: jax.Array | None = None
     backend_name: str = "static"
@@ -69,6 +71,7 @@ class StaticScoreSource:
         del batch, info, roles, key
         return ScoreBundle(
             student_logprobs=self.student_logprobs,
+            student_entropy=self.student_entropy,
             behavior_logprobs=self.behavior_logprobs,
             reference_logprobs=self.reference_logprobs,
             student_pass_count=1 if self.student_logprobs is not None else 0,
@@ -90,7 +93,7 @@ def test_rloo_signal_builder_computes_groupwise_advantages_and_group_sizes():
 
     runtime = build_objective_runtime(
         ObjectiveRuntimeConfig(
-            objective=make_rloo_objective(kl_coef=0.0),
+            objective=make_rloo_objective(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
         )
     )
     prepared_batch = runtime.prepare_batch(sequence_batch, batch_info)
@@ -105,7 +108,7 @@ def test_rloo_signal_builder_computes_groupwise_advantages_and_group_sizes():
 
 
 def test_build_objective_runtime_requires_reference_scores_for_kl_recipe():
-    objective = make_rloo_objective(kl_coef=0.2)
+    objective = make_rloo_objective(kl=KLConfig(mode=KLMode.K3_LOSS, beta=0.2))
     sequence_runtime_config = ObjectiveRuntimeConfig(objective=objective)
     bad_score_source = StaticScoreSource(
         score_requirements=ScoreRequirements(student_logprobs=True, behavior_logprobs=True),
@@ -122,7 +125,7 @@ def test_build_objective_runtime_requires_reference_scores_for_kl_recipe():
 
 
 def test_build_objective_runtime_rejects_group_batch_view_up_front():
-    objective = replace(make_rloo_objective(kl_coef=0.0), batch_view=BatchView.GROUP)
+    objective = replace(make_rloo_objective(kl=KLConfig(mode=KLMode.NONE, beta=0.0)), batch_view=BatchView.GROUP)
 
     with pytest.raises(NotImplementedError, match="supports only sequence batches"):
         build_objective_runtime(ObjectiveRuntimeConfig(objective=objective))
@@ -161,7 +164,10 @@ def test_rloo_objective_runtime_matches_current_rloo_loss_path():
 
     runtime = build_objective_runtime(
         ObjectiveRuntimeConfig(
-            objective=make_rloo_objective(kl_coef=0.2, do_trainer_inference_mismatch_importance_sampling=True)
+            objective=make_rloo_objective(
+                kl=KLConfig(mode=KLMode.K3_LOSS, beta=0.2),
+                do_trainer_inference_mismatch_importance_sampling=True,
+            )
         ),
         score_source=score_source,
     )
@@ -175,7 +181,7 @@ def test_rloo_objective_runtime_matches_current_rloo_loss_path():
         training_batch,
         score_source,
         key=None,
-        kl_coef=0.2,
+        kl=KLConfig(mode=KLMode.K3_LOSS, beta=0.2),
         clip_epsilon_low=0.2,
         clip_epsilon_high=0.2,
         tis_importance_sampling_ratio_max=2.0,
@@ -191,6 +197,10 @@ def test_rloo_objective_runtime_matches_current_rloo_loss_path():
         "clip_fraction",
         "reinforce_loss",
         "kl_loss",
+        "kl_beta",
+        "kl_k1_mean",
+        "kl_k2_mean",
+        "kl_k3_mean",
         "kl_penalty",
         "trainer_inference_importance_sampling_ratio_mean",
         "mean_advantages",
