@@ -781,7 +781,10 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             name="run_scale_sweep",
             label="scale",
             model_tag="1_5b",
-            model_config=protein_llama_1_5b,
+            # gradient_checkpointing="nested" — multi-level scan saves only
+            # sqrt(num_layers) ≈ 5 carries instead of 24. Combined with
+            # grad_accum_steps=2 to fit the post-May-2026 v5p-8 HBM budget.
+            model_config=dataclasses.replace(protein_llama_1_5b, gradient_checkpointing="nested"),
             resources_fn=_resources,
             mixture_ids=tuple(m.id for m in SCALE_MIXTURES),
             batch_size=BATCH_SIZE,
