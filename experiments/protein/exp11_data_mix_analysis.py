@@ -26,13 +26,19 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import logging
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
+import wandb
+from matplotlib.lines import Line2D
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +84,25 @@ SWEEPS: dict[str, SweepConfig] = {
         name_regex=r"^prot-exp11-dm-mix-100m-.*-v2-[0-9a-f]+$",
         mixture_regex=r"-(?P<mixture>m\d+)-lr",
     ),
+    # Offline full-dataset eval (no max_eval_batches cap) of the v2 mix
+    # checkpoints, produced by ``exp11_data_mix_eval.py`` at EVAL_VERSION=v2.
+    # One step (step=0) per run; build_snapshot picks it up via min(max(_step)).
+    "run_mix_sweep_v2_eval": SweepConfig(
+        id="run_mix_sweep_v2_eval",
+        entity="eric-czech",
+        project="marin",
+        group="exp11-data-mix-eval",
+        tag="eval",
+        name_regex=r"^prot-exp11-dm-mix-100m-.*-v2-eval-v2$",
+        mixture_regex=r"-(?P<mixture>m\d+)-lr",
+    ),
 }
 
 DEFAULT_SWEEP = "run_mix_sweep_v2"
+
+# Pair each training sweep with its offline-eval companion (see
+# ``render_train_vs_full_eval_scatter``). Missing = no scatter for that sweep.
+EVAL_OF: dict[str, str] = {"run_mix_sweep_v2": "run_mix_sweep_v2_eval"}
 
 # Prefix every plot title with this so the experiment context is unambiguous.
 TITLE_PREFIX = "MarinFold Experiment #11"
@@ -118,6 +140,10 @@ def _snapshot_path(sweep_id: str) -> Path:
     return _sweep_dir(sweep_id) / "snapshot.csv"
 
 
+def _meta_path(sweep_id: str) -> Path:
+    return _sweep_dir(sweep_id) / "meta.json"
+
+
 def _plots_dir(sweep_id: str) -> Path:
     return _sweep_dir(sweep_id) / "plots"
 
@@ -153,19 +179,107 @@ def _short_metric_label(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# W&B fetch -> long-form snapshot
+# W&B fetch -> long-form snapshot + per-sweep eval-config meta
 # ---------------------------------------------------------------------------
 
 
-def _wandb_api():
-    import wandb
+@dataclass(frozen=True)
+class EvalMeta:
+    """W&B-derived eval config for a sweep; consensus across all matched runs.
 
-    return wandb.Api()
+    Pulled from ``run.config`` at build time and validated to be identical for
+    every run in the sweep — figure annotations relying on these numbers
+    (e.g. "training-time eval = N batches x B examples") are only meaningful
+    if all runs share the same budget. ``build_snapshot`` raises on any
+    disagreement.
+
+    Both training and offline-eval runs expose ``trainer.train_batch_size``
+    and ``trainer.max_eval_batches``; the seq-length key differs (``train_seq_len``
+    for training, ``max_eval_length`` for offline ``eval_lm`` runs), so the
+    extractor prefers ``max_eval_length`` and falls back to ``train_seq_len``.
+    """
+
+    eval_batch_size: int
+    eval_seq_len: int
+    # None = "no cap" (full dataset) — the offline-eval mode.
+    max_eval_batches: int | None
+
+
+# Dotted paths into the nested ``run.config`` dict (W&B stores the levanter
+# config as a nested mapping, not dot-flattened). The first candidate whose
+# path resolves wins; ``None`` values are preserved (e.g. offline-eval has
+# ``max_eval_batches`` explicitly set to None).
+_META_FROM_CONFIG: dict[str, tuple[str, ...]] = {
+    "eval_batch_size": ("trainer.train_batch_size",),
+    "max_eval_batches": ("trainer.max_eval_batches",),
+    "eval_seq_len": ("max_eval_length", "train_seq_len"),
+}
+
+_MISSING = object()
+
+
+def _get_nested(cfg: object, dotted_key: str) -> object:
+    """Walk a nested mapping by dotted key path; ``_MISSING`` if any segment isn't present."""
+    cur: object = cfg
+    for part in dotted_key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return _MISSING
+        cur = cur[part]
+    return cur
+
+
+def _extract_meta(run) -> dict[str, object]:
+    """Pluck the eval-config fields we care about from a single run's config.
+
+    Returns a dict (rather than ``EvalMeta``) so missing values surface as
+    ``None`` and ``_consensus_meta`` can render a precise disagreement error.
+    """
+    cfg = dict(run.config)
+    out: dict[str, object] = {}
+    for field, candidates in _META_FROM_CONFIG.items():
+        for cand in candidates:
+            value = _get_nested(cfg, cand)
+            if value is not _MISSING:
+                out[field] = value
+                break
+        else:
+            out[field] = None
+    return out
+
+
+def _consensus_meta(per_run: list[dict[str, object]], sweep_id: str) -> EvalMeta:
+    """Assert every run agrees on each meta field; return the shared values.
+
+    A None value is treated as "absent" — ``max_eval_batches`` can be absent
+    (None) for offline-eval runs (uncapped) and still valid; the other two
+    fields are required.
+    """
+    if not per_run:
+        raise RuntimeError(f"Sweep {sweep_id}: no runs to derive meta from")
+    consensus: dict[str, object] = {}
+    for field in _META_FROM_CONFIG:
+        values = {m.get(field) for m in per_run}
+        if len(values) > 1:
+            raise RuntimeError(f"Sweep {sweep_id}: runs disagree on {field!r}: {sorted(values, key=str)}")
+        consensus[field] = values.pop()
+    for required in ("eval_batch_size", "eval_seq_len"):
+        if consensus[required] is None:
+            raise RuntimeError(f"Sweep {sweep_id}: required meta field {required!r} missing from all runs")
+    return EvalMeta(**consensus)  # type: ignore[arg-type]
+
+
+def _save_meta(meta: EvalMeta, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dataclasses.asdict(meta), indent=2) + "\n")
+
+
+def _load_meta(path: Path) -> EvalMeta:
+    return EvalMeta(**json.loads(path.read_text()))
 
 
 def _list_runs(sweep: SweepConfig) -> list[tuple[object, str]]:
     """Return ``[(wandb_run, mixture_id), ...]`` for this sweep."""
-    api = _wandb_api()
+    api = wandb.Api()
     filters: dict = {}
     if sweep.group:
         filters["group"] = sweep.group
@@ -213,18 +327,21 @@ def _value_at(df: pd.DataFrame, column: str, ref_step: int) -> tuple[float | Non
     return float(row[column]), int(row["_step"])
 
 
-def build_snapshot(sweep: SweepConfig) -> pd.DataFrame:
-    """Pull every run, slice at ``min(max(_step))``, return long-form snapshot.
+def build_snapshot(sweep: SweepConfig) -> tuple[pd.DataFrame, EvalMeta]:
+    """Pull every run, slice at ``min(max(_step))``, return snapshot + meta.
 
-    Returns a frame with columns: ``mixture_id``, ``mixture_name``, ``metric``,
+    Snapshot frame columns: ``mixture_id``, ``mixture_name``, ``metric``,
     ``value``, ``step_used``, ``ref_step``, ``run_name``, ``run_state``.
+    ``EvalMeta`` is the consensus run-level eval config validated to be equal
+    across every matched run.
     """
     matched = _list_runs(sweep)
     if not matched:
         raise RuntimeError(f"No runs matched sweep {sweep.id}")
 
-    # Pass 1: fetch history per run.
+    # Pass 1: fetch history + extract meta per run.
     per_run: list[tuple[object, str, pd.DataFrame]] = []
+    metas: list[dict[str, object]] = []
     for run, mixture in matched:
         keep_keys = sorted(k for k in run.summary.keys() if _is_keep_metric(k))
         if not keep_keys:
@@ -236,9 +353,13 @@ def build_snapshot(sweep: SweepConfig) -> pd.DataFrame:
             logger.warning("  empty history; skipping")
             continue
         per_run.append((run, mixture, df))
+        metas.append(_extract_meta(run))
 
     if not per_run:
         raise RuntimeError(f"No runs in sweep {sweep.id} produced usable history")
+
+    meta = _consensus_meta(metas, sweep.id)
+    logger.info("Sweep %s eval meta (consensus across %d runs): %s", sweep.id, len(metas), meta)
 
     ref_step = min(int(df["_step"].max()) for _, _, df in per_run)
     logger.info("Reference step (min over runs of max-step) = %d", ref_step)
@@ -263,19 +384,37 @@ def build_snapshot(sweep: SweepConfig) -> pd.DataFrame:
                     "run_state": run.state,
                 }
             )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), meta
 
 
-def load_or_build_snapshot(sweep: SweepConfig, *, refresh: bool) -> pd.DataFrame:
+def load_or_build_snapshot(sweep: SweepConfig, *, refresh: bool) -> tuple[pd.DataFrame, EvalMeta]:
+    """Cached fetch: returns (snapshot_df, meta).
+
+    Three cache states:
+    - both ``snapshot.csv`` and ``meta.json`` present: load both, no W&B call.
+    - only ``snapshot.csv`` present: backfill ``meta.json`` from a cheap
+      ``run.config`` fetch (no ``scan_history`` needed).
+    - neither present: full ``build_snapshot``.
+
+    ``--refresh`` always falls through to the full rebuild.
+    """
     csv_path = _snapshot_path(sweep.id)
+    meta_path = _meta_path(sweep.id)
+    if not refresh and csv_path.exists() and meta_path.exists():
+        logger.info("Loading cached snapshot+meta from %s", csv_path.parent)
+        return pd.read_csv(csv_path), _load_meta(meta_path)
     if not refresh and csv_path.exists():
-        logger.info("Loading cached snapshot from %s", csv_path)
-        return pd.read_csv(csv_path)
-    snapshot = build_snapshot(sweep)
+        logger.info("Backfilling meta.json from W&B (snapshot already cached)")
+        runs = _list_runs(sweep)
+        meta = _consensus_meta([_extract_meta(r) for r, _ in runs], sweep.id)
+        _save_meta(meta, meta_path)
+        return pd.read_csv(csv_path), meta
+    snapshot, meta = build_snapshot(sweep)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot.to_csv(csv_path, index=False)
-    logger.info("Wrote %d rows to %s", len(snapshot), csv_path)
-    return snapshot
+    _save_meta(meta, meta_path)
+    logger.info("Wrote %d rows to %s and meta to %s", len(snapshot), csv_path, meta_path)
+    return snapshot, meta
 
 
 # ---------------------------------------------------------------------------
@@ -298,13 +437,28 @@ PREFERRED_METRIC_ORDER = (
 )
 
 
-# Mixture groups for the cd-val bar plot. Tracks the issue's three logical
-# blocks: pure single-quality, static blends, staged curricula.
+# Mixture groups for the cd-val bar plot and the train-vs-full-eval scatter:
+# pure single-quality, static blends, staged curricula. Colors are the Tableau
+# 10 categorical defaults (stable, color-blind-tolerant).
 MIXTURE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Single quality", ("m1", "m2", "m3")),
     ("Static blends", ("m4", "m5", "m6")),
     ("Staged", ("m7", "m8", "m9")),
 )
+GROUP_COLORS: dict[str, str] = {
+    "Single quality": "#4C78A8",
+    "Static blends": "#54A24B",
+    "Staged": "#E45756",
+}
+GROUP_BY_MIXTURE: dict[str, str] = {mid: label for label, mixtures in MIXTURE_GROUPS for mid in mixtures}
+
+# Full-dataset example count for the offline cd-val eval — packed-sequence
+# count in the protein-docs cd-val cache. NOT derivable from W&B (eval runs
+# only log per-component loss/bpb, no per-component iter counts) and not
+# trivial to derive from the cache either (depends on eval-time packing into
+# seq_len=8192 windows). Verified manually by Eric (2026-05-24): 53,699
+# packed sequences. Update if the cd-val cache is rebuilt.
+CDVAL_FULL_EXAMPLES = 53_699
 
 
 def _ordered_columns(columns: list[str]) -> list[str]:
@@ -319,9 +473,6 @@ def _mixture_sort_key(mixture_id: str) -> tuple[int, str]:
 
 
 def render_heatmap(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) -> None:
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     ref_step = int(snapshot["ref_step"].iloc[0])
 
     mixture_order = sorted(snapshot["mixture_id"].unique(), key=_mixture_sort_key)
@@ -397,8 +548,6 @@ def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path)
 
     Y-axis range is fixed across subplots so cross-group comparison is fair.
     """
-    import matplotlib.pyplot as plt
-
     ref_step = int(snapshot["ref_step"].iloc[0])
     cdval = snapshot[snapshot["metric"] == "cd-val"].set_index("mixture_id")
     if cdval.empty:
@@ -452,6 +601,176 @@ def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path)
     logger.info("Saved %s and %s", pdf_path, png_path)
 
 
+def render_train_vs_full_eval_scatter(
+    train_snapshot: pd.DataFrame,
+    train_meta: EvalMeta,
+    eval_snapshot: pd.DataFrame,
+    eval_meta: EvalMeta,
+    train_sweep: SweepConfig,
+    eval_sweep: SweepConfig,
+    out_dir: Path,
+) -> None:
+    """Scatter: training-time (capped) vs offline (full) cd-val loss per mixture.
+
+    cd-val only — one point per mixture. Other heldout metrics (H/M/L val/test,
+    IID-carve, cd-val-unmasked) add visual noise without changing the
+    consistency story. Color encodes the mixture group; a least-squares fit
+    (formula in legend) shows how well the capped in-loop eval tracks the
+    full-dataset truth — slope≈1 + intercept≈0 means the cheap eval is a
+    faithful proxy.
+    """
+    cols = ["mixture_id", "metric"]
+    df = (
+        train_snapshot.loc[train_snapshot["metric"] == "cd-val", [*cols, "value"]]
+        .rename(columns={"value": "train_time"})
+        .merge(
+            eval_snapshot.loc[eval_snapshot["metric"] == "cd-val", [*cols, "value"]].rename(
+                columns={"value": "offline"}
+            ),
+            on=cols,
+        )
+        .assign(group=lambda d: d["mixture_id"].map(GROUP_BY_MIXTURE))
+        .dropna(subset=["train_time", "offline", "group"])
+    )
+    if df.empty:
+        logger.warning("No overlapping cd-val rows between %s and %s", train_sweep.id, eval_sweep.id)
+        return
+    if train_meta.eval_seq_len != eval_meta.eval_seq_len:
+        raise RuntimeError(
+            f"Seq length mismatch: training sweep {train_sweep.id} ran at {train_meta.eval_seq_len}, "
+            f"offline-eval sweep {eval_sweep.id} ran at {eval_meta.eval_seq_len}; not comparable."
+        )
+
+    x = df["train_time"].to_numpy(dtype=float)
+    y = df["offline"].to_numpy(dtype=float)
+    r = float(np.corrcoef(x, y)[0, 1])
+    slope, intercept = np.polyfit(x, y, 1)
+
+    # Wider canvas so the right-side mixture key has room outside the axes;
+    # short on the vertical to keep the figure compact in reports/issues.
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    for label, _ in MIXTURE_GROUPS:
+        sub = df[df["group"] == label]
+        if sub.empty:
+            continue
+        ax.scatter(
+            sub["train_time"],
+            sub["offline"],
+            c=GROUP_COLORS[label],
+            label="_nolegend_",
+            edgecolor="black",
+            linewidth=0.4,
+            alpha=0.9,
+            s=80,
+            zorder=3,
+        )
+        for _, row in sub.iterrows():
+            ax.annotate(
+                row["mixture_id"],
+                (row["train_time"], row["offline"]),
+                xytext=(4, -2),
+                textcoords="offset points",
+                fontsize=9,
+                color=GROUP_COLORS[label],
+                fontweight="bold",
+                ha="left",
+                va="top",
+            )
+
+    # Per-axis natural bounds with 8% padding — y=x no longer applies, so the
+    # union-bounded square layout (and ``set_aspect("equal")``) just wasted
+    # canvas. Each axis now spans only its own data range.
+    pad_x = 0.08 * float(np.ptp(x))
+    pad_y = 0.08 * float(np.ptp(y))
+    x_lo, x_hi = float(x.min()) - pad_x, float(x.max()) + pad_x
+    y_lo, y_hi = float(y.min()) - pad_y, float(y.max()) + pad_y
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_ylim(y_lo, y_hi)
+
+    sign = "+" if intercept >= 0 else "-"
+    fit_label = f"y = {slope:.3f}*x {sign} {abs(intercept):.3f}"
+    (fit_line,) = ax.plot(
+        [x_lo, x_hi],
+        [slope * x_lo + intercept, slope * x_hi + intercept],
+        "--",
+        color="grey",
+        linewidth=1.2,
+        zorder=1,
+        label=fit_label,
+    )
+
+    ax.set_xlabel(f"Training-time cd-val loss  (capped: {train_meta.max_eval_batches} batches)")
+    ax.set_ylabel("Offline cd-val loss  (full dataset, no cap)")
+    ax.set_title(
+        f"{TITLE_PREFIX} — {train_sweep.id}: training-time vs offline cd-val loss\n"
+        f"Pearson r = {r:.6f}   (1 - r = {1 - r:.2e};   n = {len(df)} mixtures)",
+        fontsize=11,
+    )
+    ax.grid(True, linestyle="--", alpha=0.4)
+
+    # Two legends: fit formula stays compact inside the axes; the mixture key
+    # sits outside on the right so all 9 ``MIXTURE_NAMES`` entries fit without
+    # crowding the data. Names match the heatmap row labels and bar-chart
+    # x-ticks for cross-figure consistency.
+    fit_legend = ax.legend(handles=[fit_line], loc="upper left", fontsize=9, framealpha=0.9)
+    ax.add_artist(fit_legend)
+    mixture_handles: list[Line2D] = []
+    for group_label, mids in MIXTURE_GROUPS:
+        mixture_handles.append(Line2D([], [], linestyle="none", marker="none", label=group_label))
+        for mid in mids:
+            mixture_handles.append(
+                Line2D(
+                    [],
+                    [],
+                    linestyle="none",
+                    marker="o",
+                    markerfacecolor=GROUP_COLORS[group_label],
+                    markeredgecolor="black",
+                    markersize=8,
+                    label=f"  {MIXTURE_NAMES.get(mid, mid)}",
+                )
+            )
+    ax.legend(
+        handles=mixture_handles,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        fontsize=9,
+        framealpha=0.9,
+        title="Mixture",
+        title_fontsize=9,
+    )
+
+    train_examples = train_meta.eval_batch_size * train_meta.max_eval_batches
+    train_tokens = train_examples * train_meta.eval_seq_len
+    offline_tokens = CDVAL_FULL_EXAMPLES * eval_meta.eval_seq_len
+    multiplier = CDVAL_FULL_EXAMPLES / train_examples
+    ax.text(
+        0.98,
+        0.02,
+        (
+            f"Training-time: capped at {train_meta.max_eval_batches} batches x {train_meta.eval_batch_size} "
+            f"= {train_examples:,} examples ({train_tokens / 1e6:.1f}M tokens)\n"
+            f"Offline (v2): full cd-val dataset = {CDVAL_FULL_EXAMPLES:,} examples "
+            f"({offline_tokens / 1e6:.0f}M tokens, {multiplier:.0f}x larger)"
+        ),
+        transform=ax.transAxes,
+        fontsize=8,
+        ha="right",
+        va="bottom",
+        bbox=dict(facecolor="white", edgecolor="grey", alpha=0.9, boxstyle="round,pad=0.3"),
+    )
+
+    fig.tight_layout()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = out_dir / "train_vs_full_eval_scatter.pdf"
+    png_path = out_dir / "train_vs_full_eval_scatter.png"
+    fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
+    fig.savefig(png_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved %s and %s  (r=%.6f, 1-r=%.2e, n=%d)", pdf_path, png_path, r, 1 - r, len(df))
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -465,16 +784,22 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     sweep = SWEEPS[args.sweep]
-    snapshot = load_or_build_snapshot(sweep, refresh=args.refresh)
+    snapshot, meta = load_or_build_snapshot(sweep, refresh=args.refresh)
 
     ref_step = int(snapshot["ref_step"].iloc[0])
     wide = snapshot.pivot(index="mixture_name", columns="metric", values="value")
-    logger.info("ref_step = %d", ref_step)
+    logger.info("ref_step = %d  meta = %s", ref_step, meta)
     logger.info("\n%s", wide.to_string(float_format=lambda v: f"{v:.4f}" if pd.notna(v) else "—"))
 
     plots_dir = _plots_dir(sweep.id)
     render_heatmap(snapshot, sweep, plots_dir)
     render_cdval_bars(snapshot, sweep, plots_dir)
+
+    eval_sweep_id = EVAL_OF.get(args.sweep)
+    if eval_sweep_id is not None:
+        eval_sweep = SWEEPS[eval_sweep_id]
+        eval_snapshot, eval_meta = load_or_build_snapshot(eval_sweep, refresh=args.refresh)
+        render_train_vs_full_eval_scatter(snapshot, meta, eval_snapshot, eval_meta, sweep, eval_sweep, plots_dir)
     return 0
 
 
