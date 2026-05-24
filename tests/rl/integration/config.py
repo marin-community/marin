@@ -36,6 +36,7 @@ from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from marin.rl.curriculum import Curriculum
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig
@@ -318,7 +319,11 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             max_samples=1,
             max_rollout_step_delay=0,
         ),
-        loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
+        loss=RLOOLoss(
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+            clip_epsilon_low=5.0,
+            clip_epsilon_high=5.0,
+        ),
         initial_checkpoint=None,
     )
 

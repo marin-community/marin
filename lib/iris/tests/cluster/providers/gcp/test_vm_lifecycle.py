@@ -32,7 +32,7 @@ def test_tpu_quota_exceeded_retry():
     """TPU creation fails with quota exceeded, retries successfully after clearing."""
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     service.set_zone_quota("us-central2-b", 0)
-    platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", gcp_service=service)
+    platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", worker_port=10001, gcp_service=service)
 
     with pytest.raises(QuotaExhaustedError):
         platform.create_slice(_make_slice_config())
@@ -53,7 +53,7 @@ def test_tpu_quota_exceeded_retry():
 def test_tpu_init_stuck():
     """TPU never becomes READY (stuck in CREATING)."""
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
-    platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", gcp_service=service)
+    platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", worker_port=10001, gcp_service=service)
     handle = platform.create_slice(_make_slice_config("stuck"))
 
     # TPU stays in CREATING (we never advance it to READY)
@@ -64,7 +64,7 @@ def test_tpu_init_stuck():
 def test_tpu_preempted():
     """TPU reaches READY, then termination destroys the slice."""
     service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
-    platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", gcp_service=service)
+    platform = GcpWorkerProvider(_make_gcp_config(), label_prefix="test", worker_port=10001, gcp_service=service)
     handle = platform.create_slice(_make_slice_config("preempt"))
 
     # Advance to READY

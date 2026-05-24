@@ -58,6 +58,14 @@ class TreeStore(Generic[T]):
         tree = _construct_builder_tree(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 
+    @staticmethod
+    async def open_async(exemplar: T, path: str, *, mode="a", cache_metadata: bool = False) -> "TreeStore":
+        """
+        Open a TreeStoreBuilder from a file asynchronously.
+        """
+        tree = await _construct_builder_tree_async(exemplar, path, mode, cache_metadata)
+        return TreeStore(tree, path, mode)
+
     def append(self, ex: T):
         return self.extend([ex])
 
@@ -185,6 +193,25 @@ def _construct_builder_tree(exemplar, path, mode, cache_metadata):
         )
 
     return jtu.tree_map_with_path(open_builder, exemplar, is_leaf=heuristic_is_leaf)
+
+
+async def _construct_builder_tree_async(exemplar, path, mode, cache_metadata):
+    def open_builder(tree_path, item):
+        item = np.asarray(item)
+        rank = item.ndim
+        render_tree_path = "/".join(_render_path_elem(x) for x in tree_path)
+        return JaggedArrayStore.open_async(
+            os.path.join(path, render_tree_path),
+            mode=mode,
+            item_rank=rank,
+            dtype=item.dtype,
+            cache_metadata=cache_metadata,
+        )
+
+    tree_futures = jtu.tree_map_with_path(open_builder, exemplar, is_leaf=heuristic_is_leaf)
+    leaves, treedef = jtu.tree_flatten(tree_futures)
+    opened_leaves = await asyncio.gather(*leaves)
+    return jtu.tree_unflatten(treedef, opened_leaves)
 
 
 def _render_path_elem(x):

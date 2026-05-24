@@ -131,7 +131,7 @@ jobs:
           MARIN_PREFIX: gs://marin-eu-west4
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke-gcp.yaml \
+            --config=config/smoke-gcp.yaml \
             cluster start-smoke \
             --label-prefix "$LABEL_PREFIX" \
             --url-file /tmp/iris-controller-url \
@@ -161,7 +161,7 @@ jobs:
           mkdir -p ${{ github.workspace }}/iris-cloud-screenshots
           cd lib/iris && uv run --group dev python -m pytest \
             tests/e2e/test_smoke.py \
-            -m e2e \
+            -m requires_cluster \
             --iris-controller-url "$IRIS_CONTROLLER_URL" \
             -o "addopts=" \
             --tb=short -v \
@@ -211,7 +211,7 @@ jobs:
           LABEL_PREFIX: ${{ steps.label.outputs.prefix }}
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke-gcp.yaml \
+            --config=config/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Remove OS Login SSH key
@@ -270,7 +270,7 @@ jobs:
       - name: Tear down cluster (iris stop)
         run: |
           cd lib/iris && uv run --group dev iris -v \
-            --config=examples/smoke-gcp.yaml \
+            --config=config/smoke-gcp.yaml \
             cluster stop --label "$LABEL_PREFIX" || true
 
       - name: Failsafe GCP resource cleanup

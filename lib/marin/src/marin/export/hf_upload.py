@@ -12,7 +12,9 @@ from urllib.parse import urlparse
 import fsspec
 import humanfriendly
 from fsspec.implementations.local import LocalFileSystem
-from huggingface_hub import create_commit, upload_folder
+from huggingface_hub import CommitOperationAdd, create_commit, upload_folder
+from huggingface_hub.hf_api import HfApi
+from huggingface_hub.utils import RepositoryNotFoundError
 from rigging.filesystem import open_url
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 from tqdm_loggable.auto import tqdm
@@ -94,10 +96,6 @@ def upload_dir_to_hf(
 
 
 def _actually_upload_to_hf(config: UploadToHfConfig):
-    from huggingface_hub import CommitOperationAdd, upload_folder
-    from huggingface_hub.hf_api import HfApi
-    from huggingface_hub.utils import RepositoryNotFoundError
-
     # Check if the repo exists
     api = HfApi()
     try:

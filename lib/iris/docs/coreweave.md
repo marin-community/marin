@@ -10,7 +10,7 @@ CoreWeave manages node provisioning and deprovisioning; Iris manages only Pods.
 Tasks execute as independent Kubernetes Pods via `KubernetesRuntime` (Pod-per-task),
 which replaced an originally-planned containerd/crictl approach during implementation.
 
-Example config: `lib/iris/examples/coreweave.yaml`
+Example config: `lib/iris/config/coreweave.yaml`
 
 ## 2. Architecture
 
@@ -177,7 +177,7 @@ iris --cluster=coreweave-ci job logs /runner/my-job
 iris cluster list
 ```
 
-`--cluster=NAME` resolves to a config under `lib/iris/examples/` and opens a
+`--cluster=NAME` resolves to a config under `lib/iris/config/` and opens a
 `kubectl port-forward` to the controller service. This path requires the
 `iris[controller]` extras (`duckdb`, `pyarrow`, `kubernetes`). Without them,
 auto-tunneled CoreWeave commands fail before connecting:
@@ -200,9 +200,9 @@ iris --controller-url=http://localhost:10000 ...
 
 | Target | Iris config | `--gpu` request | `nvidia-smi` GPU name |
 |--------|-------------|-----------------|-----------------------|
-| H100 | `lib/iris/examples/coreweave-ci.yaml` | `H100x1` | `NVIDIA H100 80GB HBM3` |
-| GH200 | `lib/iris/examples/coreweave-rno2a.yaml` | `GH200x1` | `NVIDIA GH200 480GB` |
-| B200 | `lib/iris/examples/coreweave-usw09b.yaml` | `B200x1` | `NVIDIA B200` |
+| H100 | `lib/iris/config/coreweave-ci.yaml` | `H100x1` | `NVIDIA H100 80GB HBM3` |
+| GH200 | `lib/iris/config/coreweave-rno2a.yaml` | `GH200x1` | `NVIDIA GH200 480GB` |
+| B200 | `lib/iris/config/coreweave-usw09b.yaml` | `B200x1` | `NVIDIA B200` |
 
 Use `GH200x1` for RNO2A. `H200x1` also schedules there today; both land on
 CoreWeave `gd-1xgh200` nodes labeled `gpu.nvidia.com/model=GH200_480GB` and
@@ -796,5 +796,5 @@ instantly. Fix in config and redeploy.
 | `lib/iris/src/iris/providers/k8s/coreweave.py` | CoreWeave platform implementation (includes `ensure_rbac()`) |
 | `lib/iris/src/iris/cluster/runtime/kubernetes.py` | KubernetesRuntime (Pod-per-task) |
 | `lib/iris/src/iris/providers/k8s/service.py` | Kubectl CLI wrapper |
-| `lib/iris/examples/coreweave.yaml` | Example cluster config |
+| `lib/iris/config/coreweave.yaml` | Example cluster config |
 | `lib/iris/AGENTS.md` | CoreWeave integration notes for agents |

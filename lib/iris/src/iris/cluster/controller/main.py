@@ -19,12 +19,19 @@ from pathlib import Path
 
 import click
 from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
+from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.config import create_autoscaler, load_config, make_provider
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
+from iris.cluster.controller.autoscaler import Autoscaler
 from iris.cluster.controller.budget import reconcile_user_budget_tiers
+from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import Controller, ControllerConfig
+from iris.cluster.controller.db import ControllerDB
 from iris.cluster.endpoints import resolve_endpoint_uri
+from iris.cluster.providers.factory import create_provider_bundle
+from iris.cluster.providers.k8s.tasks import K8sTaskProvider
 from iris.rpc import config_pb2
 
 logger = logging.getLogger(__name__)
@@ -80,13 +87,6 @@ def run_controller_serve(
     This is the shared implementation used by both the standalone daemon
     entrypoint and the ``iris cluster controller serve`` CLI command.
     """
-    from iris.cluster.config import create_autoscaler, make_provider
-    from iris.cluster.controller.autoscaler import Autoscaler
-    from iris.cluster.controller.checkpoint import download_checkpoint_to_local
-    from iris.cluster.controller.db import ControllerDB
-    from iris.cluster.providers.factory import create_provider_bundle
-    from iris.cluster.providers.k8s.tasks import K8sTaskProvider
-
     logger.info("Initializing Iris controller (git_hash=%s)", os.environ.get("IRIS_GIT_HASH", "unknown"))
 
     remote_state_dir = cluster_config.storage.remote_state_dir
@@ -164,6 +164,7 @@ def run_controller_serve(
     elif not isinstance(provider, K8sTaskProvider):
         bundle = create_provider_bundle(
             platform_config=cluster_config.platform,
+            worker_port=cluster_config.defaults.worker.port,
             cluster_config=cluster_config,
             ssh_config=cluster_config.defaults.ssh,
         )
@@ -214,6 +215,9 @@ def run_controller_serve(
     if cluster_config and cluster_config.user_budgets:
         reconcile_user_budget_tiers(db, cluster_config.user_budgets, Timestamp.now())
 
+    reconcile_rpc_enabled = os.environ.get("IRIS_RECONCILE_RPC_ENABLED", "").lower() in ("1", "true", "yes")
+    logger.info("Reconcile RPC wire: %s", "enabled" if reconcile_rpc_enabled else "disabled (legacy)")
+
     config = ControllerConfig(
         host=host,
         port=port,
@@ -226,6 +230,7 @@ def run_controller_serve(
         dry_run=dry_run,
         log_service_address=log_service_address,
         endpoints=endpoints,
+        reconcile_rpc_enabled=reconcile_rpc_enabled,
     )
 
     controller = Controller(
@@ -333,10 +338,6 @@ def serve(
     state_dir: Path | None,
 ):
     """Start the Iris controller service."""
-    from rigging.log_setup import configure_logging
-
-    from iris.cluster.config import load_config
-
     configure_logging(level=getattr(logging, log_level))
 
     cluster_config = load_config(Path(config_file))

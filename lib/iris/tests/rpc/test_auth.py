@@ -1,22 +1,41 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import datetime
 from dataclasses import dataclass
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from connectrpc._headers import Headers
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.cli.main import create_client_token_provider
+from iris.cli.token_store import ClusterCredential
+from iris.cluster.controller import writes
+from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
+from iris.cluster.controller.db import ControllerDB
 from iris.rpc.auth import (
     AuthInterceptor,
     AuthTokenInjector,
+    AuthzAction,
     CompositeTokenVerifier,
+    GcpAccessTokenProvider,
+    GcpAccessTokenVerifier,
+    NullAuthInterceptor,
     StaticTokenProvider,
     StaticTokenVerifier,
+    VerifiedIdentity,
     _extract_cookie,
+    _verified_identity,
+    authorize,
+    authorize_resource_owner,
     get_verified_identity,
     get_verified_user,
+    hash_token,
+    require_identity,
 )
+from iris.rpc.config_pb2 import AuthConfig
+from rigging.timing import Timestamp
 
 
 @dataclass(frozen=True)
@@ -187,10 +206,6 @@ def test_different_users_get_different_identities(interceptor):
 
 def test_gcp_access_token_verifier_valid():
     """GcpAccessTokenVerifier extracts email from tokeninfo."""
-    from unittest.mock import Mock, patch
-
-    from iris.rpc.auth import GcpAccessTokenVerifier
-
     verifier = GcpAccessTokenVerifier()
     mock_resp = Mock()
     mock_resp.status_code = 200
@@ -209,10 +224,6 @@ def test_gcp_access_token_verifier_valid():
 
 
 def test_gcp_access_token_verifier_invalid_token():
-    from unittest.mock import Mock, patch
-
-    from iris.rpc.auth import GcpAccessTokenVerifier
-
     verifier = GcpAccessTokenVerifier()
     mock_resp = Mock()
     mock_resp.status_code = 401
@@ -223,10 +234,6 @@ def test_gcp_access_token_verifier_invalid_token():
 
 
 def test_gcp_access_token_verifier_no_email():
-    from unittest.mock import Mock, patch
-
-    from iris.rpc.auth import GcpAccessTokenVerifier
-
     verifier = GcpAccessTokenVerifier()
     mock_resp = Mock()
     mock_resp.status_code = 200
@@ -238,10 +245,6 @@ def test_gcp_access_token_verifier_no_email():
 
 
 def test_gcp_access_token_verifier_checks_project_access():
-    from unittest.mock import Mock, patch
-
-    from iris.rpc.auth import GcpAccessTokenVerifier
-
     verifier = GcpAccessTokenVerifier(project_id="my-project")
 
     tokeninfo_resp = Mock()
@@ -264,10 +267,6 @@ def test_gcp_access_token_verifier_checks_project_access():
 
 
 def test_gcp_access_token_verifier_rejects_no_project_access():
-    from unittest.mock import Mock, patch
-
-    from iris.rpc.auth import GcpAccessTokenVerifier
-
     verifier = GcpAccessTokenVerifier(project_id="restricted-project")
 
     tokeninfo_resp = Mock()
@@ -283,10 +282,6 @@ def test_gcp_access_token_verifier_rejects_no_project_access():
 
 
 def test_gcp_access_token_provider_refreshes_credentials():
-    from unittest.mock import MagicMock, patch
-
-    from iris.rpc.auth import GcpAccessTokenProvider
-
     mock_creds = MagicMock()
     mock_creds.token = "fresh-access-token"
     mock_creds.expiry = None
@@ -334,8 +329,6 @@ def test_composite_verifier_all_fail():
 
 
 def test_null_auth_interceptor_sets_anonymous_user():
-    from iris.rpc.auth import NullAuthInterceptor
-
     interceptor = NullAuthInterceptor()
     captured = []
 
@@ -353,8 +346,6 @@ def test_null_auth_interceptor_sets_anonymous_user():
 
 
 def test_null_auth_interceptor_custom_user():
-    from iris.rpc.auth import NullAuthInterceptor
-
     interceptor = NullAuthInterceptor(user="custom-user", role="user")
     captured = []
 
@@ -368,8 +359,6 @@ def test_null_auth_interceptor_custom_user():
 
 
 def test_null_auth_interceptor_resets_context():
-    from iris.rpc.auth import NullAuthInterceptor
-
     interceptor = NullAuthInterceptor()
 
     def handler(req, ctx):
@@ -382,8 +371,6 @@ def test_null_auth_interceptor_resets_context():
 
 
 def test_null_auth_interceptor_resets_context_on_error():
-    from iris.rpc.auth import NullAuthInterceptor
-
     interceptor = NullAuthInterceptor()
 
     def failing_handler(req, ctx):
@@ -403,11 +390,6 @@ def test_null_auth_interceptor_resets_context_on_error():
 
 
 def test_create_client_token_provider_gcp(tmp_path, monkeypatch):
-    from unittest.mock import MagicMock, patch
-
-    from iris.cli.main import create_client_token_provider
-    from iris.rpc.config_pb2 import AuthConfig
-
     # Isolate from real token store
     monkeypatch.setattr("iris.cli.main.load_token", lambda *a, **kw: None)
     monkeypatch.setattr("iris.cli.main.load_any_token", lambda *a, **kw: None)
@@ -424,10 +406,6 @@ def test_create_client_token_provider_gcp(tmp_path, monkeypatch):
 
 
 def test_create_client_token_provider_uses_stored_token(tmp_path, monkeypatch):
-    from iris.cli.main import create_client_token_provider
-    from iris.cli.token_store import ClusterCredential
-    from iris.rpc.config_pb2 import AuthConfig
-
     monkeypatch.setattr(
         "iris.cli.main.load_token",
         lambda name, **kw: ClusterCredential(url="http://x", token="stored-tok") if name == "mycluster" else None,
@@ -440,9 +418,6 @@ def test_create_client_token_provider_uses_stored_token(tmp_path, monkeypatch):
 
 
 def test_create_client_token_provider_none_when_no_provider(monkeypatch):
-    from iris.cli.main import create_client_token_provider
-    from iris.rpc.config_pb2 import AuthConfig
-
     monkeypatch.setattr("iris.cli.main.load_token", lambda *a, **kw: None)
     monkeypatch.setattr("iris.cli.main.load_any_token", lambda *a, **kw: None)
 
@@ -456,15 +431,11 @@ def test_create_client_token_provider_none_when_no_provider(monkeypatch):
 
 
 def test_hash_token_deterministic():
-    from iris.rpc.auth import hash_token
-
     assert hash_token("test-token") == hash_token("test-token")
     assert hash_token("a") != hash_token("b")
 
 
 def test_hash_token_is_sha256_hex():
-    from iris.rpc.auth import hash_token
-
     result = hash_token("test")
     assert len(result) == 64  # SHA-256 hex digest
     assert all(c in "0123456789abcdef" for c in result)
@@ -477,8 +448,6 @@ def test_hash_token_is_sha256_hex():
 
 @pytest.fixture
 def jwt_manager():
-    from iris.cluster.controller.auth import JwtTokenManager
-
     return JwtTokenManager(signing_key="test-signing-key-abcdef1234567890")
 
 
@@ -490,8 +459,6 @@ def test_jwt_token_manager_roundtrip(jwt_manager):
 
 
 def test_jwt_token_manager_rejects_wrong_key():
-    from iris.cluster.controller.auth import JwtTokenManager
-
     manager_a = JwtTokenManager(signing_key="key-a-abcdef1234567890abcdef")
     manager_b = JwtTokenManager(signing_key="key-b-abcdef1234567890abcdef")
     token = manager_a.create_token(user_id="alice", role="user", key_id="k1")
@@ -513,13 +480,10 @@ def test_jwt_token_manager_expired(jwt_manager):
 
 
 def test_jwt_token_manager_load_revocations(tmp_path):
-    from iris.cluster.controller.auth import JwtTokenManager, create_api_key, revoke_api_key
-    from iris.cluster.controller.db import ControllerDB
-    from rigging.timing import Timestamp
-
     db = ControllerDB(db_dir=tmp_path)
     now = Timestamp.now()
-    db.ensure_user("alice", now)
+    with db.transaction() as _tx:
+        writes.ensure_user(_tx, "alice", now)
 
     manager = JwtTokenManager(signing_key="test-key-load-revocations-abc123")
 
@@ -596,11 +560,6 @@ def test_auth_interceptor_rejects_bidi_stream(interceptor):
 
 
 def test_gcp_access_token_provider_caches_token():
-    import datetime
-    from unittest.mock import MagicMock, patch
-
-    from iris.rpc.auth import GcpAccessTokenProvider
-
     mock_creds = MagicMock()
     mock_creds.token = "cached-token"
     mock_creds.expiry = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(hours=1)
@@ -645,52 +604,42 @@ def test_extract_cookie_empty_string():
 
 
 def test_authorize_admin_always_passes():
-    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
-
     reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
     try:
-        # Admin should pass any action, even REGISTER_WORKER
-        identity = authorize(AuthzAction.REGISTER_WORKER)
+        # Admin should pass any action, even ACT_AS_WORKER
+        identity = authorize(AuthzAction.ACT_AS_WORKER)
         assert identity.user_id == "admin-user"
     finally:
         _verified_identity.reset(reset)
 
 
-def test_authorize_worker_can_register():
-    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
-
+def test_authorize_worker_can_act_as_worker():
     reset = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
     try:
-        identity = authorize(AuthzAction.REGISTER_WORKER)
+        identity = authorize(AuthzAction.ACT_AS_WORKER)
         assert identity.role == "worker"
     finally:
         _verified_identity.reset(reset)
 
 
-def test_authorize_user_cannot_register_worker():
-    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
-
+def test_authorize_user_cannot_act_as_worker():
     reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         with pytest.raises(ConnectError) as exc_info:
-            authorize(AuthzAction.REGISTER_WORKER)
+            authorize(AuthzAction.ACT_AS_WORKER)
         assert exc_info.value.code == Code.PERMISSION_DENIED
     finally:
         _verified_identity.reset(reset)
 
 
 def test_authorize_raises_unauthenticated_when_no_identity():
-    from iris.rpc.auth import AuthzAction, authorize
-
     # No identity set — should raise UNAUTHENTICATED
     with pytest.raises(ConnectError) as exc_info:
-        authorize(AuthzAction.REGISTER_WORKER)
+        authorize(AuthzAction.ACT_AS_WORKER)
     assert exc_info.value.code == Code.UNAUTHENTICATED
 
 
 def test_authorize_manage_other_keys_admin_only():
-    from iris.rpc.auth import AuthzAction, VerifiedIdentity, _verified_identity, authorize
-
     reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         with pytest.raises(ConnectError) as exc_info:
@@ -701,8 +650,6 @@ def test_authorize_manage_other_keys_admin_only():
 
 
 def test_authorize_resource_owner_same_user():
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
-
     reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         identity = authorize_resource_owner("alice")
@@ -712,8 +659,6 @@ def test_authorize_resource_owner_same_user():
 
 
 def test_authorize_resource_owner_different_user_denied():
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
-
     reset = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
     try:
         with pytest.raises(ConnectError) as exc_info:
@@ -724,8 +669,6 @@ def test_authorize_resource_owner_different_user_denied():
 
 
 def test_authorize_resource_owner_admin_can_access_any():
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity, authorize_resource_owner
-
     reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
     try:
         identity = authorize_resource_owner("alice")
@@ -735,8 +678,6 @@ def test_authorize_resource_owner_admin_can_access_any():
 
 
 def test_require_identity_returns_identity():
-    from iris.rpc.auth import VerifiedIdentity, _verified_identity, require_identity
-
     reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
     try:
         identity = require_identity()
@@ -746,8 +687,6 @@ def test_require_identity_returns_identity():
 
 
 def test_require_identity_raises_unauthenticated():
-    from iris.rpc.auth import require_identity
-
     with pytest.raises(ConnectError) as exc_info:
         require_identity()
     assert exc_info.value.code == Code.UNAUTHENTICATED

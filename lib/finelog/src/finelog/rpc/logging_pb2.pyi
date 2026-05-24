@@ -15,12 +15,23 @@ class LogLevel(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     LOG_LEVEL_WARNING: _ClassVar[LogLevel]
     LOG_LEVEL_ERROR: _ClassVar[LogLevel]
     LOG_LEVEL_CRITICAL: _ClassVar[LogLevel]
+
+class MatchScope(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    MATCH_SCOPE_UNSPECIFIED: _ClassVar[MatchScope]
+    MATCH_SCOPE_EXACT: _ClassVar[MatchScope]
+    MATCH_SCOPE_PREFIX: _ClassVar[MatchScope]
+    MATCH_SCOPE_REGEX: _ClassVar[MatchScope]
 LOG_LEVEL_UNKNOWN: LogLevel
 LOG_LEVEL_DEBUG: LogLevel
 LOG_LEVEL_INFO: LogLevel
 LOG_LEVEL_WARNING: LogLevel
 LOG_LEVEL_ERROR: LogLevel
 LOG_LEVEL_CRITICAL: LogLevel
+MATCH_SCOPE_UNSPECIFIED: MatchScope
+MATCH_SCOPE_EXACT: MatchScope
+MATCH_SCOPE_PREFIX: MatchScope
+MATCH_SCOPE_REGEX: MatchScope
 
 class Timestamp(_message.Message):
     __slots__ = ("epoch_ms",)
@@ -63,7 +74,7 @@ class PushLogsResponse(_message.Message):
     def __init__(self) -> None: ...
 
 class FetchLogsRequest(_message.Message):
-    __slots__ = ("source", "since_ms", "cursor", "substring", "max_lines", "tail", "min_level")
+    __slots__ = ("source", "since_ms", "cursor", "substring", "max_lines", "tail", "min_level", "match_scope")
     SOURCE_FIELD_NUMBER: _ClassVar[int]
     SINCE_MS_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
@@ -71,6 +82,7 @@ class FetchLogsRequest(_message.Message):
     MAX_LINES_FIELD_NUMBER: _ClassVar[int]
     TAIL_FIELD_NUMBER: _ClassVar[int]
     MIN_LEVEL_FIELD_NUMBER: _ClassVar[int]
+    MATCH_SCOPE_FIELD_NUMBER: _ClassVar[int]
     source: str
     since_ms: int
     cursor: int
@@ -78,7 +90,8 @@ class FetchLogsRequest(_message.Message):
     max_lines: int
     tail: bool
     min_level: str
-    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., substring: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ...) -> None: ...
+    match_scope: MatchScope
+    def __init__(self, source: _Optional[str] = ..., since_ms: _Optional[int] = ..., cursor: _Optional[int] = ..., substring: _Optional[str] = ..., max_lines: _Optional[int] = ..., tail: _Optional[bool] = ..., min_level: _Optional[str] = ..., match_scope: _Optional[_Union[MatchScope, str]] = ...) -> None: ...
 
 class FetchLogsResponse(_message.Message):
     __slots__ = ("entries", "cursor")

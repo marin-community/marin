@@ -26,8 +26,10 @@ from fray.actor import HostedActor
 from marin.rl.curriculum import Curriculum
 from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.rl_job import RLJob, RLJobConfig
+from marin.rl.rollout_worker import RolloutWorker
 from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
+from marin.rl.train_worker import TrainWorker
 from marin.rl.weight_transfer import WeightTransferMode
 from marin.rl.weight_transfer.arrow_flight import ArrowFlightCoordinator
 from marin.training.run_environment import add_run_env_variables
@@ -311,8 +313,6 @@ def _train_worker_entry(train_config, runtime: RLRuntimeHandles) -> None:
     configure_logging(level=logging.INFO)
     with remove_tpu_lockfile_on_exit():
         try:
-            from marin.rl.train_worker import TrainWorker
-
             worker = TrainWorker(config=train_config, runtime=runtime)
             worker.train()
             runtime.run_state.mark_completed.remote().result()
@@ -332,8 +332,6 @@ def _rollout_worker_entry(rollout_config, runtime: RLRuntimeHandles) -> None:
     configure_logging(level=logging.INFO)
     with remove_tpu_lockfile_on_exit():
         try:
-            from marin.rl.rollout_worker import RolloutWorker
-
             worker = RolloutWorker(config=rollout_config, runtime=runtime)
             worker.run()
         except Exception:

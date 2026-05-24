@@ -49,6 +49,16 @@ const keyColumn = computed<string | null>(() => {
   return null
 })
 
+// Recent-rows window. We filter on the implicit ``seq`` column (always
+// present, monotonically increasing on insert) before sorting. DuckDB pushes
+// the ``seq`` predicate down to parquet row group statistics, so only the
+// latest segment(s) are read — a SELECT * ORDER BY <ts> DESC LIMIT 100 on a
+// multi-GB namespace would otherwise scan every segment to compute the
+// top-N. ``RECENT_SEQ_WINDOW`` is the rolling number of newest rows
+// considered; 10x the visible page so concurrent writers can't shrink the
+// post-filter set below LIMIT.
+const RECENT_SEQ_WINDOW = 1000
+
 async function load() {
   loading.value = true
   error.value = null
@@ -57,9 +67,12 @@ async function load() {
     const schemaResp = await statsRpcCall<GetTableSchemaResponse>('GetTableSchema', { namespace: ns })
     schema.value = schemaResp.schema ?? null
 
-    const orderBy = keyColumn.value ? ` ORDER BY "${keyColumn.value}" DESC` : ''
+    const orderBy = keyColumn.value ? `"${keyColumn.value}" DESC` : '"seq" DESC'
     const rows = await statsRpcCall<QueryResponse>('Query', {
-      sql: `SELECT * FROM "${ns}"${orderBy} LIMIT 100`,
+      sql:
+        `SELECT * FROM "${ns}" ` +
+        `WHERE "seq" > coalesce((SELECT max("seq") FROM "${ns}"), 0) - ${RECENT_SEQ_WINDOW} ` +
+        `ORDER BY ${orderBy} LIMIT 100`,
     })
     sample.value = decodeArrowIpc(rows.arrowIpc)
   } catch (e) {

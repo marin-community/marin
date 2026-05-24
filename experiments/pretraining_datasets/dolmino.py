@@ -10,6 +10,8 @@ from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
+from experiments.llama import llama3_tokenizer
+
 _dolmino_download = download_dolmino_step().as_executor_step()
 _dolmino_base_dir = _dolmino_download.cd("bb54cab").cd("data")
 
@@ -44,8 +46,6 @@ def _get_dolmino_split_paths(split: str):
 def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolmino dataset splits."""
     if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
-
         tokenizer = llama3_tokenizer
 
     dolmino_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
@@ -64,9 +64,7 @@ def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep
         )
 
         # Check if we need to use override path for llama3
-        from experiments.llama import llama3_tokenizer as _llama3_tokenizer
-
-        if tokenizer == _llama3_tokenizer and split in DOLMINO_LLAMA3_OVERRIDES:
+        if tokenizer == llama3_tokenizer and split in DOLMINO_LLAMA3_OVERRIDES:
             step = step.with_output_path(DOLMINO_LLAMA3_OVERRIDES[split])
         dolmino_steps[os.path.join("dolmino", split)] = step
 
@@ -88,8 +86,6 @@ _all_dolmino_math_files = [
 def tokenize_dolmino_math(tokenizer: str | None = None):
     """Create the combined math dataset tokenization step."""
     if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
-
         tokenizer = llama3_tokenizer
 
     return ExecutorStep(

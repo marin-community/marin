@@ -8,57 +8,63 @@ backs the in-memory store mode. Both satisfy :class:`LogNamespaceProtocol`.
 
 The two global locks (insertion mutex + query-visibility rwlock) live on the
 registry and are passed in at construction. The disk variant additionally
-owns a per-namespace flush mutex preventing the test ``_force_flush`` hook
-from racing the bg thread on the same segment filename.
+owns a per-namespace flush mutex serializing the flush loop with direct
+``flush()`` callers (tests, ``close()``) on the same segment filename, plus
+a maintenance mutex serializing the maintenance loop with ``compact()`` /
+``force_compact_l0()`` callers.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
-import shutil
+import re
 import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Condition, Lock
+from threading import Lock
 from typing import NamedTuple, Protocol
 
 import duckdb
 import fsspec.core
+import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from rigging.timing import RateLimiter
+from rigging.timing import ExponentialBackoff, RateLimiter
 
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.store.catalog import (
-    Catalog,
-    NamespaceStats,
-    SegmentLocation,
-    SegmentRow,
-)
+from finelog.store.catalog import Catalog
 from finelog.store.compactor import (
     CompactionConfig,
     CompactionJob,
     Compactor,
     aggregate_key_bounds,
-    compaction_sort_keys,
     parse_seg_filename,
     seg_filename,
 )
 from finelog.store.rwlock import RWLock
 from finelog.store.schema import (
     IMPLICIT_SEQ_COLUMN,
+    AlignedBatch,
     Column,
     Schema,
     schema_to_arrow,
 )
-from finelog.types import REGEX_META_RE, LogReadResult, parse_attempt_id, str_to_log_level
+from finelog.store.types import (
+    LocalSegment,
+    NamespaceStats,
+    SegmentLocation,
+    SegmentRow,
+)
+from finelog.types import LogReadResult, parse_attempt_id, str_to_log_level
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +93,15 @@ _SLOW_APPEND_THRESHOLD_MS = 200
 # and segment state regardless of whether a flush or compaction fires.
 _BG_HEARTBEAT_INTERVAL_SEC = 10.0
 
+# Polling cadence for sync durability waits. Waiters also wake the flush loop
+# whenever they observe buffered rows, so this controls observation latency,
+# not the flush cadence itself.
+_PERSIST_WAIT_BACKOFF_INITIAL_SEC = 0.001
+_PERSIST_WAIT_BACKOFF_MAX_SEC = 0.05
+
 # Hard ceiling on the per-read parquet working set; safety net for body-LIKE
 # queries that cannot be pruned by row-group statistics.
-_MAX_PARQUET_BYTES_PER_READ = 2_500 * 1024 * 1024
-
-# 4 MiB amortizes GCS per-write overhead without growing with segment size.
-_REMOTE_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+_MAX_PARQUET_BYTES_PER_READ = 10 * 1024 * 1024 * 1024
 
 
 class SegmentMetadata(NamedTuple):
@@ -224,63 +233,88 @@ def _recover_next_seq(log_dir: Path) -> int:
     return next_seq
 
 
-def _merge_chunks(chunks: list[pa.Table]) -> list[pa.Table]:
-    """Log-structured merge: keep each chunk at least 2x the previous one.
+def _maintain_chunk_invariant(chunks: list[pa.Table]) -> None:
+    """Restore the LSM-style invariant ``chunks[i-1].num_rows > chunks[i].num_rows``.
 
-    Bounds ``len(chunks)`` logarithmically in total row count.
+    Called after each append. Only the tail can violate the invariant —
+    every earlier prefix already satisfied it before this append — so we
+    cascade-merge from the tail until the previous chunk is strictly
+    larger than the last. Bounds ``len(chunks)`` logarithmically in total
+    row count.
+
+    Mutates ``chunks`` in place: no list rebuild when the new chunk
+    already satisfies the invariant (the common case), versus the prior
+    implementation which reallocated the list on every append.
     """
-    if len(chunks) < 2:
-        return chunks
-    merged = [chunks[0]]
-    for chunk in chunks[1:]:
-        if merged[-1].num_rows <= chunk.num_rows:
-            merged[-1] = pa.concat_tables([merged[-1], chunk])
-        else:
-            merged.append(chunk)
-    return merged
+    while len(chunks) >= 2 and chunks[-2].num_rows <= chunks[-1].num_rows:
+        merged = pa.concat_tables([chunks[-2], chunks[-1]])
+        chunks.pop()
+        chunks[-1] = merged
 
 
 @dataclass
 class _SealedBuffer:
+    """An immutable, in-flight flush buffer.
+
+    ``nbytes`` and ``num_rows`` are supplied by the caller (carried over
+    from ``RamBuffers`` accounting) so neither the hot path nor seal-time
+    has to walk the table's buffers. ``pa.Table.nbytes`` is O(chunks x
+    columns) via ``arrow::util::ReferencedBufferSize`` and was the
+    dominant per-WriteRows cost under sustained load.
+    """
+
     table: pa.Table
+    nbytes: int
+    num_rows: int
     min_seq: int
     max_seq: int
 
 
-@dataclass
-class LocalSegment:
-    path: str
-    size_bytes: int
-    level: int
-    min_seq: int
-    max_seq: int
-    row_count: int
-    # ``created_at_ms`` is stamped once at flush/merge time and preserved
-    # across level bumps and catalog reconcile so the planner can age out
-    # quiet L0 segments via ``CompactionConfig.max_l0_age_sec``.
-    created_at_ms: int = 0
-    # Typed key-column bounds (Python int / str / float / bool / bytes
-    # depending on schema). Stringified only at the catalog boundary in
-    # ``_segment_to_row``; held typed in memory so ``aggregate_key_bounds``
-    # can compare numeric keys with native ordering.
-    min_key_value: object | None = None
-    max_key_value: object | None = None
-    # Where the bytes live. The deque only ever holds ``LOCAL`` or ``BOTH``
-    # entries; eviction flips to ``REMOTE`` and removes the entry from the
-    # deque (the row stays in the catalog as a durable-archive pointer).
-    location: SegmentLocation = SegmentLocation.LOCAL
+def _stamp_seq_and_build(
+    aligned: AlignedBatch,
+    first_seq: int,
+    arrow_schema: pa.Schema,
+) -> pa.Table:
+    """Build the seq-stamped Table from ``aligned`` in a single ``Table.from_arrays``.
 
+    ``aligned.fields`` is in registered column order minus the implicit
+    seq column. The common path is a linear merge against ``arrow_schema``
+    (zero name lookups). The slow path handles a benign race: the writer
+    validated against schema v, then an additive evolution landed before
+    the namespace took its lock; ``arrow_schema`` now declares columns
+    not present in ``aligned`` and those are NULL-filled.
 
-def _stamp_seq_column(batch: pa.RecordBatch, first_seq: int, arrow_schema: pa.Schema) -> pa.Table:
-    """Project ``batch`` to ``arrow_schema`` with the implicit seq column filled."""
-    seq_array = pa.array(range(first_seq, first_seq + batch.num_rows), type=pa.int64())
-    arrays: list[pa.Array] = []
+    The seq array is materialized via NumPy to skip the Python-int boxing
+    that ``pa.array(range(...))`` incurs per element.
+    """
+    seq_array = pa.array(np.arange(first_seq, first_seq + aligned.num_rows, dtype=np.int64))
+
+    if len(aligned.fields) + 1 == len(arrow_schema):
+        out_arrays: list[pa.Array] = []
+        ai = 0
+        match = True
+        for field in arrow_schema:
+            if field.name == IMPLICIT_SEQ_COLUMN:
+                out_arrays.append(seq_array)
+            elif ai < len(aligned.fields) and aligned.fields[ai].name == field.name:
+                out_arrays.append(aligned.arrays[ai])
+                ai += 1
+            else:
+                match = False
+                break
+        if match and ai == len(aligned.fields):
+            return pa.Table.from_arrays(out_arrays, schema=arrow_schema)
+
+    aligned_by_name = {f.name: a for f, a in zip(aligned.fields, aligned.arrays, strict=True)}
+    fallback: list[pa.Array] = []
     for field in arrow_schema:
         if field.name == IMPLICIT_SEQ_COLUMN:
-            arrays.append(seq_array)
+            fallback.append(seq_array)
+        elif field.name in aligned_by_name:
+            fallback.append(aligned_by_name[field.name])
         else:
-            arrays.append(batch.column(field.name))
-    return pa.Table.from_arrays(arrays, schema=arrow_schema)
+            fallback.append(pa.nulls(aligned.num_rows, type=field.type))
+    return pa.Table.from_arrays(fallback, schema=arrow_schema)
 
 
 def _build_log_table(buffer: list[tuple], arrow_schema: pa.Schema) -> pa.Table:
@@ -319,6 +353,8 @@ class RamBuffers:
     primitive columns and shares string buffers via Arrow's reference
     counting, so total ``nbytes`` is conserved across merges. We can
     therefore maintain ``_ram_bytes`` incrementally rather than scanning.
+    The sealed in-flight buffer caches its own ``nbytes`` / ``num_rows``
+    (see ``_SealedBuffer``) so ``ram_bytes`` stays O(1) on the hot path.
     """
 
     def __init__(self, *, arrow_schema: pa.Schema, next_seq: int) -> None:
@@ -338,19 +374,25 @@ class RamBuffers:
         self._next_seq += count
         return first
 
-    def append_table(self, table: pa.Table) -> None:
-        added = table.nbytes
+    def append_table(self, table: pa.Table, *, added_bytes: int) -> None:
+        """Append ``table`` to the chunk list; caller supplies ``added_bytes``.
+
+        ``pa.Table.nbytes`` is O(buffers) and was the dominant per-write
+        cost (it walks ``ReferencedBufferSize`` over every chunked array).
+        Callers compute byte size cheaply at the schema boundary via
+        ``AlignedBatch.byte_size`` plus 8 bytes per row for the seq column.
+        """
         self._chunks.append(table)
-        self._chunks = _merge_chunks(self._chunks)
-        self._ram_bytes += added
+        _maintain_chunk_invariant(self._chunks)
+        self._ram_bytes += added_bytes
         self._ram_rows += table.num_rows
 
     def ram_bytes(self) -> int:
-        flushing_b = self._flushing.table.nbytes if self._flushing is not None else 0
+        flushing_b = self._flushing.nbytes if self._flushing is not None else 0
         return self._ram_bytes + flushing_b
 
     def ram_rows(self) -> int:
-        flushing_n = self._flushing.table.num_rows if self._flushing is not None else 0
+        flushing_n = self._flushing.num_rows if self._flushing is not None else 0
         return self._ram_rows + flushing_n
 
     def chunk_count(self) -> int:
@@ -368,6 +410,8 @@ class RamBuffers:
         if not self._chunks:
             return None
         tables = self._chunks
+        sealed_bytes = self._ram_bytes
+        sealed_rows = self._ram_rows
         self._chunks = []
         self._ram_bytes = 0
         self._ram_rows = 0
@@ -375,6 +419,8 @@ class RamBuffers:
         seq_col = visible_table.column(IMPLICIT_SEQ_COLUMN)
         sealed = _SealedBuffer(
             table=visible_table,
+            nbytes=sealed_bytes,
+            num_rows=sealed_rows,
             min_seq=pc.min(seq_col).as_py(),
             max_seq=pc.max(seq_col).as_py(),
         )
@@ -389,59 +435,10 @@ class RamBuffers:
         """Push the in-flight buffer back to the head of chunks (write failed)."""
         if self._flushing is None:
             return
-        table = self._flushing.table
-        self._chunks.insert(0, table)
-        self._ram_bytes += table.nbytes
-        self._ram_rows += table.num_rows
+        self._chunks.insert(0, self._flushing.table)
+        self._ram_bytes += self._flushing.nbytes
+        self._ram_rows += self._flushing.num_rows
         self._flushing = None
-
-    def query_snapshot(self) -> list[pa.Table]:
-        """Return chunks plus any in-flight flushing table (for read paths)."""
-        snap = list(self._chunks)
-        if self._flushing is not None:
-            snap.append(self._flushing.table)
-        return snap
-
-
-class LogNamespaceProtocol(Protocol):
-    name: str
-    schema: Schema
-
-    def append_log_batch(self, items: list[tuple[str, list]]) -> None: ...
-
-    def append_record_batch(self, batch: pa.RecordBatch) -> None: ...
-
-    def get_logs(
-        self,
-        key: str,
-        *,
-        since_ms: int = 0,
-        cursor: int = 0,
-        substring_filter: str = "",
-        max_lines: int = 0,
-        tail: bool = False,
-        min_level: str = "",
-    ) -> LogReadResult: ...
-
-    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]: ...
-
-    def all_segments_unlocked(self) -> list[LocalSegment]: ...
-
-    def update_schema(self, new_schema: Schema) -> None: ...
-
-    def evict_segment(self, path: str) -> int: ...
-
-    def remove_local_storage(self) -> None: ...
-
-    def close(self) -> None: ...
-
-    def stop_and_join(self) -> None: ...
-
-    def stats(self) -> NamespaceStats: ...
-
-    def ram_bytes(self) -> int: ...
-
-    def chunk_count(self) -> int: ...
 
 
 class DiskLogNamespace:
@@ -463,11 +460,11 @@ class DiskLogNamespace:
         segment_target_bytes: int,
         flush_interval_sec: float,
         compaction_config: CompactionConfig,
-        insertion_lock: Lock,
         query_visibility_lock: RWLock,
         duckdb_memory_limit: str,
         read_pool: _ReadPoolProtocol,
         catalog: Catalog,
+        merge_semaphore: threading.Semaphore,
     ) -> None:
         self.name = name
         self.schema = schema
@@ -481,11 +478,15 @@ class DiskLogNamespace:
         self._segment_target_bytes = segment_target_bytes
         self._compactor = Compactor(compaction_config)
 
-        self._insertion_lock = insertion_lock
+        # Per-namespace insertion mutex. Guards ``_buffers`` (seq counter,
+        # ram chunks, flushing buffer) and ``_local_segments``. Writes to
+        # different namespaces don't serialize against each other; the
+        # catalog mutex is held only for registry mutations and snapshots.
+        self._insertion_lock = Lock()
         self._query_visibility_lock = query_visibility_lock
-        # Prevents the test ``_force_flush`` hook racing the bg thread on
-        # the same segment filename (both derive from this namespace's
-        # _next_seq).
+        # Serializes the flush loop with direct ``flush()`` callers so
+        # they can't race on the same segment filename (both derive from
+        # this namespace's ``_next_seq``).
         self._flush_lock = Lock()
 
         # Compaction uses a fresh DuckDB connection per merge (see
@@ -498,6 +499,7 @@ class DiskLogNamespace:
         self._compaction_conn_memory_limit = duckdb_memory_limit
         self._read_pool = read_pool
         self._catalog = catalog
+        self._merge_semaphore = merge_semaphore
 
         self._buffers = RamBuffers(
             arrow_schema=self._arrow_schema,
@@ -510,13 +512,8 @@ class DiskLogNamespace:
         #      local file was evicted before the prior shutdown.
         #   2. Local parquet files — authoritative for unflushed catalog
         #      state (genuine boot from disk, no prior catalog).
-        #   3. Remote bucket — authoritative for wiped-catalog recovery,
-        #      handled below by ``_adopt_remote_segments`` *before* the
-        #      bg loop starts. We can't defer this to the first sync tick:
-        #      that tick's phase-2 orphan-delete would see an empty
-        #      catalog with a populated bucket and ``fs.rm`` everything.
-        #      The cost is a network round-trip per parquet file at boot
-        #      when the bucket is non-empty.
+        #   3. Remote bucket — handled below by
+        #      ``_reconcile_remote_segments``.
         #
         # Each catalog row is reattached to its on-disk file when present;
         # ``REMOTE``-only rows stay in the catalog but never enter the
@@ -600,31 +597,43 @@ class DiskLogNamespace:
         for seg in self._local_segments:
             self._catalog.upsert_segment(self._segment_to_row(seg))
 
-        # Wiped-catalog recovery: if the remote bucket has parquet files
-        # that no row references, adopt them as ``REMOTE``. Without this,
-        # the first ``_sync_step`` after a catalog wipe would treat the
-        # whole bucket as orphan and ``fs.rm`` everything.
         if self._remote_namespace_dir:
-            self._adopt_remote_segments(key_column=key_column)
+            self._reconcile_remote_segments(key_column=key_column)
 
         self._flush_rl = RateLimiter(flush_interval_sec)
         self._compaction_rl = RateLimiter(compaction_config.check_interval_sec)
-        # Mark just-run so the bg loop doesn't fire a spurious tick at startup
+        # Mark just-run so the bg loops don't fire a spurious tick at startup
         # and compact a partially-written set of segments.
         self._flush_rl.mark_run()
         self._compaction_rl.mark_run()
         self._stop = threading.Event()
-        self._wake = threading.Event()
-        self._flush_generation = 0
-        self._flush_generation_cond = Condition(Lock())
-        self._compaction_generation = 0
-        self._compaction_generation_cond = Condition(Lock())
-        self._bg_thread = threading.Thread(
-            target=self._bg_loop,
+        # Set by explicit callers to nudge the flush loop early instead of
+        # waiting for the next ``flush_interval_sec`` timer fire.
+        self._flush_wake = threading.Event()
+        # Serializes the maintenance cycle (compaction drain + sync + evict)
+        # against ``compact()`` / ``force_compact_l0()`` callers. The flush
+        # path uses ``_flush_lock`` instead so flushes and compactions stay
+        # concurrent (the whole point of splitting the loops).
+        self._maint_lock = Lock()
+
+        # Highest ``seq`` value durably written to an L0 (or higher) parquet
+        # segment. Service handlers poll this to block writers until their
+        # rows are persisted. Int reads/writes are atomic under the GIL so
+        # no explicit synchronization is required; the flush thread is the
+        # sole writer.
+        self._max_persisted_seq = -1
+        self._flush_thread = threading.Thread(
+            target=self._flush_loop,
             name=f"finelog_flush_{self.name}",
             daemon=True,
         )
-        self._bg_thread.start()
+        self._maint_thread = threading.Thread(
+            target=self._maint_loop,
+            name=f"finelog_maint_{self.name}",
+            daemon=True,
+        )
+        self._flush_thread.start()
+        self._maint_thread.start()
 
     def _open_compaction_conn(self) -> duckdb.DuckDBPyConnection:
         """Fresh DuckDB connection for one compaction COPY.
@@ -644,13 +653,17 @@ class DiskLogNamespace:
             }
         )
 
-    def append_log_batch(self, items: list[tuple[str, list]]) -> None:
+    def append_log_batch(self, items: list[tuple[str, list]]) -> int:
         """Log-namespace-only append for ``PushLogs`` RPCs.
 
         Pre-builds all five non-seq columns from the protobuf entries
         outside the lock — that's the bulk of the per-row Python work.
         Inside the lock we only allocate the seq range, materialize the
         seq array, assemble the Arrow table, and hand it to the buffer.
+
+        Returns the last ``seq`` allocated by this call. Callers use it as
+        the durability target when polling :meth:`max_persisted_seq`. When
+        ``items`` carries zero entries, returns ``-1`` (no seqs allocated).
         """
         t_enter = time.monotonic()
         # Outside the lock: flatten items into one combined columnar batch.
@@ -670,30 +683,33 @@ class DiskLogNamespace:
             levels.extend(int(e.level) for e in entries)
         total = len(keys)
         if total == 0:
-            return
+            return -1
         keys_arr = pa.array(keys, type=pa.string())
         sources_arr = pa.array(sources, type=pa.string())
         datas_arr = pa.array(datas, type=pa.string())
         ts_arr = pa.array(epoch_ms, type=pa.int64())
         levels_arr = pa.array(levels, type=pa.int32())
+        non_seq_bytes = sum(
+            buf.size
+            for arr in (keys_arr, sources_arr, datas_arr, ts_arr, levels_arr)
+            for buf in arr.buffers()
+            if buf is not None
+        )
         t_prepared = time.monotonic()
 
         wait_start = time.monotonic()
         with self._insertion_lock:
             critical_start = time.monotonic()
             first_seq = self._buffers.allocate_seq(total)
-            seqs_arr = pa.array(range(first_seq, first_seq + total), type=pa.int64())
+            seqs_arr = pa.array(np.arange(first_seq, first_seq + total, dtype=np.int64))
             self._buffers.append_table(
                 pa.table(
                     [seqs_arr, keys_arr, sources_arr, datas_arr, ts_arr, levels_arr],
                     schema=self._arrow_schema,
-                )
+                ),
+                added_bytes=non_seq_bytes + 8 * total,
             )
-            needs_drain = self._buffers.ram_bytes() >= self._segment_target_bytes
         critical_end = time.monotonic()
-        if needs_drain:
-            self._wake.set()
-
         total_ms = int((critical_end - t_enter) * 1000)
         if total_ms >= _SLOW_APPEND_THRESHOLD_MS:
             logger.warning(
@@ -705,22 +721,86 @@ class DiskLogNamespace:
                 int((critical_end - critical_start) * 1000),
                 total_ms,
             )
+        return first_seq + total - 1
 
-    def append_record_batch(self, batch: pa.RecordBatch) -> None:
-        """Stamp ``seq`` values onto ``batch`` and append it to the in-RAM chunks."""
-        if batch.num_rows == 0:
-            return
+    def append_aligned_batch(self, aligned: AlignedBatch) -> int:
+        """Stamp ``seq`` values onto ``aligned`` and append it to the in-RAM chunks.
+
+        Returns the last ``seq`` allocated by this call (or ``-1`` if
+        ``aligned`` is empty). Callers use it as the durability target
+        when polling :meth:`max_persisted_seq`.
+        """
+        if aligned.num_rows == 0:
+            return -1
         with self._insertion_lock:
-            first_seq = self._buffers.allocate_seq(batch.num_rows)
-            self._buffers.append_table(_stamp_seq_column(batch, first_seq, self._arrow_schema))
-            needs_drain = self._buffers.ram_bytes() >= self._segment_target_bytes
-        if needs_drain:
-            self._wake.set()
+            first_seq = self._buffers.allocate_seq(aligned.num_rows)
+            stamped = _stamp_seq_and_build(aligned, first_seq, self._arrow_schema)
+            # 8 bytes per row for the stamped int64 seq column.
+            self._buffers.append_table(stamped, added_bytes=aligned.byte_size + 8 * aligned.num_rows)
+        return first_seq + aligned.num_rows - 1
+
+    def max_persisted_seq(self) -> int:
+        """Highest ``seq`` durably written to an L0 (or higher) segment."""
+        return self._max_persisted_seq
+
+    def is_persisted(self, target_seq: int) -> bool:
+        """Return whether ``target_seq`` has reached durable storage."""
+        return target_seq < 0 or self.max_persisted_seq() >= target_seq
+
+    def request_persistance(self, target_seq: int | None = None, *, timeout: float = 10.0) -> int:
+        """Wait for buffered rows to reach durable storage.
+
+        When ``target_seq`` is provided, wait until that seq is persisted.
+        When omitted, first wait until this namespace has any allocated seq
+        newer than the persisted cursor, then wait for that seq. In both
+        modes the waiter wakes the flush loop after observing unpersisted
+        rows, so tests do not need to reach into ``_flush_wake`` directly.
+
+        Returns the seq that was waited on, or ``-1`` when there is nothing
+        to wait for.
+        """
+        if target_seq is not None and target_seq < 0:
+            return -1
+
+        deadline = time.monotonic() + timeout
+        backoff = ExponentialBackoff(
+            initial=_PERSIST_WAIT_BACKOFF_INITIAL_SEC,
+            maximum=_PERSIST_WAIT_BACKOFF_MAX_SEC,
+            jitter=0.0,
+        )
+        wait_target = target_seq
+        while True:
+            persisted_seq = self.max_persisted_seq()
+            with self._insertion_lock:
+                latest_allocated_seq = self._buffers.next_seq - 1
+
+            if wait_target is None:
+                if latest_allocated_seq <= persisted_seq:
+                    if time.monotonic() >= deadline:
+                        return -1
+                    time.sleep(min(backoff.next_interval(), max(deadline - time.monotonic(), 0.0)))
+                    continue
+                wait_target = latest_allocated_seq
+
+            if self.is_persisted(wait_target):
+                return wait_target
+
+            if latest_allocated_seq > persisted_seq:
+                self._flush_wake.set()
+
+            now = time.monotonic()
+            if now >= deadline:
+                raise TimeoutError(
+                    f"timed out waiting for ns={self.name!r} persisted_seq>={wait_target} "
+                    f"(current={self.max_persisted_seq()})"
+                )
+            time.sleep(min(backoff.next_interval(), max(deadline - now, 0.0)))
 
     def get_logs(
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -729,23 +809,7 @@ class DiskLogNamespace:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level)
-        is_pattern = bool(REGEX_META_RE.search(key))
-
-        if not is_pattern:
-            where_parts = ["key = $key", "seq > $cursor"]
-            params: dict = {"key": key, "cursor": cursor}
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            return self._execute_read(
-                where_parts,
-                params,
-                max_lines,
-                tail,
-                cursor,
-                include_key_in_select=False,
-                exact_key=key,
-            )
-
-        where_parts, params = _regex_query(key, cursor)
+        where_parts, params, include_key_in_select, exact_key = _scope_query(key, cursor, match_scope)
         _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
         return self._execute_read(
             where_parts,
@@ -753,41 +817,63 @@ class DiskLogNamespace:
             max_lines,
             tail,
             cursor,
-            include_key_in_select=True,
+            include_key_in_select=include_key_in_select,
+            exact_key=exact_key,
         )
 
     def close(self) -> None:
         self._stop.set()
-        self._wake.set()
-        self._bg_thread.join()
+        self._flush_wake.set()
+        self._flush_thread.join()
+        self._maint_thread.join()
         # Flush RAM to L0 so a clean restart picks it up. We deliberately do
-        # NOT promote L0 to L1 here — L0 is local-only by design.
-        self._flush_step()
+        # NOT promote L0 to L1 here — L0 is local-only by design. Both bg
+        # threads are joined so direct calls don't need to coordinate.
+        self.flush()
         # Final reconcile so the bucket matches the catalog at shutdown.
         self._sync_step()
 
     def stop_and_join(self) -> None:
-        """Stop the bg thread without flushing or compacting (used by ``DropTable``)."""
+        """Stop the bg threads without flushing or compacting (used by ``DropTable``)."""
         self._stop.set()
-        self._wake.set()
-        self._bg_thread.join()
+        self._flush_wake.set()
+        self._flush_thread.join()
+        self._maint_thread.join()
 
     def ram_bytes(self) -> int:
-        return self._buffers.ram_bytes()
+        with self._insertion_lock:
+            return self._buffers.ram_bytes()
 
     def chunk_count(self) -> int:
-        return self._buffers.chunk_count()
+        with self._insertion_lock:
+            return self._buffers.chunk_count()
 
     def update_schema(self, new_schema: Schema) -> None:
         _assert_additive_schema_evolution(self.schema, new_schema)
         self.schema = new_schema
         self._arrow_schema = schema_to_arrow(new_schema)
 
-    def _bg_loop(self) -> None:
+    def _flush_loop(self) -> None:
+        """Drain in-RAM chunks to L0 on a timer or explicit wake.
+
+        Splitting flush off the maintenance loop is what keeps writers
+        unblocked when a long L≥2 merge is running: durable-write waits
+        only depend on this thread's progress.
+        """
         last_heartbeat = 0.0
         last_flush_at = time.monotonic()
-        last_compact_at = time.monotonic()
         while not self._stop.is_set():
+            timeout = min(max(self._flush_rl.time_until_next(), 0.0), 1.0)
+            if timeout > 0:
+                self._flush_wake.wait(timeout=timeout)
+            woken = self._flush_wake.is_set()
+            self._flush_wake.clear()
+            if self._stop.is_set():
+                break
+
+            # Read internal buffer fields directly under the lock; the
+            # public ``ram_bytes`` / ``chunk_count`` accessors also take
+            # this lock, so we'd deadlock if we used them here.
             with self._insertion_lock:
                 ram_bytes = self._buffers.ram_bytes()
                 chunk_count = self._buffers.chunk_count()
@@ -795,12 +881,13 @@ class DiskLogNamespace:
                 level_counts = _level_histogram(self._local_segments)
                 level_bytes = _level_bytes_summary(self._local_segments, self._compactor.config.level_targets)
             force_drain = ram_bytes >= self._segment_target_bytes
+            manual_flush_requested = woken and chunk_count > 0
 
             now = time.monotonic()
             if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
                 logger.info(
-                    "bg-loop tick ns=%s: chunks=%d ram_bytes=%d levels=%s level_bytes=%s "
-                    "next_seq=%d since_flush_ms=%d since_compact_ms=%d",
+                    "flush-loop tick ns=%s: chunks=%d ram_bytes=%d levels=%s level_bytes=%s "
+                    "next_seq=%d since_flush_ms=%d",
                     self.name,
                     chunk_count,
                     ram_bytes,
@@ -808,33 +895,63 @@ class DiskLogNamespace:
                     level_bytes,
                     next_seq,
                     int((now - last_flush_at) * 1000),
+                )
+                last_heartbeat = now
+
+            if force_drain or manual_flush_requested:
+                self.flush()
+                self._flush_rl.mark_run()
+                last_flush_at = time.monotonic()
+            elif self._flush_rl.should_run():
+                self.flush()
+                last_flush_at = time.monotonic()
+
+    def _maint_loop(self) -> None:
+        """Drain planner-driven compaction, then sync + evict.
+
+        Runs independently of the flush loop so a multi-second L≥2 merge
+        cannot stall writers waiting on ``max_persisted_seq``. The full
+        cycle is serialized against direct ``compact()`` /
+        ``force_compact_l0()`` callers via ``_maint_lock``.
+        """
+        last_heartbeat = 0.0
+        last_compact_at = time.monotonic()
+        while not self._stop.is_set():
+            timeout = min(max(self._compaction_rl.time_until_next(), 0.0), 1.0)
+            if self._stop.wait(timeout=timeout):
+                break
+            if not self._compaction_rl.should_run():
+                continue
+
+            now = time.monotonic()
+            if now - last_heartbeat >= _BG_HEARTBEAT_INTERVAL_SEC:
+                with self._insertion_lock:
+                    level_counts = _level_histogram(self._local_segments)
+                    level_bytes = _level_bytes_summary(self._local_segments, self._compactor.config.level_targets)
+                logger.info(
+                    "maint-loop tick ns=%s: levels=%s level_bytes=%s since_compact_ms=%d",
+                    self.name,
+                    level_counts,
+                    level_bytes,
                     int((now - last_compact_at) * 1000),
                 )
                 last_heartbeat = now
 
-            if force_drain:
-                self._flush_step()
-                self._flush_rl.mark_run()
-                last_flush_at = time.monotonic()
-            elif self._flush_rl.should_run():
-                self._flush_step()
-                last_flush_at = time.monotonic()
-            if self._compaction_rl.should_run():
-                # Drain promotable runs back-to-back on the same tick: a
-                # large flush burst can leave several tiers eligible at once,
-                # and waiting another check_interval per merge needlessly
-                # extends per-read fanout.
+            with self._maint_lock:
                 while self._compaction_step():
                     pass
                 self._compaction_rl.mark_run()
-                last_compact_at = time.monotonic()
                 self._sync_step()
                 self._eviction_step()
+            last_compact_at = time.monotonic()
 
-            self._wake.wait(timeout=min(self._flush_rl.time_until_next(), 1.0))
-            self._wake.clear()
+    def flush(self) -> None:
+        """Drain the in-RAM buffer to a new L0 segment.
 
-    def _flush_step(self) -> None:
+        Synchronous sync-point for tests, ``close()``, and the flush loop.
+        Returns immediately if the buffer is empty. Serialized against
+        concurrent flushers via ``_flush_lock``.
+        """
         with self._flush_lock:
             flush_start = time.monotonic()
             with self._insertion_lock:
@@ -853,14 +970,14 @@ class DiskLogNamespace:
                 visible.max_seq,
             )
 
-            sealed = _SealedBuffer(
-                table=self._sort_for_flush(visible.table),
-                min_seq=visible.min_seq,
-                max_seq=visible.max_seq,
-            )
-
+            # L0 is written unsorted. Rows already arrive seq-monotonic
+            # (seq is allocated under the insertion lock at append time),
+            # and L0 segments don't get bloom filters or footer-stat-based
+            # key pruning. The L0 → L1 compaction COPY does an explicit
+            # ``ORDER BY (key_column, seq)`` so the sort cost lands once,
+            # in the bg compactor thread, instead of on every flush.
             try:
-                self._write_new_segment(sealed)
+                self._write_new_segment(visible)
             except Exception:
                 logger.warning(
                     "Flush failed after %d ms, restoring data to chunks",
@@ -871,13 +988,35 @@ class DiskLogNamespace:
                     self._buffers.restore_flush()
                 return
 
-            with self._flush_generation_cond:
-                self._flush_generation += 1
-                self._flush_generation_cond.notify_all()
+            # Atomic int write; service handlers polling
+            # ``max_persisted_seq()`` will observe this on their next tick.
+            self._max_persisted_seq = visible.max_seq
 
-    def _sort_for_flush(self, table: pa.Table) -> pa.Table:
-        keys = compaction_sort_keys(self.schema)
-        return table.sort_by([(name, "ascending") for name in keys])
+    def compact(self) -> None:
+        """Drain planner-driven compaction, then sync + evict.
+
+        Synchronous sync-point that mirrors one maintenance-loop tick.
+        Tests use this to wait for any pending merges, uploads, and
+        eviction work to finish.
+        """
+        with self._maint_lock:
+            while self._compaction_step():
+                pass
+            self._compaction_rl.mark_run()
+            self._sync_step()
+            self._eviction_step()
+
+    def force_compact_l0(self) -> None:
+        """Synthesize a one-shot L0 → L1 merge regardless of planner policy.
+
+        Production code never calls this — the planner is policy-driven
+        and L0 segments are intentionally kept local-only between
+        compactions. Tests use this when they need to assert against L1
+        state without configuring tiny ``level_targets`` on every fixture.
+        Serialized against the maintenance loop via ``_maint_lock``.
+        """
+        with self._maint_lock:
+            self._apply_force_compact_l0()
 
     def _key_bounds_from_table(self, table: pa.Table) -> tuple[object | None, object | None]:
         """Compute (min, max) over the namespace's ``key_column`` in ``table``.
@@ -918,10 +1057,10 @@ class DiskLogNamespace:
         """Build the catalog row that mirrors ``seg``.
 
         ``created_at_ms`` reflects the segment's stamped birth time, never
-        ``now`` — overwriting it would defeat ``max_l0_age_sec`` aging,
-        which the planner reads from the round-trip catalog snapshot every
-        tick. Key bounds are stringified here because the catalog stores
-        them in a generic TEXT column.
+        ``now`` — overwriting it on a tick would defeat any future age-based
+        policy and would mislead ops queries that report segment age. Key
+        bounds are stringified here because the catalog stores them in a
+        generic TEXT column.
         """
         return SegmentRow(
             namespace=self.name,
@@ -963,15 +1102,23 @@ class DiskLogNamespace:
             row_group_size=_ROW_GROUP_SIZE,
             write_page_index=True,
         )
+        encoded_buffer = buf.getvalue()
+        t_encode_done = time.monotonic()
+
         with pa.OSFile(str(staging_path), "wb") as out:
-            out.write(buf.getvalue())
+            out.write(encoded_buffer)
         staging_path.rename(filepath)
+        t_write_done = time.monotonic()
+
         # Compute key_column bounds from the in-memory table — much cheaper
         # than re-opening the freshly written parquet and reading its footer.
         min_key_value, max_key_value = self._key_bounds_from_table(sealed.table)
+        stat_size = filepath.stat().st_size
+        t_meta_done = time.monotonic()
+
         seg = LocalSegment(
             path=str(filepath),
-            size_bytes=filepath.stat().st_size,
+            size_bytes=stat_size,
             level=0,
             min_seq=sealed.min_seq,
             max_seq=sealed.max_seq,
@@ -981,19 +1128,28 @@ class DiskLogNamespace:
             max_key_value=max_key_value,
         )
 
+        t_before_lock = time.monotonic()
         with self._insertion_lock:
+            t_after_lock = time.monotonic()
             self._local_segments.append(seg)
             self._buffers.commit_flush()
             self._catalog.upsert_segment(self._segment_to_row(seg))
+        t_after_catalog = time.monotonic()
 
         logger.info(
-            "Wrote L0 segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d",
+            "Wrote L0 segment %s: rows=%d bytes=%d seq=[%d,%d] elapsed_ms=%d "
+            "(encode=%d write=%d meta=%d ins_lock_wait=%d catalog=%d)",
             filename,
             sealed.table.num_rows,
             seg.size_bytes,
             sealed.min_seq,
             sealed.max_seq,
-            int((time.monotonic() - write_start) * 1000),
+            int((t_after_catalog - write_start) * 1000),
+            int((t_encode_done - write_start) * 1000),
+            int((t_write_done - t_encode_done) * 1000),
+            int((t_meta_done - t_write_done) * 1000),
+            int((t_after_lock - t_before_lock) * 1000),
+            int((t_after_catalog - t_after_lock) * 1000),
         )
 
     def _compaction_step(self) -> bool:
@@ -1005,21 +1161,14 @@ class DiskLogNamespace:
         """
         with self._insertion_lock:
             segment_rows = [self._segment_to_row(s) for s in self._local_segments]
-        job = self._compactor.plan(segment_rows, now_ms=int(time.time() * 1000))
+        job = self._compactor.plan(segment_rows)
         if job is None:
             return False
         self._run_job(job)
         return True
 
-    def _force_compact_l0(self) -> None:
-        """Test-only hook: synthesize a one-shot L0 → L1 merge regardless of policy.
-
-        Production code (including ``close()``) never calls this — the
-        regular bg loop is planner-driven, and L0 segments are intentionally
-        kept local-only between compactions. Tests use this when they need
-        to assert against L1 state without configuring tiny ``level_targets``
-        on every fixture.
-        """
+    def _apply_force_compact_l0(self) -> None:
+        """Body of :meth:`force_compact_l0`; caller must hold ``_maint_lock``."""
         with self._insertion_lock:
             l0 = sorted(
                 [self._segment_to_row(s) for s in self._local_segments if s.level == 0],
@@ -1042,9 +1191,6 @@ class DiskLogNamespace:
             self._apply_level_bump(job)
         else:
             self._apply_merge(job)
-        with self._compaction_generation_cond:
-            self._compaction_generation += 1
-            self._compaction_generation_cond.notify_all()
 
     def _apply_level_bump(self, job: CompactionJob) -> None:
         old = job.inputs[0]
@@ -1086,8 +1232,13 @@ class DiskLogNamespace:
         # it touches neither ``_local_segments`` nor any other structure that
         # ``_insertion_lock`` protects, so we run it lock-free. A multi-second
         # COPY would otherwise stall every concurrent ``append_log_batch``.
+        # Global semaphore for L2+ merges only: those are the heavy
+        # rewrites whose per-conn memory caps multiply across namespaces
+        # and blow the pod cgroup. L0→L1 merges are small and frequent —
+        # serializing them would starve compaction throughput.
+        gate = self._merge_semaphore if job.output_level >= 2 else contextlib.nullcontext()
         try:
-            with self._open_compaction_conn() as conn:
+            with gate, self._open_compaction_conn() as conn:
                 conn.execute(sql)
         except Exception:
             logger.warning("Compaction failed, leaving inputs in place", exc_info=True)
@@ -1184,45 +1335,118 @@ class DiskLogNamespace:
         finally:
             self._query_visibility_lock.write_release()
 
-    def _adopt_remote_segments(self, *, key_column: str | None) -> None:
-        """Insert ``REMOTE`` catalog rows for bucket files with no row.
+    def _reconcile_remote_segments(self, *, key_column: str | None) -> None:
+        """Adopt unknown remote files and drop redundant ones at boot.
 
-        Runs once at boot when ``_remote_namespace_dir`` is configured.
-        After a catalog wipe the bucket is the only durable record of
-        every L>=1 segment; we read each parquet footer remotely to
-        reconstruct row metadata, then insert at ``location=REMOTE``.
-        Files whose basename is already in the catalog are left alone
-        (the local-disk pass already attached them).
+        Runs once from ``__init__`` before the bg thread starts; no
+        compactor or sync activity is concurrent with it.
+
+        Adoption is the wiped-catalog recovery path: the bucket is the
+        only durable record of L>=1 segments after the local catalog is
+        lost, so each parquet footer is fetched to rebuild row metadata.
+
+        The redundancy pass drops any segment whose ``[min_seq, max_seq]``
+        is fully covered by a higher-level segment. Otherwise a crash
+        between a compaction commit and its ``fs.rm`` would leave the
+        input file in the bucket, and adoption on the next boot would
+        give it a permanent ``REMOTE`` row.
         """
         try:
             fs, root = fsspec.core.url_to_fs(self._remote_namespace_dir)
-            remote_paths = list(fs.find(root))
+            remote_info = fs.find(root, detail=True)
         except Exception:
-            logger.warning("remote adopt list failed for %s", self.name, exc_info=True)
+            logger.warning("remote reconcile list failed for %s", self.name, exc_info=True)
             return
 
-        catalog_basenames = {Path(r.path).name for r in self._catalog.list_segments(self.name)}
-        for fs_path in remote_paths:
+        catalog_by_basename = {Path(r.path).name: r for r in self._catalog.list_segments(self.name, min_level=1)}
+
+        needs_footer: list[tuple[str, str, int, int, int]] = []  # (fs_path, basename, level, min_seq, byte_size)
+        for fs_path, info in remote_info.items():
             basename = Path(fs_path).name
-            if basename in catalog_basenames:
+            if basename in catalog_by_basename:
                 continue
             parsed = parse_seg_filename(basename)
             if parsed is None:
                 logger.warning("ignoring unparseable remote file %s/%s", self.name, basename)
                 continue
             level, min_seq = parsed
+            byte_size = int(info.get("size", 0) or 0)
+            needs_footer.append((fs_path, basename, level, min_seq, byte_size))
+
+        def _fetch_footer(
+            item: tuple[str, str, int, int, int],
+        ) -> tuple[str, str, int, int, int, pq.FileMetaData | None]:
+            fs_path, basename, level, min_seq, byte_size = item
             try:
                 with fs.open(fs_path, "rb") as f:
-                    metadata = pq.read_metadata(f)
+                    return basename, fs_path, level, min_seq, byte_size, pq.read_metadata(f)
             except Exception:
                 logger.warning("failed reading remote parquet footer %s/%s", self.name, basename, exc_info=True)
-                continue
-            num_rows = metadata.num_rows
-            min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
+                return basename, fs_path, level, min_seq, byte_size, None
+
+        # basename -> (fs_path, level, min_seq, max_seq, byte_size, metadata)
+        footer_results: dict[str, tuple[str, int, int, int, int, pq.FileMetaData]] = {}
+        if needs_footer:
+            max_workers = min(32, len(needs_footer))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reconcile-remote") as pool:
+                for basename, fs_path, level, min_seq, byte_size, metadata in pool.map(_fetch_footer, needs_footer):
+                    if metadata is None:
+                        continue
+                    max_seq = min_seq + max(metadata.num_rows - 1, 0)
+                    footer_results[basename] = (fs_path, level, min_seq, max_seq, byte_size, metadata)
+
+        # Union catalog + remote-only seq ranges, then mark any segment
+        # whose [min_seq, max_seq] is fully spanned by a strictly higher
+        # level. Transitivity (Y covers X, Z covers Y ⇒ Z covers X) means
+        # we don't need to filter out redundant Ys before checking X.
+        all_known: dict[str, tuple[int, int, int]] = {}
+        for basename, row in catalog_by_basename.items():
+            all_known[basename] = (row.level, row.min_seq, row.max_seq)
+        for basename, (_fs_path, level, min_seq, max_seq, _byte_size, _meta) in footer_results.items():
+            all_known[basename] = (level, min_seq, max_seq)
+
+        by_level: dict[int, list[tuple[int, int]]] = {}
+        for level, min_seq, max_seq in all_known.values():
+            by_level.setdefault(level, []).append((min_seq, max_seq))
+
+        redundant: set[str] = set()
+        for basename, (level, min_seq, max_seq) in all_known.items():
+            for higher_level, ranges in by_level.items():
+                if higher_level <= level:
+                    continue
+                if any(h_min <= min_seq and h_max >= max_seq for h_min, h_max in ranges):
+                    redundant.add(basename)
+                    break
+
+        for basename in redundant:
+            row = catalog_by_basename.get(basename)
+            if row is not None:
+                self._catalog.remove_segment(self.name, row.path)
+
+        # Batch fs.rm calls 8 at a time and run batches in parallel. The
+        # gcsfs path uses one BatchDelete request per chunk; otherwise a
+        # large first-deploy backlog of compaction orphans adds minutes
+        # to boot.
+        def _delete_chunk(chunk: list[str]) -> None:
+            paths = [f"{self._remote_namespace_dir}/{b}" for b in chunk]
             try:
-                byte_size = fs.info(fs_path).get("size", 0)
+                fs.rm(paths)
             except Exception:
-                byte_size = 0
+                logger.warning("redundant remote delete failed: %s/%s", self.name, chunk, exc_info=True)
+
+        if redundant:
+            ordered = list(redundant)
+            chunks = [ordered[i : i + 8] for i in range(0, len(ordered), 8)]
+            max_workers = min(32, len(chunks))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="reconcile-delete") as pool:
+                list(pool.map(_delete_chunk, chunks))
+
+        now_ms = int(time.time() * 1000)
+        adopted = 0
+        for basename, (_fs_path, level, min_seq, max_seq, byte_size, metadata) in footer_results.items():
+            if basename in redundant:
+                continue
+            min_key, max_key = _key_bounds_from_parquet(metadata, key_column)
             local_path = self._data_dir / basename
             self._catalog.upsert_segment(
                 SegmentRow(
@@ -1230,16 +1454,24 @@ class DiskLogNamespace:
                     path=str(local_path),
                     level=level,
                     min_seq=min_seq,
-                    max_seq=min_seq + max(num_rows - 1, 0),
-                    row_count=num_rows,
-                    byte_size=int(byte_size),
-                    created_at_ms=int(time.time() * 1000),
+                    max_seq=max_seq,
+                    row_count=metadata.num_rows,
+                    byte_size=byte_size,
+                    created_at_ms=now_ms,
                     location=SegmentLocation.REMOTE,
                     min_key_value=None if min_key is None else str(min_key),
                     max_key_value=None if max_key is None else str(max_key),
                 )
             )
-            logger.info("Adopted remote segment %s/%s as REMOTE", self.name, basename)
+            adopted += 1
+
+        if adopted or redundant:
+            logger.info(
+                "Reconciled remote for %s: adopted=%d, dropped_redundant=%d",
+                self.name,
+                adopted,
+                len(redundant),
+            )
 
     def _sync_step(self) -> None:
         """Reconcile the remote namespace prefix with the catalog.
@@ -1307,16 +1539,23 @@ class DiskLogNamespace:
                 logger.warning("orphan delete failed: %s/%s", self.name, basename, exc_info=True)
 
     def _upload(self, local_path: Path) -> bool:
-        """Stream ``local_path`` to remote. Returns True on success;
-        the next sync retries on failure."""
+        """Upload ``local_path`` to the remote bucket. Returns True on
+        success; the next sync retries on failure.
+
+        Uses ``fs.put_file`` so each backend picks its optimal strategy.
+        For ``gcsfs`` this is a single PUT for sub-block-size files —
+        much faster than streaming through ``open()`` + ``copyfileobj``,
+        which would issue one resumable-upload PUT per chunk and
+        serialize on the request boundaries.
+        """
         remote_path = f"{self._remote_namespace_dir}/{local_path.name}"
         upload_start = time.monotonic()
         try:
-            with (
-                fsspec.core.open(str(local_path), "rb") as f_src,
-                fsspec.core.open(remote_path, "wb") as f_dst,
-            ):
-                shutil.copyfileobj(f_src, f_dst, length=_REMOTE_UPLOAD_CHUNK_BYTES)
+            fs, _ = fsspec.core.url_to_fs(remote_path)
+            # gcsfs / s3fs treat the prefix as virtual; LocalFileSystem
+            # needs the directory to exist before put_file's shutil.copyfile.
+            fs.makedirs(self._remote_namespace_dir, exist_ok=True)
+            fs.put_file(str(local_path), remote_path)
         except Exception:
             logger.warning("Failed to copy %s to %s", local_path, remote_path, exc_info=True)
             return False
@@ -1377,10 +1616,12 @@ class DiskLogNamespace:
                 seg_count - 1,
             )
 
-    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
-        """Return all currently queryable local segments and RAM tables."""
+    def query_snapshot(self) -> list[LocalSegment]:
+        """Return queryable local segments. Queries see only flushed data;
+        the in-RAM buffer is not exposed (flush cadence is ≤1s).
+        """
         with self._insertion_lock:
-            return list(self._local_segments), self._buffers.query_snapshot()
+            return list(self._local_segments)
 
     def all_segments_unlocked(self) -> list[LocalSegment]:
         """Snapshot every locally-tracked segment. Caller MUST hold the insertion lock."""
@@ -1508,7 +1749,6 @@ class DiskLogNamespace:
     ) -> list[tuple]:
         with self._insertion_lock:
             segments = list(self._local_segments)
-            ram_tables: list[pa.Table] = self._buffers.query_snapshot()
 
         segments = _cap_segments(segments)
         parquet_files = [s.path for s in segments]
@@ -1520,8 +1760,8 @@ class DiskLogNamespace:
         order = "ORDER BY seq DESC" if (tail and max_lines > 0) else "ORDER BY seq"
         limit = f"LIMIT {max_lines}" if max_lines > 0 else ""
 
-        with self._read_pool.cursor(buffers={"_ram": ram_tables} if ram_tables else None) as conn:
-            source = _build_union_source(parquet_files, ["_ram"] if ram_tables else [], self._arrow_schema)
+        with self._read_pool.cursor() as conn:
+            source = _build_union_source(parquet_files, [], self._arrow_schema)
             sql = f"SELECT {select_cols} FROM ({source}) WHERE {where_clause} {order} {limit}"
             return conn.execute(sql, params).fetchall()
 
@@ -1540,14 +1780,15 @@ class MemoryLogNamespace:
         *,
         name: str,
         schema: Schema,
-        insertion_lock: Lock,
         query_visibility_lock: RWLock,
         read_pool: _ReadPoolProtocol,
     ) -> None:
         self.name = name
         self.schema = schema
         self._arrow_schema = schema_to_arrow(schema)
-        self._insertion_lock = insertion_lock
+        # Per-instance insertion mutex; in-memory mode never needs to
+        # coordinate across namespaces.
+        self._insertion_lock = Lock()
         self._query_visibility_lock = query_visibility_lock
         self._read_pool = read_pool
         # Empty against the registered schema so consumers can register it
@@ -1555,33 +1796,53 @@ class MemoryLogNamespace:
         self._table: pa.Table = self._arrow_schema.empty_table()
         self._next_seq = 1
 
-    def append_log_batch(self, items: list[tuple[str, list]]) -> None:
+    def append_log_batch(self, items: list[tuple[str, list]]) -> int:
         with self._insertion_lock:
             new_tables: list[pa.Table] = [self._table]
+            appended = 0
             for key, entries in items:
                 if not entries:
                     continue
                 first_seq = self._next_seq
                 self._next_seq += len(entries)
+                appended += len(entries)
                 rows = [
                     (first_seq + i, key, e.source, e.data, e.timestamp.epoch_ms, e.level) for i, e in enumerate(entries)
                 ]
                 new_tables.append(_build_log_table(rows, self._arrow_schema))
             self._table = pa.concat_tables(new_tables) if len(new_tables) > 1 else self._table
+            if appended == 0:
+                return -1
+            return self._next_seq - 1
 
-    def append_record_batch(self, batch: pa.RecordBatch) -> None:
-        if batch.num_rows == 0:
-            return
+    def append_aligned_batch(self, aligned: AlignedBatch) -> int:
+        if aligned.num_rows == 0:
+            return -1
         with self._insertion_lock:
             first_seq = self._next_seq
-            self._next_seq += batch.num_rows
-            stamped = _stamp_seq_column(batch, first_seq, self._arrow_schema)
+            self._next_seq += aligned.num_rows
+            stamped = _stamp_seq_and_build(aligned, first_seq, self._arrow_schema)
             self._table = pa.concat_tables([self._table, stamped])
+            return self._next_seq - 1
+
+    def max_persisted_seq(self) -> int:
+        # In-memory mode has no flush boundary: rows are visible immediately,
+        # so every allocated seq is treated as persisted.
+        return self._next_seq - 1
+
+    def is_persisted(self, target_seq: int) -> bool:
+        return target_seq < 0 or self.max_persisted_seq() >= target_seq
+
+    def request_persistance(self, target_seq: int | None = None, *, timeout: float = 10.0) -> int:
+        if target_seq is not None:
+            return target_seq
+        return self.max_persisted_seq()
 
     def get_logs(
         self,
         key: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_EXACT,
         since_ms: int = 0,
         cursor: int = 0,
         substring_filter: str = "",
@@ -1590,19 +1851,8 @@ class MemoryLogNamespace:
         min_level: str = "",
     ) -> LogReadResult:
         min_level_enum = str_to_log_level(min_level)
-        is_pattern = bool(REGEX_META_RE.search(key))
-
-        if not is_pattern:
-            where_parts = ["key = $key", "seq > $cursor"]
-            params: dict = {"key": key, "cursor": cursor}
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            include_key_in_select = False
-            exact_key: str | None = key
-        else:
-            where_parts, params = _regex_query(key, cursor)
-            _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
-            include_key_in_select = True
-            exact_key = None
+        where_parts, params, include_key_in_select, exact_key = _scope_query(key, cursor, match_scope)
+        _add_common_filters(where_parts, params, since_ms, substring_filter, min_level_enum)
 
         # Insertion lock alone suffices; rwlock unneeded because there are
         # no files to unlink.
@@ -1623,9 +1873,8 @@ class MemoryLogNamespace:
 
         return _shape_log_read_result(rows, tail, max_lines, cursor, include_key_in_select, exact_key)
 
-    def query_snapshot(self) -> tuple[list[LocalSegment], list[pa.Table]]:
-        with self._insertion_lock:
-            return [], [self._table]
+    def query_snapshot(self) -> list[LocalSegment]:
+        return []
 
     def all_segments_unlocked(self) -> list[LocalSegment]:
         return []
@@ -1748,30 +1997,70 @@ def _cap_segments(segments: list[LocalSegment]) -> list[LocalSegment]:
     return capped
 
 
+# Characters that hint a regex was passed where PREFIX was intended; used
+# only for a friendlier error if a caller forgets to set match_scope=REGEX.
+_REGEX_HINT_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
+
+
 def _regex_literal_prefix(pattern: str) -> str:
-    match = REGEX_META_RE.search(pattern)
+    match = _REGEX_HINT_RE.search(pattern)
     if match is None:
         return pattern
     return pattern[: match.start()]
 
 
-def _regex_query(pattern: str, cursor: int) -> tuple[list[str], dict]:
-    literal_prefix = _regex_literal_prefix(pattern)
-    suffix = pattern[len(literal_prefix) :]
-    is_pure_prefix = suffix in (".*", "")
+def _scope_query(
+    source: str,
+    cursor: int,
+    match_scope: int,
+) -> tuple[list[str], dict, bool, str | None]:
+    """Build the WHERE clause for a FetchLogs query.
 
-    where_parts = ["seq > $cursor"]
-    params: dict = {"cursor": cursor}
+    Returns ``(where_parts, params, include_key_in_select, exact_key)``.
 
-    if literal_prefix:
-        where_parts.append("prefix(key, $prefix_lo)")
-        params["prefix_lo"] = literal_prefix
+    The in-process Python default is ``MATCH_SCOPE_EXACT``; the RPC server
+    maps wire-level ``UNSPECIFIED`` to ``REGEX`` before delegating, so
+    ``UNSPECIFIED`` never reaches this function.
+    """
+    if match_scope == logging_pb2.MATCH_SCOPE_EXACT:
+        where_parts = ["key = $key", "seq > $cursor"]
+        params: dict = {"key": source, "cursor": cursor}
+        return where_parts, params, False, source
 
-    if not is_pure_prefix:
-        where_parts.append("regexp_matches(key, $key_pattern)")
-        params["key_pattern"] = pattern
+    if match_scope == logging_pb2.MATCH_SCOPE_PREFIX:
+        if not source:
+            # Empty prefix would match every key in the store. Reads with no
+            # source are almost always a caller bug (omitted/defaulted field);
+            # fail fast instead of returning the first page of every stream.
+            raise ValueError("FetchLogs source is required for MATCH_SCOPE_PREFIX")
+        # `prefix(key, $p)` is DuckDB's literal-prefix predicate. It's pushed
+        # into Parquet row-group min/max stats the same way an `=` is, so
+        # PREFIX reads keep the pruning of EXACT.
+        where_parts = ["seq > $cursor", "prefix(key, $prefix)"]
+        params = {"cursor": cursor, "prefix": source}
+        return where_parts, params, True, None
 
-    return where_parts, params
+    if match_scope == logging_pb2.MATCH_SCOPE_REGEX:
+        # Pull off any leading literal prefix to keep row-group pruning even
+        # for regex queries. `prefix(key, $p)` is monotone, so it remains
+        # correct as long as the regex requires that prefix to match.
+        literal_prefix = _regex_literal_prefix(source)
+        suffix = source[len(literal_prefix) :]
+        # `^literal$`, `^literal`, `^literal.*` all reduce to the literal prefix
+        # alone; we still need regexp_matches for any other suffix.
+        is_pure_prefix = suffix in (".*", "")
+
+        where_parts = ["seq > $cursor"]
+        params = {"cursor": cursor}
+        if literal_prefix:
+            where_parts.append("prefix(key, $prefix_lo)")
+            params["prefix_lo"] = literal_prefix
+        if not is_pure_prefix:
+            where_parts.append("regexp_matches(key, $key_pattern)")
+            params["key_pattern"] = source
+        return where_parts, params, True, None
+
+    raise ValueError(f"unknown match_scope: {match_scope}")
 
 
 def _add_common_filters(

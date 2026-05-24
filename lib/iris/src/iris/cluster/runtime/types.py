@@ -92,6 +92,7 @@ class ContainerConfig:
     workdir_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
+    attempt_uid: str | None = None
     job_id: str | None = None
     worker_id: str | None = None
     worker_metadata: job_pb2.WorkerMetadata | None = None
@@ -281,6 +282,7 @@ class DiscoveredContainer:
     container_id: str
     task_id: str
     attempt_id: int
+    attempt_uid: str
     job_id: str
     worker_id: str
     phase: ExecutionStage

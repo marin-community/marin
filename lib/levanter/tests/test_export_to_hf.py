@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import equinox as eqx
 import jax
-import pytest
 from transformers import AutoModelForCausalLM
 
 import haliax
@@ -21,7 +20,6 @@ from levanter.utils.jax_utils import is_inexact_arrayish
 from test_utils import has_torch
 
 
-@pytest.mark.entry
 def test_export_lm_to_hf():
     # just testing if train_lm has a pulse
     model_config = Gpt2Config(

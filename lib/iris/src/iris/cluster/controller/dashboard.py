@@ -31,10 +31,11 @@ from urllib.parse import urlparse
 import httpx
 from finelog.client.proxy import LogServiceProxy, StatsServiceProxy
 from finelog.rpc.finelog_stats_connect import (
-    StatsServiceWSGIApplication as FinelogStatsServiceWSGIApplication,
+    StatsServiceASGIApplication as FinelogStatsServiceASGIApplication,
 )
-from finelog.rpc.logging_connect import LogServiceWSGIApplication
+from finelog.rpc.logging_connect import LogServiceASGIApplication
 from finelog.server import LogServiceImpl
+from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -43,7 +44,6 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from iris.cluster.controller import endpoint_proxy
-from iris.cluster.controller.actor_proxy import PROXY_ROUTE, ActorProxy
 from iris.cluster.controller.endpoint_proxy import EndpointProxy
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
@@ -59,7 +59,7 @@ from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication
-from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
+from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
 from iris.rpc.stats import RpcStatsCollector
 from iris.rpc.stats_connect import StatsServiceWSGIApplication
 from iris.rpc.stats_service import RpcStatsService
@@ -453,41 +453,36 @@ class ControllerDashboard:
         # Cap concurrent FetchLogs RPCs to avoid evicting the page cache with
         # parallel DuckDB scans. See duckdb_store.py for working-set caps.
         log_interceptors = [auth_interceptor, log_timing, ConcurrencyLimitInterceptor({"FetchLogs": 4})]
-        log_wsgi_app = LogServiceWSGIApplication(
+        log_app = LogServiceASGIApplication(
             service=self._log_service, interceptors=log_interceptors, compressions=IRIS_RPC_COMPRESSIONS
         )
-        log_app = WSGIMiddleware(log_wsgi_app)
 
         # Backward-compat: clients/workers built before the finelog lift call
         # /iris.logging.LogService/{FetchLogs,PushLogs}. Wire bytes are identical
-        # to /finelog.logging.LogService/*, so mount the same WSGI app at the
+        # to /finelog.logging.LogService/*, so mount the same ASGI app at the
         # legacy prefix and register relative-path aliases.
-        # connectrpc dispatch (_server_sync.py:206-210) first looks up PATH_INFO
-        # directly; the existing /finelog.logging.LogService mount only hits via
-        # the SCRIPT_NAME==self.path fallback. Adding relative keys lets the
-        # first lookup succeeds regardless of which mount handled the request.
+        # connectrpc dispatch (_server_async.py) first looks up scope["path"]
+        # directly; under the Starlette Mount the legacy prefix is stripped to
+        # a relative path. Adding relative keys lets that first lookup succeed
+        # regardless of which mount handled the request. We pre-resolve so the
+        # aliased dict survives lifespan/lazy resolution.
         _LOG_FETCH_ENDPOINT = "/finelog.logging.LogService/FetchLogs"
         _LOG_PUSH_ENDPOINT = "/finelog.logging.LogService/PushLogs"
-        log_wsgi_app._endpoints["/FetchLogs"] = log_wsgi_app._endpoints[_LOG_FETCH_ENDPOINT]
-        log_wsgi_app._endpoints["/PushLogs"] = log_wsgi_app._endpoints[_LOG_PUSH_ENDPOINT]
+        log_app._resolved_endpoints = dict(log_app._resolve_endpoints(self._log_service))
+        log_app._resolved_endpoints["/FetchLogs"] = log_app._resolved_endpoints[_LOG_FETCH_ENDPOINT]
+        log_app._resolved_endpoints["/PushLogs"] = log_app._resolved_endpoints[_LOG_PUSH_ENDPOINT]
         _LEGACY_LOG_SERVICE_PATH = "/iris.logging.LogService"
-
-        self._actor_proxy = ActorProxy(self._service._store)
 
         def _resolve_endpoint(name: str) -> str | None:
             # Task-registered endpoints live in the SQL store; system endpoints
             # (``/system/...``) live in an in-memory dict on the service.
             # Same fallback order as ListEndpoints' system-endpoint branch.
-            row = self._service._store.endpoints.resolve(name)
+            row = self._service._endpoints.resolve(name)
             if row is not None:
                 return row.address
             return self._service._system_endpoints.get(name)
 
         self._endpoint_proxy = EndpointProxy(_resolve_endpoint)
-
-        @requires_auth
-        async def _proxy_actor_rpc(request: Request) -> Response:
-            return await self._actor_proxy.handle(request)
 
         @requires_auth
         async def _proxy_endpoint(request: Request) -> Response:
@@ -524,7 +519,6 @@ class ControllerDashboard:
             Route("/bundles/{bundle_id:str}.zip", self._bundle_download),
             Route("/blobs/{blob_id:str}", self._blob_download),
             Route("/health", self._health),
-            Route(PROXY_ROUTE, _proxy_actor_rpc, methods=["POST"]),
             Route(
                 "/proxy/{endpoint_name:str}",
                 _proxy_endpoint_redirect,
@@ -535,23 +529,23 @@ class ControllerDashboard:
                 _proxy_endpoint,
                 methods=list(endpoint_proxy.ALLOWED_METHODS),
             ),
-            Mount(log_wsgi_app.path, app=log_app),
+            Mount(log_app.path, app=log_app),
             Mount(_LEGACY_LOG_SERVICE_PATH, app=log_app),
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(stats_wsgi_app.path, app=stats_app),
         ]
         if self._finelog_stats_service is not None:
-            finelog_stats_wsgi_app = FinelogStatsServiceWSGIApplication(
+            finelog_stats_asgi_app = FinelogStatsServiceASGIApplication(
                 service=self._finelog_stats_service,
                 interceptors=[auth_interceptor],
                 compressions=IRIS_RPC_COMPRESSIONS,
             )
-            routes.append(Mount(finelog_stats_wsgi_app.path, app=WSGIMiddleware(finelog_stats_wsgi_app)))
+            routes.append(Mount(finelog_stats_asgi_app.path, app=finelog_stats_asgi_app))
         routes.append(static_files_mount())
 
         app: Starlette | _RouteAuthMiddleware = Starlette(
             routes=routes,
-            lifespan=on_shutdown(self._actor_proxy.close, self._endpoint_proxy.close),
+            lifespan=on_shutdown(self._endpoint_proxy.close),
         )
         # Starlette's default trailing-slash redirect builds an absolute
         # Location from ``scope["server"]`` (or the request's Host header).

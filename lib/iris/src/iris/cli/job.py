@@ -8,6 +8,7 @@ Usage:
     iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
+import difflib
 import json
 import logging
 import os
@@ -212,26 +213,10 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
     )
 
 
-def _levenshtein(a: str, b: str) -> int:
-    if len(a) < len(b):
-        return _levenshtein(b, a)
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a):
-        curr = [i + 1] + [0] * len(b)
-        for j, cb in enumerate(b):
-            curr[j + 1] = min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (ca != cb))
-        prev = curr
-    return prev[-1]
-
-
-def _find_closest(value: str, known: set[str], max_distance: int = 5) -> str | None:
-    """Return the closest match from *known* by edit distance, or None."""
-    best, best_dist = None, max_distance + 1
-    for candidate in sorted(known):
-        dist = _levenshtein(value, candidate)
-        if dist < best_dist:
-            best, best_dist = candidate, dist
-    return best if best_dist <= max_distance else None
+def _find_closest(value: str, known: set[str]) -> str | None:
+    """Return the closest match from *known* by sequence similarity, or None."""
+    matches = difflib.get_close_matches(value, sorted(known), n=1, cutoff=0.6)
+    return matches[0] if matches else None
 
 
 def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
@@ -976,7 +961,12 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 
 @job.command("list")
 @click.option("--state", type=str, default=None, help="Filter by state (e.g., running, pending, failed)")
-@click.option("--prefix", type=str, default=None, help="Filter by job name prefix")
+@click.option(
+    "--prefix",
+    type=str,
+    default=None,
+    help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
+)
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @click.pass_context
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
@@ -992,8 +982,7 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
         state_value = _STATE_MAP[state_lower]
 
-    prefix_name = JobName.from_wire(prefix) if prefix else None
-    jobs = client.list_jobs(state=state_value, prefix=prefix_name)
+    jobs = client.list_jobs(state=state_value, prefix=prefix)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)

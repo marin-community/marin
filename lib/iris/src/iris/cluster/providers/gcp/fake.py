@@ -20,6 +20,7 @@ from pathlib import Path
 
 from rigging.timing import Duration, Timestamp
 
+from iris.cluster.bundle import BundleStore
 from iris.cluster.providers.gcp.local import LocalSliceHandle
 from iris.cluster.providers.gcp.service import (
     KNOWN_GCP_ZONES,
@@ -40,8 +41,12 @@ from iris.cluster.providers.types import (
     QuotaExhaustedError,
     find_free_port,
 )
+from iris.cluster.runtime.process import ProcessRuntime
 from iris.cluster.service_mode import ServiceMode
+from iris.cluster.types import get_tpu_topology
+from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.managed_thread import ThreadContainer
 from iris.rpc import config_pb2
 
@@ -194,8 +199,6 @@ class InMemoryGcpService:
                 )
 
         # Synthetic network endpoints based on TPU topology
-        from iris.cluster.types import get_tpu_topology
-
         try:
             topo = get_tpu_topology(request.accelerator_type)
             vm_count = topo.vm_count
@@ -422,12 +425,6 @@ class InMemoryGcpService:
         worker_config: config_pb2.WorkerConfig | None = None,
     ) -> LocalSliceHandle:
         """Spawn real Worker threads for a slice."""
-        from iris.cluster.bundle import BundleStore
-        from iris.cluster.runtime.process import ProcessRuntime
-        from iris.cluster.types import get_tpu_topology
-        from iris.cluster.worker.env_probe import FixedEnvironmentProvider, HardwareProbe, build_worker_metadata
-        from iris.cluster.worker.worker import Worker, WorkerConfig
-
         assert self._cache_path is not None
         assert self._threads is not None
         assert self._iris_labels is not None

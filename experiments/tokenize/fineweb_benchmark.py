@@ -12,7 +12,7 @@ Usage (local, tiny synthetic dataset for smoke testing):
     MARIN_PREFIX=/tmp/marin BENCHMARK_TINY=1 uv run python experiments/tokenize/fineweb_benchmark.py
 
 Usage (cluster, full 10BT):
-    uv run iris --config=lib/iris/examples/marin-dev.yaml job run -- \
+    uv run iris --config=lib/iris/config/marin-dev.yaml job run -- \
         python experiments/tokenize/fineweb_benchmark.py
 """
 

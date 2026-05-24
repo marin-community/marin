@@ -16,7 +16,7 @@ from typing import NamedTuple
 
 from google.protobuf import json_format
 
-from iris.cluster.constraints import Constraint
+from iris.cluster.constraints import Constraint, get_device_variant
 from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import controller_pb2, job_pb2
 
@@ -115,3 +115,17 @@ def device_counts_from_json(device_json: str | None) -> DeviceCounts:
         return DeviceCounts(gpu=0, tpu=0)
     device = proto_from_json(device_json, job_pb2.DeviceConfig)
     return DeviceCounts(gpu=get_gpu_count(device), tpu=get_tpu_count(device))
+
+
+@functools.lru_cache(maxsize=8192)
+def device_variant_from_json(device_json: str | None) -> str | None:
+    """Cached parse of ``job_config.res_device_json`` into a device variant string.
+
+    Returns the GPU or TPU variant string (e.g. ``"v5p-64"``) or ``None`` for
+    CPU-only jobs.  The LRU amortizes repeated parses of the same JSON string
+    across many task rows within a scheduling cycle.
+    """
+    if not device_json:
+        return None
+    device = proto_from_json(device_json, job_pb2.DeviceConfig)
+    return get_device_variant(device)

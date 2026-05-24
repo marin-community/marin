@@ -413,51 +413,45 @@ def test_parallelism():
 def test_versioning():
     """Make sure that versions (output paths) are computed properly based on
     upstream dependencies and only the versioned fields."""
-    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
 
-        def fn(config: MyConfig):
-            pass
+    def fn(config: MyConfig):
+        pass
 
-        def get_output_path(a_input_path: str, a_n: int, a_m: int, name: str, b_n: int, b_m: int):
-            """Make steps [a -> b] with the given arguments, and return the output_path of `b`."""
-            a = ExecutorStep(
-                name="a",
-                fn=fn,
-                config=MyConfig(
-                    input_path=versioned(a_input_path), output_path=this_output_path(), n=versioned(a_n), m=a_m
-                ),
-            )
-            b = ExecutorStep(
-                name="b",
-                fn=fn,
-                config=MyConfig(
-                    input_path=output_path_of(a, name), output_path=this_output_path(), n=versioned(b_n), m=b_m
-                ),
-            )
-            executor = create_executor(temp_dir)
-            executor.run(steps=[b])
-            output_path = executor.output_paths[b]
-            return output_path
+    def get_output_path(a_input_path: str, a_n: int, a_m: int, name: str, b_n: int, b_m: int):
+        """Make steps [a -> b] with the given arguments, and return the output_path of `b`."""
+        a = ExecutorStep(
+            name="a",
+            fn=fn,
+            config=MyConfig(input_path=versioned(a_input_path), output_path=this_output_path(), n=versioned(a_n), m=a_m),
+        )
+        b = ExecutorStep(
+            name="b",
+            fn=fn,
+            config=MyConfig(input_path=output_path_of(a, name), output_path=this_output_path(), n=versioned(b_n), m=b_m),
+        )
+        executor = Executor(prefix="/tmp/executor-versioning", executor_info_base_path="/tmp/executor-versioning")
+        executor.compute_version(b, is_pseudo_dep=False)
+        return executor.output_paths[b]
 
-        defaults = dict(a_input_path="a", a_n=1, a_m=1, name="foo", b_n=1, b_m=1)
-        default_output_path = get_output_path(**defaults)
+    defaults = dict(a_input_path="a", a_n=1, a_m=1, name="foo", b_n=1, b_m=1)
+    default_output_path = get_output_path(**defaults)
 
-        def assert_same_version(**kwargs):
-            output_path = get_output_path(**(defaults | kwargs))
-            assert output_path == default_output_path
+    def assert_same_version(**kwargs):
+        output_path = get_output_path(**(defaults | kwargs))
+        assert output_path == default_output_path
 
-        def assert_diff_version(**kwargs):
-            output_path = get_output_path(**(defaults | kwargs))
-            assert output_path != default_output_path
+    def assert_diff_version(**kwargs):
+        output_path = get_output_path(**(defaults | kwargs))
+        assert output_path != default_output_path
 
-        # Changing some of the fields should affect the output path, but not all
-        assert_same_version()
-        assert_diff_version(a_input_path="aa")
-        assert_diff_version(a_n=2)
-        assert_same_version(a_m=2)
-        assert_diff_version(name="bar")
-        assert_diff_version(b_n=2)
-        assert_same_version(b_m=2)
+    # Changing some of the fields should affect the output path, but not all
+    assert_same_version()
+    assert_diff_version(a_input_path="aa")
+    assert_diff_version(a_n=2)
+    assert_same_version(a_m=2)
+    assert_diff_version(name="bar")
+    assert_diff_version(b_n=2)
+    assert_same_version(b_m=2)
 
 
 def test_executor_version_stable_across_prefixes():

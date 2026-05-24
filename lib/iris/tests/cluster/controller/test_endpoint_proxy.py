@@ -6,7 +6,7 @@
 Spin up a real upstream Starlette app on 127.0.0.1:0, route through a real
 EndpointProxy hosted on its own Starlette app, and verify the full
 round-trip: method, path suffix, query string, headers, and streaming
-bodies. Mirrors the structure of test_actor_proxy.py.
+bodies.
 """
 
 from __future__ import annotations

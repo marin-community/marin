@@ -67,7 +67,7 @@ jobs:
 
       - name: Restart dev controller
         run: |
-          uv run iris --config lib/iris/examples/marin-dev.yaml \
+          uv run iris --config lib/iris/config/marin-dev.yaml \
             cluster controller restart
 
       - name: Remove OS Login SSH key
