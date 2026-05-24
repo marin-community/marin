@@ -6,13 +6,17 @@
 from urllib.parse import urlparse
 
 from fray.types import ResourceConfig
+from marin.execution.executor import ExecutorStep
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.placement import marin_prefix_for_region
 from rigging.filesystem import REGION_TO_DATA_BUCKET
 
+from experiments.models import llama_3_1_8b_instruct
+
 CANONICAL_MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 MODEL_ARTIFACT_SUBPATH = "models/meta-llama--Llama-3-1-8B-Instruct--0e9e39f"
+DEFAULT_MODEL_ARTIFACT = llama_3_1_8b_instruct
 
 DEFAULT_EXPERIMENT_REGION = "us-central1"
 DEFAULT_GPU_TYPE = "H100"
@@ -99,7 +103,7 @@ def gpu_smoke_prefix(region: str) -> str:
 
 
 def gpu_smoke_model_path(region: str) -> str:
-    """Return the canonical region-local GCS model artifact for smoke runs."""
+    """Return the canonical region-local GCS model artifact path."""
     return f"{gpu_smoke_prefix(region)}/{MODEL_ARTIFACT_SUBPATH}"
 
 
@@ -122,12 +126,9 @@ def validate_gpu_smoke_model_path(*, region: str, model_path: str) -> None:
     )
 
 
-def resolve_gpu_smoke_model_path(*, region: str, model_path: str | None) -> str:
-    """Return the validated model artifact path for a smoke run."""
+def resolve_gpu_smoke_model_artifact(*, region: str, model_path: str | None) -> ExecutorStep | str:
+    """Return the executor-managed default artifact or a validated explicit override."""
     if model_path is None:
-        return gpu_smoke_model_path(region)
+        return DEFAULT_MODEL_ARTIFACT
     validate_gpu_smoke_model_path(region=region, model_path=model_path)
     return model_path
-
-
-DEFAULT_MODEL_PATH = gpu_smoke_model_path(DEFAULT_EXPERIMENT_REGION)

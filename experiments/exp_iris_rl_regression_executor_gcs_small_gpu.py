@@ -12,7 +12,9 @@ import os
 
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_experiment_utils import (
+    ModelArtifact,
     ModelConfig,
     RLExperimentConfig,
     config_class_path,
@@ -31,7 +33,7 @@ from experiments.iris_rl_gpu_smoke import (
     gpu_smoke_resources,
     gpu_smoke_rollout_count,
     gpu_smoke_train_batch_size,
-    resolve_gpu_smoke_model_path,
+    resolve_gpu_smoke_model_artifact,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,16 +73,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-path",
         default=None,
-        help="Model artifact path or Hugging Face model id. Defaults to the canonical cached artifact in --region.",
+        help="Model artifact path or Hugging Face model id. Defaults to the executor-managed canonical artifact.",
     )
     return parser.parse_args()
 
 
-def build_model_config(model_path: str) -> ModelConfig:
+def build_model_config(model_artifact: ModelArtifact) -> ModelConfig:
     return ModelConfig(
         name=CANONICAL_MODEL_NAME,
         type="llama",
-        artifact=model_path,
+        artifact=model_artifact,
         config_class_path=config_class_path(LlamaConfig),
     )
 
@@ -94,12 +96,12 @@ def build_debug_config(
     gpu_count: int,
     model_path: str | None,
 ) -> RLExperimentConfig:
-    resolved_model_path = resolve_gpu_smoke_model_path(region=region, model_path=model_path)
+    model_artifact = resolve_gpu_smoke_model_artifact(region=region, model_path=model_path)
     tags = ["rl", "iris-debug", "regression", "gpu", experiment_name_suffix]
     return RLExperimentConfig(
-        model_config=build_model_config(resolved_model_path),
+        model_config=build_model_config(model_artifact),
         rl_loss=RLOOLoss(
-            kl_coef=0.0,
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
             clip_epsilon_low=0.2,
             clip_epsilon_high=0.28,
             synchronous=True,
