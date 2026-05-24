@@ -2,16 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import hashlib
 import importlib
 import logging
 import os
 import urllib.parse
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TypeVar
 
 import draccus
-from fray import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
+from fray import (
+    CpuConfig,
+    Entrypoint,
+    GpuConfig,
+    JobRequest,
+    ResourceConfig,
+    TpuConfig,
+    create_environment,
+    current_client,
+)
 from mergedeep import mergedeep
 from rigging.filesystem import check_gcs_paths_same_region, marin_temp_bucket
 
@@ -347,8 +358,47 @@ def _apply_env_to_process(env: dict[str, str]) -> None:
         os.environ.setdefault(key, value)
 
 
+def _phase_training_job_name(prefix: str, output_path: str | None) -> str:
+    """Stable child job name keyed on the executor step's output path."""
+    if output_path is None:
+        return prefix
+    digest = hashlib.sha1(output_path.encode("utf-8")).hexdigest()[:10]
+    return f"{prefix}-{digest}"
+
+
+def _dispatch_training_job(
+    *,
+    job_name: str,
+    main_fn: Callable,
+    train_config,
+    resources: ResourceConfig,
+    env: dict[str, str],
+    extras: list[str],
+) -> None:
+    """Submit a Levanter training entrypoint as a child Fray job and block until it finishes.
+
+    Used by the CPU-coordinator pattern: the parent (this process) runs on a tiny
+    CPU host, then spawns the actual TPU/GPU training as a separate gang-scheduled
+    Fray job. Restarts adopt the existing job handle via Fray's ``adopt_existing``
+    default rather than racing to recreate it.
+    """
+    client = current_client()
+    job_request = JobRequest(
+        name=job_name,
+        entrypoint=Entrypoint.from_callable(main_fn, args=[train_config]),
+        resources=resources,
+        environment=create_environment(env_vars=env, extras=extras),
+        # SIGSEGVs / TPU runtime crashes on preemptible v5p hosts are common
+        # but transient — let the child auto-retry up to 10 times before the
+        # parent sees a failure and burns one of its own retry slots.
+        max_retries_failure=10,
+    )
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
+
+
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
-    """Run the Levanter LM training main function in the current process.
+    """Dispatch Levanter LM training as a child Fray job and block until completion.
 
     Expects the following env vars (in the process env or ``config.env_vars``):
 
@@ -375,17 +425,29 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         config.resources.device,
     )
 
-    _apply_env_to_process(env)
-    importlib.import_module("levanter.main.train_lm").main(train_config)
+    _dispatch_training_job(
+        job_name=_phase_training_job_name("train_lm", config.output_path),
+        main_fn=importlib.import_module("levanter.main.train_lm").main,
+        train_config=train_config,
+        resources=config.resources,
+        env=env,
+        extras=extras_for_resources(config.resources),
+    )
 
 
 def run_levanter_train_dpo(config: TrainDpoOnPodConfig):
-    """Run the Levanter DPO training main function in the current process."""
+    """Dispatch Levanter DPO training as a child Fray job and block until completion."""
     # Run upstream ExecutorStep deps in the worker's region and substitute placeholders.
     config = materialize(config)
     config, train_config, env = _prepare_training_run(config)
-    _apply_env_to_process(env)
-    importlib.import_module("levanter.main.train_dpo").main(train_config)
+    _dispatch_training_job(
+        job_name=_phase_training_job_name("train_dpo", config.output_path),
+        main_fn=importlib.import_module("levanter.main.train_dpo").main,
+        train_config=train_config,
+        resources=config.resources,
+        env=env,
+        extras=extras_for_resources(config.resources),
+    )
 
 
 def check_train_config_paths(train_config: object, resources: ResourceConfig) -> None:

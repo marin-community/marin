@@ -114,8 +114,12 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
 def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
     """Build Iris scheduling constraints from fray ResourceConfig."""
     constraints: list[Constraint] = []
-    if not resources.preemptible:
-        constraints.append(preemptible_constraint(False))
+    # Add preemptible constraint in both directions: hard (mode=REQUIRED) when False,
+    # soft (mode=PREFERRED) when True. Previously this only added the False case, so
+    # preemptible=True jobs sent no preemptible constraint at all, and the scheduler
+    # treated them as "non-preemptible only" — leaving them queued forever in regions
+    # like us-east5 that have no non-preemptible v5p pool provisioned.
+    constraints.append(preemptible_constraint(resources.preemptible))
     if resources.regions:
         constraints.append(region_constraint(resources.regions))
     if resources.zone:

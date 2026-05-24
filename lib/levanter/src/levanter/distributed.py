@@ -222,11 +222,12 @@ class DistributedConfig:
 
         if get_job_info() is not None:
             logger.info("Detected Iris job context; initializing jax.distributed via iris.runtime.jax_init.")
+            # initialize_iris_jax already calls jax.distributed.initialize() for every task
+            # (single-task and multi-task; TPU and non-TPU). Falling through to _is_distributed()
+            # below would call it a second time and crash with
+            # "RuntimeError: distributed.initialize should only be called once."
             initialize_iris_jax()
-            # On TPU, initialize_iris_jax is a no-op (TPU runtime handles it),
-            # so fall through to _is_distributed() for multi-host coordination.
-            if not (os.environ.get("PJRT_DEVICE", "").upper() == "TPU" or os.environ.get("JAX_PLATFORMS", "").startswith("tpu")):
-                return
+            return
 
         if self._is_distributed():
             device_ids = self.local_device_ids

@@ -28,6 +28,7 @@ import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
+from fray import ResourceConfig
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
@@ -392,7 +393,9 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         .map(process_shard_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
-    ctx = ZephyrContext(name="transform-conversation")
+    # 4 GB so HF streaming on single-file JSONL datasets (e.g. ~500 MB Qwen3-32B
+    # chat data) fits in worker memory; the 1 GB default OOMs on those.
+    ctx = ZephyrContext(name="transform-conversation", resources=ResourceConfig(cpu=1, ram="4g"))
     metric_files = ctx.execute(pipeline).results
 
     # Log summary by subset/split
