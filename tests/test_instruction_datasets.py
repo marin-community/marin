@@ -15,6 +15,22 @@ from experiments.posttrain.instruction_datasets import (
     get_instruction_dataset,
 )
 
+EXPECTED_DEEPMATH_103K_HF_ID = "zwhe99/DeepMath-103K"
+DEEPMATH_103K_SAMPLE = {
+    "question": "Evaluate 1 + 1.",
+    "final_answer": "2",
+    "difficulty": 4.5,
+    "topic": "Mathematics -> Arithmetic",
+    "r1_solution_1": "<think>Add the two units.</think> The answer is 2.",
+    "r1_solution_2": "We compute 1 + 1 = 2.",
+    "r1_solution_3": "The sum equals 2.",
+}
+DEEPMATH_103K_EXPECTED_RESPONSES = {
+    "r1_solution_1": "<|start_think|>Add the two units.<|end_think|> The answer is 2.",
+    "r1_solution_2": "We compute 1 + 1 = 2.",
+    "r1_solution_3": "The sum equals 2.",
+}
+
 SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
     "problem_id": "prime_rl_code_21747",
     "task_type": "prime_rl_code",
@@ -105,3 +121,38 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
         "task_type": "prime_rl_code",
         "reward": 1.0,
     }
+
+
+def test_deepmath_103k_registered_views_transform_distinct_r1_traces():
+    transformed_ids = set()
+    output_paths = set()
+
+    for trace_column, expected_response in DEEPMATH_103K_EXPECTED_RESPONSES.items():
+        dataset_key = f"{EXPECTED_DEEPMATH_103K_HF_ID}/{trace_column}"
+        step = get_instruction_dataset(dataset_key)
+        cfg = step.config
+        adapter = unwrap_versioned_value(cfg.adapter)
+
+        result = transform_row(DEEPMATH_103K_SAMPLE, cfg, adapter)
+
+        assert result is not None
+        assert result.source == EXPECTED_DEEPMATH_103K_HF_ID
+        assert [message.role for message in result.messages] == ["user", "assistant"]
+        assert result.messages[0].content == DEEPMATH_103K_SAMPLE["question"]
+        assert result.messages[1].content == expected_response
+        assert result.metadata == {
+            "final_answer": "2",
+            "difficulty": 4.5,
+            "topic": "Mathematics -> Arithmetic",
+        }
+
+        # A registered view should skip rows missing its selected trace rather than use another solution column.
+        missing_trace_row = {**DEEPMATH_103K_SAMPLE, trace_column: None}
+        assert transform_row(missing_trace_row, cfg, adapter) is None
+
+        transformed_ids.add(result.id)
+        output_paths.add(step.override_output_path)
+
+    assert len(transformed_ids) == len(DEEPMATH_103K_EXPECTED_RESPONSES)
+    # The three solution views must materialize separately so they cannot overwrite one another.
+    assert len(output_paths) == len(DEEPMATH_103K_EXPECTED_RESPONSES)

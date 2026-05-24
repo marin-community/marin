@@ -38,6 +38,9 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. zwhe99/DeepMath-103K/r1_solution_1
+27. zwhe99/DeepMath-103K/r1_solution_2
+28. zwhe99/DeepMath-103K/r1_solution_3
 """
 
 import dataclasses
@@ -256,6 +259,11 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "qwen3-4b-thinking-reward@128",
     "source",
 ]
+
+DEEPMATH_103K_HF_ID = "zwhe99/DeepMath-103K"
+DEEPMATH_103K_REVISION = "5cf055d1fe3d7a2eb19719ac020211469736ae44"
+DEEPMATH_103K_METADATA_COLUMNS = ["final_answer", "difficulty", "topic"]
+DEEPMATH_103K_TRACE_COLUMNS = ("r1_solution_1", "r1_solution_2", "r1_solution_3")
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -560,6 +568,21 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         splits=["genselect"],
     ),
 }
+
+for trace_column in DEEPMATH_103K_TRACE_COLUMNS:
+    dataset_key = f"{DEEPMATH_103K_HF_ID}/{trace_column}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=DEEPMATH_103K_HF_ID,
+        revision=DEEPMATH_103K_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="question",
+            response_column=trace_column,
+        ),
+        metadata_columns=DEEPMATH_103K_METADATA_COLUMNS,
+        subsets=["default"],
+        splits=["train"],
+    )
 
 for split_name in SMOLTALK2_SPLITS:
     dataset_key = f"HuggingFaceTB/smoltalk2/{split_name}"
