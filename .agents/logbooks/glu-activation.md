@@ -2,7 +2,7 @@
 
 Experiment ID prefix: `MOE-GLU`
 
-Linked issue: TBD (filled in after `gh issue create`).
+Linked issue: marin-community/marin#5934 (sub-issue of #5358).
 
 ## Scope
 - Goal: Test whether replacing the silu gate in the MLP (both shared expert
