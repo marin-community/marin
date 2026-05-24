@@ -50,8 +50,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
+from draccus.parsers.encoding import CHOICE_TYPE_KEY, encode
 from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
+from levanter.callbacks.watch import WatchConfig
 from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
 from marin.execution.executor import versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
@@ -71,6 +73,23 @@ from experiments.protein.train_protein_100m_distance_masked import protein_llama
 from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger(__name__)
+
+
+@encode.register(DatasetComponent)
+def _encode_dataset_component(obj: DatasetComponent, declared_type=None) -> dict:
+    # draccus has no encoder for arbitrary Python callables; substitute the
+    # function's qualified name so wandb's config.yaml artifact upload doesn't
+    # crash on ``loss_weight_fn``. Must emit the choice tag manually because
+    # registering here bypasses ``encode_choice``.
+    out: dict = {CHOICE_TYPE_KEY: obj.get_choice_name(type(obj))}
+    for f in dataclasses.fields(obj):
+        value = getattr(obj, f.name)
+        if f.name == "loss_weight_fn":
+            out[f.name] = None if value is None else f"{value.__module__}.{value.__qualname__}"
+        else:
+            out[f.name] = encode(value, f.type)
+    return out
+
 
 # --- Data source -------------------------------------------------------------
 
@@ -705,6 +724,8 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         wandb_group="exp11-data-mix",
     )
     # Override defaults.py's 10-min cadence; see TEMP_CHECKPOINT_INTERVAL.
+    # Attempt to disable per-parameter watch tracking as a candidate workaround
+    # for the post-May-2026 v5p-8 CompileTimeHbmOom on 1.5B; not confirmed to fix.
     raw_config = dataclasses.replace(
         raw_config,
         trainer=dataclasses.replace(
@@ -713,6 +734,7 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
                 raw_config.trainer.checkpointer,
                 save_interval=TEMP_CHECKPOINT_INTERVAL,
             ),
+            watch=WatchConfig(watch_targets=[], interval=0),
         ),
     )
     return job_name, raw_config
