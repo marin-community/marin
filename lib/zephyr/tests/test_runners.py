@@ -27,7 +27,12 @@ def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
     )
 
 
-@pytest.fixture(params=[InlineRunner, SubprocessRunner], ids=["inline", "subprocess"])
+@pytest.fixture(
+    params=[
+        pytest.param(lambda n: InlineRunner(num_workers=n), id="inline"),
+        pytest.param(lambda n: SubprocessRunner(num_workers=n), id="subprocess"),
+    ]
+)
 def runner_factory(request):
     """Run each test against both shipped runners."""
     return request.param
@@ -91,11 +96,11 @@ def test_exception_preserves_user_frame(local_client, tmp_path, runner_factory):
 
 
 @pytest.mark.parametrize(
-    "runner_cls",
+    "runner_factory_fn",
     [
-        pytest.param(InlineRunner, id="inline"),
+        pytest.param(lambda n: InlineRunner(num_workers=n), id="inline"),
         pytest.param(
-            SubprocessRunner,
+            lambda n: SubprocessRunner(num_workers=n),
             id="subprocess",
             marks=pytest.mark.xfail(
                 strict=True,
@@ -105,7 +110,7 @@ def test_exception_preserves_user_frame(local_client, tmp_path, runner_factory):
         ),
     ],
 )
-def test_runner_parametrization_isolates_processes(local_client, tmp_path, runner_cls):
+def test_runner_parametrization_isolates_processes(local_client, tmp_path, runner_factory_fn):
     """Regression guard that subprocess parametrization actually spawns subprocesses.
 
     Inline reuses the worker actor (≤ max_workers PIDs); subprocess gets one PID per shard.
@@ -115,7 +120,7 @@ def test_runner_parametrization_isolates_processes(local_client, tmp_path, runne
         counters.increment(f"shard_pid_{os.getpid()}", 1)
         return x
 
-    ctx = _ctx(local_client, tmp_path, stage_runner_factory=runner_cls)
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=runner_factory_fn)
     try:
         ds = Dataset.from_list(list(range(5))).map(record_pid)
         outcome = ctx.execute(ds)
@@ -141,7 +146,7 @@ def test_subprocess_runner_isolates_native_crash(local_client, tmp_path):
 
         os._exit(139)
 
-    ctx = _ctx(local_client, tmp_path, stage_runner_factory=SubprocessRunner)
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=lambda n: SubprocessRunner(num_workers=n))
     try:
         ds = Dataset.from_list([0]).map(crash)
         with pytest.raises(ZephyrWorkerError) as exc_info:

@@ -18,7 +18,6 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any, NewType
 
@@ -51,10 +50,15 @@ class RegisteredActor:
 
 @dataclass
 class OperationState:
-    """Server-side state for a long-running operation."""
+    """Server-side state for a long-running operation.
+
+    Completion is signaled by ``_run_operation`` setting ``completed_at`` in
+    its ``finally`` block; readers derive ``state`` from that and the
+    optional ``error``/``cancelled`` fields. No Future is retained because
+    the result is recorded on this object directly.
+    """
 
     operation_id: str
-    future: Future
     cancelled: threading.Event = field(default_factory=threading.Event)
     serialized_result: bytes | None = None
     error: actor_pb2.ActorError | None = None
@@ -62,10 +66,10 @@ class OperationState:
 
     @property
     def state(self) -> int:
-        if self.cancelled.is_set() and self.future.done():
-            return actor_pb2.Operation.CANCELLED
-        if not self.future.done():
+        if self.completed_at is None:
             return actor_pb2.Operation.RUNNING
+        if self.cancelled.is_set():
+            return actor_pb2.Operation.CANCELLED
         if self.error is not None:
             return actor_pb2.Operation.FAILED
         return actor_pb2.Operation.SUCCEEDED
@@ -252,17 +256,14 @@ class ActorServer:
         method, args, kwargs = self._resolve_method(request)
 
         op_id = uuid.uuid4().hex
-        op = OperationState(operation_id=op_id, future=Future())
+        op = OperationState(operation_id=op_id)
 
         with self._operations_lock:
             self._operations[op_id] = op
 
-        # Submit to thread pool. _run_operation fills in result/error on the
-        # OperationState directly; the Future is just for tracking completion.
-        def run():
-            self._run_operation(op, method, args, kwargs)
-
-        op.future = self._executor.submit(run)
+        # _run_operation writes result/error onto `op` and stamps `completed_at`
+        # in its finally block; the executor Future itself is not retained.
+        self._executor.submit(self._run_operation, op, method, args, kwargs)
 
         logger.debug("Started operation %s for %s.%s", op_id, request.actor_name, request.method_name)
         return op.to_proto()

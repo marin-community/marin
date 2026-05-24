@@ -21,6 +21,9 @@ from enum import StrEnum
 from http.cookies import SimpleCookie
 from typing import Protocol
 
+import google.auth
+import google.auth.transport.requests
+import requests
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
@@ -86,14 +89,14 @@ def get_verified_user() -> str | None:
 class AuthzAction(StrEnum):
     """Actions requiring authorization. Add new actions here; policy is in POLICY."""
 
-    REGISTER_WORKER = "register_worker"
+    ACT_AS_WORKER = "act_as_worker"
     MANAGE_OTHER_KEYS = "manage_other_keys"
     MANAGE_BUDGETS = "manage_budgets"
 
 
 # Action → frozenset of roles allowed. Admin is implicitly always allowed.
 POLICY: dict[AuthzAction, frozenset[str]] = {
-    AuthzAction.REGISTER_WORKER: frozenset({"worker"}),
+    AuthzAction.ACT_AS_WORKER: frozenset({"worker"}),
     AuthzAction.MANAGE_OTHER_KEYS: frozenset(),  # admin only
     AuthzAction.MANAGE_BUDGETS: frozenset(),  # admin only
 }
@@ -179,8 +182,6 @@ class GcpAccessTokenVerifier:
         self._project_id = project_id
 
     def verify(self, token: str) -> VerifiedIdentity:
-        import requests
-
         resp = requests.get(self._TOKENINFO_URL, params={"access_token": token}, timeout=10)
         if resp.status_code != 200:
             raise ValueError(f"Token verification failed (status {resp.status_code})")
@@ -379,9 +380,6 @@ class GcpAccessTokenProvider:
     def get_token(self) -> str | None:
         if self._cached_token is not None and time.monotonic() < self._expires_at:
             return self._cached_token
-
-        import google.auth
-        import google.auth.transport.requests
 
         if self._creds is None:
             self._creds, _ = google.auth.default()

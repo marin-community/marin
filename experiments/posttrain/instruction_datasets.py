@@ -34,9 +34,11 @@ Current datasets:
 19. nvidia/Nemotron-Post-Training-Dataset-v1
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
-22. open-thoughts/OpenThoughts3-1.2M  # Note that this is the *original* OpenThoughts3 dataset; smoltalk2 has a slightly different version
+22. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 23. marin-community/OpenThoughts4-1.2M-Qwen3-32B  # Subsampled from full OT4 dataset annotated with Qwen3-32B
 24. open-r1/Mixture-of-Thoughts-Math  # Math subset of the Mixture-of-Thoughts dataset
+25. lm-provers/FineProofs-SFT
+26. lm-provers/FineProofs-SFT/proof-only
 """
 
 import dataclasses
@@ -241,6 +243,15 @@ class ReasoningToChatKwargs:
 
 
 reasoning_to_chat_kwargs = ReasoningToChatKwargs()
+
+FINEPROOFS_SFT_REVISION = "73661e6"
+FINEPROOFS_SFT_METADATA_COLUMNS = [
+    "category",
+    "competition",
+    "gemini-3-pro-grade",
+    "qwen3-4b-thinking-reward@128",
+    "source",
+]
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -753,6 +764,27 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ),
         metadata_columns=["source", "task_type", "problem_id"],
         name="PrimeIntellect/verifiable-math-problems",
+    ),
+    "lm-provers/FineProofs-SFT": InstructionDatasetConfig(
+        hf_dataset_id="lm-provers/FineProofs-SFT",
+        revision=FINEPROOFS_SFT_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=FINEPROOFS_SFT_METADATA_COLUMNS,
+        name="lm-provers/FineProofs-SFT",
+        subsets=["default"],
+        splits=["train"],
+    ),
+    "lm-provers/FineProofs-SFT/proof-only": InstructionDatasetConfig(
+        hf_dataset_id="lm-provers/FineProofs-SFT",
+        revision=FINEPROOFS_SFT_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="proof",
+        ),
+        metadata_columns=FINEPROOFS_SFT_METADATA_COLUMNS,
+        name="lm-provers/FineProofs-SFT/proof-only",
+        subsets=["default"],
+        splits=["train"],
     ),
     "sherryy/tulu-3-sft-personas-instruction-following-expanded": InstructionDatasetConfig(
         hf_dataset_id="sherryy/tulu-3-sft-personas-instruction-following-expanded",

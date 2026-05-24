@@ -12,18 +12,21 @@ from pathlib import Path
 from connectrpc.compression.gzip import GzipCompression
 from connectrpc.compression.zstd import ZstdCompression
 from connectrpc.interceptor import Interceptor
+from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
-from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from finelog.rpc.finelog_stats_connect import StatsServiceWSGIApplication
-from finelog.rpc.logging_connect import LogServiceWSGIApplication
-from finelog.server.interceptors import ConcurrencyLimitInterceptor
+from finelog.rpc.finelog_stats_connect import StatsServiceASGIApplication
+from finelog.rpc.logging_connect import LogServiceASGIApplication
+from finelog.server.interceptors import (
+    DEFAULT_SLOW_RPC_THRESHOLD_MS,
+    SlowRpcInterceptor,
+)
 from finelog.server.service import LogServiceImpl
 from finelog.server.stats_service import StatsServiceImpl
 
@@ -108,16 +111,20 @@ def build_log_server_asgi(
     interceptors: Iterable[Interceptor] = (),
     max_concurrent_fetch_logs: int = _MAX_CONCURRENT_FETCH_LOGS,
     max_concurrent_query: int = _MAX_CONCURRENT_QUERY,
+    slow_rpc_threshold_ms: int = DEFAULT_SLOW_RPC_THRESHOLD_MS,
     stats_service: StatsServiceImpl | None = None,
 ) -> Starlette:
     """Build the ASGI app that serves LogService and (optionally) StatsService.
 
-    A ``ConcurrencyLimitInterceptor`` is appended to each service's chain
-    to cap parallel ``FetchLogs`` and ``Query`` RPCs.
+    A ``ConcurrencyLimitInterceptor`` caps parallel ``FetchLogs`` / ``Query``
+    RPCs; a ``SlowRpcInterceptor`` emits one WARNING per call that exceeds
+    ``slow_rpc_threshold_ms``. Both are appended to the service chain so
+    caller-supplied ``interceptors`` see the raw call first.
     """
     log_chain: list[Interceptor] = list(interceptors)
+    log_chain.append(SlowRpcInterceptor(default_threshold_ms=slow_rpc_threshold_ms))
     log_chain.append(ConcurrencyLimitInterceptor({"FetchLogs": max_concurrent_fetch_logs}))
-    log_wsgi_app = LogServiceWSGIApplication(
+    log_asgi_app = LogServiceASGIApplication(
         service=service, interceptors=tuple(log_chain), compressions=_DEFAULT_COMPRESSIONS
     )
 
@@ -126,15 +133,16 @@ def build_log_server_asgi(
 
     routes = [
         Route("/health", _health),
-        Mount(log_wsgi_app.path, app=WSGIMiddleware(log_wsgi_app)),
+        Mount(log_asgi_app.path, app=log_asgi_app),
     ]
     if stats_service is not None:
         stats_chain: list[Interceptor] = list(interceptors)
+        stats_chain.append(SlowRpcInterceptor(default_threshold_ms=slow_rpc_threshold_ms))
         stats_chain.append(ConcurrencyLimitInterceptor({"Query": max_concurrent_query}))
-        stats_wsgi_app = StatsServiceWSGIApplication(
+        stats_asgi_app = StatsServiceASGIApplication(
             service=stats_service, interceptors=tuple(stats_chain), compressions=_DEFAULT_COMPRESSIONS
         )
-        routes.append(Mount(stats_wsgi_app.path, app=WSGIMiddleware(stats_wsgi_app)))
+        routes.append(Mount(stats_asgi_app.path, app=stats_asgi_app))
 
     # SPA shell at "/" and any unknown path so Vue Router can take over
     # client-side. Static assets under dist/static/* are content-hashed.

@@ -20,7 +20,7 @@ jobs:
       FERRY_STATUS_PATH: gs://marin-us-central1/tmp/ttl=1d/ci/datakit-nemotron-ferry-${{ github.run_id }}-${{ github.run_attempt }}/ferry_run_status.json
       WANDB_ENTITY: marin-community
       WANDB_PROJECT: marin
-      IRIS_CONFIG: lib/iris/examples/marin.yaml
+      IRIS_CONFIG: lib/iris/config/marin.yaml
       IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
 
     steps:
@@ -63,7 +63,7 @@ jobs:
 
       # If you change the iris flags below, also update the matching tier
       # entry in scripts/datakit/submit_perf_run.py (TIERS["3"]) so the
-      # zephyr-perf skill's treatment job stays comparable to this baseline.
+      # evaluate-zephyr-perf skill's treatment job stays comparable to this baseline.
       - name: Submit datakit nemotron ferry
         id: submit
         shell: bash -l {0}

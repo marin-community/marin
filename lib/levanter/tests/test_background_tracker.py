@@ -20,9 +20,12 @@ import threading
 import time
 from typing import Any
 
+import jax
+import jax.numpy as jnp
 import pytest
 
 from levanter.tracker import BackgroundTracker, CompositeTracker
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import Tracker
 
 
@@ -331,3 +334,53 @@ def test_background_tracker_swallows_various_exceptions(exc, caplog):
         bt.finish()
     # Second call (after the raise) should still have been recorded.
     assert inner.logs == [({"loss": 0.5}, 1, None)]
+
+
+def test_background_tracker_materializes_jax_arrays_before_enqueue():
+    """jax.Array metric values must reach the wrapped tracker as host data.
+
+    Materializing a jax.Array triggers a device->host transfer, which for a
+    sharded array is a cross-host collective. That must run on the caller
+    (trainer) thread so multi-host launch IDs stay in lockstep; if it ran on
+    the worker thread the TPU slice would desync and halt. Observable proxy:
+    the wrapped tracker never sees a jax.Array.
+    """
+    inner = RecordingTracker()
+    bt = BackgroundTracker(inner)
+    try:
+        bt.log({"loss": jnp.asarray(1.5), "steps": jnp.arange(3)}, step=0)
+        bt.log_summary({"final": jnp.asarray(0.25)})
+        bt.log_hyperparameters({"lr": jnp.asarray(3e-4)})
+        assert bt._wait_until_idle(timeout=5)
+    finally:
+        bt.finish()
+
+    logged = inner.logs[0][0]
+    assert not isinstance(logged["loss"], jax.Array)
+    assert not isinstance(logged["steps"], jax.Array)
+    assert not isinstance(inner.summary[0]["final"], jax.Array)
+    assert not isinstance(inner.hparams[0]["lr"], jax.Array)
+    # Values must survive materialization unchanged.
+    assert float(logged["loss"]) == 1.5
+    assert list(logged["steps"]) == [0, 1, 2]
+
+
+def test_background_tracker_materializes_summary_stats_leaves():
+    """SummaryStats is a pytree; its jax.Array leaves must be materialized too.
+
+    Grug MoE logs per-layer routing SummaryStats every step. Their scalar
+    fields are sharded jax.Arrays, so leaving them for the worker thread to
+    convert is exactly the multi-host hazard this materialization prevents.
+    """
+    inner = RecordingTracker()
+    bt = BackgroundTracker(inner)
+    try:
+        bt.log({"grads/hist": SummaryStats.from_array(jnp.arange(100.0))}, step=0)
+        assert bt._wait_until_idle(timeout=5)
+    finally:
+        bt.finish()
+
+    logged = inner.logs[0][0]["grads/hist"]
+    assert isinstance(logged, SummaryStats)
+    for leaf in jax.tree_util.tree_leaves(logged):
+        assert not isinstance(leaf, jax.Array)

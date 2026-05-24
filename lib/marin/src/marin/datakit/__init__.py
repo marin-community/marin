@@ -3,14 +3,10 @@
 
 """Datakit: composable pipeline stages with a standard Parquet format.
 
-The standard format pins three mandatory columns on every normalized record:
-``id`` (deterministic content hash), ``text`` (UTF-8 primary content), and
-``partition_id`` (int, the output shard the row was written to at normalize
-time). The shard count itself lives on the artifact, not the row.
-
-Downstream stages preserve ``partition_id`` and use it as the ``group_by`` key
-when a global shuffle (e.g. cross-document dedup) needs to land output back
-co-partitioned with the source.
+The standard format pins two mandatory columns on every normalized record:
+``id`` (deterministic content hash) and ``text`` (UTF-8 primary content).
+The partition index lives in the filename (``part-NNNNN-of-MMMMM.parquet``)
+and is derived at reader time from sorted file order, not stamped per row.
 """
 
 

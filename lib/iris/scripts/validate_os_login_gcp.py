@@ -44,7 +44,7 @@ from rigging.timing import Duration
 
 logger = logging.getLogger("validate-os-login-gcp")
 IRIS_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = IRIS_ROOT / "examples" / "marin-dev.yaml"
+DEFAULT_CONFIG = IRIS_ROOT / "config" / "marin-dev.yaml"
 
 
 @dataclass

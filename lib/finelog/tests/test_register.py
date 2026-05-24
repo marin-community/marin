@@ -175,9 +175,20 @@ def test_register_type_change_rejects(store: DuckDBLogStore):
         store.register_table("iris.worker", bad)
 
 
-def test_register_key_column_change_rejects(store: DuckDBLogStore):
+def test_register_key_column_mismatch_uses_registered(store: DuckDBLogStore, caplog):
+    """The registered key_column is server-authoritative.
+
+    Clients send ``key_column`` only as a hint; the server-side namespace
+    owns every code path that touches the key (flush-time bounds,
+    compaction ORDER BY, bloom-filter columns). A stale worker that still
+    declares the previous key column must keep writing successfully — we
+    coerce its hint to the registered value and log once instead of
+    rejecting the register.
+    """
     base = _worker_schema()
     store.register_table("iris.worker", base)
-    bad = Schema(columns=base.columns, key_column="timestamp_ms")  # was empty
-    with pytest.raises(SchemaConflictError):
-        store.register_table("iris.worker", bad)
+    requested = Schema(columns=base.columns, key_column="timestamp_ms")
+    with caplog.at_level("WARNING", logger="finelog.store.schema"):
+        effective = store.register_table("iris.worker", requested)
+    assert effective.key_column == base.key_column
+    assert any("key_column hint mismatch" in r.message for r in caplog.records)

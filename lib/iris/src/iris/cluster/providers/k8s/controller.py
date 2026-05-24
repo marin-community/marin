@@ -20,6 +20,7 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from urllib.parse import urlparse
 
+import fsspec.config
 from rigging.timing import Deadline
 
 from iris.cluster.config import config_to_dict
@@ -95,8 +96,6 @@ def configure_client_s3(config: config_pb2.IrisClusterConfig) -> None:
         os.environ["FSSPEC_S3"] = json.dumps(fsspec_conf)
 
     # Flush fsspec/s3fs cached instances so they pick up the new config.
-    import fsspec.config
-
     fsspec.config.set_conf_env(fsspec.config.conf)
     try:
         import s3fs

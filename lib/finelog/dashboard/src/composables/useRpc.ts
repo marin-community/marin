@@ -15,6 +15,27 @@ export interface RpcState<T> {
   refresh: () => Promise<void>
 }
 
+// Connect-JSON error envelope: { code: string, message: string }. Without
+// parsing, the dashboard would display the raw JSON (escaped quotes and all),
+// which the user reads as "broken escaping" — see the iris.task GROUP-BY
+// example. We surface `message` verbatim instead; the parser-error newlines
+// and `LINE 1: ...` carets pass through to the <pre> in the error card.
+async function formatConnectError(method: string, resp: Response): Promise<string> {
+  const text = await resp.text().catch(() => '')
+  if (text) {
+    try {
+      const parsed = JSON.parse(text) as { message?: unknown }
+      if (typeof parsed.message === 'string' && parsed.message) {
+        return `${method}: ${parsed.message}`
+      }
+    } catch {
+      // fall through to the raw-text branch
+    }
+    return `${method}: ${resp.status} ${resp.statusText} — ${text}`
+  }
+  return `${method}: ${resp.status} ${resp.statusText}`
+}
+
 function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T> {
   const data = ref<T | null>(null) as Ref<T | null>
   const loading = ref(false)
@@ -34,8 +55,7 @@ function useRpc<T>(service: string, method: string, body?: RpcBody): RpcState<T>
       })
       if (gen !== generation) return
       if (!resp.ok) {
-        const text = await resp.text().catch(() => '')
-        throw new Error(`${method}: ${resp.status} ${resp.statusText}${text ? ` — ${text}` : ''}`)
+        throw new Error(await formatConnectError(method, resp))
       }
       const payload = (await resp.json()) as T
       if (gen !== generation) return
@@ -66,8 +86,7 @@ export async function statsRpcCall<T>(method: string, body?: Record<string, unkn
     body: JSON.stringify(body ?? {}),
   })
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '')
-    throw new Error(`${method}: ${resp.status} ${resp.statusText}${text ? ` — ${text}` : ''}`)
+    throw new Error(await formatConnectError(method, resp))
   }
   return resp.json() as Promise<T>
 }
@@ -79,8 +98,7 @@ export async function logRpcCall<T>(method: string, body?: Record<string, unknow
     body: JSON.stringify(body ?? {}),
   })
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '')
-    throw new Error(`${method}: ${resp.status} ${resp.statusText}${text ? ` — ${text}` : ''}`)
+    throw new Error(await formatConnectError(method, resp))
   }
   return resp.json() as Promise<T>
 }

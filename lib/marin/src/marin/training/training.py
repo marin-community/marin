@@ -343,7 +343,7 @@ def _prepare_training_run(
         train_config = replace(train_config, trainer=trainer)
 
     if not isinstance(config.resources.device, CpuConfig):
-        _doublecheck_paths(config)
+        doublecheck_paths(config)
 
     return config, train_config, env
 
@@ -474,10 +474,6 @@ def doublecheck_paths(config: TrainOnPodConfigT) -> TrainOnPodConfigT:
     """
     check_train_config_paths(config.train_config, config.resources)
     return config
-
-
-# Keep the private alias so any internal call sites continue to work.
-_doublecheck_paths = doublecheck_paths
 
 
 def _add_default_env_variables(env: dict, default_env: dict | None):

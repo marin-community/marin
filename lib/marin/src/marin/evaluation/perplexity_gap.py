@@ -7,11 +7,18 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
+import wandb
 from fray import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, TpuConfig, create_environment
 from levanter.analysis.model_perplexity import compare_scored_outputs
 from levanter.analysis.perplexity_gap import write_report_files
-from levanter.data.text import DatasetComponent, HfDatasetSourceConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
+from levanter.data.text import (
+    DatasetComponent,
+    HfDatasetSourceConfig,
+    SupervisedLmDatasetFormat,
+    TextLmDatasetFormat,
+    UrlDatasetSourceConfig,
+)
 from levanter.main.perplexity_gap import (
     GapFinderModelConfig as LevanterGapFinderModelConfig,
 )
@@ -49,7 +56,10 @@ class RawTextEvaluationDataset:
     input_path: str | InputName | ExecutorStep | None = None
     hf_dataset_id: str | None = None
     hf_dataset_name: str | None = None
+    hf_dataset_revision: str | None = None
     text_key: str = "text"
+    input_key: str | None = None
+    target_key: str | None = None
     split: str = "validation"
     tags: tuple[str, ...] = ()
 
@@ -78,6 +88,7 @@ class ModelPerplexityGapConfig:
     model_b_scores_path: str | InputName | ExecutorStep
     output_path: str = field(default_factory=this_output_path)  # type: ignore[arg-type]
     wandb_tags: list[str] | None = None
+    retry_key: str | None = None
     cache_key: dict[str, Any] | VersionedValue[dict[str, Any]] = field(default_factory=dict, repr=False)
 
 
@@ -92,6 +103,7 @@ def raw_text_dataset(
         return RawTextEvaluationDataset(
             hf_dataset_id=source.id,
             hf_dataset_name=source.name,
+            hf_dataset_revision=source.revision,
             text_key=text_key,
             split=split,
             tags=tags,
@@ -99,6 +111,35 @@ def raw_text_dataset(
     if split != "validation":
         raise ValueError("split is only supported for Hugging Face dataset sources; file paths use validation.")
     return RawTextEvaluationDataset(input_path=source, text_key=text_key, split=split, tags=tags)
+
+
+def supervised_text_dataset(
+    source: str | InputName | ExecutorStep | HfDatasetSpec,
+    *,
+    input_key: str = "input",
+    target_key: str = "target",
+    split: str = "validation",
+    tags: tuple[str, ...] = (),
+) -> RawTextEvaluationDataset:
+    if isinstance(source, HfDatasetSpec):
+        return RawTextEvaluationDataset(
+            hf_dataset_id=source.id,
+            hf_dataset_name=source.name,
+            hf_dataset_revision=source.revision,
+            input_key=input_key,
+            target_key=target_key,
+            split=split,
+            tags=tags,
+        )
+    if split != "validation":
+        raise ValueError("split is only supported for Hugging Face dataset sources; file paths use validation.")
+    return RawTextEvaluationDataset(
+        input_path=source,
+        input_key=input_key,
+        target_key=target_key,
+        split=split,
+        tags=tags,
+    )
 
 
 def model_perplexity_scores(
@@ -153,7 +194,9 @@ def model_perplexity_gap_from_scores(
     model_a_scores_path: str | InputName | ExecutorStep,
     model_b_scores_path: str | InputName | ExecutorStep,
     name: str,
+    resource_config: ResourceConfig | None = None,
     wandb_tags: list[str] | None = None,
+    retry_key: str | None = None,
 ) -> ExecutorStep:
     return ExecutorStep(
         name=f"analysis/perplexity_gap/{name}",
@@ -165,15 +208,18 @@ def model_perplexity_gap_from_scores(
             model_a_scores_path=model_a_scores_path,
             model_b_scores_path=model_b_scores_path,
             wandb_tags=wandb_tags,
+            retry_key=retry_key,
             cache_key=versioned(
                 {
                     "name": name,
                     "model_a_name": model_a_name,
                     "model_b_name": model_b_name,
                     "wandb_tags": wandb_tags,
+                    "retry_key": retry_key,
                 }
             ),
         ),
+        resources=resource_config,
     )
 
 
@@ -236,8 +282,6 @@ def _log_gap_report_to_wandb(*, config: ModelPerplexityGapConfig, summary: dict[
 
     with tempfile.TemporaryDirectory(prefix="perplexity-gap-report-") as tmpdir:
         write_report_files(tmpdir, summary)
-        import wandb
-
         artifact = wandb.Artifact(name="perplexity_gap_report", type="perplexity_gap_report")
         artifact.add_dir(tmpdir)
         run.log_artifact(artifact)
@@ -257,11 +301,17 @@ def _to_levanter_model_config(config: GapFinderModelConfig) -> LevanterGapFinder
 
 
 def _to_dataset_component(config: RawTextEvaluationDataset) -> DatasetComponent:
-    dataset_format = TextLmDatasetFormat(text_key=config.text_key)
+    if config.input_key is None and config.target_key is None:
+        dataset_format = TextLmDatasetFormat(text_key=config.text_key)
+    elif config.input_key is not None and config.target_key is not None:
+        dataset_format = SupervisedLmDatasetFormat(input_key=config.input_key, target_key=config.target_key)
+    else:
+        raise ValueError("RawTextEvaluationDataset must set both input_key and target_key for supervised data.")
     if config.hf_dataset_id is not None:
         source = HfDatasetSourceConfig(
             id=config.hf_dataset_id,
             name=config.hf_dataset_name,
+            revision=config.hf_dataset_revision,
             format=dataset_format,
             splits=[config.split],
         )
@@ -328,7 +378,10 @@ def _cache_key_for_dataset(dataset: RawTextEvaluationDataset) -> dict[str, Any]:
         "input_path": input_path,
         "hf_dataset_id": dataset.hf_dataset_id,
         "hf_dataset_name": dataset.hf_dataset_name,
+        "hf_dataset_revision": dataset.hf_dataset_revision,
         "text_key": dataset.text_key,
+        "input_key": dataset.input_key,
+        "target_key": dataset.target_key,
         "split": dataset.split,
         "tags": dataset.tags,
     }

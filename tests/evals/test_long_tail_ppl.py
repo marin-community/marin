@@ -2,8 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from levanter.data.text import HfDatasetSourceConfig
-from marin.evaluation.perplexity_gap import _to_dataset_component, raw_text_dataset
+from levanter.data.text import HfDatasetSourceConfig, SupervisedLmDatasetFormat
+from marin.evaluation.perplexity_gap import (
+    _cache_key_for_dataset,
+    _to_dataset_component,
+    raw_text_dataset,
+    supervised_text_dataset,
+)
 from marin.processing.tokenize import HfDatasetSpec
 
 from experiments.evals.long_tail_ppl import (
@@ -37,14 +42,57 @@ def test_long_tail_registry_rendering_mentions_issue_links():
 
 
 def test_hf_backed_raw_dataset_preserves_requested_split():
-    dataset = raw_text_dataset(HfDatasetSpec(id="example/dataset"), text_key="body", split="test")
+    dataset = raw_text_dataset(
+        HfDatasetSpec(id="example/dataset", name="raw_config", revision="raw-revision-abc123"),
+        text_key="body",
+        split="test",
+    )
 
     component = _to_dataset_component(dataset)
 
     assert component.split == "test"
     assert component.format.text_key == "body"
     assert isinstance(component.source, HfDatasetSourceConfig)
+    assert component.source.name == "raw_config"
+    assert component.source.revision == "raw-revision-abc123"
     assert component.source.splits == ["test"]
+
+
+def test_hf_backed_supervised_dataset_uses_supervised_format():
+    dataset = supervised_text_dataset(
+        HfDatasetSpec(id="example/dataset", name="supervised_config", revision="supervised-revision-def456"),
+        input_key="prompt",
+        target_key="completion",
+        split="test",
+    )
+
+    component = _to_dataset_component(dataset)
+
+    assert component.split == "test"
+    assert isinstance(component.format, SupervisedLmDatasetFormat)
+    assert component.format.input_key == "prompt"
+    assert component.format.target_key == "completion"
+    assert isinstance(component.source, HfDatasetSourceConfig)
+    assert component.source.name == "supervised_config"
+    assert component.source.revision == "supervised-revision-def456"
+    assert component.source.splits == ["test"]
+
+
+def test_hf_dataset_revision_changes_per_dataset_score_cache_key():
+    old_dataset = supervised_text_dataset(
+        HfDatasetSpec(id="example/dataset", name="config", revision="old-commit"),
+        input_key="prompt",
+        target_key="completion",
+    )
+    new_dataset = supervised_text_dataset(
+        HfDatasetSpec(id="example/dataset", name="config", revision="new-commit"),
+        input_key="prompt",
+        target_key="completion",
+    )
+
+    assert _cache_key_for_dataset(old_dataset)["hf_dataset_revision"] == "old-commit"
+    assert _cache_key_for_dataset(new_dataset)["hf_dataset_revision"] == "new-commit"
+    assert _cache_key_for_dataset(old_dataset) != _cache_key_for_dataset(new_dataset)
 
 
 def test_file_backed_raw_dataset_rejects_non_validation_split():

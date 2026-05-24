@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -11,6 +11,7 @@ import {
 import type { WorkerResourceTotals, WorkerSample } from "../api";
 import { useWorkers } from "../hooks/useWorkers";
 import { useWorkersHistory } from "../hooks/useWorkersHistory";
+import { displayedSpanLabel, formatClock, useContainerSize } from "./chartUtils";
 
 // Palette for per-region chart lines. Picked for good contrast on the
 // dark background; cycles if there are more regions than entries.
@@ -24,13 +25,6 @@ const REGION_COLORS = [
   "#14b8a6", // teal-500
   "#3b82f6", // blue-500
 ];
-
-function formatClock(ms: number): string {
-  const d = new Date(ms);
-  const hh = d.getHours().toString().padStart(2, "0");
-  const mm = d.getMinutes().toString().padStart(2, "0");
-  return `${hh}:${mm}`;
-}
 
 // Turn total_cpu_millicores into a human-readable CPU-core count.
 // 1000 millicores = 1 full core. k-suffix for anything above ~10k.
@@ -101,29 +95,6 @@ function ResourceLine({ resources }: { resources: WorkerResourceTotals }) {
   );
 }
 
-function useContainerSize<T extends HTMLElement>() {
-  const [node, setNode] = useState<T | null>(null);
-  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
-
-  const ref = useCallback((el: T | null) => setNode(el), []);
-
-  useEffect(() => {
-    if (!node) return;
-    const obs = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0) {
-          setSize({ width, height });
-        }
-      }
-    });
-    obs.observe(node);
-    return () => obs.disconnect();
-  }, [node]);
-
-  return { ref, size };
-}
-
 // Flatten `{t, regions: {us-west4: 232, ...}}` samples into
 // `{t, "us-west4": 232, ...}` rows that recharts can consume via
 // `dataKey={region}` on each <Line>. Also returns the ordered list of
@@ -170,6 +141,14 @@ export function WorkersPanel() {
     [data?.byRegion],
   );
   const { rows: chartRows, regions: chartRegions } = useChartData(samples, currentOrder);
+  // Color is keyed by region name (alphabetical), not display index, so a
+  // region keeps the same color even when worker counts reorder the legend.
+  const colorByRegion = useMemo(() => {
+    const sorted = [...chartRegions].sort();
+    const map = new Map<string, string>();
+    sorted.forEach((r, i) => map.set(r, REGION_COLORS[i % REGION_COLORS.length]));
+    return map;
+  }, [chartRegions]);
 
   return (
     <div>
@@ -179,7 +158,7 @@ export function WorkersPanel() {
         </h3>
         <span className="text-xs text-slate-500">
           {samples.length > 1
-            ? `${samples.length} samples · last 24h`
+            ? `${samples.length} samples · ${displayedSpanLabel(samples)}`
             : "history warming up"}
         </span>
       </div>
@@ -201,7 +180,7 @@ export function WorkersPanel() {
                   width={chartSize.width}
                   height={chartSize.height}
                   data={chartRows}
-                  margin={{ top: 4, right: 8, bottom: 4, left: -16 }}
+                  margin={{ top: 4, right: 8, bottom: 4, left: 12 }}
                 >
                   <CartesianGrid stroke="#1e293b" strokeDasharray="2 4" />
                   <XAxis
@@ -212,7 +191,17 @@ export function WorkersPanel() {
                     stroke="#475569"
                     fontSize={11}
                   />
-                  <YAxis stroke="#475569" fontSize={11} />
+                  <YAxis
+                    width={58}
+                    stroke="#475569"
+                    fontSize={11}
+                    label={{
+                      value: "Workers",
+                      angle: -90,
+                      position: "insideLeft",
+                      style: { fill: "#64748b", fontSize: 11 },
+                    }}
+                  />
                   <Tooltip
                     contentStyle={{
                       background: "#0f172a",
@@ -230,13 +219,13 @@ export function WorkersPanel() {
                     iconType="plainline"
                     wrapperStyle={{ fontSize: 11, color: "#94a3b8" }}
                   />
-                  {chartRegions.map((region, i) => (
+                  {chartRegions.map((region) => (
                     <Line
                       key={region}
                       type="monotone"
                       dataKey={region}
                       name={region}
-                      stroke={REGION_COLORS[i % REGION_COLORS.length]}
+                      stroke={colorByRegion.get(region)}
                       strokeWidth={2}
                       dot={false}
                       isAnimationActive={false}

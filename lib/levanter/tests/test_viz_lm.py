@@ -5,7 +5,6 @@ import os
 import tempfile
 
 import jax
-import pytest
 
 import haliax
 
@@ -17,7 +16,6 @@ from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
 from levanter.tracker import NoopConfig
 
 
-@pytest.mark.entry
 def test_viz_lm():
     # just testing if eval_lm has a pulse
     # save a checkpoint

@@ -67,14 +67,24 @@ def test_list_jobs_filter_by_state(harness: ServiceTestHarness):
     assert done_id.to_wire() not in pending_ids
 
 
-def test_list_jobs_filter_by_name(harness: ServiceTestHarness):
-    """list_jobs name_filter matches job names containing the substring."""
+@pytest.mark.parametrize(
+    "query_kwargs",
+    [
+        pytest.param({"name_filter": "exp-"}, id="name_filter_substring"),
+        # job_id_prefix needs the user segment because the match is anchored
+        # against the full wire-form job_id.
+        pytest.param({"job_id_prefix": "/test-user/exp-"}, id="job_id_prefix_anchored"),
+    ],
+)
+def test_list_jobs_filter_includes_only_matching(harness: ServiceTestHarness, query_kwargs):
+    """Both ListJobs filter fields exclude non-matching jobs."""
     harness.submit("exp-a-job")
     harness.submit("exp-b-job")
     other_id = harness.submit("other-job")
 
     resp = harness.service.list_jobs(
-        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(name_filter="exp-")), None
+        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(**query_kwargs)),
+        None,
     )
     job_ids = {j.job_id for j in resp.jobs}
 

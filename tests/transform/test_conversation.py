@@ -48,6 +48,36 @@ PREFERENCE_DATA_SAMPLE = {
     "metadata_field": "pref_test",
 }
 
+FINEPROOFS_MESSAGES_SAMPLE = {
+    "messages": [
+        {"role": "user", "content": "Prove that 1 + 1 = 2."},
+        {"role": "assistant", "content": "<think>Use Peano arithmetic.</think>\nHere is the proof."},
+    ],
+    "category": "number_theory",
+    "competition": "imo",
+    "gemini-3-pro-grade": 7,
+    "qwen3-4b-thinking-reward@128": 0.93,
+    "source": "olympiads",
+}
+
+FINEPROOFS_PROOF_ONLY_SAMPLE = {
+    "problem": "Show that the sum of two even integers is even.",
+    "proof": "Let the integers be 2a and 2b. Their sum is 2(a + b), so it is even.",
+    "category": "algebra",
+    "competition": "aops",
+    "gemini-3-pro-grade": 6,
+    "qwen3-4b-thinking-reward@128": 0.75,
+    "source": "aops",
+}
+
+FINEPROOFS_METADATA_COLUMNS = [
+    "category",
+    "competition",
+    "gemini-3-pro-grade",
+    "qwen3-4b-thinking-reward@128",
+    "source",
+]
+
 
 class TestTransformAdapters:
     """Test the different adapter formats."""
@@ -126,6 +156,68 @@ class TestTransformRow:
         assert "<|start_think|>" in response_message.content
         assert "<|end_think|>" in response_message.content
         assert "<think>" not in response_message.content
+
+    def test_fineproofs_multi_turn_row_preserves_metadata_and_rewrites_think_tags(self):
+        """Test FineProofs-like multi-turn rows."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            conversation_column="messages",
+            role_key="role",
+            content_key="content",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="lm-provers/FineProofs-SFT",
+            revision="73661e6",
+            output_path="/tmp/output",
+            metadata_columns=FINEPROOFS_METADATA_COLUMNS,
+            adapter=adapter,
+        )
+
+        result = transform_row(FINEPROOFS_MESSAGES_SAMPLE, cfg, adapter)
+
+        assert result is not None
+        assert result.source == "lm-provers/FineProofs-SFT"
+        assert result.metadata == {
+            "category": "number_theory",
+            "competition": "imo",
+            "gemini-3-pro-grade": 7,
+            "qwen3-4b-thinking-reward@128": 0.93,
+            "source": "olympiads",
+        }
+        assert result.messages[0].content == "Prove that 1 + 1 = 2."
+        assert result.messages[1].content == "<|start_think|>Use Peano arithmetic.<|end_think|>\nHere is the proof."
+
+    def test_fineproofs_proof_only_row_builds_instruction_response_chat(self):
+        """Test FineProofs proof-only row conversion."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+            instruction_column="problem",
+            response_column="proof",
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="lm-provers/FineProofs-SFT",
+            revision="73661e6",
+            output_path="/tmp/output",
+            metadata_columns=FINEPROOFS_METADATA_COLUMNS,
+            adapter=adapter,
+        )
+
+        result = transform_row(FINEPROOFS_PROOF_ONLY_SAMPLE, cfg, adapter)
+
+        assert result is not None
+        assert [message.role for message in result.messages] == ["user", "assistant"]
+        assert result.messages[0].content == FINEPROOFS_PROOF_ONLY_SAMPLE["problem"]
+        assert result.messages[1].content == FINEPROOFS_PROOF_ONLY_SAMPLE["proof"]
+        assert result.metadata == {
+            "category": "algebra",
+            "competition": "aops",
+            "gemini-3-pro-grade": 6,
+            "qwen3-4b-thinking-reward@128": 0.75,
+            "source": "aops",
+        }
 
 
 class TestPreferenceDataTransform:

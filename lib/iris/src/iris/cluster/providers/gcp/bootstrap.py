@@ -135,6 +135,16 @@ fi
 # Ensure docker daemon is running
 sudo systemctl start docker || true
 
+# gcloud ships as a snap on tpu-ubuntu2204-base; snapd mounts snaps
+# asynchronously during boot. Wait for seeding to finish here so `gcloud`
+# is on PATH for Artifact Registry auth below. Placed right after the
+# Docker daemon start so seeding overlaps with it and usually returns
+# immediately.
+if command -v snap &> /dev/null; then
+    timeout 300 snap wait system seed.loaded || echo "[iris-init] Warning: snap seed wait timed out"
+fi
+export PATH="$PATH:/snap/bin"
+
 # Tune network stack for high-connection workloads (#3066).
 # Expands ephemeral port range, allows reuse of TIME_WAIT sockets,
 # and raises listen backlog for actor servers handling 1000s of workers.
@@ -177,8 +187,11 @@ echo "[iris-init] Phase: worker_start"
 # from a previous worker during rolling restarts.
 sudo docker rm -f iris-worker 2>/dev/null || true
 
-# Start worker container without restart policy first (fail fast during bootstrap)
+# Start worker container with restart policy from the start so transient
+# failures (image pull races, network hiccups, etc.) self-heal. Give-up is
+# owned by the autoscaler's slice health probe, not by docker.
 sudo docker run -d --name iris-worker \\
+    --restart=unless-stopped \\
     --network=host \\
     --ulimit core=0:0 \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
@@ -192,29 +205,21 @@ echo "[iris-init] Worker container started"
 echo "[iris-init] Phase: registration"
 echo "[iris-init] Waiting for worker to register with controller..."
 
-# Wait for worker to be healthy (poll health endpoint)
+# Poll the health endpoint to report bootstrap status. Docker handles
+# restarts; the autoscaler health probe handles give-up if /health never
+# comes up.
 for i in $(seq 1 60); do
-    # Check if container is still running
-    if ! sudo docker ps -q -f name=iris-worker | grep -q .; then
-        echo "[iris-init] ERROR: Worker container exited unexpectedly"
-        echo "[iris-init] Container status:"
-        sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
-        echo "[iris-init] Container logs:"
-        sudo docker logs iris-worker --tail 100 2>&1 | sed 's/^/[iris-init] /'
-        exit 1
-    fi
-
     if curl -sf http://localhost:{{ worker_port }}/health > /dev/null 2>&1; then
         echo "[iris-init] Worker is healthy"
-        # Now add restart policy for production
-        sudo docker update --restart=unless-stopped iris-worker
         echo "[iris-init] Bootstrap complete"
         exit 0
     fi
     sleep 2
 done
 
-echo "[iris-init] ERROR: Worker failed to become healthy after 120s"
+echo "[iris-init] WARNING: Worker not healthy after 120s. Docker will keep restarting the"
+echo "[iris-init] container (--restart=unless-stopped); the autoscaler health probe will reap"
+echo "[iris-init] this slice if /health stays down for ~100s of probes."
 echo "[iris-init] Container status:"
 sudo docker ps -a -f name=iris-worker --format "table {{.Status}}\\t{{.State}}" 2>&1 | sed 's/^/[iris-init] /'
 echo "[iris-init] Container logs:"
@@ -310,6 +315,14 @@ else
     echo "[iris-controller] [2/5] ERROR: Docker daemon failed to start"
     exit 1
 fi
+
+# gcloud ships as a snap on the base image; snapd mounts snaps asynchronously
+# during boot. Wait for seeding to finish so `gcloud` is on PATH for Artifact
+# Registry auth below.
+if command -v snap &> /dev/null; then
+    timeout 300 snap wait system seed.loaded || echo "[iris-controller] Warning: snap seed wait timed out"
+fi
+export PATH="$PATH:/snap/bin"
 
 # Tune network stack for high-connection workloads (#3066).
 sudo sysctl -w net.ipv4.ip_local_port_range="1024 65535"
@@ -479,7 +492,7 @@ def build_controller_bootstrap_script_from_config(
         fresh: When True, pass ``--fresh`` to the controller serve command so
             it starts with an empty local database and skips checkpoint restore.
     """
-    # Local import to avoid circular dependency (config.py imports from bootstrap)
+    # circular import: config → factory → gcp.workers → bootstrap → config
     from iris.cluster.config import config_to_dict
 
     config_yaml = yaml.dump(config_to_dict(config), default_flow_style=False)

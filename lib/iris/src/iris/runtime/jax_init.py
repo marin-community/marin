@@ -14,8 +14,9 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import time
 
-from rigging.timing import Duration, ExponentialBackoff
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
@@ -79,22 +80,17 @@ def _poll_for_coordinator(
     Raises:
         TimeoutError: If the coordinator is not found within timeout.
     """
-    result: list[str] = []
-
-    def _check() -> bool:
+    backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
+    deadline = Deadline.from_now(Duration.from_seconds(timeout))
+    while True:
         resolved = resolver.resolve(endpoint_name)
         if not resolved.is_empty:
-            result.append(resolved.first().url)
-            return True
-        return False
-
-    backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
-    backoff.wait_until_or_raise(
-        _check,
-        timeout=Duration.from_seconds(timeout),
-        error_message=f"Timed out after {timeout}s waiting for coordinator endpoint '{endpoint_name}'",
-    )
-    return result[0]
+            return resolved.first().url
+        if deadline.expired():
+            raise TimeoutError(f"Timed out after {timeout}s waiting for coordinator endpoint '{endpoint_name}'")
+        interval = min(backoff.next_interval(), deadline.remaining_seconds())
+        if interval > 0:
+            time.sleep(interval)
 
 
 def initialize_jax(
@@ -125,7 +121,7 @@ def initialize_jax(
         poll_timeout: Maximum seconds for non-coordinator tasks to wait.
         poll_interval: Initial backoff delay for polling (seconds).
     """
-    import jax
+    import jax  # heavy import; lazy by design
 
     # TPU has its own coordinator discovery via the TPU runtime, so avoid the
     # Iris endpoint dance. We still call JAX distributed initialization to

@@ -553,8 +553,6 @@ class LevanterHarnessLM(TemplateLM):
         if self._current_step == start_step and not self._profiler_started:
             _create_perfetto_link = self.profiler_config.perfetto_link and jax.process_index() == 0
 
-            import os
-
             os.makedirs(self.profiler_config.profile_path, exist_ok=True)
 
             logger.info(f"Starting profiler at step {self._current_step} (will profile until step {end_step})")
@@ -1644,8 +1642,6 @@ def lm_eval_harness(
 
             # don't delete b/c wandb will sometimes defer upload
             with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
-                import json
-
                 json.dump(outputs, f, cls=FailSafeJSONEncoder)
                 f.flush()
                 levanter.tracker.current_tracker().log_artifact(

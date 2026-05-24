@@ -1142,6 +1142,7 @@ class IrisConfig:
 
         return create_provider_bundle(
             platform_config=self._proto.platform,
+            worker_port=self._proto.defaults.worker.port,
             cluster_config=self._proto,
             ssh_config=self._proto.defaults.ssh,
         )
@@ -1239,7 +1240,6 @@ def create_autoscaler(
     _validate_autoscaler_config(autoscaler_config, context="create_autoscaler")
     _validate_scale_group_resources(_scale_groups_to_config(scale_groups))
 
-    scale_up_delay = duration_from_proto(autoscaler_config.scale_up_delay)
     scale_down_delay = duration_from_proto(autoscaler_config.scale_down_delay)
 
     scaling_groups: dict[str, ScalingGroup] = {}
@@ -1248,7 +1248,6 @@ def create_autoscaler(
             config=group_config,
             platform=platform,
             label_prefix=label_prefix,
-            scale_up_cooldown=scale_up_delay,
             idle_threshold=scale_down_delay,
             scale_up_rate_limit=group_config.scale_up_rate_limit or DEFAULT_SCALE_UP_RATE_LIMIT,
             scale_down_rate_limit=group_config.scale_down_rate_limit or DEFAULT_SCALE_DOWN_RATE_LIMIT,

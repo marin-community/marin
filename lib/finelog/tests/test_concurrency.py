@@ -25,7 +25,7 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
 
     def writer():
         try:
-            n = store.write_rows("iris.worker", payload)
+            n, _ = store.write_rows("iris.worker", payload)
             write_results.append(n)
         except Exception as exc:
             write_results.append(exc)
@@ -57,12 +57,12 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
 
     if drop_succeeded:
         # In-memory chunks for successful writes evaporate by design.
-        assert "iris.worker" not in store._namespaces
+        assert "iris.worker" not in store.catalog
     else:
-        assert "iris.worker" in store._namespaces
-        ns = store._namespaces["iris.worker"]
-        ns._flush_step()
-        ns._force_compact_l0()
+        assert "iris.worker" in store.catalog
+        ns = store.catalog["iris.worker"]
+        ns.flush()
+        ns.force_compact_l0()
         table = store.query('SELECT worker_id FROM "iris.worker"')
         assert table.num_rows == successes
 
@@ -70,8 +70,8 @@ def test_drop_during_concurrent_write_is_safe(store: DuckDBLogStore):
 def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
     """A query iterating namespaces is safe against a concurrent drop.
 
-    Regression: ``query()`` must snapshot ``self._namespaces`` under the
-    insertion lock so a concurrent ``drop_table`` can't trigger
+    Regression: ``query()`` must snapshot the live namespace dict under
+    the catalog lock so a concurrent ``drop_table`` can't trigger
     ``RuntimeError: dictionary changed size during iteration``.
     """
     store.register_table("ns.alpha", _worker_schema())
@@ -79,7 +79,7 @@ def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
     store.write_rows("ns.alpha", _ipc_bytes(_worker_batch(["a"], [1], [1])))
     _seal(store, "ns.alpha")
 
-    alpha_ns = store._namespaces["ns.alpha"]
+    alpha_ns = store.catalog["ns.alpha"]
     in_loop = threading.Event()
     proceed = threading.Event()
     orig_query_snapshot = alpha_ns.query_snapshot
@@ -124,10 +124,10 @@ def test_query_safe_against_concurrent_drop_table(store: DuckDBLogStore):
 def test_query_acquires_read_lock_for_duration(store: DuckDBLogStore):
     """``store.query`` takes the read lock; the write lock waits for it."""
     store.register_table("iris.worker", _worker_schema())
-    ns = store._namespaces["iris.worker"]
+    ns = store.catalog["iris.worker"]
     store.write_rows("iris.worker", _ipc_bytes(_worker_batch(["w-1"], [100], [1])))
-    ns._flush_step()
-    ns._force_compact_l0()
+    ns.flush()
+    ns.force_compact_l0()
 
     rwlock = store._query_visibility_lock
     write_held_during_query: list[bool] = []

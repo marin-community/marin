@@ -6,7 +6,6 @@ import re
 from textwrap import fill
 
 import markdownify
-import six
 from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
 from regex import regex
@@ -386,7 +385,7 @@ class MyMarkdownConverter(MarkdownConverter):
                     or is_nested_node(el.previous_sibling)
                     or is_nested_node(el.next_sibling)
                 )
-                if isinstance(el, NavigableString) and six.text_type(el).strip() == "" and can_extract:
+                if isinstance(el, NavigableString) and str(el).strip() == "" and can_extract:
                     el.extract()
 
         # Convert the children first
@@ -582,7 +581,7 @@ class MyMarkdownConverter(MarkdownConverter):
         if parent_tags is None:
             parent_tags = set()
 
-        text = six.text_type(el) or ""
+        text = str(el) or ""
 
         # normalize whitespace if we're not inside a preformatted element
         if "pre" not in parent_tags:
