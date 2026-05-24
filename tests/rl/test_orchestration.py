@@ -3,11 +3,19 @@
 
 import dataclasses
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fray.types import JobStatus
-from marin.rl.orchestration import _HostedRuntime, _run_rl_coordinator, _train_worker_entry
-from marin.rl.rl_job import RunConfig
+from marin.rl.environments.inference_ctx import VLLMSamplingConfig, vLLMInferenceContextConfig
+from marin.rl.orchestration import (
+    _HostedRuntime,
+    _rollout_schedule_ledger_path,
+    _run_rl_coordinator,
+    _train_worker_entry,
+)
+from marin.rl.rl_job import RLJobConfig, RunConfig
+from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.rollout_worker import RolloutTrackerConfig
 
 
@@ -85,6 +93,14 @@ class _FakeRLJob:
         return _FakeWorkerConfig(seed=7, run_id="train"), _FakeWorkerConfig(
             seed=11,
             run_id="rl-test",
+            inference_config=vLLMInferenceContextConfig(
+                model_name="test-model",
+                max_model_len=16,
+                tensor_parallel_size=1,
+                gpu_memory_utilization=0.5,
+                sampling_params=VLLMSamplingConfig(),
+                seed=11,
+            ),
             tracker_config=RolloutTrackerConfig(project="marin_iris_rl_debug", name="shared-rollout-name"),
         )
 
@@ -94,6 +110,7 @@ class _FakeWorkerConfig:
     seed: int
     run_id: str
     worker_index: int = 0
+    inference_config: object | None = None
     tracker_config: object | None = None
     weight_transfer: object = dataclasses.field(default_factory=lambda: SimpleNamespace(debug_weight_transfer=False))
     trainer: object = dataclasses.field(
@@ -101,6 +118,27 @@ class _FakeWorkerConfig:
             checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
         )
     )
+
+
+def test_rollout_schedule_ledger_path_uses_file_rollout_storage_path():
+    file_config = SimpleNamespace(
+        rollout_storage=RolloutStorageConfig(
+            storage_type=StorageType.FILE,
+            path="gs://marin/rl/run/rollouts/",
+        )
+    )
+    memory_config = SimpleNamespace(
+        rollout_storage=RolloutStorageConfig(
+            storage_type=StorageType.IN_MEMORY,
+            queue_name="rollouts",
+        )
+    )
+
+    assert (
+        _rollout_schedule_ledger_path(cast(RLJobConfig, file_config))
+        == "gs://marin/rl/run/rollouts/_rollout_schedule_ledger"
+    )
+    assert _rollout_schedule_ledger_path(cast(RLJobConfig, memory_config)) is None
 
 
 def test_run_rl_coordinator_shuts_down_hosted_actors_when_child_job_fails(monkeypatch):
@@ -368,8 +406,14 @@ def test_run_rl_coordinator_assigns_stable_rollout_wandb_names(monkeypatch):
     rollout1_config = client.submissions[2].entrypoint.callable_entrypoint.args[0]
 
     assert rollout0_config.run_id == "rl-test-rollout-0"
+    assert rollout0_config.seed == 11
+    assert rollout0_config.inference_config.seed == 11
+    assert rollout0_config.worker_index == 0
     assert rollout0_config.tracker_config.name == "rl-test-rollout-0"
     assert rollout1_config.run_id == "rl-test-rollout-1"
+    assert rollout1_config.seed == 12
+    assert rollout1_config.inference_config.seed == 12
+    assert rollout1_config.worker_index == 1
     assert rollout1_config.tracker_config.name == "rl-test-rollout-1"
 
 

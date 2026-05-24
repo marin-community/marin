@@ -535,6 +535,10 @@ class TrainWorker:
             batch_prep_timing = self.data_loader._last_batch_prep_timing
             metrics = _training_step_timing_metrics(info.step_duration, batch_prep_timing)
             metrics["train/loss"] = float(info.loss)
+            replay_stats = self.replay_buffer.get_stats()
+            for key, value in replay_stats.items():
+                if isinstance(value, (int, float)):
+                    metrics[f"replay_buffer/{key}"] = value
             trainer.tracker.log(metrics, step=info.step)
             logger.info(
                 "Training step %d completed: train_step=%.2fs, rollout_wait=%.2fs, "

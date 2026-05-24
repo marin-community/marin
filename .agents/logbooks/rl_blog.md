@@ -645,14 +645,18 @@ successful run.
   `self._rng = np.random.default_rng(42)` in
   `lib/marin/src/marin/rl/environments/math_env.py:59` and **never
   referenced anywhere else**. The 42 had no effect on this run or REF.
-- The real "what problems get sampled" seed is `RolloutWorkerConfig.seed=0`
-  (default, same in NEW and REF), which drives a deterministic per-step
-  Python `random.Random(0)` stream that ends up calling
-  `np.random.default_rng(...).choice(12_000, size=64, replace=False)`.
-- vLLM has an engine-level seed = 0 (PR #5256). TPU vLLM does not support
-  per-request seeds, so the engine RNG advances deterministically per
-  `generate()` call.
-- No `--seed` flag passed at launch.
+- The real "what problems get sampled" seed is `RolloutWorkerConfig.seed`.
+  For this launcher, `RLJobConfig.seed` defaulted to 42, `RLJob.to_worker_configs`
+  made the rollout base seed `42 + 1000 = 1042`, and orchestration launched
+  rollout worker `i` with `1042 + i`. So rollout-0 used seed 1042 and
+  rollout-1 used seed 1043.
+- vLLM engine seed was 0 in this run (PR #5256). TPU vLLM does not support
+  per-request seeds, so the engine RNG advances per `generate()` / request
+  scheduling rather than being reset per prompt.
+- `TrainerConfig.seed` was still the Levanter default 0 in this run. As of
+  the 2026-05-23 seed-plumbing fix, the canonical launcher now propagates
+  `RLExperimentConfig.seed` / `RLJobConfig.seed` into TrainerConfig, replay
+  sampling, rollout sampling, and each rollout worker's vLLM engine seed.
 
 ### Trainer metrics at step 99 (terminal)
 
@@ -734,15 +738,15 @@ Reference: `iris-rl-e4ms2-500-clean-nodelprevtmp` (2026-03-30), the
 If we re-ran NEW to 500 steps it would very likely beat REF's terminal
 numbers — the fix-induced gradient is real and the policy isn't collapsing.
 
-Caveat (revised after the randomness audit): per-step problem selection
-is driven by `RolloutWorkerConfig.seed=0` in **both** NEW and REF, so the
-sequence of 64-problem train batches is deterministic and identical
-across runs. The remaining uncontrolled source is **vLLM-TPU async batch
-scheduler timing**, which PR #5256 explicitly does not seed at the
-per-request level. Clean ablation would require pinning vLLM dispatch
-order — not currently possible on the TPU backend.
+Caveat (corrected 2026-05-23 after a code audit): train problem selection is
+seeded and deterministic within a single uninterrupted rollout worker process,
+but the NEW-vs-REF comparison should **not** be described as having identical
+64-problem train batches. Worker restarts reset rollout-local RNG state, worker
+0's full-eval cadence consumes extra RNG draws, rollout file arrival is
+wall-clock ordered, and the replay buffer samples from whatever arrived first.
+The comparison is still useful, but not a strict seed-controlled ablation.
 
-### Randomness audit (what actually controls what)
+### CODEX 2026-05-23T23:32:09Z — Randomness audit (what actually controls what)
 
 After tracing every PRNG through the rollout/train/buffer/vLLM stack:
 
@@ -751,14 +755,16 @@ After tracing every PRNG through the rollout/train/buffer/vLLM stack:
 | Source | Location | Seed value | Effective? | What it controls |
 |---|---|---|---|---|
 | `EnvConfig.env_args["seed"]` | `experiments/llama_3_8b_rl_math500.py:119` | 42 | **❌ DEAD** | assigned to `MathEnv._rng` (`environments/math_env.py:59`), never read anywhere else |
-| `RolloutWorkerConfig.seed` | `rollout_worker.py:226` | 0 (default) | ✅ | per-step problem selection — drives `py_rng = random.Random(0)` → per-step `py_rng.randint` → `MathEnv.sample(prng_key=…)` → `np.random.default_rng(…).choice(12000, 64, replace=False)` |
-| vLLM engine seed | `inflight/worker.py:188`, `:206` (PR #5256) | 0 (default) | ✅ | global vLLM RNG seeded once at engine init; advances per `generate()` call. TPU has **no per-request `SamplingParams.seed`** — engine seed is the only knob |
-| `worker_index` | `rollout_worker.py:246` | 0 (rollout-0), 1 (rollout-1) | ❌ does NOT perturb seed | only used to gate "should this worker run full eval" (line 373) |
-| `ReplayBufferConfig.seed` (=trainer.seed) | `replay_buffer.py:91`, `train_worker.py:304` | 0 (default) | ✅ | `self._rng.choice(env_choices, size=local_batch_size, replace=False)` selects ~32 groups/step from buffer for training |
-| `TrainerConfig.seed` | `levanter/trainer.py:794` | 0 (default) | ✅ trivially | `model_key = jrandom.PRNGKey(0)` (sharding only, not init values — we load from checkpoint); `training_key = jrandom.split(..., 2)[1]` (loss-step RNG — mostly no-op for RLOO w/o dropout) |
+| `RLJobConfig.seed` | `rl_job.py:112` | 42 (default) | ✅ | base seed used by train/replay and used to derive rollout seeds |
+| `RolloutWorkerConfig.seed` | `rl_job.py:312`, `orchestration.py:210-215`, `rollout_worker.py:226` | rollout-0 = 1042, rollout-1 = 1043 | ✅ | per-worker Python `random.Random(seed)` stream; controls curriculum seed draws, eval/input prompt-sampling seeds, and therefore `MathEnv.sample(...).choice(12000, 64, replace=False)` |
+| vLLM engine seed | `vllm.py:89`, `vllm.py:197`, `inflight/worker.py:188`, `:206` (PR #5256) | 0 in this run; after the 2026-05-23 fix, each rollout worker's engine seed matches its derived rollout seed (`base + 1000 + worker_index`) | ✅ | global vLLM RNG seeded once at engine init; advances per `generate()` / request schedule. TPU has **no per-request `SamplingParams.seed`** — engine seed is the only knob |
+| `worker_index` | `orchestration.py:210-215`, `rollout_worker.py:246` | 0 (rollout-0), 1 (rollout-1) | ✅ indirectly | orchestration adds `worker_index` to the rollout base seed (`seed=rollout_config.seed + i`) and uses it to gate eval to worker 0 |
+| `ReplayBufferConfig.seed` (= `TrainWorkerConfig.seed`) | `replay_buffer.py:91`, `train_worker.py:304`, `rl_job.py:296` | 42 | ✅ | `self._rng.choice(env_choices, size=local_batch_size, replace=False)` selects rollouts from the buffer for training |
+| `TrainerConfig.seed` | `levanter/trainer.py:794` | 0 in this run; now wired to `RLJobConfig.seed` after 2026-05-23 fix | ✅ trivially | `training_key = jrandom.split(PRNGKey(seed), 2)[1]` feeds the loss-step RNG; mostly no-op for Llama/RLOO without dropout |
 | Curriculum lesson sampling | `curriculum_actor.sample_lesson(seed)` | seed varies | n/a | only one lesson `math_full` configured — no actual selection happens |
 | `MathEnv.get_eval_examples` | `environments/math_env.py:259` | hardcoded 42 | ❌ not invoked | dead code path for this run |
 | vLLM-TPU async batch scheduling | n/a | uncontrolled | wall-clock dependent | continuous-batching dispatch order varies with system clock / asyncio.gather scheduling / TPU device-side parallelism. PR #5256 explicitly accepts this |
+| Rollout file ordering | `rollout_storage.py:295`, `:174-195` | wall-clock timestamp | ✅ | writer filenames include `time.time()` and trainer reads sorted by timestamp; two rollout workers can land batches in different orders across runs |
 
 **Things I was sloppy about earlier in this logbook:**
 
@@ -769,44 +775,50 @@ After tracing every PRNG through the rollout/train/buffer/vLLM stack:
    59:        self._rng = np.random.default_rng(seed)
    ```
    One line, the assignment, never used. The actual problem selection RNG
-   is `RolloutWorkerConfig.seed=0` flowing through `MathEnv.sample(prng_key)`.
+   is `RolloutWorkerConfig.seed` flowing through `MathEnv.sample(prng_key)`.
 
-2. *"vLLM seed advances randomly per step"* — wrong. The
+2. *"`RolloutWorkerConfig.seed=0` in NEW and REF"* — wrong. The canonical
+   RLJob default base seed is 42; `RLJob.to_worker_configs()` adds 1000 for
+   rollout workers, and `orchestration.py` adds the worker index. This means
+   rollout-0 and rollout-1 are seed-decorrelated by construction.
+
+3. *"vLLM seed advances randomly per step"* — wrong. The
    `seed = py_rng.randint(0, 2**31-1)` in `rollout_worker.py:976` is a
-   **deterministic** PRNG stream from `random.Random(0)`. Each call
-   advances the PRNG state in a reproducible way. Same launch → same
-   sequence of per-step seeds.
+   **deterministic** PRNG stream from `random.Random(RolloutWorkerConfig.seed)`.
+   Each call advances the PRNG state in a reproducible way within one
+   uninterrupted process.
 
-3. *Implication for the NEW-vs-REF comparison*: per-step problem batches
-   are deterministically the same in both runs (same `RolloutWorkerConfig.seed=0`).
-   That removes one confound I previously called out — the comparison is
-   actually cleaner than I thought.
+4. *Implication for the NEW-vs-REF comparison*: per-step problem batches are
+   not guaranteed identical. REF pre-dated PR #5256's vLLM engine seed, had
+   preemptions/restarts, and both runs can differ in eval timing, rollout file
+   arrival order, and replay-buffer contents. Treat the comparison as a
+   strong operational signal, not a controlled seed ablation.
 
-**Two rollout workers running with the same seed (rollout-0, rollout-1)**
+**Rollout seed vs vLLM engine seed**
 
-Both have `RolloutWorkerConfig.seed=0` and identical engine seeds. In
-principle they should pick the same 64 problems and generate identical
-completions. In practice the rewards diverge step-by-step (e.g. step 0:
-rollout-0 = 0.349 vs rollout-1 = 0.294). The only plausible source is
-vLLM-TPU continuous-batching async scheduler timing — confirmed by
-PR #5256 commit message: *"unsupported per-request SamplingParams seeds"*.
+`RolloutWorkerConfig.seed` is the experiment/data-plane seed for a rollout
+worker. It decides which RNG integers are passed to curriculum selection,
+full eval, micro eval, and train input sampling. In this Math500 run, because
+there is only one lesson, the meaningful effect is which train/eval examples
+are selected and in what order.
 
-This is a real footgun for ablation/reproducibility studies: two
-"identical" rollout workers aren't actually drawing from independent
-streams, they're drawing from the same nominal stream but getting
-different outputs purely from TPU dispatch timing. **If you want true
-seed-decorrelation between rollout workers you'd need to thread
-`worker_index` into the seed** (e.g. `seed = base_seed * 1000 + worker_index`).
-Not done today.
+`vLLMInferenceContextConfig.seed` is the model-generation seed inside vLLM.
+It controls stochastic token sampling for the inference engine at temperature
+1.0. On TPU vLLM, there is no per-request seed, so this is a global engine
+seed whose state advances as requests are scheduled. That makes request order
+and continuous-batching timing part of the reproducibility story. After the
+2026-05-23 seed-plumbing fix, each rollout worker's vLLM engine seed is the
+same derived value as that worker's `RolloutWorkerConfig.seed`.
 
 **No curriculum.** `lessons = {"math_full": …}`. Only one lesson, so the
 "curriculum" is trivial. `eval_frequency=1` just means: run a full eval
 after every trainer step, on all 500 MATH-500 held-out problems (since
 `n_to_sample = min(eval_n_examples=500, len(eval_examples)=500)`, eval is
-the full set in randomized but irrelevant order).
+the full set in randomized order).
 
 **Eval is over the full held-out 500.** Order is a per-step random
-permutation but doesn't change pass@1.
+permutation, but generation is still stochastic at temperature 1.0, so exact
+pass@1 depends on vLLM engine RNG state and request scheduling.
 
 ### W&B
 
@@ -988,6 +1000,729 @@ Tests verified safe (manual numeric check on `test_ppo_objective`; no
 - Should we add a real `GRPOLoss` / `DrGRPOLoss` class alongside `RLOOLoss`
   to allow apples-to-apples comparison, or keep RLOO as the only path?
 
+## CODEX 2026-05-23T23:32:09Z — Plan: deterministic Math rollout schedule
+
+Ahmed's revised direction: do **not** split the finite train set into disjoint
+shards across rollout workers. We are not guaranteed to keep two samplers alive;
+if a sampler dies, a globally sharded or assignment-only schedule can leave a
+whole slice of questions ungenerated or generated-but-never-consumed. Instead,
+each logical rollout worker should epoch through the full train set with its own
+deterministic shuffle seed. Multiple workers then increase throughput and
+generate different stochastic samples, but no single worker owns a unique shard
+that can disappear.
+
+Current behavior to replace:
+
+- `RolloutWorker.run()` draws `input_rng` from a worker-local PRNG.
+- `MathEnv.sample(..., prng_key=input_rng)` turns that into
+  `np.random.default_rng(seed).choice(len(train_examples), size=n_prompts,
+  replace=False)`.
+- With multiple rollout workers, different seeds reduce duplication, but there
+  is no global notion of "we have covered this dataset epoch once".
+- On restart, the worker-local RNG resets unless the whole worker state is
+  reconstructed exactly.
+
+Levanter already has the right primitive:
+
+- `levanter.data._prp.FeistelPermutation(length, key)` implements a stateless
+  pseudo-random permutation over `[0, length)`, including arbitrary non-power-of-2
+  lengths via cycle walking.
+- `levanter.data.permutation.PermutationDataset` wraps finite async datasets,
+  but it currently has a TODO for epoch reshuffling. For MathEnv's in-memory
+  `list[DataExample]`, use the Feistel permutation primitive directly.
+
+Revised semantics:
+
+1. `RLJobConfig.seed` remains the root experiment seed.
+2. Training/replay continue to use the root seed.
+3. Each logical rollout worker gets a stable derived seed:
+
+   ```python
+   worker_seed = root_seed + 1000 + worker_index
+   ```
+
+   That same seed initializes the worker's vLLM engine and its finite-data
+   schedule.
+4. Train prompt selection uses a per-worker finite schedule, not independent
+   random sampling:
+
+   ```python
+   epoch = worker_position // dataset_len
+   offset = worker_position % dataset_len
+   key = jax.random.fold_in(jax.random.PRNGKey(worker_seed), epoch)
+   index = FeistelPermutation(dataset_len, key)(offset)
+   ```
+
+   A rollout batch with `n_prompts=64` receives the next 64 positions from that
+   worker's schedule. Crossing an epoch boundary is allowed; the next epoch uses
+   a new folded-in Feistel permutation.
+
+5. Multiple rollout workers therefore have independent full-dataset
+   permutations, not disjoint shards. In a single local window the expected
+   overlap between two workers is small (`64 * 64 / 12000 ~= 0.34` questions for
+   Math train), but across a full epoch every live worker will eventually visit
+   every question. That duplication is intentional: worker count is a throughput
+   knob, not a data-partitioning contract.
+6. If one worker dies permanently, the remaining worker(s) still traverse the
+   entire data set. Throughput drops, but data coverage does not lose a shard.
+7. Curriculum remains responsible for lesson choice. The new schedule is
+   responsible only for example choice within a lesson. For the current Math500
+   run there is only one lesson, so this degenerates to deterministic epoching
+   over the math train split.
+8. Evaluation should not consume the train schedule. Full eval should run the
+   complete eval split in a fixed deterministic order and submit prompts in the
+   same order every time. Micro eval, if kept, should use a separate
+   deterministic eval schedule, not the train cursor.
+9. Rollout metadata should include `worker_index`, `worker_seed`, `epoch`,
+   `start_position`, `end_position`, and selected `env_example_id`s. The replay
+   reader can keep wall-clock arrival order for now, but metrics must distinguish
+   written, accepted, and consumed examples.
+
+Preemption critique:
+
+- A purely process-local cursor is **not robust**. Today `RolloutWorker.run()`
+  initializes `step = 0` and `random.Random(self.config.seed)` inside the worker
+  process. If a sampler process restarts and we do nothing else, it restarts its
+  epoch from the beginning. That is not catastrophic because no shard is lost,
+  but it creates prefix bias and duplicate rollouts after every sampler retry.
+- A per-worker full-dataset schedule becomes robust only if the cursor belongs
+  to the **logical worker**, not the process attempt. The stable identity is
+  `worker_index`; retries of rollout-0 must resume rollout-0's cursor.
+- Cursor advancement should happen after the rollout batch is durably written,
+  not when generation starts. If a worker dies mid-generation, it retries the
+  same positions. If it dies after writing but before cursor update, duplicate
+  writes are possible; that should be handled by a deterministic
+  `assignment_id = (worker_index, epoch, start_position)` and replay-side
+  de-duplication.
+- `RLRunState` currently keeps only lifecycle, train step, and transfer
+  counters in memory. It survives child worker retries while the coordinator
+  lives, but it is not enough by itself for checkpoint/relaunch recovery. The
+  schedule cursor should either be checkpointed with the trainer/curriculum
+  state or recoverable from rollout metadata in storage.
+- If we do not persist/recover cursor state, the design is still safer than
+  global sharding under sampler death, but repeated preemptions can over-sample
+  early-permutation questions and delay later questions.
+
+Implementation sketch:
+
+1. Add a small `rollout_schedule.py` module with:
+   - `FeistelEpochSchedule`
+   - `RolloutScheduleCursor`
+   - `RolloutAssignment`
+2. Add per-logical-worker cursor storage:
+   - either in `RLRunState` with checkpoint/recovery support,
+   - or in a small schedule actor that is keyed by `worker_index` and can save
+     / restore its state.
+3. Split `MathEnv.sample()` into:
+   - explicit-index path used by scheduled training rollouts
+   - existing RNG path retained only for eval or unscheduled environments
+4. In `RolloutWorker.run()`, replace train `input_rng` prompt selection with a
+   per-worker schedule assignment for finite scheduled envs. Keep vLLM
+   generation seed as the engine seed already configured on the inference
+   context.
+5. Add tests:
+   - one worker's Feistel schedule covers each example exactly once per epoch.
+   - Epoch 0 and epoch 1 are deterministic but different permutations.
+   - Two rollout workers with different derived seeds produce different
+     permutations and both cover the full dataset.
+   - A worker restart resumes from the logical worker cursor instead of process
+     local step 0.
+   - A crash before durable write retries the same assignment.
+   - Duplicate assignment writes are de-duplicated by `(worker_index, epoch,
+     start_position)`.
+   - Full eval does not advance the train cursor and sends eval prompts in a
+     stable order.
+
+Design caveat: this deliberately gives up "exactly one attempt per question
+globally across all workers." The invariant becomes "each live logical worker
+attempts every question once per worker-epoch." That is the right failure mode
+for unreliable sampler capacity. Full bit-for-bit reproducibility still depends
+on vLLM TPU request scheduling and replay ingestion order.
+
+CODEX 2026-05-23T23:32:09Z — implemented in this pass:
+
+- Added `marin.rl.rollout_schedule`:
+  - `FeistelEpochSchedule`
+  - `RolloutScheduleCursor`
+  - `RolloutAssignment`
+  - `rollout_assignment(...)`
+- Added logical-worker schedule state to `RLRunState`:
+  - `reserve_rollout_assignment(...)`
+  - `commit_rollout_assignment(...)`
+  - `get_rollout_schedule_cursor(...)`
+- Reservation is idempotent while pending. A restarted rollout worker gets the
+  same pending assignment until a durable write commits it.
+- Cursor advancement now happens after `RolloutWriter.write_batch(...)`
+  succeeds, not when generation starts.
+- `RolloutMetadata` now records:
+  - `worker_index`
+  - `worker_seed`
+  - `lesson_id`
+  - `assignment_id`
+  - `schedule_epoch`
+  - `schedule_start_position`
+  - `schedule_end_position`
+  - `schedule_indices`
+- `RolloutWorker.run()` now uses scheduled train indices for
+  `FiniteDatasetEnv` lessons and falls back to the old random `env.sample(...)`
+  path for non-finite envs.
+- `ReplayBuffer` now skips duplicate non-empty `assignment_id`s and logs
+  counters for:
+  - batches seen / accepted
+  - duplicate assignment batches skipped
+  - stale-step and stale-timestamp skips
+  - groups accepted
+  - rollouts accepted / consumed
+  - consumed lag mean / max
+- Trainer step logs now include numeric `replay_buffer/*` stats in W&B.
+
+CODEX 2026-05-23T23:32:09Z — durability caveat:
+
+- This is robust to a rollout child/process retry while the coordinator and
+  `RLRunState` actor remain alive, which is the sampler-preemption case we were
+  targeting.
+- It does not yet persist schedule cursors across a full coordinator/root-job
+  relaunch. For that, either checkpoint `RLRunState` schedule cursors alongside
+  trainer/curriculum state or reconstruct committed cursors from rollout
+  metadata in storage.
+
+CODEX 2026-05-23T23:32:09Z — validation:
+
+```bash
+uv run --project lib/marin --group test pytest \
+  tests/rl/test_rollout_schedule.py \
+  tests/rl/test_run_state.py \
+  tests/rl/test_replay_buffer.py \
+  tests/rl/test_rollout_worker.py \
+  tests/rl/test_rl_experiment_utils.py \
+  tests/rl/test_rl_job.py \
+  tests/rl/test_orchestration.py \
+  tests/rl/environments/test_finite_dataset_env.py \
+  tests/rl/environments/test_math_env.py \
+  tests/rl/environments/test_mock_env.py \
+  tests/rl/environments/test_load_environment.py
+```
+
+Result: `78 passed`.
+
+CODEX 2026-05-23T23:32:09Z — pre-commit validation:
+
+```bash
+./infra/pre-commit.py --fix .agents/logbooks/rl_blog.md \
+  experiments/llama_3_8b_rl_math500.py \
+  lib/marin/src/marin/rl/curriculum.py \
+  lib/marin/src/marin/rl/environments/__init__.py \
+  lib/marin/src/marin/rl/environments/base.py \
+  lib/marin/src/marin/rl/environments/math_env.py \
+  lib/marin/src/marin/rl/environments/mock_env.py \
+  lib/marin/src/marin/rl/environments/prime_intellect_env.py \
+  lib/marin/src/marin/rl/orchestration.py \
+  lib/marin/src/marin/rl/replay_buffer.py \
+  lib/marin/src/marin/rl/rl_experiment_utils.py \
+  lib/marin/src/marin/rl/rl_job.py \
+  lib/marin/src/marin/rl/rollout_worker.py \
+  lib/marin/src/marin/rl/rollout_schedule.py \
+  lib/marin/src/marin/rl/run_state.py \
+  lib/marin/src/marin/rl/train_worker.py \
+  lib/marin/src/marin/rl/types.py \
+  tests/rl/environments/test_finite_dataset_env.py \
+  tests/rl/environments/test_math_env.py \
+  tests/rl/test_orchestration.py \
+  tests/rl/test_replay_buffer.py \
+  tests/rl/test_rl_experiment_utils.py \
+  tests/rl/test_rl_job.py \
+  tests/rl/test_rollout_schedule.py \
+  tests/rl/test_rollout_worker.py \
+  tests/rl/test_run_state.py
+```
+
+Result: `OK` after one formatter/linter convergence rerun.
+
+CODEX 2026-05-23T23:32:09Z — current status:
+
+- Implemented for finite train envs.
+- `MathEnv` uses the `FiniteDatasetEnv` explicit-index path; no env rewrite is
+  needed beyond the finite-env base already added.
+- Each logical rollout worker now has its own full-dataset Feistel order,
+  derived from that worker's seed.
+- Rollout child/process retry is handled by pending assignment reuse in
+  `RLRunState`.
+- The remaining gap is full coordinator/root-job relaunch recovery for schedule
+  cursors. That needs either schedule-cursor checkpointing or reconstruction
+  from committed rollout metadata in storage.
+
+For stale-by-one training, distinguish generated coverage from trained
+coverage. The schedule cursor now advances after durable rollout write, but
+written examples can still fail to contribute because:
+
+- their rollout arrives after `max_rollout_step_delay`,
+- the replay buffer samples only part of the buffered current-step data before
+  the trainer advances,
+- `filter_out_groups_with_no_variance=True` drops all-zero/all-one groups by
+  design.
+
+If the semantic goal is "each train example contributes once per epoch", the
+schedule needs trainer/replay feedback and should advance/retire examples on
+accepted or consumed rollout groups, not merely on durable write. If the goal
+is "each train example is attempted once per worker-epoch", commit-after-write
+is enough.
+
+### CODEX 2026-05-23T23:32:09Z — Follow-up plan: deterministic eval and configurable pass@k
+
+Problem: current full eval samples all 500 MATH-500 examples, but it still
+passes through `MathEnv.sample(..., prng_key=...)`, which permutes eval order.
+Metrics are order-insensitive, but vLLM's engine RNG and continuous batching
+are order-sensitive. Also `_evaluate_lesson()` hardcodes `n_eval_generations=1`
+and reuses the training lesson sampling params, so pass@1 and pass@16 evals
+cannot be configured independently.
+
+Plan:
+
+1. Add an eval config dataclass, probably near `SamplingParams`:
+
+   ```python
+   @dataclass
+   class EvalSamplingParams:
+       name: str
+       n_examples: int | None
+       n_generations: int
+       temperature: float
+       top_k: int | None = None
+       max_output_tokens: int | None = None
+       stop_tokens: list[int] | None = None
+   ```
+
+2. Add `eval_sampling_params: list[EvalSamplingParams]` to `LessonConfig` or
+   `CurriculumConfig`. Default should preserve today's single pass@1 eval, but
+   Math500 should explicitly configure:
+   - `pass1_greedy`: `n_generations=1`, deterministic/greedy decoding
+   - `pass16_sample`: `n_generations=16`, temperature/top-k matching rollout
+     sampling
+3. Split environment eval from random sampling:
+   - train scheduled path: explicit train indices from the Feistel schedule
+   - full eval path: explicit eval indices `[0, 1, ..., n_eval_examples - 1]`
+   - micro eval path: separate deterministic eval schedule, if enabled
+4. `_evaluate_curriculum()` should loop over eval configs and send prompts to
+   vLLM in the exact dataset order for every run. In the current sync vLLM path
+   this means one ordered `llm.generate([TokensPrompt(...), ...], params)` call
+   per eval mode. In async/inflight mode, request ids must be deterministic
+   (`eval-{mode}-{idx}`) and results must be reordered back to dataset order.
+5. Separate "same requests" from "same sampled outputs":
+   - same requests: fixed eval indices, fixed prompt rendering, fixed request
+     ids, fixed list order, fixed sampling params
+   - same greedy outputs: achievable now with greedy pass@1
+   - same stochastic pass@k outputs: requires the same engine RNG state at eval
+     call time; with today's TPU vLLM engine-level seed, prior train rollout
+     requests advance that state
+6. For stochastic pass@16, choose one of:
+   - best-effort: same ordered requests on the rollout worker's existing engine
+   - stricter: a dedicated eval-only vLLM context/engine seeded for eval so
+     train rollouts do not advance its RNG stream
+   - ideal future path: per-request `SamplingParams.seed` once TPU vLLM
+     supports it
+7. `_build_prompt_example_metrics()` should stop using global
+   `random.sample/random.choice` for eval sample tables. Tables should be a
+   deterministic prefix or a deterministic hash-based subset so logged examples
+   do not add hidden randomness.
+8. Logging names should make eval mode unambiguous:
+   - `inference.eval_pass1_greedy/math_full/pass_at_1`
+   - `inference.eval_pass16_sample/math_full/pass_at_16`
+
+Enforcement tests:
+
+- A finite env test should call `sample_by_indices(indices=[2, 0, 1])` and
+  fail unless `batch_completions()` receives prompts in exactly that order.
+- A rollout-worker eval test should configure two eval modes and fail unless
+  `_evaluate_curriculum()` sends the eval split in `[0, 1, 2, ...]` order for
+  both modes, with distinct `(temperature, n_generations, top_k)` params.
+- A prompt-table test should fail if eval sample-table logging uses ambient
+  randomness; use deterministic prefix or deterministic hash order.
+- A MathEnv inheritance test should assert `isinstance(MathEnv(...),
+  FiniteDatasetEnv)` and that explicit eval indices preserve MATH-500 order.
+
+CODEX 2026-05-23T23:32:09Z — implemented in this pass:
+
+- Added `EvalSamplingParams`.
+- Added configurable eval modes to `CurriculumConfig`.
+- Math500 now configures `eval_pass1_greedy` and `eval_pass16_sample`.
+- Finite eval envs now use explicit ordered eval indices instead of random
+  eval sampling.
+- Eval sample-table logging now uses deterministic prefix order instead of
+  ambient `random.sample/random.choice`.
+- Added tests for ordered eval requests and eval sampling params.
+
+Important caveat: fixed prompt order is necessary but not sufficient for
+bitwise-identical stochastic pass@16 on TPU vLLM, because TPU vLLM currently
+has only an engine-level seed, not per-request seeds. Greedy pass@1 can be made
+deterministic now. Stochastic pass@16 can be stable under a fixed request
+schedule, but exact reproducibility still depends on engine state and request
+scheduling unless/until per-request seeds exist.
+
+### CODEX 2026-05-23T23:32:09Z — Follow-up plan: finite-data env base
+
+`MathEnv` already inherits the abstract `MarinEnv` base class, but `MarinEnv`
+is too coarse: it only exposes `sample()`, and `sample()` mixes example
+selection, inference, grading, and rollout creation.
+
+For one-dataset RL runs like Math500, the `Curriculum` actor is overgeneral:
+there is only one lesson (`math_full`), so `sample_lesson()` always resolves to
+the same env. The curriculum machinery is useful later for multi-task or
+difficulty-band schedules, but it makes simple train/eval split reasoning
+harder than necessary.
+
+Plan:
+
+1. Introduce an intermediate abstract base class:
+
+   ```python
+   class FiniteDatasetEnv(MarinEnv, ABC):
+       ...
+   ```
+
+   It should inherit from `MarinEnv`, not replace it.
+2. `FiniteDatasetEnv` should expose:
+   - `train_len()`
+   - `eval_len()`
+   - `train_examples_by_indices(indices)`
+   - `eval_examples_by_indices(indices)`
+   - `sample_by_indices(..., mode, indices, sampling_params)`
+3. Move common finite-env mechanics into `FiniteDatasetEnv`:
+   - validate explicit indices
+   - build prompts in requested order
+   - call `inference_ctx.batch_completions(...)`
+   - preserve output order
+   - construct `RolloutGroup`s and metrics
+4. Keep env-specific behavior in subclasses:
+   - load train/eval examples
+   - render examples into prompts/messages
+   - score a generated choice
+   - choose `env_name` / `env_example_id`
+5. Refactor `MathEnv(FiniteDatasetEnv)` and keep math-specific pieces only:
+   loading Hendrycks/MATH-500, few-shot prompt formatting, answer grading.
+6. Keep `FiniteDatasetEnv.sample()` as a compatibility wrapper that still does
+   RNG-based index selection until rollout scheduling is migrated. New rollout
+   code should call `sample_by_indices()` for train and eval.
+7. Add tests with a tiny fake finite env to prove other envs can inherit the
+   base without depending on math grading.
+
+CODEX 2026-05-23T23:32:09Z — implemented in this pass:
+
+- Added `FiniteDatasetEnv(MarinEnv)`.
+- Refactored `MathEnv(FiniteDatasetEnv)`.
+- Kept `MathEnv.sample()` behavior through the finite-env compatibility
+  wrapper.
+- Added `sample_by_indices()` tests that fail if prompt order is not preserved.
+- Added a MathEnv inheritance/order test.
+
+This gives other finite train/eval envs a reusable base without changing the
+adaptive curriculum actor yet.
+
+### CODEX 2026-05-23T23:32:09Z — Stale-by-one risk check on latest two-sampler W&B run
+
+Run inspected:
+
+- train:
+  `llama-3.1-8bi-math500-rlooIS-100s-uc1-20260523-044205-train`
+- rollout-0:
+  `llama-3.1-8bi-math500-rlooIS-100s-uc1-20260523-044205-rollout-0`
+- rollout-1:
+  `llama-3.1-8bi-math500-rlooIS-100s-uc1-20260523-044205-rollout-1`
+
+What we track today:
+
+- Rollout W&B logs include `inference.weight_step` and
+  `inference.train_step`.
+- Trainer W&B logs include rollout wait / batch prep timing.
+- ReplayBuffer logs "Skipping stale rollout batch" to logs, but there is no
+  first-class W&B metric for stale skipped batches/rollouts.
+- `ReplayBuffer.get_stats()` has useful counters, but trainer-side W&B does
+  not currently log them every step.
+
+Available proxy from rollout W&B:
+
+- rollout-0: 100 rollout metric rows. `train_step - weight_step` counts:
+  `{-2: 22, -1: 49, 0: 29}`. Rows with lag `> 1`: 0.
+- rollout-1: 135 rollout metric rows. `train_step - weight_step` counts:
+  `{-2: 11, -1: 70, 0: 54}`. Rows with lag `> 1`: 0.
+
+Interpretation: by the available W&B proxy, samplers were not behind the
+trainer. They were usually at the current served weights or slightly ahead of
+the run-state train-step publication. This suggests low risk that a sampler was
+generating batches already more than one trainer step too old.
+
+But the run did overproduce:
+
+- rollout-0 summary: 103 written batches
+- rollout-1 summary: 138 written batches
+- trainer: 100 training steps
+
+So the dominant risk is not "sampler is far behind"; it is surplus generated
+batches that may never be consumed. With a deterministic schedule, assignment
+time cursor advance would give deterministic attempted coverage, but not
+deterministic trained coverage.
+
+Trainer wait stats from W&B:
+
+- 100 train rows with rollout-wait timing.
+- median rollout wait: 2.55s
+- p90 rollout wait: 45.5s
+- max rollout wait: 55.9s
+- 24/100 steps waited more than 30s, 0/100 waited more than 60s.
+
+Plan for real stale tracking:
+
+1. Add ReplayBuffer counters:
+   - `batches_seen`
+   - `batches_accepted`
+   - `batches_skipped_stale_step`
+   - `batches_skipped_stale_timestamp`
+   - `groups_seen`
+   - `groups_accepted`
+   - `groups_filtered_no_variance`
+   - `rollouts_consumed`
+2. Track a lag histogram at add time:
+   `current_step - rollout.metadata.weight_step`.
+3. Track a consumed lag histogram at sample time for the actual training batch.
+4. Log `replay_buffer/*` stats every train step alongside throughput metrics.
+5. Once deterministic assignment exists, log assignment outcomes:
+   assigned, written, accepted, consumed, stale-skipped, no-variance-filtered.
+
+### CODEX 2026-05-23T23:32:09Z — Clarification: two samplers can speed up training while overproducing rollouts
+
+Follow-up source:
+
+- `/Users/ahmed/code/marin/.claude/worktrees/packed_rl/.agents/logbooks/iris-rl-codex.md`
+
+The old Iris RL logbook confirms the user's memory. The one-vs-two-sampler
+experiment was real:
+
+- `e4par-20260326-044831-train`: one rollout worker, `n_prompts=64`.
+- `e4ms2-20260326-121919-train`: two rollout workers, `n_prompts=64`.
+- W&B recheck on 2026-05-23:
+  - `e4par` median wall-clock step: `182.206s`.
+  - `e4ms2` median wall-clock step: `101.088s`.
+  - two-sampler speedup over one-sampler parity: `1.80x`.
+  - trainer compute stayed about the same: `60.76s` vs `61.08s`.
+  - median train-side batch prep dropped from `30.08s` to `3.95s`.
+
+So the speedup came from reducing trainer starvation, not from making the
+trainer step itself faster.
+
+The same run also overproduced rollout data:
+
+- final W&B rollout counts rechecked on 2026-05-23:
+  - rollout-0 max cumulative train batches: `115`.
+  - rollout-1 max cumulative train batches: `168`.
+  - total produced train rollout batches: `283`.
+  - trainer steps completed: `200`.
+- Since each produced batch and each trainer batch were both `64 * 16 = 1024`
+  rollouts, the trainer could consume at most `200` full batch-equivalents.
+- The surplus was `83 / 283 = 29.3%` of produced batch-equivalents, before
+  accounting for the small amount that could still be resident in replay.
+
+This is not a contradiction. It is a producer-consumer tradeoff:
+
+- one sampler under-supplied the trainer often enough that the trainer waited;
+- two samplers supplied enough data to keep the trainer close to saturated;
+- async generation plus eval/checkpoint variance means production sometimes
+  outruns consumption;
+- with `max_samples=1`, replay `capacity=4096`, and
+  `max_rollout_step_delay=1`, surplus data is expected to be evicted, retired,
+  or become too old to use.
+
+The better wording is "surplus rollouts" or "overproduction cost", not
+"wasted rollouts" without qualification. The cost can be rational if wall-clock
+throughput is the target. It becomes a problem only if TPU budget or
+deterministic train-data coverage matters more than keeping the trainer fed.
+
+Connection to the stale-by-one concern:
+
+- The correctness concern is not that two samplers fail to speed up training.
+- The concern is that a deterministic finite-data schedule must distinguish:
+  assigned examples, written rollouts, replay-accepted rollouts, and actually
+  consumed training rollouts.
+- If an epoch cursor advances when a rollout worker is assigned examples, then
+  surplus or stale-skipped batches can make examples count as "seen" even
+  though they never affected a gradient.
+- If we want train coverage semantics, coverage should be based on consumed
+  rollouts, or the scheduler must explicitly requeue assigned-but-unconsumed
+  examples.
+
+Connection to importance sampling:
+
+- One-step stale data is allowed by `max_rollout_step_delay=1`.
+- The sampler stores token logprobs under the rollout weight step.
+- The trainer recomputes current logprobs and, with `synchronous=False`,
+  computes the PPO/RLOO importance ratio against the stored sampler logprobs.
+- If `synchronous=True`, the current code forces that ratio to `1`, so PPO
+  clipping cannot correct policy lag. That is why the Math500 loss now keeps
+  `synchronous=False`.
+
+## CODEX 2026-05-23T23:32:09Z — Next work from Claude/Codex evidence
+
+Based on Claude's `r4` / `e4par` / `e4ms2` runs, the 2026-05-23 100-step
+blog run, and the follow-up code audit, the highest-value next work is:
+
+1. Run a short validation job with the new deterministic finite-train schedule.
+   - Target: `100` train steps, same Math500 setup, two rollout workers if
+     capacity allows.
+   - Must inspect new `replay_buffer/*` metrics:
+     duplicate assignment skips, stale-step skips, rollouts accepted, rollouts
+     consumed, consumed lag.
+   - Pass condition: no assignment explosions, no unexpected stale spike, eval
+     metrics still match or beat the previous 100-step UC1 run.
+2. Add schedule-cursor recovery across full coordinator/root-job relaunch.
+   - The current implementation survives rollout child/process retry while
+     `RLRunState` lives.
+   - Claude's Iris history makes root relaunch/resume a real failure mode, not
+     theoretical. Persist schedule cursors or reconstruct them from committed
+     rollout metadata before trusting long preemptible runs.
+3. Move eval off the critical sampler path or reduce eval interference.
+   - Claude's `e4ms2` analysis showed two samplers sped training by reducing
+     trainer starvation, but one rollout worker still carried eval burden.
+   - The packed-rollout thread also missed `e4ms2` mainly because eval still
+     monopolized sampler capacity.
+   - Best next design: separate eval worker / eval-only engine. Cheaper
+     interim: lower full-eval frequency for throughput experiments while
+     keeping deterministic eval order.
+4. Run the fixed stack to 500 steps only after the above validation.
+   - The reference 500-step run peaked around step 100 then bled held-out
+     pass@1.
+   - The 100-step fixed run looked structurally healthier: larger real
+     gradients, active IS ratio, higher train pass@16, no obvious collapse.
+   - A 500-step rerun is the decisive blog comparison, but only after replay
+     accounting and schedule recovery are trustworthy.
+5. Revisit output length and diversity diagnostics.
+   - F8/F9 remain partly open. Deterministic eval now supports pass@1 and
+     pass@16, but we should still log a distinct-n / unique-response metric and
+     test `max_output_tokens=768`.
+   - The reference run had persistent truncation near the 512 cap; if the fixed
+     run still truncates, length cap is a likely artificial limiter.
+6. Keep KL off for now, but keep the KL path honest.
+   - User decision was to keep KL disabled.
+   - If the 500-step fixed run still shows held-out decay, first fix F5's KL
+     token aggregation and then run a small KL-anchor ablation.
+7. Clean up the vLLM / tpu-inference pin story before final blog runs.
+   - F10 remains open in the original plan.
+   - Use a reproducible Marin fork release pair, verify the release-pair asset,
+     and update docs/package naming so future reruns do not silently use the
+     wrong inference stack.
+
+## CODEX 2026-05-23T23:58:50Z — Schedule recovery and logging implementation
+
+Implemented the requested logging/recovery follow-up:
+
+- Added a file-backed finite-rollout schedule ledger under the rollout storage
+  path: `<rollout_storage.path>/_rollout_schedule_ledger`.
+  - `RLRunState` writes one tiny JSON commit record per committed assignment.
+  - The write happens after the rollout batch write and before advancing the
+    in-memory cursor.
+  - On coordinator/root-job relaunch, `RLRunState` replays the ledger and
+    recovers each `(worker_index, lesson_id)` cursor to the max committed
+    `end_position`.
+  - In-memory rollout storage keeps the prior in-memory-only behavior.
+- Added schedule assignment counters in `RLRunState` and rollout W&B logging:
+  - `inference.schedule/active_cursors`
+  - `inference.schedule/pending_assignments`
+  - `inference.schedule/reserved_assignments`
+  - `inference.schedule/reused_pending_assignments`
+  - `inference.schedule/committed_assignments`
+  - `inference.schedule/ledger_recovered_assignments`
+- Added cheap length-cap saturation metrics from already-materialized response
+  token arrays. These do not decode text or compute diversity metrics, so they
+  should not matter compared with inference/training time.
+  - Train rollout logs now include `inference.length/*`:
+    response count, total/mean/max response tokens, truncation count/rate, cap
+    tokens, cap saturation threshold, cap-saturated count/rate.
+  - Eval/rollout pass metrics also include per-lesson
+    `<prefix>/<lesson>/length/*` fields, so pass@1/pass@16 can be inspected
+    against the active cap.
+- Added tests:
+  - ledger recovery resumes the next assignment at the recovered cursor;
+  - schedule counters distinguish reserve, pending reuse, commit, and recovery;
+  - rollout logging includes schedule counters;
+  - length-cap saturation counts near-cap and truncated responses;
+  - orchestration derives the ledger path only for file-backed rollout storage.
+
+Verification:
+
+- `uv run pytest tests/rl/test_run_state.py tests/rl/test_rollout_worker.py tests/rl/test_orchestration.py -q`
+  - `44 passed`
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/run_state.py lib/marin/src/marin/rl/orchestration.py lib/marin/src/marin/rl/rollout_worker.py tests/rl/test_run_state.py tests/rl/test_rollout_worker.py tests/rl/test_orchestration.py`
+  - all checks passed, including Pyrefly.
+- `./infra/pre-commit.py --changed-files --fix`
+  - all changed-file checks passed.
+
+Caveats:
+
+- Coverage is still assignment/commit coverage, not consumed-gradient coverage.
+  The replay-buffer metrics added earlier are still the source of truth for
+  accepted/consumed data.
+- Recovery requires relaunching with the same rollout storage path. That matches
+  the broader Marin resume rule: if the output path changes, the recovered
+  ledger changes too.
+- If a rollout batch write succeeds but the schedule ledger commit never
+  completes, the worker will retry the same assignment rather than silently
+  skipping it. Duplicate rollout batches can still be skipped by assignment-id
+  replay dedupe when both copies are visible.
+
+## CODEX 2026-05-24T00:03:48Z — Next 100-step validation plan
+
+We have enough instrumentation and scheduler hardening to run another short
+Math500 RL validation. This should be treated as a systems validation run, not
+yet as the final 500-step blog comparison.
+
+Recommended setup:
+
+- Train for `100` steps.
+- Use the same Math500 baseline stack and keep KL disabled.
+- Use two rollout workers, matching the one-vs-two sampler evidence where two
+  workers reduced trainer starvation.
+- Keep `max_rollout_step_delay=1` so the run exercises bounded async/stale
+  rollout behavior.
+- Keep the current `max_output_tokens=512` for this validation, because the new
+  length-cap saturation metrics should first tell us whether 512 is actually
+  binding.
+- Keep deterministic eval enabled with fixed-order pass@1 greedy and pass@16
+  sampled eval.
+- Relaunch as one continuous RL run with a stable rollout storage path; the
+  schedule ledger lives under that path and should recover if the coordinator is
+  relaunched with the same output path.
+
+Primary questions:
+
+1. Does the finite-data Feistel schedule behave correctly under real async
+   rollout?
+2. Do `inference.schedule/*` counters show a sane reserve/commit pattern with no
+   pending-assignment buildup or duplicate storm?
+3. Do `replay_buffer/*` metrics show sane accepted vs consumed rollout flow?
+4. How often are batches skipped for staleness with two rollout workers and
+   `max_rollout_step_delay=1`?
+5. Do `inference.length/*` metrics show cap pressure at 512 tokens?
+6. Are pass@1 greedy and pass@16 sampled eval structurally reasonable compared
+   with the previous 100-step fixed-stack run?
+
+Pass conditions:
+
+- No schedule ledger or cursor errors.
+- `inference.schedule/committed_assignments` increases steadily.
+- `inference.schedule/pending_assignments` does not grow without bound.
+- Replay-buffer stale and duplicate skip counters stay explainable rather than
+  dominating accepted rollouts.
+- `replay_buffer/total_rollouts_consumed` advances consistently with train
+  steps.
+- Eval does not show an obvious collapse relative to the previous 100-step
+  fixed-stack run.
+
+Expected interpretation:
+
+- If the run is healthy and 512-token cap saturation is low, proceed toward the
+  500-step fixed-stack comparison.
+- If the run is healthy but cap saturation is high, run the planned
+  `max_output_tokens=768` ablation before the 500-step comparison.
+- If stale/duplicate/schedule counters look bad, debug replay/scheduling before
+  spending on longer RL runs.
+
 ## Related artifacts in this worktree
 
 - `rl_500_passk.png` — headline pass@k curves (eval + rollout, EMA-smoothed)
@@ -996,3 +1731,337 @@ Tests verified safe (manual numeric check on `test_ppo_objective`; no
 - `.agents/logbooks/iris-rl.md` — original migration logbook (preserved from `e4beb97e0`)
 - `.agents/projects/iris-rl.md` — original migration plan
 - `.agents/projects/on-demand-rl.md` — precursor RL experience, where most of the operational hardening originated
+
+## CODEX 2026-05-24T01:04:10Z — Launched 100-step scheduler validation
+
+Launched a fresh single-region UC1 run for the planned 100-step Math500 RL
+systems validation:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run \
+  --no-wait \
+  --user ahmedah \
+  --job-name iris-rl-blog-rlooIS-sched-100s-uc1-20260524-010114 \
+  --zone us-central1-a \
+  --cpu 1 \
+  --memory 4G \
+  --disk 30G \
+  --enable-extra-resources \
+  --extra cpu \
+  -- python experiments/llama_3_8b_rl_math500.py \
+    --run-name llama-3.1-8bi-math500-rlooIS-sched-100s-uc1-20260524-010114 \
+    --experiment-name-suffix rlooIS-sched-100s \
+    --num-train-steps 100 \
+    --num-rollout-workers 2 \
+    --max-output-tokens 512 \
+    --eval-frequency 1 \
+    --zone us-central1-a \
+    --inflight-weight-updates
+```
+
+Root job:
+
+- `/ahmedah/iris-rl-blog-rlooIS-sched-100s-uc1-20260524-010114`
+
+Smoke check:
+
+- Root coordinator is running.
+- Executor step launched under `gs://marin-us-central1`.
+- RL coordinator started with instance id
+  `llama-3.1-8bi-math500-rlooIS-sched-100s-uc1-20260524-010114-20260524-010307-0aa9df59`.
+- Coordinator submitted 3 child jobs: 1 trainer and 2 rollout workers.
+- TPU children are pending on `us-central1-a` v5p-8 capacity:
+  `Scheduler: Insufficient memory (need 400.0GB, available 300.8GB)` while the
+  autoscaler waits for `tpu_v5p-preemptible_8-us-central1-a`.
+- No immediate import/config traceback in the first smoke logs.
+
+## CODEX 2026-05-24T01:59:34Z — Patched W&B eval-table key and relaunched validation
+
+The first 100-step launch
+`/ahmedah/iris-rl-blog-rlooIS-sched-100s-uc1-20260524-010114` reached real
+training, but rollout-0 hit W&B's 128-character artifact-name limit while
+logging eval sample tables. The failure was caused by the combination of the
+long run id and the metric key
+`inference.eval_pass1_greedy/math_full/sample_table`.
+
+Action taken:
+
+- Stopped the flawed run before it burned more TPU time on a known-bad code
+  bundle.
+- Changed eval sample-table keys to compact deterministic names such as
+  `samples/p1g/math_full`.
+- Added a regression test that models W&B's derived table artifact name for the
+  long RL run id.
+- Verified:
+  `uv run --project lib/marin --group test pytest tests/rl/test_rollout_worker.py::test_build_prompt_example_metrics_is_deterministic_without_ambient_random tests/rl/test_rollout_worker.py::test_sample_table_metric_key_fits_long_wandb_run_names -q`
+  passed, and `./infra/pre-commit.py --fix lib/marin/src/marin/rl/rollout_worker.py tests/rl/test_rollout_worker.py`
+  passed.
+
+Relaunched:
+
+```bash
+uv run iris --config lib/iris/config/marin.yaml job run \
+  --no-wait \
+  --user ahmedah \
+  --job-name iris-rl-blog-rlooIS-sched-100s-uc1-20260524-012916 \
+  --zone us-central1-a \
+  --cpu 1 \
+  --memory 4G \
+  --disk 30G \
+  --enable-extra-resources \
+  --extra cpu \
+  -- python experiments/llama_3_8b_rl_math500.py \
+    --run-name llama-3.1-8bi-math500-rlooIS-sched-100s-uc1-20260524-012916 \
+    --experiment-name-suffix rlooIS-sched-100s \
+    --num-train-steps 100 \
+    --num-rollout-workers 2 \
+    --max-output-tokens 512 \
+    --eval-frequency 1 \
+    --zone us-central1-a \
+    --inflight-weight-updates
+```
+
+Current live status:
+
+- Root job:
+  `/ahmedah/iris-rl-blog-rlooIS-sched-100s-uc1-20260524-012916`.
+- W&B train run:
+  `https://wandb.ai/marin-community/marin_iris_rl_debug/runs/llama-3.1-8bi-math500-rlooIS-sched-100s-uc1-20260524-012916-train`.
+- Trainer, rollout-0, and rollout-1 are running with zero failure counts.
+- Rollout-0 started first, proving the run can make progress with only one
+  sampler active while rollout-1 waits for capacity.
+- Rollout-0 generated and wrote initial rollouts; trainer received initial
+  rollouts with buffer size 976.
+- Training step 0 completed with loss `-0.0301`; progress reached `2/100`.
+- Pass@1 greedy eval logged at weight step 0 with
+  `inference.eval_pass1_greedy/math_full/pass_at_1 = 0.408`.
+- The previous W&B artifact-name failure signature did not recur after the
+  pass@1 sample table was prepared and logged.
+- Rollout-1 allocated later and is starting its vLLM stack.
+
+Monitor state:
+
+- `scratch/20260524-0129_monitoring_state.json`.
+
+## CODEX 2026-05-24T02:18:53Z — Sustained-progress babysit checkpoint
+
+The relaunched run is still healthy after the first eval and after both rollout
+workers joined:
+
+- Trainer, rollout-0, and rollout-1 are all `JOB_STATE_RUNNING`.
+- Failure counts remain zero for trainer and both rollout workers.
+- Rollout-1 did get preempted once during startup, then restarted and joined the
+  run successfully.
+- Trainer progressed to `5/100`.
+- Rollout-1 generated, wrote rollout steps 1 and 2, and the trainer replay
+  buffer ingested the fresh rollout batch.
+- The apparent stall around trainer step 3 was not a deadlock: trainer logged
+  `No rollouts received... cumulative_wait=660s`, but rollout-1 subsequently
+  completed generation and training advanced.
+- Rollout-1 emitted repeated TPU/XLA scoped-Vmem `INVALID_ARGUMENT` messages
+  during compilation, then continued running. Treat these as noisy unless they
+  turn into task failures.
+- Pass@1 greedy eval is verified; pass@16 sampled eval has not logged yet. The
+  current config evaluates 500 examples with 16 generations at every eval point,
+  so that path can dominate wall time with `--eval-frequency 1`.
+
+Interpretation:
+
+- The W&B eval sample-table key patch fixed the live crash point.
+- One-sampler progress worked while rollout-1 was pending/preempted.
+- Two-sampler progress is now working, but the run is likely eval-heavy because
+  pass@16 is configured on 500 examples per eval.
+
+## CODEX 2026-05-24T02:30:25Z — Validation run continues through 9/100
+
+Additional babysit checkpoint:
+
+- Root, trainer, rollout-0, and rollout-1 are still `JOB_STATE_RUNNING`.
+- Failure counts remain zero.
+- Train progress reached `9/100`; training step 8 completed with loss
+  `-0.0297`.
+- Rollout-1 is the main producer right now and reached rollout step 9.
+- Rollout-0 resumed normal rollout generation and logged another pass@1 greedy
+  eval at weight step 5:
+  `inference.eval_pass1_greedy/math_full/pass_at_1 = 0.432`.
+- The W&B artifact-name failure signature is still absent.
+- I still have not found `eval_pass16_sample` in the live logs. Local config
+  includes it, so this needs follow-up against W&B history or a cleaner log
+  query. It is not blocking training progress in this run.
+
+## CODEX 2026-05-24T03:33:35Z — Babysit checkpoint at 34/100
+
+The 100-step RL validation run remains healthy:
+
+- Root, trainer, rollout-0, and rollout-1 are still `JOB_STATE_RUNNING`.
+- Failure counts remain zero.
+- Train progress reached `34/100`; training step 33 completed with loss
+  `-0.0567`, `train_step=60.50s`, `rollout_wait=26.43s`, and
+  `iteration=90.54s`.
+- Rollout-1 advanced through rollout step 54 and started generating step 55.
+- The earlier timeout warnings resolved when the trainer collected another
+  rollout batch at `2026-05-24T03:22:41Z`.
+- Pass@16 sampled eval is verified in the live run: at weight step 24,
+  `inference.eval_pass16_sample/math_full/pass_at_16 = 0.744` with
+  `total_count=8000`, `length/truncated_rate=0.208625`, and
+  `length/cap_saturated_rate=0.224`.
+- The W&B artifact-name failure signature has not recurred after both pass@1
+  and pass@16 eval logging.
+
+## CODEX 2026-05-24T03:48:15Z — Recovery for vLLM over-context prompt
+
+The first patched relaunch exposed a second live defect:
+
+- The trainer reached step 36, but rollout-1 repeatedly crashed on the same
+  over-context prompt.
+- vLLM reported `max_model_len=1536`, `prompt contains 1674 input tokens`, and
+  `requested 0 output tokens`; the engine then died and Iris restarted the
+  rollout worker.
+- The failure was deterministic after restart: rollout-1 reached
+  `failure_count=2` and the trainer began waiting for rollouts.
+
+Fix applied:
+
+- `vLLMInferenceContext` now computes a prompt budget of
+  `max_model_len - max_tokens` before generation.
+- Prompts over budget are deterministically left-truncated to the last budgeted
+  tokens before calling vLLM, preserving request order and request count.
+- The inference context logs prompt budget/truncation metrics through
+  `get_metrics()`.
+- Regression tests cover over-budget prompt truncation and invalid prompt
+  budget rejection.
+
+Validation:
+
+- `uv run --project lib/marin --group test pytest \
+  tests/rl/test_inference_ctx.py::test_vllm_batch_completions_truncates_over_budget_prompts \
+  tests/rl/test_inference_ctx.py::test_vllm_prompt_token_budget_requires_prompt_room \
+  tests/rl/test_rollout_worker.py::test_sample_table_metric_key_fits_long_wandb_run_names -q`
+  passed.
+- `./infra/pre-commit.py --fix lib/marin/src/marin/rl/environments/inference_ctx/vllm.py \
+  tests/rl/test_inference_ctx.py` passed.
+
+Recovery action:
+
+- Stopped `/ahmedah/iris-rl-blog-rlooIS-sched-100s-uc1-20260524-012916`.
+- Relaunched the same root job with the same run name and command after the
+  prompt-budget patch.
+
+## CODEX 2026-05-24T04:03:37Z — Recovery relaunch is making progress
+
+The post-recovery attempt is healthy so far:
+
+- New executor attempt id:
+  `rl_testing-llama-3.1-8bi-math500-rloois-sched-100s-uc1-20260524-012916_5d6f5c80-c179a3d7`.
+- Root, trainer, rollout-0, and rollout-1 are `JOB_STATE_RUNNING`.
+- Failure counts are zero on the trainer and both rollout workers.
+- Rollout-1 had one preemption during startup, then restarted and generated
+  normally.
+- The trainer collected fresh rollout batches again.
+- Training resumed/advanced around step 36; live progress showed `37/100`.
+- No `VLLMValidationError` or W&B artifact-name error has appeared in the new
+  attempt logs.
+
+## CODEX 2026-05-24T04:13:42Z — Recovery attempt through 41/100
+
+The recovery attempt continues to make normal training progress:
+
+- Root, trainer, rollout-0, and rollout-1 remain `JOB_STATE_RUNNING`.
+- Failure counts remain zero on trainer and both rollout workers.
+- Train progress reached `41/100`.
+- Trainer completed step 40 with `rollout_wait=1.00s` and step 41 with
+  `rollout_wait=0.00s`.
+- Rollout-1 advanced to rollout step 10 and continued generating normally.
+- Current-attempt logs show no `VLLMValidationError`, no W&B artifact-name
+  failure, and no new traceback.
+
+## CODEX 2026-05-24T04:26:01Z — vLLM prompt-budget fix live-validated
+
+The over-context prompt guard has now been exercised in the live run:
+
+- At rollout step 18, rollout-1 logged
+  `Truncated 1/64 prompts to fit max_model_len=1536 with max_tokens=512`
+  with `prompt_token_budget=1024`.
+- vLLM generation completed after the truncation warning instead of raising the
+  previous `VLLMValidationError`.
+- Rollout step 18 wrote successfully and the trainer collected the batch at
+  `2026-05-24T04:23:57Z`.
+- Training progressed to `46/100`; training step 45 completed with
+  `rollout_wait=28.13s`.
+- Failure counts remain zero on trainer and both rollout workers.
+
+## CODEX 2026-05-24T04:36:43Z — Midpoint checkpoint
+
+The recovery attempt reached the midpoint:
+
+- Train progress reached `50/100`; training step 49 completed with loss
+  `-0.0475`.
+- Failure counts remain zero on trainer and both rollout workers.
+- Rollout-1 reached rollout step 27 and continued generating normally.
+- A short trainer `No rollouts received` warning resolved in the same interval
+  when the replay buffer collected the next rollout batch.
+- No recurrence of the vLLM over-context crash or W&B artifact-name error.
+
+## CODEX 2026-05-24T05:12:37Z — Eval-heavy run through trainer step 62
+
+The run remains healthy past the midpoint:
+
+- Trainer reached step 62 with failure counts still zero.
+- Checkpoint step 57 saved successfully at `2026-05-24T05:00:31Z`.
+- Pass@16 sampled eval logged again at weight step 61:
+  `pass_at_16 = 0.718`, `total_count = 8000`,
+  `length/truncated_rate = 0.18125`, and
+  `length/cap_saturated_rate = 0.196625`.
+- No recurrence of either fixed failure signature.
+
+## CODEX 2026-05-24T05:53:56Z — Recovery attempt through 79/100
+
+The babysat run is still making progress after the prompt-budget recovery:
+
+- Root, trainer, rollout-0, and rollout-1 remain `JOB_STATE_RUNNING`.
+- Failure counts remain zero on the trainer and both rollout workers.
+- Trainer completed step 78 and progress reached `79/100`.
+- Checkpoint `step-73` saved successfully; checkpoint `step-78` started cleanly.
+- The temporary `No rollouts received` warnings resolved when the replay buffer
+  collected fresh rollout batches.
+- Rollout-1 advanced through rollout step 88; recent generations completed in
+  roughly 43-86 seconds.
+- No recurrence of the vLLM over-context crash or W&B artifact-name failure.
+
+## CODEX 2026-05-24T06:20:15Z — Final stretch through 90/100
+
+The recovery attempt remains healthy in the final stretch:
+
+- Root, trainer, rollout-0, and rollout-1 remain `JOB_STATE_RUNNING`.
+- Failure counts remain zero on the trainer and both rollout workers.
+- Trainer progress reached `90/100`; step 88 completed with loss `-0.0417`.
+- Checkpoint `step-83` saved successfully; checkpoint `step-89` started cleanly.
+- A fresh one-minute rollout wait resolved with the replay buffer collecting the
+  next rollout at `2026-05-24T06:17:13Z`.
+- Both rollout workers are alive; rollout-1 reached rollout step 109 and
+  rollout-0 was generating step 12.
+- No recurrence of the vLLM over-context crash or W&B artifact-name failure.
+
+## CODEX 2026-05-24T06:53:11Z — 100-step RL run succeeded
+
+The babysat 100-step run completed successfully:
+
+- Root job `/ahmedah/iris-rl-blog-rlooIS-sched-100s-uc1-20260524-012916`
+  reached `JOB_STATE_SUCCEEDED`.
+- Structured Iris summary reported `state=succeeded`, `exit_code=0`,
+  `failure_count=0`, and `preemption_count=0` for the root wrapper.
+- Trainer reached `100/100`, completed training step 99, and saved final
+  checkpoint `step-99` under
+  `gs://marin-us-central1/rl_testing/llama-3.1-8bi-math500-rlooIS-sched-100s-uc1-20260524-012916-ce4109/checkpoints/llama-3.1-8bi-math500-rlooIS-sched-100s-uc1-20260524-012916-train/step-99`.
+- The RL coordinator marked the run completed and finished at
+  `2026-05-24T06:50:47Z`.
+- Final eval signals observed during the run included pass@1 greedy at
+  weight step 90 with `pass_at_1=0.462`, and pass@16 sampled at weight step 98
+  with `pass_at_16=0.68`.
+- The final pass@16 length metrics at weight step 98 were
+  `length/truncated_rate=0.196875` and
+  `length/cap_saturated_rate=0.210625`.
+- No recurrence of the W&B artifact-name failure or vLLM over-context crash
+  appeared after the patches.
+- Rollout-0 shows `JOB_STATE_KILLED` with `exit_code=0` during coordinated
+  shutdown after completion; the nested RL job and root wrapper both succeeded.

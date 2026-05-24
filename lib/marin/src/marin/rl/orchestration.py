@@ -24,8 +24,10 @@ from fray import (
 )
 from fray.actor import HostedActor
 from marin.rl.curriculum import Curriculum
+from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.placement import resolve_launcher_region, singleton_region_list
 from marin.rl.rl_job import RLJob, RLJobConfig
+from marin.rl.rollout_storage import StorageType
 from marin.rl.rollout_worker import RolloutWorker
 from marin.rl.run_state import RLRunState
 from marin.rl.runtime import RLRuntimeHandles, WeightTransferRuntime
@@ -204,15 +206,20 @@ def _run_rl_coordinator(config: RLJobConfig) -> None:
         # Rollout workers
         for i in range(run_config.num_rollout_workers):
             worker_run_id = f"{rollout_config.run_id}-rollout-{i}"
+            worker_seed = rollout_config.seed + i
             tracker_config = rollout_config.tracker_config
             if tracker_config is not None:
                 tracker_config = dataclasses.replace(tracker_config, name=worker_run_id)
+            inference_config = rollout_config.inference_config
+            if isinstance(inference_config, vLLMInferenceContextConfig):
+                inference_config = dataclasses.replace(inference_config, seed=worker_seed)
             worker_config = dataclasses.replace(
                 rollout_config,
-                seed=rollout_config.seed + i,
+                seed=worker_seed,
                 run_id=worker_run_id,
                 worker_index=i,
                 tracker_config=tracker_config,
+                inference_config=inference_config,
             )
             rollout_jobs.append(
                 client.submit(
@@ -281,6 +288,7 @@ def _create_runtime_handles(client: Client, config: RLJobConfig) -> _HostedRunti
 
         run_state_hosted = client.host_actor(
             RLRunState,
+            _rollout_schedule_ledger_path(config),
             name=f"rl-{config.resolved_instance_id}-run-state",
         )
         hosted_actors.append(run_state_hosted)
@@ -306,6 +314,15 @@ def _create_runtime_handles(client: Client, config: RLJobConfig) -> _HostedRunti
     except Exception:
         _shutdown_hosted_actors(hosted_actors)
         raise
+
+
+def _rollout_schedule_ledger_path(config: RLJobConfig) -> str | None:
+    """Return the durable finite-data schedule ledger path for file-backed rollouts."""
+    if config.rollout_storage.storage_type != StorageType.FILE:
+        return None
+    if config.rollout_storage.path is None:
+        return None
+    return f"{config.rollout_storage.path.rstrip('/')}/_rollout_schedule_ledger"
 
 
 def _train_worker_entry(train_config, runtime: RLRuntimeHandles) -> None:

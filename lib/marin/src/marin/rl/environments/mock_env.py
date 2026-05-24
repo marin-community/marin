@@ -280,7 +280,7 @@ class MockEnv(MarinEnv):
         mode: str = "train",
         max_tokens: int | None = None,
         top_k: int | None = None,
-        stop: list[str] | None = None,
+        stop: list[str] | list[int] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts."""

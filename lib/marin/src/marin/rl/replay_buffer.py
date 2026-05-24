@@ -78,10 +78,21 @@ class ReplayBuffer:
     seed: int
 
     _total_batches_added: int = 0
+    _total_batches_seen: int = 0
+    _total_duplicate_batches_skipped: int = 0
+    _total_stale_step_batches_skipped: int = 0
+    _total_stale_timestamp_batches_skipped: int = 0
     _total_batches_sampled: int = 0
     _total_groups_seen: int = 0
+    _total_groups_accepted: int = 0
     _total_dead_groups_seen: int = 0
+    _total_rollouts_accepted: int = 0
+    _total_rollouts_consumed: int = 0
+    _consumed_lag_sum: int = 0
+    _consumed_lag_count: int = 0
+    _consumed_lag_max: int = 0
     _last_group_reward_std: float = 0.0
+    _seen_assignment_ids: set[str] = dataclasses.field(default_factory=set)
     _lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
     _current_step: int = 0
     _rng: np.random.Generator = dataclasses.field(init=False)
@@ -131,19 +142,28 @@ class ReplayBuffer:
         current_step: int,
         current_time: float,
     ) -> bool:
+        return self._rollout_staleness_reason(rollout_step, rollout_timestamp, current_step, current_time) is None
+
+    def _rollout_staleness_reason(
+        self,
+        rollout_step: int,
+        rollout_timestamp: float,
+        current_step: int,
+        current_time: float,
+    ) -> str | None:
         # We can receive "future" rollouts if the training worker crashed and restarted.
         # These can introduce unexpected non-determinism, so we explicitly disallow them.
         min_step = current_step - self.max_rollout_step_delay
         max_step = current_step
         if rollout_step < min_step or rollout_step > max_step:
-            return False
+            return "step"
 
         # Check timestamp
         min_time = current_time - self.max_rollout_timestamp_delay
         if rollout_timestamp <= min_time:
-            return False
+            return "timestamp"
 
-        return True
+        return None
 
     def set_current_step(self, step: int) -> None:
         """Set current training step and filter stale rollouts."""
@@ -189,10 +209,17 @@ class ReplayBuffer:
         current_time = time.time()
 
         for batch in new_batches:
+            if not batch.groups or not batch.groups[0].rollouts:
+                continue
+            self._total_batches_seen += 1
+
             # R[num_groups, num_rollouts_per_group]
             batch_rewards = np.zeros((len(batch.groups), len(batch.groups[0].rollouts)), dtype=np.float32)
 
-            if not batch.groups or not batch.groups[0].rollouts:
+            assignment_id = batch.metadata.assignment_id
+            if assignment_id and assignment_id in self._seen_assignment_ids:
+                self._total_duplicate_batches_skipped += 1
+                logger.info("Skipping duplicate rollout assignment %s", assignment_id)
                 continue
 
             # Read weight_step from first rollout's metadata
@@ -200,13 +227,25 @@ class ReplayBuffer:
             rollout_step = first_rollout.metadata.weight_step
             rollout_timestamp = first_rollout.metadata.timestamp
 
-            if not self._is_rollout_fresh(rollout_step, rollout_timestamp, self._current_step, current_time):
+            stale_reason = self._rollout_staleness_reason(
+                rollout_step, rollout_timestamp, self._current_step, current_time
+            )
+            if stale_reason is not None:
+                if stale_reason == "step":
+                    self._total_stale_step_batches_skipped += 1
+                elif stale_reason == "timestamp":
+                    self._total_stale_timestamp_batches_skipped += 1
                 logger.info(
-                    f"Skipping stale rollout batch (rollout_step={rollout_step}, current_step={self._current_step})"
+                    "Skipping stale rollout batch (rollout_step=%d, current_step=%d, reason=%s)",
+                    rollout_step,
+                    self._current_step,
+                    stale_reason,
                 )
                 continue
 
             self._total_batches_added += 1
+            if assignment_id:
+                self._seen_assignment_ids.add(assignment_id)
 
             for group_idx, group in enumerate(batch.groups):
                 # Compute RLOO advantages for the group
@@ -222,10 +261,14 @@ class ReplayBuffer:
                 self._total_groups_seen += 1
                 if np.std(batch_rewards[group_idx]) > 0.0:
                     env_examples[rollout.env_name].extend(maybe_used_rollouts)
+                    self._total_groups_accepted += 1
+                    self._total_rollouts_accepted += len(maybe_used_rollouts)
                 else:  # group has no variance in rewards
                     self._total_dead_groups_seen += 1
                     if not self.filter_out_groups_with_no_variance:
                         env_examples[rollout.env_name].extend(maybe_used_rollouts)
+                        self._total_groups_accepted += 1
+                        self._total_rollouts_accepted += len(maybe_used_rollouts)
 
                     logger.info(f"Group {group_idx} has no variance in rewards")
 
@@ -298,6 +341,13 @@ class ReplayBuffer:
             # Retire overused rollouts
             self._retire_overused_rollouts()
 
+            for rollout in sampled:
+                lag = self._current_step - rollout.weight_step
+                self._consumed_lag_sum += lag
+                self._consumed_lag_count += 1
+                self._consumed_lag_max = max(self._consumed_lag_max, lag)
+            self._total_rollouts_consumed += len(sampled)
+
             # Update stats
             self._total_batches_sampled += 1
             return sampled
@@ -314,15 +364,28 @@ class ReplayBuffer:
             total_groups = self._total_groups_seen
             dead_groups = self._total_dead_groups_seen
             dead_fraction = (dead_groups / total_groups) if total_groups > 0 else 0.0
+            consumed_lag_mean = (
+                self._consumed_lag_sum / self._consumed_lag_count if self._consumed_lag_count > 0 else 0.0
+            )
             return {
                 "total_size": sum(env_sizes.values()),
                 "env_sizes": env_sizes,
                 "num_environments": len(self.rollout_storage),
+                "total_batches_seen": self._total_batches_seen,
                 "total_batches_added": self._total_batches_added,
+                "total_batches_accepted": self._total_batches_added,
+                "total_duplicate_batches_skipped": self._total_duplicate_batches_skipped,
+                "total_stale_step_batches_skipped": self._total_stale_step_batches_skipped,
+                "total_stale_timestamp_batches_skipped": self._total_stale_timestamp_batches_skipped,
                 "total_batches_sampled": self._total_batches_sampled,
                 "total_groups_seen": total_groups,
+                "total_groups_accepted": self._total_groups_accepted,
                 "dead_groups_seen": dead_groups,
                 "dead_groups_fraction": dead_fraction,
+                "total_rollouts_accepted": self._total_rollouts_accepted,
+                "total_rollouts_consumed": self._total_rollouts_consumed,
+                "consumed_lag_mean": consumed_lag_mean,
+                "consumed_lag_max": self._consumed_lag_max,
                 "last_group_reward_std": self._last_group_reward_std,
                 "filter_dead_groups": float(self.filter_out_groups_with_no_variance),
             }

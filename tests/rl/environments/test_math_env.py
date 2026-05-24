@@ -6,6 +6,7 @@
 import jax.random
 import numpy as np
 import pytest
+from marin.rl.environments.base import FiniteDatasetEnv
 from marin.rl.environments.inference_ctx import LevanterInferenceContext
 from marin.rl.environments.math_env import MathEnv
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
@@ -47,6 +48,7 @@ class DummyInferenceContext(LevanterInferenceContext):
         self.tokenizer = tokenizer
         self._stop_tokens = None
         self.max_tokens = 512
+        self.calls = []
 
     def batch_completions(
         self,
@@ -59,6 +61,15 @@ class DummyInferenceContext(LevanterInferenceContext):
         top_k=None,
     ):
         """Return mock completions for each prompt."""
+        self.calls.append(
+            {
+                "prompts": prompts,
+                "temperature": temperature,
+                "n": n,
+                "max_tokens": max_tokens,
+                "top_k": top_k,
+            }
+        )
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]
 
 
@@ -102,3 +113,28 @@ def test_math_env_reward_calculation(gpt2_tokenizer):
     # With format_coef=0.1, format_valid=1.0, correct_answer=1.0: reward = 0.1 * 0 + 1.0 = 1.0
     np.testing.assert_allclose(rollout.token_rewards, 1.0), (rollout, metrics)
     assert rollout.episode_reward == pytest.approx(1.0), (rollout, metrics)
+
+
+def test_math_env_is_finite_dataset_env_and_preserves_explicit_eval_order(gpt2_tokenizer):
+    inference_ctx = DummyInferenceContext(gpt2_tokenizer)
+    eval_data = [
+        {"problem": "What is 1+1?", "solution": "\\boxed{2}"},
+        {"problem": "What is 2+2?", "solution": "\\boxed{4}"},
+    ]
+    env = MathEnv(train_dataset=[], eval_dataset=eval_data)
+
+    assert isinstance(env, FiniteDatasetEnv)
+
+    rollout_groups, metrics = env.sample_by_indices(
+        inference_ctx=inference_ctx,
+        indices=[1, 0],
+        n_generations=1,
+        temperature=0.0,
+        mode="eval",
+    )
+
+    prompts = inference_ctx.calls[0]["prompts"]
+    assert "What is 2+2?" in prompts[0][-1]["content"]
+    assert "What is 1+1?" in prompts[1][-1]["content"]
+    assert [group.rollouts[0].env_example_id for group in rollout_groups] == ["test_1", "test_0"]
+    assert metrics["math.eval_sampled_examples"] == 2.0

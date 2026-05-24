@@ -19,7 +19,7 @@ import os
 from levanter.checkpoint import CheckpointDebugConfig
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
-from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.curriculum import CurriculumConfig, EvalSamplingParams, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_experiment_utils import (
@@ -27,6 +27,7 @@ from marin.rl.rl_experiment_utils import (
     RLExperimentConfig,
     config_class_path,
     executor_main_config_for_rl_experiment,
+    get_stop_tokens,
     make_rl_step,
 )
 from marin.rl.rl_losses import RLOOLoss
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 PROJECT_NAME = "marin_iris_rl_debug"
 DEFAULT_EXPERIMENT_NAME_SUFFIX = "math500"
+DEFAULT_SEED = 42
 DEFAULT_NUM_TRAIN_STEPS = 500
 DEFAULT_CHECKPOINTER_SAVE_INTERVAL = 600
 DEFAULT_N_PROMPTS = 64
@@ -123,6 +125,28 @@ def build_math500_curriculum(run_id: str, config: RLExperimentConfig, eval_frequ
             ),
         },
         eval_frequency=eval_frequency,
+        eval_sampling_params=[
+            EvalSamplingParams(
+                name="pass1_greedy",
+                n_examples=DEFAULT_EVAL_N_EXAMPLES,
+                n_generations=1,
+                temperature=0.0,
+                top_k=-1,
+                max_output_tokens=config.max_output_tokens,
+                stop_tokens=get_stop_tokens(config.model_config.type),
+                update_curriculum_stats=True,
+            ),
+            EvalSamplingParams(
+                name="pass16_sample",
+                n_examples=DEFAULT_EVAL_N_EXAMPLES,
+                n_generations=config.n_generations_per_prompt,
+                temperature=1.0,
+                top_k=config.inference_top_k,
+                max_output_tokens=config.max_output_tokens,
+                stop_tokens=get_stop_tokens(config.model_config.type),
+                update_curriculum_stats=False,
+            ),
+        ],
         micro_eval_frequency=None,
         actor_name=f"curriculum-{run_id}",
         eval_n_examples=DEFAULT_EVAL_N_EXAMPLES,
@@ -144,6 +168,12 @@ def parse_args() -> argparse.Namespace:
         help="Suffix used in the executor step name, checkpoint path, and W&B runs.",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help="Base seed propagated to trainer, replay sampling, rollout sampling, and vLLM engine.",
+    )
+    parser.add_argument(
         "--num-train-steps",
         type=int,
         default=DEFAULT_NUM_TRAIN_STEPS,
@@ -154,6 +184,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_N_PROMPTS,
         help="Number of prompts sampled per rollout batch.",
+    )
+    parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=DEFAULT_MAX_OUTPUT_TOKENS,
+        help="Maximum generated response tokens for train and eval rollouts.",
     )
     parser.add_argument(
         "--eval-frequency",
@@ -260,6 +296,7 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         experiment_name_suffix=args.experiment_name_suffix,
         project_name=args.project_name,
         tags=tags,
+        seed=args.seed,
         num_train_steps=args.num_train_steps,
         checkpointer_save_interval=args.checkpointer_save_interval,
         delete_previous_temporary_checkpoint_after_save=args.delete_previous_temporary_checkpoint_after_save,
@@ -278,7 +315,7 @@ def build_experiment_config(args: argparse.Namespace) -> RLExperimentConfig:
         # bound per-step drift; sweep up to 1e-6 if training is too slow.
         learning_rate=5e-7,
         max_input_tokens=DEFAULT_MAX_INPUT_TOKENS,
-        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+        max_output_tokens=args.max_output_tokens,
         n_prompts=args.n_prompts,
         n_generations_per_prompt=16,
         num_rollout_workers=args.num_rollout_workers,

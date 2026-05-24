@@ -379,6 +379,72 @@ def test_vllm_async_engine_receives_engine_seed(monkeypatch):
     assert calls["seed"] == 1234
 
 
+def test_vllm_batch_completions_truncates_over_budget_prompts(monkeypatch):
+    captured = {}
+
+    class _FakeSamplingParams:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _FakeTokensPrompt:
+        def __init__(self, prompt_token_ids):
+            self.prompt_token_ids = prompt_token_ids
+
+    class _FakeLLM:
+        def generate(self, prompts, sampling_params):
+            captured["prompts"] = prompts
+            captured["sampling_params"] = sampling_params
+            return ["short-output", "long-output"]
+
+    class _FakeRenderer:
+        def build_generation_prompt(self, messages):
+            content = messages[0]["content"]
+            if content == "short":
+                return [1, 2, 3, 4]
+            if content == "long":
+                return [1, 2, 3, 4, 5, 6, 7]
+            raise AssertionError(content)
+
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.SamplingParams", _FakeSamplingParams)
+    monkeypatch.setattr("marin.rl.environments.inference_ctx.vllm.TokensPrompt", _FakeTokensPrompt)
+
+    ctx = object.__new__(vLLMInferenceContext)
+    ctx.llm = _FakeLLM()
+    ctx.max_model_len = 8
+    ctx.sampling_config = VLLMSamplingConfig(max_tokens=3, top_k=-1, stop=None)
+    ctx._use_final_only = False
+    ctx._last_generation_metrics = {}
+    ctx.renderer = _FakeRenderer()
+    ctx._convert_vllm_to_openai = lambda output: output
+
+    completions = ctx.batch_completions(
+        prompts=["short", "long"],
+        temperature=1.0,
+        n=1,
+        max_tokens=3,
+    )
+
+    assert completions == ["short-output", "long-output"]
+    assert captured["sampling_params"].max_tokens == 3
+    assert captured["prompts"][0].prompt_token_ids == [1, 2, 3, 4]
+    assert captured["prompts"][1].prompt_token_ids == [3, 4, 5, 6, 7]
+    assert ctx.get_metrics() == {
+        "vllm.prompt_tokens_max": 7,
+        "vllm.prompt_tokens_mean": 5.5,
+        "vllm.prompt_token_budget": 5,
+        "vllm.prompt_truncated_count": 1,
+        "vllm.prompt_truncated_rate": 0.5,
+    }
+
+
+def test_vllm_prompt_token_budget_requires_prompt_room():
+    ctx = object.__new__(vLLMInferenceContext)
+    ctx.max_model_len = 8
+
+    with pytest.raises(ValueError, match="leave room for at least one prompt token"):
+        ctx._prompt_token_budget(8)
+
+
 def test_worker_extension_uses_public_sync_weights():
     calls = {}
 

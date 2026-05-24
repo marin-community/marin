@@ -61,6 +61,7 @@ def _test_config(
     train_ram: str | None = None,
     inference_ram: str | None = None,
     zone: str | None = None,
+    seed: int = 42,
     delete_previous_temporary_checkpoint_after_save: bool = True,
     checkpoint_debug: CheckpointDebugConfig | None = None,
 ) -> RLExperimentConfig:
@@ -87,6 +88,7 @@ def _test_config(
         train_ram=train_ram,
         inference_ram=inference_ram,
         zone=zone,
+        seed=seed,
         delete_previous_temporary_checkpoint_after_save=delete_previous_temporary_checkpoint_after_save,
         checkpoint_debug=checkpoint_debug or CheckpointDebugConfig(),
     )
@@ -276,6 +278,31 @@ def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monk
     assert job_config.trainer.checkpointer.debug.enabled
     assert job_config.trainer.checkpointer.debug.log_interval == 15.0
     assert job_config.trainer.checkpointer.debug.dump_stacks_after == 45.0
+
+
+def test_build_rl_job_config_propagates_seed_to_rl_job_trainer_and_vllm(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=_test_config(
+            train_tpu_type="v5p-8",
+            inference_tpu_type="v5p-8",
+            seed=2026,
+        ),
+        curriculum=_test_curriculum(),
+        model_path="gs://marin-us-central1/models/test-model",
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.seed == 2026
+    assert job_config.trainer.seed == 2026
+    assert job_config.inference_config.seed == 2026
 
 
 def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):

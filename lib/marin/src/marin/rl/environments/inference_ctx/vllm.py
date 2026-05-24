@@ -118,7 +118,9 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.model_name = inference_config.model_name
         self.canonical_model_name = inference_config.canonical_model_name or inference_config.model_name
         self.sampling_config = inference_config.sampling_params
+        self.max_model_len = inference_config.max_model_len
         self._use_final_only = inference_config.mode == InferenceMode.ASYNC
+        self._last_generation_metrics: dict[str, float | int] = {}
 
         # Initialize the appropriate renderer based on model type
         self.renderer = self._get_renderer(self.canonical_model_name, self.tokenizer)
@@ -322,6 +324,28 @@ class vLLMInferenceContext(BaseInferenceContext):
     def shutdown(self) -> None:
         pass
 
+    def get_metrics(self) -> dict[str, float | int]:
+        """Return metrics from the most recent generation request."""
+        return self._last_generation_metrics
+
+    def _prompt_token_budget(self, max_tokens: int) -> int:
+        prompt_token_budget = self.max_model_len - max_tokens
+        if prompt_token_budget <= 0:
+            raise ValueError(
+                "vLLM max_model_len must leave room for at least one prompt token: "
+                f"max_model_len={self.max_model_len}, max_tokens={max_tokens}"
+            )
+        return prompt_token_budget
+
+    @staticmethod
+    def _truncate_prompt_token_ids(
+        prompt_token_ids: list[int],
+        prompt_token_budget: int,
+    ) -> tuple[list[int], bool]:
+        if len(prompt_token_ids) <= prompt_token_budget:
+            return prompt_token_ids, False
+        return prompt_token_ids[-prompt_token_budget:], True
+
     def batch_completions(
         self,
         prompts: list[str] | list[list[dict]],
@@ -344,12 +368,13 @@ class vLLMInferenceContext(BaseInferenceContext):
         """
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        requested_max_tokens = max_tokens if max_tokens is not None else self.sampling_config.max_tokens
         kwargs = {
             "temperature": temperature,
             "n": n,
-            "max_tokens": max_tokens or self.sampling_config.max_tokens,
-            "top_k": top_k or self.sampling_config.top_k,
-            "stop": stop or self.sampling_config.stop,
+            "max_tokens": requested_max_tokens,
+            "top_k": top_k if top_k is not None else self.sampling_config.top_k,
+            "stop": stop if stop is not None else self.sampling_config.stop,
             "logprobs": 1,
             "include_stop_str_in_output": self.sampling_config.include_stop_str_in_output,
         }
@@ -375,9 +400,38 @@ class vLLMInferenceContext(BaseInferenceContext):
 
         # Render messages to token IDs using the appropriate renderer
         prompt_token_ids = []
+        prompt_token_budget = self._prompt_token_budget(requested_max_tokens)
+        prompt_token_count_total = 0
+        prompt_token_count_max = 0
+        truncated_prompt_count = 0
         for messages in message_lists:
             tokens = self._render_messages_to_tokens(messages)
+            prompt_token_count_total += len(tokens)
+            prompt_token_count_max = max(prompt_token_count_max, len(tokens))
+            tokens, truncated = self._truncate_prompt_token_ids(tokens, prompt_token_budget)
+            if truncated:
+                truncated_prompt_count += 1
             prompt_token_ids.append(tokens)
+
+        prompt_count = len(prompt_token_ids)
+        self._last_generation_metrics = {
+            "vllm.prompt_tokens_max": prompt_token_count_max,
+            "vllm.prompt_tokens_mean": prompt_token_count_total / prompt_count if prompt_count > 0 else 0.0,
+            "vllm.prompt_token_budget": prompt_token_budget,
+            "vllm.prompt_truncated_count": truncated_prompt_count,
+            "vllm.prompt_truncated_rate": truncated_prompt_count / prompt_count if prompt_count > 0 else 0.0,
+        }
+        if truncated_prompt_count > 0:
+            logger.warning(
+                "Truncated %d/%d prompts to fit max_model_len=%d with max_tokens=%d "
+                "(prompt_token_budget=%d, max_prompt_tokens_before_truncation=%d)",
+                truncated_prompt_count,
+                prompt_count,
+                self.max_model_len,
+                requested_max_tokens,
+                prompt_token_budget,
+                prompt_token_count_max,
+            )
 
         # Pass token IDs directly to vLLM
         # See: https://docs.vllm.ai/en/v0.4.3/dev/offline_inference/llm_inputs.html

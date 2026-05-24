@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-import jax
 import numpy as np
-from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.tinker_environments.math_env import (
     MathEnv as TinkerMathEnvBase,
 )
@@ -20,9 +18,8 @@ from marin.rl.environments.tinker_environments.math_env import (
 )
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
 from marin.rl.math_utils import last_boxed_only_string
-from marin.rl.types import Rollout, RolloutGroup
 
-from .base import MarinEnv
+from .base import FiniteDatasetEnv
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +36,12 @@ class DataExample:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class MathEnv(MarinEnv):
+class MathEnv(FiniteDatasetEnv):
     """Math environment using Tinker's grading and prompt format."""
+
+    @property
+    def env_name(self) -> str:
+        return "math"
 
     def __init__(
         self,
@@ -123,110 +124,31 @@ class MathEnv(MarinEnv):
             return False
         return grade_answer(answer, ground_truth)
 
-    def sample(
-        self,
-        inference_ctx: BaseInferenceContext,
-        n_examples: int,
-        n_generations: int,
-        temperature: float,
-        prng_key,
-        mode: str = "train",
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
-        system_prompt: str | None = None,
-    ) -> tuple[list[RolloutGroup], dict[str, float]]:
-        """Sample prompts, evaluate responses, and create rollouts."""
+    def train_len(self) -> int:
+        return len(self.train_examples)
 
-        if mode not in ("train", "eval"):
-            raise ValueError(f"Unsupported mode: {mode}")
+    def eval_len(self) -> int:
+        return len(self.eval_examples)
 
-        available_examples = self.train_examples if mode == "train" else self.eval_examples
-        if not available_examples:
-            raise ValueError(f"No examples available for mode '{mode}'")
+    def train_examples_by_indices(self, indices: Sequence[int]) -> list[DataExample]:
+        return [self.train_examples[idx] for idx in indices]
 
-        n_to_sample = min(n_examples, len(available_examples))
-        if isinstance(prng_key, int):
-            seed = prng_key
-        else:
-            seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
-        rng = np.random.default_rng(seed)
-        indices = rng.choice(len(available_examples), size=n_to_sample, replace=False)
-        sampled_examples = [available_examples[int(idx)] for idx in indices]
+    def eval_examples_by_indices(self, indices: Sequence[int]) -> list[DataExample]:
+        return [self.eval_examples[idx] for idx in indices]
 
-        # Build message lists with few-shot examples for each prompt
-        prompts = [
-            [*self.fewshot_prefix, {"role": "user", "content": example.processed_prompt}] for example in sampled_examples
-        ]
-        completions = inference_ctx.batch_completions(
-            prompts=prompts,
-            temperature=temperature,
-            n=n_generations,
-            max_tokens=max_tokens,
-            top_k=top_k,
-            stop=stop,
-            system_prompt=None,  # No system prompt - use few-shot examples instead
-        )
+    def inference_prompt_for_example(self, example: DataExample) -> list[dict[str, str]]:
+        return [*self.fewshot_prefix, {"role": "user", "content": example.processed_prompt}]
 
-        rollout_groups: list[RolloutGroup] = []
-        total_choices = 0
-        reward_sum = 0.0
-        format_sum = 0.0
-        correct_sum = 0.0
-        response_token_count = 0
-        truncated_count = 0
+    def rollout_prompt_for_example(self, example: DataExample) -> str:
+        return example.processed_prompt
 
-        for example, completion in zip(sampled_examples, completions, strict=True):
-            group_rollouts: list[Rollout] = []
+    def example_id(self, example: DataExample) -> str:
+        return example.example_id
 
-            for choice in completion.choices:
-                reward, fmt_score, correct_score = self._score_choice(
-                    example=example,
-                    response_text=choice.message.content,
-                    finish_reason=choice.finish_reason,
-                    tokenizer=inference_ctx.tokenizer,
-                )
-
-                rollout = inference_ctx.create_rollout_from_choice(
-                    prompt=example.processed_prompt,
-                    choice=choice,
-                    env_name="math",
-                    env_example_id=example.example_id,
-                    reward=reward,
-                    correctness_reward=correct_score,
-                    temperature=temperature,
-                    top_k=top_k,
-                    system_prompt=system_prompt,
-                )
-
-                group_rollouts.append(rollout)
-                total_choices += 1
-                reward_sum += reward
-                format_sum += fmt_score
-                correct_sum += correct_score
-                response_token_count += rollout.response_tokens.size
-
-                if choice.finish_reason == "length":
-                    truncated_count += 1
-
-            if group_rollouts:
-                rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
-
-        if total_choices == 0:
-            raise RuntimeError("Inference context returned no choices; cannot compute metrics")
-
-        prefix = f"math.{mode}"
-        metrics = {
-            f"{prefix}_mean_reward": reward_sum / total_choices,
-            f"{prefix}_format_accuracy": format_sum / total_choices,
-            f"{prefix}_correct_accuracy": correct_sum / total_choices,
-            f"{prefix}_mean_response_tokens": response_token_count / total_choices,
-            f"{prefix}_total_responses": float(total_choices),
-            f"{prefix}_sampled_examples": float(len(sampled_examples)),
-            f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
-        }
-
-        return rollout_groups, metrics
+    def score_choice(
+        self, example: DataExample, response_text: str, finish_reason: str, tokenizer
+    ) -> tuple[float, float, float]:
+        return self._score_choice(example, response_text, finish_reason, tokenizer)
 
     def _score_choice(
         self, example: DataExample, response_text: str, finish_reason: str, tokenizer
@@ -251,21 +173,19 @@ class MathEnv(MarinEnv):
         return reward, format_valid, correct_answer
 
     def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
-        """Sample evaluation examples deterministically."""
+        """Return evaluation examples in stable dataset order."""
 
         if not self.eval_examples:
             return []
 
-        eval_key = jax.random.PRNGKey(42)
         n_to_sample = min(n_examples, len(self.eval_examples))
-        indices = jax.random.choice(eval_key, len(self.eval_examples), shape=(n_to_sample,), replace=False)
         return [
             {
-                "prompt": self.eval_examples[int(idx)].processed_prompt,
-                "answer": self.eval_examples[int(idx)].processed_answer,
-                "example_id": self.eval_examples[int(idx)].example_id,
+                "prompt": example.processed_prompt,
+                "answer": example.processed_answer,
+                "example_id": example.example_id,
             }
-            for idx in indices
+            for example in self.eval_examples[:n_to_sample]
         ]
 
     def clean_example(self, raw_prompt: str, raw_answer: str, example_id: str) -> DataExample:

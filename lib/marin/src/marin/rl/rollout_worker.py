@@ -10,6 +10,7 @@ and writes the rollout data to files for training workers to consume.
 
 import dataclasses
 import faulthandler
+import hashlib
 import logging
 import os
 import random
@@ -35,8 +36,8 @@ from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from levanter.utils.mesh import MeshConfig
-from marin.rl.curriculum import CurriculumConfig
-from marin.rl.environments import MarinEnv
+from marin.rl.curriculum import CurriculumConfig, EvalSamplingParams, LessonConfig
+from marin.rl.environments import FiniteDatasetEnv, MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
 from marin.rl.environments.inference_ctx import (
     AsyncvLLMInferenceContext,
@@ -51,6 +52,7 @@ from marin.rl.environments.inference_ctx.staging import (
 )
 from marin.rl.metrics import pass_at_k_estimator
 from marin.rl.model_utils import load_model_from_checkpoint
+from marin.rl.rollout_schedule import RolloutAssignment
 from marin.rl.run_state import RolloutTransferCounters
 from marin.rl.runtime import RLRuntimeHandles
 
@@ -65,6 +67,13 @@ from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_
 from .weight_transfer.base import WeightUpdate
 
 logger = logging.getLogger(__name__)
+
+SAMPLE_TABLE_EVAL_TYPE_ALIASES = {
+    "eval": "eval",
+    "eval_pass1_greedy": "p1g",
+    "eval_pass16_sample": "p16s",
+}
+SAMPLE_TABLE_KEY_COMPONENT_MAX_LENGTH = 12
 
 
 @dataclass(frozen=True)
@@ -138,6 +147,88 @@ def _rollout_transfer_metrics_for_logging(
         "fetch_mib_per_second": metrics["fetch_mib_per_second"],
         "decode_mib_per_second": metrics["decode_mib_per_second"],
     }
+
+
+def _rollout_batch_throughput_and_length_metrics(
+    batch: RolloutBatch,
+    batch_time: float,
+    max_output_tokens: int | None,
+) -> dict[str, float | int]:
+    """Build cheap rollout throughput and length-cap saturation metrics."""
+    total_output_tokens = 0
+    total_responses = 0
+    truncated_responses = 0
+    max_response_tokens = 0
+    saturated_responses = 0
+    saturation_threshold = max_output_tokens * 0.95 if max_output_tokens is not None else None
+
+    for group in batch.groups:
+        for rollout in group.rollouts:
+            response_token_count = len(rollout.response_tokens)
+            total_output_tokens += response_token_count
+            total_responses += 1
+            max_response_tokens = max(max_response_tokens, response_token_count)
+            if rollout.is_truncated:
+                truncated_responses += 1
+            if saturation_threshold is not None and response_token_count >= saturation_threshold:
+                saturated_responses += 1
+
+    mean_response_tokens = total_output_tokens / total_responses if total_responses > 0 else 0.0
+    truncated_rate = truncated_responses / total_responses if total_responses > 0 else 0.0
+    saturated_rate = saturated_responses / total_responses if total_responses > 0 else 0.0
+
+    metrics: dict[str, float | int] = {
+        "inference.throughput/tokens_per_second": total_output_tokens / batch_time if batch_time > 0 else 0,
+        "inference.throughput/requests_per_second": total_responses / batch_time if batch_time > 0 else 0,
+        "inference.throughput/batch_time_seconds": batch_time,
+        "inference.length/response_tokens_total": total_output_tokens,
+        "inference.length/response_count": total_responses,
+        "inference.length/response_tokens_mean": mean_response_tokens,
+        "inference.length/response_tokens_max": max_response_tokens,
+        "inference.length/truncated_count": truncated_responses,
+        "inference.length/truncated_rate": truncated_rate,
+        "inference.length/cap_tokens": max_output_tokens if max_output_tokens is not None else -1,
+        "inference.length/cap_saturated_count": saturated_responses,
+        "inference.length/cap_saturated_rate": saturated_rate,
+    }
+    if saturation_threshold is not None:
+        metrics["inference.length/cap_saturation_threshold_tokens"] = saturation_threshold
+    return metrics
+
+
+def _rollout_batch_length_metrics(batch: RolloutBatch, max_output_tokens: int | None) -> dict[str, float | int]:
+    """Build length metrics without throughput keys."""
+    metrics = _rollout_batch_throughput_and_length_metrics(
+        batch=batch,
+        batch_time=0.0,
+        max_output_tokens=max_output_tokens,
+    )
+    return {
+        key.removeprefix("inference.length/"): value
+        for key, value in metrics.items()
+        if key.startswith("inference.length/")
+    }
+
+
+def _short_metric_key_component(value: str) -> str:
+    """Return a short stable component for W&B table keys.
+
+    W&B derives artifact names for tables from the run id and metric key. Long
+    RL run names leave little space for table keys, so keep sample-table keys
+    compact while preserving stable per-eval/per-lesson disambiguation.
+    """
+    if len(value) <= SAMPLE_TABLE_KEY_COMPONENT_MAX_LENGTH:
+        return value
+
+    digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:4]
+    prefix_length = SAMPLE_TABLE_KEY_COMPONENT_MAX_LENGTH - len(digest) - 1
+    return f"{value[:prefix_length]}-{digest}"
+
+
+def _sample_table_metric_key(eval_type: str, lesson_id: str) -> str:
+    eval_component = SAMPLE_TABLE_EVAL_TYPE_ALIASES.get(eval_type, _short_metric_key_component(eval_type))
+    lesson_component = _short_metric_key_component(lesson_id)
+    return f"samples/{eval_component}/{lesson_component}"
 
 
 class _NoOpTracker:
@@ -397,6 +488,33 @@ def _should_run_micro_eval(
     return rollout_step % micro_eval_frequency == 0
 
 
+def _eval_type_from_name(name: str) -> str:
+    """Return metric-safe eval type for an eval sampling config name."""
+    return name if name.startswith("eval") else f"eval_{name}"
+
+
+def _eval_sampling_params_for_lesson(
+    curriculum_config: CurriculumConfig, lesson_config: LessonConfig
+) -> list[EvalSamplingParams]:
+    """Return explicit eval params, falling back to the legacy pass@1 behavior."""
+    if curriculum_config.eval_sampling_params is not None:
+        return curriculum_config.eval_sampling_params
+
+    sampling_params = lesson_config.sampling_params
+    return [
+        EvalSamplingParams(
+            name="eval",
+            n_examples=curriculum_config.eval_n_examples,
+            n_generations=1,
+            temperature=sampling_params.temperature,
+            top_k=sampling_params.top_k,
+            max_output_tokens=sampling_params.max_output_tokens,
+            stop_tokens=sampling_params.stop_tokens,
+            update_curriculum_stats=True,
+        )
+    ]
+
+
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
 
@@ -504,29 +622,51 @@ class RolloutWorker:
         n_generations: int,
         mode: str,
         rng,
+        indices: list[int] | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        stop_tokens: list[str] | list[int] | None = None,
+        max_tokens: int | None = None,
+        assignment: RolloutAssignment | None = None,
     ) -> tuple[RolloutBatch | None, dict | None]:
         """Sample a batch of rollouts from the environment for the given lesson ID."""
         env = self._load_environment(lesson_id)
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
 
         # Get sampling params from lesson config
-        temperature = lesson_config.sampling_params.temperature
-        top_k = lesson_config.sampling_params.top_k
-        stop_tokens = lesson_config.sampling_params.stop_tokens
-        max_tokens = lesson_config.sampling_params.max_output_tokens
+        sampling_params = lesson_config.sampling_params
+        temperature = temperature if temperature is not None else sampling_params.temperature
+        top_k = top_k if top_k is not None else sampling_params.top_k
+        stop_tokens = stop_tokens if stop_tokens is not None else sampling_params.stop_tokens
+        max_tokens = max_tokens if max_tokens is not None else sampling_params.max_output_tokens
 
-        rollout_groups, metrics = env.sample(
-            inference_ctx=self._policy_ctx,
-            n_examples=n_examples,
-            n_generations=n_generations,
-            temperature=temperature,
-            prng_key=rng,
-            mode=mode,
-            max_tokens=max_tokens,
-            top_k=top_k,
-            stop=stop_tokens,
-            system_prompt=self.config.system_prompt,
-        )
+        if indices is not None:
+            if not isinstance(env, FiniteDatasetEnv):
+                raise TypeError(f"Explicit indices require FiniteDatasetEnv, got {type(env).__name__}")
+            rollout_groups, metrics = env.sample_by_indices(
+                inference_ctx=self._policy_ctx,
+                indices=indices,
+                n_generations=n_generations,
+                temperature=temperature,
+                mode=mode,
+                max_tokens=max_tokens,
+                top_k=top_k,
+                stop=stop_tokens,
+                system_prompt=self.config.system_prompt,
+            )
+        else:
+            rollout_groups, metrics = env.sample(
+                inference_ctx=self._policy_ctx,
+                n_examples=n_examples,
+                n_generations=n_generations,
+                temperature=temperature,
+                prng_key=rng,
+                mode=mode,
+                max_tokens=max_tokens,
+                top_k=top_k,
+                stop=stop_tokens,
+                system_prompt=self.config.system_prompt,
+            )
 
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch...")
@@ -544,6 +684,14 @@ class RolloutWorker:
             worker_id=f"{socket.gethostname()}_{os.getpid()}",
             timestamp=time.time(),
             weight_step=self._current_weight_step,
+            worker_index=getattr(self.config, "worker_index", -1),
+            worker_seed=getattr(self.config, "seed", 0),
+            lesson_id=lesson_id,
+            assignment_id=assignment.assignment_id if assignment is not None else "",
+            schedule_epoch=assignment.epoch if assignment is not None else -1,
+            schedule_start_position=assignment.start_position if assignment is not None else -1,
+            schedule_end_position=assignment.end_position if assignment is not None else -1,
+            schedule_indices=assignment.indices if assignment is not None else (),
         )
 
         # Attach metadata to each rollout in each group
@@ -562,6 +710,33 @@ class RolloutWorker:
             metadata=batch_metadata,
         )
         return rollout_batch, metrics
+
+    def _reserve_train_assignment(self, lesson_id: str, n_examples: int) -> RolloutAssignment | None:
+        """Reserve scheduled train indices for finite dataset environments."""
+        env = self._load_environment(lesson_id)
+        if not isinstance(env, FiniteDatasetEnv):
+            return None
+
+        dataset_len = env.train_len()
+        assignment = self._runtime.run_state.reserve_rollout_assignment.remote(
+            worker_index=self.config.worker_index,
+            lesson_id=lesson_id,
+            worker_seed=self.config.seed,
+            dataset_len=dataset_len,
+            n_examples=n_examples,
+        ).result()
+        return assignment
+
+    def _commit_train_assignment(self, assignment: RolloutAssignment | None) -> None:
+        """Commit a scheduled train assignment after durable rollout write."""
+        if assignment is None:
+            return
+
+        self._runtime.run_state.commit_rollout_assignment.remote(
+            worker_index=assignment.worker_index,
+            lesson_id=assignment.lesson_id,
+            assignment_id=assignment.assignment_id,
+        ).result()
 
     def _build_models(self):
         if self.config.initial_checkpoint is not None:
@@ -706,20 +881,18 @@ class RolloutWorker:
             lesson_id: ID of the evaluated lesson
             batch: The rollout batch containing samples
             step: Semantic training/weight step to include in the table rows
-            eval_type: Either "eval" or "micro_eval"
+            eval_type: Eval metric stream name, such as "eval" or "eval_pass1_greedy".
         """
         if not batch or not batch.groups:
             return {}
 
         sample_groups = min(1000, len(batch.groups))
-        selected_group_indices = random.sample(range(len(batch.groups)), k=sample_groups)
 
         rows = []
-        for group_idx in selected_group_indices:
-            group = batch.groups[group_idx]
+        for group in batch.groups[:sample_groups]:
             if not group.rollouts:
                 continue
-            rollout = random.choice(group.rollouts)
+            rollout = group.rollouts[0]
             prompt_text = self._tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=False)
             response_text = self._tokenizer.decode(rollout.response_tokens, skip_special_tokens=False)
             rows.append(
@@ -733,9 +906,8 @@ class RolloutWorker:
         for row in rows:
             table.add_data(row["prompt"], row["response"], row["reward"], row["step"])
 
-        prefix = f"inference.{eval_type}/{lesson_id}"
         logger.info("Prepared %d eval samples for lesson %s at step %d", len(rows), lesson_id, step)
-        return {f"{prefix}/sample_table": table}
+        return {_sample_table_metric_key(eval_type, lesson_id): table}
 
     def _build_eval_metrics(
         self,
@@ -745,6 +917,7 @@ class RolloutWorker:
         n_generations: int,
         temperature: float,
         top_k: int | None,
+        max_output_tokens: int | None,
     ) -> dict[str, Any]:
         metrics = {}
         stats = _compute_batch_stats(batch, lesson_id)
@@ -759,12 +932,18 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/avg_at_{n_generations}"] = stats.avg_at_k
         metrics[f"{prefix}/{lesson_id}/temperature"] = temperature
         metrics[f"{prefix}/{lesson_id}/top_k"] = top_k if top_k is not None else -1
+        metrics.update(
+            {
+                f"{prefix}/{lesson_id}/length/{key}": value
+                for key, value in _rollout_batch_length_metrics(batch, max_output_tokens).items()
+            }
+        )
         return metrics
 
     def _log_lesson_eval(
         self,
         lesson_id: str,
-        eval_type: Literal["eval", "micro_eval"],
+        eval_type: str,
         batch: RolloutBatch,
         step: int,
         weight_step: int,
@@ -792,32 +971,66 @@ class RolloutWorker:
     def _evaluate_lesson(
         self,
         lesson_id: str,
-        n_examples: int,
-        eval_type: Literal["eval", "micro_eval"],
+        n_examples: int | None,
+        eval_type: str,
         rng,
         step: int,
+        eval_params: EvalSamplingParams | None = None,
     ) -> RolloutBatchStats:
         """Evaluate a single lesson and log metrics."""
-        n_eval_generations = 1
+        lesson_config = self.config.curriculum_config.lessons[lesson_id]
+        sampling_params = lesson_config.sampling_params
+        if eval_params is None:
+            n_eval_generations = 1
+            temperature = sampling_params.temperature
+            top_k = sampling_params.top_k
+            max_tokens = sampling_params.max_output_tokens
+            stop_tokens = sampling_params.stop_tokens
+            update_curriculum_stats = eval_type == "eval"
+        else:
+            n_eval_generations = eval_params.n_generations
+            temperature = eval_params.temperature
+            top_k = eval_params.top_k
+            max_tokens = eval_params.max_output_tokens or sampling_params.max_output_tokens
+            stop_tokens = eval_params.stop_tokens if eval_params.stop_tokens is not None else sampling_params.stop_tokens
+            update_curriculum_stats = eval_params.update_curriculum_stats
+
+        env = self._load_environment(lesson_id)
+        indices = None
+        if isinstance(env, FiniteDatasetEnv):
+            eval_len = env.eval_len()
+            n_to_sample = eval_len if n_examples is None else min(n_examples, eval_len)
+            indices = list(range(n_to_sample))
+            n_examples_for_sample = n_to_sample
+        else:
+            if n_examples is None:
+                raise ValueError("n_examples=None requires a FiniteDatasetEnv eval split")
+            n_examples_for_sample = n_examples
+
         batch, _ = self._sample_batch(
             lesson_id=lesson_id,
-            n_examples=n_examples,
+            n_examples=n_examples_for_sample,
             n_generations=n_eval_generations,
             mode="eval",
             rng=rng,
+            indices=indices,
+            temperature=temperature,
+            top_k=top_k,
+            stop_tokens=stop_tokens,
+            max_tokens=max_tokens,
         )
         if batch is None:
             raise RuntimeError(f"Eval batch for lesson {lesson_id} produced no rollouts")
 
         stats = _compute_batch_stats(batch, lesson_id)
-        sampling_params = self.config.curriculum_config.lessons[lesson_id].sampling_params
         metrics = self._build_eval_metrics(
             prefix=f"inference.{eval_type}",
             lesson_id=lesson_id,
             batch=batch,
             n_generations=n_eval_generations,
-            temperature=sampling_params.temperature,
-            top_k=sampling_params.top_k,
+            temperature=temperature,
+            top_k=top_k,
+            max_output_tokens=max_tokens,
         )
         self._log_lesson_eval(
             lesson_id=lesson_id,
@@ -827,7 +1040,7 @@ class RolloutWorker:
             weight_step=self._current_weight_step,
             metrics=metrics,
         )
-        if eval_type == "eval":
+        if update_curriculum_stats:
             self._curriculum_actor.update_lesson_stats.remote(
                 stats.rollout_stats,
                 mode="eval",
@@ -844,13 +1057,16 @@ class RolloutWorker:
 
         logger.info("Evaluating %d lessons", len(lesson_names))
         for lesson_id in lesson_names:
-            self._evaluate_lesson(
-                lesson_id=lesson_id,
-                n_examples=self.config.curriculum_config.eval_n_examples,
-                eval_type="eval",
-                rng=rng,
-                step=step,
-            )
+            lesson_config = self.config.curriculum_config.lessons[lesson_id]
+            for eval_params in _eval_sampling_params_for_lesson(self.config.curriculum_config, lesson_config):
+                self._evaluate_lesson(
+                    lesson_id=lesson_id,
+                    n_examples=eval_params.n_examples,
+                    eval_type=_eval_type_from_name(eval_params.name),
+                    rng=rng,
+                    step=step,
+                    eval_params=eval_params,
+                )
 
     def _resume_safe_transfer_metrics(self) -> dict[str, float | int]:
         current_metrics = self._transfer_client.get_metrics()
@@ -865,6 +1081,16 @@ class RolloutWorker:
         self._last_transfer_counters = current_counters
         return _rollout_transfer_metrics_for_logging(current_metrics, cumulative_counters)
 
+    def _rollout_schedule_metrics(self) -> dict[str, float | int]:
+        try:
+            stats = self._runtime.run_state.get_rollout_schedule_stats.remote().result(timeout=5.0)
+        except AttributeError:
+            return {}
+        except Exception:
+            logger.warning("Failed to fetch rollout schedule metrics", exc_info=True)
+            return {}
+        return {f"schedule/{key}": value for key, value in stats.items() if isinstance(value, (int, float))}
+
     def _log_rollout_metrics(
         self,
         *,
@@ -875,6 +1101,7 @@ class RolloutWorker:
     ) -> None:
         log_metrics = dict(rollout_metrics)
         log_metrics.update(self._resume_safe_transfer_metrics())
+        log_metrics.update(self._rollout_schedule_metrics())
         log_metrics.update(self._policy_ctx.get_metrics())
         log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
         if hasattr(self._rollout_writer, "get_metrics"):
@@ -1028,6 +1255,11 @@ class RolloutWorker:
                 logger.info("PHASE: GENERATE step=%d lesson=%s", step, lesson_id)
                 faulthandler.dump_traceback_later(1200, repeat=False, file=sys.stderr, exit=True)
 
+                assignment = self._reserve_train_assignment(
+                    lesson_id=lesson_id,
+                    n_examples=lesson_config.sampling_params.n_prompts,
+                )
+                scheduled_indices = list(assignment.indices) if assignment is not None else None
                 batch_start_time = time.time()
                 rollout_batch, env_metrics = self._sample_batch(
                     lesson_id=lesson_id,
@@ -1035,6 +1267,8 @@ class RolloutWorker:
                     n_generations=lesson_config.sampling_params.n_generations_per_prompt,
                     mode="train",
                     rng=input_rng,
+                    indices=scheduled_indices,
+                    assignment=assignment,
                 )
                 batch_time = time.time() - batch_start_time
 
@@ -1042,25 +1276,28 @@ class RolloutWorker:
                     faulthandler.cancel_dump_traceback_later()
                     continue
 
-                # Count tokens for throughput calculation
-                total_output_tokens = 0
-                total_prompts = 0
-                for group in rollout_batch.groups:
-                    for rollout in group.rollouts:
-                        total_output_tokens += len(rollout.response_tokens)
-                        total_prompts += 1
-
-                # Calculate throughput metrics
-                throughput_metrics = {
-                    "inference.throughput/tokens_per_second": total_output_tokens / batch_time if batch_time > 0 else 0,
-                    "inference.throughput/requests_per_second": total_prompts / batch_time if batch_time > 0 else 0,
-                    "inference.throughput/batch_time_seconds": batch_time,
-                }
+                throughput_metrics = _rollout_batch_throughput_and_length_metrics(
+                    batch=rollout_batch,
+                    batch_time=batch_time,
+                    max_output_tokens=lesson_config.sampling_params.max_output_tokens,
+                )
+                if assignment is not None:
+                    throughput_metrics.update(
+                        {
+                            "inference.schedule/worker_index": assignment.worker_index,
+                            "inference.schedule/worker_seed": assignment.worker_seed,
+                            "inference.schedule/epoch": assignment.epoch,
+                            "inference.schedule/start_position": assignment.start_position,
+                            "inference.schedule/end_position": assignment.end_position,
+                            "inference.schedule/dataset_len": assignment.dataset_len,
+                        }
+                    )
 
                 logger.info("PHASE: WRITE_ROLLOUT step=%d", step)
                 faulthandler.dump_traceback_later(300, repeat=False, file=sys.stderr, exit=True)
 
                 self._rollout_writer.write_batch(rollout_batch)
+                self._commit_train_assignment(assignment)
 
                 stats = _compute_batch_stats(rollout_batch, lesson_id)
                 self._curriculum_actor.update_lesson_stats.remote(
@@ -1073,6 +1310,7 @@ class RolloutWorker:
                     n_generations=lesson_config.sampling_params.n_generations_per_prompt,
                     temperature=lesson_config.sampling_params.temperature,
                     top_k=lesson_config.sampling_params.top_k,
+                    max_output_tokens=lesson_config.sampling_params.max_output_tokens,
                 )
 
                 step += 1

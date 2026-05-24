@@ -72,6 +72,8 @@ class RLExperimentConfig:
     experiment_name_suffix: str
 
     # trainer params
+    seed: int = 42
+    """Base seed for trainer RNG, replay sampling, rollout sampling, and vLLM engine sampling."""
     train_batch_size: int = 1024
     per_device_parallelism: int = 16
     num_train_steps: int = 500
@@ -231,6 +233,7 @@ def _build_rl_job_config(
             name=name,
             tags=tags,
         ),
+        seed=config.seed,
         log_xla_hlo=False,
         log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -307,12 +310,14 @@ def _build_rl_job_config(
                 logprobs=1,
                 top_k=config.inference_top_k,
             ),
+            seed=config.seed,
             load_format=_vllm_load_format_for_model_path(model_path),
         ),
         initial_checkpoint=model_path,
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
+        seed=config.seed,
         log_freq=1,
         run_config=RunConfig(
             train_tpu_type=config.train_tpu_type,

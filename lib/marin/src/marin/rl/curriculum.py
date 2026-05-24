@@ -86,6 +86,35 @@ class SamplingParams:
 
 
 @dataclass
+class EvalSamplingParams:
+    """Parameters for deterministic evaluation sampling."""
+
+    name: str = "eval"
+    """Name used in metric prefixes. Names without an ``eval`` prefix are logged as ``eval_<name>``."""
+
+    n_examples: int | None = None
+    """Number of eval examples to run. None means the full finite eval split."""
+
+    n_generations: int = 1
+    """Number of generations per prompt."""
+
+    temperature: float = 1.0
+    """Sampling temperature for eval generation."""
+
+    top_k: int | None = None
+    """Top-k sampling parameter for eval generation."""
+
+    max_output_tokens: int | None = None
+    """Maximum eval response tokens. None falls back to the lesson sampling config."""
+
+    stop_tokens: list[str] | list[int] | None = None
+    """Stop strings for eval generation. None falls back to the lesson sampling config."""
+
+    update_curriculum_stats: bool = True
+    """Whether this eval stream should feed adaptive curriculum eval statistics."""
+
+
+@dataclass
 class LessonConfig:
     """Configuration for a single lesson in the curriculum."""
 
@@ -129,6 +158,9 @@ class CurriculumConfig:
 
     eval_n_examples: int = 64
     """Number of examples to use for each lesson during full evaluation."""
+
+    eval_sampling_params: list[EvalSamplingParams] | None = None
+    """Explicit eval modes. None preserves the legacy single pass@1 eval."""
 
     micro_eval_frequency: int | None = 10
     """How often to run micro-evaluation on the current lesson (in rollout worker steps).

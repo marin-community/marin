@@ -38,6 +38,7 @@ def create_test_batch(
     env_name: str | None = None,
     weight_step: int = 0,
     timestamp: float | None = None,
+    assignment_id: str = "",
 ) -> RolloutBatch:
     """Helper to create test batches with identifiable tokens for testing."""
     rng = np.random.default_rng(42 + idx)
@@ -47,7 +48,12 @@ def create_test_batch(
         timestamp = time.time()
 
     # Create batch metadata
-    batch_metadata = RolloutMetadata(worker_id="test_worker", timestamp=timestamp, weight_step=weight_step)
+    batch_metadata = RolloutMetadata(
+        worker_id="test_worker",
+        timestamp=timestamp,
+        weight_step=weight_step,
+        assignment_id=assignment_id,
+    )
 
     # Create individual rollouts with identifiable tokens
     rollouts = []
@@ -212,6 +218,32 @@ def test_replay_buffer_capacity_eviction():
 
     # Verify most recent data is kept (batches 2, 3, 4 should remain)
     # This is hard to test directly without exposing internals, but capacity enforcement is verified
+
+
+def test_replay_buffer_skips_duplicate_rollout_assignment():
+    replay_buffer = ReplayBuffer(
+        capacity=100,
+        local_batch_size=2,
+        alpha=1.0,
+        total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
+        seed=42,
+    )
+
+    first = create_test_batch(0, batch_size=2, max_seq_len=16, env_name="test_env", assignment_id="assignment-0")
+    duplicate = create_test_batch(1, batch_size=2, max_seq_len=16, env_name="test_env", assignment_id="assignment-0")
+
+    replay_buffer.add_batches([first, duplicate])
+
+    stats = replay_buffer.get_stats()
+    assert stats["total_batches_seen"] == 2
+    assert stats["total_batches_accepted"] == 1
+    assert stats["total_duplicate_batches_skipped"] == 1
+    assert replay_buffer.size() == 2
 
 
 def test_replay_buffer_max_resamples():

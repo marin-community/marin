@@ -44,6 +44,30 @@ class RolloutMetadata:
     weight_step: int = -1
     """The step at which the model weights were used to generate this rollout."""
 
+    worker_index: int = -1
+    """Stable logical rollout worker index."""
+
+    worker_seed: int = 0
+    """Seed used by the logical rollout worker that generated this rollout."""
+
+    lesson_id: str = ""
+    """Curriculum lesson used to generate this rollout."""
+
+    assignment_id: str = ""
+    """Deterministic finite-data assignment id, if generated from a schedule."""
+
+    schedule_epoch: int = -1
+    """Finite-data epoch at the assignment start position."""
+
+    schedule_start_position: int = -1
+    """Worker-local finite-data schedule start position."""
+
+    schedule_end_position: int = -1
+    """Worker-local finite-data schedule end position."""
+
+    schedule_indices: tuple[int, ...] = ()
+    """Dataset indices selected for this rollout batch."""
+
 
 class Rollout(eqx.Module):
     """A single rollout: one prompt + one generated response + rewards."""

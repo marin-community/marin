@@ -110,6 +110,7 @@ class RLJobConfig:
     inference_type: Literal["levanter", "vllm"]
 
     seed: int = 42
+    """Base seed for trainer RNG and replay sampling; rollout workers derive seeds as base + 1000 + worker_index."""
 
     vocab_size: int | None = None
     """Vocab size for model construction. Should match the checkpoint's vocab dimension.
@@ -230,6 +231,10 @@ class RLJob:
         """
         # Create tokenizer
         tokenizer = make_tokenizer(self.config.tokenizer)
+        trainer_config = dataclasses.replace(self.config.trainer, seed=self.config.seed)
+        # Keep rollout-side data sampling and vLLM token sampling on one derived stream.
+        # Orchestration adds worker_index for multi-rollout runs.
+        rollout_seed = self.config.seed + 1000
 
         # Scan over sampling params for max seqs, must be able to fit a single lesson prompt
         max_seqs = 0
@@ -255,7 +260,7 @@ class RLJob:
         # Create inference server config if not provided
         if self.config.inference_config is None and self.config.inference_type == "levanter":
             inference_server_config = InferenceServerConfig(
-                trainer=self.config.trainer,
+                trainer=trainer_config,
                 tokenizer=tokenizer,
                 temperature=1.0,
                 service=InferenceEngineConfig(
@@ -270,21 +275,23 @@ class RLJob:
                 "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_seq_len=%d", max_seqs, max_seq_len
             )
             inference_config = LevanterInferenceContextConfig(
-                mesh=self.config.trainer.device_mesh,
+                mesh=trainer_config.device_mesh,
                 inference_server_config=inference_server_config,
                 tokenizer=tokenizer,
-                axis_mapping=self.config.trainer.compute_axis_mapping,
+                axis_mapping=trainer_config.compute_axis_mapping,
             )
         else:
             assert self.config.inference_config is not None, "Inference config must be provided for vllm inference"
             inference_config = self.config.inference_config
+            if isinstance(inference_config, vLLMInferenceContextConfig):
+                inference_config = dataclasses.replace(inference_config, seed=rollout_seed)
 
         # Create train worker config
         train_worker_config = TrainWorkerConfig(
             rollout_storage=self.config.rollout_storage,
             weight_transfer=weight_transfer_config,
             model=self.config.model,
-            trainer=self.config.trainer,
+            trainer=trainer_config,
             optimizer=self.config.train_params.optimizer,
             loss=self.config.train_params.rl_loss,
             tokenizer=tokenizer,
@@ -298,7 +305,7 @@ class RLJob:
 
         # Create rollout worker config
         rollout_worker_config = RolloutWorkerConfig(
-            trainer=self.config.trainer,
+            trainer=trainer_config,
             model=self.config.model,
             curriculum_config=self.config.curriculum,
             tokenizer=tokenizer,
@@ -309,7 +316,7 @@ class RLJob:
             weight_transfer=weight_transfer_config,
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
-            seed=self.config.seed + 1000,
+            seed=rollout_seed,
             inference_type=self.config.inference_type,
             inference_config=inference_config,
             system_prompt=self.config.system_prompt,
