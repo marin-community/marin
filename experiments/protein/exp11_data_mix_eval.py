@@ -1,85 +1,126 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exp 11 eval-only: run val/test eval on final checkpoints of mix/scale sweeps.
+"""Exp 11 eval-only: run val/test eval on one trial's final checkpoint.
 
-Loads the latest ``step_N`` checkpoint for each ``(stage, mixture)`` trial and
-runs Levanter's :class:`TaggedEvaluator` on the same heldout components the
-training run reported. Reuses :func:`build_mixture` via
-:func:`_build_trial` so the ``LmDataConfig`` (and therefore the IID-carve
-permutation + heldout cells + masking) matches training exactly.
+Designed to run directly on a TPU VM (no Fray coordinator). Each invocation
+evaluates exactly one (stage, mixture) trial. Parallelize at the top level by
+submitting separate ``iris job run`` commands, one per mixture.
 
-W&B run names are ``<training run id>-eval-<EVAL_VERSION>`` so eval lands in
-fresh runs that don't collide with the training run's step axis. Bump
-``EVAL_VERSION`` to fork eval runs when eval semantics change (data shape,
-masking, batch count, etc.) — training-run versions are untouched.
+Reuses :func:`build_mixture` via :func:`_build_trial` so the ``LmDataConfig``
+(heldout cells, IID-carve permutation, masking) matches training exactly.
+W&B run name is ``<training run id>-eval-<EVAL_VERSION>`` so eval lands in a
+fresh run that doesn't collide with the training run's step axis. Bump
+``EVAL_VERSION`` to fork eval runs when eval semantics change.
 
-Subcommands (``COMMAND`` env var):
+Env vars:
 
-* ``run_mix_sweep``  — eval m1..m9 (100M) on H/M/L x val/test + cd-val (masked + unmasked).
-* ``run_scale_sweep`` — eval m10..m15 (1.5B) on H x val/test + cd-val (masked).
+* ``COMMAND`` (required) — ``"run_mix_sweep"`` or ``"run_scale_sweep"``.
+* ``RUN`` (required) — mixture id (e.g. ``"m10"``); must exactly match one
+  of the stage's mixtures.
+* ``EVAL_MAX_BATCHES`` (optional) — cap on batches per heldout component.
+  Unset = no cap (evaluate every batch). Set to an int for smoke tests.
+* ``PREVIEW=yes`` (optional) — describe target, don't run.
 
-Env vars: ``COMMAND`` (required), ``RUNS`` (CSV substring filter on eval target
-ids), ``PREVIEW=yes`` (list targets, submit nothing), ``NUM_WORKERS`` (default
-1; eval is short, one TPU sequential is cheap), ``TPU`` (override worker TPU;
-default v5p-8), ``EVAL_MAX_BATCHES`` (default ``MAX_EVAL_BATCHES`` from the
-sweep, currently 16).
+Submission example::
 
-Preview::
-
-    COMMAND=run_scale_sweep PREVIEW=yes \\
-        uv run python -m experiments.protein.exp11_data_mix_eval
-
-Submit::
-
-    uv run iris --cluster=marin job run --user $USERNAME --no-wait \\
-        --job-name prot-exp11-eval-scale-$(date +%Y%m%d-%H%M) \\
-        --region us-east5 --memory=1GB \\
+    uv run iris job run \\
+        --region us-east5 --user eczech --no-wait --priority interactive \\
+        --tpu v6e-8 --enable-extra-resources --extra tpu --extra lm_eval \\
+        --memory 128GB \\
+        --job-name prot-exp11-eval-scale-m10-$(date +%Y%m%d-%H%M) \\
         -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" \\
-        -e COMMAND run_scale_sweep \\
+        -e COMMAND run_scale_sweep -e RUN m10 \\
         -- python -m experiments.protein.exp11_data_mix_eval
 """
 
+import dataclasses
 import logging
 import os
+from typing import Any
 
 import jmp
-from fray import current_client
-from fray.types import Entrypoint, JobRequest, create_environment
+from levanter.checkpoint import latest_checkpoint_path
 from levanter.main.eval_lm import EvalLmConfig
 from levanter.main.eval_lm import main as eval_lm_main
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.executor import compute_output_path
-from marin.execution.sweep import SweepTarget, claim_and_run
-from marin.training.training import extras_for_resources, resolve_training_env
 
 from experiments.protein.exp11_data_mix_sweep import (
-    MAX_EVAL_BATCHES,
-    RUN_NAME_PREFIX,
+    HIDDEN_100M,
     SEQ_LEN,
     STAGE_SPECS,
-    SWEEP_ROOT_PREFIX,
     StageSpec,
     _build_trial,
-    _preview,
-    _resolve_targets,  # noqa: F401  # imported for parity; eval uses its own target ids
-    _selected_runs,
     _trial_name,
+    scaled_lr,
 )
 
 logger = logging.getLogger(__name__)
 
-# Bump to fork eval runs without touching training-run versions. Used in both
-# the W&B run name and the claim_and_run sweep root.
-EVAL_VERSION: str = "v1"
+# Bump to fork eval runs without touching training-run versions. Goes into the
+# W&B run name suffix.
+EVAL_VERSION: str = "v2"
 
 # Stages eligible for eval. Smoke is excluded — it's a 400M-token sanity run.
 EVAL_STAGES: tuple[str, ...] = ("run_mix_sweep", "run_scale_sweep")
 
-# Default eval batch count. Matches the training-time eval budget so the same
-# number of examples per component is scored. Override via EVAL_MAX_BATCHES.
-DEFAULT_EVAL_MAX_BATCHES: int = MAX_EVAL_BATCHES
+# Sweep version actually trained (and thus targeted by eval) per stage. The
+# live ``STAGE_SPECS`` in the sweep file may have advanced past these — when
+# that's the case, ``_STAGE_SPEC_OVERRIDES`` below supplies the (batch, lr,
+# steps, version) values needed to recompute the trained-checkpoint path.
+# Bump these (and the override entry below) once a newer training version
+# has actually produced checkpoints on GCS.
+MIX_TRAIN_VERSION: str = "v2"
+SCALE_TRAIN_VERSION: str = "v6"
+
+# Per-stage StageSpec field overrides applied at eval-build time. Only fields
+# that affect ``_trial_name`` or the ``compute_output_path`` hash need to
+# appear. An empty dict means the live ``STAGE_SPECS[stage]`` already matches
+# the trained version (no override needed).
+#
+# Mix override pins to the trained v2 sweep (batch=128, scaled-LR, 4103 steps).
+# Scale needs no override — STAGE_SPECS["run_scale_sweep"].version is v6,
+# which matches SCALE_TRAIN_VERSION.
+_STAGE_SPEC_OVERRIDES: dict[str, dict[str, Any]] = {
+    "run_mix_sweep": {
+        "version": MIX_TRAIN_VERSION,
+        "batch_size": 128,
+        "learning_rate": scaled_lr(128, HIDDEN_100M),
+        # num_train_steps=4104 matches the trained path hash. Levanter saves
+        # the final checkpoint at step-(N-1), so the on-disk dir is step-4103.
+        "num_train_steps": 4104,
+    },
+    "run_scale_sweep": {},
+}
+
+
+def _resolve_spec(stage: str) -> StageSpec:
+    """Return the StageSpec the eval should target for ``stage``.
+
+    Falls back to ``STAGE_SPECS[stage]`` unchanged when no override is
+    registered for the stage. ``dataclasses.replace`` mutates a single field
+    list at a time so overrides can be added incrementally.
+    """
+    spec = STAGE_SPECS[stage]
+    overrides = _STAGE_SPEC_OVERRIDES.get(stage) or {}
+    if not overrides:
+        return spec
+    return dataclasses.replace(spec, **overrides)
+
+
+# Sanity-check at import time that the scale spec hasn't drifted past
+# SCALE_TRAIN_VERSION without an override entry.
+assert STAGE_SPECS["run_scale_sweep"].version == SCALE_TRAIN_VERSION or _STAGE_SPEC_OVERRIDES["run_scale_sweep"], (
+    f"STAGE_SPECS['run_scale_sweep'].version={STAGE_SPECS['run_scale_sweep'].version!r} "
+    f"!= SCALE_TRAIN_VERSION={SCALE_TRAIN_VERSION!r}; add an override entry."
+)
+
+# Default eval batch count. ``None`` = evaluate every batch in every heldout
+# component (no truncation). Override via ``EVAL_MAX_BATCHES`` if you want to
+# cap eval cost — e.g. for quick smoke tests.
+DEFAULT_EVAL_MAX_BATCHES: int | None = None
 
 # W&B group for eval runs. Distinct from training's "exp11-data-mix" so they
 # don't clutter the same group view. Runs land under the wandb API key owner's
@@ -87,9 +128,20 @@ DEFAULT_EVAL_MAX_BATCHES: int = MAX_EVAL_BATCHES
 EVAL_WANDB_GROUP: str = "exp11-data-mix-eval"
 
 
-def _eval_max_batches() -> int:
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise ValueError(f"Required env var {name!r} not set")
+    return value
+
+
+def _eval_max_batches() -> int | None:
     raw = os.environ.get("EVAL_MAX_BATCHES")
-    return int(raw) if raw else DEFAULT_EVAL_MAX_BATCHES
+    return DEFAULT_EVAL_MAX_BATCHES if raw is None else int(raw)
+
+
+def _preview() -> bool:
+    return os.environ.get("PREVIEW", "").strip().lower() in {"yes", "true", "1"}
 
 
 def _eval_run_name(spec: StageSpec, mixture_id: str) -> str:
@@ -97,31 +149,15 @@ def _eval_run_name(spec: StageSpec, mixture_id: str) -> str:
     return f"{_trial_name(spec, mixture_id)}-eval-{EVAL_VERSION}"
 
 
-def _eval_targets(spec: StageSpec) -> list[SweepTarget]:
-    return [SweepTarget(target_id=_eval_run_name(spec, mid), config=(mid,)) for mid in spec.mixture_ids]
+def _resolve_mixture(spec: StageSpec, run: str) -> str:
+    """Resolve ``RUN`` to exactly one of ``spec.mixture_ids`` by exact match.
 
-
-def _resolve_eval_targets(spec: StageSpec, runs: tuple[str, ...]) -> list[SweepTarget]:
-    targets = _eval_targets(spec)
-    if runs:
-        targets = [t for t in targets if any(r in t.target_id for r in runs)]
-    return targets
-
-
-def _eval_sweep_root(spec: StageSpec) -> str:
-    return f"{SWEEP_ROOT_PREFIX}/eval-{spec.name}-{spec.version}-{EVAL_VERSION}"
-
-
-def _trial_checkpoint_dir(spec: StageSpec, mixture_id: str) -> str:
-    """Recompute the trial's checkpoint dir from its StageSpec.
-
-    Re-runs the same ``prepare_lm_train`` pipeline training used, so the
-    ``compute_output_path`` hash matches. Returns ``<output_path>/checkpoints``;
-    Levanter's ``latest_checkpoint_path`` walks it to find the latest ``step_N``.
+    Exact match (not substring) so ``RUN=m1`` can't accidentally also match
+    m10, m11, etc.
     """
-    name, raw_config = _build_trial(spec, mixture_id)
-    output_path = compute_output_path(name, raw_config, override_output_path=None)
-    return f"{output_path}/checkpoints"
+    if run not in spec.mixture_ids:
+        raise ValueError(f"RUN={run!r} not in {spec.name} mixtures {spec.mixture_ids}")
+    return run
 
 
 def _build_eval_config(spec: StageSpec, mixture_id: str, *, max_eval_batches: int) -> EvalLmConfig:
@@ -129,10 +165,10 @@ def _build_eval_config(spec: StageSpec, mixture_id: str, *, max_eval_batches: in
 
     Reuses ``_build_trial`` so the data config is bit-identical to training's:
     same heldout cells, same ``num_validation_sequences`` (IID-carve), same
-    ``data_seed`` (= ``DATA_SEED`` constant). ``per_device_eval_parallelism``
-    is left at -1 so eval_batch_size resolves to ``train_batch_size``, matching
-    the eval batch the training loop used (so ``max_eval_batches`` semantics
-    are directly comparable across train and eval).
+    ``data_seed``. ``per_device_eval_parallelism`` is left at -1 so
+    eval_batch_size resolves to ``train_batch_size``, matching the eval batch
+    the training loop used (so ``max_eval_batches`` semantics are directly
+    comparable across train and eval).
     """
     name, raw_config = _build_trial(spec, mixture_id)
     output_path = compute_output_path(name, raw_config, override_output_path=None)
@@ -169,113 +205,31 @@ def _build_eval_config(spec: StageSpec, mixture_id: str, *, max_eval_batches: in
     )
 
 
-def _worker_entrypoint(stage: str, rank: int, num_workers: int, runs: tuple[str, ...], max_eval_batches: int) -> None:
-    """One eval worker: slice targets rank-stride, claim, and run eval_lm per trial."""
-    spec = STAGE_SPECS[stage]
-    targets = _resolve_eval_targets(spec, runs)
-    my_targets = targets[rank::num_workers]
-    logger.info(
-        "Eval worker rank=%d/%d assigned %d/%d target(s): %s",
-        rank,
-        num_workers,
-        len(my_targets),
-        len(targets),
-        [t.target_id for t in my_targets],
-    )
-    sweep_root = _eval_sweep_root(spec)
-
-    def _run_one(target: SweepTarget) -> None:
-        (mixture_id,) = target.config
-        config = _build_eval_config(spec, mixture_id, max_eval_batches=max_eval_batches)
-        logger.info("Running eval for %s from %s", target.target_id, config.checkpoint_path)
-        eval_lm_main(config)
-
-    claim_and_run(sweep_root, my_targets, _run_one)
-
-
-# ============================================================================
-# Launcher / preview
-# ============================================================================
-
-
-def _print_eval_preview(spec: StageSpec, targets: list[SweepTarget], *, max_eval_batches: int) -> None:
-    print(
-        f"PREVIEW: eval {spec.name} ({spec.version}/{EVAL_VERSION}) would run "
-        f"{len(targets)} target(s); max_eval_batches={max_eval_batches}:",
-        flush=True,
-    )
-    for t in targets:
-        (mid,) = t.config
-        ckpt = _trial_checkpoint_dir(spec, mid)
-        print(f"  {t.target_id}", flush=True)
-        print(f"    checkpoint: {ckpt}", flush=True)
-
-
-def _eval_launcher(stage: str) -> None:
-    spec = STAGE_SPECS[stage]
-    runs = _selected_runs()
-    targets = _resolve_eval_targets(spec, runs)
-    if not targets:
-        raise ValueError(f"eval {stage}: no targets matched RUNS={runs!r}")
-
-    max_eval_batches = _eval_max_batches()
-
-    if _preview():
-        _print_eval_preview(spec, targets, max_eval_batches=max_eval_batches)
-        return
-
-    # Default to 1 worker: eval is short, paying TPU startup for parallelism
-    # is rarely worth it. Bump via NUM_WORKERS to parallelize.
-    num_workers = int(os.environ.get("NUM_WORKERS", "1"))
-    num_workers = min(num_workers, len(targets))
-    resources = spec.resources_fn()
-    env = resolve_training_env(base_env=None, resources=resources)
-    extras = extras_for_resources(resources)
-
-    logger.info(
-        "Eval stage=%s targets=%d workers=%d runs=%s max_eval_batches=%d resources=%s",
-        stage,
-        len(targets),
-        num_workers,
-        runs,
-        max_eval_batches,
-        resources,
-    )
-
-    client = current_client()
-    handles = []
-    for rank in range(num_workers):
-        request = JobRequest(
-            name=f"{RUN_NAME_PREFIX}-eval-{stage}-w{rank}",
-            entrypoint=Entrypoint.from_callable(
-                _worker_entrypoint,
-                args=[stage, rank, num_workers, runs, max_eval_batches],
-            ),
-            resources=resources,
-            environment=create_environment(env_vars=env, extras=extras),
-        )
-        handles.append(client.submit(request))
-        logger.info("Submitted eval worker rank=%d/%d: %s", rank, num_workers, request.name)
-
-    failures = 0
-    for rank, h in enumerate(handles):
-        try:
-            h.wait(raise_on_failure=True)
-            logger.info("Eval worker rank=%d finished", rank)
-        except Exception:
-            failures += 1
-            logger.exception("Eval worker rank=%d failed", rank)
-    if failures:
-        raise RuntimeError(f"{failures}/{num_workers} eval workers failed")
-
-
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    command = os.environ.get("COMMAND")
-    if command in EVAL_STAGES:
-        _eval_launcher(command)
+    command = _required_env("COMMAND")
+    if command not in EVAL_STAGES:
+        raise ValueError(f"COMMAND must be one of {EVAL_STAGES}. Got {command!r}.")
+    spec = _resolve_spec(command)
+    mixture_id = _resolve_mixture(spec, _required_env("RUN"))
+    max_eval_batches = _eval_max_batches()
+    config = _build_eval_config(spec, mixture_id, max_eval_batches=max_eval_batches)
+    run_name = _eval_run_name(spec, mixture_id)
+
+    if _preview():
+        print(f"PREVIEW: eval {command} ({spec.version}/{EVAL_VERSION})", flush=True)
+        print(f"  target:         {run_name}", flush=True)
+        print(f"  checkpoint dir: {config.checkpoint_path}", flush=True)
+        try:
+            resolved = latest_checkpoint_path(config.checkpoint_path)
+            print(f"  resolved:       {resolved}", flush=True)
+        except FileNotFoundError as e:
+            print(f"  resolved:       <not found: {e}>", flush=True)
+        print(f"  max_eval_batches: {max_eval_batches}", flush=True)
         return
-    raise ValueError(f"Set COMMAND to one of: {', '.join(EVAL_STAGES)}. Got {command!r}.")
+
+    logger.info("Running eval for %s from %s", run_name, config.checkpoint_path)
+    eval_lm_main(config)
 
 
 if __name__ == "__main__":
