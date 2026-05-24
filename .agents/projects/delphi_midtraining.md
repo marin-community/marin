@@ -337,12 +337,12 @@ Notebook UX decisions that matter:
 - Use **marimo controls**, not the Plotly legend, as the source of truth.
 - Learning-rate filtering is four explicit checkboxes (`lr33`, `lr50`, `lr67`, `lr83`). This was intentional: Plotly legend toggles are ambiguous when each recipe has multiple traces (points, fit line, residual line, partial marker).
 - The endpoint plot renders only checked LR recipes, so visible curves always correspond exactly to selected controls.
-- The `1e21`/`1e22` points are held-out extrapolation targets. They are rendered past the `2e20` fit boundary and never enter the small-ladder fit.
+- The `1e21`/`1e22` points are held-out extrapolation targets. They are rendered past the `3e20` fit boundary and never enter the small-ladder fit.
 - Target markers are diamonds for complete-like held-out runs and open x markers for best-prefix runs that did not reach the final planned step.
 - The fit-quality readout should prioritize residuals and leave-one-scale-out error in raw loss units. `R^2` is secondary because these monotone endpoint curves can make bad extrapolations look visually plausible.
 - The `floor + A * compute^-alpha` fit is diagnostic only until we have more scales; the default baseline is `log(loss) = a + b log(compute)`.
 - The within-run section tunes prefix-prediction methods on completed small
-  ladder runs through `2e20`, then evaluates `1e21`/`1e22` as held-out large
+  ladder runs through `3e20`, then evaluates `1e21`/`1e22` as held-out large
   targets. Use the prefix controls to inspect the accuracy/cost tradeoff; do
   not assume the first 10% is enough for every metric.
 
@@ -358,17 +358,36 @@ W&B at step 6382/7647. See `.agents/logbooks/midtraining_delphi.md` sections
 `2026-05-21T02:45Z — held-out 1e21/1e22 extrapolation overlay` for the recorded
 result and commands.
 
-Within-run prefix-prediction first pass (2026-05-21) used five methods:
+Within-run prefix-prediction first pass (2026-05-21) used five baseline methods
+over a 10%-90% prefix grid:
 `last_value`, `linear_tau`, `template_global`, `template_by_mix`, and
 `template_by_recipe`. The template methods learn the median fraction of final
 improvement achieved by a prefix on the small ladder. For math validation,
 10% progress is informative but not enough under small-CV (`template_by_mix`
 MAE `0.0353`); the selected accuracy/cost point is `template_by_recipe` at
-50% progress (small-CV MAE `0.00387`, held-out complete MAE `0.0210`). Paloma
-macro and C4 select `template_by_recipe` at 10% progress with held-out MAE
-around `0.024` and `0.022` respectively. See
+55% progress after the 5%-spaced grid refresh (small-CV MAE `0.00258`, held-out
+complete MAE `0.0199`). Paloma macro and C4 select `template_by_recipe` at 10%
+progress. The grid starts at 10% because all runs used a 10% warmup, so earlier
+prefixes are not meaningful prediction prefixes. See
 `midtrain_analysis_outputs/small_final_loss_scaling/trajectory_prediction_summary.md`
 for the full leaderboard.
+
+The notebook also precomputes four explicit parametric curve families:
+`curve_log`, `curve_exp`, `curve_power`, and `curve_rational`, each with both
+`_mae` and `_huber` prefix-fit variants. Each family is a bounded monotone
+decay curve with a learned `tau=1` floor; shape parameters are selected by the
+fixed grid for initialization and then optimized with SciPy under the named
+prefix fit loss. Final-loss MAE is reported against completed endpoints. The
+marimo "functional form / method" dropdown can switch
+between template baselines and these curve families, and the "Best Functional
+Form By Scale And Prefix" grid compares the parametric variants by scale
+(`3e18` through `1e22`) and prefix.
+The bottom "Configs Meeting Target MAE" section adds a target-MAE slider
+(`0.005`, `0.01`, `0.02`, `0.05`, `0.10`) and reports the cheapest overall and
+per-scale curve configs satisfying that final-loss MAE target. This section
+uses a strict criterion: `max_abs_error <= target` with full completed-run
+coverage, not just mean MAE below the target. It renders markdown tables rather
+than pandas explorer tables so dtype labels such as `int64` do not appear.
 
 ---
 

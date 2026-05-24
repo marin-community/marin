@@ -4,7 +4,7 @@
 """Fit endpoint validation-loss scaling curves for small Delphi CPT runs.
 
 This is a deliberately simple first pass: fetch W&B summaries for the
-3e18 -> 2e20 K=0.20 CPT ladder, select the best non-probe attempt for each
+3e18 -> 3e20 K=0.20 CPT ladder, select the best non-probe attempt for each
 cell, and fit final observed validation loss across compute scale.
 
 Outputs:
@@ -45,7 +45,7 @@ RUN_REGISTRY_PATH = Path("midtrain_analysis_outputs/midtrain_run_registry.csv")
 TRAJECTORY_DELTAS_PATH = Path("midtrain_analysis_outputs/midtrain_trajectory_deltas.csv")
 
 RUN_PATTERN = re.compile(
-    r"^delphi-(?P<scale>3e18|9e18|2e19|3e19|9e19|2e20)-"
+    r"^delphi-(?P<scale>3e18|9e18|2e19|3e19|9e19|2e20|3e20)-"
     r"(?P<mix>p33m67|p50m50|p67m33)-k0p20-lr(?P<lr>33|50|67|83)-a(?P<attempt>\d{3})$"
 )
 HELDOUT_RUN_PATTERN = re.compile(
@@ -61,6 +61,7 @@ SCALE_FLOPS = {
     "3e19": 3e19,
     "9e19": 9e19,
     "2e20": 2e20,
+    "3e20": 3e20,
 }
 HELDOUT_SCALE_FLOPS = {
     "1e21": 1e21,
@@ -204,7 +205,7 @@ def is_complete(state: str, global_step: int | None, expected_steps: int | None)
 
 def fetch_run_endpoints(project: str) -> list[RunEndpoint]:
     api = wandb.Api(timeout=60)
-    filters = {"display_name": {"$regex": r"^delphi-(3e18|9e18|2e19|3e19|9e19|2e20)-"}}
+    filters = {"display_name": {"$regex": r"^delphi-(3e18|9e18|2e19|3e19|9e19|2e20|3e20)-"}}
     candidates: list[RunEndpoint] = []
 
     for run in api.runs(project, filters=filters):

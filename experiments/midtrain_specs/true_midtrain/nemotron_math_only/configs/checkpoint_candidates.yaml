@@ -1,0 +1,469 @@
+# Generated from scripts/list_delphi_checkpoints.py on 2026-05-23.
+# Human review is required before any launcher may use these rows.
+schema_version: 1
+dataset: nemotron_math_only
+checkpoint_candidate_policy:
+  source_of_truth: experiments.delphi_models.ALL_DELPHI_MODELS
+  checkpoint_choice: suggested_closest_available_by_absolute_step_delta
+  launch_contract: launcher_must_use_only_human_reviewed_rows
+  ratios: [0.30, 0.20, 0.10]
+checkpoint_candidates:
+  - candidate_id: delphi-3e18-cooldown30
+    base: 3e18
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 25900
+    target_progress_percent: 69.9981
+    target_cooldown_steps: 11101
+    suggested_step: 30000
+    suggested_step_delta: 4100
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 81.0789
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 20000, delta: -5900, phase: stable, progress_percent: 54.0526}
+    checkpoint_at_or_after: {step: 30000, delta: 4100, phase: decay, progress_percent: 81.0789}
+    review_status: needs_human_review
+  - candidate_id: delphi-3e18-cooldown20
+    base: 3e18
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 29600
+    target_progress_percent: 79.9978
+    target_cooldown_steps: 7401
+    suggested_step: 30000
+    suggested_step_delta: 400
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 81.0789
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 20000, delta: -9600, phase: stable, progress_percent: 54.0526}
+    checkpoint_at_or_after: {step: 30000, delta: 400, phase: decay, progress_percent: 81.0789}
+    review_status: approved
+  - candidate_id: delphi-3e18-cooldown10
+    base: 3e18
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 33300
+    target_progress_percent: 89.9976
+    target_cooldown_steps: 3701
+    suggested_step: 30000
+    suggested_step_delta: -3300
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 81.0789
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 30000, delta: -3300, phase: decay, progress_percent: 81.0789}
+    checkpoint_at_or_after: {step: 37001, delta: 3701, phase: final, progress_percent: 100.0000}
+    review_status: needs_human_review
+  - candidate_id: delphi-9e18-cooldown30
+    base: 9e18
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 30867
+    target_progress_percent: 69.9995
+    target_cooldown_steps: 13229
+    suggested_step: 30000
+    suggested_step_delta: -867
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 68.0334
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-9e+18-d1152-L12-B16-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 30000, delta: -867, phase: stable, progress_percent: 68.0334}
+    checkpoint_at_or_after: {step: 40000, delta: 9133, phase: decay, progress_percent: 90.7112}
+    review_status: needs_human_review
+  - candidate_id: delphi-9e18-cooldown20
+    base: 9e18
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 35276
+    target_progress_percent: 79.9982
+    target_cooldown_steps: 8820
+    suggested_step: 30000
+    suggested_step_delta: -5276
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 68.0334
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-9e+18-d1152-L12-B16-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 30000, delta: -5276, phase: stable, progress_percent: 68.0334}
+    checkpoint_at_or_after: {step: 40000, delta: 4724, phase: decay, progress_percent: 90.7112}
+    review_status: approved
+  - candidate_id: delphi-9e18-cooldown10
+    base: 9e18
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 39686
+    target_progress_percent: 89.9991
+    target_cooldown_steps: 4410
+    suggested_step: 40000
+    suggested_step_delta: 314
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 90.7112
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-9e+18-d1152-L12-B16-adamh_scaling_v6/checkpoints/step-40000"
+    checkpoint_at_or_before: {step: 30000, delta: -9686, phase: stable, progress_percent: 68.0334}
+    checkpoint_at_or_after: {step: 40000, delta: 314, phase: decay, progress_percent: 90.7112}
+    review_status: needs_human_review
+  - candidate_id: delphi-2e19-cooldown30
+    base: 2e19
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 38440
+    target_progress_percent: 69.9991
+    target_cooldown_steps: 16475
+    suggested_step: 40000
+    suggested_step_delta: 1560
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 72.8398
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-2e+19-d1408-L15-B16-adamh_scaling_v6/checkpoints/step-40000"
+    checkpoint_at_or_before: {step: 30000, delta: -8440, phase: stable, progress_percent: 54.6299}
+    checkpoint_at_or_after: {step: 40000, delta: 1560, phase: stable, progress_percent: 72.8398}
+    review_status: needs_human_review
+  - candidate_id: delphi-2e19-cooldown20
+    base: 2e19
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 43932
+    target_progress_percent: 80.0000
+    target_cooldown_steps: 10983
+    suggested_step: 40000
+    suggested_step_delta: -3932
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 72.8398
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-2e+19-d1408-L15-B16-adamh_scaling_v6/checkpoints/step-40000"
+    checkpoint_at_or_before: {step: 40000, delta: -3932, phase: stable, progress_percent: 72.8398}
+    checkpoint_at_or_after: {step: 50000, delta: 6068, phase: decay, progress_percent: 91.0498}
+    review_status: approved
+  - candidate_id: delphi-2e19-cooldown10
+    base: 2e19
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 49423
+    target_progress_percent: 89.9991
+    target_cooldown_steps: 5492
+    suggested_step: 50000
+    suggested_step_delta: 577
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 91.0498
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-2e+19-d1408-L15-B16-adamh_scaling_v6/checkpoints/step-50000"
+    checkpoint_at_or_before: {step: 40000, delta: -9423, phase: stable, progress_percent: 72.8398}
+    checkpoint_at_or_after: {step: 50000, delta: 577, phase: decay, progress_percent: 91.0498}
+    review_status: needs_human_review
+  - candidate_id: delphi-3e19-cooldown30
+    base: 3e19
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 26509
+    target_progress_percent: 70.0000
+    target_cooldown_steps: 11361
+    suggested_step: 30000
+    suggested_step_delta: 3491
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 79.2184
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 20000, delta: -6509, phase: stable, progress_percent: 52.8123}
+    checkpoint_at_or_after: {step: 30000, delta: 3491, phase: stable, progress_percent: 79.2184}
+    review_status: needs_human_review
+  - candidate_id: delphi-3e19-cooldown20
+    base: 3e19
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 30296
+    target_progress_percent: 80.0000
+    target_cooldown_steps: 7574
+    suggested_step: 30000
+    suggested_step_delta: -296
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 79.2184
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 30000, delta: -296, phase: stable, progress_percent: 79.2184}
+    checkpoint_at_or_after: {step: 37870, delta: 7574, phase: final, progress_percent: 100.0000}
+    review_status: approved
+  - candidate_id: delphi-3e19-cooldown10
+    base: 3e19
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 34083
+    target_progress_percent: 90.0000
+    target_cooldown_steps: 3787
+    suggested_step: 37870
+    suggested_step_delta: 3787
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 100.0000
+    suggested_phase: final
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-37870"
+    checkpoint_at_or_before: {step: 30000, delta: -4083, phase: stable, progress_percent: 79.2184}
+    checkpoint_at_or_after: {step: 37870, delta: 3787, phase: final, progress_percent: 100.0000}
+    review_status: needs_human_review
+  - candidate_id: delphi-9e19-cooldown30
+    base: 9e19
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 28114
+    target_progress_percent: 69.9998
+    target_cooldown_steps: 12049
+    suggested_step: 30000
+    suggested_step_delta: 1886
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 74.6956
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-9e+19-d1792-L18-B64-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 20000, delta: -8114, phase: stable, progress_percent: 49.7971}
+    checkpoint_at_or_after: {step: 30000, delta: 1886, phase: stable, progress_percent: 74.6956}
+    review_status: needs_human_review
+  - candidate_id: delphi-9e19-cooldown20
+    base: 9e19
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 32130
+    target_progress_percent: 79.9990
+    target_cooldown_steps: 8033
+    suggested_step: 30000
+    suggested_step_delta: -2130
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 74.6956
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-9e+19-d1792-L18-B64-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 30000, delta: -2130, phase: stable, progress_percent: 74.6956}
+    checkpoint_at_or_after: {step: 40000, delta: 7870, phase: decay, progress_percent: 99.5942}
+    review_status: approved
+  - candidate_id: delphi-9e19-cooldown10
+    base: 9e19
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 36146
+    target_progress_percent: 89.9983
+    target_cooldown_steps: 4017
+    suggested_step: 40000
+    suggested_step_delta: 3854
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 99.5942
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-9e+19-d1792-L18-B64-adamh_scaling_v6/checkpoints/step-40000"
+    checkpoint_at_or_before: {step: 30000, delta: -6146, phase: stable, progress_percent: 74.6956}
+    checkpoint_at_or_after: {step: 40000, delta: 3854, phase: decay, progress_percent: 99.5942}
+    review_status: needs_human_review
+  - candidate_id: delphi-2e20-cooldown30
+    base: 2e20
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 39474
+    target_progress_percent: 69.9993
+    target_cooldown_steps: 16918
+    suggested_step: 40000
+    suggested_step_delta: 526
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 70.9320
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-2e+20-d2048-L21-B64-adamh_scaling_v6/checkpoints/step-40000"
+    checkpoint_at_or_before: {step: 30000, delta: -9474, phase: stable, progress_percent: 53.1990}
+    checkpoint_at_or_after: {step: 40000, delta: 526, phase: stable, progress_percent: 70.9320}
+    review_status: needs_human_review
+  - candidate_id: delphi-2e20-cooldown20
+    base: 2e20
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 45113
+    target_progress_percent: 79.9989
+    target_cooldown_steps: 11279
+    suggested_step: 40000
+    suggested_step_delta: -5113
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 70.9320
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-2e+20-d2048-L21-B64-adamh_scaling_v6/checkpoints/step-40000"
+    checkpoint_at_or_before: {step: 40000, delta: -5113, phase: stable, progress_percent: 70.9320}
+    checkpoint_at_or_after: {step: 50000, delta: 4887, phase: decay, progress_percent: 88.6651}
+    review_status: approved
+  - candidate_id: delphi-2e20-cooldown10
+    base: 2e20
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 50752
+    target_progress_percent: 89.9986
+    target_cooldown_steps: 5640
+    suggested_step: 50000
+    suggested_step_delta: -752
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 88.6651
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-2e+20-d2048-L21-B64-adamh_scaling_v6/checkpoints/step-50000"
+    checkpoint_at_or_before: {step: 50000, delta: -752, phase: decay, progress_percent: 88.6651}
+    checkpoint_at_or_after: {step: 56392, delta: 5640, phase: final, progress_percent: 100.0000}
+    review_status: needs_human_review
+  - candidate_id: delphi-3e20-cooldown30
+    base: 3e20
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 24785
+    target_progress_percent: 69.9983
+    target_cooldown_steps: 10623
+    suggested_step: 20000
+    suggested_step_delta: -4785
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 56.4844
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-20000"
+    checkpoint_at_or_before: {step: 20000, delta: -4785, phase: stable, progress_percent: 56.4844}
+    checkpoint_at_or_after: {step: 30000, delta: 5215, phase: decay, progress_percent: 84.7266}
+    review_status: needs_human_review
+  - candidate_id: delphi-3e20-cooldown20
+    base: 3e20
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 28326
+    target_progress_percent: 79.9989
+    target_cooldown_steps: 7082
+    suggested_step: 30000
+    suggested_step_delta: 1674
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 84.7266
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 20000, delta: -8326, phase: stable, progress_percent: 56.4844}
+    checkpoint_at_or_after: {step: 30000, delta: 1674, phase: decay, progress_percent: 84.7266}
+    review_status: needs_human_review
+  - candidate_id: delphi-3e20-cooldown10
+    base: 3e20
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 31867
+    target_progress_percent: 89.9994
+    target_cooldown_steps: 3541
+    suggested_step: 30000
+    suggested_step_delta: -1867
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 84.7266
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 30000, delta: -1867, phase: decay, progress_percent: 84.7266}
+    checkpoint_at_or_after: {step: 35408, delta: 3541, phase: final, progress_percent: 100.0000}
+    review_status: needs_human_review
+  - candidate_id: delphi-1e21-cooldown30
+    base: 1e21
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 15439
+    target_progress_percent: 69.9959
+    target_cooldown_steps: 6618
+    suggested_step: 15000
+    suggested_step_delta: -439
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 68.0056
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-15000"
+    checkpoint_at_or_before: {step: 15000, delta: -439, phase: stable, progress_percent: 68.0056}
+    checkpoint_at_or_after: {step: 20000, delta: 4561, phase: decay, progress_percent: 90.6742}
+    review_status: needs_human_review
+  - candidate_id: delphi-1e21-cooldown20
+    base: 1e21
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 17645
+    target_progress_percent: 79.9973
+    target_cooldown_steps: 4412
+    suggested_step: 20000
+    suggested_step_delta: 2355
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 90.6742
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-20000"
+    checkpoint_at_or_before: {step: 15000, delta: -2645, phase: stable, progress_percent: 68.0056}
+    checkpoint_at_or_after: {step: 20000, delta: 2355, phase: decay, progress_percent: 90.6742}
+    review_status: needs_human_review
+  - candidate_id: delphi-1e21-cooldown10
+    base: 1e21
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 19851
+    target_progress_percent: 89.9986
+    target_cooldown_steps: 2206
+    suggested_step: 20000
+    suggested_step_delta: 149
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 90.6742
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+21-v5-019021/checkpoints/step-20000"
+    checkpoint_at_or_before: {step: 15000, delta: -4851, phase: stable, progress_percent: 68.0056}
+    checkpoint_at_or_after: {step: 20000, delta: 149, phase: decay, progress_percent: 90.6742}
+    review_status: needs_human_review
+  - candidate_id: delphi-1e22-cooldown30
+    base: 1e22
+    cooldown_ratio: 0.30
+    train_prefix_ratio: 0.70
+    target_step: 26764
+    target_progress_percent: 69.9987
+    target_cooldown_steps: 11471
+    suggested_step: 25000
+    suggested_step_delta: -1764
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 65.3851
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-25000"
+    checkpoint_at_or_before: {step: 25000, delta: -1764, phase: stable, progress_percent: 65.3851}
+    checkpoint_at_or_after: {step: 30000, delta: 3236, phase: stable, progress_percent: 78.4621}
+    review_status: needs_human_review
+  - candidate_id: delphi-1e22-cooldown20
+    base: 1e22
+    cooldown_ratio: 0.20
+    train_prefix_ratio: 0.80
+    target_step: 30588
+    target_progress_percent: 80.0000
+    target_cooldown_steps: 7647
+    suggested_step: 30000
+    suggested_step_delta: -588
+    suggested_relation_to_target: before_target
+    suggested_progress_percent: 78.4621
+    suggested_phase: stable
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-30000"
+    checkpoint_at_or_before: {step: 30000, delta: -588, phase: stable, progress_percent: 78.4621}
+    checkpoint_at_or_after: {step: 35000, delta: 4412, phase: decay, progress_percent: 91.5392}
+    review_status: needs_human_review
+  - candidate_id: delphi-1e22-cooldown10
+    base: 1e22
+    cooldown_ratio: 0.10
+    train_prefix_ratio: 0.90
+    target_step: 34411
+    target_progress_percent: 89.9987
+    target_cooldown_steps: 3824
+    suggested_step: 35000
+    suggested_step_delta: 589
+    suggested_relation_to_target: after_target
+    suggested_progress_percent: 91.5392
+    suggested_phase: decay
+    suggested_required_artifacts_ok: true
+    suggested_checkpoint_path: "gs://marin-us-central2/adamh-scaling-ladder-nemotron-optimal-1e+22-v5-025b0e/checkpoints/step-35000"
+    checkpoint_at_or_before: {step: 30000, delta: -4411, phase: stable, progress_percent: 78.4621}
+    checkpoint_at_or_after: {step: 35000, delta: 589, phase: decay, progress_percent: 91.5392}
+    review_status: needs_human_review

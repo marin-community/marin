@@ -1,0 +1,180 @@
+# True-midtraining plan for p50m50. This file is not a launcher.
+schema_version: 1
+dataset: nemotron_math_only
+mode: cooldown
+mix:
+  tag: p50m50
+  pretrain_replay_fraction: 0.50
+  math_fraction: 0.50
+  data_section_path: ../../../data_sections/p50m50.json
+checkpoint_candidates_path: checkpoint_candidates.yaml
+launch_contract:
+  checkpoint_selection: explicit_yaml_review
+  require_candidate_review_status: approved
+  preserve_optimizer: true
+  preserve_scheduler_count: true
+  preserve_state_step: true
+  change_only_data_mix: true
+cells:
+  - cell_id: delphi-true-3e18-p50m50-cooldown30
+    base: 3e18
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e18-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-3e18-p50m50-cooldown20
+    base: 3e18
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e18-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-3e18-p50m50-cooldown10
+    base: 3e18
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e18-cooldown10
+    cooldown_ratio: 0.10
+    status: planned
+  - cell_id: delphi-true-9e18-p50m50-cooldown30
+    base: 9e18
+    mix: p50m50
+    checkpoint_candidate_id: delphi-9e18-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-9e18-p50m50-cooldown20
+    base: 9e18
+    mix: p50m50
+    checkpoint_candidate_id: delphi-9e18-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-9e18-p50m50-cooldown10
+    base: 9e18
+    mix: p50m50
+    checkpoint_candidate_id: delphi-9e18-cooldown10
+    cooldown_ratio: 0.10
+    status: planned
+  - cell_id: delphi-true-2e19-p50m50-cooldown30
+    base: 2e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-2e19-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-2e19-p50m50-cooldown20
+    base: 2e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-2e19-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-2e19-p50m50-cooldown10
+    base: 2e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-2e19-cooldown10
+    cooldown_ratio: 0.10
+    status: planned
+  - cell_id: delphi-true-3e19-p50m50-cooldown30
+    base: 3e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e19-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-3e19-p50m50-cooldown20
+    base: 3e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e19-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-3e19-p50m50-cooldown10
+    base: 3e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e19-cooldown10
+    cooldown_ratio: 0.10
+    status: planned
+  - cell_id: delphi-true-9e19-p50m50-cooldown30
+    base: 9e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-9e19-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-9e19-p50m50-cooldown20
+    base: 9e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-9e19-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-9e19-p50m50-cooldown10
+    base: 9e19
+    mix: p50m50
+    checkpoint_candidate_id: delphi-9e19-cooldown10
+    cooldown_ratio: 0.10
+    status: planned
+  - cell_id: delphi-true-2e20-p50m50-cooldown30
+    base: 2e20
+    mix: p50m50
+    checkpoint_candidate_id: delphi-2e20-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-2e20-p50m50-cooldown20
+    base: 2e20
+    mix: p50m50
+    checkpoint_candidate_id: delphi-2e20-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-2e20-p50m50-cooldown10
+    base: 2e20
+    mix: p50m50
+    checkpoint_candidate_id: delphi-2e20-cooldown10
+    cooldown_ratio: 0.10
+    status: planned
+  - cell_id: delphi-true-3e20-p50m50-cooldown30
+    base: 3e20
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e20-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-3e20-p50m50-cooldown20
+    base: 3e20
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e20-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-3e20-p50m50-cooldown10
+    base: 3e20
+    mix: p50m50
+    checkpoint_candidate_id: delphi-3e20-cooldown10
+    cooldown_ratio: 0.10
+    status: planned
+  - cell_id: delphi-true-1e21-p50m50-cooldown30
+    base: 1e21
+    mix: p50m50
+    checkpoint_candidate_id: delphi-1e21-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-1e21-p50m50-cooldown20
+    base: 1e21
+    mix: p50m50
+    checkpoint_candidate_id: delphi-1e21-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-1e21-p50m50-cooldown10
+    base: 1e21
+    mix: p50m50
+    checkpoint_candidate_id: delphi-1e21-cooldown10
+    cooldown_ratio: 0.10
+    status: planned
+  - cell_id: delphi-true-1e22-p50m50-cooldown30
+    base: 1e22
+    mix: p50m50
+    checkpoint_candidate_id: delphi-1e22-cooldown30
+    cooldown_ratio: 0.30
+    status: planned
+  - cell_id: delphi-true-1e22-p50m50-cooldown20
+    base: 1e22
+    mix: p50m50
+    checkpoint_candidate_id: delphi-1e22-cooldown20
+    cooldown_ratio: 0.20
+    status: planned
+  - cell_id: delphi-true-1e22-p50m50-cooldown10
+    base: 1e22
+    mix: p50m50
+    checkpoint_candidate_id: delphi-1e22-cooldown10
+    cooldown_ratio: 0.10
+    status: planned

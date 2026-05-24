@@ -5,7 +5,7 @@
 
 This is the within-run companion to ``delphi_small_final_loss_scaling.py``.
 It caches validation trajectories, tunes prefix-prediction rules on the clean
-small ladder through ``2e20``, and evaluates the same rules on held-out
+small ladder through ``3e20``, and evaluates the same rules on held-out
 ``1e21``/``1e22`` runs.
 
 Outputs:
@@ -24,6 +24,7 @@ import argparse
 import logging
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -33,6 +34,7 @@ from delphi_small_final_loss_scaling import (
     OUT_DIR,
     PROJECT,
 )
+from scipy.optimize import Bounds, least_squares, minimize
 
 logger = logging.getLogger("delphi_within_run_prediction")
 
@@ -50,18 +52,39 @@ VALIDATION_METRICS = {
     "eval/paloma/macro_loss": "paloma_macro_loss",
     "eval/paloma/c4_en/loss": "paloma_c4_loss",
 }
-PREFIX_FRACS = (0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50)
+PREFIX_FRACS = tuple(round(percent / 100, 2) for percent in range(10, 91, 5))
+PARAMETRIC_BASE_METHODS = ("curve_log", "curve_exp", "curve_power", "curve_rational")
+PARAMETRIC_FIT_LOSSES = ("mae", "huber")
 METHODS = (
     "last_value",
     "linear_tau",
     "template_global",
     "template_by_mix",
     "template_by_recipe",
+    *(f"{method}_{fit_loss}" for method in PARAMETRIC_BASE_METHODS for fit_loss in PARAMETRIC_FIT_LOSSES),
 )
 MIN_POINTS_FOR_LINEAR = 2
+MIN_POINTS_FOR_PARAMETRIC = 3
 MIN_TEMPLATE_RUNS = 3
 SELECTION_REL_TOLERANCE = 0.10
 SELECTION_ABS_TOLERANCE = 0.002
+HUBER_DELTA_FRACTION = 0.10
+SCIPY_MAXITER = 200
+SCIPY_MAX_NFEV = 300
+PARAMETRIC_METRIC_LABELS = {"math_val_loss"}
+
+PARAMETRIC_SHAPE_GRID: dict[str, tuple[tuple[float, float | None], ...]] = {
+    "curve_log": tuple((shift, None) for shift in (0.01, 0.03, 0.10, 0.30, 1.00)),
+    "curve_exp": tuple((rate, None) for rate in (1.0, 3.0, 8.0, 18.0)),
+    "curve_power": tuple((shift, exponent) for shift in (0.03, 0.10, 0.30) for exponent in (0.50, 1.0, 2.0, 4.0)),
+    "curve_rational": tuple((t0, beta) for t0 in (0.10, 0.30, 0.80, 1.50) for beta in (0.75, 1.0, 2.0, 4.0)),
+}
+PARAMETRIC_SHAPE_BOUNDS: dict[str, tuple[tuple[float, float], ...]] = {
+    "curve_log": ((1e-4, 10.0),),
+    "curve_exp": ((0.01, 50.0),),
+    "curve_power": ((1e-4, 10.0), (0.05, 10.0)),
+    "curve_rational": ((0.01, 10.0), (0.10, 10.0)),
+}
 
 
 @dataclass(frozen=True)
@@ -273,6 +296,41 @@ def fetch_trajectory_points(specs: list[RunSpec], project: str, target_values: p
     return points.reset_index(drop=True)
 
 
+def update_trajectory_points_cache(
+    specs: list[RunSpec],
+    project: str,
+    target_values: pd.DataFrame,
+    cache_path: Path,
+) -> pd.DataFrame:
+    if not cache_path.exists():
+        return fetch_trajectory_points(specs, project, target_values)
+
+    cached = pd.read_csv(cache_path, dtype={"scale": str, "lr": str})
+    cached_run_ids = set(cached["run_id"].dropna().astype(str))
+    missing_specs = [spec for spec in specs if spec.run_id not in cached_run_ids]
+    if not missing_specs:
+        logger.info("Trajectory cache is already current for all %d run specs.", len(specs))
+        return cached
+
+    incomplete_missing = [spec for spec in missing_specs if not spec.complete]
+    fetch_specs = [spec for spec in missing_specs if spec.complete]
+    if incomplete_missing:
+        logger.info("Skipping %d incomplete missing runs while refreshing trajectory cache.", len(incomplete_missing))
+    if not fetch_specs:
+        logger.info("No completed missing runs to fetch; reusing trajectory cache.")
+        return cached
+
+    fetched = fetch_trajectory_points(fetch_specs, project, target_values)
+    if fetched.empty:
+        logger.warning("Fetched no new trajectory points; reusing trajectory cache.")
+        return cached
+
+    points = pd.concat([cached, fetched], ignore_index=True)
+    points = points.drop_duplicates(["run_id", "metric", "step"], keep="last")
+    points = points.sort_values(["eval_split", "scale", "mix", "lr", "metric_label", "step"])
+    return points.reset_index(drop=True)
+
+
 def prefix_point(group: pd.DataFrame, prefix: float) -> pd.Series | None:
     sub = group[group["tau"].le(prefix)].sort_values("tau")
     if sub.empty:
@@ -290,6 +348,278 @@ def linear_tau_prediction(group: pd.DataFrame, prefix: float) -> tuple[float, in
         return None
     slope, intercept = np.polyfit(x, y, deg=1)
     return float(intercept + slope), len(sub)
+
+
+def parametric_shape_values(method: str, tau: np.ndarray, shape_1: float, shape_2: float | None) -> np.ndarray | None:
+    if method == "curve_log":
+        shift = shape_1
+        denominator = math.log((1 + shift) / shift)
+        return np.log((1 + shift) / (tau + shift)) / denominator
+    if method == "curve_exp":
+        rate = shape_1
+        denominator = 1 - math.exp(-rate)
+        return (np.exp(-rate * tau) - math.exp(-rate)) / denominator
+    if method == "curve_power":
+        if shape_2 is None:
+            return None
+        shift = shape_1
+        exponent = shape_2
+        raw = np.power(tau + shift, -exponent)
+        raw_start = shift**-exponent
+        raw_end = (1 + shift) ** -exponent
+        return (raw - raw_end) / (raw_start - raw_end)
+    if method == "curve_rational":
+        if shape_2 is None:
+            return None
+        t0 = shape_1
+        beta = shape_2
+        raw = 1 / (1 + np.power(tau / t0, beta))
+        raw_end = 1 / (1 + (1 / t0) ** beta)
+        return (raw - raw_end) / (1 - raw_end)
+    raise ValueError(f"not a parametric method: {method}")
+
+
+def huber_delta(y: np.ndarray) -> float:
+    return max(0.002, HUBER_DELTA_FRACTION * float(np.max(y) - np.min(y)))
+
+
+def huber_loss(residuals: np.ndarray, delta: float) -> np.ndarray:
+    absolute = np.abs(residuals)
+    return np.where(absolute <= delta, 0.5 * np.square(residuals), delta * (absolute - 0.5 * delta))
+
+
+def huber_location(values: np.ndarray, delta: float) -> float:
+    lower = float(np.min(values) - delta)
+    upper = float(np.max(values) + delta)
+    for _ in range(20):
+        midpoint = (lower + upper) / 2
+        score = float(np.sum(np.clip(values - midpoint, -delta, delta)))
+        if score > 0:
+            lower = midpoint
+        else:
+            upper = midpoint
+    return (lower + upper) / 2
+
+
+def fit_parametric_shape(
+    y: np.ndarray,
+    shape_values: np.ndarray,
+    fit_loss: str,
+) -> tuple[float, float, float, float] | None:
+    shape_range = float(np.max(shape_values) - np.min(shape_values))
+    if shape_range <= 1e-8:
+        return None
+
+    centered_shape = shape_values - np.mean(shape_values)
+    denominator = float(np.dot(centered_shape, centered_shape))
+    candidates: list[float] = []
+    if denominator > 1e-12:
+        candidates.append(float(np.dot(centered_shape, y - np.mean(y)) / denominator))
+    candidates.append(float((y[0] - y[-1]) / (shape_values[0] - shape_values[-1])))
+    candidates.append(float((np.max(y) - np.min(y)) / shape_range))
+
+    adjacent_slopes = []
+    for left in range(len(y) - 1):
+        shape_delta = shape_values[left] - shape_values[left + 1]
+        if abs(shape_delta) > 1e-8:
+            adjacent_slopes.append(float((y[left] - y[left + 1]) / shape_delta))
+    positive_adjacent_slopes = [value for value in adjacent_slopes if math.isfinite(value) and value > 0]
+    if positive_adjacent_slopes:
+        candidates.append(float(np.median(positive_adjacent_slopes)))
+
+    best: tuple[float, float, float, float] | None = None
+    floor_lower = 1e-8
+    floor_upper = max(float(np.min(y)) - 1e-8, floor_lower)
+    delta = huber_delta(y)
+    for candidate in candidates:
+        if not math.isfinite(candidate) or candidate <= 0:
+            continue
+        for multiplier in (0.75, 1.0, 1.25):
+            amplitude = candidate * multiplier
+            residual_location_values = y - amplitude * shape_values
+            if fit_loss == "mae":
+                floor = float(np.median(residual_location_values))
+            elif fit_loss == "huber":
+                floor = huber_location(residual_location_values, delta)
+            else:
+                raise ValueError(f"unknown fit loss: {fit_loss}")
+            floor = min(max(floor, floor_lower), floor_upper)
+            predictions = floor + amplitude * shape_values
+            prefix_fit_mae = float(np.mean(np.abs(predictions - y)))
+            prefix_fit_loss = prefix_fit_mae if fit_loss == "mae" else float(np.mean(huber_loss(predictions - y, delta)))
+            if best is None or prefix_fit_loss < best[3]:
+                best = (floor, float(amplitude), prefix_fit_mae, prefix_fit_loss)
+    return best
+
+
+def parametric_model_values(base_method: str, params: np.ndarray, tau: np.ndarray) -> np.ndarray | None:
+    shape_2 = float(params[3]) if len(params) > 3 else None
+    shape_values = parametric_shape_values(base_method, tau, float(params[2]), shape_2)
+    if shape_values is None or not np.all(np.isfinite(shape_values)):
+        return None
+    return params[0] + params[1] * shape_values
+
+
+def parametric_residuals(base_method: str, params: np.ndarray, tau: np.ndarray, y: np.ndarray) -> np.ndarray:
+    predicted = parametric_model_values(base_method, params, tau)
+    if predicted is None:
+        return np.full_like(y, 1e6, dtype=float)
+    return predicted - y
+
+
+def parametric_parameter_bounds(base_method: str, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    floor_upper = max(float(np.min(y)) - 1e-8, 1e-8)
+    amplitude_upper = max(10.0, 10.0 * float(np.max(y) - np.min(y)), 2.0 * float(np.max(y)))
+    lower = [1e-8, 0.0]
+    upper = [floor_upper, amplitude_upper]
+    for lower_shape, upper_shape in PARAMETRIC_SHAPE_BOUNDS[base_method]:
+        lower.append(lower_shape)
+        upper.append(upper_shape)
+    return np.array(lower, dtype=float), np.array(upper, dtype=float)
+
+
+def parametric_loss_value(base_method: str, params: np.ndarray, tau: np.ndarray, y: np.ndarray, fit_loss: str) -> float:
+    residual = parametric_residuals(base_method, params, tau, y)
+    if not np.all(np.isfinite(residual)):
+        return 1e6
+    if fit_loss == "mae":
+        return float(np.mean(np.abs(residual)))
+    if fit_loss == "huber":
+        return float(np.mean(huber_loss(residual, huber_delta(y))))
+    raise ValueError(f"unknown fit loss: {fit_loss}")
+
+
+def scipy_parametric_fit(
+    base_method: str,
+    tau: np.ndarray,
+    y: np.ndarray,
+    fit_loss: str,
+    floor: float,
+    amplitude: float,
+    shape_1: float,
+    shape_2: float | None,
+) -> tuple[np.ndarray, bool] | None:
+    initial_values = [floor, amplitude, shape_1]
+    if len(PARAMETRIC_SHAPE_BOUNDS[base_method]) == 2:
+        if shape_2 is None:
+            return None
+        initial_values.append(shape_2)
+
+    lower, upper = parametric_parameter_bounds(base_method, y)
+    initial = np.clip(np.array(initial_values, dtype=float), lower + 1e-12, upper - 1e-12)
+    if not np.all(np.isfinite(initial)):
+        return None
+
+    try:
+        if fit_loss == "huber":
+            result = least_squares(
+                lambda params: parametric_residuals(base_method, params, tau, y),
+                initial,
+                bounds=(lower, upper),
+                loss="huber",
+                f_scale=huber_delta(y),
+                max_nfev=SCIPY_MAX_NFEV,
+            )
+        elif fit_loss == "mae":
+            result = minimize(
+                lambda params: parametric_loss_value(base_method, params, tau, y, fit_loss),
+                initial,
+                method="L-BFGS-B",
+                bounds=Bounds(lower, upper),
+                options={"maxiter": SCIPY_MAXITER},
+            )
+        else:
+            raise ValueError(f"unknown fit loss: {fit_loss}")
+    except ValueError:
+        return None
+
+    params = np.asarray(result.x, dtype=float)
+    if not np.all(np.isfinite(params)):
+        return None
+    return params, bool(result.success)
+
+
+def parametric_predictions(group: pd.DataFrame, prefix: float) -> list[dict[str, Any]]:
+    sub = group[group["tau"].le(prefix)].sort_values("tau")
+    if len(sub) < MIN_POINTS_FOR_PARAMETRIC:
+        return []
+    tau = sub["tau"].to_numpy(dtype=float)
+    y = sub["value"].to_numpy(dtype=float)
+    if len(np.unique(tau)) < MIN_POINTS_FOR_PARAMETRIC:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for base_method, shapes in PARAMETRIC_SHAPE_GRID.items():
+        for fit_loss in PARAMETRIC_FIT_LOSSES:
+            best: dict[str, Any] | None = None
+            for shape_1, shape_2 in shapes:
+                shape_values = parametric_shape_values(base_method, tau, shape_1, shape_2)
+                if shape_values is None or not np.all(np.isfinite(shape_values)):
+                    continue
+                fit = fit_parametric_shape(y, shape_values, fit_loss)
+                if fit is None:
+                    continue
+                floor, amplitude, prefix_fit_mae, prefix_fit_loss = fit
+                if best is None or prefix_fit_loss < best["heuristic_prefix_fit_loss"]:
+                    best = {
+                        "method": f"{base_method}_{fit_loss}",
+                        "fit_loss": fit_loss,
+                        "heuristic_floor": floor,
+                        "heuristic_amplitude": amplitude,
+                        "heuristic_shape_1": shape_1,
+                        "heuristic_shape_2": shape_2,
+                        "fit_n": len(sub),
+                        "heuristic_prefix_fit_mae": prefix_fit_mae,
+                        "heuristic_prefix_fit_loss": prefix_fit_loss,
+                    }
+            if best is not None:
+                scipy_fit = scipy_parametric_fit(
+                    base_method,
+                    tau,
+                    y,
+                    fit_loss,
+                    best["heuristic_floor"],
+                    best["heuristic_amplitude"],
+                    best["heuristic_shape_1"],
+                    best["heuristic_shape_2"],
+                )
+                if scipy_fit is None:
+                    floor = best["heuristic_floor"]
+                    amplitude = best["heuristic_amplitude"]
+                    shape_1 = best["heuristic_shape_1"]
+                    shape_2 = best["heuristic_shape_2"]
+                    prefix_fit_mae = best["heuristic_prefix_fit_mae"]
+                    prefix_fit_loss = best["heuristic_prefix_fit_loss"]
+                    optimizer = "heuristic_fallback"
+                    optimizer_success = False
+                else:
+                    params, optimizer_success = scipy_fit
+                    floor = float(params[0])
+                    amplitude = float(params[1])
+                    shape_1 = float(params[2])
+                    shape_2 = float(params[3]) if len(params) > 3 else None
+                    residual = parametric_residuals(base_method, params, tau, y)
+                    prefix_fit_mae = float(np.mean(np.abs(residual)))
+                    prefix_fit_loss = parametric_loss_value(base_method, params, tau, y, fit_loss)
+                    optimizer = "scipy"
+
+                rows.append(
+                    {
+                        "method": best["method"],
+                        "fit_loss": fit_loss,
+                        "optimizer": optimizer,
+                        "optimizer_success": optimizer_success,
+                        "predicted": floor,
+                        "fit_n": len(sub),
+                        "param_floor": floor,
+                        "param_amplitude": amplitude,
+                        "param_shape_1": shape_1,
+                        "param_shape_2": np.nan if shape_2 is None else shape_2,
+                        "prefix_fit_mae": prefix_fit_mae,
+                        "prefix_fit_loss": prefix_fit_loss,
+                    }
+                )
+    return rows
 
 
 def fraction_record(group: pd.DataFrame, prefix: float) -> dict[str, Any] | None:
@@ -330,22 +660,37 @@ def template_group_columns(method: str) -> list[str]:
     raise ValueError(f"not a template method: {method}")
 
 
+def template_key(row: pd.Series, method: str) -> tuple[Any, ...]:
+    return tuple(row[column] for column in template_group_columns(method))
+
+
+def build_template_index(fraction_table: pd.DataFrame) -> dict[str, dict[tuple[Any, ...], list[tuple[str, float]]]]:
+    index: dict[str, dict[tuple[Any, ...], list[tuple[str, float]]]] = {}
+    for method in [item for item in METHODS if item.startswith("template_")]:
+        method_index: dict[tuple[Any, ...], list[tuple[str, float]]] = {}
+        for key, group in fraction_table.groupby(template_group_columns(method), observed=True, sort=False):
+            if not isinstance(key, tuple):
+                key = (key,)
+            method_index[key] = [
+                (str(row.run_id), float(row.fraction)) for row in group[["run_id", "fraction"]].itertuples(index=False)
+            ]
+        index[method] = method_index
+    return index
+
+
 def template_fraction(
-    fraction_table: pd.DataFrame,
+    template_index: dict[str, dict[tuple[Any, ...], list[tuple[str, float]]]],
     target_row: pd.Series,
     method: str,
     *,
     exclude_run_id: str | None,
 ) -> tuple[float, int] | None:
-    group_columns = template_group_columns(method)
-    candidates = fraction_table.copy()
+    candidates = template_index.get(method, {}).get(template_key(target_row, method), [])
     if exclude_run_id is not None:
-        candidates = candidates[~candidates["run_id"].eq(exclude_run_id)]
-    for column in group_columns:
-        candidates = candidates[candidates[column].eq(target_row[column])]
+        candidates = [(run_id, fraction) for run_id, fraction in candidates if run_id != exclude_run_id]
     if len(candidates) < MIN_TEMPLATE_RUNS:
         return None
-    fraction = float(candidates["fraction"].median())
+    fraction = float(np.median([fraction for _, fraction in candidates]))
     if not math.isfinite(fraction) or fraction <= 0:
         return None
     return fraction, len(candidates)
@@ -354,7 +699,7 @@ def template_fraction(
 def prediction_rows_for_run(
     group: pd.DataFrame,
     prefix: float,
-    fraction_table: pd.DataFrame,
+    template_index: dict[str, dict[tuple[Any, ...], list[tuple[str, float]]]],
 ) -> list[dict[str, Any]]:
     prefix_row = prefix_point(group, prefix)
     if prefix_row is None:
@@ -386,7 +731,7 @@ def prediction_rows_for_run(
     }
     rows: list[dict[str, Any]] = []
 
-    def add_prediction(method: str, predicted: float, fit_n: int) -> None:
+    def add_prediction(method: str, predicted: float, fit_n: int, extra: dict[str, Any] | None = None) -> None:
         error = predicted - target
         rows.append(
             {
@@ -397,6 +742,7 @@ def prediction_rows_for_run(
                 "abs_error": abs(error),
                 "pct_error": 100 * error / target,
                 "fit_n": fit_n,
+                **(extra or {}),
             }
         )
 
@@ -407,10 +753,29 @@ def prediction_rows_for_run(
         predicted, fit_n = linear_prediction
         add_prediction("linear_tau", predicted, fit_n)
 
+    if prefix_row["metric_label"] in PARAMETRIC_METRIC_LABELS:
+        for prediction in parametric_predictions(group, prefix):
+            add_prediction(
+                prediction["method"],
+                prediction["predicted"],
+                prediction["fit_n"],
+                {
+                    "param_floor": prediction["param_floor"],
+                    "param_amplitude": prediction["param_amplitude"],
+                    "param_shape_1": prediction["param_shape_1"],
+                    "param_shape_2": prediction["param_shape_2"],
+                    "prefix_fit_mae": prediction["prefix_fit_mae"],
+                    "prefix_fit_loss": prediction["prefix_fit_loss"],
+                    "fit_loss": prediction["fit_loss"],
+                    "optimizer": prediction["optimizer"],
+                    "optimizer_success": prediction["optimizer_success"],
+                },
+            )
+
     template_target = pd.Series(base)
     exclude_run_id = str(prefix_row["run_id"]) if prefix_row["eval_split"] == "small_cv" else None
     for method in [m for m in METHODS if m.startswith("template_")]:
-        fitted_fraction = template_fraction(fraction_table, template_target, method, exclude_run_id=exclude_run_id)
+        fitted_fraction = template_fraction(template_index, template_target, method, exclude_run_id=exclude_run_id)
         if fitted_fraction is None:
             continue
         fraction, fit_n = fitted_fraction
@@ -433,10 +798,11 @@ def make_fraction_table(points: pd.DataFrame) -> pd.DataFrame:
 
 def predict_prefixes(points: pd.DataFrame) -> pd.DataFrame:
     fraction_table = make_fraction_table(points)
+    template_index = build_template_index(fraction_table)
     rows: list[dict[str, Any]] = []
     for _, group in points.groupby(["run_id", "metric"], observed=True, sort=False):
         for prefix in PREFIX_FRACS:
-            rows.extend(prediction_rows_for_run(group.sort_values("tau"), prefix, fraction_table))
+            rows.extend(prediction_rows_for_run(group.sort_values("tau"), prefix, template_index))
     predictions = pd.DataFrame(rows)
     if predictions.empty:
         return predictions
@@ -505,7 +871,7 @@ def write_markdown_summary(summary: pd.DataFrame, selection: pd.DataFrame) -> No
     lines = [
         "# Within-Run Validation Prediction",
         "",
-        "Train/tune split: methods are tuned on clean small-ladder runs through `2e20`.",
+        "Train/tune split: methods are tuned on clean small-ladder runs through `3e20`.",
         "`1e21` and `1e22` are held out for generalization checks.",
         "",
         "Methods:",
@@ -515,6 +881,11 @@ def write_markdown_summary(summary: pd.DataFrame, selection: pd.DataFrame) -> No
         "- `template_*`: learn the median fraction of final improvement "
         "achieved by the prefix on small runs, then apply that fraction to "
         "the target run's observed prefix improvement.",
+        "- `curve_*_mae` and `curve_*_huber`: fit a bounded monotone-decay "
+        "curve to the observed prefix and read its `tau=1` floor as the "
+        "final-loss prediction. The fixed shape grid supplies initial values; "
+        "SciPy then optimizes the endpoint floor, amplitude, and shape "
+        "parameters under the named prefix fit loss. Final evaluation is still MAE.",
         "",
     ]
     if not selection.empty:
@@ -564,7 +935,7 @@ def main() -> None:
     if args.use_cache and TRAJECTORY_POINTS_PATH.exists():
         points = pd.read_csv(TRAJECTORY_POINTS_PATH, dtype={"scale": str, "lr": str})
     else:
-        points = fetch_trajectory_points(specs, args.project, target_values)
+        points = update_trajectory_points_cache(specs, args.project, target_values, TRAJECTORY_POINTS_PATH)
         points.to_csv(TRAJECTORY_POINTS_PATH, index=False)
 
     predictions = predict_prefixes(points)

@@ -217,6 +217,7 @@ def submit_launch(request: LaunchRequest, *, client: object | None = None) -> La
         request.resources_kwargs["tpu_type"],
         regions=request.resources_kwargs.get("regions") or None,
         ram=request.resources_kwargs["ram"],
+        preemptible=bool(request.resources_kwargs["preemptible"]),
     )
     environment = create_environment(env_vars=request.env, extras=list(request.extras))
     job_request = JobRequest(
@@ -256,4 +257,9 @@ def _resources_kwargs(compute: ComputeProfile, run: RunIdentity) -> dict[str, ob
     regions = compute.regions or (run.output_region,)
     if regions != (run.output_region,):
         raise ValueError(f"ComputeProfile.regions={regions!r} must equal ({run.output_region!r},) for a real launch.")
-    return {"tpu_type": compute.tpu_type, "regions": list(regions), "ram": compute.ram}
+    return {
+        "tpu_type": compute.tpu_type,
+        "regions": list(regions),
+        "ram": compute.ram,
+        "preemptible": compute.preemptible,
+    }

@@ -93,6 +93,13 @@ def test_compute_failure_retry_budget_reaches_launch_request():
     assert request.max_retries_failure == 5
 
 
+def test_compute_preemptible_reaches_launch_request():
+    spec = make_cpt_spec(extra_compute_kwargs={"preemptible": False})
+    resolved = _resolve(spec)
+    request = build_launch_request(resolved)
+    assert request.resources_kwargs["preemptible"] is False
+
+
 def test_data_manifest_region_must_match_run_region():
     spec = make_cpt_spec(data_manifest_uri="gs://marin-us-central1/midtrain-manifests/data/p33m67/abc.json")
     with pytest.raises(ValueError, match="does not match run output region"):

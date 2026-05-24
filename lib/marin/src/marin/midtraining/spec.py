@@ -72,6 +72,7 @@ class ComputeProfile:
     ram: str = "128g"
     per_device_parallelism: int = -1
     regions: tuple[str, ...] = ()
+    preemptible: bool = True
     max_retries_failure: int = 3
     max_task_failures: int = 100
 

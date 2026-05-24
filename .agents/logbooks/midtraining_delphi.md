@@ -1,5 +1,176 @@
 # Delphi × Nemotron-CC-Math 10 B midtraining — logbook
 
+## 2026-05-24T05:16Z — True-midtraining cooldown20 batch monitor update
+
+The cooldown20 true-midtraining batch launch is still healthy. The launcher set
+uses `v6e-4` for `3e18` and `9e18`, `v6e-8` for `2e19`/`3e19`/`9e19`, and
+`v5p-8` for `2e20`, with high-RAM child TPU jobs and Iris `batch` priority.
+The previously completed `3e18/p33m67` cell was not relaunched.
+
+Current signal from Iris:
+
+- 17 launch roots for timestamp `1779597018`: 6 running, 11 pending on CPU
+  coordinator capacity.
+- Child TPU jobs: 5 running, 1 pending for v6e-4 capacity
+  (`9e18/p67m33`).
+- No root or child terminal failures in the new batch.
+- Verified resume/progress:
+  - `3e18/p50m50`: running, temp checkpoints through step `31501`, latest
+    observed progress `31.5kit/37.0kit`.
+  - `9e18/p50m50`: resumed after preemption from step `30001`, first train
+    step completed, latest observed progress `30.2kit/44.1kit`.
+  - `2e19/p33m67`: resumed from step `40001`, first train step completed,
+    latest observed progress `40.2kit/54.9kit`.
+
+### 2026-05-24T05:44Z follow-up
+
+Still no terminal failures. `9e18/p67m33` acquired TPU capacity, resumed from
+step `30001`, and started training. All six materialized child TPU jobs are now
+running, though `2e19/p33m67` and `9e18/p33m67` have seen additional
+preemptions and are restarting through the expected resume path. `3e18/p50m50`
+has saved temp checkpoint `32551` and reached `32.9kit/37.0kit`
+(`eval_loss=2.688`, `nemotron_cc_math_v1 macro=1.616`). The remaining eleven
+roots are still pending on CPU coordinator capacity; no larger-scale child jobs
+have materialized yet.
+
+### 2026-05-24T05:56Z follow-up
+
+Still no terminal failures. Six child TPU jobs remain running. `3e18/p50m50`
+saved a permanent checkpoint at step `33300` and reached `33.6kit/37.0kit`
+(`eval_loss=2.650`, `nemotron_cc_math_v1 macro=1.576`). `9e18/p50m50` saved a
+permanent checkpoint at step `30863`. `3e18/p67m33` saved temp checkpoint
+`30451` after resuming through repeated preemptions. The eleven remaining roots
+are still pending on CPU coordinator capacity.
+
+### 2026-05-24T06:19Z follow-up
+
+Still no terminal failures. Three more roots started (`2e19/p50m50`,
+`2e19/p67m33`, `3e19/p33m67`) and submitted child TPU jobs; those children are
+currently pending on v6e-8 high-RAM autoscaler capacity with
+`tier_blocked: 1 matching group(s) blocked by quota-pool tier monotonicity`.
+This is a scheduler wait, not a relaunch/config failure. `9e18/p67m33` saved a
+permanent checkpoint at step `30863`. `3e18/p50m50` reached `34.7kit/37.0kit`
+(`eval_loss=2.604`, `nemotron_cc_math_v1 macro=1.529`) and temp checkpoint
+`34301`. `9e18/p50m50` reached `32.1kit/44.1kit` and temp checkpoint `31756`.
+
+### 2026-05-24T06:31Z follow-up
+
+Still no terminal failures. The pending v6e-8 high-RAM children cleared the
+autoscaler wait and are running. `2e19/p50m50` and `2e19/p67m33` both resumed
+from step `40001`; `3e19/p33m67` resumed from step `30001`. `3e18/p50m50`
+reached `35.4kit/37.0kit` (`eval_loss=2.575`,
+`nemotron_cc_math_v1 macro=1.502`) and temp checkpoint `35351`. `9e18/p50m50`
+reached `32.7kit/44.1kit` and temp checkpoint `32681`; `9e18/p67m33` reached
+`31.7kit/44.1kit` and temp checkpoint `31756`. Eight roots remain pending on
+CPU coordinator capacity.
+
+### 2026-05-24T06:54Z follow-up
+
+External preemption storm hit the newly materialized v6e-8 children. Iris shows
+`2e19/p50m50`, `2e19/p67m33`, and `3e19/p33m67` child tasks killed by
+`/tonyhlee/eval-lr1e5_rstarcoder_n8_vr5_round1-step-500-code/0`. Structured
+summaries confirmed exit code `0` and error `Preempted by ...`, not a code
+failure. The parent coordinators are still alive and already demonstrated the
+correct recovery path for `2e19/p50m50`: it restarted, reused
+`gs://marin-us-east5/checkpoints/delphi-true-2e19-p50m50-cooldown20-a001`,
+and re-submitted `midtrain-delphi-true-2e19-p50m50-cooldown20-a001`. As of
+06:54Z, `2e19/p67m33` and `3e19/p33m67` parents were still waiting for CPU to
+restart and resubmit their children. Do not manually relaunch those cells unless
+their parent jobs become terminal or stop making recovery progress; manual
+duplicate relaunch risks splitting the recovery path.
+
+### 2026-05-24T10:37Z follow-up
+
+Still no terminal failures in the cooldown20 batch. Iris shows 17 launch roots:
+2 succeeded, 10 running, and 5 pending on CPU coordinator capacity. The active
+child set has 2 succeeded and 10 running. The pending roots are
+`9e19/p50m50`, `9e19/p67m33`, and all three `2e20` cells.
+
+Verified resume/progress:
+
+- `2e19/p33m67`, `2e19/p50m50`, and `2e19/p67m33` all loaded
+  `gs://marin-us-east5/checkpoints/delphi-true-2e19-<mix>-cooldown20-a001/checkpoints/step-40000`
+  and logged `Resuming training from step 40001`.
+- `9e18/p33m67`: running around `40.9kit/44.1kit`; latest eval loss `2.403`,
+  `nemotron_cc_math_v1 macro=1.271`; latest temp checkpoint `40584`.
+- `9e18/p50m50`: running around `42.9kit/44.1kit`; latest eval loss `2.340`,
+  `nemotron_cc_math_v1 macro=1.266`; latest temp checkpoint `42855`.
+- `9e18/p67m33`: running around `41.9kit/44.1kit`; latest eval loss `2.379`,
+  `nemotron_cc_math_v1 macro=1.342`; latest temp checkpoint `41947`.
+
+No manual relaunches were needed. Parent coordinators are still preserving the
+intended output paths/run ids while recovering through preemptions.
+
+### 2026-05-24T11:30Z follow-up
+
+`9e18/p50m50` succeeded after three preemptions and parent-owned recovery
+through the same output path. Final artifacts:
+
+- Checkpoint:
+  `gs://marin-us-east5/checkpoints/delphi-true-9e18-p50m50-cooldown20-a001/checkpoints/step-44095`
+- HF checkpoint:
+  `gs://marin-us-east5/checkpoints/delphi-true-9e18-p50m50-cooldown20-a001/hf/step-44095`
+- Final eval loss: `2.320`
+- Final `nemotron_cc_math_v1` macro loss: `1.249`
+
+Batch status at 11:29Z: 17 roots total, 3 succeeded, 10 running, 4 pending on
+CPU coordinator capacity. Children: 3 succeeded, 9 running/pending under alive
+parents. No failed/killed/unschedulable jobs. `9e18/p33m67` and
+`9e18/p67m33` are still active; most v6e-8 children are waiting/recovering
+after external preemptions.
+
+### 2026-05-24T12:15Z follow-up
+
+The full `9e18` cooldown20 set is now complete.
+
+- `9e18/p33m67` succeeded after eight preemptions.
+  - Checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-9e18-p33m67-cooldown20-a001/checkpoints/step-44095`
+  - HF checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-9e18-p33m67-cooldown20-a001/hf/step-44095`
+  - Final eval loss: `2.325`
+  - Final `nemotron_cc_math_v1` macro loss: `1.210`
+- `9e18/p67m33` succeeded after two preemptions.
+  - Checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-9e18-p67m33-cooldown20-a001/checkpoints/step-44095`
+  - HF checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-9e18-p67m33-cooldown20-a001/hf/step-44095`
+  - Final eval loss: `2.332`
+  - Final `nemotron_cc_math_v1` macro loss: `1.303`
+
+Batch status at 12:14Z: 5 children succeeded
+(`3e18/p50m50`, `3e18/p67m33`, all three `9e18` cells). The apparent bad
+children are external preemptions, not code failures:
+`3e19/p67m33` was preempted by
+`/tonyhlee/eval-lr1e5_rstarcoder_n8_vr5_round1-step-700-code/0`, and
+`9e19/p33m67` was preempted by
+`/tonyhlee/eval-lr1e5_rstarcoder_n8_vr5_round1-step-800-code/0`. Their parent
+coordinators remain alive, so continue to let parent-owned recovery preserve
+the original output paths.
+
+12:18Z recovery check: `3e19/p67m33` parent resubmitted
+`midtrain-delphi-true-3e19-p67m33-cooldown20-a001` at 12:14Z under the same
+logical child/output identity. `9e19/p33m67` parent is still alive and pending
+after its child preemption; continue waiting for parent-owned recovery rather
+than manually relaunching.
+
+12:27Z progress check: tmux monitor `true_midtrain_cd20_monitor` is live and
+writing to `scratch/20260524-2133_true_midtrain_cd20_batch_monitor.log`. Active
+v6e-8 children have resumed under the same logical run ids: `2e19/p33m67`
+from step `40402`, `2e19/p50m50` and `2e19/p67m33` from step `40001`,
+`3e19/p33m67` and `3e19/p50m50` from step `30001`. `3e19/p67m33` and
+`9e19/p67m33` are materialized but pending for v6e-8 TPU capacity. The remaining
+`2e20` roots are still CPU-coordinator pending.
+
+19:42Z handoff update: status refresh shows 17 roots with 9 succeeded, 7
+running, and 1 pending (`2e20/p67m33` still CPU-coordinator pending). Children:
+9 succeeded, 5 running, 1 pending (`2e20/p33m67` waiting for v5p-8 TPU
+capacity), and 1 killed child (`2e20/p50m50`, externally preempted by
+`/tonyhlee/8b-lr1e5-rstarcoder-v5p64-defram-v1/0`). The parent roots remain
+alive, so continue parent-owned recovery and do not manually duplicate relaunch.
+The stale tmux monitor was restarted as `true_midtrain_cd20_monitor` at local
+12:42 with the same state/log paths.
+
 > ## 🚨 CRITICAL — 1e20 RESULTS IN THIS LOGBOOK USED THE WRONG BASE MODEL 🚨
 >
 > **Discovered 2026-05-14.** Every "1e20" cell logged below — across the April 10 B sweep, the April 20 B sweep, and the May K=0.20 36-cell sweep — was trained from `isoflop-3e+20-d2048-L21-B128-adamh_scaling_v5`. **This is NOT a Delphi compute-optimal checkpoint.** It's from a deprecated v5 isoflop sweep generation with a different optimizer recipe (different LR formula, different `/H` treatment, different (d, L) architecture). Will Held (Delphi lead) confirmed: *"a checkpoint from a totally different scaling recipe."*
@@ -9955,6 +10126,314 @@ Verification:
 - `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
 - `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
 
+## 2026-05-21T19:42Z — dense prefix slider for within-run prediction
+
+Ahmed asked for a sliding control rather than fixed prefix choices, and asked
+for clarification on the current fitted functional form.
+
+Implemented:
+
+- Replaced the marimo prefix dropdown with a slider in
+  `scripts/analysis/delphi_small_final_loss_scaling_notebook.py`.
+- Expanded `PREFIX_FRACS` in
+  `scripts/analysis/delphi_within_run_prediction.py` from seven hand-picked
+  points to a 5%-90% grid in 1% increments.
+- Optimized template lookup so recomputing all prefixes from cached W&B
+  trajectory points takes seconds instead of minutes.
+
+Updated selected accuracy/cost points after the dense grid:
+
+| Metric | Selected method | Prefix | Small-CV MAE | Held-out complete MAE | Held-out complete MAPE |
+|---|---|---:|---:|---:|---:|
+| `eval_loss` | `template_by_recipe` | 0.65 | 0.00265 | 0.01723 | 1.04% |
+| `math_val_loss` | `template_by_recipe` | 0.43 | 0.00289 | 0.02596 | 3.85% |
+| `paloma_c4_loss` | `template_by_recipe` | 0.06 | 0.00552 | 0.04450 | 1.68% |
+| `paloma_macro_loss` | `template_by_recipe` | 0.06 | 0.00529 | 0.03306 | 1.24% |
+
+The best small-CV math point is still much later (`0.90`, MAE `0.000996`), but
+the selection rule picks the earliest prefix within the configured tolerance
+of the best point. At 10% math progress, the best method is still
+`template_by_mix` with small-CV MAE `0.0353`, so the "first 10%" heuristic is
+useful for a rough forecast but not enough for tight recipe selection.
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_within_run_prediction.py --use-cache`
+- `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+  (structural pass; markdown indentation warnings only)
+- `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
+- `./infra/pre-commit.py --fix scripts/analysis/delphi_within_run_prediction.py scripts/analysis/delphi_small_final_loss_scaling_notebook.py .agents/projects/delphi_midtraining.md`
+
+## 2026-05-23T01:10Z — within-run prefix grid starts after 10% warmup
+
+Ahmed pointed out that every Delphi midtraining run used a 10% warmup, so a
+5% prefix is inside warmup and should not be treated as a usable trajectory
+prediction prefix.
+
+Updated:
+
+- `scripts/analysis/delphi_within_run_prediction.py` now defines
+  `PREFIX_FRACS` as 10%-90% in 5% steps.
+- `scripts/analysis/build_delphi_midtraining_interactive_report.py` now sets
+  both per-cell and joint-fit prefix sliders to `min=10`.
+- Regenerated per-cell predictions, joint predictions, and the standalone
+  GitHub Pages HTML report from the new grid.
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_within_run_prediction.py --use-cache`
+- `uv run python scripts/analysis/delphi_joint_trajectory_prediction.py`
+- `uv run python scripts/analysis/build_delphi_midtraining_interactive_report.py --output midtrain_analysis_outputs/small_final_loss_scaling/delphi_midtraining_interactive.html`
+- Checked the regenerated CSVs and HTML payload: per-cell predictions, joint
+  predictions, and joint model coefficients all have minimum prefix `0.10`.
+
+## 2026-05-23T01:12Z — joint trajectory fits added to report
+
+Ahmed clarified the distinction between the per-cell setting and the
+scaling-law-discovery style setting:
+
+- Per-cell: fit a curve within one `(flop, mix, lr)` run from prefix points.
+- Joint: fit shared trajectory regressions over `tau`, flop scale, mix, and LR.
+
+Implemented:
+
+- Added `scripts/analysis/delphi_joint_trajectory_prediction.py`.
+- The script fits three paper-inspired joint forms:
+  - exp + drift
+  - power + drift
+  - Gompertz shoulder
+- It evaluates two scopes:
+  - `global`: across all flops, mixes, and LRs.
+  - `by_flop`: within each flop scale, across mix and LR.
+- For each prefix, fitting uses only validation points with `tau <= prefix`,
+  then predicts each completed run's endpoint at `tau=1`.
+- Added a bottom report section, "Joint Trajectory Fits Across LR, Mix, And
+  Flop", with mix/LR filters including `all`, a target max-error selector,
+  a method selector, a prefix slider, MAE-vs-prefix curves, observed-vs-predicted
+  scatter, and target-satisfying config tables.
+- Added a joint fitted-curve overlay so the section shows the actual shared
+  trajectory shapes, not just endpoint MAE.
+- Moved the SLDBench/source-note material into this joint section.
+- Relabeled the original section as "Curve Prediction Within A LR / Mix / Flop
+  Cell" so the setting is explicit.
+
+Current joint-fit headline:
+
+- Best all-run joint method: `joint_by_flop_power_drift @ 90%`, MAE `0.009892`,
+  max error `0.028735`.
+- No joint method satisfies max absolute error `<= 0.02` across all 104
+  completed math runs.
+- Joint fits satisfy max error `<= 0.05` from `65%` prefix onward, with
+  `by-flop power + drift`.
+- This is worse than the current per-cell SciPy parametric best
+  (`curve_rational_huber @ 90%`, MAE `0.003952`, max error `0.017680`).
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_joint_trajectory_prediction.py`
+- `uv run python scripts/analysis/build_delphi_midtraining_interactive_report.py --output ...`
+- `./infra/pre-commit.py --fix scripts/analysis/delphi_joint_trajectory_prediction.py scripts/analysis/build_delphi_midtraining_interactive_report.py`
+
+## 2026-05-23T00:25Z — SciPy optimizer promoted for parametric trajectory fits
+
+Ahmed asked to rerun the within-run trajectory prediction using SciPy
+optimization consistently instead of the earlier fixed-grid heuristic.
+
+Implemented:
+
+- `scripts/analysis/delphi_within_run_prediction.py` now uses the old shape
+  grid only for initialization.
+- MAE variants use bounded `scipy.optimize.minimize`.
+- Huber variants use `scipy.optimize.least_squares(loss="huber")`.
+- SciPy optimizes the endpoint floor, amplitude, and curve shape parameters;
+  final evaluation remains endpoint absolute error / MAE.
+
+Regenerated:
+
+- `trajectory_prefix_predictions.csv`
+- `trajectory_prefix_summary.csv`
+- `trajectory_method_selection.csv`
+- `trajectory_prediction_summary.md`
+- `delphi_midtraining_interactive.html`
+- hosted GitHub Pages copy at `ahmeda14960.github.io/delphi-midtraining/`
+
+Math-val headline after SciPy parametric regeneration:
+
+- `curve_rational_huber @ 90%`: all completed runs MAE `0.003952`, max error
+  `0.017680`.
+- `curve_rational_mae @ 90%`: all completed runs MAE `0.004897`, max error
+  `0.014867`.
+- `template_by_recipe` still wins the global small-CV method-selection rule,
+  so the automatic selected-method table remains template-based. The parametric
+  dropdown and target-config table now use SciPy-optimized curve fits.
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_within_run_prediction.py --use-cache`
+- `uv run python scripts/analysis/build_delphi_midtraining_interactive_report.py --output ...`
+- `./infra/pre-commit.py --fix scripts/analysis/delphi_within_run_prediction.py scripts/analysis/build_delphi_midtraining_interactive_report.py scripts/analysis/compare_scipy_within_run_fits.py .agents/projects/delphi_midtraining.md`
+
+## 2026-05-22T22:35Z — 3e20 finished-cell ingestion plan
+
+Ahmed reported that the 3e20 K=0.20 sweep has 9 finished cells so far:
+
+- `p33m67`: `lr50`, `lr67`, `lr83`
+- `p50m50`: `lr33`, `lr50`, `lr67`, `lr83`
+- `p67m33`: `lr33`, `lr50`
+
+Plan before fetching:
+
+- Extend `delphi_small_final_loss_scaling.py` from `3e18 -> 2e20` to
+  `3e18 -> 3e20`.
+- Extend the within-run cache updater so reruns fetch only missing completed
+  trajectories instead of re-downloading the full cache.
+- Add `3e20` to the standalone report and marimo scale order.
+- Clarify report wording: aggregate goodness-of-fit is endpoint MAE, i.e.
+  mean `|predicted_final - observed_final|`; target tables also report max
+  absolute endpoint error.
+
+## 2026-05-21T19:57Z — parametric trajectory forms and best-form grid
+
+Ahmed pushed back that the empirical template was too dumb as a functional
+model and asked for selectable functional forms plus a scale-by-prefix view of
+which form performs best.
+
+Implemented in `scripts/analysis/delphi_within_run_prediction.py`:
+
+- Added four parametric monotone-decay curve families:
+  - `curve_log`: mirrored-log decay.
+  - `curve_exp`: normalized exponential decay.
+  - `curve_power`: shifted power-law decay.
+  - `curve_rational`: rational/Hill-style decay.
+- Each family is normalized so `tau=1` equals the learned floor. For a fixed
+  shape, the script fits `loss(tau) = floor + amplitude * shape(tau)` on the
+  observed prefix. Shape parameters are selected by prefix MAE over a bounded
+  grid, and final prediction is the learned `tau=1` floor.
+- Evaluation and selection still use final-loss MAE.
+- The dense cached run now writes parametric prediction rows with
+  `param_floor`, `param_amplitude`, `param_shape_1`, `param_shape_2`, and
+  `prefix_fit_mae`.
+
+Implemented in `scripts/analysis/delphi_small_final_loss_scaling_notebook.py`:
+
+- Relabeled the selector to "functional form / method"; it now includes both
+  template baselines and the four parametric curve families.
+- When a parametric method is selected, the within-run trajectory plot draws
+  held-out fitted continuations from the selected prefix to `tau=1`, alongside
+  observed and predicted-final markers.
+- Added "Best Functional Form By Scale And Prefix": a heatmap/table with
+  x-axis = isoflop scale (`3e18` through `1e22`), y-axis = prefix, and cell text
+  = best parametric curve family plus MAE.
+
+Current headline after adding parametric forms:
+
+- The small-CV global winner is still usually `template_by_recipe`; the
+  parametric forms are now available for inspection but do not dominate the
+  empirical recipe template on aggregate.
+- On held-out math, high-prefix parametric `curve_power` is competitive
+  (`prefix=0.89/0.90`, held-out complete MAE `0.00643`), but the best held-out
+  rows are still `template_by_recipe` near prefix `0.87`.
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_within_run_prediction.py --use-cache`
+  completed in ~85s from cached trajectory points.
+- `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+  (structural pass; markdown indentation warnings only)
+- `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
+
+## 2026-05-21T20:52Z — MAE and Huber prefix-fit variants
+
+Ahmed asked whether the curves were fit with MAE and suggested trying Huber for
+curve fitting while keeping final goodness-of-fit selection by MAE.
+
+Implemented:
+
+- Parametric methods now emit both prefix-fit variants:
+  - `curve_log_mae`, `curve_log_huber`
+  - `curve_exp_mae`, `curve_exp_huber`
+  - `curve_power_mae`, `curve_power_huber`
+  - `curve_rational_mae`, `curve_rational_huber`
+- Final evaluation remains final-loss MAE in
+  `trajectory_prefix_summary.csv` and the notebook heatmap/table.
+- Prefix fitting now records both `prefix_fit_mae` and `prefix_fit_loss`.
+- Parametric curves are precomputed for `math_val_loss` only. Template/last/linear
+  baselines still run for all four validation metrics. This keeps the local
+  precompute to about one minute instead of a long Python grid-search job.
+- Prefix grid is 10%-90% in 5% steps for the parametric comparison after the
+  2026-05-23 warmup correction.
+
+Current math snapshot:
+
+- Aggregate selected method remains `template_by_recipe`, now at prefix `0.65`
+  under the 10%-90% grid (small-CV MAE `0.00235`, held-out complete MAE
+  `0.01857`).
+- Best small-CV parametric row is `curve_exp_mae` at prefix `0.90` (MAE
+  `0.00488`).
+- Best held-out parametric row is `curve_rational_mae` at prefix `0.90` (MAE
+  `0.00750`).
+
+Verification:
+
+- `uv run python scripts/analysis/delphi_within_run_prediction.py --use-cache`
+  completed in ~59s from cached trajectory points.
+- `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+  (structural pass; markdown indentation warnings only)
+- `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
+
+## 2026-05-21T21:01Z — target-MAE config finder
+
+Ahmed asked for a bottom notebook cell where a desired final-loss MAE target
+(`0.01`, `0.02`, `0.05`, etc.) returns the prefix/method configs that satisfy
+it, e.g. `(90% prefix, rational MAE)`.
+
+Implemented in `scripts/analysis/delphi_small_final_loss_scaling_notebook.py`:
+
+- Added "Configs Meeting Target MAE" below the best-form heatmap.
+- Added a target-MAE slider with values `0.005`, `0.01`, `0.02`, `0.05`, `0.10`.
+- Added an overall table of cheapest qualifying parametric configs for the
+  selected metric.
+- Added a per-scale table of cheapest qualifying parametric configs for the
+  selected metric and each scale.
+
+Selection rule:
+
+- Filter completed parametric prediction rows to `mean_abs_error <= target`.
+- Sort by smallest prefix first, then lower MAE.
+- Report top configs overall and up to five configs per scale.
+
+Verification:
+
+- `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+  (structural pass; markdown indentation warnings only)
+- `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
+- `./infra/pre-commit.py --fix scripts/analysis/delphi_within_run_prediction.py scripts/analysis/delphi_small_final_loss_scaling_notebook.py .agents/projects/delphi_midtraining.md`
+
+## 2026-05-21T22:34Z — target-MAE criterion tightened to all-run max error
+
+Ahmed pointed out that the target-MAE table should find configs that work for
+all runs, not just average below the target, and that the pandas dtype headers
+(`int64`, etc.) were clutter.
+
+Updated `scripts/analysis/delphi_small_final_loss_scaling_notebook.py`:
+
+- Target-MAE filters now require full completed-run coverage and
+  `max_abs_error <= target`.
+- Overall table requires the config to cover every completed run for the
+  selected metric.
+- Per-scale table requires the config to cover every completed run in that
+  scale.
+- Removed the `n` column from the display.
+- Rendered the qualifying configs as markdown tables via `to_markdown(index=False)`
+  so marimo no longer shows pandas dtype labels.
+
+Verification:
+
+- `uv run --with marimo marimo check scripts/analysis/delphi_small_final_loss_scaling_notebook.py`
+  (structural pass; markdown indentation warnings only)
+- `uv run --with marimo marimo export html scripts/analysis/delphi_small_final_loss_scaling_notebook.py -o /tmp/delphi_small_final_loss_scaling_notebook.html`
+- `./infra/pre-commit.py --fix scripts/analysis/delphi_within_run_prediction.py scripts/analysis/delphi_small_final_loss_scaling_notebook.py .agents/projects/delphi_midtraining.md`
+
 ## 2026-05-23T06:49Z — 3e20 K=0.20 sweep complete (12/12)
 
 Last cell (`p33m67-lr33`) reached step 7081 at `2026-05-23T05:47Z`. All
@@ -10036,3 +10515,601 @@ cell at measurement time).
   `2026-05-22`) captures why `delphi-1e20-*` (without `true-midtrain`)
   is the v5-isoflop-3e20 stand-in usable as a throughput proxy for
   canonical 3e20 with a ~1.39x param-ratio scale-up.
+
+## 2026-05-23T23:38Z — cooldown checkpoint helper and p33m67 launch recipe
+
+Added local operator helper:
+
+```bash
+uv run python scripts/list_delphi_checkpoints.py --base <scale>
+uv run python scripts/list_delphi_checkpoints.py --base <scale> --cooldown-ratio 0.2
+uv run python scripts/list_delphi_checkpoints.py --base <scale> --expect-step <step>
+```
+
+The helper is read-only. It lists native Delphi pretrain checkpoints from the
+registered `experiments.delphi_models` GCS root and checks the required
+TensorStore artifacts (`manifest.ocdbt`, `metadata.json`, `d`). With
+`--cooldown-ratio r`, it reports the target resume step at `(1-r)` progress
+and the nearest available checkpoints. With `--expect-step`, it exits
+nonzero unless that exact checkpoint exists and is well-formed.
+
+Concrete check run:
+
+```bash
+uv run python scripts/list_delphi_checkpoints.py --base 3e18 --cooldown-ratio 0.2
+```
+
+Result:
+
+- `3e18` native checkpoints: `step-10000`, `step-20000`, `step-30000`,
+  `step-37001`.
+- A `0.2` cooldown ratio targets `80%` pretraining progress:
+  `target_step=29600`, `target_cooldown_steps=7401`.
+- Closest checkpoint is `step-30000` (`+400` steps, `81.08%` progress,
+  decay phase).
+- Bracket around the target is `step-20000` (`-9600`) and `step-30000`
+  (`+400`). For an 80/20 cooldown on 3e18, `step-30000` is the sensible
+  explicit resume step if the operator accepts being 400 steps late.
+
+### Mixture naming
+
+The mix tag is `p{pretrain}m{math}`. Therefore:
+
+- Desired **67% math / 33% pretraining replay** is `p33m67`.
+- `p67m33` is the opposite: 67% pretraining replay / 33% math.
+
+### How to keep everything the same except the mixture
+
+For true cooldown, "everything the same" means:
+
+- use the exact native Delphi pretrain checkpoint path chosen by the helper;
+- keep `resume_step` equal to the chosen native checkpoint step;
+- preserve full trainer state: model weights, optimizer state, scheduler
+  count, and state step;
+- keep the base model's original `num_train_steps`, batch size, architecture,
+  and pretrain optimizer/schedule;
+- change only the `data:` section to the desired mixture.
+
+In the refactored `marin.midtraining` path, the conceptual spec is:
+
+```python
+run = build_run_identity(
+    logical_cell_id="delphi-3e18-p33m67-cooldown20",
+    attempt=1,
+    output_region_name="us-east5",
+    wandb_project="delphi-midtraining",
+)
+
+mode = CooldownMode(
+    resume=CooldownResume(
+        pretrain_checkpoint_path=(
+            "gs://marin-us-central2/checkpoints/isoflop/"
+            "isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/"
+            "checkpoints/step-30000"
+        ),
+        resume_step=30000,
+        staged_output_path=run.output_path,
+    )
+)
+```
+
+Then set:
+
+- `data_section_override=load_legacy_data_section("p33m67")`;
+- `data_section_provenance=LEGACY_PROVENANCE["p33m67"]`;
+- `mode=mode`;
+- `compute.batch_size=base.batch_size`;
+- model config from the Delphi base architecture;
+- optimizer config from the base pretrain AdamH hyperparameters with the
+  original pretrain WSD schedule, not a CPT LR-factor schedule.
+
+Before launch, call `stage_cooldown_checkpoint(spec, ...)` so the native
+checkpoint is copied into:
+
+```text
+<run.output_path>/checkpoints/step-30000
+```
+
+Then run `preflight`, write `train_lm_config.yaml` and
+`midtrain_manifest.json`, build the launch request, and launch. Startup logs
+must show the same run id/output path and `Resuming training from step 30000`.
+
+Legacy note: `experiments/exp_delphi_true_midtrain.py` already supports
+`TRUE_MIDTRAIN_SELECT_MIX=p33m67` for 1e21/1e22, but it has hard-coded
+`PRETRAINS` and a manual pre-stage/fan-out contract. It does not currently
+cover `3e18`. For new cooldown cells, prefer a small launcher using the
+refactored `CooldownMode` path above so the exact native checkpoint path from
+`scripts/list_delphi_checkpoints.py` is recorded in the manifest and staged by
+`stage_cooldown_checkpoint`.
+
+## 2026-05-23T23:56Z — true-midtraining YAML planning configs
+
+Added the non-launch planning directory:
+
+```text
+experiments/midtrain_specs/true_midtrain/nemotron_math_only/
+  README.md
+  configs/
+    checkpoint_candidates.yaml
+    p33m67.yaml
+    p50m50.yaml
+    p67m33.yaml
+```
+
+Intent:
+
+- Keep true-cooldown checkpoint selection visible and reviewable.
+- Avoid a launcher silently choosing a larger/smaller checkpoint than the
+  target cooldown ratio implies.
+- Reuse the existing mix convention: `p{pretrain}m{math}`.
+
+`checkpoint_candidates.yaml` contains 27 candidate rows:
+
+- 9 registered Delphi bases: `3e18`, `9e18`, `2e19`, `3e19`, `9e19`,
+  `2e20`, `3e20`, `1e21`, `1e22`.
+- 3 cooldown ratios: `0.30`, `0.20`, `0.10`.
+
+Each row records:
+
+- target step/progress/cooldown steps;
+- suggested closest available checkpoint by absolute step delta;
+- whether that suggestion is before or after the target;
+- before/after checkpoint bracket;
+- exact GCS checkpoint path;
+- `review_status: needs_human_review`.
+
+The per-mix YAMLs each list 27 planned cells and reference the shared
+checkpoint candidate ids. Their launch contract requires
+`review_status: approved` before any future launcher stages or submits a job.
+No launcher has been added yet.
+
+Validation:
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+import yaml
+
+root = Path('experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs')
+candidates = yaml.safe_load((root / 'checkpoint_candidates.yaml').read_text())
+assert len(candidates['checkpoint_candidates']) == 27
+candidate_ids = {row['candidate_id'] for row in candidates['checkpoint_candidates']}
+assert all(row['review_status'] == 'needs_human_review' for row in candidates['checkpoint_candidates'])
+for name in ('p33m67', 'p50m50', 'p67m33'):
+    config = yaml.safe_load((root / f'{name}.yaml').read_text())
+    assert len(config['cells']) == 27
+    assert all(cell['checkpoint_candidate_id'] in candidate_ids for cell in config['cells'])
+PY
+./infra/pre-commit.py --fix experiments/midtrain_specs/true_midtrain/nemotron_math_only/README.md \
+  experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/checkpoint_candidates.yaml \
+  experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/p33m67.yaml \
+  experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/p50m50.yaml \
+  experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/p67m33.yaml
+```
+
+## 2026-05-24T00:16Z — launched 3e18 p33m67 20% true cooldown
+
+User request: launch the 3e18 model at 20% cooldown on `v6e-4` with
+interactive priority, after first showing the 3e18 checkpoint candidates and
+ensuring W&B marks this as `cooldown_midtraining`, not `cpt_midtraining`.
+
+3e18 reviewed candidates:
+
+| candidate | cooldown ratio | target step | suggested step | delta | relation | checkpoint |
+|---|---:|---:|---:|---:|---|---|
+| `delphi-3e18-cooldown30` | 0.30 | 25900 | 30000 | +4100 | after target | `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-30000` |
+| `delphi-3e18-cooldown20` | 0.20 | 29600 | 30000 | +400 | after target | `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-30000` |
+| `delphi-3e18-cooldown10` | 0.10 | 33300 | 30000 | -3300 | before target | `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-30000` |
+
+Approved for launch:
+
+- `experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/checkpoint_candidates.yaml`
+  now marks `delphi-3e18-cooldown20` as `review_status: approved`.
+- `experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/p33m67.yaml`
+  now marks `delphi-true-3e18-p33m67-cooldown20` as `status: approved`.
+- Added launcher:
+  `experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py`.
+
+The dry-run confirmed W&B tracker tags contain:
+
+```text
+mode:cooldown
+base:3e18
+tpu:v6e-4
+region:us-east5
+attempt:001
+resume_step:30000
+cooldown_midtraining
+true_midtraining
+dataset:nemotron_math_only
+mix:p33m67
+cooldown_ratio:0.20
+target_step:29600
+resume_step:30000
+checkpoint_relation:after_target
+checkpoint_candidate:delphi-3e18-cooldown20
+```
+
+There is no `cpt_midtraining` tag in the rendered config. The written GCS
+config verifies the same tags at:
+
+```text
+gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a001/train_lm_config.yaml
+```
+
+The run manifest records the cooldown stage:
+
+```text
+source:      gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-30000
+destination: gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a001/checkpoints/step-30000
+bytes:       5366958711
+reason:      Ahmed approved 3e18 p33m67 20pct cooldown staging from native Delphi checkpoint
+```
+
+Launch notes:
+
+- Normal root submit first failed because `--memory 4GB` requires
+  `--enable-extra-resources`; reduced the CPU coordinator to `--memory 3GB`.
+- The current worktree's `iris.version` freshness check reports the source tree
+  as older than the controller minimum even after `uv sync`. I did not edit Iris
+  source or merge branches; I submitted the root coordinator with an in-process
+  `iris.version._CACHED = "2026-05-23"` patch so the CLI call could reach the
+  controller.
+- Root coordinator job:
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-1779581129`
+- TPU child job:
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-1779581129/midtrain-delphi-true-3e18-p33m67-cooldown20-a001`
+- Root coordinator is running and waiting on the child.
+- The TPU child is currently pending on `v6e-4` capacity in `us-east5`.
+  Scheduler reason:
+  `Insufficient TPUs (need 4, available 0)` plus quota-pool tier monotonicity.
+
+Current output path:
+
+```text
+gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a001
+```
+
+To check status:
+
+```bash
+uv run iris --cluster=marin job list --json --prefix /ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-1779581129
+uv run iris --cluster=marin job logs --since-seconds 1200 --max-lines 260 --tail /ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-1779581129
+```
+
+Update 2026-05-24T00:26Z:
+
+- First root attempt `...-1779581129` staged successfully and submitted the
+  child, but the child landed on `tpu_v6e-preemptible_4-us-east5-b` and was
+  killed after ~20s before Levanter printed a traceback. The parent then
+  exited `1` on status `stopped`.
+- Added `ComputeProfile.preemptible` and passed it through
+  `build_launch_request`/`submit_launch` so launchers can explicitly request
+  non-preemptible TPU children when that capacity class exists. Added a unit
+  assertion in `tests/midtraining/test_spec_validators.py`.
+- Tried a replacement root
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r2-1779582081` with a
+  non-preemptible child. Iris rejected it before child creation:
+  `no non-preemptible group provides device tpu:v6e-4`.
+- Patched the true-cooldown launcher so the default remains preemptible
+  (`v6e-4` is only schedulable that way), with an opt-out flag
+  `--no-preemptible-child` for future TPU types.
+- Active replacement root:
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r3-1779582254`
+- Active child:
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r3-1779582254/midtrain-delphi-true-3e18-p33m67-cooldown20-a001`
+- Current state: root `running`; child `pending` on `v6e-4` preemptible
+  capacity in `us-east5`.
+- Scheduler reason:
+  `Insufficient TPUs (need 4, available 0)` and autoscaler waiting for
+  `tpu_v6e-preemptible_4-us-east5-b`.
+
+Re-check command for the active launch:
+
+```bash
+uv run iris --cluster=marin job list --json --prefix /ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r3-1779582254
+uv run iris --cluster=marin job logs --since-seconds 900 --max-lines 420 --tail /ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r3-1779582254
+```
+
+Update 2026-05-24T00:29Z:
+
+- Active child is now `JOB_STATE_RUNNING`.
+- W&B run exists and is `running`:
+  <https://wandb.ai/marin-community/delphi-midtraining/runs/delphi-true-3e18-p33m67-cooldown20-a001>
+- W&B tags verified through `wandb.Api()`:
+  `cooldown_midtraining`, `true_midtraining`, `mode:cooldown`,
+  `base:3e18`, `tpu:v6e-4`, `region:us-east5`, `attempt:001`,
+  `mix:p33m67`, `cooldown_ratio:0.20`, `target_step:29600`,
+  `resume_step:30000`, `checkpoint_relation:after_target`,
+  `checkpoint_candidate:delphi-3e18-cooldown20`,
+  `dataset:nemotron_math_only`.
+- No `cpt_midtraining` tag is present.
+- Startup logs verify checkpoint selection and resume:
+
+```text
+Discovered latest checkpoint at gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a001/checkpoints/step-30000
+Resuming training from step 30001
+```
+
+Update 2026-05-24T01:07Z:
+
+- Another agent accidentally killed the active r3 root and child while triaging
+  a different run:
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r3-1779582254`.
+- Verified the relevant temp checkpoint exists before relaunching:
+  `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e18-p33m67-cooldown20-a001/checkpoints/step-30976`.
+- Relaunched with the same output path/run id, same W&B id, same config
+  namespace, and a fresh root coordinator:
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r4-1779584389`.
+- Active child:
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r4-1779584389/midtrain-delphi-true-3e18-p33m67-cooldown20-a001`.
+- Root and child are both `JOB_STATE_RUNNING`.
+- Startup logs show the expected resume behavior:
+
+```text
+Discovered latest checkpoint at gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a001/checkpoints/step-30000
+Discovered latest checkpoint at gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e18-p33m67-cooldown20-a001/checkpoints/step-30976
+Found prior temporary checkpoint gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5_checkpoints_delphi-true-3e18-p33m67-cooldown20-a001/checkpoints/step-30976. We will delete it after saving a new checkpoint.
+Resuming training from step 30977
+First train step completed in 18.7s (step 30977)
+Progress on:train 31.0kit/37.0kit
+```
+
+W&B also resumed the same run id:
+<https://wandb.ai/marin-community/delphi-midtraining/runs/delphi-true-3e18-p33m67-cooldown20-a001>.
+
+Update 2026-05-24T03:12Z:
+
+- Babysat r4 through completion after the accidental kill/relaunch.
+- Root and child both reached `JOB_STATE_SUCCEEDED` with `exit_code=0`,
+  `failure_count=0`, and `preemption_count=0`.
+- Final child:
+  `/ahmed/aa-true-d3e18-p33m67-cd20-v6e4-a001-r4-1779584389/midtrain-delphi-true-3e18-p33m67-cooldown20-a001`.
+- Final W&B run:
+  <https://wandb.ai/marin-community/delphi-midtraining/runs/delphi-true-3e18-p33m67-cooldown20-a001>.
+- Final checkpoints were written and confirmed:
+  - Levanter checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a001/checkpoints/step-37000`
+  - HF-compatible checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-3e18-p33m67-cooldown20-a001/hf/step-37000`
+- Temporary checkpoint `step-36926` was deleted after final permanent
+  `step-37000` was saved.
+- Final logged eval loss was `2.531`; `nemotron_cc_math_v1` macro and micro
+  loss were both `1.418`.
+- Monitoring state recorded in
+  `scratch/20260524-0108_delphi_cooldown_monitoring_state.json`.
+## 2026-05-24T04:44Z — True-midtraining cooldown20 batch launched
+
+User requested the 20% cooldown true-midtraining batch for all three
+Nemotron math-only mixes across the small Delphi isoflop ladder through
+`2e20`, switching `3e18` from `v5p-8` to `v6e-4`.
+
+Checkpoint policy was corrected before launch: for `9e18` and `2e20`, the
+reviewed `cooldown20` candidate now uses the at-or-before checkpoint instead
+of the nominally closest checkpoint that would have started around 90% through
+pretraining. Approved resume checkpoints:
+
+| base | resume step | progress | phase | TPU |
+|---|---:|---:|---|---|
+| `3e18` | 30000 | 81.08% | decay | `v6e-4` |
+| `9e18` | 30000 | 68.03% | stable | `v6e-4` |
+| `2e19` | 40000 | 72.84% | stable | `v6e-8` |
+| `3e19` | 30000 | 79.22% | stable | `v6e-8` |
+| `9e19` | 30000 | 74.70% | stable | `v6e-8` |
+| `2e20` | 40000 | 70.93% | stable | `v5p-8` |
+
+`3e18/p33m67` already finished as
+`delphi-true-3e18-p33m67-cooldown20-a001`, so it was not relaunched. The
+remaining 17 roots were submitted as batch-priority, non-preemptible CPU
+coordinators with child TPU RAM set to `256g`:
+
+```text
+scratch/20260524_true_midtrain_cd20_batch_launch_1779597018.tsv
+```
+
+The babysit state file is:
+
+```text
+scratch/20260524-2133_true_midtrain_cd20_batch_monitoring_state.json
+```
+
+Initial babysit signal:
+
+- `17` new roots are visible in Iris; no root or child failure observed.
+- `3e18/p50m50` created a child job, opened W&B run
+  `delphi-true-3e18-p50m50-cooldown20-a001`, discovered staged checkpoint
+  `gs://marin-us-east5/checkpoints/delphi-true-3e18-p50m50-cooldown20-a001/checkpoints/step-30000`,
+  resumed from step `30001`, and completed the first train step.
+- `3e18/p67m33` and all three `9e18` children were created and were pending
+  on `v6e-4` TPU capacity at the first post-launch check.
+- Remaining pending roots were blocked on CPU coordinator capacity in
+  `us-east5`, not on config/preflight errors.
+
+Follow-up at ~2026-05-24T05:11Z:
+
+- No root or child failures observed.
+- Clean resume/training startup verified for:
+  - `delphi-true-3e18-p50m50-cooldown20-a001` from step `30001`.
+  - `delphi-true-3e18-p67m33-cooldown20-a001` from step `30001`.
+  - `delphi-true-9e18-p33m67-cooldown20-a001` from step `30001`.
+  - `delphi-true-9e18-p50m50-cooldown20-a001` from step `30001`.
+  - `delphi-true-2e19-p33m67-cooldown20-a001` from step `40001`.
+- `9e18/p50m50` had a TPU preemption and restarted, but W&B resumed the same
+  run id and Levanter rediscovered the expected permanent checkpoint at
+  `step-30000`.
+- Current Iris shape: `17` roots total (`6` running, `11` pending on CPU
+  coordinator slots); `6` TPU children total (`5` running, `1` pending for
+  `v6e-4` capacity).
+
+Follow-up at ~2026-05-24T06:58Z:
+
+- Current Iris shape: `17` roots total (`9` running, `8` pending on CPU
+  coordinator slots); `9` TPU children total (`7` running, `2` killed).
+- The two killed children are external preemptions by
+  `/tonyhlee/eval-lr1e5_rstarcoder_n8_vr5_round1-step-500-code/0`, not
+  training/config failures:
+  - `delphi-true-2e19-p67m33-cooldown20-a001`
+  - `delphi-true-3e19-p33m67-cooldown20-a001`
+- Both affected parent coordinators are still `JOB_STATE_RUNNING` with their
+  task pending, so they still own recovery. Do not launch duplicate manual
+  copies while these parents are alive; that would risk splitting the exact
+  output-path/run identity that true Delphi resume relies on.
+- Resume invariant was checked in logs before the preemptions:
+  - `2e19/p67m33` discovered and loaded
+    `gs://marin-us-east5/checkpoints/delphi-true-2e19-p67m33-cooldown20-a001/checkpoints/step-40000`
+    and printed `Resuming training from step 40001`.
+  - `3e19/p33m67` discovered and loaded
+    `gs://marin-us-east5/checkpoints/delphi-true-3e19-p33m67-cooldown20-a001/checkpoints/step-30000`
+    and printed `Resuming training from step 30001`.
+- `2e19/p67m33` had already auto-recovered once at `06:34Z`, reusing the
+  staged checkpoint and resubmitting
+  `midtrain-delphi-true-2e19-p67m33-cooldown20-a001`, then was preempted again
+  at `06:41Z`.
+
+Follow-up at ~2026-05-24T07:08Z:
+
+- First new batch completion: `delphi-true-3e18-p50m50-cooldown20-a001`.
+  The child and parent both reached `JOB_STATE_SUCCEEDED`; child summary showed
+  `exit_code=0`, `failure_count=0`, and `preemption_count=0`.
+- Final checkpoints:
+  - Levanter checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-3e18-p50m50-cooldown20-a001/checkpoints/step-37000`
+  - HF-compatible checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-3e18-p50m50-cooldown20-a001/hf/step-37000`
+- Final logged eval loss was `2.533`; `nemotron_cc_math_v1` macro loss was
+  `1.462`.
+- Current Iris shape: `17` roots total (`1` succeeded, `8` running, `8`
+  pending on CPU coordinator slots); `9` TPU children total (`1` succeeded,
+  `6` running, `2` killed by Tony's eval preemption).
+- `2e19/p33m67` and `2e19/p50m50` are back in `building` after earlier
+  preemptions. The remaining killed children are still only
+  `2e19/p67m33` and `3e19/p33m67`; their parent roots remain alive, so continue
+  to wait for parent-owned recovery instead of launching duplicate copies.
+
+Follow-up at ~2026-05-24T07:12Z:
+
+- Parent-owned recovery worked for `2e19/p67m33`; the child is back to
+  `JOB_STATE_RUNNING` with its task running.
+- The recovered child rediscovered the expected permanent checkpoint:
+  `gs://marin-us-east5/checkpoints/delphi-true-2e19-p67m33-cooldown20-a001/checkpoints/step-40000`.
+- Current Iris shape: `17` roots total (`1` succeeded, `8` running, `8`
+  pending on CPU coordinator slots); `9` TPU children total (`1` succeeded,
+  `7` running, `1` killed).
+- Only remaining killed child:
+  `delphi-true-3e19-p33m67-cooldown20-a001`, preempted by Tony's eval job.
+  Its parent coordinator is still alive, so continue waiting for that parent to
+  recover rather than manually duplicating the run.
+
+Follow-up at ~2026-05-24T07:29Z:
+
+- External preemption churn continued. `2e19/p50m50` was killed by
+  `/tonyhlee/eval-lr1e5_rstarcoder_n8_vr5_round1-step-600-code/0` after
+  multiple successful restarts from `step-40001`.
+- Current bad children:
+  - `delphi-true-2e19-p50m50-cooldown20-a001`
+  - `delphi-true-3e19-p33m67-cooldown20-a001`
+- Both parent roots are still `JOB_STATE_RUNNING` with pending tasks. Continue
+  to preserve parent-owned recovery rather than launching duplicate copies.
+- Current Iris shape: `17` roots total (`1` succeeded, `8` running, `8`
+  pending on CPU coordinator slots); `9` TPU children total (`1` succeeded,
+  `6` running, `2` killed).
+
+Follow-up at ~2026-05-24T08:12Z:
+
+- Second new batch completion: `delphi-true-3e18-p67m33-cooldown20-a001`.
+  The child reached `JOB_STATE_SUCCEEDED` with `exit_code=0`,
+  `failure_count=0`, and `preemption_count=5`.
+- Final checkpoints:
+  - Levanter checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-3e18-p67m33-cooldown20-a001/checkpoints/step-37000`
+  - HF-compatible checkpoint:
+    `gs://marin-us-east5/checkpoints/delphi-true-3e18-p67m33-cooldown20-a001/hf/step-37000`
+- Final logged eval loss was `2.553`; `nemotron_cc_math_v1` macro loss was
+  `1.524`.
+- Current Iris shape: `17` roots total (`1` succeeded, `8` running, `8`
+  pending on CPU coordinator slots); `9` TPU children total (`2` succeeded,
+  `5` running, `2` killed by Tony eval preemptions).
+- Still killed with live parent coordinators:
+  - `delphi-true-2e19-p50m50-cooldown20-a001`
+  - `delphi-true-3e19-p33m67-cooldown20-a001`
+
+Follow-up at ~2026-05-24T08:18Z:
+
+- `2e19/p50m50` recovered from killed to a pending child waiting on `v6e-8`
+  TPU capacity (`Scheduler: Insufficient TPUs`). This confirms the parent
+  coordinator preserved the original run identity and took ownership of the
+  relaunch.
+- Only remaining killed child is now
+  `delphi-true-3e19-p33m67-cooldown20-a001`; its parent coordinator remains
+  alive.
+- Current Iris shape: `17` roots total (`2` succeeded, `7` running, `8`
+  pending on CPU coordinator slots); `9` TPU children total (`2` succeeded,
+  `5` running, `1` pending for TPU capacity, `1` killed by Tony eval
+  preemption).
+
+Follow-up at ~2026-05-24T08:24Z:
+
+- All three `2e19` children are running again:
+  - `delphi-true-2e19-p33m67-cooldown20-a001`
+  - `delphi-true-2e19-p50m50-cooldown20-a001`
+  - `delphi-true-2e19-p67m33-cooldown20-a001`
+- Only remaining killed child is
+  `delphi-true-3e19-p33m67-cooldown20-a001`, still the Tony eval
+  preemption. Its parent root remains alive.
+- Current Iris shape: `17` roots total (`2` succeeded, `7` running, `8`
+  pending on CPU coordinator slots); `9` TPU children total (`2` succeeded,
+  `6` running, `1` killed).
+
+Follow-up at ~2026-05-24T09:30Z:
+
+- Bad count is back to zero. `3e19/p33m67` recovered from killed to a pending
+  child waiting on `v6e-8` TPU capacity, so the parent coordinator preserved the
+  original run identity and relaunched correctly.
+- Current Iris shape: `17` roots total (`2` succeeded, `8` running, `7`
+  pending on CPU coordinator slots); `9` TPU children total (`2` succeeded,
+  `6` running, `1` pending for TPU capacity).
+- `2e19` remains non-terminal but is still heavily preempted/pending:
+  preemption counts are now `13/4/6` for `p33m67/p50m50/p67m33`.
+
+Follow-up at ~2026-05-24T09:40Z:
+
+- Coordinator capacity opened up: root pending count dropped from `7` to `5`.
+- No bad jobs.
+- New child/launch state:
+  - `3e19/p33m67` recovered and is pending for `v6e-8` TPU capacity.
+  - `3e19/p50m50` submitted
+    `midtrain-delphi-true-3e19-p50m50-cooldown20-a001`, also pending for
+    `v6e-8` TPU capacity.
+  - `3e19/p67m33` root is running, but no matching child-launch line was seen
+    yet in the recent log sample.
+  - `9e19/p33m67` root is running, but no matching child-launch line was seen
+    yet in the recent log sample.
+- Current Iris shape: `17` roots total (`2` succeeded, `10` running, `5`
+  pending on CPU coordinator slots); `10` TPU children total (`2` succeeded,
+  `6` running, `2` pending for TPU capacity).
+
+Follow-up at ~2026-05-24T09:49Z:
+
+- No bad jobs.
+- `3e19/p33m67` and `3e19/p50m50` children are now running.
+- `3e19/p67m33` submitted
+  `midtrain-delphi-true-3e19-p67m33-cooldown20-a001` and is pending on
+  `v6e-8` TPU capacity.
+- `9e19/p33m67` root is running and got through dependency setup to
+  `running user command`, but has not emitted launcher/preflight logs or a
+  child row yet.
+- Current Iris shape: `17` roots total (`2` succeeded, `10` running, `5`
+  pending on CPU coordinator slots); `11` TPU children total (`2` succeeded,
+  `8` running, `1` pending for TPU capacity).
+
+Follow-up at ~2026-05-24T10:01Z:
+
+- No bad jobs.
+- `9e19/p33m67` submitted
+  `midtrain-delphi-true-9e19-p33m67-cooldown20-a001` and is pending on
+  `v6e-8` TPU capacity.
+- Current Iris shape: `17` roots total (`2` succeeded, `10` running, `5`
+  pending on CPU coordinator slots); `12` TPU children total (`2` succeeded,
+  `8` running, `2` pending for TPU capacity).
+- `2e19` and `3e19/p33,p50` remain non-terminal but are task-pending after
+  more preemptions. `9e18` remains the active progress path.

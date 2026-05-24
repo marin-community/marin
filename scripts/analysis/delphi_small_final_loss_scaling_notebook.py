@@ -19,7 +19,7 @@ Run:
 
 import marimo
 
-__generated_with = "0.23.6"
+__generated_with = "0.23.7"
 app = marimo.App(width="full")
 
 
@@ -87,7 +87,7 @@ def _(Path, mo, pd):
         pd.read_csv(trajectory_selection_path) if trajectory_selection_path.exists() else pd.DataFrame()
     )
 
-    fit_scale_order = ["3e18", "9e18", "2e19", "3e19", "9e19", "2e20"]
+    fit_scale_order = ["3e18", "9e18", "2e19", "3e19", "9e19", "2e20", "3e20"]
     heldout_scale_order = ["1e21", "1e22"]
     scale_order = fit_scale_order + heldout_scale_order
     mix_order = ["p33m67", "p50m50", "p67m33"]
@@ -99,6 +99,7 @@ def _(Path, mo, pd):
         "3e19": 3e19,
         "9e19": 9e19,
         "2e20": 2e20,
+        "3e20": 3e20,
     }
     metric_options = {
         "Held-out math validation": "math_val_loss",
@@ -581,7 +582,7 @@ def _(mo):
     This section asks a different question from the endpoint scaling fit:
     given only the first `x%` of a run, how well can we predict its final
     validation loss? Methods are tuned on completed small-ladder runs through
-    `2e20`; `1e21` and `1e22` are held out.
+    `3e20`; `1e21` and `1e22` are held out.
     """
     )
     return
@@ -621,35 +622,117 @@ def _(pd, trajectory_selection_raw):
 @app.cell
 def _(mo, trajectory_predictions_raw):
     if trajectory_predictions_raw.empty:
-        prefix_labels = ["0.10"]
+        prefix_percents = [10]
         trajectory_method_options = ["template_by_recipe"]
     else:
-        prefix_values = sorted(float(value) for value in trajectory_predictions_raw["prefix"].dropna().unique())
-        prefix_labels = [f"{value:.2f}" for value in prefix_values]
+        prefix_percents = sorted(
+            {round(100 * float(value)) for value in trajectory_predictions_raw["prefix"].dropna().unique()}
+        )
         trajectory_method_options = sorted(trajectory_predictions_raw["method"].dropna().unique())
-    prefix_default = "0.10" if "0.10" in prefix_labels else prefix_labels[0]
+    prefix_default = 10 if 10 in prefix_percents else prefix_percents[0]
     method_default = (
         "template_by_recipe" if "template_by_recipe" in trajectory_method_options else trajectory_method_options[0]
     )
-    trajectory_prefix_select = mo.ui.dropdown(
-        options=prefix_labels,
+    trajectory_prefix_slider = mo.ui.slider(
+        steps=prefix_percents,
         value=prefix_default,
-        label="prefix fraction",
+        label="prefix %",
+        show_value=True,
+        include_input=True,
     )
     trajectory_method_select = mo.ui.dropdown(
         options=trajectory_method_options,
         value=method_default,
-        label="prediction method",
+        label="functional form / method",
     )
-    mo.hstack([trajectory_prefix_select, trajectory_method_select], justify="start", gap=2)
-    return trajectory_method_select, trajectory_prefix_select
+    mo.hstack([trajectory_prefix_slider, trajectory_method_select], justify="start", gap=2)
+    return trajectory_method_select, trajectory_prefix_slider
 
 
 @app.cell
-def _(trajectory_method_select, trajectory_prefix_select):
+def _(trajectory_method_select, trajectory_prefix_slider):
     selected_trajectory_method = trajectory_method_select.value
-    selected_trajectory_prefix = float(trajectory_prefix_select.value)
+    selected_trajectory_prefix = round(float(trajectory_prefix_slider.value) / 100, 2)
     return selected_trajectory_method, selected_trajectory_prefix
+
+
+@app.cell
+def _(math, np):
+    def base_curve_method(method):
+        for suffix in ("_mae", "_huber"):
+            if str(method).endswith(suffix):
+                return str(method)[: -len(suffix)]
+        return method
+
+    def trajectory_shape_values(method, tau, shape_1, shape_2):
+        if method == "curve_log":
+            shift = shape_1
+            denominator = math.log((1 + shift) / shift)
+            return np.log((1 + shift) / (tau + shift)) / denominator
+        if method == "curve_exp":
+            rate = shape_1
+            denominator = 1 - math.exp(-rate)
+            return (np.exp(-rate * tau) - math.exp(-rate)) / denominator
+        if method == "curve_power":
+            shift = shape_1
+            exponent = shape_2
+            raw = np.power(tau + shift, -exponent)
+            raw_start = shift**-exponent
+            raw_end = (1 + shift) ** -exponent
+            return (raw - raw_end) / (raw_start - raw_end)
+        if method == "curve_rational":
+            t0 = shape_1
+            beta = shape_2
+            raw = 1 / (1 + np.power(tau / t0, beta))
+            raw_end = 1 / (1 + (1 / t0) ** beta)
+            return (raw - raw_end) / (1 - raw_end)
+        return None
+
+    def trajectory_curve_values(prediction_row, tau_grid):
+        method = base_curve_method(prediction_row["method"])
+        if not str(method).startswith("curve_"):
+            return None
+        shape_1 = prediction_row.get("param_shape_1")
+        shape_2 = prediction_row.get("param_shape_2")
+        floor = prediction_row.get("param_floor")
+        amplitude = prediction_row.get("param_amplitude")
+        if shape_1 is None or floor is None or amplitude is None:
+            return None
+        shape_1 = float(shape_1)
+        floor = float(floor)
+        amplitude = float(amplitude)
+        if not np.all(np.isfinite([shape_1, floor, amplitude])):
+            return None
+        if shape_2 is None or np.isnan(float(shape_2)):
+            shape_2 = None
+        else:
+            shape_2 = float(shape_2)
+        shape = trajectory_shape_values(method, tau_grid, shape_1, shape_2)
+        if shape is None:
+            return None
+        return floor + amplitude * shape
+
+    def method_label(method):
+        labels = {
+            "curve_log": "log",
+            "curve_exp": "exp",
+            "curve_power": "power",
+            "curve_rational": "rational",
+            "last_value": "last",
+            "linear_tau": "linear",
+            "template_global": "template global",
+            "template_by_mix": "template mix",
+            "template_by_recipe": "template recipe",
+        }
+        base_method = base_curve_method(method)
+        label = labels.get(base_method, method)
+        if str(method).endswith("_mae"):
+            return f"{label} MAE"
+        if str(method).endswith("_huber"):
+            return f"{label} Huber"
+        return label
+
+    return method_label, trajectory_curve_values
 
 
 @app.cell
@@ -712,7 +795,7 @@ def _(
             & trajectory_predictions_raw["mix"].eq(mix_select.value)
             & trajectory_predictions_raw["lr"].isin(selected_lrs)
             & trajectory_predictions_raw["method"].eq(selected_trajectory_method)
-            & trajectory_predictions_raw["prefix"].eq(selected_trajectory_prefix)
+            & (trajectory_predictions_raw["prefix"].sub(selected_trajectory_prefix).abs().lt(1e-9))
         ].copy()
         trajectory_prediction_detail_view = trajectory_prediction_detail_view.sort_values(
             ["eval_split", "scale", "lr", "complete"],
@@ -744,11 +827,14 @@ def _(
 @app.cell
 def _(
     go,
+    method_label,
     mix_select,
+    np,
     selected_lrs,
     selected_metric_label,
     selected_trajectory_method,
     selected_trajectory_prefix,
+    trajectory_curve_values,
     trajectory_points_raw,
     trajectory_predictions_raw,
 ):
@@ -772,7 +858,7 @@ def _(
             & predictions["mix"].eq(mix_select.value)
             & predictions["lr"].isin(selected_lrs)
             & predictions["method"].eq(selected_trajectory_method)
-            & predictions["prefix"].eq(selected_trajectory_prefix)
+            & (predictions["prefix"].sub(selected_trajectory_prefix).abs().lt(1e-9))
         ].copy()
         if plot_points.empty:
             fig.add_annotation(text="No trajectory points for this selection.", showarrow=False)
@@ -810,6 +896,7 @@ def _(
             seen_line_legends.add(legend_key)
 
         if not plot_predictions.empty:
+            seen_curve_legends = set()
             for lr, group in plot_predictions.groupby("lr", observed=True):
                 color = lr_colors.get(str(lr), "#666")
                 fig.add_trace(
@@ -844,6 +931,43 @@ def _(
                         ),
                     )
                 )
+            fitted_curve_rows = plot_predictions[
+                plot_predictions["eval_split"].eq("heldout_large")
+                & plot_predictions["method"].astype(str).str.startswith("curve_")
+            ]
+            for row in fitted_curve_rows.itertuples(index=False):
+                row_dict = row._asdict()
+                curve_start = max(float(row_dict["prefix_actual_tau"]), selected_trajectory_prefix)
+                tau_grid = np.linspace(curve_start, 1.0, 80)
+                curve_values = trajectory_curve_values(row_dict, tau_grid)
+                if curve_values is None:
+                    continue
+                lr = str(row_dict["lr"])
+                legend_key = (lr, row_dict["method"])
+                fig.add_trace(
+                    go.Scatter(
+                        x=tau_grid,
+                        y=curve_values,
+                        mode="lines",
+                        name=f"lr{lr} {method_label(row_dict['method'])} fit",
+                        legendgroup=f"lr{lr}-curve-fit",
+                        showlegend=legend_key not in seen_curve_legends,
+                        line={"color": lr_colors.get(lr, "#666"), "dash": "dash", "width": 2},
+                        customdata=np.column_stack(
+                            [
+                                np.full(len(tau_grid), row_dict["scale"]),
+                                np.full(len(tau_grid), row_dict["run_name"]),
+                                np.full(len(tau_grid), row_dict["prefix_fit_mae"]),
+                            ]
+                        ),
+                        hovertemplate=(
+                            "%{customdata[0]}<br>%{customdata[1]}<br>"
+                            "prefix-fit MAE=%{customdata[2]:.5f}<br>"
+                            "tau=%{x:.3f}<br>fit=%{y:.5f}<extra></extra>"
+                        ),
+                    )
+                )
+                seen_curve_legends.add(legend_key)
 
         fig.add_vline(
             x=selected_trajectory_prefix,
@@ -864,6 +988,290 @@ def _(
 
     trajectory_prediction_figure = within_run_prediction_figure(trajectory_points_raw, trajectory_predictions_raw)
     trajectory_prediction_figure  # noqa: B018
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+    ## Best Functional Form By Scale And Prefix
+
+    This grid compares only the parametric curve families. Each cell is the
+    curve family with the lowest final-loss MAE at that scale and prefix.
+    """
+    )
+    return
+
+
+@app.cell
+def _(
+    method_label,
+    pd,
+    scale_order,
+    selected_metric_label,
+    trajectory_predictions_raw,
+):
+    if trajectory_predictions_raw.empty:
+        best_curve_by_scale_prefix = pd.DataFrame()
+    else:
+        curve_predictions = trajectory_predictions_raw[
+            trajectory_predictions_raw["metric_label"].eq(selected_metric_label)
+            & trajectory_predictions_raw["complete"]
+            & trajectory_predictions_raw["method"].astype(str).str.startswith("curve_")
+        ].copy()
+        if curve_predictions.empty:
+            best_curve_by_scale_prefix = pd.DataFrame()
+        else:
+            curve_predictions["prefix_percent"] = (100 * curve_predictions["prefix"]).round().astype(int)
+            curve_predictions = curve_predictions[curve_predictions["prefix_percent"].mod(5).eq(0)]
+            scale_mae = (
+                curve_predictions.groupby(["scale", "prefix_percent", "method"], observed=True)
+                .agg(n=("abs_error", "size"), mean_abs_error=("abs_error", "mean"))
+                .reset_index()
+            )
+            best_curve_by_scale_prefix = (
+                scale_mae.sort_values(["scale", "prefix_percent", "mean_abs_error"])
+                .drop_duplicates(["scale", "prefix_percent"], keep="first")
+                .copy()
+            )
+            best_curve_by_scale_prefix["scale"] = pd.Categorical(
+                best_curve_by_scale_prefix["scale"], categories=scale_order, ordered=True
+            )
+            best_curve_by_scale_prefix["label"] = best_curve_by_scale_prefix.apply(
+                lambda row: f"{method_label(row['method'])}<br>{row['mean_abs_error']:.4f}",
+                axis=1,
+            )
+            best_curve_by_scale_prefix = best_curve_by_scale_prefix.sort_values(["prefix_percent", "scale"])
+    return (best_curve_by_scale_prefix,)
+
+
+@app.cell
+def _(best_curve_by_scale_prefix, go, np, scale_order, selected_metric_label):
+    if best_curve_by_scale_prefix.empty:
+        best_curve_heatmap = go.Figure()
+        best_curve_heatmap.add_annotation(text="No parametric curve predictions for this metric.", showarrow=False)
+    else:
+        _prefix_values = sorted(best_curve_by_scale_prefix["prefix_percent"].unique())
+        _z = []
+        _text = []
+        _customdata = []
+        for _prefix in _prefix_values:
+            _row_z = []
+            _row_text = []
+            _row_custom = []
+            _prefix_df = best_curve_by_scale_prefix[best_curve_by_scale_prefix["prefix_percent"].eq(_prefix)]
+            for _scale in scale_order:
+                _cell = _prefix_df[_prefix_df["scale"].astype(str).eq(_scale)]
+                if _cell.empty:
+                    _row_z.append(np.nan)
+                    _row_text.append("")
+                    _row_custom.append(["", np.nan, 0])
+                else:
+                    _record = _cell.iloc[0]
+                    _row_z.append(_record["mean_abs_error"])
+                    _row_text.append(_record["label"])
+                    _row_custom.append([_record["method"], _record["mean_abs_error"], _record["n"]])
+            _z.append(_row_z)
+            _text.append(_row_text)
+            _customdata.append(_row_custom)
+        best_curve_heatmap = go.Figure(
+            data=go.Heatmap(
+                z=_z,
+                x=scale_order,
+                y=[f"{_prefix}%" for _prefix in _prefix_values],
+                text=_text,
+                customdata=_customdata,
+                texttemplate="%{text}",
+                colorscale="Viridis",
+                colorbar={"title": "MAE"},
+                hovertemplate=(
+                    "scale=%{x}<br>prefix=%{y}<br>"
+                    "method=%{customdata[0]}<br>"
+                    "MAE=%{customdata[1]:.5f}<br>"
+                    "n=%{customdata[2]}<extra></extra>"
+                ),
+            )
+        )
+        best_curve_heatmap.update_layout(
+            height=980,
+            title=f"Best parametric final-loss predictor by scale/prefix: {selected_metric_label}",
+            xaxis_title="isoflop scale",
+            yaxis_title="prefix",
+            margin={"l": 70, "r": 30, "t": 80, "b": 50},
+        )
+    best_curve_heatmap  # noqa: B018
+    return
+
+
+@app.cell
+def _(best_curve_by_scale_prefix, method_label, pd, scale_order):
+    if best_curve_by_scale_prefix.empty:
+        best_curve_table = pd.DataFrame()
+    else:
+        table = best_curve_by_scale_prefix.copy()
+        table["cell"] = table.apply(
+            lambda row: f"{method_label(row['method'])} ({row['mean_abs_error']:.4f})",
+            axis=1,
+        )
+        best_curve_table = (
+            table.pivot(index="prefix_percent", columns="scale", values="cell")
+            .reindex(columns=scale_order)
+            .reset_index()
+            .rename(columns={"prefix_percent": "prefix_pct"})
+        )
+    best_curve_table  # noqa: B018
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+    ## Configs Meeting Target MAE
+
+    Pick a final-loss MAE target. The tables below find the cheapest
+    functional-form configs that satisfy it, where "cheapest" means smallest
+    prefix.
+    """
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    target_mae_slider = mo.ui.slider(
+        steps=[0.005, 0.01, 0.02, 0.05, 0.10],
+        value=0.02,
+        label="target MAE",
+        show_value=True,
+    )
+    target_mae_slider  # noqa: B018
+    return (target_mae_slider,)
+
+
+@app.cell
+def _(
+    method_label,
+    pd,
+    selected_metric_label,
+    target_mae_slider,
+    trajectory_predictions_raw,
+):
+    if trajectory_predictions_raw.empty:
+        target_mae_scale_configs = pd.DataFrame()
+        target_mae_overall_configs = pd.DataFrame()
+    else:
+        target_mae_predictions = trajectory_predictions_raw[
+            trajectory_predictions_raw["metric_label"].eq(selected_metric_label)
+            & trajectory_predictions_raw["complete"]
+            & trajectory_predictions_raw["method"].astype(str).str.startswith("curve_")
+        ].copy()
+        if target_mae_predictions.empty:
+            target_mae_scale_configs = pd.DataFrame()
+            target_mae_overall_configs = pd.DataFrame()
+        else:
+            target_mae_predictions["prefix_percent"] = (100 * target_mae_predictions["prefix"]).round().astype(int)
+            expected_overall_runs = target_mae_predictions["run_id"].nunique()
+            expected_scale_runs = target_mae_predictions.groupby("scale", observed=True)["run_id"].nunique()
+            config_mae = (
+                target_mae_predictions.groupby(["scale", "prefix_percent", "method"], observed=True)
+                .agg(
+                    run_count=("run_id", "nunique"),
+                    mean_abs_error=("abs_error", "mean"),
+                    max_abs_error=("abs_error", "max"),
+                )
+                .reset_index()
+            )
+            config_mae["expected_run_count"] = config_mae["scale"].map(expected_scale_runs)
+            qualifying = config_mae[
+                config_mae["run_count"].eq(config_mae["expected_run_count"])
+                & config_mae["max_abs_error"].le(target_mae_slider.value)
+            ].copy()
+            if qualifying.empty:
+                target_mae_scale_configs = pd.DataFrame()
+            else:
+                qualifying["method_label"] = qualifying["method"].map(method_label)
+                target_mae_scale_configs = (
+                    qualifying.sort_values(["scale", "prefix_percent", "max_abs_error", "mean_abs_error"])
+                    .groupby("scale", observed=True)
+                    .head(5)
+                    .sort_values(["scale", "prefix_percent", "max_abs_error", "mean_abs_error"])
+                )
+                target_mae_scale_configs = target_mae_scale_configs[
+                    ["scale", "prefix_percent", "method_label", "max_abs_error", "mean_abs_error"]
+                ].copy()
+                target_mae_scale_configs["max_abs_error"] = target_mae_scale_configs["max_abs_error"].round(5)
+                target_mae_scale_configs["mean_abs_error"] = target_mae_scale_configs["mean_abs_error"].round(5)
+
+            overall_mae = (
+                target_mae_predictions.groupby(["prefix_percent", "method"], observed=True)
+                .agg(
+                    run_count=("run_id", "nunique"),
+                    mean_abs_error=("abs_error", "mean"),
+                    max_abs_error=("abs_error", "max"),
+                )
+                .reset_index()
+            )
+            overall_qualifying = overall_mae[
+                overall_mae["run_count"].eq(expected_overall_runs)
+                & overall_mae["max_abs_error"].le(target_mae_slider.value)
+            ].copy()
+            if overall_qualifying.empty:
+                target_mae_overall_configs = pd.DataFrame()
+            else:
+                overall_qualifying["method_label"] = overall_qualifying["method"].map(method_label)
+                target_mae_overall_configs = (
+                    overall_qualifying.sort_values(["prefix_percent", "max_abs_error", "mean_abs_error"])
+                    .head(12)[["prefix_percent", "method_label", "max_abs_error", "mean_abs_error"]]
+                    .copy()
+                )
+                target_mae_overall_configs["max_abs_error"] = target_mae_overall_configs["max_abs_error"].round(5)
+                target_mae_overall_configs["mean_abs_error"] = target_mae_overall_configs["mean_abs_error"].round(5)
+    return target_mae_overall_configs, target_mae_scale_configs
+
+
+@app.cell
+def _(mo, selected_metric_label, target_mae_slider):
+    mo.md(
+        f"""
+    **Overall configs that satisfy every completed run** for
+    `{selected_metric_label}` at max absolute error <=
+    `{target_mae_slider.value}`.
+    """
+    )
+    return
+
+
+@app.cell
+def _(mo, target_mae_overall_configs):
+    if target_mae_overall_configs.empty:
+        target_mae_overall_view = mo.md("_No config satisfies this target for every completed run._")
+    else:
+        target_mae_overall_view = mo.md(target_mae_overall_configs.to_markdown(index=False))
+    target_mae_overall_view  # noqa: B018
+    return
+
+
+@app.cell
+def _(mo, selected_metric_label, target_mae_slider):
+    mo.md(
+        f"""
+    **Per-scale configs that satisfy every completed run in that scale** for
+    `{selected_metric_label}` at max absolute error <=
+    `{target_mae_slider.value}`.
+    """
+    )
+    return
+
+
+@app.cell
+def _(mo, target_mae_scale_configs):
+    if target_mae_scale_configs.empty:
+        target_mae_scale_view = mo.md("_No per-scale config satisfies this target._")
+    else:
+        target_mae_scale_view = mo.md(target_mae_scale_configs.to_markdown(index=False))
+    target_mae_scale_view  # noqa: B018
     return
 
 
