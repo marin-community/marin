@@ -210,6 +210,13 @@ def classify_llm_quality_step(
         "k": K,
         "threshold": THRESHOLD,
         "score_target_label": SCORE_TARGET_LABEL,
+        # Bumped after fixing the fasttext-wheel 0.9.2 batch-predict quirk
+        # (commit 9beb82582). Pre-fix cache slots produced ``score >= 0.5``
+        # for every record because ``model.predict(list, k=-1)`` duplicated
+        # the top-label prob across both labels; the per-text predict path
+        # now yields proper softmax. Force a fresh cache slot so re-runs
+        # don't pick up the broken outputs.
+        "predict_mode": "per_text",
     }
     resources = worker_resources or WORKER_RESOURCES
     workers = max_workers if max_workers is not None else PER_SOURCE_MAX_WORKERS
