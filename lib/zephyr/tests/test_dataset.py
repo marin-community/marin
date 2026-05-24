@@ -1330,44 +1330,10 @@ def test_reshard_integration(integration_ctx):
     assert sorted(result) == list(range(10))
 
 
-def test_sorted_merge_join_inner_basic_integration(integration_ctx):
-    left = Dataset.from_list(
-        [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}]
-    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
-    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 2, "score": 0.3}]).group_by(
-        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
-    )
-
-    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
-
-    results = sorted(integration_ctx.execute(joined).results, key=lambda x: x["id"])
-    assert len(results) == 2
-    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
-    assert results[1] == {"id": 2, "text": "world", "score": 0.3}
-
-
-def test_sorted_merge_join_left_integration(integration_ctx):
-    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
-        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
-    )
-    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
-        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
-    )
-
-    joined = left.sorted_merge_join(
-        right,
-        left_key=lambda x: x["id"],
-        right_key=lambda x: x["id"],
-        combiner=lambda left, right: {**left, "score": right["score"] if right else 0.0},
-        how="left",
-    )
-
-    results = sorted(integration_ctx.execute(joined).results, key=lambda x: x["id"])
-    assert len(results) == 2
-    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
-    assert results[1] == {"id": 2, "text": "world", "score": 0.0}
-
-
+# Inner- and left-join correctness is covered by the local unit tests
+# test_sorted_merge_join_inner_basic / test_sorted_merge_join_left, and the
+# join-on-iris backend path is covered by test_chunk_storage_with_join, so no
+# per-operation iris integration cell is needed for those cases.
 @pytest.mark.slow
 def test_sorted_merge_join_after_group_by_integration(integration_ctx):
     docs = Dataset.from_list(
