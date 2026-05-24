@@ -10,6 +10,8 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
+GREEDY_SAMPLING_ONLY_FIELDS: tuple[str, ...] = ("top_k", "top_p", "min_p", "seed")
+
 
 class DecodingStrategy(StrEnum):
     """High-level decoding strategies used by RL rollouts."""
@@ -66,6 +68,19 @@ class DecodingConfig:
             raise ValueError("top_k must be positive when set")
         if self.stop_strings is not None and self.stop_token_ids is not None:
             raise ValueError("Specify at most one of stop_strings or stop_token_ids")
+        if self.strategy == DecodingStrategy.GREEDY:
+            greedy_invalid_fields: list[str] = []
+            if self.temperature != 0.0:
+                greedy_invalid_fields.append("temperature")
+            greedy_invalid_fields.extend(
+                field_name for field_name in GREEDY_SAMPLING_ONLY_FIELDS if getattr(self, field_name) is not None
+            )
+            if greedy_invalid_fields:
+                invalid_fields = ", ".join(greedy_invalid_fields)
+                raise ValueError(
+                    "Greedy decoding requires temperature=0.0 and does not support sampling-only fields: "
+                    f"{invalid_fields}"
+                )
 
     def with_temperature(self, temperature: float) -> "DecodingConfig":
         """Return a copy with a different temperature."""

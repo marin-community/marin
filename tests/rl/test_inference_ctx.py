@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 from levanter.inference.openai import ChatMessage
-from marin.rl.decoding import DecodingConfig, DecodingStrategy
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import (
     MODEL_MAPPINGS,
     MODEL_TRANSPOSE_KEYS,
@@ -449,7 +449,6 @@ def test_vllm_sampling_params_maps_shared_decoding_fields(monkeypatch):
         prompts=["hello"],
         n=2,
         decoding=DecodingConfig(
-            strategy=DecodingStrategy.GREEDY,
             temperature=0.7,
             top_k=8,
             top_p=0.91,
@@ -468,7 +467,7 @@ def test_vllm_sampling_params_maps_shared_decoding_fields(monkeypatch):
     assert result == []
     assert [prompt.prompt_token_ids for prompt in calls["prompts"]] == [[1, 2, 3]]
     assert calls["kwargs"] == {
-        "temperature": 0.0,
+        "temperature": 0.7,
         "n": 2,
         "max_tokens": 64,
         "logprobs": 1,
