@@ -3,6 +3,8 @@
 
 """Test training batch creation utilities."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from marin.rl import train_batch
@@ -236,6 +238,7 @@ def test_rollout_to_trajectory_record_preserves_trace_and_verifier_metadata():
     rollout = create_test_rollout(metadata=metadata, correctness_reward=0.75)
 
     record = train_batch.rollout_to_trajectory_record(rollout)
+    roundtripped = train_batch.trajectory_record_to_rollout(record)
 
     assert record.trace_id == "trace-9"
     assert record.group_id == "group-3"
@@ -247,6 +250,10 @@ def test_rollout_to_trajectory_record_preserves_trace_and_verifier_metadata():
     assert record.trace_ref == "gs://trace.json"
     assert record.rollout_metadata.run_id == "run-1"
     assert record.correctness_reward == 0.75
+    assert roundtripped.metadata == metadata
+    assert roundtripped.correctness_reward == 0.75
+    np.testing.assert_array_equal(roundtripped.prompt_tokens, rollout.prompt_tokens)
+    np.testing.assert_array_equal(roundtripped.response_tokens, rollout.response_tokens)
 
 
 def test_create_sequence_batch_from_rollouts_produces_neutral_masks_and_info():
@@ -352,7 +359,13 @@ def test_rollout_group_to_trajectory_group_record_uses_group_metadata():
         trace_ref="trace://shared",
     )
     rollout_a = create_test_rollout(prompt_len=3, response_len=2, unique_id=88, metadata=metadata)
-    rollout_b = create_test_rollout(prompt_len=3, response_len=2, unique_id=88, metadata=metadata)
+    rollout_b_metadata = replace(
+        metadata,
+        trace_id="trace-shared-b",
+        verifier_version="v3",
+        trace_ref="trace://shared-b",
+    )
+    rollout_b = create_test_rollout(prompt_len=3, response_len=2, unique_id=88, metadata=rollout_b_metadata)
     group = RolloutGroup(
         rollouts=[rollout_a, rollout_b],
         metadata=RolloutGroupMetadata(
@@ -378,6 +391,9 @@ def test_rollout_group_to_trajectory_group_record_uses_group_metadata():
     assert record.verifier_version == "v2"
     assert record.trace_ref == "trace://override"
     assert len(record.trajectories) == 2
+    assert [trajectory.trace_id for trajectory in record.trajectories] == ["trace-shared", "trace-shared-b"]
+    assert [trajectory.trace_ref for trajectory in record.trajectories] == ["trace://shared", "trace://shared-b"]
+    assert {trajectory.group_id for trajectory in record.trajectories} == {"group-shared"}
 
 
 def test_rollout_group_to_trajectory_group_record_rejects_mismatched_prompts():

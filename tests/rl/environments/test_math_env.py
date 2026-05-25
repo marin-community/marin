@@ -106,4 +106,14 @@ def test_math_env_reward_calculation(gpt2_tokenizer):
     assert sample.identity.task_name == "math"
     assert sample.identity.verifier_name == "math.tinker_grader"
     assert len(sample.traces) == 1
-    assert sample.traces[0].env_example_id == rollout.env_example_id
+    trace = sample.traces[0]
+    assert trace.env_name == rollout.env_name
+    assert trace.env_example_id == rollout.env_example_id
+    assert "What is 2+2?" in trace.prompt
+    assert trace.task_name == sample.identity.task_name
+    assert trace.verifier_name == sample.identity.verifier_name
+    assert len(trace.responses) == 1
+    assert trace.responses[0].response_text == "\\boxed{4}"
+    assert trace.responses[0].reward == pytest.approx(rollout.episode_reward)
+    assert trace.responses[0].correctness_reward == pytest.approx(1.0)
+    assert trace.responses[0].metadata["format_score"] == pytest.approx(1.0)

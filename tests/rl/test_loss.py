@@ -397,6 +397,8 @@ def test_rloo_loss_policy_entropy_uses_student_entropy_with_reference_kl():
     assert loss == pytest.approx(-1.0)
     assert metrics["current_policy_entropy"].value() == pytest.approx(0.5)
     assert metrics["kl_loss"].value() == pytest.approx(0.0)
+    assert metrics["scoring/student_pass_count"].value() == pytest.approx(1.0)
+    assert metrics["scoring/reference_pass_count"].value() == pytest.approx(1.0)
 
 
 def test_rloo_loss_rejects_missing_policy_entropy_when_metric_enabled():

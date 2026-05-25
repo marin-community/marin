@@ -68,6 +68,7 @@ def create_test_rollout_group(key: str, n_rollouts: int, start_idx: int = 0) -> 
             task_version="v1",
             verifier_name="test_verifier",
             verifier_version="v1",
+            trace_ref=f"trace://{key}",
         ),
     )
 
@@ -82,6 +83,10 @@ def create_test_rollout_batch(idx: int, n_groups: int = 2, rollouts_per_group: i
 
     metadata = RolloutMetadata(worker_id=f"worker_{idx}", timestamp=time.time(), weight_step=0)
     return RolloutBatch(groups=groups, metadata=metadata)
+
+
+def assert_group_metadata_round_trips(read_back: RolloutGroup, original: RolloutGroup) -> None:
+    assert read_back.metadata == original.metadata
 
 
 @pytest.fixture(params=["memory", "file"])
@@ -115,10 +120,11 @@ def test_storage_operations(storage_config):
     assert len(read_batches) == 3
 
     # Verify content
-    for original, read_back in zip(test_batches, read_batches, strict=False):
+    for original, read_back in zip(test_batches, read_batches, strict=True):
         assert len(read_back.groups) == len(original.groups)
         assert read_back.metadata.worker_id == original.metadata.worker_id
-        assert read_back.groups[0].metadata.group_id == original.groups[0].metadata.group_id
+        for read_group, original_group in zip(read_back.groups, original.groups, strict=True):
+            assert_group_metadata_round_trips(read_group, original_group)
 
         # Check first rollout of first group
         orig_rollout = original.groups[0].rollouts[0]
@@ -174,4 +180,5 @@ def test_large_rollout_batch():
     assert read_batch is not None
     assert len(read_batch.groups) == 10
     assert len(read_batch.groups[0].rollouts) == 20
-    assert read_batch.groups[0].metadata.group_id == batch.groups[0].metadata.group_id
+    for read_group, original_group in zip(read_batch.groups, batch.groups, strict=True):
+        assert_group_metadata_round_trips(read_group, original_group)

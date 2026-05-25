@@ -59,9 +59,11 @@ def inference_ctx(tokenizer):
             self.tokenizer = tokenizer
             self._stop_tokens = None
             self.max_tokens = 1024
+            self.openai_client_calls = 0
 
         def openai_client(self):
             """Return a mock AsyncOpenAI client that returns proper ChatCompletion objects."""
+            self.openai_client_calls += 1
             mock_client = AsyncMock()
             # Configure the mock to return a proper ChatCompletion
             mock_client.chat.completions.create = AsyncMock(return_value=create_mock_chat_completion())
@@ -119,7 +121,17 @@ def test_prime_intellect_env_sample(tokenizer, inference_ctx, vf_env):
     assert "primeintellect/gsm8k.total_rollouts" in metrics
     assert sample.identity.task_name == "prime_intellect:primeintellect/gsm8k"
     assert sample.identity.verifier_name == "verifiers:primeintellect/gsm8k"
-    assert len(sample.traces) == 2
+    assert len(sample.traces) == len(rollout_groups)
+    for trace, group in zip(sample.traces, rollout_groups, strict=True):
+        assert trace.env_name == group.rollouts[0].env_name
+        assert trace.env_example_id == group.rollouts[0].env_example_id
+        assert trace.task_name == sample.identity.task_name
+        assert trace.verifier_name == sample.identity.verifier_name
+        assert len(trace.responses) == len(group.rollouts)
+        np.testing.assert_allclose(
+            [response.reward for response in trace.responses],
+            [rollout.episode_reward for rollout in group.rollouts],
+        )
 
 
 def test_prime_intellect_env_openai_client_called(tokenizer, inference_ctx, vf_env):
@@ -136,8 +148,11 @@ def test_prime_intellect_env_openai_client_called(tokenizer, inference_ctx, vf_e
             prng_key=prng_key,
         )
 
-    # Verify we got rollout groups (which means generate() was called successfully)
-    assert len(sample.rollout_groups) >= 0
+    assert inference_ctx.openai_client_calls == 1
+    assert len(sample.rollout_groups) == 1
+    assert len(sample.rollout_groups[0].rollouts) == 1
+    assert len(sample.traces) == 1
+    assert sample.traces[0].responses[0].reward == pytest.approx(sample.rollout_groups[0].rollouts[0].episode_reward)
 
 
 def test_prime_intellect_env_records_resolved_decoding_trace(tokenizer, inference_ctx, vf_env):
