@@ -356,71 +356,12 @@ def _init_state_for_leaf(param, B: int, init_factor: float) -> tuple[_LeafMeta, 
 # ---------------------------------------------------------------------------
 
 
-def _flipped_eigh(matrix):
-    """Descending-eigenvector eigh via per-chip shard_map.
-
-    Used in the init branch to set ``Q`` from the first gradient's Gram.
-    Each chip runs eigh independently on its local slice of the leading
-    axes — no all-gather, no replicated work.
-    """
-    return _shardmap_eigh_flipped(matrix)
-
-
 def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
-def _shardmap_eigh_flipped(x: jnp.ndarray) -> jnp.ndarray:
-    """Run flipped-eigh on ``x`` per-chip via shard_map. No cross-chip comm.
-
-    Each chip independently executes ``jnp.linalg.eigh`` on its local slice
-    of the leading axes. eigh broadcasts over leading axes naturally; with
-    sharding handled at the shard_map boundary, no replication or
-    all-gather happens. Replaces the reshard-to-replicated pattern that was
-    19x slower in MFU than the original full-replicate baseline.
-
-    Input/output sharding is preserved unchanged.
-    """
-    s = None
-    if hasattr(x, "aval") and hasattr(x.aval, "sharding"):
-        s = x.aval.sharding
-    if not isinstance(s, NamedSharding) or s.mesh is None or s.mesh.empty:
-        sym = 0.5 * (x + jnp.swapaxes(x, -1, -2))
-        _, q = jnp.linalg.eigh(sym)
-        return q[..., :, ::-1]
-
-    spec = s.spec
-    mesh = s.mesh
-
-    def _local(m):
-        sym = 0.5 * (m + jnp.swapaxes(m, -1, -2))
-        _, q = jnp.linalg.eigh(sym)
-        return q[..., :, ::-1]
-
-    return shard_map(_local, mesh=mesh, in_specs=spec, out_specs=spec, check_rep=False)(x)
-
-
-def _shardmap_qr(x: jnp.ndarray) -> jnp.ndarray:
-    """Run QR on ``x`` per-chip via shard_map; return only Q. No cross-chip comm."""
-    s = None
-    if hasattr(x, "aval") and hasattr(x.aval, "sharding"):
-        s = x.aval.sharding
-    if not isinstance(s, NamedSharding) or s.mesh is None or s.mesh.empty:
-        q, _ = jnp.linalg.qr(x)
-        return q
-
-    spec = s.spec
-    mesh = s.mesh
-
-    def _local(m):
-        q, _ = jnp.linalg.qr(m)
-        return q
-
-    return shard_map(_local, mesh=mesh, in_specs=spec, out_specs=spec, check_rep=False)(x)
-
-
-def _klsoaph_step_blocked(
-    grad_blocks: jnp.ndarray,
+def _klsoaph_step_local(
+    g32_in: jnp.ndarray,
     exp_avg: jnp.ndarray,
     exp_avg_sq: jnp.ndarray,
     gg_l: jnp.ndarray,
@@ -437,117 +378,89 @@ def _klsoaph_step_blocked(
     precond_freq: int,
     init_factor: float,
     block_size: int,
-    block_sharding: NamedSharding | None,
 ):
-    """One per-block SOAP step.
+    """Single-chip body of the per-block SOAP step.
 
-    All inputs are block-form ``(*leading, R, C, B, B)`` with the same
-    sharding (the (R, C) axes carry the parameter's sharding, the trailing
-    (B, B) axes are replicated). Operations contract only on the trailing
-    (B, B) axes, so they are local to each chip — no cross-shard
-    communication is introduced.
-
-    ``block_sharding`` carries the explicit (R, C, B, B) sharding so we can
-    pass ``out_sharding`` to every einsum and avoid JAX's auto-inference
-    ever picking a contracted-on-model layout for the output.
+    Assumes all inputs are already per-chip slices (no cross-chip
+    communication needed). Plain ``jnp.einsum`` / ``jnp.linalg.eigh`` /
+    ``jnp.linalg.qr`` — no ``out_sharding=`` hints, no per-linalg
+    ``shard_map`` wrappers. Called inside one outer ``shard_map`` so XLA
+    can fuse einsums + eigh + qr in one local kernel pipeline.
     """
     B = block_size
     inner_rows = B
     inner_cols = B
-    g32 = grad_blocks.astype(jnp.float32)
-    out_sh = block_sharding  # alias for brevity
+    g32 = g32_in.astype(jnp.float32)
 
-    def _ein(spec_str, *ops):
-        return jnp.einsum(spec_str, *ops, out_sharding=out_sh)
+    def _flip(m):
+        sym = 0.5 * (m + jnp.swapaxes(m, -1, -2))
+        _, q = jnp.linalg.eigh(sym)
+        return q[..., :, ::-1]
 
-    # We avoid jax.lax.cond entirely. The cond lowering broadcasts the scalar
-    # predicate to match each case's shape AND assigns it the default replicated
-    # sharding; when the cases have a non-trivial spec (e.g. P('data', None,
-    # None, None) for sharded blocks of a 2-D weight) the lowered select fails
-    # with `which` and `cases` having different shardings. The fix is to do
-    # cond as an arithmetic blend with a scalar weight: `w * a + (1 - w) * b`
-    # — the scalar broadcasts cleanly to any sharding, and we never go through
-    # JAX's per-axis select reconciliation.
-
-    # --- init branch outputs (upstream KLSOAPH: GG from first gradient, Q from
-    # flipped-eigh of GG, esi at init_factor**-0.5). eigh runs replicated. ---
-    init_gg_l = _symmetrize(_ein("...ik,...jk->...ij", g32, g32) / inner_cols)
-    init_gg_r = _symmetrize(_ein("...ki,...kj->...ij", g32, g32) / inner_rows)
-    init_q_l = _flipped_eigh(init_gg_l)
-    init_q_r = _flipped_eigh(init_gg_r)
+    # init branch (upstream KLSOAPH: GG from first gradient, Q from flipped-eigh)
+    init_gg_l = _symmetrize(jnp.einsum("...ik,...jk->...ij", g32, g32) / inner_cols)
+    init_gg_r = _symmetrize(jnp.einsum("...ki,...kj->...ij", g32, g32) / inner_rows)
+    init_q_l = _flip(init_gg_l)
+    init_q_r = _flip(init_gg_r)
     init_esi_l = jnp.full_like(esi_l, init_factor**-0.5)
     init_esi_r = jnp.full_like(esi_r, init_factor**-0.5)
     init_dir = jnp.zeros_like(g32)
     init_exp_avg = jnp.zeros_like(exp_avg)
     init_exp_avg_sq = jnp.zeros_like(exp_avg_sq)
 
-    # --- normal branch outputs ---
-    # 1. Project gradient via current Q.
-    g_qr = _ein("...ij,...jk->...ik", g32, q_r)
-    g_proj = _ein("...ki,...kj->...ij", q_l, g_qr)
-
-    # 2. Adam in projected basis.
+    # normal branch: project, Adam-in-projected-basis, direction.
+    g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r)
+    g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr)
     nb_exp_avg = beta1 * exp_avg + (1.0 - beta1) * g_proj
     nb_exp_avg_sq = beta2 * exp_avg_sq + (1.0 - beta2) * g_proj * g_proj
     precond_proj = nb_exp_avg / (jnp.sqrt(nb_exp_avg_sq) + eps)
+    p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r)
+    nb_direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt)
 
-    # 3. Direction.
-    p_qrt = _ein("...ij,...kj->...ik", precond_proj, q_r)
-    nb_direction = _ein("...ij,...jk->...ik", q_l, p_qrt)
-
-    # 4. Whitened Gram update.
+    # whitened Gram update
     g_qr_white = g_qr * esi_r[..., None, :]
-    left_target = _ein("...ik,...jk->...ij", g_qr_white, g_qr_white) / inner_cols
-    qlT_g = _ein("...ki,...kj->...ij", q_l, g32)
+    left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white) / inner_cols
+    qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32)
     qlT_g_white = qlT_g * esi_l[..., :, None]
-    right_target = _ein("...ki,...kj->...ij", qlT_g_white, qlT_g_white) / inner_rows
+    right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white) / inner_rows
     nb_gg_l = _symmetrize(shampoo_beta * gg_l + (1.0 - shampoo_beta) * left_target)
     nb_gg_r = _symmetrize(shampoo_beta * gg_r + (1.0 - shampoo_beta) * right_target)
 
-    # 5. ESI update.
+    # ESI update (inside shard_map → plain ops are safe)
     proj_col_white = g_proj * esi_r[..., None, :]
     left_diag = jnp.mean(proj_col_white * proj_col_white, axis=-1)
     proj_row_white = g_proj * esi_l[..., :, None]
     right_diag = jnp.mean(proj_row_white * proj_row_white, axis=-2)
 
     def _update_esi(esi, diag):
-        # All sharding-safe arithmetic — no select/where/maximum/minimum/nan_to_num
-        # since those broadcast scalar args to a fully-replicated tensor and then
-        # try to combine with the (sharded) case, which fails under explicit mesh.
         old_eigen = jnp.reciprocal(jnp.square(esi))
-        old_eigen = old_eigen * jnp.isfinite(old_eigen).astype(old_eigen.dtype)
+        old_eigen = jnp.nan_to_num(old_eigen, nan=0.0, posinf=0.0, neginf=0.0)
         eigen = shampoo_beta * old_eigen + (1.0 - shampoo_beta) * diag
-        # max(eigen, 1e-30): (x + eps + |x - eps|) / 2. Pure arithmetic.
-        eigen_clamped = 0.5 * (eigen + 1e-30 + jnp.abs(eigen - 1e-30))
-        inv_sqrt = jax.lax.rsqrt(eigen_clamped)
-        # min(inv_sqrt, 4000.0): (x + cap - |x - cap|) / 2. Pure arithmetic.
-        inv_sqrt_capped = 0.5 * (inv_sqrt + 4000.0 - jnp.abs(inv_sqrt - 4000.0))
-        return inv_sqrt_capped * jnp.isfinite(inv_sqrt_capped).astype(inv_sqrt_capped.dtype)
+        eigen = jnp.maximum(eigen, 1e-30)
+        inv_sqrt = jax.lax.rsqrt(eigen)
+        inv_sqrt = jnp.minimum(inv_sqrt, 4000.0)
+        inv_sqrt = jnp.nan_to_num(inv_sqrt, nan=0.0, posinf=0.0, neginf=0.0)
+        return inv_sqrt
 
     nb_esi_l = _update_esi(esi_l, left_diag)
     nb_esi_r = _update_esi(esi_r, right_diag)
 
-    # 6. Warm-started QR refresh; blended via scalar weight.
-    # QR runs per-chip via shard_map (no all-gather).
-    ea_qrT = _ein("...ij,...kj->...ik", nb_exp_avg, q_r)
-    ea_original = _ein("...ij,...jk->...ik", q_l, ea_qrT)
-    gg_l_q = _ein("...ij,...jk->...ik", nb_gg_l, q_l)
-    gg_r_q = _ein("...ij,...jk->...ik", nb_gg_r, q_r)
-    ql_refresh = _shardmap_qr(gg_l_q)
-    qr_refresh = _shardmap_qr(gg_r_q)
-    ea_qr_new = _ein("...ij,...jk->...ik", ea_original, qr_refresh)
-    ea_refresh = _ein("...ki,...kj->...ij", ql_refresh, ea_qr_new)
+    # warm-started QR refresh
+    ea_qrT = jnp.einsum("...ij,...kj->...ik", nb_exp_avg, q_r)
+    ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT)
+    gg_l_q = jnp.einsum("...ij,...jk->...ik", nb_gg_l, q_l)
+    gg_r_q = jnp.einsum("...ij,...jk->...ik", nb_gg_r, q_r)
+    ql_refresh, _ = jnp.linalg.qr(gg_l_q)
+    qr_refresh, _ = jnp.linalg.qr(gg_r_q)
+    ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_refresh)
+    ea_refresh = jnp.einsum("...ki,...kj->...ij", ql_refresh, ea_qr_new)
 
-    # Blend refresh-vs-keep by scalar `should_refresh`. For precond_freq=1 this
-    # weight is always 1.0 (the keep branch contributes 0). For precond_freq>1
-    # we pay the refresh compute every step but only commit it every freq-th.
     should_refresh = jnp.equal(jnp.remainder(step, precond_freq), 0)
     wr = should_refresh.astype(jnp.float32)
     nb_q_l = wr * ql_refresh + (1.0 - wr) * q_l
     nb_q_r = wr * qr_refresh + (1.0 - wr) * q_r
     nb_exp_avg_out = wr * ea_refresh + (1.0 - wr) * nb_exp_avg
 
-    # --- Blend init-vs-normal by scalar `is_first`. ---
     is_first = jnp.equal(step, 1)
     wi = is_first.astype(jnp.float32)
 
@@ -572,6 +485,113 @@ def _klsoaph_step_blocked(
         new_esi_l,
         new_esi_r,
     )
+
+
+def _klsoaph_step_blocked(
+    grad_blocks: jnp.ndarray,
+    exp_avg: jnp.ndarray,
+    exp_avg_sq: jnp.ndarray,
+    gg_l: jnp.ndarray,
+    gg_r: jnp.ndarray,
+    q_l: jnp.ndarray,
+    q_r: jnp.ndarray,
+    esi_l: jnp.ndarray,
+    esi_r: jnp.ndarray,
+    step: jnp.ndarray,
+    beta1: float,
+    beta2: float,
+    shampoo_beta: float,
+    eps: float,
+    precond_freq: int,
+    init_factor: float,
+    block_size: int,
+    mesh,
+    block_spec,
+    esi_spec,
+):
+    """One per-leaf SOAP step wrapped in a single outer ``shard_map``.
+
+    State tensors are all block-form with the (R, C) axes carrying the
+    parameter's sharding and the trailing (B, B) (or (B,) for esi) axes
+    replicated. We dispatch the entire per-block step inside one
+    ``shard_map`` so XLA sees a single local pipeline (einsum + eigh +
+    qr fused per chip), instead of paying per-linalg shard_map dispatch
+    overhead. After step-1 (compile) the per-step cost should match a
+    plain per-chip JIT.
+    """
+    if mesh is None or mesh.empty:
+        return _klsoaph_step_local(
+            grad_blocks,
+            exp_avg,
+            exp_avg_sq,
+            gg_l,
+            gg_r,
+            q_l,
+            q_r,
+            esi_l,
+            esi_r,
+            step,
+            beta1=beta1,
+            beta2=beta2,
+            shampoo_beta=shampoo_beta,
+            eps=eps,
+            precond_freq=precond_freq,
+            init_factor=init_factor,
+            block_size=block_size,
+        )
+
+    def _local(g, ea, eas, ggl, ggr, ql, qr, esil, esir, st):
+        return _klsoaph_step_local(
+            g,
+            ea,
+            eas,
+            ggl,
+            ggr,
+            ql,
+            qr,
+            esil,
+            esir,
+            st,
+            beta1=beta1,
+            beta2=beta2,
+            shampoo_beta=shampoo_beta,
+            eps=eps,
+            precond_freq=precond_freq,
+            init_factor=init_factor,
+            block_size=block_size,
+        )
+
+    in_specs = (
+        block_spec,
+        block_spec,
+        block_spec,
+        block_spec,
+        block_spec,
+        block_spec,
+        block_spec,
+        esi_spec,
+        esi_spec,
+        P(),
+    )
+    out_specs = (
+        block_spec,
+        block_spec,
+        block_spec,
+        block_spec,
+        block_spec,
+        block_spec,
+        block_spec,
+        esi_spec,
+        esi_spec,
+    )
+
+    return shard_map(
+        _local,
+        mesh=mesh,
+        in_specs=in_specs,
+        out_specs=out_specs,
+        check_rep=False,
+    )(grad_blocks, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r, step)
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +696,9 @@ def scale_by_klsoaph(
             padded = _pad_to(grad, rows_p, cols_p)
             grad_blocks = _to_blocks(padded, B, spec, mesh)
             block_sharding = _block_state_sharding(spec, mesh)
+            esi_sharding = _block_esi_sharding(spec, mesh, side="l")
+            block_spec_ = block_sharding.spec if block_sharding is not None else None
+            esi_spec_ = esi_sharding.spec if esi_sharding is not None else None
 
             out = _klsoaph_step_blocked(
                 grad_blocks,
@@ -695,7 +718,9 @@ def scale_by_klsoaph(
                 precond_freq=precond_freq,
                 init_factor=init_factor,
                 block_size=B,
-                block_sharding=block_sharding,
+                mesh=mesh,
+                block_spec=block_spec_,
+                esi_spec=esi_spec_,
             )
             direction_padded = _from_blocks(out[0], padded_shape, B, spec, mesh)
             direction = _unpad_to(direction_padded, rows, cols).astype(grad.dtype)
