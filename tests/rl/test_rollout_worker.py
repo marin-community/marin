@@ -282,6 +282,73 @@ def test_sample_batch_attaches_trace_and_verifier_metadata():
     assert batch.groups[0].rollouts[0].metadata.verifier_name == "mock_env.reward"
 
 
+def test_sample_batch_generates_unique_fallback_group_ids_across_calls():
+    rollout = Rollout(
+        env_name="mock_env:cats",
+        env_example_id="example-1",
+        prompt_tokens=np.array([1, 2, 3], dtype=np.int32),
+        response_tokens=np.array([4, 5], dtype=np.int32),
+        response_logprobs=np.array([-0.1, -0.2], dtype=np.float32),
+        token_rewards=np.array([1.0, 1.0], dtype=np.float32),
+        episode_reward=1.0,
+        temperature=0.7,
+        top_k=5,
+        is_truncated=False,
+    )
+    sample = EnvironmentSample(
+        rollout_groups=[RolloutGroup(rollouts=[rollout])],
+        traces=[
+            EpisodeTrace(
+                env_name="mock_env:cats",
+                env_example_id="example-1",
+                prompt="prompt",
+                responses=(EpisodeResponseTrace(response_text="response", reward=1.0),),
+            )
+        ],
+        identity=EnvironmentIdentity(
+            task_name="mock_env:cats",
+            task_version="v1",
+            verifier_name="mock_env.reward",
+            verifier_version="v1",
+        ),
+    )
+
+    class _FakeEnv:
+        def sample(self, **_kwargs):
+            return sample
+
+    worker = object.__new__(RolloutWorker)
+    worker._load_environment = lambda _lesson_id: _FakeEnv()
+    worker._policy_ctx = object()
+    worker._current_weight_step = 42
+    worker.config = SimpleNamespace(
+        run_id="run-123",
+        system_prompt=None,
+        curriculum_config=SimpleNamespace(
+            lessons={
+                "lesson-a": SimpleNamespace(
+                    sampling_params=SimpleNamespace(
+                        temperature=0.7,
+                        top_k=5,
+                        stop_tokens=None,
+                        max_output_tokens=32,
+                    )
+                )
+            }
+        ),
+    )
+
+    first_batch, _ = worker._sample_batch("lesson-a", 1, 1, "train", rng=None)
+    second_batch, _ = worker._sample_batch("lesson-a", 1, 1, "train", rng=None)
+
+    assert first_batch is not None
+    assert second_batch is not None
+    assert first_batch.groups[0].metadata.group_id != second_batch.groups[0].metadata.group_id
+    assert first_batch.groups[0].metadata.trace_id != second_batch.groups[0].metadata.trace_id
+    assert first_batch.groups[0].rollouts[0].metadata.group_id == first_batch.groups[0].metadata.group_id
+    assert second_batch.groups[0].rollouts[0].metadata.group_id == second_batch.groups[0].metadata.group_id
+
+
 def test_stage_vllm_metadata_locally_copies_hf_metadata(tmp_path, monkeypatch):
     remote_dir = tmp_path / "remote-model"
     remote_dir.mkdir()

@@ -447,6 +447,7 @@ class RolloutWorker:
         self._current_train_step: int = -1
         self._last_transfer_counters = RolloutTransferCounterSnapshot()
         self._last_eval_train_step: int | None = None
+        self._sample_batch_index: int = 0
 
         self._tokenizer = config.tokenizer
 
@@ -554,6 +555,8 @@ class RolloutWorker:
         )
 
         # Attach metadata to each rollout in each group
+        sample_batch_index = getattr(self, "_sample_batch_index", 0)
+        self._sample_batch_index = sample_batch_index + 1
         rollout_groups_with_metadata = []
         for group_index, group in enumerate(rollout_groups):
             trace = sample.traces[group_index] if sample.traces else None
@@ -565,6 +568,7 @@ class RolloutWorker:
                     lesson_id,
                     self._current_weight_step,
                     batch_metadata.worker_id,
+                    sample_batch_index,
                     group_index,
                 )
             )
@@ -576,6 +580,7 @@ class RolloutWorker:
                     lesson_id,
                     self._current_weight_step,
                     batch_metadata.worker_id,
+                    sample_batch_index,
                     group_index,
                 )
             )

@@ -42,9 +42,10 @@ from marin.rl.objectives import ObjectiveRuntime, ObjectiveRuntimeConfig, Object
 from marin.rl.runtime import RLRuntimeHandles
 from marin.rl.weight_transfer import WeightTransferConfig
 
-from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader, StoredTrajectory
+from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
 from .rollout_storage import RolloutStorageConfig
 from .train_batch import create_sequence_batch_from_trajectories
+from .types import TrajectoryRecord
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,7 @@ class StreamingRolloutLoader:
 
         # Track batch preparation timing for RL throughput diagnostics.
         self._last_batch_prep_timing = BatchPrepTiming()
-        self._last_trajectories: list[StoredTrajectory] | None = None
+        self._last_trajectories: list[TrajectoryRecord] | None = None
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
@@ -212,27 +213,28 @@ class StreamingRolloutLoader:
 
         while True:
             fetch_start = time.time()
-            trajectories = self.data_loader.get_trajectories(timeout=self.timeout)
+            groups = self.data_loader.get_groups(timeout=self.timeout)
             fetch_time = time.time() - fetch_start
 
-            self._last_trajectories = trajectories
-
-            if not trajectories:
+            if not groups:
                 cumulative_wait += fetch_time
                 if cumulative_wait >= max_cumulative_wait:
                     raise TimeoutError(f"No rollouts received after {cumulative_wait:.0f}s total wait")
                 logger.warning(
-                    "No rollouts received from data loader within timeout (cumulative_wait=%.0fs), retrying...",
+                    "No full rollout groups received from data loader within timeout "
+                    "(cumulative_wait=%.0fs), retrying...",
                     cumulative_wait,
                 )
                 continue
 
             cumulative_wait = 0.0
+            trajectories = [trajectory for group in groups for trajectory in group.trajectories]
+            self._last_trajectories = trajectories
 
             # Measure batch creation time
             batch_start = time.time()
             sequence_batch, batch_info = create_sequence_batch_from_trajectories(
-                [trajectory.trajectory for trajectory in trajectories],
+                trajectories,
                 self.max_tokens,
                 self.pad_token_id,
                 self.pad_to_multiple,
@@ -249,11 +251,12 @@ class StreamingRolloutLoader:
             timing = BatchPrepTiming(fetch_time=fetch_time, batch_time=batch_time, shard_time=shard_time)
             self._last_batch_prep_timing = timing
             logger.info(
-                "Batch prep: fetch=%.3fs, create=%.3fs, shard=%.3fs, total=%.3fs, trajectories=%d",
+                "Batch prep: fetch=%.3fs, create=%.3fs, shard=%.3fs, total=%.3fs, groups=%d, trajectories=%d",
                 fetch_time,
                 batch_time,
                 shard_time,
                 timing.total_time,
+                len(groups),
                 len(trajectories),
             )
 
@@ -637,12 +640,11 @@ class TrainWorker:
         trainer.tracker.log(metrics, step=step)
         logger.info("Successfully transferred weights with ID %d (transfer_time=%.2fs)", step, transfer_time)
 
-    def _log_samples(self, trainer, step, trajectories: list[StoredTrajectory]):
+    def _log_samples(self, trainer, step, trajectories: list[TrajectoryRecord]):
         """Log trainer samples for the first 5 prompts to wandb table."""
         # group by prompt
         prompts = {}
-        for stored_trajectory in trajectories:
-            trajectory = stored_trajectory.trajectory
+        for trajectory in trajectories:
             pid = trajectory.env_example_id
             if pid not in prompts:
                 prompts[pid] = []

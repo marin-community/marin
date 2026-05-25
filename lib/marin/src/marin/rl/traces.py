@@ -63,15 +63,29 @@ class EpisodeTrace:
         )
 
 
-def make_group_id(run_id: str, lesson_id: str, weight_step: int, worker_id: str, group_index: int) -> str:
+def make_group_id(
+    run_id: str,
+    lesson_id: str,
+    weight_step: int,
+    worker_id: str,
+    sample_batch_index: int,
+    group_index: int,
+) -> str:
     """Build a stable group identifier for a rollout group."""
 
-    seed = f"group:{run_id}:{lesson_id}:{weight_step}:{worker_id}:{group_index}"
+    seed = f"group:{run_id}:{lesson_id}:{weight_step}:{worker_id}:{sample_batch_index}:{group_index}"
     return f"group-{uuid.uuid5(uuid.NAMESPACE_URL, seed)}"
 
 
-def make_trace_id(run_id: str, lesson_id: str, weight_step: int, worker_id: str, group_index: int) -> str:
+def make_trace_id(
+    run_id: str,
+    lesson_id: str,
+    weight_step: int,
+    worker_id: str,
+    sample_batch_index: int,
+    group_index: int,
+) -> str:
     """Build a stable trace identifier for a rollout group."""
 
-    seed = f"trace:{run_id}:{lesson_id}:{weight_step}:{worker_id}:{group_index}"
+    seed = f"trace:{run_id}:{lesson_id}:{weight_step}:{worker_id}:{sample_batch_index}:{group_index}"
     return f"trace-{uuid.uuid5(uuid.NAMESPACE_URL, seed)}"
