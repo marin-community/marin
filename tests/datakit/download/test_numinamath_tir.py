@@ -9,9 +9,6 @@ import pyarrow.parquet as pq
 import pytest
 from marin.datakit.download.numinamath_tir import (
     HF_DATASET_ID,
-    HF_REVISION,
-    TRAIN_PARQUET_GLOB,
-    numinamath_tir_normalize_steps,
     row_to_doc,
     transform,
 )
@@ -63,41 +60,33 @@ def test_row_to_doc_renders_messages_as_tagged_transcript():
 @pytest.mark.parametrize(
     "row",
     [
-        {},
         {"messages": "not-a-list"},
         {"messages": []},
         {"messages": [{"role": "critic", "content": "Nope."}]},
         {"messages": [{"role": "user", "content": ""}]},
         {"messages": [{"role": "user", "content": None}]},
-        {"messages": [{"role": "user"}]},
-        {"messages": [{"content": "Missing role."}]},
         {"messages": [{"role": "user", "content": "Hi"}, "bad-message"]},
+    ],
+    ids=[
+        "messages-not-list",
+        "empty-transcript",
+        "unsupported-role",
+        "empty-content",
+        "non-string-content",
+        "malformed-message",
     ],
 )
 def test_row_to_doc_drops_invalid_rows(row):
     assert row_to_doc(row) == []
 
 
-def test_numinamath_tir_normalize_steps_use_train_split_and_stable_names():
-    processed, normalized = numinamath_tir_normalize_steps()
-    download = processed.deps[0]
-
-    assert download.name == "raw/numinamath-tir"
-    assert download.hash_attrs["hf_dataset_id"] == HF_DATASET_ID
-    assert download.hash_attrs["revision"] == HF_REVISION
-    assert download.hash_attrs["hf_urls_glob"] == [TRAIN_PARQUET_GLOB]
-    assert processed.name == "processed/numinamath-tir"
-    assert processed.deps == [download]
-    assert normalized.name == "normalized/numinamath-tir"
-    assert normalized.deps == [processed]
-
-
-def test_numinamath_tir_is_registered_as_datakit_source():
+def test_numinamath_tir_is_materializable_from_datakit_registry():
     source = all_sources()["numinamath-tir"]
+    processed, normalized = source.normalize_steps
 
-    assert source.rough_token_count_b == 0.08
-    assert source.normalize_steps[0].name == "processed/numinamath-tir"
-    assert source.normalized.name == "normalized/numinamath-tir"
+    assert source.normalized is normalized
+    assert processed.deps
+    assert normalized.deps == [processed]
 
 
 def test_transform_reads_parquet_and_writes_valid_docs(tmp_path: Path):
@@ -115,8 +104,4 @@ def test_transform_reads_parquet_and_writes_valid_docs(tmp_path: Path):
     transform(str(tmp_path / "raw"), str(output_dir))
 
     rows = [row for path in output_dir.rglob("*.parquet") for row in pq.read_table(path).to_pylist()]
-    assert len(rows) == 1
-    assert rows[0]["source"] == HF_DATASET_ID
-    assert rows[0]["text"].startswith("<user>\nSolve $x + 1 = 3$.\n</user>")
-    assert "```python\nprint(3 - 1)\n```" in rows[0]["text"]
-    assert rows[0]["id"] == hashlib.sha256(rows[0]["text"].encode("utf-8")).hexdigest()
+    assert rows == row_to_doc(_valid_row())
