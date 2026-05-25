@@ -28,34 +28,37 @@ def _job_config(*, rl_loss, teacher: TeacherConfig | None) -> RLJobConfig:
     )
 
 
-def test_rl_job_threads_teacher_config_to_train_worker():
+@pytest.mark.parametrize(
+    "rl_loss",
+    [
+        OPDSampledTokenReverseKLLoss(),
+        HybridRLOOOPDSampledTokenReverseKLLoss(
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+            opd_coef=0.1,
+        ),
+    ],
+)
+def test_rl_job_threads_teacher_config_to_train_worker(rl_loss):
     teacher = TeacherConfig(checkpoint="teacher-checkpoint")
-    job = RLJob(_job_config(rl_loss=OPDSampledTokenReverseKLLoss(), teacher=teacher))
+    job = RLJob(_job_config(rl_loss=rl_loss, teacher=teacher))
 
     train_config, _rollout_config = job.to_worker_configs()
 
     assert train_config.teacher == teacher
 
 
-def test_rl_job_threads_teacher_config_for_hybrid_loss():
-    teacher = TeacherConfig(checkpoint="teacher-checkpoint")
-    job = RLJob(
-        _job_config(
-            rl_loss=HybridRLOOOPDSampledTokenReverseKLLoss(
-                kl=KLConfig(mode=KLMode.NONE, beta=0.0),
-                opd_coef=0.1,
-            ),
-            teacher=teacher,
-        )
-    )
-
-    train_config, _rollout_config = job.to_worker_configs()
-
-    assert train_config.teacher == teacher
-
-
-def test_rl_job_requires_teacher_config_for_teacher_loss():
-    job = RLJob(_job_config(rl_loss=OPDSampledTokenReverseKLLoss(), teacher=None))
+@pytest.mark.parametrize(
+    "rl_loss",
+    [
+        OPDSampledTokenReverseKLLoss(),
+        HybridRLOOOPDSampledTokenReverseKLLoss(
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+            opd_coef=0.1,
+        ),
+    ],
+)
+def test_rl_job_requires_teacher_config_for_teacher_loss(rl_loss):
+    job = RLJob(_job_config(rl_loss=rl_loss, teacher=None))
 
     with pytest.raises(ValueError, match="TeacherConfig is required"):
         job.to_worker_configs()

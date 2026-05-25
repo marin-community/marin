@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from marin.rl.kl_regularization import KLConfig, KLMode
+from marin.rl.opd_losses import OPDSampledTokenReverseKLLoss
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.teacher import INITIAL_POLICY_TEACHER_CHECKPOINT, TeacherConfig
 from marin.rl.train_worker import (
@@ -48,10 +49,6 @@ def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabl
 def test_build_models_loads_teacher_when_loss_requires_teacher(monkeypatch):
     calls = []
 
-    class _TeacherLoss:
-        def needs_teacher_model(self) -> bool:
-            return True
-
     def fake_load_model_from_checkpoint(**kwargs):
         calls.append(kwargs)
         return f"model:{kwargs['checkpoint']}"
@@ -68,7 +65,7 @@ def test_build_models_loads_teacher_when_loss_requires_teacher(monkeypatch):
         trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
     )
     worker.tokenizer = SimpleNamespace(vocab_size=8)
-    worker.loss_module = _TeacherLoss()
+    worker.loss_module = OPDSampledTokenReverseKLLoss()
 
     worker._build_models()
 
@@ -80,10 +77,6 @@ def test_build_models_loads_teacher_when_loss_requires_teacher(monkeypatch):
 
 def test_build_models_rejects_missing_teacher_config_when_loss_requires_teacher(monkeypatch):
     calls = []
-
-    class _TeacherLoss:
-        def needs_teacher_model(self) -> bool:
-            return True
 
     monkeypatch.setattr(
         "marin.rl.train_worker.load_model_from_checkpoint",
@@ -100,7 +93,7 @@ def test_build_models_rejects_missing_teacher_config_when_loss_requires_teacher(
         trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
     )
     worker.tokenizer = SimpleNamespace(vocab_size=8)
-    worker.loss_module = _TeacherLoss()
+    worker.loss_module = OPDSampledTokenReverseKLLoss()
 
     with pytest.raises(ValueError, match="TeacherConfig is required"):
         worker._build_models()
@@ -109,10 +102,6 @@ def test_build_models_rejects_missing_teacher_config_when_loss_requires_teacher(
 
 def test_build_models_rejects_unused_teacher_config(monkeypatch):
     calls = []
-
-    class _NoTeacherLoss:
-        def needs_teacher_model(self) -> bool:
-            return False
 
     monkeypatch.setattr(
         "marin.rl.train_worker.load_model_from_checkpoint",
@@ -129,7 +118,7 @@ def test_build_models_rejects_unused_teacher_config(monkeypatch):
         trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
     )
     worker.tokenizer = SimpleNamespace(vocab_size=8)
-    worker.loss_module = _NoTeacherLoss()
+    worker.loss_module = RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0))
 
     with pytest.raises(ValueError, match="does not use a teacher"):
         worker._build_models()
@@ -138,10 +127,6 @@ def test_build_models_rejects_unused_teacher_config(monkeypatch):
 
 def test_build_models_rejects_unresolved_initial_policy_teacher_marker(monkeypatch):
     calls = []
-
-    class _TeacherLoss:
-        def needs_teacher_model(self) -> bool:
-            return True
 
     monkeypatch.setattr(
         "marin.rl.train_worker.load_model_from_checkpoint",
@@ -158,7 +143,7 @@ def test_build_models_rejects_unresolved_initial_policy_teacher_marker(monkeypat
         trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
     )
     worker.tokenizer = SimpleNamespace(vocab_size=8)
-    worker.loss_module = _TeacherLoss()
+    worker.loss_module = OPDSampledTokenReverseKLLoss()
 
     with pytest.raises(ValueError, match="checkpoint marker was not resolved"):
         worker._build_models()
