@@ -9,12 +9,13 @@ from marin.rl.opd_losses import HybridRLOOOPDSampledTokenReverseKLLoss, OPDSampl
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.teacher import TeacherConfig
+from marin.rl.train_worker import TrainWorker
 
 
 def _job_config(*, rl_loss, teacher: TeacherConfig | None) -> RLJobConfig:
     return RLJobConfig(
         model=object(),
-        trainer=SimpleNamespace(device_mesh=None, compute_axis_mapping={}, seed=0),
+        trainer=SimpleNamespace(device_mesh=None, compute_axis_mapping={}, parameter_axis_mapping={}, seed=0),
         train_params=TrainParams(optimizer=object(), rl_loss=rl_loss),
         curriculum=SimpleNamespace(
             lessons={"lesson": SimpleNamespace(sampling_params=SimpleNamespace(n_generations_per_prompt=1))},
@@ -28,23 +29,28 @@ def _job_config(*, rl_loss, teacher: TeacherConfig | None) -> RLJobConfig:
     )
 
 
-@pytest.mark.parametrize(
-    "rl_loss",
-    [
-        OPDSampledTokenReverseKLLoss(),
-        HybridRLOOOPDSampledTokenReverseKLLoss(
-            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
-            opd_coef=0.1,
-        ),
-    ],
-)
-def test_rl_job_threads_teacher_config_to_train_worker(rl_loss):
+def test_rl_job_worker_config_loads_required_teacher(monkeypatch):
+    calls = []
+
+    def fake_load_model_from_checkpoint(**kwargs):
+        calls.append(kwargs)
+        return f"model:{kwargs['checkpoint']}"
+
+    monkeypatch.setattr("marin.rl.train_worker.load_model_from_checkpoint", fake_load_model_from_checkpoint)
+
     teacher = TeacherConfig(checkpoint="teacher-checkpoint")
-    job = RLJob(_job_config(rl_loss=rl_loss, teacher=teacher))
+    job = RLJob(_job_config(rl_loss=OPDSampledTokenReverseKLLoss(), teacher=teacher))
 
     train_config, _rollout_config = job.to_worker_configs()
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = train_config
+    worker.tokenizer = train_config.tokenizer
+    worker.loss_module = train_config.loss
 
-    assert train_config.teacher == teacher
+    worker._build_models()
+
+    assert [call["checkpoint"] for call in calls] == ["student-checkpoint", "teacher-checkpoint"]
+    assert worker.teacher_model == "model:teacher-checkpoint"
 
 
 @pytest.mark.parametrize(
