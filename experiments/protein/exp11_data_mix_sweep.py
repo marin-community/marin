@@ -22,6 +22,11 @@ Subcommands (``COMMAND`` env var):
 * ``run_mix_sweep`` — all 9 mix mixtures (m1..m9) at 100M, ~4.3B tokens each.
 * ``run_scale_sweep`` — 6 scale mixtures (m10..m15) at 1.5B on v5p-8,
   ~21.5B tokens each (one job per mixture).
+* ``run_lrsch_sweep`` — 2 trials on m11 (size-proportional blend) at 100M,
+  ~4.3B tokens each, batch=128: current WSD linear-decay schedule vs. the
+  cosine recipe used by ``train_protein_1_5b_distance_masked.py``.
+* ``run_arch_sweep`` — 2 trials on m11 at 100M, ~4.3B tokens each, batch=128:
+  Llama vs. equivalent Qwen3 (same dims; Qwen3 defaults add QK-norm).
 
 Env vars: ``COMMAND`` (required), ``RUNS`` (CSV substring filter on target
 ids), ``PREVIEW=yes`` (list targets, submit nothing), ``NUM_WORKERS``
@@ -54,6 +59,7 @@ from fray import ResourceConfig, current_client
 from fray.types import Entrypoint, JobRequest, create_environment
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text import DatasetComponent, LmDataConfig, TextLmDatasetFormat, UrlDatasetSourceConfig
+from levanter.models.qwen import Qwen3Config
 from marin.execution.executor import versioned
 from marin.execution.sweep import SweepTarget, claim_and_run
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
@@ -210,14 +216,20 @@ def scaled_lr(batch_size: int, hidden_size: int) -> float:
     return LR_CONSTANT * math.sqrt(batch_size) / hidden_size
 
 
-# Operating point for all sweeps. LR scales by sqrt(BATCH_SIZE/128) via
-# scaled_lr; beta2 follows the noise-scale heuristic
-# beta2 = 0.98 ** (BATCH_SIZE / 128). At BATCH_SIZE=256 these resolve to:
+# Operating point for the smoke/mix/scale stages. LR scales by sqrt(BATCH_SIZE/128)
+# via scaled_lr; beta2 is computed per stage from spec.batch_size via beta2_for
+# (noise-scale heuristic: 0.98 at batch 128). At BATCH_SIZE=256 these resolve to:
 #   smoke/mix (HIDDEN_100M=768):  lr = 1.32e-3
 #   scale     (HIDDEN_1_5B=2048): lr = 4.95e-4
-#   beta2 (all sweeps): 0.9604
+#   beta2 (all stages at batch 256): 0.9604
+# The lrsch/arch sweeps use batch=128 instead (beta2 = 0.98).
 BATCH_SIZE: int = 256
-BETA2: float = 0.98 ** (BATCH_SIZE / 128)
+
+
+def beta2_for(batch_size: int) -> float:
+    """Adam β₂ scaled per the noise-scale heuristic; 0.98 at batch 128."""
+    return 0.98 ** (batch_size / 128)
+
 
 WEIGHT_DECAY: float = 0.01
 WARMUP: float = 0.1
@@ -580,16 +592,27 @@ def _format_weights(weights: dict[str, float]) -> str:
 
 def _describe_target(spec: "StageSpec", target: SweepTarget) -> str:
     """Multi-line target description for preview: schedule, mixture, stages."""
-    (mixture_id,) = target.config
+    mixture_id, variant_id = target.config
+    variant = _variant_by_id(spec, variant_id)
     quality_weights = _resolve_mixture_weights(
         MIXTURE_BY_ID[mixture_id], spec.num_train_steps, batch_size=spec.batch_size
     )
     tokens_str = _fmt_count(spec.batch_size * SEQ_LEN * spec.num_train_steps)
+    # Cosine arm leaves both None to inherit AdamConfig defaults (cosine + full decay).
+    schedule_str = (
+        "cosine,full"
+        if variant.lr_schedule is None and variant.decay is None
+        else (f"{variant.lr_schedule},decay={variant.decay}")
+    )
+    arch_str = variant.arch_label
+    if variant.model_config is not None:
+        arch_str = f"{arch_str}({type(variant.model_config).__name__})"
     lines = [
         f"  {target.target_id}",
-        f"    model={spec.model_tag} batch={spec.batch_size} steps={spec.num_train_steps} "
-        f"steps_per_eval={spec.steps_per_eval} lr={spec.learning_rate:.4g} tokens={tokens_str} "
-        f"lr_schedule={LR_SCHEDULE} decay={LR_DECAY}",
+        f"    arch={arch_str} model={spec.model_tag} batch={spec.batch_size} "
+        f"steps={spec.num_train_steps} steps_per_eval={spec.steps_per_eval} "
+        f"lr={spec.learning_rate:.4g} tokens={tokens_str} schedule={schedule_str} "
+        f"data_seed={spec.data_seed}",
     ]
     if isinstance(quality_weights, dict):
         lines.append(f"    mixture (static): {_format_weights(quality_weights)}")
@@ -621,6 +644,58 @@ def _print_tokenize_preview(suffixes: list[str]) -> None:
 SWEEP_ROOT_PREFIX = "gs://marin-us-east5/sweeps/prot-exp11-data-mix"
 RUN_NAME_PREFIX = "prot-exp11-dm"
 
+# Sentinel id for stages that don't vary anything across trials beyond the
+# mixture. The default variant inherits stage defaults verbatim; its id is
+# omitted from run names so existing (smoke/mix/scale) target_ids stay stable.
+_DEFAULT_VARIANT_ID = "default"
+
+
+@dataclass(frozen=True)
+class TrialVariant:
+    """Per-trial overrides for stages that sweep something besides the mixture.
+
+    Stages with one trial per mixture use ``_DEFAULT_VARIANT`` (no overrides);
+    lrsch/arch-style stages populate per-trial overrides on the axis they vary.
+    """
+
+    variant_id: str  # short tag baked into target_id and W&B tags when not default
+    # None ⇒ use spec.model_config; set in the arch sweep to swap the model family.
+    model_config: object | None = None
+    # Family tag emitted in W&B; defaults to "llama" since every current stage uses it.
+    arch_label: str = "llama"
+    # Routed to SimpleTrainConfig. Defaults match the WSD-style schedule used by
+    # smoke/mix/scale (linear decay over the trailing LR_DECAY fraction of steps).
+    # Setting both to None falls through to AdamConfig defaults (cosine + full decay).
+    lr_schedule: str | None = LR_SCHEDULE
+    decay: float | None = LR_DECAY
+
+
+_DEFAULT_VARIANT = TrialVariant(variant_id=_DEFAULT_VARIANT_ID)
+
+# lrsch sweep variants. WSD inherits the stage's default schedule; cosine
+# unsets lr_schedule + decay so SimpleTrainConfig falls back to AdamConfig
+# defaults (lr_schedule="cosine", decay=None ⇒ full decay), matching the
+# recipe in experiments/protein/train_protein_1_5b_distance_masked.py.
+WSD_VARIANT = TrialVariant(variant_id="wsd")
+COSINE_VARIANT = TrialVariant(variant_id="cosine", lr_schedule=None, decay=None)
+
+# arch sweep variants. The Qwen3 config mirrors protein_llama_100m's dims
+# (read off the source config to avoid drift); Qwen3 adds QK-norm by default,
+# leaves sliding window off, uses default rope, and does not tie embeddings.
+LLAMA_VARIANT = TrialVariant(variant_id="llama", arch_label="llama")
+QWEN3_VARIANT = TrialVariant(
+    variant_id="qwen3",
+    arch_label="qwen3",
+    model_config=Qwen3Config(
+        max_seq_len=protein_llama_100m.max_seq_len,
+        hidden_dim=protein_llama_100m.hidden_dim,
+        intermediate_dim=protein_llama_100m.intermediate_dim,
+        num_heads=protein_llama_100m.num_heads,
+        num_kv_heads=protein_llama_100m.num_kv_heads,
+        num_layers=protein_llama_100m.num_layers,
+    ),
+)
+
 
 @dataclass(frozen=True)
 class StageSpec:
@@ -645,22 +720,53 @@ class StageSpec:
     # 1 = no grad accum (microbatch == batch_size). >1 splits each step into N
     # microbatches; per_device_parallelism is derived from chip_count below.
     grad_accum_steps: int = 1
+    # Per-stage data permutation seed. Defaults to the shared DATA_SEED so
+    # smoke/mix/scale stay on the same permutation; lrsch/arch use distinct
+    # 2-digit seeds so their training streams don't overlap with anything else.
+    data_seed: int = DATA_SEED
+    # Per-trial overrides expanded against ``mixture_ids``. Default = one
+    # implicit trial per mixture; override for lrsch/arch-style sweeps.
+    trial_variants: tuple[TrialVariant, ...] = (_DEFAULT_VARIANT,)
 
 
-def _trial_name(spec: StageSpec, mixture_id: str) -> str:
+def _trial_name(spec: StageSpec, mixture_id: str, variant: TrialVariant) -> str:
     tokens_str = _fmt_count(spec.batch_size * SEQ_LEN * spec.num_train_steps)
+    # Default variant keeps the legacy run-name format unchanged so existing
+    # (smoke/mix/scale) target_ids and sweep-root locks survive the refactor.
+    variant_segment = "" if variant.variant_id == _DEFAULT_VARIANT_ID else f"{variant.variant_id}-"
     return (
         f"{RUN_NAME_PREFIX}-{spec.label}-{spec.model_tag}-{tokens_str}-"
-        f"{mixture_id}-lr{_fmt_lr(spec.learning_rate)}-{spec.version}"
+        f"{mixture_id}-{variant_segment}lr{_fmt_lr(spec.learning_rate)}-{spec.version}"
     )
 
 
 def _stage_targets(spec: StageSpec) -> list[SweepTarget]:
-    return [SweepTarget(target_id=_trial_name(spec, mid), config=(mid,)) for mid in spec.mixture_ids]
+    return [
+        SweepTarget(target_id=_trial_name(spec, mid, var), config=(mid, var.variant_id))
+        for mid in spec.mixture_ids
+        for var in spec.trial_variants
+    ]
 
 
-def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
+def _variant_by_id(spec: StageSpec, variant_id: str) -> TrialVariant:
+    for var in spec.trial_variants:
+        if var.variant_id == variant_id:
+            return var
+    raise KeyError(f"stage {spec.name!r} has no trial variant {variant_id!r}")
+
+
+def _variant_tags(variant: TrialVariant) -> list[str]:
+    """Variant-aware tag slice: arch family + variant id (deduped)."""
+    tags = [variant.arch_label]
+    if variant.variant_id != _DEFAULT_VARIANT_ID and variant.variant_id != variant.arch_label:
+        tags.append(variant.variant_id)
+    return tags
+
+
+def _build_trial(spec: StageSpec, mixture_id: str, variant_id: str) -> tuple[str, object]:
     """Build one trial's ``(job_name, raw_config)`` for ``prepare_lm_train``."""
+    variant = _variant_by_id(spec, variant_id)
+    model_config = variant.model_config if variant.model_config is not None else spec.model_config
     data = build_mixture(
         MIXTURE_BY_ID[mixture_id],
         spec.num_train_steps,
@@ -687,30 +793,30 @@ def _build_trial(spec: StageSpec, mixture_id: str) -> tuple[str, object]:
         num_train_steps=spec.num_train_steps,
         learning_rate=versioned(spec.learning_rate),
         weight_decay=WEIGHT_DECAY,
-        beta2=BETA2,
+        beta2=beta2_for(spec.batch_size),
         warmup=WARMUP,
-        decay=LR_DECAY,
-        lr_schedule=LR_SCHEDULE,
+        decay=variant.decay,
+        lr_schedule=variant.lr_schedule,
         train_seq_len=SEQ_LEN,
         steps_per_eval=spec.steps_per_eval,
         steps_per_export=spec.steps_per_export,
         max_eval_batches=MAX_EVAL_BATCHES,
-        data_seed=DATA_SEED,
+        data_seed=spec.data_seed,
         per_device_parallelism=per_device_parallelism,
     )
-    params = compute_num_parameters(spec.model_config, PROTEIN_VOCAB_SIZE)
+    params = compute_num_parameters(model_config, PROTEIN_VOCAB_SIZE)
     tokens = spec.batch_size * SEQ_LEN * spec.num_train_steps
     job_name, raw_config = prepare_lm_train(
-        name=_trial_name(spec, mixture_id),
+        name=_trial_name(spec, mixture_id, variant),
         tokenized=data,
-        model_config=spec.model_config,
+        model_config=model_config,
         train_config=train_config,
         tags=[
             "protein",
             "exp11",
             "data-mix",
             spec.label,
-            "llama",
+            *_variant_tags(variant),
             spec.model_tag,
             mixture_id,
             f"params={_fmt_count(params)}",
@@ -746,6 +852,12 @@ def _make_stage_specs() -> dict[str, StageSpec]:
     smoke_steps, smoke_spe = _schedule(400_000_000, num_evals=2, batch_size=BATCH_SIZE)
     mix_steps, mix_spe = _schedule(4_300_000_000, num_evals=8, batch_size=BATCH_SIZE)
     scale_steps, scale_spe = _schedule(5 * 4_300_000_000, num_evals=32, batch_size=BATCH_SIZE)
+    # lrsch + arch use the mix-stage token/eval budget but at batch=128 so
+    # the runs match the source 100M recipe more closely than the 256-batch
+    # mix sweep does. 4.3B tokens at batch=128 ⇒ ~4104 steps, 8 evals.
+    small_batch = 128
+    small_steps, small_spe = _schedule(4_300_000_000, num_evals=8, batch_size=small_batch)
+    small_lr = scaled_lr(small_batch, HIDDEN_100M)
     return {
         # m9 exercises MixtureDataset's weight_stages path (alignment + rescaling).
         "run_smoke": StageSpec(
@@ -801,6 +913,43 @@ def _make_stage_specs() -> dict[str, StageSpec]:
             # post-May-2026 v5p-8 CompileTimeHbmOom on the 1.5B compile.
             grad_accum_steps=2,
         ),
+        # Two-trial schedule comparison on m11 (size-proportional H/M/L blend).
+        # WSD = current sweep schedule (linear, decay=LR_DECAY); cosine inherits
+        # AdamConfig defaults (cosine + full decay), matching the 1.5B recipe.
+        "run_lrsch_sweep": StageSpec(
+            name="run_lrsch_sweep",
+            label="lrsch",
+            model_tag="100m",
+            model_config=protein_llama_100m,
+            resources_fn=_resources,
+            mixture_ids=("m11",),
+            batch_size=small_batch,
+            num_train_steps=small_steps,
+            steps_per_eval=small_spe,
+            learning_rate=small_lr,
+            version="v1",
+            num_workers=2,
+            data_seed=42,
+            trial_variants=(WSD_VARIANT, COSINE_VARIANT),
+        ),
+        # Two-trial architecture comparison on m11: Llama (current) vs.
+        # equivalent Qwen3 (same dims; Qwen3 defaults add QK-norm).
+        "run_arch_sweep": StageSpec(
+            name="run_arch_sweep",
+            label="arch",
+            model_tag="100m",
+            model_config=protein_llama_100m,
+            resources_fn=_resources,
+            mixture_ids=("m11",),
+            batch_size=small_batch,
+            num_train_steps=small_steps,
+            steps_per_eval=small_spe,
+            learning_rate=small_lr,
+            version="v1",
+            num_workers=2,
+            data_seed=73,
+            trial_variants=(LLAMA_VARIANT, QWEN3_VARIANT),
+        ),
     }
 
 
@@ -846,8 +995,8 @@ def _worker_entrypoint(stage: str, rank: int, num_workers: int, runs: tuple[str,
     resources = spec.resources_fn()
 
     def _run_one(target: SweepTarget) -> None:
-        (mixture_id,) = target.config
-        name, raw_config = _build_trial(spec, mixture_id)
+        mixture_id, variant_id = target.config
+        name, raw_config = _build_trial(spec, mixture_id, variant_id)
         _run_training_on_worker(name=name, raw_config=raw_config, override_output_path=None, resources=resources)
 
     claim_and_run(sweep_root, my_targets, _run_one)
