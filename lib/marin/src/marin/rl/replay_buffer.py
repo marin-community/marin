@@ -186,11 +186,11 @@ class ReplayBuffer:
         current_time = time.time()
 
         for batch in new_batches:
-            # R[num_groups, num_rollouts_per_group]
-            batch_rewards = np.zeros((len(batch.groups), len(batch.groups[0].rollouts)), dtype=np.float32)
-
             if not batch.groups or not batch.groups[0].rollouts:
                 continue
+
+            # R[num_groups, num_rollouts_per_group]
+            batch_rewards = np.zeros((len(batch.groups), len(batch.groups[0].rollouts)), dtype=np.float32)
 
             # Read weight_step from first rollout's metadata
             first_rollout = batch.groups[0].rollouts[0]

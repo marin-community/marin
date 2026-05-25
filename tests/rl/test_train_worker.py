@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_losses import RLOOLoss
+from marin.rl.teacher import INITIAL_POLICY_TEACHER_CHECKPOINT, TeacherConfig
 from marin.rl.train_worker import (
     BatchPrepTiming,
     InitialRolloutState,
@@ -42,6 +43,126 @@ def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabl
 
     assert worker.initial_model is None
     assert worker.reference_model is model
+
+
+def test_build_models_loads_teacher_when_loss_requires_teacher(monkeypatch):
+    calls = []
+
+    class _TeacherLoss:
+        def needs_teacher_model(self) -> bool:
+            return True
+
+    def fake_load_model_from_checkpoint(**kwargs):
+        calls.append(kwargs)
+        return f"model:{kwargs['checkpoint']}"
+
+    monkeypatch.setattr("marin.rl.train_worker.load_model_from_checkpoint", fake_load_model_from_checkpoint)
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        seed=0,
+        vocab_size=8,
+        initial_checkpoint="student-checkpoint",
+        teacher=TeacherConfig(checkpoint="teacher-checkpoint"),
+        model=object(),
+        trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
+    )
+    worker.tokenizer = SimpleNamespace(vocab_size=8)
+    worker.loss_module = _TeacherLoss()
+
+    worker._build_models()
+
+    assert [call["checkpoint"] for call in calls] == ["student-checkpoint", "teacher-checkpoint"]
+    assert worker.initial_model == "model:student-checkpoint"
+    assert worker.reference_model == "model:student-checkpoint"
+    assert worker.teacher_model == "model:teacher-checkpoint"
+
+
+def test_build_models_rejects_missing_teacher_config_when_loss_requires_teacher(monkeypatch):
+    calls = []
+
+    class _TeacherLoss:
+        def needs_teacher_model(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        "marin.rl.train_worker.load_model_from_checkpoint",
+        lambda **kwargs: calls.append(kwargs) or f"model:{kwargs['checkpoint']}",
+    )
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        seed=0,
+        vocab_size=8,
+        initial_checkpoint="student-checkpoint",
+        teacher=None,
+        model=object(),
+        trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
+    )
+    worker.tokenizer = SimpleNamespace(vocab_size=8)
+    worker.loss_module = _TeacherLoss()
+
+    with pytest.raises(ValueError, match="TeacherConfig is required"):
+        worker._build_models()
+    assert calls == []
+
+
+def test_build_models_rejects_unused_teacher_config(monkeypatch):
+    calls = []
+
+    class _NoTeacherLoss:
+        def needs_teacher_model(self) -> bool:
+            return False
+
+    monkeypatch.setattr(
+        "marin.rl.train_worker.load_model_from_checkpoint",
+        lambda **kwargs: calls.append(kwargs) or f"model:{kwargs['checkpoint']}",
+    )
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        seed=0,
+        vocab_size=8,
+        initial_checkpoint="student-checkpoint",
+        teacher=TeacherConfig(checkpoint="teacher-checkpoint"),
+        model=object(),
+        trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
+    )
+    worker.tokenizer = SimpleNamespace(vocab_size=8)
+    worker.loss_module = _NoTeacherLoss()
+
+    with pytest.raises(ValueError, match="does not use a teacher"):
+        worker._build_models()
+    assert calls == []
+
+
+def test_build_models_rejects_unresolved_initial_policy_teacher_marker(monkeypatch):
+    calls = []
+
+    class _TeacherLoss:
+        def needs_teacher_model(self) -> bool:
+            return True
+
+    monkeypatch.setattr(
+        "marin.rl.train_worker.load_model_from_checkpoint",
+        lambda **kwargs: calls.append(kwargs) or f"model:{kwargs['checkpoint']}",
+    )
+
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        seed=0,
+        vocab_size=8,
+        initial_checkpoint="student-checkpoint",
+        teacher=TeacherConfig(checkpoint=INITIAL_POLICY_TEACHER_CHECKPOINT),
+        model=object(),
+        trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
+    )
+    worker.tokenizer = SimpleNamespace(vocab_size=8)
+    worker.loss_module = _TeacherLoss()
+
+    with pytest.raises(ValueError, match="checkpoint marker was not resolved"):
+        worker._build_models()
+    assert calls == []
 
 
 def test_record_train_step_updates_replay_buffer_and_shared_run_state():
@@ -114,6 +235,7 @@ def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
     waited_weight_steps: list[int] = []
     replay_steps: list[int] = []
     published_steps: list[int] = []
+    loss_fn_args = []
 
     class _FakeRemoteMethod:
         def remote(self, step: int) -> None:
@@ -166,8 +288,16 @@ def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
         optimizer=SimpleNamespace(build=lambda num_steps: object()),
         weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
     )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
-    worker.reference_model = object()
+    reference_model = object()
+    teacher_model = object()
+    worker.loss_module = SimpleNamespace(
+        create_loss_fn=lambda reference_model, _, *, teacher_model=None: loss_fn_args.append(
+            (reference_model, teacher_model)
+        )
+        or (lambda model, batch, key: 0.0)
+    )
+    worker.reference_model = reference_model
+    worker.teacher_model = teacher_model
     worker.initial_model = object()
     worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)
     worker.replay_loader = _FakeReplayLoader()
@@ -185,6 +315,7 @@ def test_train_bootstraps_fresh_run_with_step_minus_one(monkeypatch):
     assert published_steps == []
     assert served_weight_steps == [-1]
     assert waited_weight_steps == [-1]
+    assert loss_fn_args == [(reference_model, teacher_model)]
 
 
 def test_train_reuses_recovered_step_on_resume(monkeypatch):
@@ -244,8 +375,11 @@ def test_train_reuses_recovered_step_on_resume(monkeypatch):
         optimizer=SimpleNamespace(build=lambda num_steps: object()),
         weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
     )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
+    worker.loss_module = SimpleNamespace(
+        create_loss_fn=lambda reference_model, _, *, teacher_model=None: lambda model, batch, key: 0.0
+    )
     worker.reference_model = object()
+    worker.teacher_model = None
     worker.initial_model = object()
     worker.replay_buffer = SimpleNamespace(set_current_step=replay_steps.append)
     worker.replay_loader = _FakeReplayLoader()
