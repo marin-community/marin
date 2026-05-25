@@ -45,6 +45,11 @@ import optax
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
+try:
+    from jax.shard_map import shard_map
+except ModuleNotFoundError:
+    from jax.experimental.shard_map import shard_map
+
 _DEFAULT_BLOCK_SIZE: int = 128
 
 
@@ -352,52 +357,66 @@ def _init_state_for_leaf(param, B: int, init_factor: float) -> tuple[_LeafMeta, 
 
 
 def _flipped_eigh(matrix):
-    """Descending-eigenvector eigh. Broadcasts over leading axes.
+    """Descending-eigenvector eigh via per-chip shard_map.
 
-    eigh under explicit mesh + sharded leading axes lowers to ops that emit a
-    select with a broadcast predicate, crashing the trainer. We reshard the
-    matrix to fully-replicated for the eigh call, then reshard the result
-    back to the input's sharding so the rest of the kernel stays
-    block-sharded.
+    Used in the init branch to set ``Q`` from the first gradient's Gram.
+    Each chip runs eigh independently on its local slice of the leading
+    axes — no all-gather, no replicated work.
     """
-    sym = 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
-    sym_repl, src = _replicate_for_linalg(sym)
-    _, q = jnp.linalg.eigh(sym_repl)
-    q = q[..., :, ::-1]
-    return _reshard_back(q, src)
+    return _shardmap_eigh_flipped(matrix)
 
 
 def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
-def _replicate_for_linalg(x: jnp.ndarray) -> tuple[jnp.ndarray, NamedSharding | None]:
-    """Reshard ``x`` to fully-replicated for a linalg primitive call.
+def _shardmap_eigh_flipped(x: jnp.ndarray) -> jnp.ndarray:
+    """Run flipped-eigh on ``x`` per-chip via shard_map. No cross-chip comm.
 
-    Returns ``(replicated_x, original_sharding)``. The caller should reshard
-    the linalg primitive's output back to ``original_sharding`` to keep
-    the rest of the kernel block-sharded.
+    Each chip independently executes ``jnp.linalg.eigh`` on its local slice
+    of the leading axes. eigh broadcasts over leading axes naturally; with
+    sharding handled at the shard_map boundary, no replication or
+    all-gather happens. Replaces the reshard-to-replicated pattern that was
+    19x slower in MFU than the original full-replicate baseline.
 
-    ``jnp.linalg.eigh`` and ``jnp.linalg.qr`` under explicit-mesh + sharded
-    inputs emit select ops with a broadcast predicate whose sharding
-    doesn't match the cases, crashing the trainer. Wrapping the linalg
-    call with a brief gather-replicated -> linalg -> scatter-back pattern
-    keeps the upstream algorithm intact while sidestepping that lowering
-    issue.
+    Input/output sharding is preserved unchanged.
     """
     s = None
     if hasattr(x, "aval") and hasattr(x.aval, "sharding"):
         s = x.aval.sharding
     if not isinstance(s, NamedSharding) or s.mesh is None or s.mesh.empty:
-        return x, None
-    replicated = NamedSharding(s.mesh, P(*([None] * x.ndim)))
-    return jax.sharding.reshard(x, replicated), s
+        sym = 0.5 * (x + jnp.swapaxes(x, -1, -2))
+        _, q = jnp.linalg.eigh(sym)
+        return q[..., :, ::-1]
+
+    spec = s.spec
+    mesh = s.mesh
+
+    def _local(m):
+        sym = 0.5 * (m + jnp.swapaxes(m, -1, -2))
+        _, q = jnp.linalg.eigh(sym)
+        return q[..., :, ::-1]
+
+    return shard_map(_local, mesh=mesh, in_specs=spec, out_specs=spec, check_rep=False)(x)
 
 
-def _reshard_back(x: jnp.ndarray, target: NamedSharding | None) -> jnp.ndarray:
-    if target is None:
-        return x
-    return jax.sharding.reshard(x, target)
+def _shardmap_qr(x: jnp.ndarray) -> jnp.ndarray:
+    """Run QR on ``x`` per-chip via shard_map; return only Q. No cross-chip comm."""
+    s = None
+    if hasattr(x, "aval") and hasattr(x.aval, "sharding"):
+        s = x.aval.sharding
+    if not isinstance(s, NamedSharding) or s.mesh is None or s.mesh.empty:
+        q, _ = jnp.linalg.qr(x)
+        return q
+
+    spec = s.spec
+    mesh = s.mesh
+
+    def _local(m):
+        q, _ = jnp.linalg.qr(m)
+        return q
+
+    return shard_map(_local, mesh=mesh, in_specs=spec, out_specs=spec, check_rep=False)(x)
 
 
 def _klsoaph_step_blocked(
@@ -508,20 +527,14 @@ def _klsoaph_step_blocked(
     nb_esi_l = _update_esi(esi_l, left_diag)
     nb_esi_r = _update_esi(esi_r, right_diag)
 
-    # 6. Warm-started QR refresh; blended into normal branch via scalar weight.
-    # Reshard to fully-replicated for jnp.linalg.qr (same reason as eigh —
-    # the linalg primitive's lowering emits a select with a broadcast
-    # predicate that doesn't match sharded cases under explicit mesh).
+    # 6. Warm-started QR refresh; blended via scalar weight.
+    # QR runs per-chip via shard_map (no all-gather).
     ea_qrT = _ein("...ij,...kj->...ik", nb_exp_avg, q_r)
     ea_original = _ein("...ij,...jk->...ik", q_l, ea_qrT)
     gg_l_q = _ein("...ij,...jk->...ik", nb_gg_l, q_l)
     gg_r_q = _ein("...ij,...jk->...ik", nb_gg_r, q_r)
-    gg_l_q_repl, src_l = _replicate_for_linalg(gg_l_q)
-    gg_r_q_repl, src_r = _replicate_for_linalg(gg_r_q)
-    ql_refresh_repl, _ = jnp.linalg.qr(gg_l_q_repl)
-    qr_refresh_repl, _ = jnp.linalg.qr(gg_r_q_repl)
-    ql_refresh = _reshard_back(ql_refresh_repl, src_l)
-    qr_refresh = _reshard_back(qr_refresh_repl, src_r)
+    ql_refresh = _shardmap_qr(gg_l_q)
+    qr_refresh = _shardmap_qr(gg_r_q)
     ea_qr_new = _ein("...ij,...jk->...ik", ea_original, qr_refresh)
     ea_refresh = _ein("...ki,...kj->...ij", ql_refresh, ea_qr_new)
 
