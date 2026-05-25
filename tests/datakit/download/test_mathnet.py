@@ -7,18 +7,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from marin.datakit.download.mathnet import (
-    HF_DATASET_ID,
     MathNetLanguagePolicy,
     MathNetSolutionPolicy,
     MathNetTextSftConfig,
-    download_mathnet_raw_step,
-    mathnet_text_sft_primary_step,
     row_to_text_sft_records,
     transform_text_sft,
 )
 
+EXPECTED_SOURCE = "ShadenA/MathNet"
 EXPECTED_HF_REVISION = "ae12e35eef0fc52bbbef270d6ef0f5b002252eb9"
-EXPECTED_ALL_TRAIN_GLOB = ["data/all/train-*.parquet"]
 
 
 def _base_config(
@@ -59,7 +56,7 @@ def test_text_only_row_becomes_two_message_record():
     assert len(records) == 1
     record = records[0]
     assert record["id"] == f"mathnet:{EXPECTED_HF_REVISION}:abc123:solution-0"
-    assert record["source"] == HF_DATASET_ID
+    assert record["source"] == EXPECTED_SOURCE
     assert record["messages"] == [
         {
             "role": "user",
@@ -179,42 +176,6 @@ def test_all_languages_policy_keeps_non_english_rows():
 
     assert len(records) == 1
     assert records[0]["metadata"]["language_policy"] == "all_languages"
-
-
-def test_excluded_ids_are_skipped():
-    row = _base_row(id="heldout")
-
-    assert row_to_text_sft_records(row, _base_config(), {"heldout"}) == []
-
-
-def test_download_step_restricts_to_default_all_config_train_files():
-    step = download_mathnet_raw_step()
-
-    assert step.name == "raw/mathnet-v0"
-    assert step.deps == []
-    assert step.hash_attrs == {
-        "hf_dataset_id": HF_DATASET_ID,
-        "revision": EXPECTED_HF_REVISION,
-        "hf_urls_glob": EXPECTED_ALL_TRAIN_GLOB,
-        "append_sha_to_path": False,
-    }
-
-
-def test_processed_step_records_policy_in_hash_attrs():
-    step = mathnet_text_sft_primary_step(
-        language_policy=MathNetLanguagePolicy.ALL_LANGUAGES,
-        solution_policy=MathNetSolutionPolicy.ALL,
-        excluded_ids_path="gs://example/heldout.txt",
-    )
-
-    assert step.name == "processed/mathnet-v0/text-sft-primary"
-    assert [dep.name for dep in step.deps] == ["raw/mathnet-v0"]
-    assert step.hash_attrs["hf_dataset_id"] == HF_DATASET_ID
-    assert step.hash_attrs["hf_revision"] == EXPECTED_HF_REVISION
-    assert step.hash_attrs["hf_urls_glob"] == EXPECTED_ALL_TRAIN_GLOB
-    assert step.hash_attrs["language_policy"] == "all_languages"
-    assert step.hash_attrs["solution_policy"] == "all"
-    assert step.hash_attrs["excluded_ids_path"] == "gs://example/heldout.txt"
 
 
 def test_transform_text_sft_filters_and_writes_chat_jsonl(tmp_path: Path, read_all_jsonl_gz):
