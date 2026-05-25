@@ -59,8 +59,6 @@ RUN_NAME_RE: re.Pattern = re.compile(
 )
 
 # Prefix every plot title with this so the experiment context is unambiguous.
-TITLE_PREFIX: str = "MarinFold Experiment #29"
-
 # Display labels + colors for the two variants. Tableau-10 subset; the Llama
 # / Qwen3 colors here match the variant palette used by the exp11 analysis
 # script in its pre-retcon form, so plots stay visually continuous.
@@ -357,7 +355,8 @@ def render_comparison_bars(snapshot: pd.DataFrame) -> None:
     ax.set_xlabel("Heldout eval split (masked: distance bin only)")
     ax.set_ylabel("Loss")
     ax.set_title(
-        f"{TITLE_PREFIX} — {SWEEP_ID}: val loss by trial @ step={ref_step}",
+        f"MarinFold #29 — Llama vs Qwen3 "
+        f"(val loss @ step {ref_step}, m11 mixture, 100M @ ~4.3B tokens)",
         fontsize=11,
     )
     ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
