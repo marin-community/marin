@@ -7,17 +7,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from marin.datakit.download.mathnet import (
-    HF_REVISION,
-    HF_URLS_GLOB,
+    HF_DATASET_ID,
     MathNetLanguagePolicy,
     MathNetSolutionPolicy,
     MathNetTextSftConfig,
-    _load_excluded_ids,
     download_mathnet_raw_step,
     mathnet_text_sft_primary_step,
     row_to_text_sft_records,
     transform_text_sft,
 )
+
+EXPECTED_HF_REVISION = "ae12e35eef0fc52bbbef270d6ef0f5b002252eb9"
+EXPECTED_ALL_TRAIN_GLOB = ["data/all/train-*.parquet"]
 
 
 def _base_config(
@@ -57,8 +58,8 @@ def test_text_only_row_becomes_two_message_record():
 
     assert len(records) == 1
     record = records[0]
-    assert record["id"] == f"mathnet:{HF_REVISION}:abc123:solution-0"
-    assert record["source"] == "ShadenA/MathNet"
+    assert record["id"] == f"mathnet:{EXPECTED_HF_REVISION}:abc123:solution-0"
+    assert record["source"] == HF_DATASET_ID
     assert record["messages"] == [
         {
             "role": "user",
@@ -86,7 +87,7 @@ def test_text_only_row_becomes_two_message_record():
     assert record["metadata"]["solution_count"] == 1
     assert record["metadata"]["language_policy"] == "english_or_unknown"
     assert record["metadata"]["solution_policy"] == "first"
-    assert record["metadata"]["hf_revision"] == HF_REVISION
+    assert record["metadata"]["hf_revision"] == EXPECTED_HF_REVISION
     assert record["metadata"]["license"] == "cc-by-4.0"
 
 
@@ -96,7 +97,7 @@ def test_first_solution_policy_uses_first_non_empty_solution():
     records = row_to_text_sft_records(row, _base_config())
 
     assert len(records) == 1
-    assert records[0]["id"] == f"mathnet:{HF_REVISION}:abc123:solution-1"
+    assert records[0]["id"] == f"mathnet:{EXPECTED_HF_REVISION}:abc123:solution-1"
     assert records[0]["messages"][1]["content"] == "First usable solution."
     assert records[0]["metadata"]["solution_count"] == 2
 
@@ -107,8 +108,8 @@ def test_all_solution_policy_expands_each_non_empty_solution():
     records = row_to_text_sft_records(row, _base_config(solution_policy=MathNetSolutionPolicy.ALL))
 
     assert [record["id"] for record in records] == [
-        f"mathnet:{HF_REVISION}:abc123:solution-0",
-        f"mathnet:{HF_REVISION}:abc123:solution-2",
+        f"mathnet:{EXPECTED_HF_REVISION}:abc123:solution-0",
+        f"mathnet:{EXPECTED_HF_REVISION}:abc123:solution-2",
     ]
     assert [record["messages"][1]["content"] for record in records] == ["First solution.", "Second solution."]
 
@@ -140,7 +141,7 @@ def test_all_solution_policy_skips_only_image_dependent_solution_variants():
     records = row_to_text_sft_records(row, _base_config(solution_policy=MathNetSolutionPolicy.ALL))
 
     assert len(records) == 1
-    assert records[0]["id"] == f"mathnet:{HF_REVISION}:abc123:solution-0"
+    assert records[0]["id"] == f"mathnet:{EXPECTED_HF_REVISION}:abc123:solution-0"
     assert records[0]["messages"][1]["content"] == "Text-only solution."
 
 
@@ -186,19 +187,17 @@ def test_excluded_ids_are_skipped():
     assert row_to_text_sft_records(row, _base_config(), {"heldout"}) == []
 
 
-def test_load_excluded_ids_reads_one_id_per_line(tmp_path: Path):
-    excluded_path = tmp_path / "heldout.txt"
-    excluded_path.write_text("abc123\n\nxyz789\n", encoding="utf-8")
-
-    assert _load_excluded_ids(str(excluded_path)) == {"abc123", "xyz789"}
-
-
-def test_download_step_restricts_to_default_all_config_files():
+def test_download_step_restricts_to_default_all_config_train_files():
     step = download_mathnet_raw_step()
 
-    assert step.hash_attrs["hf_dataset_id"] == "ShadenA/MathNet"
-    assert step.hash_attrs["revision"] == HF_REVISION
-    assert step.hash_attrs["hf_urls_glob"] == HF_URLS_GLOB
+    assert step.name == "raw/mathnet-v0"
+    assert step.deps == []
+    assert step.hash_attrs == {
+        "hf_dataset_id": HF_DATASET_ID,
+        "revision": EXPECTED_HF_REVISION,
+        "hf_urls_glob": EXPECTED_ALL_TRAIN_GLOB,
+        "append_sha_to_path": False,
+    }
 
 
 def test_processed_step_records_policy_in_hash_attrs():
@@ -209,30 +208,61 @@ def test_processed_step_records_policy_in_hash_attrs():
     )
 
     assert step.name == "processed/mathnet-v0/text-sft-primary"
-    assert step.hash_attrs["hf_dataset_id"] == "ShadenA/MathNet"
-    assert step.hash_attrs["hf_revision"] == HF_REVISION
-    assert step.hash_attrs["hf_urls_glob"] == HF_URLS_GLOB
+    assert [dep.name for dep in step.deps] == ["raw/mathnet-v0"]
+    assert step.hash_attrs["hf_dataset_id"] == HF_DATASET_ID
+    assert step.hash_attrs["hf_revision"] == EXPECTED_HF_REVISION
+    assert step.hash_attrs["hf_urls_glob"] == EXPECTED_ALL_TRAIN_GLOB
     assert step.hash_attrs["language_policy"] == "all_languages"
     assert step.hash_attrs["solution_policy"] == "all"
     assert step.hash_attrs["excluded_ids_path"] == "gs://example/heldout.txt"
 
 
-def test_transform_text_sft_writes_chat_jsonl(tmp_path: Path, read_all_jsonl_gz):
+def test_transform_text_sft_filters_and_writes_chat_jsonl(tmp_path: Path, read_all_jsonl_gz):
     raw_dir = tmp_path / "raw"
     raw_shard = raw_dir / "data" / "all" / "train-00000-of-00001.parquet"
     raw_shard.parent.mkdir(parents=True)
-    pq.write_table(pa.Table.from_pylist([_base_row()]), raw_shard)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                _base_row(id="kept", problem_markdown="Solve $x+1=2$.", solutions_markdown=["Subtract 1 to get $x=1$."]),
+                _base_row(id="heldout"),
+                _base_row(id="needs_image", problem_markdown="Use attached_image_1.png to solve this."),
+                _base_row(id="spanish", language="Spanish"),
+                _base_row(id="empty_solution", solutions_markdown=["", "   "]),
+            ]
+        ),
+        raw_shard,
+    )
+    excluded_ids = tmp_path / "heldout.txt"
+    excluded_ids.write_text("heldout\n\nunused-id\n", encoding="utf-8")
 
     output_dir = tmp_path / "processed"
     transform_text_sft(
         MathNetTextSftConfig(
             raw_input_path=str(raw_dir),
             output_path=str(output_dir),
+            excluded_ids_path=str(excluded_ids),
         )
     )
 
     records = read_all_jsonl_gz(output_dir)
     assert len(records) == 1
-    assert records[0]["id"] == f"mathnet:{HF_REVISION}:abc123:solution-0"
-    assert records[0]["messages"][0]["role"] == "user"
-    assert records[0]["messages"][1]["role"] == "assistant"
+    assert records[0]["id"] == f"mathnet:{EXPECTED_HF_REVISION}:kept:solution-0"
+    assert records[0]["messages"] == [
+        {
+            "role": "user",
+            "content": "Solve $x+1=2$.",
+            "name": None,
+            "tool_calls": None,
+            "tool_call_id": None,
+        },
+        {
+            "role": "assistant",
+            "content": "Subtract 1 to get $x=1$.",
+            "name": None,
+            "tool_calls": None,
+            "tool_call_id": None,
+        },
+    ]
+    assert records[0]["metadata"]["mathnet_id"] == "kept"
+    assert records[0]["metadata"]["excluded_ids_path"] == str(excluded_ids)
