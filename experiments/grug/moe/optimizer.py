@@ -229,18 +229,20 @@ def scale_with_grug_normuonh(
 
 
 def scale_with_grug_klsoaph(
-    beta1: float = 0.9,
+    beta1: float = 0.95,
     beta2: float = 0.9,
     shampoo_beta: float = 0.9,
     eps: float = 1e-8,
     precond_freq: int = 5,
+    init_factor: float = 0.1,
     learning_rate: float = 0.018,
 ) -> optax.GradientTransformation:
     """KL Soap H transform: SOAP-eigenbasis Adam direction + hyperball post-step.
 
     Reproduces KLSOAPH from KellerJordan/modded-nanogpt PR #290 with one
     deviation: precond_freq defaults to 5 (upstream uses 1) to amortize the
-    eigendecomposition cost.
+    eigendecomposition cost. Default ``(beta1, beta2, shampoo_beta)`` matches
+    upstream's "passing" tuple (0.95, 0.9, 0.9).
     """
     soap_transform = scale_by_klsoaph(
         beta1=beta1,
@@ -248,6 +250,7 @@ def scale_with_grug_klsoaph(
         shampoo_beta=shampoo_beta,
         eps=eps,
         precond_freq=precond_freq,
+        init_factor=init_factor,
     )
 
     def init_fn(params):
@@ -541,11 +544,14 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
     """
 
     adam_lr: float = 6e-4
-    beta1: float = 0.9
+    # Default (beta1, beta2, shampoo_beta) matches upstream "passing" tuple from
+    # KellerJordan/modded-nanogpt PR #290 (beta1=0.95, beta2=0.9, shampoo_beta=0.9).
+    beta1: float = 0.95
     beta2: float = 0.9
     shampoo_beta: float = 0.9
     epsilon: float = 1e-8
     precond_freq: int = 5
+    init_factor: float = 0.1
     max_grad_norm: float | None = 1.0
 
     def build(self, num_train_steps):
@@ -564,6 +570,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
                         shampoo_beta=self.shampoo_beta,
                         eps=self.epsilon,
                         precond_freq=self.precond_freq,
+                        init_factor=self.init_factor,
                         learning_rate=learning_rate,
                     )
                 )

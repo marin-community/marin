@@ -355,12 +355,21 @@ def test_grug_klsoaph_state_shapes_match_soap_geometry():
     assert soap_state.gg_r["dense"].shape == (6, 6)
     assert soap_state.q_l["dense"].shape == (4, 4)
     assert soap_state.q_r["dense"].shape == (6, 6)
+    assert soap_state.esi_l["dense"].shape == (4,)
+    assert soap_state.esi_r["dense"].shape == (6,)
     assert soap_state.exp_avg["experts"].shape == (3, 4, 6)
     assert soap_state.exp_avg_sq["experts"].shape == (3, 4, 6)
     assert soap_state.gg_l["experts"].shape == (3, 4, 4)
     assert soap_state.gg_r["experts"].shape == (3, 6, 6)
     assert soap_state.q_l["experts"].shape == (3, 4, 4)
     assert soap_state.q_r["experts"].shape == (3, 6, 6)
+    assert soap_state.esi_l["experts"].shape == (3, 4)
+    assert soap_state.esi_r["experts"].shape == (3, 6)
+    # esi initialized at init_factor**-0.5 (default init_factor=0.1 → sqrt(10)).
+    import math
+
+    assert jnp.allclose(soap_state.esi_l["dense"], math.sqrt(10.0))
+    assert jnp.allclose(soap_state.esi_r["dense"], math.sqrt(10.0))
 
 
 def test_grug_moe_klsoaph_optimizer_update_runs_on_single_device():
