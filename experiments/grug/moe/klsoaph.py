@@ -354,19 +354,50 @@ def _init_state_for_leaf(param, B: int, init_factor: float) -> tuple[_LeafMeta, 
 def _flipped_eigh(matrix):
     """Descending-eigenvector eigh. Broadcasts over leading axes.
 
-    We skip the ``1e-30 * eye`` regularization from upstream because broadcasting
-    a replicated eye over a sharded matrix and then adding triggers JAX's
-    sharding reconciliation in some cases. The symmetrize step (mathematical,
-    pure arithmetic) plus the fact that we eigh Gram matrices (PSD by
-    construction) makes the eye-add redundant for stability on our shapes.
+    eigh under explicit mesh + sharded leading axes lowers to ops that emit a
+    select with a broadcast predicate, crashing the trainer. We reshard the
+    matrix to fully-replicated for the eigh call, then reshard the result
+    back to the input's sharding so the rest of the kernel stays
+    block-sharded.
     """
     sym = 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
-    _, q = jnp.linalg.eigh(sym)
-    return q[..., :, ::-1]
+    sym_repl, src = _replicate_for_linalg(sym)
+    _, q = jnp.linalg.eigh(sym_repl)
+    q = q[..., :, ::-1]
+    return _reshard_back(q, src)
 
 
 def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
+
+
+def _replicate_for_linalg(x: jnp.ndarray) -> tuple[jnp.ndarray, NamedSharding | None]:
+    """Reshard ``x`` to fully-replicated for a linalg primitive call.
+
+    Returns ``(replicated_x, original_sharding)``. The caller should reshard
+    the linalg primitive's output back to ``original_sharding`` to keep
+    the rest of the kernel block-sharded.
+
+    ``jnp.linalg.eigh`` and ``jnp.linalg.qr`` under explicit-mesh + sharded
+    inputs emit select ops with a broadcast predicate whose sharding
+    doesn't match the cases, crashing the trainer. Wrapping the linalg
+    call with a brief gather-replicated -> linalg -> scatter-back pattern
+    keeps the upstream algorithm intact while sidestepping that lowering
+    issue.
+    """
+    s = None
+    if hasattr(x, "aval") and hasattr(x.aval, "sharding"):
+        s = x.aval.sharding
+    if not isinstance(s, NamedSharding) or s.mesh is None or s.mesh.empty:
+        return x, None
+    replicated = NamedSharding(s.mesh, P(*([None] * x.ndim)))
+    return jax.sharding.reshard(x, replicated), s
+
+
+def _reshard_back(x: jnp.ndarray, target: NamedSharding | None) -> jnp.ndarray:
+    if target is None:
+        return x
+    return jax.sharding.reshard(x, target)
 
 
 def _klsoaph_step_blocked(
@@ -419,22 +450,12 @@ def _klsoaph_step_blocked(
     # — the scalar broadcasts cleanly to any sharding, and we never go through
     # JAX's per-axis select reconciliation.
 
-    # --- init branch outputs ---
-    # We deviate from upstream KLSOAPH on Q initialization: instead of
-    # `eigh` of the first-gradient Gram, we initialize Q = identity (per-
-    # block). Reason: jnp.linalg.eigh on sharded tensors lowers to ops that
-    # eventually emit a `select` with mismatched sharding between the
-    # broadcast predicate and the case tensors, crashing the explicit-mesh
-    # trainer. The QR-iteration refresh (which runs every precond_freq=1
-    # step on this config) effectively warm-starts the basis from identity
-    # in ~O(1) refresh iterations, so we lose at most a few-step warmup.
-    # Q is started at the (per-block) identity sharded the same as gg_l/gg_r.
+    # --- init branch outputs (upstream KLSOAPH: GG from first gradient, Q from
+    # flipped-eigh of GG, esi at init_factor**-0.5). eigh runs replicated. ---
     init_gg_l = _symmetrize(_ein("...ik,...jk->...ij", g32, g32) / inner_cols)
     init_gg_r = _symmetrize(_ein("...ki,...kj->...ij", g32, g32) / inner_rows)
-    # Identity per block — use multiplication by a precomputed mask so we don't
-    # introduce any reshaping/broadcast that could change sharding.
-    init_q_l = jnp.zeros_like(gg_l) + jnp.eye(B, dtype=jnp.float32)
-    init_q_r = jnp.zeros_like(gg_r) + jnp.eye(B, dtype=jnp.float32)
+    init_q_l = _flipped_eigh(init_gg_l)
+    init_q_r = _flipped_eigh(init_gg_r)
     init_esi_l = jnp.full_like(esi_l, init_factor**-0.5)
     init_esi_r = jnp.full_like(esi_r, init_factor**-0.5)
     init_dir = jnp.zeros_like(g32)
@@ -488,12 +509,19 @@ def _klsoaph_step_blocked(
     nb_esi_r = _update_esi(esi_r, right_diag)
 
     # 6. Warm-started QR refresh; blended into normal branch via scalar weight.
+    # Reshard to fully-replicated for jnp.linalg.qr (same reason as eigh —
+    # the linalg primitive's lowering emits a select with a broadcast
+    # predicate that doesn't match sharded cases under explicit mesh).
     ea_qrT = _ein("...ij,...kj->...ik", nb_exp_avg, q_r)
     ea_original = _ein("...ij,...jk->...ik", q_l, ea_qrT)
     gg_l_q = _ein("...ij,...jk->...ik", nb_gg_l, q_l)
     gg_r_q = _ein("...ij,...jk->...ik", nb_gg_r, q_r)
-    ql_refresh, _ = jnp.linalg.qr(gg_l_q)
-    qr_refresh, _ = jnp.linalg.qr(gg_r_q)
+    gg_l_q_repl, src_l = _replicate_for_linalg(gg_l_q)
+    gg_r_q_repl, src_r = _replicate_for_linalg(gg_r_q)
+    ql_refresh_repl, _ = jnp.linalg.qr(gg_l_q_repl)
+    qr_refresh_repl, _ = jnp.linalg.qr(gg_r_q_repl)
+    ql_refresh = _reshard_back(ql_refresh_repl, src_l)
+    qr_refresh = _reshard_back(qr_refresh_repl, src_r)
     ea_qr_new = _ein("...ij,...jk->...ik", ea_original, qr_refresh)
     ea_refresh = _ein("...ki,...kj->...ij", ql_refresh, ea_qr_new)
 
