@@ -352,13 +352,16 @@ def _init_state_for_leaf(param, B: int, init_factor: float) -> tuple[_LeafMeta, 
 
 
 def _flipped_eigh(matrix):
-    """Descending-eigenvector eigh. Broadcasts over leading axes."""
-    n = matrix.shape[-1]
-    eye = jnp.eye(n, dtype=jnp.float32)
-    if matrix.ndim > 2:
-        eye = jnp.broadcast_to(eye, matrix.shape)
+    """Descending-eigenvector eigh. Broadcasts over leading axes.
+
+    We skip the ``1e-30 * eye`` regularization from upstream because broadcasting
+    a replicated eye over a sharded matrix and then adding triggers JAX's
+    sharding reconciliation in some cases. The symmetrize step (mathematical,
+    pure arithmetic) plus the fact that we eigh Gram matrices (PSD by
+    construction) makes the eye-add redundant for stability on our shapes.
+    """
     sym = 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
-    _, q = jnp.linalg.eigh(sym + 1e-30 * eye)
+    _, q = jnp.linalg.eigh(sym)
     return q[..., :, ::-1]
 
 
@@ -457,11 +460,18 @@ def _klsoaph_step_blocked(
     right_diag = jnp.mean(proj_row_white * proj_row_white, axis=-2)
 
     def _update_esi(esi, diag):
+        # All sharding-safe arithmetic — no select/where/maximum/minimum/nan_to_num
+        # since those broadcast scalar args to a fully-replicated tensor and then
+        # try to combine with the (sharded) case, which fails under explicit mesh.
         old_eigen = jnp.reciprocal(jnp.square(esi))
-        old_eigen = jnp.nan_to_num(old_eigen, nan=0.0, posinf=0.0, neginf=0.0)
+        old_eigen = old_eigen * jnp.isfinite(old_eigen).astype(old_eigen.dtype)
         eigen = shampoo_beta * old_eigen + (1.0 - shampoo_beta) * diag
-        inv_sqrt = jnp.minimum(jax.lax.rsqrt(jnp.maximum(eigen, 1e-30)), 4000.0)
-        return jnp.nan_to_num(inv_sqrt, nan=0.0, posinf=0.0, neginf=0.0)
+        # max(eigen, 1e-30): (x + eps + |x - eps|) / 2. Pure arithmetic.
+        eigen_clamped = 0.5 * (eigen + 1e-30 + jnp.abs(eigen - 1e-30))
+        inv_sqrt = jax.lax.rsqrt(eigen_clamped)
+        # min(inv_sqrt, 4000.0): (x + cap - |x - cap|) / 2. Pure arithmetic.
+        inv_sqrt_capped = 0.5 * (inv_sqrt + 4000.0 - jnp.abs(inv_sqrt - 4000.0))
+        return inv_sqrt_capped * jnp.isfinite(inv_sqrt_capped).astype(inv_sqrt_capped.dtype)
 
     nb_esi_l = _update_esi(esi_l, left_diag)
     nb_esi_r = _update_esi(esi_r, right_diag)
