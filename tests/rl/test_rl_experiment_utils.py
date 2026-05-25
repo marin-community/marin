@@ -311,35 +311,6 @@ def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monk
     assert job_config.trainer.checkpointer.debug.dump_stacks_after == 45.0
 
 
-def test_build_rl_job_config_propagates_lora_and_rollout_policy_format(monkeypatch):
-    class _FakeConverter:
-        def __init__(self, *args, **kwargs):
-            self.default_hf_config = SimpleNamespace(vocab_size=32000)
-
-    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
-    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
-    monkeypatch.setattr("marin.rl.rl_experiment_utils.is_hf_checkpoint", lambda _path: True)
-
-    lora_config = LoraConfig(r=16, alpha=32.0, target_modules=["q_proj", "v_proj"])
-    job_config = _build_rl_job_config(
-        name="rl-test",
-        config=_test_config(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            lora=lora_config,
-            rollout_policy_format="merged",
-        ),
-        curriculum=_test_curriculum(),
-        model_path="gs://marin-us-central1/models/test-model",
-        output_path="gs://marin-us-central1/rl_testing/rl-test",
-    )
-
-    assert job_config.train_params.lora == lora_config
-    assert job_config.rollout_policy_format == "merged"
-    assert job_config.adapter_artifacts_path == "gs://marin-us-central1/rl_testing/rl-test/adapter_artifacts"
-    assert job_config.merged_hf_export_path == "gs://marin-us-central1/rl_testing/rl-test/exports/merged"
-
-
 def test_build_rl_job_config_skips_default_adapter_export_for_non_hf_base(monkeypatch):
     class _FakeConverter:
         def __init__(self, *args, **kwargs):
@@ -365,36 +336,7 @@ def test_build_rl_job_config_skips_default_adapter_export_for_non_hf_base(monkey
     assert job_config.merged_hf_export_path == "gs://marin-us-central1/rl_testing/rl-test/exports/merged"
 
 
-def test_to_worker_configs_threads_manifest_fields_for_non_lora_runs(monkeypatch):
-    class _FakeConverter:
-        def __init__(self, *args, **kwargs):
-            self.default_hf_config = SimpleNamespace(vocab_size=32000)
-
-    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
-    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
-    monkeypatch.setattr("marin.rl.rl_experiment_utils.is_hf_checkpoint", lambda _path: True)
-    monkeypatch.setattr("marin.rl.job_config.make_tokenizer", lambda _tokenizer: SimpleNamespace(vocab_size=32000))
-
-    job_config = _build_rl_job_config(
-        name="rl-test",
-        config=_test_config(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-        ),
-        curriculum=_test_curriculum(),
-        model_path="gs://marin-us-central1/models/test-model",
-        output_path="gs://marin-us-central1/rl_testing/rl-test",
-    )
-
-    train_worker_config, rollout_worker_config = RLJob(job_config).to_worker_configs()
-
-    assert train_worker_config.rollout_policy_format == "merged"
-    assert train_worker_config.run_manifest_path == "gs://marin-us-central1/rl_testing/rl-test/rl_run_manifest.json"
-    assert train_worker_config.inference_type == "vllm"
-    assert rollout_worker_config.rollout_policy_format == "merged"
-
-
-def test_to_worker_configs_threads_lora_fields(monkeypatch):
+def test_lora_job_config_reaches_worker_with_safe_export_paths(monkeypatch):
     class _FakeConverter:
         def __init__(self, *args, **kwargs):
             self.default_hf_config = SimpleNamespace(vocab_size=32000)
@@ -418,39 +360,21 @@ def test_to_worker_configs_threads_lora_fields(monkeypatch):
     )
 
     train_worker_config, rollout_worker_config = RLJob(job_config).to_worker_configs()
+    adapter_artifacts_path = train_worker_config.adapter_artifacts_path
+    merged_hf_export_path = train_worker_config.merged_hf_export_path
+    checkpointer_path = train_worker_config.trainer.checkpointer.base_path
 
     assert train_worker_config.lora == lora_config
     assert train_worker_config.rollout_policy_format == "merged"
     assert train_worker_config.run_manifest_path == "gs://marin-us-central1/rl_testing/rl-test/rl_run_manifest.json"
-    assert train_worker_config.adapter_artifacts_path == "gs://marin-us-central1/rl_testing/rl-test/adapter_artifacts"
-    assert train_worker_config.merged_hf_export_path == "gs://marin-us-central1/rl_testing/rl-test/exports/merged"
+    assert adapter_artifacts_path == "gs://marin-us-central1/rl_testing/rl-test/adapter_artifacts"
+    assert merged_hf_export_path == "gs://marin-us-central1/rl_testing/rl-test/exports/merged"
     assert train_worker_config.inference_type == "vllm"
     assert rollout_worker_config.rollout_policy_format == "merged"
-
-
-def test_export_paths_stay_distinct_from_resume_checkpoints(monkeypatch):
-    class _FakeConverter:
-        def __init__(self, *args, **kwargs):
-            self.default_hf_config = SimpleNamespace(vocab_size=32000)
-
-    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
-    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
-
-    job_config = _build_rl_job_config(
-        name="rl-test",
-        config=_test_config(
-            train_tpu_type="v5p-8",
-            inference_tpu_type="v5p-8",
-            lora=LoraConfig(r=8, alpha=16.0, target_modules=["q_proj"]),
-        ),
-        curriculum=_test_curriculum(),
-        model_path=MODEL_NAME,
-        output_path="gs://marin-us-central1/rl_testing/rl-test",
-    )
-
-    assert job_config.trainer.checkpointer.base_path == "gs://marin-us-central1/rl_testing/rl-test/checkpoints"
-    assert job_config.adapter_artifacts_path == "gs://marin-us-central1/rl_testing/rl-test/adapter_artifacts"
-    assert job_config.merged_hf_export_path == "gs://marin-us-central1/rl_testing/rl-test/exports/merged"
+    assert adapter_artifacts_path != checkpointer_path
+    assert merged_hf_export_path != checkpointer_path
+    assert not adapter_artifacts_path.startswith(f"{checkpointer_path}/")
+    assert not merged_hf_export_path.startswith(f"{checkpointer_path}/")
 
 
 def test_to_worker_configs_rejects_unimplemented_adapter_rollout_format(monkeypatch):
@@ -476,6 +400,7 @@ def test_to_worker_configs_rejects_unimplemented_adapter_rollout_format(monkeypa
 
     with pytest.raises(ValueError, match="rollout_policy_format='adapter' is not implemented yet"):
         RLJob(job_config).to_worker_configs()
+
 
 def test_run_rl_experiment_step_returns_serializable_path_metadata(monkeypatch):
     calls = {}

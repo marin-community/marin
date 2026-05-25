@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import json
 from types import SimpleNamespace
 
 import pytest
 from levanter.adaptor.lora import LoraConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
-from marin.rl.lora_manifest import build_rl_run_manifest
+from marin.rl.lora_manifest import build_rl_run_manifest, read_rl_run_manifest
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.train_worker import (
     BatchPrepTiming,
@@ -455,16 +454,7 @@ def test_write_run_manifest_persists_expected_lora_metadata(tmp_path):
 
     worker._write_run_manifest()
 
-    manifest = json.loads(manifest_path.read_text())
-    assert manifest["manifest_version"] == 1
-    assert manifest["initial_checkpoint"] == "hf://meta-llama/Llama-3.1-8B"
-    assert manifest["rollout_policy_format"] == "merged"
-    assert manifest["reference_mode"] == "base"
-    assert manifest["inference_type"] == "vllm"
-    assert manifest["lora_config"]["r"] == 8
-    assert manifest["lora_config"]["alpha"] == 16.0
-    assert manifest["lora_config"]["target_modules"] == ["q_proj", "v_proj"]
-    assert manifest["lora_config_fingerprint"] is not None
+    assert read_rl_run_manifest(str(manifest_path)) == worker._expected_run_manifest()
 
 
 def test_validate_run_manifest_for_resume_accepts_matching_manifest(monkeypatch):
