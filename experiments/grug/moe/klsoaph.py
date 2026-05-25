@@ -420,10 +420,21 @@ def _klsoaph_step_blocked(
     # JAX's per-axis select reconciliation.
 
     # --- init branch outputs ---
+    # We deviate from upstream KLSOAPH on Q initialization: instead of
+    # `eigh` of the first-gradient Gram, we initialize Q = identity (per-
+    # block). Reason: jnp.linalg.eigh on sharded tensors lowers to ops that
+    # eventually emit a `select` with mismatched sharding between the
+    # broadcast predicate and the case tensors, crashing the explicit-mesh
+    # trainer. The QR-iteration refresh (which runs every precond_freq=1
+    # step on this config) effectively warm-starts the basis from identity
+    # in ~O(1) refresh iterations, so we lose at most a few-step warmup.
+    # Q is started at the (per-block) identity sharded the same as gg_l/gg_r.
     init_gg_l = _symmetrize(_ein("...ik,...jk->...ij", g32, g32) / inner_cols)
     init_gg_r = _symmetrize(_ein("...ki,...kj->...ij", g32, g32) / inner_rows)
-    init_q_l = _flipped_eigh(init_gg_l)
-    init_q_r = _flipped_eigh(init_gg_r)
+    # Identity per block — use multiplication by a precomputed mask so we don't
+    # introduce any reshaping/broadcast that could change sharding.
+    init_q_l = jnp.zeros_like(gg_l) + jnp.eye(B, dtype=jnp.float32)
+    init_q_r = jnp.zeros_like(gg_r) + jnp.eye(B, dtype=jnp.float32)
     init_esi_l = jnp.full_like(esi_l, init_factor**-0.5)
     init_esi_r = jnp.full_like(esi_r, init_factor**-0.5)
     init_dir = jnp.zeros_like(g32)
