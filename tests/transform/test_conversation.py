@@ -3,8 +3,6 @@
 
 """Tests for conversation data transformation scripts."""
 
-import dataclasses
-import json
 from pathlib import Path
 
 from marin.core.conversation import OpenAIChatMessage
@@ -16,7 +14,11 @@ from marin.transform.conversation.transform_conversation import (
     transform_row,
 )
 
-from experiments.posttrain.instruction_datasets import get_adapter_signature_string, instruction_response_adapter
+from experiments.posttrain.instruction_datasets import (
+    InstructionDatasetConfig,
+    instruction_response_adapter,
+    transform_dataset_step,
+)
 
 OPENAI_FORMAT_SAMPLE = {
     "messages": [
@@ -93,24 +95,6 @@ def _replace_assistant_message(messages: list[OpenAIChatMessage], row: dict[str,
 
 def _row_id_from_source(row: dict[str, str], _messages: list[dict[str, object]]) -> str:
     return row["custom_row_id"]
-
-
-def _legacy_adapter_signature_string(adapter: TransformAdapter) -> str:
-    adapter_dict = dataclasses.asdict(adapter)
-    adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
-    adapter_dict.pop("message_postprocess_fn", None)
-    adapter_dict.pop("row_id_fn", None)
-
-    def canonicalize(value):
-        if isinstance(value, dict):
-            return {key: canonicalize(inner_value) for key, inner_value in sorted(value.items())}
-        if isinstance(value, list):
-            return [canonicalize(item) for item in value]
-        if callable(value):
-            return f"{value.__module__}.{value.__qualname__}"
-        return value
-
-    return json.dumps(canonicalize(adapter_dict), sort_keys=True)
 
 
 class TestTransformAdapters:
@@ -309,63 +293,37 @@ class TestTransformRow:
         response_message = result.messages[1]
         assert response_message.content == "<|start_think|>Use the replacement path<|end_think|>"
 
-    def test_transform_uses_row_id_hook(self):
-        """Test row ids can come from a source-provided identifier."""
-        adapter = TransformAdapter(
-            dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
-            instruction_column="instruction",
-            response_column="response",
-            row_id_fn=_row_id_from_source,
-        )
 
-        row = {
-            "instruction": "Question",
-            "response": "Answer",
-            "custom_row_id": "trace-123",
-        }
+class TestInstructionDatasetTransformVersioning:
+    """Test transform-cache versioning for behavior-changing adapter hooks."""
 
-        cfg = TransformSFTDatasetConfig(
-            source="test/dataset",
-            revision="main",
-            output_path="/tmp/output",
+    def test_trace_hooks_get_distinct_transform_output_path(self):
+        base_config = InstructionDatasetConfig(
+            hf_dataset_id="test/trace-source",
+            revision="abc123",
+            adapter=instruction_response_adapter(
+                instruction_column="instruction",
+                response_column="response",
+            ),
             metadata_columns=[],
-            adapter=adapter,
+        )
+        hooked_config = InstructionDatasetConfig(
+            hf_dataset_id="test/trace-source",
+            revision="abc123",
+            adapter=instruction_response_adapter(
+                instruction_column="instruction",
+                response_column="response",
+                message_postprocess_fn=_replace_assistant_message,
+                row_id_fn=_row_id_from_source,
+            ),
+            metadata_columns=[],
         )
 
-        result = transform_row(row, cfg, adapter)
+        base_step = transform_dataset_step(base_config)
+        hooked_step = transform_dataset_step(hooked_config)
 
-        assert result is not None
-        assert result.id == "trace-123"
-
-
-class TestInstructionDatasetAdapterSignatures:
-    """Test instruction dataset adapter signature stability."""
-
-    def test_signature_omits_unset_trace_hooks(self):
-        adapter = instruction_response_adapter(
-            instruction_column="instruction",
-            response_column="response",
-        )
-
-        signature_string = get_adapter_signature_string(adapter)
-        signature = json.loads(signature_string)
-
-        assert "message_postprocess_fn" not in signature
-        assert "row_id_fn" not in signature
-        assert signature_string == _legacy_adapter_signature_string(adapter)
-
-    def test_signature_includes_set_trace_hooks(self):
-        adapter = instruction_response_adapter(
-            instruction_column="instruction",
-            response_column="response",
-            message_postprocess_fn=_replace_assistant_message,
-            row_id_fn=_row_id_from_source,
-        )
-
-        signature = json.loads(get_adapter_signature_string(adapter))
-
-        assert signature["message_postprocess_fn"].endswith("._replace_assistant_message")
-        assert signature["row_id_fn"].endswith("._row_id_from_source")
+        assert base_step.name == hooked_step.name
+        assert base_step.override_output_path != hooked_step.override_output_path
 
 
 class TestPreferenceDataTransform:

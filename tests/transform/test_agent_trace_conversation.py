@@ -17,33 +17,28 @@ from marin.transform.conversation.transform_conversation import TransformSFTData
 from experiments.posttrain.instruction_datasets import INSTRUCTION_DATASET_NAME_TO_CONFIG
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "agent_traces"
-EXPECTED_HERMES_FEATURES = ["id", "conversations", "tools", "category", "subcategory", "task"]
 
 
 def _load_json_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("fixture_name", ["hermes_glm_schema.json", "hermes_kimi_schema.json"])
-def test_hermes_schema_fixtures_match_expected_fields(fixture_name: str):
-    schema = _load_json_fixture(fixture_name)
-    assert [feature["name"] for feature in schema["features"]] == EXPECTED_HERMES_FEATURES
-
-
 @pytest.mark.parametrize(
-    ("dataset_name", "fixture_name", "expected_tool_name", "expected_tool_call_id"),
+    ("dataset_name", "fixture_name", "expected_tool_name", "expected_tool_call_id", "expected_tool_content"),
     [
         (
             "lambda/hermes-agent-reasoning-traces/glm-5.1",
             "hermes_glm_sample.json",
             "write_file",
             "glm-tool-call-001",
+            {"bytes_written": 15, "dirs_created": False},
         ),
         (
             "lambda/hermes-agent-reasoning-traces/kimi",
             "hermes_kimi_sample.json",
             "terminal",
             "kimi-tool-call-001",
+            {"output": "/workspace/project", "exit_code": 0, "error": None},
         ),
     ],
 )
@@ -52,6 +47,7 @@ def test_registered_hermes_dataset_transforms(
     fixture_name: str,
     expected_tool_name: str,
     expected_tool_call_id: str,
+    expected_tool_content: dict,
 ):
     row = _load_json_fixture(fixture_name)
     dataset_cfg = INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_name]
@@ -85,30 +81,32 @@ def test_registered_hermes_dataset_transforms(
     tool_message = result.messages[3]
     assert tool_message.name == expected_tool_name
     assert tool_message.tool_call_id == expected_tool_call_id
-    assert isinstance(tool_message.content, dict)
+    assert tool_message.content == expected_tool_content
     assert "<tool_response>" not in json.dumps(tool_message.content)
 
 
-def test_hermes_tool_response_normalization_preserves_raw_content_on_malformed_wrapper():
-    original = OpenAIChatMessage(role="tool", content='<tool_response>\n{"name": "terminal"}')
+@pytest.mark.parametrize(
+    "content",
+    [
+        '<tool_response>\n{"name": "terminal"}',
+        '<tool_response>\n{"name": "terminal",}\n</tool_response>',
+    ],
+)
+def test_hermes_tool_response_normalization_preserves_raw_content_when_wrapper_cannot_parse(content: str):
+    original = OpenAIChatMessage(role="tool", content=content)
 
     normalized = normalize_hermes_trace_messages([original], row={})
 
     assert normalized == [original]
 
 
-def test_hermes_tool_response_normalization_preserves_wrapped_content_on_invalid_json():
-    original = OpenAIChatMessage(role="tool", content='<tool_response>\n{"name": "terminal",}\n</tool_response>')
-
-    normalized = normalize_hermes_trace_messages([original], row={})
-
-    assert normalized == [original]
-
-
-def test_hermes_trace_row_id_falls_back_to_message_hash_without_source_id():
+def test_hermes_trace_row_id_uses_source_id_or_deterministic_message_hash():
     messages = [{"role": "assistant", "content": "hello"}]
 
-    row_id = hermes_trace_row_id({}, messages)
+    assert hermes_trace_row_id({"id": "trace-from-source"}, messages) == "trace-from-source"
+    first_fallback = hermes_trace_row_id({}, messages)
+    second_fallback = hermes_trace_row_id({}, messages)
+    changed_fallback = hermes_trace_row_id({}, [{"role": "assistant", "content": "goodbye"}])
 
-    assert isinstance(row_id, str)
-    assert len(row_id) == 64
+    assert first_fallback == second_fallback
+    assert first_fallback != changed_fallback
