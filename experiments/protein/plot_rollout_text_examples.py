@@ -97,14 +97,14 @@ def pair_tail_tokens(i: int, j: int, atom_i: str, atom_j: str) -> list[str]:
 def pick_example_pairs(seq_len: int, n_examples: int = 8) -> list[tuple[int, int]]:
     """Pick a spread of (i, j) pairs (i<j) covering short/medium/long range."""
     candidates = [
-        (1, 2),                             # adjacent
-        (1, 5),                             # short range
-        (1, 10),                            # short range
-        (max(1, seq_len // 4), seq_len // 4 + 5),       # short range mid
-        (max(1, seq_len // 4), max(2, seq_len // 2)),   # medium range
+        (1, 2),  # adjacent
+        (1, 5),  # short range
+        (1, 10),  # short range
+        (max(1, seq_len // 4), seq_len // 4 + 5),  # short range mid
+        (max(1, seq_len // 4), max(2, seq_len // 2)),  # medium range
         (max(1, seq_len // 8), max(2, 7 * seq_len // 8)),  # long range
-        (max(1, seq_len // 3), seq_len),                # long range
-        (max(1, seq_len // 2), seq_len),                # long range
+        (max(1, seq_len // 3), seq_len),  # long range
+        (max(1, seq_len // 2), seq_len),  # long range
     ]
     # Drop duplicates, drop invalid (j > seq_len or i==j), keep order.
     seen: set[tuple[int, int]] = set()
@@ -158,9 +158,15 @@ def render_query_page(
     # 1) Render the prefix at top, monospace blue, with line wrapping.
     y = 0.95
     ax.text(
-        0.0, y,
+        0.0,
+        y,
         f"PROMPT ({len(prefix)} tokens, shown first {min(len(prefix), max_prefix_tokens)}):",
-        fontsize=9, family="monospace", weight="bold", color="black", va="top", transform=ax.transAxes,
+        fontsize=9,
+        family="monospace",
+        weight="bold",
+        color="black",
+        va="top",
+        transform=ax.transAxes,
     )
     y -= line_height + 0.005
 
@@ -171,8 +177,16 @@ def render_query_page(
         sep = 1 if line_tokens else 0
         if char_pos + sep + len(tok) > max_line_chars and line_tokens:
             for t, off in line_tokens:
-                ax.text(off / max_line_chars, y, t, fontsize=fontsize, family="monospace",
-                        color="tab:blue", va="top", transform=ax.transAxes)
+                ax.text(
+                    off / max_line_chars,
+                    y,
+                    t,
+                    fontsize=fontsize,
+                    family="monospace",
+                    color="tab:blue",
+                    va="top",
+                    transform=ax.transAxes,
+                )
             y -= line_height
             line_tokens = []
             char_pos = 0
@@ -181,23 +195,54 @@ def render_query_page(
         char_pos += sep + len(tok)
     if line_tokens:
         for t, off in line_tokens:
-            ax.text(off / max_line_chars, y, t, fontsize=fontsize, family="monospace",
-                    color="tab:blue", va="top", transform=ax.transAxes)
+            ax.text(
+                off / max_line_chars,
+                y,
+                t,
+                fontsize=fontsize,
+                family="monospace",
+                color="tab:blue",
+                va="top",
+                transform=ax.transAxes,
+            )
         y -= line_height
     if len(prefix) > max_prefix_tokens:
-        ax.text(0.0, y, f"... [{len(prefix) - max_prefix_tokens} more prefix tokens omitted]",
-                fontsize=fontsize, family="monospace", color="gray", va="top", transform=ax.transAxes)
+        ax.text(
+            0.0,
+            y,
+            f"... [{len(prefix) - max_prefix_tokens} more prefix tokens omitted]",
+            fontsize=fontsize,
+            family="monospace",
+            color="gray",
+            va="top",
+            transform=ax.transAxes,
+        )
         y -= line_height
 
     # 2) Header for the query section (split across two lines so it fits).
     y -= 0.012
-    ax.text(0.0, y,
-            "PER-PAIR QUERIES — each row is an independent forward pass.",
-            fontsize=9, family="monospace", weight="bold", color="black", va="top", transform=ax.transAxes)
+    ax.text(
+        0.0,
+        y,
+        "PER-PAIR QUERIES — each row is an independent forward pass.",
+        fontsize=9,
+        family="monospace",
+        weight="bold",
+        color="black",
+        va="top",
+        transform=ax.transAxes,
+    )
     y -= line_height
-    ax.text(0.0, y,
-            "Input = the prompt above + the tail in the row; output = one distance-bin token.",
-            fontsize=9, family="monospace", color="black", va="top", transform=ax.transAxes)
+    ax.text(
+        0.0,
+        y,
+        "Input = the prompt above + the tail in the row; output = one distance-bin token.",
+        fontsize=9,
+        family="monospace",
+        color="black",
+        va="top",
+        transform=ax.transAxes,
+    )
     y -= line_height + 0.004
 
     # 3) Render each pair as a row with stable column alignment.
@@ -206,11 +251,11 @@ def render_query_page(
     def col(char_offset: int) -> float:
         return char_offset / max_line_chars
 
-    col_pair = col(0)        # "(i=  X, j=  Y)"             — 16 chars
-    col_tail = col(20)       # tail tokens                   — up to ~42 chars
-    col_arrow = col(64)      # "→"
-    col_pred = col(68)       # "<d_x.x> (p=0.NN)"            — ~18 chars
-    col_gt = col(94)         # "GT: <d_y.y> (z.zz Å)"        — ~22 chars
+    col_pair = col(0)  # "(i=  X, j=  Y)"             — 16 chars
+    col_tail = col(20)  # tail tokens                   — up to ~42 chars
+    col_arrow = col(64)  # "→"
+    col_pred = col(68)  # "<d_x.x> (p=0.NN)"            — ~18 chars
+    col_gt = col(94)  # "GT: <d_y.y> (z.zz Å)"        — ~22 chars
 
     for q in pair_queries:
         i, j = q["i"], q["j"]
@@ -220,17 +265,52 @@ def render_query_page(
         pred_p = q["pred_p"]
         gt_dist = q["gt_distance_a"]
 
-        ax.text(col_pair, y, f"(i={i:3d}, j={j:3d})", fontsize=fontsize,
-                family="monospace", color="dimgray", va="top", transform=ax.transAxes)
-        ax.text(col_tail, y, " ".join(tail), fontsize=fontsize, family="monospace",
-                color="dimgray", va="top", transform=ax.transAxes)
-        ax.text(col_arrow, y, "→", fontsize=fontsize, family="monospace", color="black",
-                va="top", transform=ax.transAxes)
-        ax.text(col_pred, y, f"{pred_tok}  p={pred_p:.2f}", fontsize=fontsize,
-                family="monospace", color="tab:green", weight="bold", va="top", transform=ax.transAxes)
+        ax.text(
+            col_pair,
+            y,
+            f"(i={i:3d}, j={j:3d})",
+            fontsize=fontsize,
+            family="monospace",
+            color="dimgray",
+            va="top",
+            transform=ax.transAxes,
+        )
+        ax.text(
+            col_tail,
+            y,
+            " ".join(tail),
+            fontsize=fontsize,
+            family="monospace",
+            color="dimgray",
+            va="top",
+            transform=ax.transAxes,
+        )
+        ax.text(
+            col_arrow, y, "→", fontsize=fontsize, family="monospace", color="black", va="top", transform=ax.transAxes
+        )
+        ax.text(
+            col_pred,
+            y,
+            f"{pred_tok}  p={pred_p:.2f}",
+            fontsize=fontsize,
+            family="monospace",
+            color="tab:green",
+            weight="bold",
+            va="top",
+            transform=ax.transAxes,
+        )
         gt_str = f"GT: {gt_tok if gt_tok else '(out-of-range)'}  {gt_dist:.2f} Å"
-        ax.text(col_gt, y, gt_str, fontsize=fontsize, family="monospace", color="gray",
-                style="italic", va="top", transform=ax.transAxes)
+        ax.text(
+            col_gt,
+            y,
+            gt_str,
+            fontsize=fontsize,
+            family="monospace",
+            color="gray",
+            style="italic",
+            va="top",
+            transform=ax.transAxes,
+        )
 
         y -= line_height
         if y < 0.04:
@@ -253,7 +333,7 @@ def plot_title_page(model: str, variant: str, targets: list[str], n_values: list
         "WHAT THE EVAL DOES (this PDF visualizes a representative slice):\n"
         "  • Build a single shared PREFIX once per (target, variant, N):\n"
         "      <contacts-and-distances-v1> <begin_sequence> <AA1>...<AAn>\n"
-        "      <begin_statements> [<long-range-contact> <p_i> <p_j>] × N\n"
+        "      <begin_statements> [<long-range-contact> <p_i> <p_j>] x N\n"
         "  • For every residue pair (i, j) with i<j, form an independent\n"
         "    teacher-forced query by appending a 5-token tail:\n"
         "      <distance> <p_i> <p_j> <atom_i> <atom_j>\n"
@@ -272,8 +352,14 @@ def plot_title_page(model: str, variant: str, targets: list[str], n_values: list
         "    comparison (gray italic)."
     )
     ax.text(
-        0.05, 0.95, body, ha="left", va="top",
-        fontsize=11, family="monospace", transform=ax.transAxes,
+        0.05,
+        0.95,
+        body,
+        ha="left",
+        va="top",
+        fontsize=11,
+        family="monospace",
+        transform=ax.transAxes,
     )
     return fig
 
@@ -314,7 +400,10 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info(
         "Building rollout-text PDF: model=%s variant=%s targets=%s n_values=%s",
-        args.model, args.variant, args.targets, args.n_values,
+        args.model,
+        args.variant,
+        args.targets,
+        args.n_values,
     )
     with PdfPages(args.output_pdf) as pdf:
         pdf.savefig(plot_title_page(args.model, args.variant, args.targets, args.n_values, args.max_prefix_tokens))
@@ -340,12 +429,17 @@ def main(argv: list[str] | None = None) -> int:
                     pred_p = float(p_i_j[pred_k])
                     gt_k = _gt_bin_index(float(gt_distance[i - 1, j - 1]))
                     gt_tok = _bin_token(gt_k) if gt_k is not None else None
-                    pair_queries.append({
-                        "i": i, "j": j, "tail": tail,
-                        "pred_tok": _bin_token(pred_k), "pred_p": pred_p,
-                        "gt_tok": gt_tok,
-                        "gt_distance_a": float(gt_distance[i - 1, j - 1]),
-                    })
+                    pair_queries.append(
+                        {
+                            "i": i,
+                            "j": j,
+                            "tail": tail,
+                            "pred_tok": _bin_token(pred_k),
+                            "pred_p": pred_p,
+                            "gt_tok": gt_tok,
+                            "gt_distance_a": float(gt_distance[i - 1, j - 1]),
+                        }
+                    )
 
                 title = f"{target} ({args.variant}) — N={n} seeded contacts — model {args.model}"
                 fig = render_query_page(

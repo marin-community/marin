@@ -36,16 +36,17 @@ from experiments.defaults import default_tokenize, default_train
 from experiments.protein.create_protein_tokenizer import create_protein_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 
-# Pinned to the legacy 2840-vocab revision of protein-docs-tokenizer. Required
-# because the all-doc-types training run (see ``train_protein_1b_all_docs_unmasked``)
-# briefly pushed a 2849-vocab version to this same repo URL on 2026-05-06,
-# poisoning the local tokenizer cache on iris workers; pinning a specific
-# commit forces a fresh fetch into a revision-keyed cache dir, sidestepping
-# the stale-cache problem. The 2849 vocab now lives at
-# ``timodonnell/protein-docs-all-doc-types-tokenizer`` for the new run.
+# Pinned to a specific revision of protein-docs-tokenizer (2840-vocab).
+# HEAD is also 2840-vocab now, but workers on this cluster have a stale
+# 2849-vocab tokenizer in their local HF cache from when HEAD briefly was 2849
+# on 2026-05-06. The @<sha> suffix forces levanter's patched load_tokenizer to
+# key the cache by revision so the stale entry is bypassed.
 #
-# Pinning is supported by levanter's load_tokenizer via a ``repo@revision``
-# suffix; cache key includes the revision so different revs don't collide.
+# Known issue: at periodic export checkpoints (steps_per_export trigger), some
+# code path inside levanter/marin's export passes this string to
+# huggingface_hub directly, which rejects ``repo@sha`` as an invalid repo id.
+# That crash recurs every 5K steps until either marin/levanter export is
+# patched to strip the @sha, or workers' stale tokenizer cache is purged.
 PROTEIN_TOKENIZER = "timodonnell/protein-docs-tokenizer@83f597d88e9b"
 DISTANCE_TOKEN_ID: int = create_protein_tokenizer().convert_tokens_to_ids("<distance>")
 
@@ -240,12 +241,18 @@ def build_hf_export_step(
     else:
         checkpoint_path = output_path_of(train_step, "checkpoints")
 
+    # Strip the ``@<revision>`` suffix when passing to the export step. The pin
+    # exists to bust workers' stale local tokenizer cache during training; the
+    # export container starts fresh so doesn't need it, and various transformers
+    # code paths (AutoTokenizer falling back to AutoConfig) reject the @sha form.
+    export_tokenizer = PROTEIN_TOKENIZER.split("@", 1)[0]
+
     return convert_checkpoint_to_hf_step(
         name=f"hf/{name_prefix}-step-{checkpoint_step}",
         checkpoint_path=checkpoint_path,  # pyrefly: ignore
         trainer=deepcopy(trainer),
         model=model_config,
-        tokenizer=PROTEIN_TOKENIZER,
+        tokenizer=export_tokenizer,
         use_cpu=True,
         discover_latest=True,
     )

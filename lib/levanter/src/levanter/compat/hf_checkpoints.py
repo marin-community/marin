@@ -1504,6 +1504,19 @@ def _patch_hf_hub_download():
             if repo_type is None:
                 repo_type = "model"
 
+            # Split ``repo@revision`` so the bare repo passes hub validation
+            # and the revision propagates explicitly.
+            if repo_id and "@" in repo_id and not _is_url_like(repo_id):
+                bare_repo, _, suffix_rev = repo_id.partition("@")
+                repo_id = bare_repo
+                if revision is None and suffix_rev:
+                    revision = suffix_rev
+                if "repo_id" in kwargs:
+                    kwargs["repo_id"] = repo_id
+                else:
+                    args = (repo_id,) + args[1:]
+                kwargs["revision"] = revision
+
             if revision is None:
                 revision = "main"
 
@@ -1534,7 +1547,11 @@ def _patch_hf_hub_download():
         def custom_validate_repo_id(repo_id):
             if _is_url_like(repo_id):
                 return
-            return original_validate_repo_id(repo_id)
+            # Strip ``@<revision>`` suffix (used by levanter's load_tokenizer
+            # to pin a specific revision) before validation — huggingface_hub
+            # rejects ``repo@sha`` as an invalid repo id.
+            bare_repo = repo_id.split("@", 1)[0] if "@" in repo_id else repo_id
+            return original_validate_repo_id(bare_repo)
 
         huggingface_hub.utils._validators.validate_repo_id = custom_validate_repo_id
 

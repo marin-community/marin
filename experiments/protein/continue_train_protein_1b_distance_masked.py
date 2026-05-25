@@ -53,10 +53,13 @@ protein_docs_data = LmDataConfig(
     block_cross_document_attention=True,
 )
 
+# Bumped to 100K to add a second epoch on top of the original 50K finished run.
+# Levanter's checkpointer auto-resumes from the latest checkpoint at the pinned
+# output dir (step-49999), so this trains 50K more steps (~50K → 99999).
 train_config = SimpleTrainConfig(
     resources=PROTEIN_RESOURCES_USE5,
     train_batch_size=128,
-    num_train_steps=50_000,
+    num_train_steps=100_000,
     learning_rate=versioned(3.5e-4),
     weight_decay=0.01,
     warmup=0.1,

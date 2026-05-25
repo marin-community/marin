@@ -31,11 +31,16 @@ protein_llama_1_5b = LlamaConfig(
     num_layers=24,
 )
 
+# Pinned to the 70f8f5 output dir from the original launch. Without this, a
+# checkpoint at step ~28933 was orphaned when something upstream in the marin
+# executor's hash computation drifted and produced a new hash (ce18f8). The
+# checkpoint is still at the 70f8f5 path; pin so we resume from it.
 protein_model_1_5b_distance_masked = build_distance_masked_train_step(
     name="protein-contacts-1_5b-distance-masked",
     model_config=protein_llama_1_5b,
     learning_rate=3.5e-4,
     extra_tags=("1_5b",),
+    override_output_path="gs://marin-us-east5/checkpoints/protein-contacts-1_5b-distance-masked-70f8f5",
 )
 
 

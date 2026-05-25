@@ -23,7 +23,7 @@ from experiments.protein.train_protein_1_5b_distance_masked import (
     protein_model_1_5b_distance_masked,
 )
 
-CHECKPOINT_STEP = 2500
+CHECKPOINT_STEP = 49999
 CHECKPOINT_PATH = "gs://marin-us-east5/checkpoints/protein-contacts-1_5b-distance-masked-70f8f5/checkpoints"
 
 hf_export = build_hf_export_step(

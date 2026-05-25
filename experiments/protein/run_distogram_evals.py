@@ -117,9 +117,8 @@ class EvalVariant:
 # the actual checkpoint loaded is the latest one found by
 # ``discover_latest_checkpoint`` when the eval container starts.
 #
-# Snapshot 8 (2026-05-11 ~01:10 UTC): 1b_unmasked and 420m_deep finished.
-# Updated still-training models to latest checkpoints. 1b_all_docs not yet
-# included — only has eval@1000, too early.
+# Snapshot 10 (2026-05-22 ~17:15 UTC): 1_5b FINISHED at step 49999 (loss 1.000);
+# 3b at 29k loss 1.077; 1b_all_docs at 32k macro_loss 1.403.
 EVAL_RUNS: list[EvalRunEntry] = [
     EvalRunEntry(
         # Finished at step-50000. Unchanged.
@@ -147,14 +146,14 @@ EVAL_RUNS: list[EvalRunEntry] = [
         levanter_model_spec="experiments.protein.train_protein_420m_deep_distance_masked.protein_llama_420m_deep",
     ),
     EvalRunEntry(
-        # Latest eval@28500 loss=1.065.
-        model_label="1_5b-step-29000",
+        # Finished at step-49999. Final eval loss=0.9999, bpb=0.107.
+        model_label="1_5b-step-50000",
         levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-1_5b-distance-masked-70f8f5/checkpoints",
         levanter_model_spec="experiments.protein.train_protein_1_5b_distance_masked.protein_llama_1_5b",
     ),
     EvalRunEntry(
-        # Latest eval@13000 loss=1.226 — slow but progressing.
-        model_label="3b-step-13000",
+        # Latest eval@29000 loss=1.077.
+        model_label="3b-step-29000",
         levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-3b-distance-masked-ef3aa5/checkpoints",
         levanter_model_spec="experiments.protein.train_protein_3b_distance_masked.protein_llama_3b",
     ),
@@ -174,6 +173,14 @@ EVAL_RUNS: list[EvalRunEntry] = [
         model_label="100m_unmasked-step-50000",
         levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-100m-3.5e-4-unmasked-7c3ef7/checkpoints",
         levanter_model_spec="experiments.protein.train_protein_100m_unmasked.protein_llama_100m",
+    ),
+    EvalRunEntry(
+        # All-docs unmasked run on v5p-8. Latest eval@32000 macro_loss=1.403
+        # (cd=2.545, det=0.467, r3b=1.198). Trained on 3-way mixture; vocab=2849
+        # (all-doc-types tokenizer).
+        model_label="1b_all_docs-step-32000",
+        levanter_checkpoint_path="gs://marin-us-east5/checkpoints/protein-contacts-1b-3.5e-4-all-docs-unmasked-f697e4/checkpoints",
+        levanter_model_spec="experiments.protein.train_protein_1b_all_docs_unmasked.protein_llama_1b",
     ),
 ]
 

@@ -27,7 +27,8 @@ single-subset baselines like ``protein-contacts-1b-3.5e-4-distance-masked-7d355e
 Usage::
 
     uv run iris --config=lib/iris/examples/marin.yaml job run \\
-        --memory=16GB --disk=16GB --cpu=1 --extra=tpu --zone=us-east5-a -- \\
+        --enable-extra-resources --memory=128GB --disk=50GB --cpu=32 \\
+        --extra=tpu --tpu=v5p-8 --zone=us-east5-a --no-wait -- \\
         python -m experiments.protein.train_protein_1b_all_docs_unmasked
 """
 
@@ -36,11 +37,11 @@ import dataclasses
 from fray import ResourceConfig
 from levanter.data.text import BlockShuffleConfig, LmDataConfig, TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
+from marin.execution.executor import executor_main, versioned
+from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main, versioned
-from marin.processing.tokenize.data_configs import step_to_lm_mixture_component
 
 # Architecture matches train_protein_1b.py exactly.
 protein_llama_1b = LlamaConfig(
@@ -155,25 +156,28 @@ protein_docs_data = LmDataConfig(
     shuffle=SHUFFLE,
 )
 
-# v5p-32 (32 chips, 4× v5p-8) using the same minimal config that
-# experiments.ferries.* run with successfully. Earlier we tried adding cpu/ram/
-# zone overrides; that broke JAX multi-host bootstrap with
-# "multihost_broadcast_sync requires jax distributed client to be initialized"
-# during wandb tracker init. Defaults are fine here.
-PROTEIN_RESOURCES_V5P_32 = ResourceConfig.with_tpu("v5p-32")
+# v5p-8 single-host. Earlier on v5p-32 we hit a structural bug: marin
+# executor's per-step GCS lock races across the 4 gang-scheduled siblings
+# (none of them can hold the lock long enough), so the JAX coordinator times
+# out within ~5 min. v5p-8 has one task, no race, no coordinator timeout.
+# Cost: 4x slower wall-clock vs. v5p-32 at the same batch size.
+PROTEIN_RESOURCES_V5P_8 = ResourceConfig.with_tpu(
+    "v5p-8",
+    slice_count=1,
+    cpu=32,
+    ram="128g",
+    disk="50g",
+    zone="us-east5-a",
+)
 
-# Scaling vs the reference 1B recipe (v5p-8, batch 128, lr 3.5e-4):
-#   * train_batch_size: 128 → 512  (linear scale with chip count)
-#   * learning_rate:    3.5e-4 → 7e-4  (square-root scale; conservative —
-#     420m_deep just had a divergence event at 3.5e-4 batch 128, so we
-#     don't want to push linear-scaled 1.4e-3)
-#   * num_train_steps:  unchanged at 200K (4× the original total tokens of
-#     ~52B → ~210B; long but matches the user's bumped horizon)
+# Matches the reference 1B recipe (train_protein_1b.py): batch 128, lr 3.5e-4
+# on a single v5p-8. 200K steps gives the same horizon the v5p-32 attempt was
+# aiming for; just takes 4x longer in wall-clock.
 train_config = SimpleTrainConfig(
-    resources=PROTEIN_RESOURCES_V5P_32,
-    train_batch_size=512,
+    resources=PROTEIN_RESOURCES_V5P_8,
+    train_batch_size=128,
     num_train_steps=200_000,
-    learning_rate=versioned(7e-4),
+    learning_rate=versioned(3.5e-4),
     weight_decay=0.01,
     warmup=0.1,
     train_seq_len=8192,
