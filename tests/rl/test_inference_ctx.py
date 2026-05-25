@@ -735,35 +735,8 @@ def test_vllm_reload_model_resets_prefix_cache_and_syncs_weights(monkeypatch):
     assert call["reshard_fn"] is None
 
 
-def test_vllm_reload_model_requires_state_dict(monkeypatch):
-    fake_llm = SimpleNamespace(
-        llm_engine=SimpleNamespace(
-            reset_prefix_cache=lambda: None,
-            model_executor=SimpleNamespace(driver_worker=SimpleNamespace(sync_weights=lambda **kwargs: None)),
-        )
-    )
-
-    monkeypatch.setattr(vLLMInferenceContext, "_get_llm_engine", staticmethod(lambda _config: fake_llm))
-    monkeypatch.setattr(
-        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
-        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
-    )
-    monkeypatch.setattr(
-        vLLMInferenceContext,
-        "_get_renderer",
-        staticmethod(lambda model_name, _tokenizer: model_name),
-    )
-
-    ctx = vLLMInferenceContext(
-        vLLMInferenceContextConfig(
-            model_name="Qwen/Qwen3-0.6B",
-            canonical_model_name="Qwen/Qwen3-0.6B",
-            max_model_len=1024,
-            tensor_parallel_size=1,
-            gpu_memory_utilization=0.9,
-            sampling_params=VLLMSamplingConfig(),
-        )
-    )
+def test_vllm_reload_model_requires_state_dict():
+    ctx = vLLMInferenceContext.__new__(vLLMInferenceContext)
 
     with pytest.raises(ValueError, match="requires a full state_dict payload"):
         ctx.reload_model(model=None, state_dict=None)

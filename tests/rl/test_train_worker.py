@@ -278,8 +278,10 @@ def test_train_uses_trainable_filter_for_lora_runs(monkeypatch):
     manifest_writes: list[bool] = []
     logged_summaries: list[dict[str, float | int]] = []
     served_weights: list[tuple[int, object]] = []
+    exported_models: list[object] = []
     merged_model = object()
     trainable_model = object()
+    eval_model = object()
 
     class _FakeReplayLoader:
         def __enter__(self):
@@ -311,8 +313,8 @@ def test_train_uses_trainable_filter_for_lora_runs(monkeypatch):
             return SimpleNamespace(step=0, model=model, trainable_model=trainable_model)
 
         def train(self, state, data_loader) -> None:
-            del data_loader
-            return SimpleNamespace(eval_model=state.model)
+            del state, data_loader
+            return SimpleNamespace(eval_model=eval_model)
 
     monkeypatch.setattr("marin.rl.train_worker.Trainer", _FakeTrainer)
     monkeypatch.setattr("marin.rl.train_worker.merge_lora_modules", lambda model: merged_model)
@@ -352,6 +354,7 @@ def test_train_uses_trainable_filter_for_lora_runs(monkeypatch):
     worker._wait_for_initial_rollouts = lambda *, weight_step: True
     worker._validate_run_manifest_for_resume = lambda trainer: None
     worker._write_run_manifest = lambda: manifest_writes.append(True)
+    worker._export_lora_artifacts = exported_models.append
     worker.stop = lambda: None
 
     worker.train()
@@ -359,6 +362,7 @@ def test_train_uses_trainable_filter_for_lora_runs(monkeypatch):
     assert manifest_writes == [True]
     assert initial_state_calls == [{"model": worker.initial_model, "is_trainable": "lora-filter"}]
     assert served_weights == [(-1, merged_model)]
+    assert exported_models == [eval_model]
     assert logged_summaries == [
         {"rollout_policy_format": "merged", "reference_mode": "base"},
         {"parameter_count": 12, "trainable_parameter_count": 3, "fraction_trainable": 0.25},
@@ -434,87 +438,6 @@ def test_export_lora_artifacts_requires_hf_compatible_base_for_adapter_export(mo
 
     with pytest.raises(ValueError, match="HF-compatible base checkpoint"):
         worker._export_lora_artifacts(object())
-
-
-def test_train_exports_lora_artifacts_after_training(monkeypatch):
-    exported_models: list[object] = []
-    eval_model = object()
-
-    class _FakeReplayLoader:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    class _FakeTransferServer:
-        def serve_weights(self, weight_step: int, model: object) -> None:
-            del weight_step, model
-
-        def cleanup(self) -> None:
-            return None
-
-    class _FakeTrainer:
-        def __init__(self, *, config, optimizer, loss_fn):
-            del config, optimizer, loss_fn
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def initial_state(self, key, *, model, is_trainable):
-            del key, is_trainable
-            return SimpleNamespace(step=0, model=model, trainable_model=object())
-
-        def train(self, state, data_loader):
-            del state, data_loader
-            return SimpleNamespace(eval_model=eval_model)
-
-    monkeypatch.setattr("marin.rl.train_worker.Trainer", _FakeTrainer)
-    monkeypatch.setattr("marin.rl.train_worker.parameter_count", lambda model: 4 if model is eval_model else 16)
-    monkeypatch.setattr("marin.rl.train_worker.levanter.tracker.log_summary", lambda summary: None)
-
-    worker = TrainWorker.__new__(TrainWorker)
-    worker.config = SimpleNamespace(
-        run_id="lora-export-test",
-        trainer=SimpleNamespace(
-            checkpointer=SimpleNamespace(debug=SimpleNamespace(enabled=False)),
-            num_train_steps=10,
-            seed=0,
-        ),
-        optimizer=SimpleNamespace(build=lambda num_steps: object()),
-        weight_transfer=SimpleNamespace(debug_weight_transfer=False, sync_interval_steps=1),
-        lora=LoraConfig(r=8, alpha=16.0, target_modules=["q_proj"]),
-        rollout_policy_format="merged",
-        initial_checkpoint="hf://meta-llama/Llama-3.1-8B",
-        model={"name": "toy-model"},
-        inference_type="vllm",
-        run_manifest_path="/tmp/rl_run_manifest.json",
-    )
-    worker.loss_module = SimpleNamespace(create_loss_fn=lambda reference_model, _: lambda model, batch, key: 0.0)
-    worker.reference_model = object()
-    worker.initial_model = object()
-    worker.trainable_model_filter = "lora-filter"
-    worker.replay_buffer = SimpleNamespace(set_current_step=lambda step: None)
-    worker.replay_loader = _FakeReplayLoader()
-    worker.transfer_server = _FakeTransferServer()
-    worker.data_loader = object()
-    worker._runtime = SimpleNamespace(
-        run_state=SimpleNamespace(update_train_step=SimpleNamespace(remote=lambda step: None))
-    )
-    worker._drop_bootstrap_model_references = lambda: None
-    worker._configure_training_hooks = lambda trainer: None
-    worker._wait_for_initial_rollouts = lambda *, weight_step: True
-    worker._validate_run_manifest_for_resume = lambda trainer: None
-    worker._write_run_manifest = lambda: None
-    worker._export_lora_artifacts = exported_models.append
-    worker.stop = lambda: None
-
-    worker.train()
-
-    assert exported_models == [eval_model]
 
 
 def test_write_run_manifest_persists_expected_lora_metadata(tmp_path):
