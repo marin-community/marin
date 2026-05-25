@@ -5,22 +5,12 @@
 
 Companion to ``exp11_data_mix_sweep.py``. Pulls ``train/loss`` and every
 ``eval/<dataset>-(val|test)[-...]/loss`` history series for the runs in a
-configured sweep, then renders one of two plot families based on the sweep's
-``kind`` field:
-
-* ``kind="mixture"`` (mix/scale sweeps): heatmap of loss across mixtures,
-  cd-val bar grid grouped by single-quality / static / staged, and an optional
-  training-time-vs-offline-eval scatter when ``EVAL_OF`` maps the sweep to
-  its full-dataset companion.
-* ``kind="variant"`` (lrsch, arch): a single grouped-bar comparison on the
-  four val splits we care about (cd-val + H/M/L val, masked). The mixture is
-  fixed (m11), so the per-trial discriminator is the LR schedule or model
-  architecture; ``SweepConfig.mixture_regex`` captures the variant id.
+configured sweep, then renders a heatmap of loss values across mixtures.
 
 Most runs are typically mid-flight, so we never wait for completion. Instead
 we compute ``min_step`` = ``min`` over runs of ``max(_step)`` and slice each
 run/metric at the largest history step ``<= min_step``. This gives a fair
-cross-trial snapshot at the slowest run's progress.
+cross-mixture snapshot at the slowest run's progress.
 
 The W&B fetch result is reduced to a single ``snapshot.csv`` under
 ``experiments/protein/exp11_data_mix_results/<sweep_id>/``; pass
@@ -30,8 +20,7 @@ The W&B fetch result is reduced to a single ``snapshot.csv`` under
 Usage::
 
     WANDB_API_KEY=... uv run --with matplotlib --with seaborn \\
-        python -m experiments.protein.exp11_data_mix_analysis \\
-            [--sweep <id>] [--refresh]
+        python -m experiments.protein.exp11_data_mix_analysis [--refresh]
 """
 
 from __future__ import annotations
@@ -72,14 +61,7 @@ class SweepConfig:
         name_regex: Client-side regex applied to ``run.display_name`` to keep
             only this sweep's runs (e.g. version-specific).
         mixture_regex: Regex with a ``mixture`` named group, extracted from
-            ``run.display_name`` to identify trial rows. For ``kind="variant"``
-            sweeps (single mixture, varying schedule/arch), this captures the
-            variant id (e.g. ``wsd``/``cosine``) into the ``mixture`` slot.
-        kind: ``"mixture"`` (default) for sweeps that vary the data mixture
-            (heatmap + cd-val bar grid + optional offline-eval scatter). Set to
-            ``"variant"`` for sweeps that fix the mixture and vary another axis
-            (LR schedule, arch) — those render via the grouped-bar comparison
-            on the val splits only.
+            ``run.display_name`` to identify mixture rows.
     """
 
     id: str
@@ -89,7 +71,6 @@ class SweepConfig:
     tag: str
     name_regex: str
     mixture_regex: str
-    kind: str = "mixture"
 
 
 SWEEPS: dict[str, SweepConfig] = {
@@ -114,32 +95,6 @@ SWEEPS: dict[str, SweepConfig] = {
         tag="eval",
         name_regex=r"^prot-exp11-dm-mix-100m-.*-v2-eval-v2$",
         mixture_regex=r"-(?P<mixture>m\d+)-lr",
-    ),
-    # exp11 lrsch-v1: 2 trials on m11 (size-proportional H/M/L blend), 100M /
-    # batch=128 / ~4.3B tokens. WSD (linear, decay=0.2) vs cosine (AdamConfig
-    # defaults: cosine + full decay). Single-mixture sweep so ``mixture_regex``
-    # captures the variant id instead.
-    "run_lrsch_sweep_v1": SweepConfig(
-        id="run_lrsch_sweep_v1",
-        entity="eric-czech",
-        project="marin",
-        group="exp11-data-mix",
-        tag="lrsch",
-        name_regex=r"^prot-exp11-dm-lrsch-100m-.*-m11-(wsd|cosine)-lr.*-v1-[0-9a-f]+$",
-        mixture_regex=r"-m11-(?P<mixture>wsd|cosine)-lr",
-        kind="variant",
-    ),
-    # exp11 arch-v1: 2 trials on m11, 100M / batch=128 / ~4.3B tokens. Llama
-    # vs equivalent Qwen3 (same dims; Qwen3 defaults add QK-norm).
-    "run_arch_sweep_v1": SweepConfig(
-        id="run_arch_sweep_v1",
-        entity="eric-czech",
-        project="marin",
-        group="exp11-data-mix",
-        tag="arch",
-        name_regex=r"^prot-exp11-dm-arch-100m-.*-m11-(llama|qwen3)-lr.*-v1-[0-9a-f]+$",
-        mixture_regex=r"-m11-(?P<mixture>llama|qwen3)-lr",
-        kind="variant",
     ),
 }
 
@@ -166,25 +121,6 @@ MIXTURE_NAMES: dict[str, str] = {
     "m7": "m7 (L→H)",
     "m8": "m8 (H→L)",
     "m9": "m9 (L,M → L,M,H → H)",
-}
-
-
-# Display labels for variant-axis sweeps (lrsch, arch). Kept separate from
-# MIXTURE_NAMES because these identify the per-trial axis (LR schedule or
-# model architecture) rather than the data mixture; sweeps with
-# ``SweepConfig.kind="variant"`` look up labels here.
-VARIANT_NAMES: dict[str, str] = {
-    "wsd": "WSD (linear, decay=0.2)",
-    "cosine": "Cosine (full decay)",
-    "llama": "Llama",
-    "qwen3": "Qwen3 (+QK-norm)",
-}
-# Stable, color-blind-tolerant categorical palette (Tableau 10 subset).
-VARIANT_COLORS: dict[str, str] = {
-    "wsd": "#4C78A8",
-    "cosine": "#F58518",
-    "llama": "#54A24B",
-    "qwen3": "#9D7AB8",
 }
 
 
@@ -665,126 +601,6 @@ def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path)
     logger.info("Saved %s and %s", pdf_path, png_path)
 
 
-# Metrics that drive the variant-axis decision (lrsch / arch): cd-val plus the
-# three per-quality val splits. All are masked (distance-bin loss only). The
-# *-test, *-train (IID-carve), and cd-val-unmasked metrics are intentionally
-# excluded — they don't change the WSD-vs-cosine or Llama-vs-Qwen3 verdict.
-VARIANT_COMPARISON_METRICS: tuple[str, ...] = ("cd-val", "high-val", "medium-val", "low-val")
-
-
-def _variant_sort_key(variant_id: str) -> int:
-    """Sort variants in the order they appear in VARIANT_NAMES (definition order)."""
-    keys = list(VARIANT_NAMES.keys())
-    return keys.index(variant_id) if variant_id in keys else len(keys)
-
-
-def render_variant_comparison_bars(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) -> None:
-    """Grouped bars: one bar per trial variant per val metric.
-
-    Restricted to ``VARIANT_COMPARISON_METRICS`` (cd-val + the three per-quality
-    val splits). Each metric group annotates the absolute loss on each bar plus
-    a ``Δ`` line for the difference (second variant minus first) so the
-    direction of the effect is immediately readable.
-    """
-    df = snapshot[snapshot["metric"].isin(VARIANT_COMPARISON_METRICS)]
-    if df.empty:
-        logger.warning("No target metrics in snapshot for sweep %s; skipping variant comparison", sweep.id)
-        return
-
-    ref_step = int(snapshot["ref_step"].iloc[0])
-    pivot = df.pivot(index="metric", columns="mixture_id", values="value").reindex(list(VARIANT_COMPARISON_METRICS))
-    variants = sorted(pivot.columns, key=_variant_sort_key)
-    pivot = pivot[variants]
-
-    n_variants = len(variants)
-    n_metrics = len(VARIANT_COMPARISON_METRICS)
-    width = 0.8 / max(n_variants, 1)
-    x = np.arange(n_metrics)
-
-    fig, ax = plt.subplots(figsize=(9.0, 4.8))
-    for i, variant in enumerate(variants):
-        offset = (i - (n_variants - 1) / 2) * width
-        values = pivot[variant].to_numpy(dtype=float)
-        bars = ax.bar(
-            x + offset,
-            values,
-            width,
-            color=VARIANT_COLORS.get(variant, "#999999"),
-            edgecolor="black",
-            linewidth=0.5,
-            label=VARIANT_NAMES.get(variant, variant),
-        )
-        for bar, value in zip(bars, values, strict=True):
-            if not np.isfinite(value):
-                continue
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                value,
-                f"{value:.4f}",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-
-    # Tighten y-axis around the data so deltas at the 1e-3 scale are visible.
-    # Generous top headroom so the Δ box in the upper-right corner clears the
-    # tallest bar + its value annotation; padding scales with the data range
-    # so small-delta sweeps (lrsch) and large-delta sweeps (arch) both fit.
-    y_all = pivot.to_numpy(dtype=float)
-    y_finite = y_all[np.isfinite(y_all)]
-    if y_finite.size:
-        y_lo, y_hi = float(y_finite.min()), float(y_finite.max())
-        span = max(y_hi - y_lo, 1e-6)
-        ax.set_ylim(y_lo - 0.15 * span, y_hi + 0.55 * span)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(list(VARIANT_COMPARISON_METRICS))
-    ax.set_xlabel("Heldout eval split (masked: distance bin only)")
-    ax.set_ylabel("Loss")
-    ax.set_title(
-        f"{TITLE_PREFIX} — {sweep.id}: val loss by trial @ step={ref_step}",
-        fontsize=11,
-    )
-    ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
-    ax.grid(axis="y", linestyle="--", alpha=0.4)
-
-    # Δ line per metric: only meaningful when exactly two variants are compared
-    # (always true for the lrsch/arch sweeps). Renders just under the x-axis
-    # tick labels so the bar canvas stays clean.
-    if n_variants == 2:
-        a, b = variants
-        delta_lines = []
-        for metric in VARIANT_COMPARISON_METRICS:
-            va, vb = pivot.loc[metric, a], pivot.loc[metric, b]
-            if np.isfinite(va) and np.isfinite(vb):
-                delta_lines.append(f"{metric}: Δ = {vb - va:+.4f}")
-            else:
-                delta_lines.append(f"{metric}: Δ = —")
-        ax.text(
-            0.99,
-            0.99,
-            f"Δ = {VARIANT_NAMES.get(b, b)} - {VARIANT_NAMES.get(a, a)}\n" + "\n".join(delta_lines),
-            transform=ax.transAxes,
-            fontsize=8,
-            ha="right",
-            va="top",
-            bbox=dict(facecolor="white", edgecolor="grey", alpha=0.9, boxstyle="round,pad=0.3"),
-        )
-
-    fig.tight_layout()
-
-    # Filename reflects the actual A/B comparison (e.g. "wsd_vs_cosine.png",
-    # "llama_vs_qwen3.png") so it's recognizable on disk without opening it.
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem = "_vs_".join(variants)
-    pdf_path = out_dir / f"{stem}.pdf"
-    png_path = out_dir / f"{stem}.png"
-    fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
-    fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    logger.info("Saved %s and %s", pdf_path, png_path)
-
-
 def render_train_vs_full_eval_scatter(
     train_snapshot: pd.DataFrame,
     train_meta: EvalMeta,
@@ -976,20 +792,14 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("\n%s", wide.to_string(float_format=lambda v: f"{v:.4f}" if pd.notna(v) else "—"))
 
     plots_dir = _plots_dir(sweep.id)
-    if sweep.kind == "variant":
-        # lrsch/arch sweeps fix the mixture and vary another axis; the heatmap
-        # and per-group cd-val bars assume a 9-mixture cross-section and would
-        # render mostly NaN here, so skip them.
-        render_variant_comparison_bars(snapshot, sweep, plots_dir)
-    else:
-        render_heatmap(snapshot, sweep, plots_dir)
-        render_cdval_bars(snapshot, sweep, plots_dir)
+    render_heatmap(snapshot, sweep, plots_dir)
+    render_cdval_bars(snapshot, sweep, plots_dir)
 
-        eval_sweep_id = EVAL_OF.get(args.sweep)
-        if eval_sweep_id is not None:
-            eval_sweep = SWEEPS[eval_sweep_id]
-            eval_snapshot, eval_meta = load_or_build_snapshot(eval_sweep, refresh=args.refresh)
-            render_train_vs_full_eval_scatter(snapshot, meta, eval_snapshot, eval_meta, sweep, eval_sweep, plots_dir)
+    eval_sweep_id = EVAL_OF.get(args.sweep)
+    if eval_sweep_id is not None:
+        eval_sweep = SWEEPS[eval_sweep_id]
+        eval_snapshot, eval_meta = load_or_build_snapshot(eval_sweep, refresh=args.refresh)
+        render_train_vs_full_eval_scatter(snapshot, meta, eval_snapshot, eval_meta, sweep, eval_sweep, plots_dir)
     return 0
 
 
