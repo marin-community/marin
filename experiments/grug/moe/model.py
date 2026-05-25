@@ -85,6 +85,9 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Sandwich gated norm: also apply RMSNorm+GatedNorm to the residual stream after
+    # each sub-layer addition. r_{L+1} = GatedNorm(RMSNorm(r_L + f(GatedNorm(RMSNorm(r_L))))).
+    gated_post_norm: bool = False
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -425,15 +428,28 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    rms_attn_post: RMSNorm | None
+    attn_gated_norm_post: GatedNorm | None
+    rms_mlp_post: RMSNorm | None
+    mlp_gated_norm_post: GatedNorm | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key, gn_attn_post_key, gn_mlp_post_key = random.split(key, 7)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
             )
+        rms_attn_post: RMSNorm | None = None
+        attn_gated_norm_post: GatedNorm | None = None
+        rms_mlp_post: RMSNorm | None = None
+        mlp_gated_norm_post: GatedNorm | None = None
+        if cfg.gated_post_norm:
+            rms_attn_post = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            attn_gated_norm_post = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_post_key)
+            rms_mlp_post = RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps)
+            mlp_gated_norm_post = GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_post_key)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -442,6 +458,10 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
+            rms_attn_post=rms_attn_post,
+            attn_gated_norm_post=attn_gated_norm_post,
+            rms_mlp_post=rms_mlp_post,
+            mlp_gated_norm_post=mlp_gated_norm_post,
         )
 
     @named_call
@@ -452,11 +472,15 @@ class Block(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask)
+        if self.attn_gated_norm_post is not None:
+            x = self.attn_gated_norm_post(self.rms_attn_post(x))
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
+        if self.mlp_gated_norm_post is not None:
+            x = self.mlp_gated_norm_post(self.rms_mlp_post(x))
         return x, router_stats
 
 
