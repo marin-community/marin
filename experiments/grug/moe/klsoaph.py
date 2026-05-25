@@ -394,6 +394,14 @@ def scale_by_klsoaph(
                 return _SoapStepResult(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r)
 
             original_shape = grad.shape
+            # Reshard the gradient to fully-replicated BEFORE reshape — JAX cannot
+            # split a sharded axis into sub-axes during reshape. State tensors are
+            # created replicated and stay that way through _klsoaph_step_blocked,
+            # but the gradient inherits its sharding from upstream. The full-shape
+            # direction's sharding is restored by `_match_named_update_sharding`
+            # in optimizer.py after this transform.
+            if not jax.sharding.get_abstract_mesh().empty:
+                grad = reshard(grad, _replicated_pspec(grad.ndim))
             # Pad to multiples of B on the trailing two axes, then reshape to blocks.
             padded = _pad_to_multiple(grad, B)
             grad_blocks = _to_blocks(padded, B)
