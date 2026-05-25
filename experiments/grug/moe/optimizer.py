@@ -235,14 +235,18 @@ def scale_with_grug_klsoaph(
     eps: float = 1e-8,
     precond_freq: int = 5,
     init_factor: float = 0.1,
+    block_size: int = 128,
     learning_rate: float = 0.018,
 ) -> optax.GradientTransformation:
-    """KL Soap H transform: SOAP-eigenbasis Adam direction + hyperball post-step.
+    """KL Soap H transform: block-wise SOAP-eigenbasis Adam direction + hyperball post-step.
 
-    Reproduces KLSOAPH from KellerJordan/modded-nanogpt PR #290 with one
-    deviation: precond_freq defaults to 5 (upstream uses 1) to amortize the
-    eigendecomposition cost. Default ``(beta1, beta2, shampoo_beta)`` matches
-    upstream's "passing" tuple (0.95, 0.9, 0.9).
+    Reproduces KLSOAPH from KellerJordan/modded-nanogpt PR #290 *within
+    each ``block_size x block_size`` block*; the full-shape direction is
+    reassembled before the hyperball step so normalization sees the
+    original (unblocked) parameter and update. Default
+    ``(beta1, beta2, shampoo_beta)`` matches upstream's "passing" tuple
+    (0.95, 0.9, 0.9). ``precond_freq`` defaults to 5 to amortize the
+    warm-started QR-iteration refresh on TPU.
     """
     soap_transform = scale_by_klsoaph(
         beta1=beta1,
@@ -251,6 +255,7 @@ def scale_with_grug_klsoaph(
         eps=eps,
         precond_freq=precond_freq,
         init_factor=init_factor,
+        block_size=block_size,
     )
 
     def init_fn(params):
@@ -552,6 +557,11 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
     epsilon: float = 1e-8
     precond_freq: int = 5
     init_factor: float = 0.1
+    # Block size for the block-wise SOAP preconditioner. Each (rows, cols) weight
+    # is tiled into (R, C) blocks of (block_size, block_size); SOAP runs per
+    # block. Direction is reassembled to full shape before the hyperball post-step
+    # so normalization sees the original parameter/update.
+    block_size: int = 128
     max_grad_norm: float | None = 1.0
 
     def build(self, num_train_steps):
@@ -571,6 +581,7 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
                         eps=self.epsilon,
                         precond_freq=self.precond_freq,
                         init_factor=self.init_factor,
+                        block_size=self.block_size,
                         learning_rate=learning_rate,
                     )
                 )

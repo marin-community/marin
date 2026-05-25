@@ -334,37 +334,39 @@ def test_grug_moe_klsoaph_routes_attn_gate_to_matrix_group():
     assert block_mask["rms_attn"]["weight"] == "adam"
 
 
-def test_grug_klsoaph_state_shapes_match_soap_geometry():
-    """Per-leaf SOAP state: Q_L rows x rows, Q_R cols x cols, exp_avg rows x cols.
+def test_grug_klsoaph_state_shapes_match_block_soap_geometry():
+    """Block-wise SOAP state: each (rows, cols) leaf is tiled into (R, C) blocks of
+    (B, B); state lives in blocked form. Padding makes rows/cols a multiple of B.
 
-    Higher-rank (3-D) leaves carry an extra leading axis on every state
-    tensor so the transform can vmap the 2-D update over experts.
+    Higher-rank (3-D) leaves carry an extra leading axis on every state tensor.
     """
+    B = 4
+    # dense: (4, 6) → padded to (4, 8) → blocks (1, 2, B, B).
+    # experts: (3, 4, 6) → padded to (3, 4, 8) → blocks (3, 1, 2, B, B).
     params = {
         "dense": jnp.ones((4, 6), dtype=jnp.float32),
         "experts": jnp.ones((3, 4, 6), dtype=jnp.float32),
     }
-    transform = scale_with_grug_klsoaph(precond_freq=1, learning_rate=0.01)
+    transform = scale_with_grug_klsoaph(precond_freq=1, learning_rate=0.01, block_size=B)
 
     state = transform.init(params)
     soap_state = state.inner_state if hasattr(state, "inner_state") else state
 
-    assert soap_state.exp_avg["dense"].shape == (4, 6)
-    assert soap_state.exp_avg_sq["dense"].shape == (4, 6)
-    assert soap_state.gg_l["dense"].shape == (4, 4)
-    assert soap_state.gg_r["dense"].shape == (6, 6)
-    assert soap_state.q_l["dense"].shape == (4, 4)
-    assert soap_state.q_r["dense"].shape == (6, 6)
-    assert soap_state.esi_l["dense"].shape == (4,)
-    assert soap_state.esi_r["dense"].shape == (6,)
-    assert soap_state.exp_avg["experts"].shape == (3, 4, 6)
-    assert soap_state.exp_avg_sq["experts"].shape == (3, 4, 6)
-    assert soap_state.gg_l["experts"].shape == (3, 4, 4)
-    assert soap_state.gg_r["experts"].shape == (3, 6, 6)
-    assert soap_state.q_l["experts"].shape == (3, 4, 4)
-    assert soap_state.q_r["experts"].shape == (3, 6, 6)
-    assert soap_state.esi_l["experts"].shape == (3, 4)
-    assert soap_state.esi_r["experts"].shape == (3, 6)
+    assert soap_state.exp_avg["dense"].shape == (1, 2, B, B)
+    assert soap_state.exp_avg_sq["dense"].shape == (1, 2, B, B)
+    assert soap_state.gg_l["dense"].shape == (1, 2, B, B)
+    assert soap_state.gg_r["dense"].shape == (1, 2, B, B)
+    assert soap_state.q_l["dense"].shape == (1, 2, B, B)
+    assert soap_state.q_r["dense"].shape == (1, 2, B, B)
+    assert soap_state.esi_l["dense"].shape == (1, 2, B)
+    assert soap_state.esi_r["dense"].shape == (1, 2, B)
+    assert soap_state.exp_avg["experts"].shape == (3, 1, 2, B, B)
+    assert soap_state.gg_l["experts"].shape == (3, 1, 2, B, B)
+    assert soap_state.gg_r["experts"].shape == (3, 1, 2, B, B)
+    assert soap_state.q_l["experts"].shape == (3, 1, 2, B, B)
+    assert soap_state.q_r["experts"].shape == (3, 1, 2, B, B)
+    assert soap_state.esi_l["experts"].shape == (3, 1, 2, B)
+    assert soap_state.esi_r["experts"].shape == (3, 1, 2, B)
     # esi initialized at init_factor**-0.5 (default init_factor=0.1 → sqrt(10)).
     import math
 

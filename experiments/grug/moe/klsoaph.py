@@ -1,22 +1,40 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# KL SOAP H: SOAP-style Hessian-eigenbasis preconditioner with Adam moments
-# in the eigenbasis. The "KL" qualifier refers to the scale-invariant
-# ("hyperball") post-step applied in optimizer.py:_scale_invariant_hyperball_updates,
-# not a KL-divergence projection. Reproduces the KLSOAPH optimizer from
-# KellerJordan/modded-nanogpt PR #290 — including the whitened Gram update,
-# eigen_sqrt_inv state, first-gradient initialization, post-EMA symmetrize,
-# descending-eigenvalue flip at init, and QR-iteration warm-started basis
-# refresh.
+# KL SOAP H: block-wise SOAP-style Hessian-eigenbasis preconditioner with Adam
+# moments in the eigenbasis. Adapts the upstream KLSOAPH from
+# KellerJordan/modded-nanogpt PR #290 to MoE-scale weight matrices by
+# decomposing each (rows, cols) weight into a tiling of ``B x B`` blocks
+# (default B=128). Each block carries its own SOAP state and eigenbasis;
+# the full-matrix direction is reassembled before the scale-invariant
+# ("hyperball") post-step so that normalization still operates on the
+# unblocked parameter / update.
 #
-# The single intentional deviation from upstream is the default ``precond_freq``
-# value: upstream uses 1, we ship 5 to amortize the per-step refresh cost on TPU.
-# All other behaviour matches upstream.
+# Why blocks: the dense KLSOAPH operates on the full (cols, cols) Gram
+# matrix. On MoE expert tensors with cols ~ 2816 and an expert-stack
+# leading axis of 256, that means 256 independent eigh of 2816x2816 every
+# refresh — slow and JIT-compile-heavy on TPU. Block decomposition keeps
+# every per-block Gram at exactly B x B = 128 x 128, which is fast and
+# enables a single compiled kernel to vmap over (E, R, C) block
+# instances. The intent is fidelity to upstream KLSOAPH *within each
+# block*, with the MoE-scale weight matrix treated as a sum of
+# independent per-block preconditioned updates.
 #
-# scale_by_klsoaph returns only the SOAP direction; the hyperball post-step
-# is applied by scale_with_grug_klsoaph in optimizer.py, mirroring the
-# muonh/normuonh pattern.
+# Per-block algorithm follows upstream KLSOAPH exactly:
+#  1. First call: initialize Q from descending-eigh of (g g.T / cols,
+#     g.T g / rows) computed on the first gradient; esi = init_factor**-0.5.
+#     First call returns zero direction.
+#  2. Subsequent calls: project gradient via current Q, Adam in projected
+#     basis, build direction.
+#  3. Whitened Gram update: gg_l += (g @ q_r * esi_r)^T @ (g @ q_r * esi_r) / cols;
+#     symmetric counterpart for gg_r. Update esi via projected-gradient
+#     diagonals.
+#  4. Refresh every ``precond_freq`` steps: warm-started QR iteration
+#     (``qr(GG @ Q)``) and reproject exp_avg through old→new basis.
+#
+# scale_by_klsoaph returns only the SOAP direction (full parameter
+# shape). The hyperball post-step is applied by ``scale_with_grug_klsoaph``
+# in ``optimizer.py``, mirroring the muonh / normuonh pattern.
 
 from typing import NamedTuple
 
@@ -27,9 +45,20 @@ import optax
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
+_DEFAULT_BLOCK_SIZE: int = 128
+
 
 class ScaleByKLSoapHState(NamedTuple):
-    """Per-leaf SOAP state. Float32 throughout for eigh / qr stability."""
+    """Per-leaf block-wise SOAP state. Float32 throughout for eigh / qr stability.
+
+    Tensor shapes for a parameter ``p`` with shape ``(..., rows, cols)``,
+    R = ceil(rows / B), C = ceil(cols / B):
+
+      exp_avg, exp_avg_sq:    (..., R, C, B, B)
+      gg_l, q_l:              (..., R, C, B, B)   -- block-local row-Gram / its eigenbasis
+      gg_r, q_r:              (..., R, C, B, B)   -- block-local col-Gram / its eigenbasis
+      esi_l, esi_r:           (..., R, C, B)
+    """
 
     count: chex.Array
     exp_avg: optax.Updates
@@ -38,8 +67,8 @@ class ScaleByKLSoapHState(NamedTuple):
     gg_r: optax.Updates
     q_l: optax.Updates
     q_r: optax.Updates
-    esi_l: optax.Updates  # eigen_sqrt_inv for the row axis, shape (..., rows)
-    esi_r: optax.Updates  # eigen_sqrt_inv for the column axis, shape (..., cols)
+    esi_l: optax.Updates
+    esi_r: optax.Updates
 
 
 class _SoapStepResult:
@@ -66,42 +95,78 @@ def _is_matrix_param(p) -> bool:
     return hasattr(p, "ndim") and p.ndim >= 2
 
 
-def _zeros_param(p):
+def _block_grid(p, block_size: int) -> tuple[int, int]:
+    """Return (R, C) — number of B-sized tiles along the last two axes."""
+    rows = p.shape[-2]
+    cols = p.shape[-1]
+    R = (rows + block_size - 1) // block_size
+    C = (cols + block_size - 1) // block_size
+    return R, C
+
+
+def _pad_to_multiple(x: jnp.ndarray, block_size: int) -> jnp.ndarray:
+    """Right-pad the last two axes of ``x`` up to multiples of ``block_size``."""
+    rows = x.shape[-2]
+    cols = x.shape[-1]
+    pad_r = (-rows) % block_size
+    pad_c = (-cols) % block_size
+    if pad_r == 0 and pad_c == 0:
+        return x
+    pad_widths = [(0, 0)] * (x.ndim - 2) + [(0, pad_r), (0, pad_c)]
+    return jnp.pad(x, pad_widths)
+
+
+def _to_blocks(x: jnp.ndarray, block_size: int) -> jnp.ndarray:
+    """Reshape ``(..., rows, cols)`` (padded) → ``(..., R, C, B, B)``."""
+    B = block_size
+    rows = x.shape[-2]
+    cols = x.shape[-1]
+    # rows, cols already multiples of B (caller pads first).
+    R = rows // B
+    C = cols // B
+    x = x.reshape(*x.shape[:-2], R, B, C, B)
+    return jnp.swapaxes(x, -3, -2)  # (..., R, B, C, B) → (..., R, C, B, B)
+
+
+def _from_blocks(x: jnp.ndarray, original_shape: tuple, block_size: int) -> jnp.ndarray:
+    """Reverse of _to_blocks: ``(..., R, C, B, B)`` → original ``(..., rows, cols)``."""
+    rows = original_shape[-2]
+    cols = original_shape[-1]
+    x = jnp.swapaxes(x, -3, -2)  # (..., R, B, C, B)
+    R, B = x.shape[-4], x.shape[-3]
+    C = x.shape[-2]
+    assert x.shape[-1] == B
+    x = x.reshape(*x.shape[:-4], R * B, C * B)
+    if x.shape[-2] != rows or x.shape[-1] != cols:
+        x = x[..., :rows, :cols]
+    return x
+
+
+def _zeros_blocks(p, block_size: int):
     if not _is_matrix_param(p):
         return None
-    return jnp.zeros(p.shape, dtype=jnp.float32)
+    R, C = _block_grid(p, block_size)
+    return jnp.zeros((*p.shape[:-2], R, C, block_size, block_size), dtype=jnp.float32)
 
 
-def _zeros_left(p):
+def _eye_blocks(p, block_size: int):
     if not _is_matrix_param(p):
         return None
-    n = p.shape[-2]
-    return jnp.zeros((*p.shape[:-2], n, n), dtype=jnp.float32)
-
-
-def _zeros_right(p):
-    if not _is_matrix_param(p):
-        return None
-    n = p.shape[-1]
-    return jnp.zeros((*p.shape[:-2], n, n), dtype=jnp.float32)
-
-
-def _eye_leading(p, axis: int):
-    if not _is_matrix_param(p):
-        return None
-    n = p.shape[axis]
-    eye = jnp.eye(n, dtype=jnp.float32)
-    if p.ndim > 2:
-        eye = jnp.broadcast_to(eye, (*p.shape[:-2], n, n))
+    R, C = _block_grid(p, block_size)
+    eye = jnp.eye(block_size, dtype=jnp.float32)
+    eye = jnp.broadcast_to(eye, (*p.shape[:-2], R, C, block_size, block_size))
     return jnp.asarray(eye, dtype=jnp.float32)
 
 
-def _esi_init(p, axis: int, init_factor: float):
+def _esi_init_blocks(p, block_size: int, init_factor: float):
     if not _is_matrix_param(p):
         return None
-    n = p.shape[axis]
-    # eigen_sqrt_inv starts at init_factor**-0.5 (upstream init_factor=0.1 → sqrt(10) ≈ 3.162).
-    return jnp.full((*p.shape[:-2], n), init_factor**-0.5, dtype=jnp.float32)
+    R, C = _block_grid(p, block_size)
+    return jnp.full(
+        (*p.shape[:-2], R, C, block_size),
+        init_factor**-0.5,
+        dtype=jnp.float32,
+    )
 
 
 def _replicated_pspec(ndim: int) -> P:
@@ -110,14 +175,11 @@ def _replicated_pspec(ndim: int) -> P:
 
 
 def _flipped_eigh(matrix):
-    """eigh on a symmetric matrix and return eigenvectors in DESCENDING order.
+    """eigh on a symmetric matrix; return eigenvectors in DESCENDING order.
 
-    Matches upstream ``_initial_orthogonal_matrix`` which does
-    ``torch.linalg.eigh`` then ``torch.flip(q, dims=[1])``. The initial Gram
-    is regularized with ``1e-30 * I`` to match upstream guard.
-
-    Operates on the last two axes; batches automatically over leading axes
-    when the input is replicated across the mesh.
+    Matches upstream ``_initial_orthogonal_matrix``: regularize the Gram by
+    ``1e-30 * I``, eigh on the symmetric part, flip eigenvectors along the
+    last axis. Operates per leading axis under broadcasting.
     """
     n = matrix.shape[-1]
     eye = jnp.eye(n, dtype=jnp.float32)
@@ -125,7 +187,6 @@ def _flipped_eigh(matrix):
         eye = jnp.broadcast_to(eye, matrix.shape)
     sym = 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
     _, q = jnp.linalg.eigh(sym + 1e-30 * eye)
-    # Flip eigenvectors along the column axis to get descending order.
     return q[..., :, ::-1]
 
 
@@ -133,8 +194,8 @@ def _symmetrize(matrix):
     return 0.5 * (matrix + jnp.swapaxes(matrix, -1, -2))
 
 
-def _klsoaph_step(
-    grad: jnp.ndarray,
+def _klsoaph_step_blocked(
+    grad_blocks: jnp.ndarray,
     exp_avg: jnp.ndarray,
     exp_avg_sq: jnp.ndarray,
     gg_l: jnp.ndarray,
@@ -150,32 +211,26 @@ def _klsoaph_step(
     eps: float,
     precond_freq: int,
     init_factor: float,
+    block_size: int,
 ):
-    """One SOAP step. Works for 2-D ``(rows, cols)`` gradients and 3-D
-    ``(stack, rows, cols)`` gradients via einsum ellipsis.
+    """Run one block-wise SOAP step over the (..., R, C, B, B) blocked gradient.
 
-    Replicates every intermediate fully across the mesh so contracting-dim
-    sharding ambiguities cannot occur (matching the legacy MuonH replicated
-    Newton-Schulz pattern in ``levanter.optim.grugmuon``). The caller's
-    parameter-sharding is restored downstream by
-    ``_match_named_update_sharding`` in ``optimizer.py``.
-
-    The first call (``step == 1``) takes the "init" branch: it derives the
-    initial Gram matrices, Q bases, and eigen_sqrt_inv from the first
-    gradient (matching upstream ``init_2d_klsoap_state_``) and returns a
-    zero direction — i.e. the first call does not move the parameter.
+    Every leading axis (including (R, C)) is treated independently; eigh /
+    qr operate on the trailing (B, B) only. Replicates all intermediates
+    across the mesh to keep contracting-dim sharding unambiguous; the
+    parameter-sharding for the externally-visible direction is restored
+    downstream by ``_match_named_update_sharding`` in ``optimizer.py``.
     """
-    rows = grad.shape[-2]
-    cols = grad.shape[-1]
+    B = block_size
+    # rows/cols here refer to per-block dimensions (== B). Variables named for
+    # clarity vs upstream's notation; the SOAP geometry is identical inside a block.
+    inner_rows = B
+    inner_cols = B
 
     has_mesh = not jax.sharding.get_abstract_mesh().empty
-    out_pspec = _replicated_pspec(grad.ndim) if has_mesh else None
-    out_pspec_l = _replicated_pspec(grad.ndim) if has_mesh else None  # (..., rows, rows)
-    out_pspec_r = _replicated_pspec(grad.ndim) if has_mesh else None  # (..., cols, cols)
-
-    g32 = grad.astype(jnp.float32)
+    g32 = grad_blocks.astype(jnp.float32)
     if has_mesh:
-        repl = _replicated_pspec(grad.ndim)
+        repl = _replicated_pspec(g32.ndim)
         g32 = reshard(g32, repl)
         gg_l = reshard(gg_l, repl)
         gg_r = reshard(gg_r, repl)
@@ -183,30 +238,26 @@ def _klsoaph_step(
         q_r = reshard(q_r, repl)
         exp_avg = reshard(exp_avg, repl)
         exp_avg_sq = reshard(exp_avg_sq, repl)
-        # esi has one fewer trailing axis.
-        esi_repl = _replicated_pspec(grad.ndim - 1)
+        esi_repl = _replicated_pspec(esi_l.ndim)
         esi_l = reshard(esi_l, esi_repl)
         esi_r = reshard(esi_r, esi_repl)
+    out_p = _replicated_pspec(g32.ndim) if has_mesh else None
 
-    # --- First-call init branch (matches upstream init_2d_klsoap_state_) ----
     def _init_branch(_):
-        # GG = [g g.T / cols, g.T g / rows].
-        new_gg_l = jnp.einsum("...ik,...jk->...ij", g32, g32, out_sharding=out_pspec_l) / cols
-        new_gg_r = jnp.einsum("...ki,...kj->...ij", g32, g32, out_sharding=out_pspec_r) / rows
+        # GG = [g g.T / cols, g.T g / rows] on the trailing (B, B) of each block.
+        new_gg_l = jnp.einsum("...ik,...jk->...ij", g32, g32, out_sharding=out_p) / inner_cols
+        new_gg_r = jnp.einsum("...ki,...kj->...ij", g32, g32, out_sharding=out_p) / inner_rows
         new_gg_l = _symmetrize(new_gg_l)
         new_gg_r = _symmetrize(new_gg_r)
-        # Q = flipped eigh of initial Gram (descending eigenvalues).
         new_q_l = _flipped_eigh(new_gg_l)
         new_q_r = _flipped_eigh(new_gg_r)
-        # eigen_sqrt_inv at init_factor**-0.5.
         new_esi_l = jnp.full_like(esi_l, init_factor**-0.5)
         new_esi_r = jnp.full_like(esi_r, init_factor**-0.5)
-        # No parameter update on the first call.
         zero_dir = jnp.zeros_like(g32)
         return (
             zero_dir,
-            jnp.zeros_like(exp_avg),  # exp_avg
-            jnp.zeros_like(exp_avg_sq),  # exp_avg_sq
+            jnp.zeros_like(exp_avg),
+            jnp.zeros_like(exp_avg_sq),
             new_gg_l,
             new_gg_r,
             new_q_l,
@@ -215,11 +266,10 @@ def _klsoaph_step(
             new_esi_r,
         )
 
-    # --- Normal branch ----
     def _normal_branch(_):
-        # 1. Project gradient via current Q: g_proj = q_l.T @ g @ q_r.
-        g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r, out_sharding=out_pspec)
-        g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr, out_sharding=out_pspec)
+        # 1. Project: g_proj = q_l.T @ g @ q_r (per block).
+        g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r, out_sharding=out_p)
+        g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr, out_sharding=out_p)
 
         # 2. Adam in projected basis.
         new_exp_avg = beta1 * exp_avg + (1.0 - beta1) * g_proj
@@ -227,23 +277,19 @@ def _klsoaph_step(
         precond_proj = new_exp_avg / (jnp.sqrt(new_exp_avg_sq) + eps)
 
         # 3. Direction = q_l @ precond_proj @ q_r.T.
-        p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r, out_sharding=out_pspec)
-        direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt, out_sharding=out_pspec)
+        p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r, out_sharding=out_p)
+        direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt, out_sharding=out_p)
 
-        # 4. Whitened Gram update (matches upstream update_2d_klsoap_preconditioner_):
-        #    left_target  = (g @ q_r * esi_r[None,:]) @ (g @ q_r * esi_r[None,:]).T / cols
-        #    right_target = (q_l.T @ g * esi_l[:,None]).T @ (q_l.T @ g * esi_l[:,None]) / rows
-        g_qr_white = g_qr * esi_r[..., None, :]  # (..., rows, cols)
-        left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white, out_sharding=out_pspec_l) / cols
-        qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32, out_sharding=out_pspec)
-        qlT_g_white = qlT_g * esi_l[..., :, None]  # (..., rows, cols)
-        right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white, out_sharding=out_pspec_r) / rows
+        # 4. Whitened Gram update.
+        g_qr_white = g_qr * esi_r[..., None, :]
+        left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white, out_sharding=out_p) / inner_cols
+        qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32, out_sharding=out_p)
+        qlT_g_white = qlT_g * esi_l[..., :, None]
+        right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white, out_sharding=out_p) / inner_rows
         new_gg_l = _symmetrize(shampoo_beta * gg_l + (1.0 - shampoo_beta) * left_target)
         new_gg_r = _symmetrize(shampoo_beta * gg_r + (1.0 - shampoo_beta) * right_target)
 
-        # 5. ESI update (matches upstream _update_eigen_sqrt_inv_).
-        #    left_diag  = (g_proj * esi_r[None,:]).square().mean(axis=-1)  shape (..., rows)
-        #    right_diag = (g_proj * esi_l[:,None]).square().mean(axis=-2)  shape (..., cols)
+        # 5. ESI update from projected-gradient diagonals.
         proj_col_white = g_proj * esi_r[..., None, :]
         left_diag = jnp.mean(proj_col_white * proj_col_white, axis=-1)
         proj_row_white = g_proj * esi_l[..., :, None]
@@ -259,22 +305,18 @@ def _klsoaph_step(
         new_esi_l = _update_esi(esi_l, left_diag)
         new_esi_r = _update_esi(esi_r, right_diag)
 
-        # 6. Refresh basis every precond_freq steps via QR iteration on GG @ Q,
-        #    and reproject exp_avg from the old basis into the new basis.
+        # 6. Warm-started QR-iteration refresh + reproject exp_avg.
         should_refresh = jnp.equal(jnp.remainder(step, precond_freq), 0)
 
         def _refresh(_):
-            # exp_avg lives in the OLD basis; project back to parameter space.
-            ea_qrT = jnp.einsum("...ij,...kj->...ik", new_exp_avg, q_r, out_sharding=out_pspec)  # exp_avg @ q_r.T
-            ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT, out_sharding=out_pspec)  # q_l @ ea_qrT
-            # One step of subspace (QR) iteration warm-started from current Q.
-            gg_l_q = jnp.einsum("...ij,...jk->...ik", new_gg_l, q_l, out_sharding=out_pspec_l)
-            gg_r_q = jnp.einsum("...ij,...jk->...ik", new_gg_r, q_r, out_sharding=out_pspec_r)
+            ea_qrT = jnp.einsum("...ij,...kj->...ik", new_exp_avg, q_r, out_sharding=out_p)
+            ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT, out_sharding=out_p)
+            gg_l_q = jnp.einsum("...ij,...jk->...ik", new_gg_l, q_l, out_sharding=out_p)
+            gg_r_q = jnp.einsum("...ij,...jk->...ik", new_gg_r, q_r, out_sharding=out_p)
             ql_new, _ = jnp.linalg.qr(gg_l_q)
             qr_new, _ = jnp.linalg.qr(gg_r_q)
-            # Reproject exp_avg into the NEW basis.
-            ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_new, out_sharding=out_pspec)  # ea @ q_r_new
-            ea_new = jnp.einsum("...ki,...kj->...ij", ql_new, ea_qr_new, out_sharding=out_pspec)  # q_l_new.T @ ...
+            ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_new, out_sharding=out_p)
+            ea_new = jnp.einsum("...ki,...kj->...ij", ql_new, ea_qr_new, out_sharding=out_p)
             return ql_new, qr_new, ea_new
 
         def _keep(_):
@@ -295,10 +337,7 @@ def _klsoaph_step(
         )
 
     is_first = jnp.equal(step, 1)
-    direction, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r = jax.lax.cond(
-        is_first, _init_branch, _normal_branch, operand=None
-    )
-    return direction.astype(grad.dtype), exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r
+    return jax.lax.cond(is_first, _init_branch, _normal_branch, operand=None)
 
 
 def scale_by_klsoaph(
@@ -308,42 +347,42 @@ def scale_by_klsoaph(
     eps: float = 1e-8,
     precond_freq: int = 5,
     init_factor: float = 0.1,
+    block_size: int = _DEFAULT_BLOCK_SIZE,
 ) -> optax.GradientTransformation:
-    """SOAP-style preconditioner reproducing upstream KLSOAPH.
+    """Block-wise SOAP-style preconditioner adapting upstream KLSOAPH.
 
-    Returns the direction in parameter space. No learning-rate scaling and no
-    hyperball normalization — both applied by scale_with_grug_klsoaph.
-
-    State is allocated only for leaves with ndim >= 2; lower-rank leaves get
-    None state slots and pass through unchanged (their gradients should be
-    routed to a different optimizer group via an optax mask). Leaves with
-    ndim > 2 are treated as stacks of (rows, cols) matrices over the leading
-    axes via einsum ellipsis.
+    Each ``(rows, cols)`` weight is tiled into ``(R, C)`` non-overlapping
+    ``block_size x block_size`` blocks (right-padded with zeros to fit).
+    Each block holds its own SOAP state and eigenbasis; eigh / qr operate
+    only on the per-block ``(B, B)`` Gram matrices. The full-shape
+    direction is reassembled before return so the downstream
+    scale-invariant ("hyperball") post-step normalizes the unblocked
+    parameter and update.
 
     Default hyperparameters match the upstream "passing" tuple
-    (beta1=0.95, beta2=0.9, shampoo_beta=0.9) at the modded-nanogpt scale
-    (PR #290). ``precond_freq`` defaults to 5 (upstream 1) to amortize the
-    per-step QR-iteration refresh on TPU; everything else matches upstream
-    bit-for-bit including the whitened Gram update, eigen_sqrt_inv state,
-    descending-eigh first-step init, post-EMA symmetrize, and warm-started
-    QR refresh with exp_avg reprojection.
+    (beta1=0.95, beta2=0.9, shampoo_beta=0.9) from
+    KellerJordan/modded-nanogpt PR #290 within each block. ``precond_freq``
+    defaults to 5 to amortize the warm-started QR-iteration refresh on TPU.
+
+    State is allocated only for leaves with ``ndim >= 2``; lower-rank
+    leaves pass through unchanged (their gradients should be routed to a
+    different optimizer group via an optax mask). Leaves with ``ndim > 2``
+    are treated as stacks of ``(rows, cols)`` matrices over the leading
+    axes (per-stack-element block-SOAP via einsum ellipsis).
     """
+    B = block_size
 
     def init_fn(params):
-        # All state tensors are placeholders for non-matrix leaves (None) or
-        # zeros / eye / init-factor for matrix leaves. On the first call to
-        # update_fn the matrix state is overwritten from the first gradient
-        # (matching upstream init_2d_klsoap_state_).
         return ScaleByKLSoapHState(
             count=jnp.zeros([], jnp.int32),
-            exp_avg=jax.tree.map(_zeros_param, params, is_leaf=lambda x: x is None),
-            exp_avg_sq=jax.tree.map(_zeros_param, params, is_leaf=lambda x: x is None),
-            gg_l=jax.tree.map(_zeros_left, params, is_leaf=lambda x: x is None),
-            gg_r=jax.tree.map(_zeros_right, params, is_leaf=lambda x: x is None),
-            q_l=jax.tree.map(lambda p: _eye_leading(p, -2), params, is_leaf=lambda x: x is None),
-            q_r=jax.tree.map(lambda p: _eye_leading(p, -1), params, is_leaf=lambda x: x is None),
-            esi_l=jax.tree.map(lambda p: _esi_init(p, -2, init_factor), params, is_leaf=lambda x: x is None),
-            esi_r=jax.tree.map(lambda p: _esi_init(p, -1, init_factor), params, is_leaf=lambda x: x is None),
+            exp_avg=jax.tree.map(lambda p: _zeros_blocks(p, B), params, is_leaf=lambda x: x is None),
+            exp_avg_sq=jax.tree.map(lambda p: _zeros_blocks(p, B), params, is_leaf=lambda x: x is None),
+            gg_l=jax.tree.map(lambda p: _zeros_blocks(p, B), params, is_leaf=lambda x: x is None),
+            gg_r=jax.tree.map(lambda p: _zeros_blocks(p, B), params, is_leaf=lambda x: x is None),
+            q_l=jax.tree.map(lambda p: _eye_blocks(p, B), params, is_leaf=lambda x: x is None),
+            q_r=jax.tree.map(lambda p: _eye_blocks(p, B), params, is_leaf=lambda x: x is None),
+            esi_l=jax.tree.map(lambda p: _esi_init_blocks(p, B, init_factor), params, is_leaf=lambda x: x is None),
+            esi_r=jax.tree.map(lambda p: _esi_init_blocks(p, B, init_factor), params, is_leaf=lambda x: x is None),
         )
 
     def update_fn(updates, state, params=None):
@@ -353,8 +392,14 @@ def scale_by_klsoaph(
         def per_leaf(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r):
             if grad is None or exp_avg is None:
                 return _SoapStepResult(grad, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r)
-            out = _klsoaph_step(
-                grad,
+
+            original_shape = grad.shape
+            # Pad to multiples of B on the trailing two axes, then reshape to blocks.
+            padded = _pad_to_multiple(grad, B)
+            grad_blocks = _to_blocks(padded, B)
+
+            out = _klsoaph_step_blocked(
+                grad_blocks,
                 exp_avg,
                 exp_avg_sq,
                 gg_l,
@@ -370,8 +415,13 @@ def scale_by_klsoaph(
                 eps=eps,
                 precond_freq=precond_freq,
                 init_factor=init_factor,
+                block_size=B,
             )
-            return _SoapStepResult(*out)
+            direction_blocks = out[0]
+            # Reassemble direction back to the original full shape (drop padding)
+            # so the downstream hyperball post-step normalizes the original matrix.
+            direction = _from_blocks(direction_blocks, original_shape, B).astype(grad.dtype)
+            return _SoapStepResult(direction, *out[1:])
 
         results = jax.tree.map(
             per_leaf,
@@ -387,7 +437,6 @@ def scale_by_klsoaph(
             is_leaf=lambda x: x is None,
         )
 
-        # Treat _SoapStepResult as a leaf on the way out.
         def _is_result_or_none(x):
             return x is None or isinstance(x, _SoapStepResult)
 
