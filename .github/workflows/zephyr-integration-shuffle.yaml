@@ -55,7 +55,7 @@ jobs:
 
     env:
       RUN_ID: zephyr-shuffle-itest-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
-      IRIS_CONFIG: lib/iris/examples/marin-dev.yaml
+      IRIS_CONFIG: lib/iris/config/marin-dev.yaml
       IRIS_CONTROLLER_SERVICE_ACCOUNT: iris-controller@hai-gcp-models.iam.gserviceaccount.com
       NUM_INPUT_SHARDS: ${{ github.event.inputs.num_input_shards || '64' }}
 

@@ -6,7 +6,6 @@ import tempfile
 
 import jax
 import jax.numpy as jnp
-import pytest
 
 from haliax.quantization import QuantizationConfig
 
@@ -18,7 +17,6 @@ from levanter.distributed import DistributedConfig
 from levanter.tracker import NoopConfig
 
 
-@pytest.mark.entry
 def test_train_lm():
     # just testing if train_lm has a pulse
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -51,7 +49,6 @@ def test_train_lm():
                 pass
 
 
-@pytest.mark.entry
 def test_train_lm_fp8():
     # just testing if train_lm has a pulse
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -85,7 +82,6 @@ def test_train_lm_fp8():
                 pass
 
 
-@pytest.mark.entry
 def test_train_lm_direct_dataset():
     with tempfile.TemporaryDirectory():
         try:

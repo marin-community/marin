@@ -246,7 +246,7 @@ class PreferencePairDataset(
         mask_user_turns: bool = True,
     ):
         self.packed: GreedyPrepackedDataset[ProcessedPreferenceChatDict] = GreedyPrepackedDataset(
-            cache.store.tree,
+            cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,

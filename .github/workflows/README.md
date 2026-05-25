@@ -14,10 +14,10 @@ This directory contains thin trigger YAML around behavior implemented in `script
 | `iris-release-iap-proxy.yaml` | Iris - Release IAP Proxy | PR + push to main | release | iris | see job steps |
 | `iris-smoke-coreweave.yaml` | Iris - Smoke - CoreWeave | PR + issue_comment + workflow_dispatch | smoke | iris | see job steps |
 | `iris-smoke-gcp.yaml` | Iris - Smoke - GCP | PR + issue_comment + workflow_dispatch | smoke | iris | see job steps |
-| `iris-unit.yaml` | Iris - Unit | PR + push to main | unit | iris | `cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not e2e' tests/` |
+| `iris-unit.yaml` | Iris - Unit | PR + push to main | unit | iris | `cd lib/iris && uv run --group dev python -m pytest -n1 --durations=5 --tb=short -m 'not slow and not docker and not requires_cluster' tests/` |
 | `levanter-dev-launch-small-fast.yaml` | Levanter - Dev - Launch Small Fast | workflow_dispatch | dev | levanter | see job steps |
 | `levanter-integration-gpt2-small.yaml` | Levanter - Integration - GPT-2 Small | workflow_dispatch | integration | levanter | see job steps |
-| `levanter-unit.yaml` | Levanter - Unit | PR + push to main | unit | levanter | `uv run --package marin-levanter --frozen --with "jax[cpu]==0.9.2" pytest tests -m "not entry and not slow and not tpu and not torch"` |
+| `levanter-unit.yaml` | Levanter - Unit | PR + push to main | unit | levanter | `uv run --package marin-levanter --frozen --with "jax[cpu]==0.9.2" pytest tests -m "not slow and not torch"` |
 | `marin-canary-datakit-nemotron.yaml` | Marin - Canary - Datakit Nemotron | schedule + workflow_dispatch | canary | marin | see job steps |
 | `marin-canary-ferry-coreweave.yaml` | Marin - Canary Ferry - CoreWeave | schedule + workflow_dispatch | canary | marin | see job steps |
 | `marin-canary-ferry.yaml` | Marin - Canary Ferry | schedule + workflow_dispatch | canary | marin | see job steps |

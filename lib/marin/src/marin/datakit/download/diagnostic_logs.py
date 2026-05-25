@@ -13,7 +13,7 @@ import re
 import shutil
 import xml.etree.ElementTree as ET
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import StrEnum, auto
@@ -23,8 +23,8 @@ import fsspec
 import requests
 from fray import ResourceConfig
 from pydantic import BaseModel, ConfigDict
-from rigging.filesystem import marin_prefix
-from zephyr import Dataset, ZephyrContext, counters, load_zip_members
+from rigging.filesystem import marin_prefix, open_url
+from zephyr import Dataset, ZephyrContext, counters
 
 from marin.datakit.ingestion_manifest import (
     IdentityTreatment,
@@ -71,7 +71,6 @@ DEFAULT_GHALOGS_MAX_MEMBERS = 10_000
 DEFAULT_LOGCHUNKS_MAX_EXAMPLES = 10_000
 DEFAULT_LOGHUB_MAX_FILES = 100
 DEFAULT_GHALOGS_MATERIALIZE_SHARDS = 128
-DEFAULT_GHALOGS_PARTITION_SHARDS = 16
 LONG_TAIL_PPL_EPIC_ISSUE = 5005
 PUBLIC_DIAGNOSTIC_LOGS_ISSUE = 5094
 _DOWNLOAD_CHUNK_BYTES = 1 << 20
@@ -596,20 +595,37 @@ def _resolve_loghub_input_path(input_path: str | None) -> str:
     return normalized_input_path
 
 
-def _ghalogs_zip_member_to_records(member: dict[str, object]) -> list[dict[str, str]]:
-    filename = member["filename"]
-    content = member["content"]
-    assert isinstance(filename, str), f"Expected zip member filename to be str, got {type(filename)}"
-    assert isinstance(content, bytes), f"Expected zip member content to be bytes, got {type(content)}"
+def _list_ghalogs_member_names(archive_path: str) -> list[str]:
+    """Read the zip's central directory and return non-directory member names.
 
-    record = ghalogs_member_to_record(filename, content)
-    if record is None:
-        counters.increment("ghalogs_materialize/dropped_empty")
-        return []
+    The CD lives at the end of the file; ``zipfile`` only reads that small
+    region, so this is cheap even on multi-GB archives over fsspec/gcsfs.
+    """
+    with open_url(archive_path, "rb") as f:
+        with zipfile.ZipFile(f) as zf:
+            return [name for name in zf.namelist() if not name.endswith("/")]
 
-    counters.increment("ghalogs_materialize/kept")
-    counters.increment(f"ghalogs_materialize/partition_{record['partition']}")
-    return [record]
+
+def _process_ghalogs_member_batch(batch: list[str], archive_path: str) -> Iterator[dict[str, str]]:
+    """Open the archive once, read each assigned member, yield sanitized records.
+
+    Opens the zip a single time per worker (vs once per record). ``zipfile``
+    seeks to each member's offset, so the worker only fetches the bytes for
+    members in its batch — not the whole archive.
+    """
+    with open_url(archive_path, "rb") as f:
+        with zipfile.ZipFile(f) as zf:
+            for name in batch:
+                with zf.open(name, "r") as member_file:
+                    content = member_file.read()
+                counters.increment("zephyr/records_in")
+                record = ghalogs_member_to_record(name, content)
+                if record is None:
+                    counters.increment("ghalogs_materialize/dropped_empty")
+                    continue
+                counters.increment("ghalogs_materialize/kept")
+                counters.increment(f"ghalogs_materialize/partition_{record['partition']}")
+                yield record
 
 
 def materialize_ghalogs_to_parquet(
@@ -621,23 +637,41 @@ def materialize_ghalogs_to_parquet(
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> MaterializedDiagnosticLogParquet:
-    """Materialize sanitized GHALogs records into reusable parquet shards."""
+    """Materialize sanitized GHALogs records into reusable parquet shards.
+
+    Listing the archive's central directory is cheap (tail read of a few KB),
+    so it happens locally in the orchestrator. The resulting member names are
+    partitioned into ``num_shards`` batches and shipped to zephyr workers,
+    each of which opens the archive once and streams its assigned members
+    via ``zipfile``'s random-access reads — bounding per-worker memory to a
+    single member's content rather than the whole archive.
+    """
     if max_members is not None and max_members <= 0:
         raise ValueError(f"max_members must be positive when set, got {max_members}")
     if num_shards <= 0:
         raise ValueError(f"num_shards must be positive, got {num_shards}")
 
     _, archive_path = _resolve_ghalogs_archive_path(input_path)
-    pipeline = Dataset.from_list([archive_path]).flat_map(load_zip_members).flat_map(_ghalogs_zip_member_to_records)
+    member_names = _list_ghalogs_member_names(archive_path)
     if max_members is not None:
-        pipeline = pipeline.take_per_shard(max_members)
+        # Truncate globally, matching the prior ``take_per_shard`` semantics
+        # when there was only a single upstream shard.
+        member_names = member_names[:max_members]
+    logger.info("Sharding %d ghalogs members across %d workers", len(member_names), num_shards)
+    # Round-robin partition so shards are evenly sized regardless of input order.
+    batches = [member_names[i::num_shards] for i in range(num_shards)]
 
-    pipeline = pipeline.reshard(num_shards).write_parquet(
-        f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet",
-        skip_existing=True,
+    pipeline = (
+        Dataset.from_list(batches)
+        .reshard(num_shards)
+        .flat_map(lambda batch: _process_ghalogs_member_batch(batch, archive_path))
+        .write_parquet(
+            f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet",
+            skip_existing=True,
+        )
     )
 
-    resources = worker_resources or ResourceConfig(cpu=1, ram="16g", disk="20g")
+    resources = worker_resources or ResourceConfig(cpu=1, ram="8g", disk="10g")
     ctx_kwargs: dict[str, object] = {"name": "materialize-ghalogs", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
@@ -664,20 +698,24 @@ def materialize_ghalogs_partition_to_parquet(
     output_path: str,
     *,
     partition: DiagnosticPartition,
-    num_shards: int = DEFAULT_GHALOGS_PARTITION_SHARDS,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
 ) -> MaterializedDiagnosticLogParquet:
-    """Filter materialized GHALogs parquet shards down to one partition."""
-    if num_shards <= 0:
-        raise ValueError(f"num_shards must be positive, got {num_shards}")
+    """Filter materialized GHALogs parquet shards down to one partition.
 
+    Output shard count tracks the input (one output file per input parquet
+    from ``materialize_ghalogs_to_parquet``). No reshard between filter and
+    write — a shuffle here forced each map-side worker to buffer its outgoing
+    hash partitions in memory, blowing the worker RAM on the large ``train``
+    partition. Skipping the shuffle lets records stream straight through to
+    the per-shard parquet writer; smaller partitions just yield smaller
+    output files.
+    """
     pipeline = (
         Dataset.from_files(f"{input_path}/*.parquet")
         .load_parquet()
         .filter(lambda record: record.get("partition") == partition.value)
         .map(lambda record: _count_partition_record(record, partition))
-        .reshard(num_shards)
         .write_parquet(f"{output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet", skip_existing=True)
     )
 
@@ -981,7 +1019,6 @@ def materialize_ghalogs_partition_step(
     *,
     materialized: StepSpec,
     partition: DiagnosticPartition,
-    num_shards: int = DEFAULT_GHALOGS_PARTITION_SHARDS,
     output_path_prefix: str | None = None,
 ) -> StepSpec:
     """Return a StepSpec that filters materialized GHALogs parquet to one partition."""
@@ -994,14 +1031,12 @@ def materialize_ghalogs_partition_step(
             materialized.output_path,
             output_path,
             partition=partition,
-            num_shards=num_shards,
         ),
         hash_attrs={
-            "version": "v1",
+            "version": "v2",
             "source_label": source.source_label,
             "materialized_input": materialized.output_path,
             "partition": partition.value,
-            "num_shards": num_shards,
             "source_content_fingerprint": source.fingerprint(),
         },
     )
@@ -1012,7 +1047,6 @@ def ghalogs_public_normalize_steps(
     source_path: str = GHALOGS_STAGED_PREFIX,
     max_members: int | None = None,
     num_materialize_shards: int = DEFAULT_GHALOGS_MATERIALIZE_SHARDS,
-    num_partition_shards: int = DEFAULT_GHALOGS_PARTITION_SHARDS,
     output_path_prefix: str | None = None,
 ) -> tuple[StepSpec, StepSpec, StepSpec]:
     """Return the Datakit ``(materialize, train-partition, normalize)`` chain for GHALogs."""
@@ -1025,7 +1059,6 @@ def ghalogs_public_normalize_steps(
     train_partition = materialize_ghalogs_partition_step(
         materialized=materialized,
         partition=DiagnosticPartition.TRAIN,
-        num_shards=num_partition_shards,
         output_path_prefix=output_path_prefix,
     )
     normalized = normalize_step(

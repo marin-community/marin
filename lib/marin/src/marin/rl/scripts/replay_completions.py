@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import socket
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -116,8 +117,6 @@ def create_inference_server(config: ReplayConfig) -> tuple[InferenceServer, Asyn
     server = InferenceServer.create(server_config)
 
     # run serving in background
-    import threading
-
     threading.Thread(target=server.serve, daemon=True).start()
 
     # Create client
@@ -172,7 +171,7 @@ async def send_batch_requests(
             "failing_requests": [],
         }
 
-    except (asyncio.TimeoutError, Exception):
+    except Exception:
         logger.error(f"Failing batch contained {len(requests)} requests, writing to /tmp/failing_batch.json")
         # write bad batch to disk
         with open("/tmp/failing_batch.json", "w") as f:

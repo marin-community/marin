@@ -73,6 +73,7 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module  # n
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 
 if TYPE_CHECKING:
+    # transformers is an optional dep; keep guard to avoid import at type-check time only
     from transformers import FeatureExtractionMixin, ProcessorMixin
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)

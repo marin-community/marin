@@ -32,9 +32,9 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished
+from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, is_job_finished, tpu_device
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.rpc import job_pb2
+from iris.rpc import actor_pb2, job_pb2
 from rigging.timing import ExponentialBackoff
 
 from fray.actor import (
@@ -79,8 +79,6 @@ def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingCon
 
 def _convert_device(device: DeviceConfig) -> job_pb2.DeviceConfig | None:
     """Convert fray DeviceConfig to Iris protobuf DeviceConfig."""
-    from iris.cluster.types import tpu_device
-
     if isinstance(device, CpuConfig):
         return None
     elif isinstance(device, TpuConfig):
@@ -101,8 +99,6 @@ def convert_resources(resources: ResourceConfig) -> ResourceSpec:
       fray device    → Iris device (TPU via tpu_device(), GPU via GpuDevice)
     Replicas are passed separately to iris client.submit().
     """
-    from iris.cluster.types import ResourceSpec
-
     return ResourceSpec(
         cpu=resources.cpu,
         memory=resources.ram,
@@ -129,8 +125,6 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
 
 def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
     """Convert fray Entrypoint to Iris Entrypoint."""
-    from iris.cluster.types import Entrypoint as IrisEntrypoint
-
     if entrypoint.callable_entrypoint is not None:
         ce = entrypoint.callable_entrypoint
         return IrisEntrypoint.from_callable(ce.callable, *ce.args, **ce.kwargs)
@@ -148,8 +142,6 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
             env_vars.setdefault(key, value)
     if env is None and not env_vars:
         return None
-    from iris.cluster.types import EnvironmentSpec
-
     return EnvironmentSpec(
         pip_packages=list(env.pip_packages) if env is not None else [],
         env_vars=env_vars,
@@ -254,6 +246,9 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     shutdown_event.wait()
     logger.info(f"Actor {actor_name} shutting down")
     server.stop()
+    if actor_ctx._errors:
+        logger.error("Actor %s recorded %d failure(s); raising the first", actor_name, len(actor_ctx._errors))
+        raise actor_ctx._errors[0]
 
 
 class IrisActorHandle:
@@ -262,6 +257,7 @@ class IrisActorHandle:
     def __init__(self, endpoint_name: str):
         self._endpoint_name = endpoint_name
         self._client: Any = None  # Lazily resolved ActorClient
+        self._resolve_lock = threading.Lock()
 
     def __getstate__(self) -> dict:
         # Only serialize the endpoint name - client is lazily resolved
@@ -270,10 +266,15 @@ class IrisActorHandle:
     def __setstate__(self, state: dict) -> None:
         self._endpoint_name = state["endpoint_name"]
         self._client = None
+        self._resolve_lock = threading.Lock()
 
     def _resolve(self) -> Any:
         """Resolve endpoint to ActorClient via IrisContext."""
-        if self._client is None:
+        if self._client is not None:
+            return self._client
+        with self._resolve_lock:
+            if self._client is not None:
+                return self._client
             ctx = get_iris_ctx()
             if ctx is None:
                 raise RuntimeError(
@@ -281,7 +282,7 @@ class IrisActorHandle:
                     "Call from within an Iris job or set context via iris_ctx_scope()."
                 )
             self._client = ActorClient(ctx.resolver, self._endpoint_name)
-        return self._client
+            return self._client
 
     def __getattr__(self, method_name: str) -> _IrisActorMethod:
         if method_name.startswith("_"):
@@ -303,8 +304,6 @@ class OperationFuture:
         self._poll_interval = poll_interval
 
     def result(self, timeout: float | None = None) -> Any:
-        from iris.rpc import actor_pb2
-
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             op = self._client.poll_operation_status(self._op_id)
@@ -414,8 +413,6 @@ class IrisActorGroup:
 
     def _get_client(self) -> IrisClientLib:
         """Get IrisClient from context."""
-        from iris.client.client import get_iris_ctx
-
         ctx = get_iris_ctx()
         if ctx is None or ctx.client is None:
             raise RuntimeError("IrisActorGroup requires IrisContext with client. Set context via iris_ctx_scope().")
@@ -635,8 +632,6 @@ class FrayIrisClient:
         Uses Iris's multi-replica job feature instead of creating N separate jobs,
         which improves networking and reduces job overhead.
         """
-        from iris.cluster.types import Entrypoint as IrisEntrypoint
-
         iris_resources = convert_resources(resources)
         iris_constraints = convert_constraints(resources)
         iris_environment = convert_environment(None, device=resources.device)

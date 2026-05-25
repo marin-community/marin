@@ -73,6 +73,18 @@ def test_ragged_dot_gpu_auto_uses_triton_when_available(monkeypatch):
     assert jnp.array_equal(auto_out, expected)
 
 
+def test_triton_default_block_sizes_use_blackwell_n_tile(monkeypatch):
+    monkeypatch.setattr(ragged_dot_module, "_is_blackwell_gpu_backend", lambda: True)
+
+    assert ragged_dot_module._triton_default_block_sizes(32768, 5120, 5120) == (128, 256, 32)
+
+
+def test_triton_default_block_sizes_keep_non_blackwell_n_tile(monkeypatch):
+    monkeypatch.setattr(ragged_dot_module, "_is_blackwell_gpu_backend", lambda: False)
+
+    assert ragged_dot_module._triton_default_block_sizes(32768, 5120, 5120) == (128, 128, 32)
+
+
 def test_triton_custom_vjp_routes_backward_through_triton_layouts(monkeypatch):
     lhs, rhs, group_sizes = _inputs()
     calls = []

@@ -78,7 +78,6 @@ lint = [
     "pyrefly>=0.42.0",
     "types-PyYAML",
     "types-requests",
-    "types-six",
     "click>=8.0",
     "pyyaml>=6.0",
 ]
@@ -136,10 +135,16 @@ gpu = [
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
+  # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
+  # 0.3.0 is missing the CUDA backend API needed by our current stack.
+  "jax-triton==0.3.1; sys_platform == 'linux'",
+  # This module imports Triton directly; stay on the tested minor without
+  # forcing an exact patch version.
+  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
   "torch==2.11.0",
   "torchvision==0.26.0",
 ]
-tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.38", "torch==2.10.0", "torchvision==0.25.0"]
+tpu = ["jax==0.9.2", "jaxlib==0.9.2", "libtpu==0.0.39", "torch==2.10.0", "torchvision==0.25.0"]
 
 cpu = [
   "jax==0.9.2",
@@ -185,8 +190,8 @@ vizier = [
 vllm = [
     "jax==0.9.2",
     "jaxlib==0.9.2",
-    "vllm-tpu==0.18.0",
-    "tpu-inference==0.18.0",
+    "vllm-tpu==0.19.0",
+    "tpu-inference==0.19.0",
     "triton==3.6.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
     # Pin torch + torchvision explicitly so the per-extra source map below
     # routes them to the pytorch-cpu index during fresh Iris resolves.

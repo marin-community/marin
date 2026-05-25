@@ -95,6 +95,7 @@ class ClusterClient(Protocol):
         self,
         source: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
         since_ms: int = 0,
         cursor: int = 0,
         max_lines: int = 0,

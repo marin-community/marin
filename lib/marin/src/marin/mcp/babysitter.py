@@ -436,15 +436,11 @@ class IrisBabysitter:
         jobs: list[dict[str, Any]] = []
         offset = 0
         capped_limit = max(1, limit)
-        prefix_job = JobName.from_wire(prefix) if prefix else None
-        # Push the prefix into name_filter (substring on j.name) when the caller
-        # didn't pass an explicit name_filter, so the server narrows results
-        # before we re-validate prefix anchoring client-side.
-        effective_name_filter = name_filter or (prefix_job.to_wire() if prefix_job else "")
         while len(jobs) < capped_limit:
             query = controller_pb2.Controller.JobQuery(
                 state_filter=state_filter,
-                name_filter=effective_name_filter,
+                name_filter=name_filter,
+                job_id_prefix=prefix,
                 sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
                 sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
                 offset=offset,
@@ -452,8 +448,6 @@ class IrisBabysitter:
             )
             response = self.controller.list_jobs(controller_pb2.Controller.ListJobsRequest(query=query))
             for job in response.jobs:
-                if prefix_job is not None and not _job_matches_prefix(job.job_id, prefix_job):
-                    continue
                 jobs.append(job_status_to_json(job))
                 if len(jobs) >= capped_limit:
                     break
@@ -502,10 +496,11 @@ class IrisBabysitter:
         attempt_id: int = -1,
         tail: bool = True,
     ) -> dict[str, Any]:
-        source = _log_source(target, attempt_id)
+        source, match_scope = _log_source(target, attempt_id)
         response = self.logs.fetch_logs(
             logging_pb2.FetchLogsRequest(
                 source=source,
+                match_scope=match_scope,
                 since_ms=since_ms,
                 cursor=cursor,
                 max_lines=max_lines,
@@ -657,22 +652,16 @@ class IrisBabysitter:
     def _jobs_with_prefix(self, prefix: str) -> list[job_pb2.JobStatus]:
         jobs: list[job_pb2.JobStatus] = []
         offset = 0
-        root = JobName.from_wire(prefix)
-        # Substring filter on j.name (which stores the full wire path) narrows
-        # the page-walk server-side; the loop body re-validates anchored prefix
-        # matching to drop jobs whose names happen to contain the prefix
-        # without being a true descendant.
-        name_filter = root.to_wire()
         while True:
             query = controller_pb2.Controller.JobQuery(
-                name_filter=name_filter,
+                job_id_prefix=prefix,
                 sort_field=controller_pb2.Controller.JOB_SORT_FIELD_DATE,
                 sort_direction=controller_pb2.Controller.SORT_DIRECTION_DESC,
                 offset=offset,
                 limit=MAX_LIST_JOBS_PAGE_SIZE,
             )
             response = self.controller.list_jobs(controller_pb2.Controller.ListJobsRequest(query=query))
-            jobs.extend(job for job in response.jobs if _job_matches_prefix(job.job_id, root))
+            jobs.extend(response.jobs)
             if not response.has_more:
                 return jobs
             offset += len(response.jobs)
@@ -696,10 +685,6 @@ def _job_summary_payload(job: job_pb2.JobStatus, tasks: list[job_pb2.TaskStatus]
     return summary
 
 
-def _job_matches_prefix(job_id: str, prefix: JobName) -> bool:
-    return prefix.is_ancestor_of(JobName.from_wire(job_id), include_self=True)
-
-
 def _token_provider(cluster: str, *, store_path: Path | None = None) -> TokenProvider | None:
     credential = load_token(cluster, store_path=store_path)
     if credential is None:
@@ -716,9 +701,9 @@ def _normalize_state_filter(state: str) -> str:
     return normalized
 
 
-def _log_source(target: str, attempt_id: int) -> str:
+def _log_source(target: str, attempt_id: int) -> tuple[str, "logging_pb2.MatchScope"]:
     if target.startswith("/system/"):
-        return target
+        return target, logging_pb2.MATCH_SCOPE_EXACT
     return build_log_source(JobName.from_wire(target), attempt_id)
 
 

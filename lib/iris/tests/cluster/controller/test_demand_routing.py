@@ -265,8 +265,8 @@ class TestWaterfallRouting:
         config_high = make_scale_group_config(name="high-priority", max_slices=5, priority=10)
         config_low = make_scale_group_config(name="low-priority", max_slices=5, priority=20)
 
-        group_high = ScalingGroup(config_high, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
-        group_low = ScalingGroup(config_low, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_high = ScalingGroup(config_high, make_mock_platform())
+        group_low = ScalingGroup(config_low, make_mock_platform())
 
         demand = make_demand_entries(3, device_type=DeviceType.CPU, device_variant=None)
         result = route_demand([group_high, group_low], demand)
@@ -283,8 +283,8 @@ class TestWaterfallRouting:
             priority=20,
         )
 
-        group_high = ScalingGroup(config_high, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
-        group_low = ScalingGroup(config_low, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_high = ScalingGroup(config_high, make_mock_platform())
+        group_low = ScalingGroup(config_low, make_mock_platform())
 
         demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
         result = route_demand([group_high, group_low], demand)
@@ -302,7 +302,7 @@ class TestWaterfallRouting:
         group_high.reconcile()
         _mark_discovered_ready(group_high, discovered)
 
-        group_low = ScalingGroup(config_low, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_low = ScalingGroup(config_low, make_mock_platform())
 
         demand = make_demand_entries(3, device_type=DeviceType.CPU, device_variant=None)
         result = route_demand([group_high, group_low], demand)
@@ -317,8 +317,8 @@ class TestWaterfallRouting:
             name="v5lite-group", accelerator_variant="v5litepod-4", max_slices=5, priority=10
         )
 
-        group_v5p = ScalingGroup(config_v5p, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
-        group_v5lite = ScalingGroup(config_v5lite, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_v5p = ScalingGroup(config_v5p, make_mock_platform())
+        group_v5lite = ScalingGroup(config_v5lite, make_mock_platform())
 
         demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="v5litepod-4")
         result = route_demand([group_v5p, group_v5lite], demand)
@@ -330,7 +330,7 @@ class TestWaterfallRouting:
         """Demand for unknown accelerator type results in unmet demand."""
         config = make_scale_group_config(name="test-group", max_slices=5, priority=10)
 
-        group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(config, make_mock_platform())
 
         demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variant="unknown-type")
         result = route_demand([group], demand)
@@ -344,8 +344,8 @@ class TestWaterfallRouting:
             name="v5lite-group", accelerator_variant="v5litepod-4", max_slices=5, priority=10
         )
 
-        group_v5p = ScalingGroup(config_v5p, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
-        group_v5lite = ScalingGroup(config_v5lite, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_v5p = ScalingGroup(config_v5p, make_mock_platform())
+        group_v5lite = ScalingGroup(config_v5lite, make_mock_platform())
 
         demand = [
             *make_demand_entries(1, device_type=DeviceType.TPU, device_variant="v5p-8", task_prefix="v5p"),
@@ -361,8 +361,8 @@ class TestWaterfallRouting:
         config_v4 = make_scale_group_config(name="v4-group", accelerator_variant="v4-8", max_slices=5, priority=10)
         config_v5p = make_scale_group_config(name="v5p-group", accelerator_variant="v5p-8", max_slices=5, priority=20)
 
-        group_v4 = ScalingGroup(config_v4, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
-        group_v5p = ScalingGroup(config_v5p, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_v4 = ScalingGroup(config_v4, make_mock_platform())
+        group_v5p = ScalingGroup(config_v5p, make_mock_platform())
 
         # Demand accepts either v4-8 or v5p-8; should route to v4-group (higher priority)
         demand = make_demand_entries(2, device_type=DeviceType.TPU, device_variants=frozenset({"v4-8", "v5p-8"}))
@@ -374,7 +374,7 @@ class TestWaterfallRouting:
         """Flexible demand with no matching groups is unmet."""
         config_v4 = make_scale_group_config(name="v4-group", accelerator_variant="v4-8", max_slices=5, priority=10)
 
-        group_v4 = ScalingGroup(config_v4, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_v4 = ScalingGroup(config_v4, make_mock_platform())
 
         # Demand requires v5p-8 or v5litepod-4, but only v4-8 group exists
         demand = make_demand_entries(1, device_type=DeviceType.TPU, device_variants=frozenset({"v5p-8", "v5litepod-4"}))
@@ -388,20 +388,13 @@ class TestWaterfallRouting:
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
 
-        group_primary = ScalingGroup(
-            config_primary,
-            make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
-            backoff_initial=Duration.from_seconds(60),
-        )
-        group_fallback = ScalingGroup(
-            config_fallback,
-            make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
-        )
+        group_primary = ScalingGroup(config_primary, make_mock_platform())
+        group_fallback = ScalingGroup(config_fallback, make_mock_platform())
 
         ts = Timestamp.from_ms(1000)
-        group_primary.record_failure(timestamp=ts)
+        # With decay=0.7, 5 failures → 0.168 (HOSTILE).
+        for _ in range(5):
+            group_primary.record_create_failed(timestamp=ts)
         assert group_primary.availability(ts).status == GroupAvailability.BACKOFF
 
         demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
@@ -410,7 +403,7 @@ class TestWaterfallRouting:
         assert len(result.routed_entries.get("fallback", [])) == 2
         status_by_group = {s.group: s for s in result.group_statuses}
         assert status_by_group["primary"].decision == "blocked"
-        assert "consecutive failure" in status_by_group["primary"].reason
+        assert "degraded" in status_by_group["primary"].reason
         assert status_by_group["fallback"].decision == "selected"
 
     def test_backoff_group_with_ready_slices_still_falls_through(self):
@@ -421,21 +414,13 @@ class TestWaterfallRouting:
         config_primary = make_scale_group_config(name="primary", max_slices=5, priority=10)
         config_fallback = make_scale_group_config(name="fallback", max_slices=5, priority=20)
 
-        group_primary = ScalingGroup(
-            config_primary,
-            make_mock_platform(slices_to_discover=discovered),
-            scale_up_cooldown=Duration.from_ms(0),
-            backoff_initial=Duration.from_seconds(60),
-        )
+        group_primary = ScalingGroup(config_primary, make_mock_platform(slices_to_discover=discovered))
         group_primary.reconcile()
-        group_fallback = ScalingGroup(
-            config_fallback,
-            make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
-        )
+        group_fallback = ScalingGroup(config_fallback, make_mock_platform())
 
         ts = Timestamp.from_ms(1000)
-        group_primary.record_failure(timestamp=ts)
+        for _ in range(8):
+            group_primary.record_create_failed(timestamp=ts)
         assert group_primary.availability(ts).status == GroupAvailability.BACKOFF
         assert group_primary.slice_count() == 1
 
@@ -444,23 +429,14 @@ class TestWaterfallRouting:
 
         assert len(result.routed_entries.get("fallback", [])) == 2
 
-    def test_cooldown_does_not_cause_fallthrough(self):
-        """Groups in COOLDOWN still accept demand -- demand does not fall through."""
-        from iris.cluster.controller.autoscaler.scaling_group import GroupAvailability
+    def test_recent_scale_up_does_not_cause_fallthrough(self):
+        """A group that recently scaled up still accepts demand — no cooldown gate."""
 
         config_a = make_scale_group_config(name="group-a", max_slices=5, priority=10)
         config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
 
-        group_a = ScalingGroup(
-            config_a,
-            make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(60_000),
-        )
-        group_b = ScalingGroup(
-            config_b,
-            make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
-        )
+        group_a = ScalingGroup(config_a, make_mock_platform())
+        group_b = ScalingGroup(config_b, make_mock_platform())
 
         ts = Timestamp.from_ms(1_000_000)
         group_a.begin_scale_up(timestamp=ts)
@@ -468,7 +444,7 @@ class TestWaterfallRouting:
         group_a.complete_scale_up(handle, ts)
 
         eval_ts = Timestamp.from_ms(1_030_000)
-        assert group_a.availability(eval_ts).status == GroupAvailability.COOLDOWN
+        assert group_a.can_accept_demand(eval_ts)
 
         demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
         result = route_demand([group_a, group_b], demand, eval_ts)
@@ -492,7 +468,6 @@ class TestWaterfallRouting:
         group_b = ScalingGroup(
             config_b,
             make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
         )
 
         demand = make_demand_entries(2, device_type=DeviceType.CPU, device_variant=None)
@@ -527,15 +502,15 @@ class TestWaterfallRouting:
 
         # Zone 0: has 1 booting slice (scale-up happened, slice created but not ready)
         handle_0 = make_mock_slice_handle("slice-zone-0", all_ready=False)
-        group_0 = ScalingGroup(configs[0], make_mock_platform(), scale_up_cooldown=Duration.from_ms(60_000))
+        group_0 = ScalingGroup(configs[0], make_mock_platform())
         group_0.begin_scale_up(timestamp=ts)
         group_0.complete_scale_up(handle_0, timestamp=ts)
         # Slice is BOOTING, not READY. Group is at max_slices.
         assert group_0.slice_count() == 1
 
         # Zone 1 and 2: empty, ready to accept
-        group_1 = ScalingGroup(configs[1], make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
-        group_2 = ScalingGroup(configs[2], make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_1 = ScalingGroup(configs[1], make_mock_platform())
+        group_2 = ScalingGroup(configs[2], make_mock_platform())
 
         groups = [group_0, group_1, group_2]
         demand = make_demand_entries(1, device_type=DeviceType.CPU, device_variant=None)
@@ -836,8 +811,8 @@ class TestCommittedBudgetRouting:
 
         platform_v6e = make_mock_platform()
         platform_v5e = make_mock_platform()
-        group_v6e = ScalingGroup(config_v6e, platform_v6e, scale_up_cooldown=Duration.from_ms(0))
-        group_v5e = ScalingGroup(config_v5e, platform_v5e, scale_up_cooldown=Duration.from_ms(0))
+        group_v6e = ScalingGroup(config_v6e, platform_v6e)
+        group_v5e = ScalingGroup(config_v5e, platform_v5e)
 
         # v6e has 3 requesting slices
         for _ in range(3):
@@ -869,8 +844,8 @@ class TestCommittedBudgetRouting:
         config_v5e = make_scale_group_config(name="v5e", max_slices=10, priority=10, num_vms=1)
         config_v5e.resources.CopyFrom(small_resources)
 
-        group_v6e = ScalingGroup(config_v6e, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
-        group_v5e = ScalingGroup(config_v5e, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_v6e = ScalingGroup(config_v6e, make_mock_platform())
+        group_v5e = ScalingGroup(config_v5e, make_mock_platform())
 
         # v6e has 1 requesting slice -> committed budget = 1 VM, full budget = 2 VMs
         group_v6e.begin_scale_up()
@@ -890,8 +865,8 @@ class TestCommittedBudgetRouting:
         config_a = make_scale_group_config(name="group-a", max_slices=5, priority=10)
         config_b = make_scale_group_config(name="group-b", max_slices=5, priority=20)
 
-        group_a = ScalingGroup(config_a, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
-        group_b = ScalingGroup(config_b, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group_a = ScalingGroup(config_a, make_mock_platform())
+        group_b = ScalingGroup(config_b, make_mock_platform())
 
         ts = Timestamp.now()
         demand = make_demand_entries(3, device_type=DeviceType.TPU, device_variant="v5p-8")
@@ -922,7 +897,6 @@ class TestPackingRouting:
         group = ScalingGroup(
             config,
             make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
         )
 
         entries = _make_big_demand_entries(
@@ -954,12 +928,10 @@ class TestPackingRouting:
         group_a = ScalingGroup(
             config_a,
             make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
         )
         group_b = ScalingGroup(
             config_b,
             make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
         )
 
         # 8 entries at 32GiB each -> 2 VMs needed -> ceil(2/4) = 1 slice.
@@ -986,7 +958,6 @@ class TestPackingRouting:
         group = ScalingGroup(
             config,
             make_mock_platform(),
-            scale_up_cooldown=Duration.from_ms(0),
         )
 
         # 16 entries at 32GiB -> 4 VMs -> ceil(4/4) = 1 slice.
@@ -1012,7 +983,6 @@ class TestPackingRouting:
         group = ScalingGroup(
             config,
             make_mock_platform(slices_to_discover=discovered),
-            scale_up_cooldown=Duration.from_ms(0),
         )
         group.reconcile()
         _mark_discovered_ready(group, discovered)
@@ -1062,7 +1032,7 @@ class TestRoutingBinPacking:
         config.resources.CopyFrom(resources)
         config.num_vms = kwargs.pop("num_vms", 1)
         config.slice_template.gcp.zone = "us-central1-a"
-        return ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        return ScalingGroup(config, make_mock_platform())
 
     def _make_entries(self, count: int, memory_bytes: int = 32 * 1024**3) -> list[DemandEntry]:
         resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=memory_bytes)
@@ -1147,7 +1117,7 @@ class TestRoutingBinPacking:
         )
         config.resources.CopyFrom(DEFAULT_RESOURCES)
         config.slice_template.gcp.zone = "us-central1-a"
-        group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(config, make_mock_platform())
 
         resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
         normalized = PlacementRequirements(
@@ -1189,7 +1159,7 @@ class TestRoutingBinPacking:
         )
         config.resources.CopyFrom(DEFAULT_RESOURCES)
         config.slice_template.gcp.zone = "us-central1-a"
-        group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        group = ScalingGroup(config, make_mock_platform())
 
         resources = job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024)
         normalized = PlacementRequirements(
@@ -1446,7 +1416,7 @@ class TestAllocationTierBlocking:
             )
             config.quota_pool = pool
             config.allocation_tier = tier
-            group = ScalingGroup(config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+            group = ScalingGroup(config, make_mock_platform())
             groups.append(group)
         return groups
 
@@ -1528,7 +1498,7 @@ class TestAllocationTierBlocking:
         unpooled_config = make_scale_group_config(
             name="standalone", max_slices=10, priority=50, accelerator_variant="v5p-8"
         )
-        unpooled = ScalingGroup(unpooled_config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        unpooled = ScalingGroup(unpooled_config, make_mock_platform())
 
         entries = make_demand_entries(1, device_variant="v5p-8")
         result = route_demand([*pooled, unpooled], entries, timestamp=Timestamp.from_ms(1100))
@@ -1540,12 +1510,12 @@ class TestAllocationTierBlocking:
         g1_config = make_scale_group_config(name="zone-a", max_slices=10, priority=10, accelerator_variant="v5p-8")
         g1_config.quota_pool = "v5p"
         g1_config.allocation_tier = 1
-        g1 = ScalingGroup(g1_config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        g1 = ScalingGroup(g1_config, make_mock_platform())
 
         g2_config = make_scale_group_config(name="zone-b", max_slices=10, priority=10, accelerator_variant="v5p-8")
         g2_config.quota_pool = "v5p"
         g2_config.allocation_tier = 1
-        g2 = ScalingGroup(g2_config, make_mock_platform(), scale_up_cooldown=Duration.from_ms(0))
+        g2 = ScalingGroup(g2_config, make_mock_platform())
 
         ts = Timestamp.from_ms(1000)
 

@@ -14,7 +14,6 @@ from test_utils import skip_if_no_soundlibs
 
 
 @pytest.mark.skip
-@pytest.mark.entry
 @skip_if_no_soundlibs
 def test_train_asr():
     # just testing if train_asr has a pulse

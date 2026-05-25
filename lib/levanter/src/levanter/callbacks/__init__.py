@@ -1,11 +1,15 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import cProfile
 import os
+import pstats
 import threading
 import time
 from contextlib import contextmanager
 from typing import Optional
+
+import wandb
 
 import jax
 from tqdm_loggable.auto import tqdm
@@ -96,8 +100,6 @@ def compute_validation_loss(
 
 
 def wandb_xla_logger(config: WandbConfig):
-    import wandb
-
     last_mtime = wandb.run and wandb.run.start_time or time.time()
 
     def log_xla_to_wandb(step: StepInfo):
@@ -121,6 +123,7 @@ def profile_ctx(
     host_profile: bool = False,
     host_profile_basename: str = "host_profile",
     host_profile_topn: int = 0,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
 ):
     """Context manager for JAX profiling traces.
 
@@ -151,7 +154,12 @@ def profile_ctx(
         pass
 
     if device_profile:
-        jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
+        jax.profiler.start_trace(
+            path,
+            create_perfetto_link=_create_perfetto_link,
+            create_perfetto_trace=True,
+            profiler_options=profiler_options,
+        )
 
     event = None
     pr = None
@@ -159,8 +167,6 @@ def profile_ctx(
     txt_summary_path = None
     if host_profile:
         try:
-            import cProfile  # type: ignore
-
             pr = cProfile.Profile()
             pr.enable()
             # Primary .pstats file and a human-readable txt summary
@@ -185,8 +191,6 @@ def profile_ctx(
                 pr.disable()
                 pr.dump_stats(stats_path)
                 if host_profile_topn and txt_summary_path is not None:
-                    import pstats  # type: ignore
-
                     s = pstats.Stats(stats_path)
                     s.strip_dirs().sort_stats("cumtime")
                     with open(txt_summary_path, "w") as f:

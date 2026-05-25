@@ -6,13 +6,13 @@
 from unittest.mock import MagicMock
 
 import pytest
-from iris.cluster.controller.schema import TASK_DETAIL_PROJECTION
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
 from tests.cluster.controller.conftest import (
     make_job_request,
     make_worker_metadata,
+    query_tasks_for_job,
     register_worker,
     submit_job,
 )
@@ -42,10 +42,7 @@ def test_dry_run_scheduling_does_not_dispatch(dry_run_controller):
 
     controller._run_scheduling()
 
-    with state._db.snapshot() as q:
-        tasks = TASK_DETAIL_PROJECTION.decode(
-            q.fetchall("SELECT * FROM tasks WHERE job_id = ?", (JobName.root("test-user", "dry-job").to_wire(),)),
-        )
+    tasks = query_tasks_for_job(state, JobName.root("test-user", "dry-job"))
     assert len(tasks) == 1
     assert tasks[0].state == job_pb2.TASK_STATE_PENDING
 

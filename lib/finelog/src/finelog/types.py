@@ -7,12 +7,12 @@ Finelog treats keys as opaque strings — any structure (e.g.
 ``/user/<job>/<task>:<attempt>``) is caller convention, not a finelog
 concern. The only exception is ``parse_attempt_id`` below, which the
 DuckDB store uses to populate ``LogEntry.attempt_id`` for entries fetched
-through pattern queries (best-effort; falls back to 0 on parse failure).
+through PREFIX/REGEX queries that span multiple keys (best-effort; falls
+back to 0 on parse failure).
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -20,9 +20,6 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
 from finelog.rpc import logging_pb2
-
-# Characters that indicate a regex pattern (vs. a literal key).
-REGEX_META_RE = re.compile(r"[.*+?\[\](){}^$|\\]")
 
 
 @dataclass

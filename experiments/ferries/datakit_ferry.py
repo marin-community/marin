@@ -68,7 +68,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-smoke/minhash",
         deps=[normalized],
         fn=lambda output_path: compute_minhash_attrs(
-            source=Artifact.load(normalized, NormalizedData),
+            source=Artifact.from_path(normalized, NormalizedData),
             output_path=output_path,
             worker_resources=ResourceConfig(cpu=5, ram="16g", disk="10g"),
         ),
@@ -82,7 +82,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         deps=[minhash],
         hash_attrs={"cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
-            inputs=[Artifact.load(minhash, MinHashAttrData)],
+            inputs=[Artifact.from_path(minhash, MinHashAttrData)],
             output_path=output_path,
             max_parallelism=128,
             cc_max_iterations=3,
@@ -95,7 +95,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         name="datakit-smoke/consolidate",
         deps=[normalized, deduped],
         fn=lambda output_path: consolidate(
-            input_path=Artifact.load(normalized, NormalizedData).main_output_dir,
+            input_path=Artifact.from_path(normalized, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
@@ -104,8 +104,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 # keep_if_missing=True passes them through.
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=Artifact.load(deduped, FuzzyDupsAttrData)
-                    .sources[Artifact.load(normalized, NormalizedData).main_output_dir]
+                    attribute_path=Artifact.from_path(deduped, FuzzyDupsAttrData)
+                    .sources[Artifact.from_path(normalized, NormalizedData).main_output_dir]
                     .attr_dir,
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",

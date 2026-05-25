@@ -6,6 +6,6 @@ deployment:
   gcp:
     project: hai-gcp-models
     zone: us-central1-a
-    machine_type: n2-standard-4
+    machine_type: n2-highmem-4
     boot_disk_size_gb: 200
     service_account: iris-controller@hai-gcp-models.iam.gserviceaccount.com

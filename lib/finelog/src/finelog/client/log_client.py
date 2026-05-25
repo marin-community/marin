@@ -80,17 +80,12 @@ DEFAULT_BATCH_ROWS = 10_000
 # Per-Table queue cap in bytes. Matches WriteRows max body size.
 DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024
 
-# Compression policy: prefer zstd, but never demand it.
-#
-# Connect has no per-request negotiation for the *send* direction — whatever
-# we set as ``send_compression`` is what every request body carries. To stay
-# safe across a phased rollout where clients and servers update in either
-# order, we send gzip (which every connectrpc server has accepted forever)
-# and only express the zstd preference on the response side via
-# ``accept_compression`` (zstd first). Servers that support zstd reply in
-# zstd; older servers fall back to gzip. Once we have confidence every
-# deployed server accepts zstd, flip ``_SEND_COMPRESSION`` to ``ZstdCompression``.
-_SEND_COMPRESSION = GzipCompression()
+# Compression policy: zstd for both directions; gzip kept only as a fallback
+# the server still accepts. Every deployed finelog server has accepted zstd
+# since #5457 (2026-05-05), so the send-side gzip workaround is no longer
+# needed — gzip.decompress was the dominant CPU cost on the server when
+# clients sent gzip bodies.
+_SEND_COMPRESSION = ZstdCompression()
 _ACCEPT_COMPRESSIONS = (ZstdCompression(), GzipCompression())
 
 _BACKOFF_INITIAL = 0.5
@@ -520,6 +515,22 @@ class LogClient:
         except (ConnectionError, OSError, TimeoutError) as exc:
             self._invalidate(_format_exc_summary(exc))
             raise
+
+    def query(self, sql: str, *, max_rows: int = 100_000) -> pa.Table:
+        """Run Postgres-flavored SQL against any registered namespace.
+
+        Unlike :meth:`Table.query`, this does not require a local Table
+        handle; the server resolves namespaces from the FROM clause. Raises
+        :class:`QueryResultTooLargeError` if the row count exceeds
+        ``max_rows``.
+        """
+        result = self._stats_query(sql)
+        if result.num_rows > max_rows:
+            raise QueryResultTooLargeError(
+                f"query returned {result.num_rows} rows, exceeds max_rows={max_rows} "
+                f"(add a LIMIT or pass a higher max_rows)"
+            )
+        return result
 
     def flush(self, timeout: float | None = None) -> FlushResult:
         """Flush the ``log`` namespace's Table, if any."""

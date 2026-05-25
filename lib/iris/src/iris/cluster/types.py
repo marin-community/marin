@@ -12,6 +12,7 @@ This module provides Python types for the Iris cluster API:
 Wire-format types (ResourceSpecProto, JobStatus, etc.) are defined in cluster.proto.
 """
 
+import functools
 import hashlib
 import os
 import sys
@@ -22,6 +23,7 @@ from typing import Any, NewType
 
 import cloudpickle
 import humanfriendly
+from rigging.timing import Timestamp
 
 from iris.cluster.constraints import Constraint
 from iris.rpc import job_pb2
@@ -57,21 +59,16 @@ class JobName:
     def from_string(cls, s: str) -> "JobName":
         """Parse a job name string like '/user/root/child/grandchild'.
 
+        Parsed names are interned in a process-wide LRU cache (names are
+        immutable) so repeated decodes — the TypeDecorator path that fires
+        once per row read — collapse to a dict lookup.
+
         Examples:
             JobName.from_string("/alice/my-job") -> JobName(("alice", "my-job"))
             JobName.from_string("/alice/parent/child") -> JobName(("alice", "parent", "child"))
             JobName.from_string("/alice/job/0") -> JobName(("alice", "job", "0"))
         """
-        if not s:
-            raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
-        if not s.startswith("/"):
-            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
-        parts = tuple(s[1:].split("/"))
-        if len(parts) < 2:
-            raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
-        if any(not part or not part.strip() for part in parts):
-            raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
-        return cls(parts)
+        return _parse_job_name(s)
 
     @classmethod
     def root(cls, user: str, name: str) -> "JobName":
@@ -205,6 +202,26 @@ class JobName:
         return cls.from_string(s)
 
 
+@functools.lru_cache(maxsize=2**18)
+def _parse_job_name(s: str) -> JobName:
+    """Cached parser backing JobName.from_string / from_wire.
+
+    Hot SA Core read paths decode the same job_id / task_id strings on every
+    row; this collapses repeated decodes to a dict lookup. ``JobName`` is
+    frozen+slots so cached instances can be shared without aliasing risk.
+    """
+    if not s:
+        raise ValueError("Job name must use canonical '/<user>/<job>[...]' format")
+    if not s.startswith("/"):
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    parts = tuple(s[1:].split("/"))
+    if len(parts) < 2:
+        raise ValueError(f"Job name must use canonical '/<user>/<job>[...]' format: {s}")
+    if any(not part or not part.strip() for part in parts):
+        raise ValueError(f"Job name contains empty or whitespace-only component: {s}")
+    return JobName(parts)
+
+
 @dataclass(frozen=True, slots=True)
 class TaskAttempt:
     """A task identity combining a task-level JobName with an optional attempt qualifier.
@@ -297,6 +314,50 @@ def get_tpu_count(device: job_pb2.DeviceConfig) -> int:
 
 WorkerId = NewType("WorkerId", str)
 EndpointId = NewType("EndpointId", str)
+AttemptUid = NewType("AttemptUid", str)
+
+
+@dataclass(frozen=True, slots=True)
+class PendingTask:
+    """Controller-side scheduling input projected from task, job, and config rows."""
+
+    task_id: JobName
+    job_id: JobName
+    state: int
+    current_attempt_id: int
+    failure_count: int
+    preemption_count: int
+    max_retries_failure: int
+    max_retries_preemption: int
+    submitted_at_ms: Timestamp
+    priority_band: int
+    priority_neg_depth: int
+    priority_root_submitted_ms: int
+    priority_insertion: int
+    job_state: int
+    scheduling_deadline_epoch_ms: int | None
+    is_reservation_holder: bool
+    has_reservation: bool
+    scheduling_timeout_ms: int | None
+    has_coscheduling: bool
+    coscheduling_group_by: str | None
+    constraints_json: str | None
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+
+
+@dataclass
+class UserBudgetDefaults:
+    """Budget settings applied when a user has no override row in ``user_budgets``.
+
+    ``budget_limit=0`` means unlimited; positive values cap spend before
+    ``compute_effective_band`` downgrades INTERACTIVE work to BATCH.
+    """
+
+    budget_limit: int = 1000
+    max_band: int = job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
 @dataclass(frozen=True)
@@ -605,6 +666,7 @@ TERMINAL_TASK_STATES: frozenset[int] = frozenset(
         job_pb2.TASK_STATE_UNSCHEDULABLE,
         job_pb2.TASK_STATE_WORKER_FAILED,
         job_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_COSCHED_FAILED,
     }
 )
 
