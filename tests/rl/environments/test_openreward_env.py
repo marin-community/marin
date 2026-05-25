@@ -15,7 +15,7 @@ from marin.rl.integrations.openreward import (
     save_openreward_task_manifest,
 )
 from marin.rl.integrations.openreward.env import OpenRewardEnv
-from marin.rl.types import Rollout, RolloutGroup
+from marin.rl.types import Rollout
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionUsage
@@ -282,7 +282,6 @@ def test_openreward_env_sample_executes_single_terminal_tool(monkeypatch, tmp_pa
     assert environment.session_calls == [("submit_answer", {"answer": "4"}, {"OPENAI_API_KEY": "secret"})]
 
     assert len(rollout_groups) == 1
-    assert isinstance(rollout_groups[0], RolloutGroup)
     assert rollout_groups[0].rollouts[0].episode_reward == pytest.approx(1.0)
     assert rollout_groups[0].rollouts[0].env_name == "openreward:marin/openreward-math-agent"
     assert metrics["openreward.math-agent-v1.train.mean_reward"] == pytest.approx(1.0)

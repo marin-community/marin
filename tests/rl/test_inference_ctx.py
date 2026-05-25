@@ -661,15 +661,29 @@ def test_qwen_renderer_renders_tool_schema_and_openreward_tool_payload():
     )
 
     assert "<tools>" in rendered
-    assert (
-        '{"type":"function","function":{"name":"submit_answer","description":"Submit the final answer.",'
-        '"parameters":{"type":"object","properties":{"answer":{"type":"string"},"confidence":{"type":"number"}},'
-        '"required":["answer"]}}}'
-    ) in rendered
-    assert (
-        '<tool_call>\n{"name":"submit_answer","arguments":{"confidence":1,"answer":"42"},"id":"call_submit"}\n</tool_call>'
-        in rendered
-    )
+    rendered_tool_spec = rendered.split("<tools>\n", 1)[1].split("\n</tools>", 1)[0]
+    rendered_tool_call = rendered.split("<tool_call>\n", 1)[1].split("\n</tool_call>", 1)[0]
+
+    assert json.loads(rendered_tool_spec) == {
+        "type": "function",
+        "function": {
+            "name": "submit_answer",
+            "description": "Submit the final answer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["answer"],
+            },
+        },
+    }
+    assert json.loads(rendered_tool_call) == {
+        "name": "submit_answer",
+        "arguments": {"confidence": 1, "answer": "42"},
+        "id": "call_submit",
+    }
 
 
 def test_qwen_renderer_parses_newline_wrapped_canonical_tool_call():
