@@ -15,7 +15,6 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from finelog.client import LogClient, Table
@@ -52,7 +51,7 @@ from iris.cluster.types import (
     TaskAttempt as TaskAttemptIdentity,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
-from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
+from iris.cluster.worker.stats import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat, stats_timestamp
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
 from iris.rpc import job_pb2, worker_pb2
@@ -988,7 +987,7 @@ class TaskAttempt:
             cpu_millicores=self.current_cpu_millicores,
             process_count=self.process_count,
         )
-        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
+        ts = stats_timestamp()
         stat = build_task_stat(
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,

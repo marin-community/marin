@@ -8,7 +8,6 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -50,6 +49,7 @@ from iris.cluster.worker.stats import (
     IrisWorkerStat,
     WorkerStatus,
     build_worker_stat,
+    stats_timestamp,
 )
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
@@ -61,11 +61,6 @@ from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
-
-
-def _now_dt() -> datetime:
-    """Tz-naive UTC datetime for stats namespaces' TIMESTAMP_MS column."""
-    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -1000,7 +995,7 @@ class Worker:
         status = WorkerStatus.RUNNING if self._tasks else WorkerStatus.IDLE
         stat = build_worker_stat(
             worker_id=self._worker_id,
-            ts=_now_dt(),
+            ts=stats_timestamp(),
             status=status,
             address=self._resolve_address(),
             snapshot=snapshot,

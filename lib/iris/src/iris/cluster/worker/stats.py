@@ -22,14 +22,26 @@ on first ping rather than silently dropping rows.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import ClassVar
+
+from rigging.timing import Timestamp
 
 from iris.rpc import job_pb2
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
+
+
+def stats_timestamp() -> datetime:
+    """Current tz-naive UTC datetime for the stats namespaces' ``ts`` segment key.
+
+    Worker and task stats schemas key their parquet segments on a ``ts``
+    datetime column (stored as TIMESTAMP_MS by finelog). Built from rigging's
+    ``Timestamp.now()`` so the time source stays consistent with the rest of iris.
+    """
+    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
 
 
 class WorkerStatus(StrEnum):
