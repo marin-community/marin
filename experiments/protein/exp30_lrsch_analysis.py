@@ -57,8 +57,6 @@ RUN_NAME_RE: re.Pattern = re.compile(
     r"^prot-exp30-100m-.*-m11-(?P<variant>wsd|cosine)-lr.*-v1(?:-[0-9a-f]+)?$"
 )
 
-TITLE_PREFIX: str = "MarinFold Experiment #30"
-
 # Tableau-10 subset; matches the variant palette used by the exp11 analysis
 # script in its pre-retcon form, so plots stay visually continuous.
 VARIANT_NAMES: dict[str, str] = {
@@ -338,7 +336,8 @@ def render_comparison_bars(snapshot: pd.DataFrame) -> None:
     ax.set_xlabel("Heldout eval split (masked: distance bin only)")
     ax.set_ylabel("Loss")
     ax.set_title(
-        f"{TITLE_PREFIX} — {SWEEP_ID}: val loss by trial @ step={ref_step}",
+        f"MarinFold #30 — WSD vs cosine "
+        f"(val loss @ step {ref_step}, m11 mixture, 100M @ ~4.3B tokens)",
         fontsize=11,
     )
     ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
