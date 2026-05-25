@@ -42,7 +42,7 @@ _TPU: str = "v5p-8"
 # Bumped to sharded-v1 after the sharding-aware block kernel rewrite.
 # Earlier "blockwise-v1" run is at 1.4% MFU because it reshards every
 # state tensor to fully replicated; this run uses keep-blocks-sharded.
-_RUN_SUFFIX: str = "sharded-v1"
+_RUN_SUFFIX: str = "sharded-v2"
 
 
 def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
