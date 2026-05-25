@@ -426,7 +426,7 @@ def test_rloo_loss_module_allows_vocab_tiling_when_policy_entropy_disabled():
     )
 
 
-def test_ppo_objective_stays_finite_with_sparse_masks():
+def test_ppo_objective_uses_sparse_response_masks_for_loss_and_metrics():
     importance_sampling_ratio = np.array([[1.0, 1.0, 1.0, 1.2, 0.0, 0.8]], dtype=np.float32)
     loss_weights = np.array([[0.0, 0.0, 0.0, 0.5, 0.0, 1.0]], dtype=np.float32)
     loss_masks = np.array([[0.0, 0.0, 0.0, 1.0, 0.0, 1.0]], dtype=np.float32)
@@ -441,5 +441,7 @@ def test_ppo_objective_stays_finite_with_sparse_masks():
         trainer_inference_importance_sampling_ratio=None,
     )
 
-    assert np.isfinite(loss)
+    np.testing.assert_allclose(float(loss), -0.7, atol=1e-6)
     assert set(metadata) == {"loss_max_over_batch", "loss_std_over_batch"}
+    np.testing.assert_allclose(float(metadata["loss_max_over_batch"].value()), -0.7, atol=1e-6)
+    np.testing.assert_allclose(float(metadata["loss_std_over_batch"].value()), 0.0, atol=1e-6)

@@ -26,7 +26,6 @@ from marin.rl.environments.inference_ctx import (
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.openai_compat import OpenAICompatClient
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
-from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from openai.types.completion_usage import CompletionUsage
@@ -720,52 +719,36 @@ def test_levanter_openai_client_stays_native(inference_ctx, dummy_server):
     assert str(client.base_url).endswith("/v1/")
 
 
-def test_vllm_openai_client_delegates_to_batch_completions(monkeypatch):
-    monkeypatch.setattr(
-        vLLMInferenceContext,
-        "_get_llm_engine",
-        staticmethod(lambda _config: object()),
-    )
-    monkeypatch.setattr(
-        "marin.rl.environments.inference_ctx.vllm.load_tokenizer",
-        lambda _path: SimpleNamespace(get_vocab=lambda: {}),
-    )
-    monkeypatch.setattr(
-        vLLMInferenceContext,
-        "_get_renderer",
-        staticmethod(lambda model_name, _tokenizer: model_name),
-    )
-
-    ctx = vLLMInferenceContext(
-        _test_vllm_inference_config(
-            canonical_model_name="meta-llama/Llama-3.1-8B-Instruct",
-        )
-    )
-
+def test_openai_compat_client_normalizes_chat_requests_for_batch_completions():
     completion = create_chat_completion("hello")
     completion.choices[0].prompt_token_ids = [11, 12, 13]
     completion.choices[0].response_token_ids = [21, 22]
-    captured = {}
 
-    def _fake_batch_completions(*, prompts, n, decoding, system_prompt):
-        captured.update(
-            prompts=prompts,
-            n=n,
-            decoding=decoding,
-            system_prompt=system_prompt,
-        )
-        return [completion]
+    class RecordingContext:
+        def __init__(self):
+            self.calls = []
 
-    monkeypatch.setattr(ctx, "batch_completions", _fake_batch_completions)
+        def batch_completions(self, *, prompts, n, decoding, system_prompt):
+            self.calls.append(
+                {
+                    "prompts": prompts,
+                    "n": n,
+                    "decoding": decoding,
+                    "system_prompt": system_prompt,
+                }
+            )
+            return [completion]
 
-    client = ctx.openai_client()
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Solve 2+2"},
+    ]
+    ctx = RecordingContext()
+    client = OpenAICompatClient(ctx)
     result = asyncio.run(
         client.chat.completions.create(
             model="marin-model",
-            messages=[
-                {"role": "system", "content": "You are helpful."},
-                {"role": "user", "content": "Solve 2+2"},
-            ],
+            messages=messages,
             temperature=0.7,
             n=2,
             max_completion_tokens=32,
@@ -776,24 +759,25 @@ def test_vllm_openai_client_delegates_to_batch_completions(monkeypatch):
         )
     )
 
-    assert isinstance(client, OpenAICompatClient)
     assert result is completion
-    assert captured["prompts"] == [
-        [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Solve 2+2"}]
+    assert ctx.calls == [
+        {
+            "prompts": [[{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Solve 2+2"}]],
+            "n": 2,
+            "decoding": DecodingConfig(
+                temperature=0.7,
+                max_output_tokens=32,
+                top_k=17,
+                stop_strings=["<stop>"],
+            ),
+            "system_prompt": None,
+        }
     ]
-    assert captured["n"] == 2
-    assert captured["decoding"] == DecodingConfig(
-        temperature=0.7,
-        max_output_tokens=32,
-        top_k=17,
-        stop_strings=["<stop>"],
-    )
-    assert captured["system_prompt"] is None
     assert result.choices[0].prompt_token_ids == [11, 12, 13]
     assert result.choices[0].response_token_ids == [21, 22]
 
 
-def test_vllm_openai_client_rejects_unsupported_kwargs():
+def test_openai_compat_client_rejects_unsupported_kwargs():
     class _DummyCtx:
         def batch_completions(self, **_kwargs):
             raise AssertionError("batch_completions should not be called for unsupported kwargs")
@@ -828,7 +812,7 @@ def test_vllm_openai_client_rejects_unsupported_kwargs():
         )
 
 
-def test_vllm_openai_client_completion_endpoint_is_not_supported():
+def test_openai_compat_client_completion_endpoint_is_not_supported():
     client = OpenAICompatClient(SimpleNamespace())
 
     with pytest.raises(NotImplementedError, match="Completion-format requests are not supported"):

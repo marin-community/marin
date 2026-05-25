@@ -78,6 +78,8 @@ class FakeVerifierEnv:
         return dataset
 
     def generate(self, *, inputs, client, model, sampling_args, max_concurrent):
+        if self.generate_result_factory is None:
+            raise AssertionError("FakeVerifierEnv.generate was called without a generate_result_factory")
         self.generate_calls.append(
             {
                 "inputs": inputs,
@@ -179,6 +181,10 @@ def _install_fake_verifiers(monkeypatch, loader):
     fake_verifiers.load_environment = load_environment
     monkeypatch.setitem(sys.modules, "verifiers", fake_verifiers)
     return load_calls
+
+
+def _fail_if_verifier_env_loads(env_id: str, env_args: dict[str, object]):
+    raise AssertionError(f"verifiers.load_environment should not be called for {env_id} with {env_args}")
 
 
 def _levanter_inference_ctx(gpt2_tokenizer):
@@ -366,14 +372,8 @@ def test_prime_intellect_env_sample_supports_vllm_single_turn_chat(monkeypatch, 
     assert metrics["primeintellect/gsm8k.total_rollouts"] == 4.0
 
 
-def test_prime_intellect_env_prepare_installs_once_per_env_id(monkeypatch, prime_cli, gpt2_tokenizer):
-    load_calls = _install_fake_verifiers(
-        monkeypatch,
-        lambda _env_id, _env_args: FakeVerifierEnv(
-            _prompt_dataset(["0"], "train"),
-            generate_result_factory=lambda *, inputs: _single_turn_generate_outputs(inputs, gpt2_tokenizer),
-        ),
-    )
+def test_prime_intellect_env_prepare_installs_once_per_env_id(monkeypatch, prime_cli):
+    _install_fake_verifiers(monkeypatch, _fail_if_verifier_env_loads)
     env_one = PrimeIntellectEnv(env_id="primeintellect/gsm8k", env_args={"difficulty": "easy"})
     env_two = PrimeIntellectEnv(env_id="primeintellect/gsm8k", env_args={"difficulty": "hard"})
 
@@ -381,7 +381,8 @@ def test_prime_intellect_env_prepare_installs_once_per_env_id(monkeypatch, prime
     env_two.prepare()
 
     assert prime_cli.call_count == 1
-    assert load_calls == []
+    assert prime_cli.call_args.args == (["/usr/bin/prime", "env", "install", "primeintellect/gsm8k"],)
+    assert prime_cli.call_args.kwargs == {"check": True}
 
 
 def test_prime_intellect_env_load_cache_keys_include_env_args(monkeypatch, prime_cli, gpt2_tokenizer):
@@ -456,18 +457,14 @@ def test_prime_intellect_env_prepare_requires_prime_cli(monkeypatch):
         env.prepare()
 
 
-def test_prime_intellect_env_sample_rejects_invalid_mode(monkeypatch, prime_cli, gpt2_tokenizer):
-    verifier_env = FakeVerifierEnv(
-        _prompt_dataset(["0"], "train"),
-        generate_result_factory=lambda *, inputs: _single_turn_generate_outputs(inputs, gpt2_tokenizer),
-    )
-    load_calls = _install_fake_verifiers(monkeypatch, lambda _env_id, _env_args: verifier_env)
+def test_prime_intellect_env_sample_rejects_invalid_mode(monkeypatch, prime_cli):
+    _install_fake_verifiers(monkeypatch, _fail_if_verifier_env_loads)
     env = PrimeIntellectEnv(env_id="primeintellect/gsm8k")
 
     env.prepare()
     with pytest.raises(ValueError, match="Unsupported mode"):
         env.sample(
-            inference_ctx=_levanter_inference_ctx(gpt2_tokenizer),
+            inference_ctx=object(),
             n_examples=1,
             n_generations=1,
             decoding=DecodingConfig(temperature=1.0),
@@ -475,21 +472,15 @@ def test_prime_intellect_env_sample_rejects_invalid_mode(monkeypatch, prime_cli,
             mode="debug",
         )
 
-    assert load_calls == []
 
-
-def test_prime_intellect_env_sample_rejects_system_prompt(monkeypatch, prime_cli, gpt2_tokenizer):
-    verifier_env = FakeVerifierEnv(
-        _prompt_dataset(["0"], "train"),
-        generate_result_factory=lambda *, inputs: _single_turn_generate_outputs(inputs, gpt2_tokenizer),
-    )
-    load_calls = _install_fake_verifiers(monkeypatch, lambda _env_id, _env_args: verifier_env)
+def test_prime_intellect_env_sample_rejects_system_prompt(monkeypatch, prime_cli):
+    _install_fake_verifiers(monkeypatch, _fail_if_verifier_env_loads)
     env = PrimeIntellectEnv(env_id="primeintellect/gsm8k")
 
     env.prepare()
     with pytest.raises(ValueError, match="does not support Marin-level system prompts"):
         env.sample(
-            inference_ctx=_levanter_inference_ctx(gpt2_tokenizer),
+            inference_ctx=object(),
             n_examples=1,
             n_generations=1,
             decoding=DecodingConfig(temperature=1.0),
@@ -497,14 +488,11 @@ def test_prime_intellect_env_sample_rejects_system_prompt(monkeypatch, prime_cli
             system_prompt="You are helpful.",
         )
 
-    assert load_calls == []
 
-
-def test_prime_intellect_env_sample_rejects_non_chat_verifier_env(monkeypatch, prime_cli, gpt2_tokenizer):
+def test_prime_intellect_env_sample_rejects_non_chat_verifier_env(monkeypatch, prime_cli):
     verifier_env = FakeVerifierEnv(
         _prompt_dataset(["0"], "train"),
         message_type="completion",
-        generate_result_factory=lambda *, inputs: _single_turn_generate_outputs(inputs, gpt2_tokenizer),
     )
     _install_fake_verifiers(monkeypatch, lambda _env_id, _env_args: verifier_env)
     env = PrimeIntellectEnv(env_id="primeintellect/gsm8k")
@@ -512,7 +500,7 @@ def test_prime_intellect_env_sample_rejects_non_chat_verifier_env(monkeypatch, p
     env.prepare()
     with pytest.raises(ValueError, match="only supports chat-format verifier environments"):
         env.sample(
-            inference_ctx=_levanter_inference_ctx(gpt2_tokenizer),
+            inference_ctx=object(),
             n_examples=1,
             n_generations=1,
             decoding=DecodingConfig(temperature=1.0),
@@ -520,11 +508,10 @@ def test_prime_intellect_env_sample_rejects_non_chat_verifier_env(monkeypatch, p
         )
 
 
-def test_prime_intellect_env_sample_rejects_tool_enabled_verifier_env(monkeypatch, prime_cli, gpt2_tokenizer):
+def test_prime_intellect_env_sample_rejects_tool_enabled_verifier_env(monkeypatch, prime_cli):
     verifier_env = FakeVerifierEnv(
         _prompt_dataset(["0"], "train"),
         oai_tools=[{"type": "function"}],
-        generate_result_factory=lambda *, inputs: _single_turn_generate_outputs(inputs, gpt2_tokenizer),
     )
     _install_fake_verifiers(monkeypatch, lambda _env_id, _env_args: verifier_env)
     env = PrimeIntellectEnv(env_id="primeintellect/gsm8k")
@@ -532,7 +519,7 @@ def test_prime_intellect_env_sample_rejects_tool_enabled_verifier_env(monkeypatc
     env.prepare()
     with pytest.raises(ValueError, match="does not support tool-enabled verifier environments"):
         env.sample(
-            inference_ctx=_levanter_inference_ctx(gpt2_tokenizer),
+            inference_ctx=object(),
             n_examples=1,
             n_generations=1,
             decoding=DecodingConfig(temperature=1.0),
