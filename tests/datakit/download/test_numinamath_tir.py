@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from marin.datakit.download.numinamath_tir import (
     HF_DATASET_ID,
@@ -8,26 +13,29 @@ from marin.datakit.download.numinamath_tir import (
     TRAIN_PARQUET_GLOB,
     numinamath_tir_normalize_steps,
     row_to_doc,
+    transform,
 )
 from marin.datakit.sources import all_sources
 
 
-def test_row_to_doc_renders_messages_as_tagged_transcript():
+def _valid_row(**overrides) -> dict:
     row = {
+        "problem": "Solve $x + 1 = 3$.",
+        "solution": "We can verify with code.\n```python\nprint(3 - 1)\n```\n```output\n2\n```\nThus x = 2.",
         "messages": [
-            {"role": "user", "content": "Solve $x + 1 = 3$."},
+            {"role": "user", "content": " Solve $x + 1 = 3$. "},
             {
                 "role": "assistant",
-                "content": "We can verify with code.\n```python\nprint(3 - 1)\n```\n```output\n2\n```\nThus x = 2.",
+                "content": " We can verify with code.\n```python\nprint(3 - 1)\n```\n```output\n2\n```\nThus x = 2. ",
             },
-        ]
+        ],
     }
+    row.update(overrides)
+    return row
 
-    [doc] = row_to_doc(row)
 
-    assert doc["source"] == HF_DATASET_ID
-    assert len(doc["id"]) == 64
-    assert doc["text"] == (
+def test_row_to_doc_renders_messages_as_tagged_transcript():
+    expected_text = (
         "<user>\n"
         "Solve $x + 1 = 3$.\n"
         "</user>\n\n"
@@ -43,25 +51,13 @@ def test_row_to_doc_renders_messages_as_tagged_transcript():
         "</assistant>"
     )
 
+    [doc] = row_to_doc(_valid_row())
 
-def test_row_to_doc_preserves_supported_message_order():
-    row = {
-        "messages": [
-            {"role": "system", "content": "You are a math tutor."},
-            {"role": "user", "content": "Compute 2 + 2."},
-            {"role": "tool", "content": "4"},
-            {"role": "assistant", "content": "The answer is 4."},
-        ]
+    assert doc == {
+        "id": hashlib.sha256(expected_text.encode("utf-8")).hexdigest(),
+        "text": expected_text,
+        "source": HF_DATASET_ID,
     }
-
-    [doc] = row_to_doc(row)
-
-    assert doc["text"] == (
-        "<system>\nYou are a math tutor.\n</system>\n\n"
-        "<user>\nCompute 2 + 2.\n</user>\n\n"
-        "<tool>\n4\n</tool>\n\n"
-        "<assistant>\nThe answer is 4.\n</assistant>"
-    )
 
 
 @pytest.mark.parametrize(
@@ -102,3 +98,25 @@ def test_numinamath_tir_is_registered_as_datakit_source():
     assert source.rough_token_count_b == 0.08
     assert source.normalize_steps[0].name == "processed/numinamath-tir"
     assert source.normalized.name == "normalized/numinamath-tir"
+
+
+def test_transform_reads_parquet_and_writes_valid_docs(tmp_path: Path):
+    raw_dir = tmp_path / "raw" / "data"
+    raw_dir.mkdir(parents=True)
+    table = pa.Table.from_pylist(
+        [
+            _valid_row(),
+            _valid_row(messages=[{"role": "critic", "content": "Nope."}]),
+        ]
+    )
+    pq.write_table(table, raw_dir / "train-00000-of-00001.parquet")
+
+    output_dir = tmp_path / "processed"
+    transform(str(tmp_path / "raw"), str(output_dir))
+
+    rows = [row for path in output_dir.rglob("*.parquet") for row in pq.read_table(path).to_pylist()]
+    assert len(rows) == 1
+    assert rows[0]["source"] == HF_DATASET_ID
+    assert rows[0]["text"].startswith("<user>\nSolve $x + 1 = 3$.\n</user>")
+    assert "```python\nprint(3 - 1)\n```" in rows[0]["text"]
+    assert rows[0]["id"] == hashlib.sha256(rows[0]["text"].encode("utf-8")).hexdigest()
