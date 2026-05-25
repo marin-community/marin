@@ -21,17 +21,30 @@ from marin.rl.rollout_worker import (
     _should_run_micro_eval,
     create_inference_context,
 )
-from marin.rl.run_state import RolloutTransferCounters
+from marin.rl.run_state import RLRunState, RolloutTransferCounters
 from marin.rl.telemetry import ArtifactRef, TelemetryEvent, TrackerRunRef, TrackerStream
 
 
-class _RemoteRecorder:
-    def __init__(self):
-        self.values = []
+class _RemoteResult:
+    def __init__(self, value):
+        self._value = value
 
-    def remote(self, value):
-        self.values.append(value)
-        return SimpleNamespace(result=lambda: None)
+    def result(self):
+        return self._value
+
+
+class _RemoteMethod:
+    def __init__(self, fn):
+        self._fn = fn
+
+    def remote(self, *args, **kwargs):
+        return _RemoteResult(self._fn(*args, **kwargs))
+
+
+class _RunStateHandle:
+    def __init__(self, run_state: RLRunState):
+        self.register_artifact_ref = _RemoteMethod(run_state.register_artifact_ref)
+        self.register_tracker_ref = _RemoteMethod(run_state.register_tracker_ref)
 
 
 def test_rollout_tracker_uses_explicit_name_when_provided(monkeypatch):
@@ -237,8 +250,7 @@ def test_log_lesson_eval_uses_wandb_default_step_and_context_metrics():
 
 
 def test_initialize_telemetry_writes_rollout_and_eval_shards_and_registers_refs(tmp_path):
-    artifact_recorder = _RemoteRecorder()
-    tracker_recorder = _RemoteRecorder()
+    run_state = RLRunState()
 
     worker = object.__new__(RolloutWorker)
     worker.config = SimpleNamespace(
@@ -249,12 +261,7 @@ def test_initialize_telemetry_writes_rollout_and_eval_shards_and_registers_refs(
         worker_index=0,
         eval_owner_worker_index=0,
     )
-    worker._runtime = SimpleNamespace(
-        run_state=SimpleNamespace(
-            register_artifact_ref=artifact_recorder,
-            register_tracker_ref=tracker_recorder,
-        )
-    )
+    worker._runtime = SimpleNamespace(run_state=_RunStateHandle(run_state))
     worker.tracker = SimpleNamespace(
         as_tracker_ref=lambda *, stream, worker_index=None: TrackerRunRef(
             stream=stream,
@@ -271,7 +278,7 @@ def test_initialize_telemetry_writes_rollout_and_eval_shards_and_registers_refs(
 
     assert worker._event_writer is not None
     assert worker._eval_event_writer is not None
-    assert artifact_recorder.values == [
+    assert run_state.list_artifact_refs() == [
         ArtifactRef(
             name="rollout-0-attempt-abc.jsonl",
             path=worker._event_writer.path,
@@ -286,7 +293,7 @@ def test_initialize_telemetry_writes_rollout_and_eval_shards_and_registers_refs(
             stream=TrackerStream.EVAL,
         ),
     ]
-    assert tracker_recorder.values == [
+    assert run_state.list_tracker_refs() == [
         TrackerRunRef(
             stream=TrackerStream.ROLLOUT,
             tracker_run_id="wandb-rollout-123",
@@ -319,8 +326,7 @@ def test_initialize_telemetry_writes_rollout_and_eval_shards_and_registers_refs(
 
 
 def test_initialize_telemetry_does_not_create_eval_shard_for_non_owner(tmp_path):
-    artifact_recorder = _RemoteRecorder()
-    tracker_recorder = _RemoteRecorder()
+    run_state = RLRunState()
 
     worker = object.__new__(RolloutWorker)
     worker.config = SimpleNamespace(
@@ -331,12 +337,7 @@ def test_initialize_telemetry_does_not_create_eval_shard_for_non_owner(tmp_path)
         worker_index=1,
         eval_owner_worker_index=0,
     )
-    worker._runtime = SimpleNamespace(
-        run_state=SimpleNamespace(
-            register_artifact_ref=artifact_recorder,
-            register_tracker_ref=tracker_recorder,
-        )
-    )
+    worker._runtime = SimpleNamespace(run_state=_RunStateHandle(run_state))
     worker.tracker = SimpleNamespace(
         as_tracker_ref=lambda *, stream, worker_index=None: TrackerRunRef(
             stream=stream,
@@ -351,7 +352,7 @@ def test_initialize_telemetry_does_not_create_eval_shard_for_non_owner(tmp_path)
 
     assert worker._event_writer is not None
     assert worker._eval_event_writer is None
-    assert artifact_recorder.values == [
+    assert run_state.list_artifact_refs() == [
         ArtifactRef(
             name="rollout-1-attempt-abc.jsonl",
             path=worker._event_writer.path,
@@ -360,7 +361,7 @@ def test_initialize_telemetry_does_not_create_eval_shard_for_non_owner(tmp_path)
             worker_index=1,
         )
     ]
-    assert tracker_recorder.values == [
+    assert run_state.list_tracker_refs() == [
         TrackerRunRef(
             stream=TrackerStream.ROLLOUT,
             tracker_run_id="wandb-rollout-456",
