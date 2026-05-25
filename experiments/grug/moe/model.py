@@ -8,7 +8,6 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
-
 from dataclasses import dataclass
 
 import equinox as eqx
@@ -26,7 +25,6 @@ try:
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Float, Int, PRNGKeyArray
-
 from levanter.grug.attention import AttentionMask, RotaryConfig, align_kv_heads, apply_rotary_embedding, attention
 from levanter.grug.grug_moe import MoeActivation, moe_mlp
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
@@ -367,25 +365,8 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
 def _histogram_from_expert_counts(expert_counts: jax.Array) -> Histogram:
     counts = jnp.asarray(expert_counts, dtype=jnp.float32)
     num_experts = counts.shape[0]
-    expert_ids = jnp.arange(num_experts, dtype=jnp.float32)
-    num = jnp.sum(counts)
-    sum_values = jnp.sum(counts * expert_ids)
-    sum_squares = jnp.sum(counts * expert_ids * expert_ids)
-    nonzero = counts > 0
-    min_value = jnp.where(nonzero, expert_ids, jnp.inf).min()
-    max_value = jnp.where(nonzero, expert_ids, -jnp.inf).max()
-    min_value = jnp.where(num > 0, min_value, 0.0)
-    max_value = jnp.where(num > 0, max_value, 0.0)
     bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
-    return Histogram(
-        min=min_value,
-        max=max_value,
-        num=num,
-        sum=sum_values,
-        sum_squares=sum_squares,
-        bucket_limits=bucket_limits,
-        bucket_counts=counts,
-    )
+    return Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
 
 
 class MoEMLP(eqx.Module):
