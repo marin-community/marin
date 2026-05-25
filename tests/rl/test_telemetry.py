@@ -6,6 +6,7 @@ from pathlib import Path
 import fsspec
 import pytest
 from marin.rl.telemetry import (
+    ArtifactRef,
     EventShardWriter,
     StepProvenance,
     TelemetryEvent,
@@ -107,4 +108,28 @@ def test_event_shard_writer_appends_jsonl_records(tmp_path: Path):
 
     restored = [TelemetryEvent.from_json(line) for line in lines]
     assert restored == [first_event, second_event]
-    assert writer.artifact_ref().schema_version == "rl_artifact_ref.v1"
+    assert writer.artifact_ref() == ArtifactRef(
+        name="train-attempt-abc.jsonl",
+        path=writer.path,
+        artifact_type="event_shard",
+        stream=TrackerStream.TRAINER,
+    )
+
+
+def test_event_shard_writer_rejects_events_for_other_streams(tmp_path: Path):
+    writer = EventShardWriter(
+        metadata_path=str(tmp_path / "metadata"),
+        run_id="rl-test",
+        stream=TrackerStream.TRAINER,
+        instance_id="attempt-abc",
+    )
+
+    with pytest.raises(ValueError, match="does not match shard stream"):
+        writer.append(
+            TelemetryEvent(
+                run_id="rl-test",
+                stream=TrackerStream.ROLLOUT,
+                event_type="worker_started",
+                provenance=StepProvenance(instance_id="attempt-abc", worker_index=0),
+            )
+        )

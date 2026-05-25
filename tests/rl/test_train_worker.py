@@ -7,7 +7,7 @@ import fsspec
 import pytest
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_losses import RLOOLoss
-from marin.rl.telemetry import TelemetryEvent, TrackerStream
+from marin.rl.telemetry import ArtifactRef, StepProvenance, TelemetryEvent, TrackerStream
 from marin.rl.train_worker import (
     BatchPrepTiming,
     InitialRolloutState,
@@ -86,18 +86,31 @@ def test_initialize_telemetry_writes_trainer_event_shard_and_registers_artifact(
     worker._initialize_telemetry()
 
     assert worker._event_writer is not None
-    assert len(registered_artifacts) == 1
+    assert registered_artifacts == [
+        ArtifactRef(
+            name="train-attempt-abc.jsonl",
+            path=worker._event_writer.path,
+            artifact_type="event_shard",
+            stream=TrackerStream.TRAINER,
+        )
+    ]
 
     fs = fsspec.filesystem("file")
     assert fs.exists(worker._event_writer.path)
     with fs.open(worker._event_writer.path) as handle:
         events = [TelemetryEvent.from_json(line) for line in handle.read().splitlines() if line]
 
-    assert len(events) == 1
-    assert events[0].stream == TrackerStream.TRAINER
-    assert events[0].event_type == "worker_started"
-    assert events[0].run_id == "rl-test"
-    assert events[0].payload == {"worker_role": "trainer"}
+    assert events == [
+        TelemetryEvent(
+            run_id="rl-test",
+            stream=TrackerStream.TRAINER,
+            event_type="worker_started",
+            provenance=StepProvenance(instance_id="attempt-abc"),
+            payload={"worker_role": "trainer"},
+            event_id=events[0].event_id,
+            created_at=events[0].created_at,
+        )
+    ]
 
 
 def test_initial_rollout_state_uses_bootstrap_weights_for_fresh_run():
