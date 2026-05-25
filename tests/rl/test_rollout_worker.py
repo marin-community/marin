@@ -223,6 +223,9 @@ def test_sample_batch_attaches_trace_and_verifier_metadata():
                 task_version="v1",
                 verifier_name="mock_env.reward",
                 verifier_version="v1",
+                group_id="trace-group-1",
+                trace_id="trace-id-1",
+                trace_ref="trace://mock-env/example-1",
             )
         ],
         identity=EnvironmentIdentity(
@@ -231,6 +234,7 @@ def test_sample_batch_attaches_trace_and_verifier_metadata():
             verifier_name="mock_env.reward",
             verifier_version="v1",
         ),
+        metrics={"mock_env/rollouts": 1},
     )
 
     class _FakeEnv:
@@ -262,16 +266,18 @@ def test_sample_batch_attaches_trace_and_verifier_metadata():
     batch, metrics = worker._sample_batch("lesson-a", 1, 1, "train", rng=None)
 
     assert batch is not None
-    assert metrics == {}
+    assert metrics == {"mock_env/rollouts": 1}
     assert batch.metadata.run_id == "run-123"
     assert batch.metadata.lesson_id == "lesson-a"
     assert batch.metadata.task_name == "mock_env:cats"
     assert batch.metadata.verifier_name == "mock_env.reward"
     assert batch.groups[0].metadata.lesson_id == "lesson-a"
-    assert batch.groups[0].metadata.group_id
-    assert batch.groups[0].metadata.trace_id
+    assert batch.groups[0].metadata.group_id == "trace-group-1"
+    assert batch.groups[0].metadata.trace_id == "trace-id-1"
+    assert batch.groups[0].metadata.trace_ref == "trace://mock-env/example-1"
     assert batch.groups[0].rollouts[0].metadata.group_id == batch.groups[0].metadata.group_id
     assert batch.groups[0].rollouts[0].metadata.trace_id == batch.groups[0].metadata.trace_id
+    assert batch.groups[0].rollouts[0].metadata.trace_ref == batch.groups[0].metadata.trace_ref
     assert batch.groups[0].rollouts[0].metadata.task_name == "mock_env:cats"
     assert batch.groups[0].rollouts[0].metadata.verifier_name == "mock_env.reward"
 

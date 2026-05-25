@@ -187,8 +187,14 @@ def test_replay_buffer_sample_groups_preserves_full_group_context():
     assert groups is not None
     assert sum(len(group.trajectories) for group in groups) >= 4
     assert all(len(group.trajectories) == 2 for group in groups)
-    assert all(group.group_id for group in groups)
-    assert all(group.lesson_id.startswith("lesson_") for group in groups)
+    assert {group.group_id for group in groups} <= {"group_0", "group_1", "group_2"}
+    for group in groups:
+        assert group.lesson_id == group.group_id.replace("group_", "lesson_")
+        assert {trajectory.group_id for trajectory in group.trajectories} == {group.group_id}
+        assert {trajectory.rollout_metadata.group_id for trajectory in group.trajectories} == {group.group_id}
+        assert {trajectory.rollout_metadata.trace_id for trajectory in group.trajectories} == {
+            group.group_id.replace("group_", "trace_")
+        }
 
 
 def test_replay_buffer_recency_bias():

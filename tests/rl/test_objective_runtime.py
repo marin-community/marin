@@ -116,12 +116,8 @@ def test_build_objective_runtime_requires_reference_scores_for_kl_recipe():
         behavior_logprobs=jax.numpy.zeros((1, 1), dtype=jax.numpy.float32),
     )
 
-    try:
+    with pytest.raises(ValueError, match="reference_logprobs"):
         build_objective_runtime(sequence_runtime_config, score_source=bad_score_source)
-    except ValueError as exc:
-        assert "reference_logprobs" in str(exc)
-    else:
-        raise AssertionError("expected build_objective_runtime to reject missing reference scores")
 
 
 def test_build_objective_runtime_rejects_group_batch_view_up_front():
