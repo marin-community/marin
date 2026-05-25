@@ -283,13 +283,20 @@ class StopTrainerException(Exception):
 
 def _resume_checkpoint_path_for_validation(trainer: Trainer) -> str | None:
     """Return the checkpoint path that a LoRA resume would load, if any."""
-    if trainer.config.load_checkpoint is False:
-        initialize_from = trainer.config.initialize_from
-        if initialize_from is None or not is_checkpoint_path(initialize_from):
-            return None
-        return initialize_from
+    load_checkpoint = trainer.config.load_checkpoint
+    if load_checkpoint is not False:
+        latest_checkpoint = discover_latest_checkpoint(*trainer.checkpoint_search_paths)
+        if latest_checkpoint is not None:
+            return latest_checkpoint
 
-    return discover_latest_checkpoint(trainer.checkpoint_path)
+        if load_checkpoint is True:
+            return None
+
+    initialize_from = trainer.config.initialize_from
+    if initialize_from is None or not is_checkpoint_path(initialize_from):
+        return None
+
+    return initialize_from
 
 
 class TrainWorker:

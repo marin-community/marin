@@ -469,7 +469,7 @@ def test_validate_run_manifest_for_resume_accepts_matching_manifest(monkeypatch)
     )
     trainer = SimpleNamespace(
         config=SimpleNamespace(load_checkpoint=None, initialize_from=None),
-        checkpoint_path="/tmp/checkpoints/run",
+        checkpoint_search_paths=["/tmp/checkpoints/run"],
     )
     manifest = build_rl_run_manifest(
         initial_checkpoint=worker.config.initial_checkpoint,
@@ -479,7 +479,7 @@ def test_validate_run_manifest_for_resume_accepts_matching_manifest(monkeypatch)
         inference_type=worker.config.inference_type,
     )
 
-    monkeypatch.setattr("marin.rl.train_worker.discover_latest_checkpoint", lambda path: f"{path}/step_10")
+    monkeypatch.setattr("marin.rl.train_worker.discover_latest_checkpoint", lambda *paths: f"{paths[0]}/step_10")
     monkeypatch.setattr("marin.rl.train_worker.read_rl_run_manifest", lambda path: manifest)
 
     worker._validate_run_manifest_for_resume(trainer)
@@ -508,7 +508,7 @@ def test_validate_run_manifest_for_resume_rejects_mismatches(monkeypatch, manife
     )
     trainer = SimpleNamespace(
         config=SimpleNamespace(load_checkpoint=None, initialize_from=None),
-        checkpoint_path="/tmp/checkpoints/run",
+        checkpoint_search_paths=["/tmp/checkpoints/run"],
     )
     expected_manifest = build_rl_run_manifest(
         initial_checkpoint=worker.config.initial_checkpoint,
@@ -519,10 +519,41 @@ def test_validate_run_manifest_for_resume_rejects_mismatches(monkeypatch, manife
     )
     manifest = dataclasses.replace(expected_manifest, **manifest_overrides)
 
-    monkeypatch.setattr("marin.rl.train_worker.discover_latest_checkpoint", lambda path: f"{path}/step_10")
+    monkeypatch.setattr("marin.rl.train_worker.discover_latest_checkpoint", lambda *paths: f"{paths[0]}/step_10")
     monkeypatch.setattr("marin.rl.train_worker.read_rl_run_manifest", lambda path: manifest)
 
     with pytest.raises(ValueError, match=field_name):
+        worker._validate_run_manifest_for_resume(trainer)
+
+
+def test_validate_run_manifest_for_resume_checks_initialize_from_when_checkpoint_auto_detects_empty(monkeypatch):
+    worker = TrainWorker.__new__(TrainWorker)
+    worker.config = SimpleNamespace(
+        initial_checkpoint="hf://meta-llama/Llama-3.1-8B",
+        model={"name": "toy-model", "hidden_dim": 128},
+        lora=LoraConfig(r=8, alpha=16.0, target_modules=["q_proj", "v_proj"]),
+        rollout_policy_format="merged",
+        inference_type="vllm",
+        run_manifest_path="/tmp/rl_run_manifest.json",
+    )
+    trainer = SimpleNamespace(
+        config=SimpleNamespace(load_checkpoint=None, initialize_from="/tmp/source-run/step_10"),
+        checkpoint_search_paths=["/tmp/current-run"],
+    )
+    expected_manifest = build_rl_run_manifest(
+        initial_checkpoint=worker.config.initial_checkpoint,
+        model_config=worker.config.model,
+        lora_config=worker.config.lora,
+        rollout_policy_format=worker.config.rollout_policy_format,
+        inference_type=worker.config.inference_type,
+    )
+    manifest = dataclasses.replace(expected_manifest, lora_config_fingerprint="cafebabecafebabe")
+
+    monkeypatch.setattr("marin.rl.train_worker.discover_latest_checkpoint", lambda *paths: None)
+    monkeypatch.setattr("marin.rl.train_worker.is_checkpoint_path", lambda path: path == "/tmp/source-run/step_10")
+    monkeypatch.setattr("marin.rl.train_worker.read_rl_run_manifest", lambda path: manifest)
+
+    with pytest.raises(ValueError, match="lora_config_fingerprint"):
         worker._validate_run_manifest_for_resume(trainer)
 
 
@@ -538,10 +569,10 @@ def test_validate_run_manifest_for_resume_requires_manifest(monkeypatch):
     )
     trainer = SimpleNamespace(
         config=SimpleNamespace(load_checkpoint=None, initialize_from=None),
-        checkpoint_path="/tmp/checkpoints/run",
+        checkpoint_search_paths=["/tmp/checkpoints/run"],
     )
 
-    monkeypatch.setattr("marin.rl.train_worker.discover_latest_checkpoint", lambda path: f"{path}/step_10")
+    monkeypatch.setattr("marin.rl.train_worker.discover_latest_checkpoint", lambda *paths: f"{paths[0]}/step_10")
     monkeypatch.setattr(
         "marin.rl.train_worker.read_rl_run_manifest",
         lambda path: (_ for _ in ()).throw(FileNotFoundError(path)),
