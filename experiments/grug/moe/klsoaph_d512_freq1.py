@@ -39,10 +39,10 @@ _HIDDEN_DIM: int = 512
 _BUDGET: float = 2.19e17
 _TARGET_STEPS: int = 2**14
 _TPU: str = "v5p-8"
-# Bumped from v1 to blockwise-v1 after the block-wise SOAP rewrite — the
-# previous v1 had a dead wandb run from the full-matrix attempt that wandb
-# was resuming on every relaunch.
-_RUN_SUFFIX: str = "blockwise-v1"
+# Bumped to sharded-v1 after the sharding-aware block kernel rewrite.
+# Earlier "blockwise-v1" run is at 1.4% MFU because it reshards every
+# state tensor to fully replicated; this run uses keep-blocks-sharded.
+_RUN_SUFFIX: str = "sharded-v1"
 
 
 def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
