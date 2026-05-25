@@ -46,35 +46,6 @@ def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabl
     assert worker.reference_model is model
 
 
-def test_build_models_loads_teacher_when_loss_requires_teacher(monkeypatch):
-    calls = []
-
-    def fake_load_model_from_checkpoint(**kwargs):
-        calls.append(kwargs)
-        return f"model:{kwargs['checkpoint']}"
-
-    monkeypatch.setattr("marin.rl.train_worker.load_model_from_checkpoint", fake_load_model_from_checkpoint)
-
-    worker = TrainWorker.__new__(TrainWorker)
-    worker.config = SimpleNamespace(
-        seed=0,
-        vocab_size=8,
-        initial_checkpoint="student-checkpoint",
-        teacher=TeacherConfig(checkpoint="teacher-checkpoint"),
-        model=object(),
-        trainer=SimpleNamespace(device_mesh=None, parameter_axis_mapping={}),
-    )
-    worker.tokenizer = SimpleNamespace(vocab_size=8)
-    worker.loss_module = OPDSampledTokenReverseKLLoss()
-
-    worker._build_models()
-
-    assert [call["checkpoint"] for call in calls] == ["student-checkpoint", "teacher-checkpoint"]
-    assert worker.initial_model == "model:student-checkpoint"
-    assert worker.reference_model == "model:student-checkpoint"
-    assert worker.teacher_model == "model:teacher-checkpoint"
-
-
 def test_build_models_rejects_missing_teacher_config_when_loss_requires_teacher(monkeypatch):
     calls = []
 

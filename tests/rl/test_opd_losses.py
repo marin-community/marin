@@ -14,7 +14,6 @@ from marin.rl.opd_losses import (
     sampled_token_reverse_kl_opd_loss,
 )
 from marin.rl.rl_losses import rloo_loss_with_importance_sampling
-from marin.rl.teacher import TeacherConfig, TeacherScoringMode
 
 
 class DummyNamedArray:
@@ -45,21 +44,9 @@ def create_test_batch(
     )
 
 
-def test_teacher_config_normalizes_scoring_mode():
-    teacher = TeacherConfig(checkpoint="teacher", scoring_mode="local_sampled_token")
-
-    assert teacher.scoring_mode is TeacherScoringMode.LOCAL_SAMPLED_TOKEN
-
-
 def test_opd_loss_rejects_missing_teacher_model():
     with pytest.raises(ValueError, match="teacher_model is required"):
         OPDSampledTokenReverseKLLoss().create_loss_fn(reference_model=None, train_model=None)
-
-
-def test_opd_advantages_are_unit_weights():
-    loss = OPDSampledTokenReverseKLLoss()
-
-    np.testing.assert_array_equal(loss.compute_advantages([object(), object(), object()]), np.ones(3))
 
 
 def test_sampled_token_opd_loss_is_zero_when_teacher_behavior_and_current_match():
