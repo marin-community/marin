@@ -5,15 +5,15 @@ Sibling to exp11 (data-mix), exp29 (arch), and exp30 (LR schedule).
 
 ## Goal
 
-Iso-FLOP sweep over three training-FLOP budgets — **3e17, 1e18, 3e18** — on the
-protein-docs `contacts-and-distances-v1-5x` corpus, Qwen3 architecture, WSD LR
-schedule. One run per (budget, hidden) point satisfying the v5p-8 + batch + LR
-+ data-budget constraints.
+Iso-FLOP sweep over four training-FLOP budgets — **3e17, 1e18, 3e18, 1e19** —
+on the protein-docs `contacts-and-distances-v1-5x` corpus, Qwen3 architecture,
+WSD LR schedule. One run per (budget, hidden) point satisfying the v5p-8 +
+batch + LR + data-budget constraints.
 
 ## Identity
 
 - File: `experiments/protein/exp31_isoflop_sweep.py`, branch `eac/plm-exp31`.
-- Run-name prefix: `prot-exp31-iso`. Wandb group: `exp31-isoflop`. `VERSION = "v1"`.
+- Run-name prefix: `prot-exp31-iso`. Wandb group: `exp31-isoflop`. `VERSION = "v2"`.
 - Sweep root: `gs://marin-us-east5/sweeps/prot-exp31-isoflop/run_isoflop_sweep-{VERSION}`.
 
 ## Data
@@ -109,6 +109,6 @@ for the per-trial bash for-loop in the module docstring).
 
 ## Preview
 
-At `STEPS_PER_RUN=4000`: 20/27 survivors (7/7/6 across the three budgets). The
-budget span (10x) and batch span ([8,128]=16x) are close enough that a single S
-covers most cells; small-h × high-budget and large-h × low-budget corners drop.
+At `STEPS_PER_RUN=10000`: 24/36 survivors (4/8/7/5 across the four budgets).
+Every budget has at least one Chinchilla-band cell (D/N ~ 20-35); small-h ×
+high-budget and large-h × low-budget corners drop.

@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # --- Identity ---------------------------------------------------------------
 
 # Bump VERSION to fork run names + sweep-root claim dir on a recipe change.
-VERSION: str = "v1"
+VERSION: str = "v2"
 RUN_NAME_PREFIX: str = "prot-exp31-iso"
 SWEEP_ROOT: str = f"gs://marin-us-east5/sweeps/prot-exp31-isoflop/run_isoflop_sweep-{VERSION}"
 WANDB_GROUP: str = "exp31-isoflop"
@@ -85,8 +85,8 @@ DATASET_TOKENS: int = 43_301_511_168
 
 # --- Model / sweep grid -----------------------------------------------------
 
-# Three iso-FLOP budgets at ~sqrt(10) ratio (half-decade spacing).
-BUDGETS: tuple[float, ...] = (3e17, 1e18, 3e18)
+# Four iso-FLOP budgets at ~sqrt(10) ratio (half-decade spacing).
+BUDGETS: tuple[float, ...] = (3e17, 1e18, 3e18, 1e19)
 
 # Hidden grid; all values divisible by HEAD_DIM=64.
 HIDDEN_MIN: int = 256
@@ -99,8 +99,8 @@ SEQ_LEN: int = 8192
 
 # --- Iso-FLOP solver --------------------------------------------------------
 
-# Single value across all budgets; tuned via PREVIEW=yes (20/27 at 4000).
-STEPS_PER_RUN: int = 4000
+# Single value across all budgets; tuned via PREVIEW=yes (24/36 at 10000).
+STEPS_PER_RUN: int = 10000
 BATCH_MIN: int = 8  # v5p-8 chip count
 BATCH_MAX: int = 128  # v5p-8 HBM limit
 LR_MAX: float = 0.03
