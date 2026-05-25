@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -60,8 +61,6 @@ class _AsyncifyingFileSystemWrapper(AsyncFileSystem):
     def __init__(self, fs: AbstractFileSystem):
         super().__init__()
         self._fs = fs
-        import concurrent.futures
-
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHUNKS)
 
     async def _cat_file(self, path: str, start: int | None = None, end: int | None = None, **kwargs) -> bytes:

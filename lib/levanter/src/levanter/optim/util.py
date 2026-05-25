@@ -15,11 +15,11 @@ from optax import GradientTransformation, GradientTransformationExtraArgs
 from optax._src.base import init_empty_state
 
 import haliax as hax
+from haliax.nn import Linear
 from haliax.tree_util import scan_aware_tree_map
 
 from levanter.models.linear import has_linear_like_marker
 import levanter.tracker
-from levanter.utils.jax_utils import is_inexact_arrayish
 
 
 T = TypeVar("T")
@@ -41,28 +41,6 @@ def label_linear_like_module(module: Any, *, weight_label: str, bias_label: str)
     if not dataclasses.is_dataclass(module):
         raise TypeError(f"Expected a dataclass module for mask labeling, got {type(module)}")
     return dataclasses.replace(module, weight=weight_label, bias=masked_bias)
-
-
-def hvp(f, x, v):
-    """Compute the Hessian-vector product of a function."""
-    return eqx.filter_jvp(eqx.filter_grad(f), (x,), (v,))[1]
-    # grad_f = eqx.filter_grad(f)
-    # _, vjp_fn = eqx.filter_vjp(grad_f, x)
-    # return vjp_fn(v)[0]
-
-
-def tree_gaussian_like(key, tree):
-    """
-    Samples a tree of gaussian noise with the same structure as `tree`, except for leaves which are not inexact arrays,
-    for which it returns None
-    """
-    leaves, structure = jax.tree_util.tree_flatten(tree)
-    keys = jax.random.split(key, len(leaves))
-    rand_n = lambda x, key: jax.random.normal(key, x.shape) if is_inexact_arrayish(x) else None
-    g = jax.tree_util.tree_map(rand_n, leaves, list(keys))
-    g = jax.tree_util.tree_unflatten(structure, g)
-
-    return g
 
 
 def log_norm_passthrough(desc: str) -> GradientTransformation:
@@ -110,7 +88,6 @@ def flatten_linear_layers(tree: T) -> T:
 
     :param tree:
     """
-    from haliax.nn import Linear
 
     def _flatten_linear(layer):
         if not isinstance(layer, Linear):
@@ -152,8 +129,6 @@ def unflatten_linear_layers(template: T, tree_with_flattened_linears: T) -> T:
         The same tree as `tree_with_flattened_linears`, but with the linear layers unflattened to match
         the structure of `template`.
     """
-
-    from haliax.nn import Linear
 
     def _unflatten_linear(template, flattened):
         assert isinstance(template, Linear) == isinstance(flattened, Linear)

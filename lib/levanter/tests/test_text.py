@@ -24,8 +24,10 @@ from levanter.data.text import (
     PreferenceChatLmDatasetFormat,
     PreferenceChatProcessor,
     PrebuiltLmDatasetFormat,
+    SupervisedLmDatasetFormat,
     UrlDatasetSourceConfig,
     build_lm_dataset_cache,
+    count_corpus_sizes,
     dataset_for_component,
     grug_lm_example_from_named,
     named_lm_example_from_grug,
@@ -52,6 +54,40 @@ def test_dont_blow_up_without_validation_set():
         Pos = hax.Axis("position", 10)
         # mostly just making sure this doesn't blow up
         assert config.validation_sets(Pos) == {}
+
+
+def test_count_corpus_sizes_handles_empty_train_cache(monkeypatch):
+    class EmptyCache:
+        def flat_field_length(self, _field):
+            return 0
+
+        async def async_flat_field_length(self, _field):
+            return 0
+
+        def flat_field_num_rows(self, _field):
+            return 0
+
+    config = LmDataConfig(
+        components={"empty": DatasetComponent()},
+        tokenizer="passthrough",
+        vocab_size=64,
+    )
+
+    def build_caches(_self, split):
+        if split == "train":
+            return {"empty": EmptyCache()}
+        return {}
+
+    monkeypatch.setattr(LmDataConfig, "build_caches", build_caches)
+
+    stats = count_corpus_sizes(config)
+
+    prefix = "data/stats/train/empty/"
+    assert stats[f"{prefix}total_tokens"] == 0
+    assert stats[f"{prefix}total_docs"] == 0
+    assert stats[f"{prefix}total_seqs"] == 0
+    assert f"{prefix}padding_fraction" not in stats
+    assert f"{prefix}truncation_fraction" not in stats
 
 
 def test_lm_example_handles_ignore_id():
@@ -128,6 +164,146 @@ def test_merge_split_encodings(local_gpt2_marin_tokenizer):
     assert short_out == reg_out
 
 
+# ---------------------------------------------------------------------------
+# BOS / EOS handling — regression tests for #5034
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def marin_tokenizer_with_bos():
+    """Real marin-tokenizer (Llama-3 BPE, BOS-only TemplateProcessing post-processor)."""
+    try:
+        return load_tokenizer("marin-community/marin-tokenizer")
+    except Exception as e:
+        pytest.skip(f"Cannot load marin-community/marin-tokenizer: {e}")
+
+
+def test_batch_tokenizer_prepends_bos(marin_tokenizer_with_bos):
+    """Every doc in the output must start with BOS when enforce_bos=True.
+
+    Regression test for https://github.com/marin-community/marin/issues/5034:
+    BatchTokenizer silently stopped prepending BOS after the kitoken backend
+    migration because the init probe ran with add_special_tokens=True but the
+    hot-path encode_batch did not, inverting the prepend decision.
+    """
+    tokenizer = marin_tokenizer_with_bos
+    bos_id = tokenizer.bos_token_id
+    assert bos_id is not None
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=True, enforce_eos=False)
+    batch = [{"text": "hello world"}, {"text": "Anonymous 01/04/19 posted"}, {"text": "x"}]
+    out = bt(batch)
+
+    for i, item in enumerate(out):
+        ids = item["input_ids"]
+        assert ids[0] == bos_id, f"doc {i}: expected BOS at position 0, got {ids[:5]}"
+        assert ids.count(bos_id) == 1, f"doc {i}: expected exactly one BOS, got {ids.count(bos_id)}"
+
+
+def test_batch_tokenizer_appends_eos(marin_tokenizer_with_bos):
+    """Every doc must end with EOS when enforce_eos=True."""
+    tokenizer = marin_tokenizer_with_bos
+    eos_id = tokenizer.eos_token_id
+    assert eos_id is not None
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=False, enforce_eos=True)
+    batch = [{"text": "hello world"}, {"text": "another doc"}]
+    out = bt(batch)
+
+    for i, item in enumerate(out):
+        ids = item["input_ids"]
+        assert ids[-1] == eos_id, f"doc {i}: expected EOS at end, got {ids[-5:]}"
+
+
+def test_batch_tokenizer_bos_disabled(marin_tokenizer_with_bos):
+    """With enforce_bos=False, doc must not start with BOS even though the tokenizer has one."""
+    tokenizer = marin_tokenizer_with_bos
+    bos_id = tokenizer.bos_token_id
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=False, enforce_eos=False)
+    out = bt([{"text": "hello world"}])
+    ids = out[0]["input_ids"]
+    assert bos_id not in ids
+
+
+def test_batch_tokenizer_output_equals_direct_encode_plus_bos(marin_tokenizer_with_bos):
+    """BatchTokenizer(enforce_bos=True, enforce_eos=False) must equal [BOS] + encode(text)."""
+    tokenizer = marin_tokenizer_with_bos
+    bos_id = tokenizer.bos_token_id
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=True, enforce_eos=False)
+    texts = ["hello world", "Anonymous 01/04/19", "The quick brown fox", "  leading space"]
+    out = bt([{"text": t} for t in texts])
+
+    for t, item in zip(texts, out):
+        expected = [bos_id] + tokenizer.encode(t, add_special_tokens=False)
+        assert item["input_ids"] == expected, f"text={t!r}: got {item['input_ids'][:10]}, expected {expected[:10]}"
+
+
+def test_batch_tokenizer_metadata_reflects_user_intent(marin_tokenizer_with_bos):
+    """metadata['append_bos'/'append_eos'] must track user intent, not internal detail.
+
+    Post-migration caches stored append_bos=False despite enforce_bos=True; this
+    invariant makes the metadata field a reliable signal for cache comparability.
+    """
+    tokenizer = marin_tokenizer_with_bos
+
+    bt_on = BatchTokenizer(tokenizer, enforce_bos=True, enforce_eos=True)
+    assert bt_on.metadata["append_bos"] is True
+    assert bt_on.metadata["append_eos"] is True
+
+    bt_off = BatchTokenizer(tokenizer, enforce_bos=False, enforce_eos=False)
+    assert bt_off.metadata["append_bos"] is False
+    assert bt_off.metadata["append_eos"] is False
+
+
+def test_batch_tokenizer_bos_survives_long_string_split(marin_tokenizer_with_bos):
+    """Long-string workaround must not duplicate or drop BOS across chunk boundaries."""
+    tokenizer = marin_tokenizer_with_bos
+    bos_id = tokenizer.bos_token_id
+
+    lorem = (
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et "
+        "dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip "
+        "ex ea commodo consequat."
+    )
+
+    bt_split = BatchTokenizer(
+        tokenizer,
+        enforce_bos=True,
+        enforce_eos=False,
+        _workaround_len=len(lorem) // 3,
+        long_string_workaround=True,
+    )
+    bt_whole = BatchTokenizer(
+        tokenizer,
+        enforce_bos=True,
+        enforce_eos=False,
+        _workaround_len=50000,
+    )
+    batch = [{"text": lorem}]
+
+    split_out = bt_split(batch)
+    whole_out = bt_whole(batch)
+
+    assert split_out == whole_out
+    ids = split_out[0]["input_ids"]
+    assert ids[0] == bos_id
+    assert ids.count(bos_id) == 1
+
+
+def test_batch_tokenizer_no_bos_when_tokenizer_has_none(local_gpt2_marin_tokenizer):
+    """Tokenizer without a BOS id: enforce_bos=True is a no-op (and doesn't crash)."""
+    tokenizer = local_gpt2_marin_tokenizer
+    assert tokenizer.bos_token_id is None
+
+    bt = BatchTokenizer(tokenizer, enforce_bos=True, enforce_eos=False)
+    assert bt.metadata["append_bos"] is False
+
+    out = bt([{"text": "hello world"}])
+    assert len(out[0]["input_ids"]) > 0
+
+
 def test_prebuilt_cache_with_loss_weights(tmp_path):
     records = [
         {"input_ids": [1, 2, 3, 4], "loss_weights": [1.0, 0.5, 0.0, 1.0]},
@@ -199,6 +375,119 @@ def test_prebuilt_cache_without_loss_weights(tmp_path):
     example = ds[0]
     expected_loss_weight = np.array([1.0, 1.0, 1.0, 0.0], dtype=np.asarray(example.loss_weight).dtype)
     np.testing.assert_array_equal(np.asarray(example.loss_weight), expected_loss_weight)
+
+
+def test_supervised_text_cache_masks_target_tokens_for_training_and_eval(tmp_path):
+    records = [
+        {"input": "1 2 ", "target": "3 4"},
+        {"input": "5 ", "target": "6 7 8"},
+    ]
+    data_path = tmp_path / "supervised.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)], validation_urls=[str(data_path)]),
+        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
+        cache_dir=str(tmp_path),
+    )
+    config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    train_cache = config.build_caches("train")["supervised"]
+    first_row = train_cache.as_sync_dataset()[0]
+    np.testing.assert_array_equal(first_row["input_ids"], np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(first_row["loss_weights"], np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float32))
+
+    Pos = hax.Axis("position", 4)
+    train_example = config.train_sets(Pos, initial_batch_size=1, key=jax.random.PRNGKey(0))[
+        "supervised"
+    ].as_sync_dataset()[0]
+    np.testing.assert_array_equal(np.asarray(train_example.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(train_example.loss_weight), np.array([0.0, 1.0, 1.0, 0.0]))
+
+    tagged_eval_sets = config.tagged_eval_sets(Pos)
+    assert tagged_eval_sets[0][1] == ["supervised"]
+    eval_example = tagged_eval_sets[0][0].as_sync_dataset()[0]
+    np.testing.assert_array_equal(eval_example.tokens.array, np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(eval_example.loss_weight.array, np.array([0.0, 1.0, 1.0, 0.0]))
+
+
+def test_supervised_text_processor_preserves_input_target_token_boundary():
+    class BoundaryMergingTokenizer:
+        name_or_path = "boundary-merging"
+        vocab_size = 128
+        bos_token_id = None
+        eos_token_id = None
+        pad_token_id = None
+        bos_token = None
+        eos_token = None
+        chat_template = None
+
+        def __len__(self):
+            return self.vocab_size
+
+        def encode(self, text, *, add_special_tokens=False):
+            if text == "ab":
+                return [99]
+            if text == "a":
+                return [1]
+            if text == "b":
+                return [2]
+            raise ValueError(f"Unexpected text: {text!r}")
+
+    processor = preprocessor_for_format(
+        SupervisedLmDatasetFormat(input_key="input", target_key="target"),
+        BoundaryMergingTokenizer(),  # type: ignore[arg-type]
+        enforce_bos=False,
+        enforce_eos=False,
+    )
+
+    row = processor([{"input": "a", "target": "b"}])[0]
+
+    np.testing.assert_array_equal(row["input_ids"], np.array([1, 2], dtype=np.int32))
+    np.testing.assert_array_equal(row["loss_weights"], np.array([1.0, 0.0], dtype=np.float32))
+
+
+def test_supervised_text_packing_preserves_document_loss_boundaries(tmp_path):
+    records = [
+        {"input": "1 ", "target": "2"},
+        {"input": "3 ", "target": "4"},
+    ]
+    data_path = tmp_path / "supervised_pack.jsonl"
+    with data_path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(data_path)]),
+        format=SupervisedLmDatasetFormat(input_key="input", target_key="target"),
+        cache_dir=str(tmp_path),
+        pack=2,
+    )
+    config = LmDataConfig(
+        components={"supervised": component},
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+
+    cache = config.build_caches("train")["supervised"]
+    Pos = hax.Axis("position", 4)
+    dataset = dataset_for_component(
+        component,
+        Pos,
+        cache,
+        eos_id=None,
+        block_cross_document_attention=config.block_cross_document_attention,
+    ).as_sync_dataset()
+
+    example = dataset[0]
+    np.testing.assert_array_equal(np.asarray(example.tokens), np.array([1, 2, 3, 4], dtype=np.int32))
+    np.testing.assert_array_equal(np.asarray(example.loss_weight), np.array([1.0, 0.0, 1.0, 0.0]))
 
 
 def test_train_set_last_mile_wraps_to_named(tmp_path):
@@ -421,12 +710,11 @@ def assert_loss_weight_matches_all_assistants(example, tokenizer):
     assert np.array_equal(loss_weight, expected), "loss_weight does not match assistant spans"
 
 
-@pytest.mark.ray
 def test_chat_dataset_build_and_pack(dummy_chat_data):
     with tempfile.TemporaryDirectory() as tmpdir:
         cache_dir = tmpdir
 
-        tokenizer = load_tokenizer("stanford-crfm/marin-tokenizer")
+        tokenizer = load_tokenizer("marin-community/marin-tokenizer")
 
         component = DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
@@ -454,11 +742,14 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         assert sample["assistant_masks"].shape == sample["input_ids"].shape
         assert 8 < sample["assistant_masks"].sum() <= 10
         # assert sample["input_ids"].shape[0] > 20
-        assert (
-            tokenizer.decode(sample["input_ids"], skip_special_tokens=False)
-            == "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\nHello!<|eot_id|>\n<|start_header_id|>assistant"
-            "<|end_header_id|>\nHi there, how can I help?<|eot_id|>\n"
+        expected_rendered = tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": "Hello!"},
+                {"role": "assistant", "content": "Hi there, how can I help?"},
+            ],
+            tokenize=False,
         )
+        assert tokenizer.decode(sample["input_ids"], skip_special_tokens=False) == expected_rendered
 
         # now test packing
         Pos = hax.Axis("position", 100)
@@ -488,3 +779,38 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
             # loss_weight should coincide with assistant tokens only
             assert_loss_weight_matches_all_assistants(ex, tokenizer)
+
+
+# --- LmDataConfig.build_caches ---------------------------------------------
+
+
+def _write_prebuilt_jsonl(path: Path, records: list[dict]) -> None:
+    with path.open("w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+
+
+def _prebuilt_train_component(jsonl_path: Path) -> DatasetComponent:
+    return DatasetComponent(
+        source=UrlDatasetSourceConfig(train_urls=[str(jsonl_path)], validation_urls=[]),
+        format=PrebuiltLmDatasetFormat(),
+    )
+
+
+def test_build_caches_propagates_exception_from_one_component(tmp_path):
+    p_good = tmp_path / "good.jsonl"
+    _write_prebuilt_jsonl(p_good, [{"input_ids": [1, 2, 3, 4]}])
+    good = _prebuilt_train_component(p_good)
+    bad = DatasetComponent(
+        source=None,
+        cache_dir=str(tmp_path / "bad_missing"),
+        format=PrebuiltLmDatasetFormat(),
+    )
+    config = LmDataConfig(
+        components={"good": good, "bad": bad},
+        cache_dir=str(tmp_path / "caches"),
+        tokenizer="passthrough",
+        vocab_size=16,
+    )
+    with pytest.raises(ValueError, match="No source and no cache"):
+        config.build_caches("train")

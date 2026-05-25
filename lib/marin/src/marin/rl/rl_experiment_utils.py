@@ -9,18 +9,16 @@ import uuid
 from urllib.parse import urlparse
 
 import jmp
-from fray.v2.types import ResourceConfig
+from fray.types import ResourceConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
 from levanter.layers.attention import AttentionBackend
-from levanter.distributed import RayConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.artifact import PathMetadata
 from levanter.utils.fsspec_utils import join_path
 from levanter.utils.mesh import MeshConfig
-
+from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorMainConfig, ExecutorStep, InputName, output_path_of, this_output_path
 from marin.execution.remote import remote
 from marin.rl.curriculum import CurriculumConfig
@@ -245,7 +243,6 @@ def _build_rl_job_config(
             axes={"context": 1, "model": 1},
             shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
         ),
-        ray=RayConfig(auto_start_cluster=False),
     )
 
     opt_config = AdamConfig(

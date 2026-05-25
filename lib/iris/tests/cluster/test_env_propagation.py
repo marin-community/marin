@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from unittest.mock import patch
 
 import pytest
-
 from iris.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute
@@ -135,8 +134,8 @@ def test_child_job_inherits_parent_constraints(capturing_client, parent_context)
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
     parent_constraints = [
-        Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4"),
-        Constraint(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value="true"),
+        Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4"),
+        Constraint.create(key=WellKnownAttribute.PREEMPTIBLE, op=ConstraintOp.EQ, value="true"),
     ]
 
     with (
@@ -157,8 +156,8 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-    parent_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
-    child_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
+    parent_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
+    child_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
 
     with (
         iris_ctx_scope(parent_context),
@@ -174,69 +173,36 @@ def test_child_explicit_constraints_override_parent(capturing_client, parent_con
     )
 
 
-def test_child_inherits_worker_region_constraint(capturing_client, parent_context):
-    """When the parent has a worker_region and the child has no region constraint,
-    the child should get an implicit region constraint from the parent's worker."""
+def test_child_inherits_parent_worker_region(capturing_client, parent_context):
+    """Children co-locate with the parent worker's region by default."""
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
 
     with (
         iris_ctx_scope(parent_context),
-        patch(
-            "iris.client.client.get_job_info",
-            return_value=_parent_job_info({}, worker_region="us-central1"),
-        ),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
     ):
-        client.submit(entrypoint, "child-region-inherit", resources)
+        client.submit(entrypoint, "child-inherits-region", resources)
 
     assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central1" for c in stub.captured_constraints
+        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central2" for c in stub.captured_constraints
     )
 
 
-def test_child_explicit_region_not_overridden_by_worker_region(capturing_client, parent_context):
-    """When the child already has a region constraint, the parent's worker_region
-    should NOT override it."""
+def test_child_explicit_region_overrides_parent_worker_region(capturing_client, parent_context):
+    """An explicit region constraint on the child wins over the inherited worker_region."""
     client, stub = capturing_client
     entrypoint = Entrypoint.from_callable(dummy_entrypoint)
     resources = ResourceSpec(cpu=1, memory="1g")
-    child_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
+    child_constraints = [Constraint.create(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="europe-west4")]
 
     with (
         iris_ctx_scope(parent_context),
-        patch(
-            "iris.client.client.get_job_info",
-            return_value=_parent_job_info({}, worker_region="us-central1"),
-        ),
+        patch("iris.client.client.get_job_info", return_value=_parent_job_info({}, worker_region="us-central2")),
     ):
         client.submit(entrypoint, "child-explicit-region", resources, constraints=child_constraints)
 
-    assert any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "europe-west4" for c in stub.captured_constraints
-    )
-    assert not any(
-        c.key == WellKnownAttribute.REGION and c.value.string_value == "us-central1" for c in stub.captured_constraints
-    )
-
-
-def test_parent_region_constraint_not_overridden_by_worker_region(capturing_client, parent_context):
-    """When the parent already has a region constraint in its stored constraints,
-    the worker_region should NOT add a duplicate."""
-    client, stub = capturing_client
-    entrypoint = Entrypoint.from_callable(dummy_entrypoint)
-    resources = ResourceSpec(cpu=1, memory="1g")
-    parent_constraints = [Constraint(key=WellKnownAttribute.REGION, op=ConstraintOp.EQ, value="us-west4")]
-
-    with (
-        iris_ctx_scope(parent_context),
-        patch(
-            "iris.client.client.get_job_info",
-            return_value=_parent_job_info({}, constraints=parent_constraints, worker_region="us-central1"),
-        ),
-    ):
-        client.submit(entrypoint, "child-parent-region", resources)
-
     region_constraints = [c for c in stub.captured_constraints if c.key == WellKnownAttribute.REGION]
     assert len(region_constraints) == 1
-    assert region_constraints[0].value.string_value == "us-west4"
+    assert region_constraints[0].value.string_value == "europe-west4"

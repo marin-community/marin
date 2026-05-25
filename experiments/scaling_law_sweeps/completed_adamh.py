@@ -35,21 +35,21 @@ import math
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
+from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
+from marin.execution.executor import ExecutorStep, InputName
+from marin.processing.tokenize import get_vocab_size_for_tokenizer
+from marin.scaling_laws import CandidateConfig, pick_v4_type
+from marin.scaling_laws.tpu_utils import V4_SPEC
 
 from experiments.defaults import default_train
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from fray.cluster import ResourceConfig
-from marin.execution.executor import ExecutorStep, InputName
-from marin.processing.tokenize import get_vocab_size_for_tokenizer
-from marin.scaling_laws import CandidateConfig, pick_v4_type
-from marin.scaling_laws.tpu_utils import V4_CORES_PER_CHIP
 
 # --- Constants ---
 SEQ_LEN: int = 4096
@@ -66,7 +66,7 @@ def _round_to_power_of_two(x: float) -> int:
 def _compute_tensor_parallel_size(tpu_type: str, batch_size: int, hidden_dim: int, max_tp: int = 4) -> int:
     """Compute TP degree when batch_size < num_chips on the selected TPU."""
     cores = int(tpu_type.split("-")[1])
-    num_chips = cores // V4_CORES_PER_CHIP
+    num_chips = cores // V4_SPEC.cores_per_chip
     min_tp = 1 if batch_size >= num_chips else _round_to_power_of_two(math.ceil(num_chips / batch_size))
     tp = min_tp
 
@@ -102,7 +102,7 @@ class CompletedAdamHHeuristic:
     """
 
     name: str = "completed-adamh"
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    tokenizer: str = "marin-community/marin-tokenizer"
 
     @property
     def vocab_size(self) -> int:

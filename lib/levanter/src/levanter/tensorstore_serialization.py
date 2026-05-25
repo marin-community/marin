@@ -22,8 +22,11 @@ import tensorstore as ts
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
+from jax._src.mesh import get_concrete_mesh
 from jax.sharding import Mesh, Sharding
 from jaxtyping import PyTree
+
+from rigging.filesystem import record_transfer
 
 from levanter._debug_logging import flush_debug_output
 from levanter.utils import fsspec_utils, jax_utils
@@ -190,6 +193,12 @@ def tree_serialize_leaves_tensorstore(
         spec = _create_ocdbt_spec(checkpoint_dir, path)
         tspecs.append(spec)
 
+    # Pre-charge the cross-region transfer budget before kicking off the
+    # async writes — tensorstore bypasses fsspec, so the CrossRegionGuardedFS
+    # interceptor never sees these bytes.  No-op when checkpoint_dir is local
+    # or in the same region as the VM.
+    record_transfer(total_array_bytes, checkpoint_dir)
+
     if debug_checkpointer:
         logger.info("Checkpoint tensorstore serialize entering manager.serialize for %s", checkpoint_dir)
         flush_debug_output(logger)
@@ -210,8 +219,6 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
             concrete_mesh = mesh or hax.partitioning._get_mesh()
             if isinstance(concrete_mesh, jax.sharding.AbstractMesh) or concrete_mesh is None or concrete_mesh.empty:
                 # Fall back to JAX's concrete mesh getter when available.
-                from jax._src.mesh import get_concrete_mesh
-
                 concrete_mesh = get_concrete_mesh()
 
             if concrete_mesh is not None and not concrete_mesh.empty:
@@ -380,6 +387,20 @@ def tree_deserialize_leaves_tensorstore(
     """
     if manager is None:
         manager = array_ser.GlobalAsyncCheckpointManager()
+
+    # Pre-charge the cross-region transfer budget before kicking off the
+    # async reads.  Tensorstore bypasses fsspec, so the CrossRegionGuardedFS
+    # interceptor never sees these bytes.  We use the exemplar pytree's
+    # shapes/dtypes as an upper bound — if `allow_missing=True` and some
+    # leaves aren't on disk we'll over-charge slightly, but the common case
+    # (no missing arrays) is exact.  No-op when checkpoint_dir is local or
+    # in the same region as the VM.
+    estimated_bytes = sum(
+        _estimate_array_nbytes(leaf.array if is_named_array(leaf) else leaf)
+        for leaf in jtu.tree_leaves(pytree, is_leaf=_is_named_or_none)
+        if leaf is not None
+    )
+    record_transfer(estimated_bytes, checkpoint_dir)
 
     shardings: PyTree[Optional[Sharding]] = jtu.tree_map(
         partial(_sharding_from_leaf, axis_mapping=axis_mapping, mesh=mesh), pytree, is_leaf=_is_named_or_none

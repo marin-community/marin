@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { controllerRpcCall } from '@/composables/useRpc'
+import { controllerRpcCall, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName, stateDisplayName } from '@/types/status'
 import type {
   JobStatus, TaskStatus, LaunchJobRequest, JobQuery,
   GetJobStatusResponse, ListTasksResponse, ListJobsResponse,
-  ResourceUsage,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -17,12 +17,19 @@ import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
+import { useMediaQuery } from '@/composables/useMediaQuery'
+
+// Tailwind's `sm` breakpoint is 640px. Cards on mobile, table on desktop.
+// v-if-switched (not CSS-hidden) so only one variant is in the DOM.
+const isMobile = useMediaQuery('(max-width: 639px)')
 
 const props = defineProps<{
   jobId: string
 }>()
 
-const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'preempted', 'unschedulable'])
+const TERMINAL_STATES = new Set(['succeeded', 'failed', 'killed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
+const FAILED_TERMINAL_STATES = new Set(['failed', 'worker_failed', 'cosched_failed', 'preempted', 'unschedulable'])
 
 // -- State --
 
@@ -39,7 +46,7 @@ const copiedName = ref(false)
 const taskSearch = ref('')
 const stateFilter = ref('')
 
-type SortColumn = 'task' | 'state' | 'mem' | 'peakMem' | 'cpu' | 'duration'
+type SortColumn = 'task' | 'state' | 'mem' | 'cpu' | 'duration'
 type SortDir = 'asc' | 'desc'
 
 const sortColumn = ref<SortColumn | null>(null)
@@ -91,6 +98,107 @@ async function fetchChildJobs(parentJobId: string): Promise<JobStatus[]> {
   return response.jobs ?? []
 }
 
+// --- Per-task resource samples sourced from finelog stats (iris.task) ---
+//
+// Latest sample per task_id, scoped to this job's tasks. Drives the
+// Memory / Peak / CPU columns and their sort comparators. Empty until the
+// stats query lands. The controller no longer populates
+// TaskStatus.resource_usage, so this is the canonical source.
+//
+// The underlying iris.task columns are stored in MB (matching the
+// ResourceUsage proto), but the SQL projection converts to bytes so the
+// dashboard can call formatBytes directly without a per-call MB→B helper.
+interface TaskStatRow {
+  task_id?: string
+  attempt_id?: number
+  cpu_millicores?: number
+  // Memory in bytes — converted in the SQL projection so the dashboard can call
+  // formatBytes directly without re-multiplying at every render site.
+  memory_bytes?: number
+  memory_peak_bytes?: number
+}
+
+function buildTaskStatsSql(taskIds: readonly string[]): string {
+  if (taskIds.length === 0) return ''
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
+  const list = taskIds.map(t => `'${t.replace(/'/g, "''")}'`).join(',')
+  return `
+SELECT
+  task_id,
+  attempt_id,
+  cpu_millicores,
+  memory_mb * 1024 * 1024 AS memory_bytes,
+  memory_peak_mb * 1024 * 1024 AS memory_peak_bytes
+FROM "iris.task"
+WHERE task_id IN (${list})
+QUALIFY row_number() OVER (PARTITION BY task_id ORDER BY ts DESC) = 1
+`.trim()
+}
+
+const { data: taskStatsData, refresh: fetchTaskStats } = useLogServerStatsRpc<{ arrowIpc?: string }>(
+  'Query',
+  () => ({ sql: buildTaskStatsSql(tasks.value.map(t => t.taskId)) }),
+)
+
+const taskUsageMap = computed<Map<string, TaskStatRow>>(() => {
+  const ipc = taskStatsData.value?.arrowIpc
+  const m = new Map<string, TaskStatRow>()
+  if (!ipc) return m
+  const rows = decodeArrowIpc(ipc).rows as TaskStatRow[]
+  for (const r of rows) {
+    if (r.task_id) m.set(r.task_id, r)
+  }
+  return m
+})
+
+function taskMemBytes(taskId: string): number {
+  return Number(taskUsageMap.value.get(taskId)?.memory_bytes ?? 0)
+}
+function taskPeakMemBytes(taskId: string): number {
+  return Number(taskUsageMap.value.get(taskId)?.memory_peak_bytes ?? 0)
+}
+function taskCpuMillicores(taskId: string): number {
+  return Number(taskUsageMap.value.get(taskId)?.cpu_millicores ?? 0)
+}
+
+// True when the task has finished with a non-zero exit code. Drives the
+// merged status column: non-zero exits get prominent display; zero exits
+// fall back to status text or the state badge.
+function taskExitNonZero(t: TaskStatus): boolean {
+  return TERMINAL_STATES.has(stateToName(t.state))
+    && t.exitCode !== undefined
+    && t.exitCode !== 0
+}
+
+// Min/max of the latest stat sample across currently-running tasks. Powers
+// the "Live Resource Usage" panel; null when no running task has reported.
+interface RunningResourceRange {
+  cpuMillicoresMin: number
+  cpuMillicoresMax: number
+  memoryBytesMin: number
+  memoryBytesMax: number
+  memoryPeakBytesMax: number
+}
+const runningResourceRange = computed<RunningResourceRange | null>(() => {
+  const samples: TaskStatRow[] = []
+  for (const t of tasks.value) {
+    if (stateToName(t.state) !== 'running') continue
+    const r = taskUsageMap.value.get(t.taskId)
+    if (r) samples.push(r)
+  }
+  if (samples.length === 0) return null
+  const cpus = samples.map(r => Number(r.cpu_millicores ?? 0))
+  const mems = samples.map(r => Number(r.memory_bytes ?? 0))
+  const peaks = samples.map(r => Number(r.memory_peak_bytes ?? 0))
+  return {
+    cpuMillicoresMin: Math.min(...cpus),
+    cpuMillicoresMax: Math.max(...cpus),
+    memoryBytesMin: Math.min(...mems),
+    memoryBytesMax: Math.max(...mems),
+    memoryPeakBytesMax: Math.max(...peaks),
+  }
+})
+
 async function fetchData() {
   const gen = ++fetchGeneration
   error.value = null
@@ -107,6 +215,13 @@ async function fetchData() {
     job.value = jobResp.job
     jobRequest.value = jobResp.request ?? null
     tasks.value = tasksResp.tasks ?? []
+
+    // Refresh stats only once tasks are known so the SQL filter targets the
+    // current job's tasks. Failures here surface as zero values — never block
+    // the rest of the page.
+    if (tasks.value.length > 0) {
+      void fetchTaskStats()
+    }
 
     const parentIds = [props.jobId, ...expandedChildJobs.value]
     const childEntries = await Promise.all(
@@ -169,22 +284,6 @@ function taskDuration(t: TaskStatus): string {
   return formatDuration(started, ended)
 }
 
-function formatMemMb(usage: ResourceUsage | undefined): string {
-  if (!usage?.memoryMb) return '-'
-  const mb = parseInt(usage.memoryMb, 10)
-  return `${mb} MB`
-}
-
-function formatPeakMemMb(usage: ResourceUsage | undefined): string {
-  if (!usage?.memoryPeakMb) return '-'
-  const mb = parseInt(usage.memoryPeakMb, 10)
-  return `${mb} MB`
-}
-
-function formatCpu(usage: ResourceUsage | undefined): string {
-  return formatCpuMillicores(usage?.cpuMillicores)
-}
-
 function taskIndex(taskId: string): string {
   const last = taskId.split('/').pop()
   if (!last) return '-'
@@ -240,34 +339,34 @@ const flattenedChildJobs = computed(() => {
   return result
 })
 
-async function loadChildJobs(parentJobId: string) {
-  if (loadingChildJobs.value.has(parentJobId)) return
-  const nextLoading = new Set(loadingChildJobs.value)
-  nextLoading.add(parentJobId)
-  loadingChildJobs.value = nextLoading
-  try {
-    const children = await fetchChildJobs(parentJobId)
-    const nextChildren = new Map(childJobsByParent.value)
-    nextChildren.set(parentJobId, children)
-    childJobsByParent.value = nextChildren
-  } finally {
-    const doneLoading = new Set(loadingChildJobs.value)
-    doneLoading.delete(parentJobId)
-    loadingChildJobs.value = doneLoading
-  }
-}
-
-function toggleExpandedChildJob(jobStatus: JobStatus) {
+async function toggleExpandedChildJob(jobStatus: JobStatus) {
   const next = new Set(expandedChildJobs.value)
   if (next.has(jobStatus.jobId)) {
     next.delete(jobStatus.jobId)
-  } else {
-    next.add(jobStatus.jobId)
-    if (!childJobsByParent.value.has(jobStatus.jobId)) {
-      void loadChildJobs(jobStatus.jobId)
-    }
+    expandedChildJobs.value = next
+    return
   }
+
+  next.add(jobStatus.jobId)
   expandedChildJobs.value = next
+
+  if (childJobsByParent.value.has(jobStatus.jobId)) {
+    return
+  }
+
+  const nextLoading = new Set(loadingChildJobs.value)
+  nextLoading.add(jobStatus.jobId)
+  loadingChildJobs.value = nextLoading
+  try {
+    const children = await fetchChildJobs(jobStatus.jobId)
+    const nextChildren = new Map(childJobsByParent.value)
+    nextChildren.set(jobStatus.jobId, children)
+    childJobsByParent.value = nextChildren
+  } finally {
+    const doneLoading = new Set(loadingChildJobs.value)
+    doneLoading.delete(jobStatus.jobId)
+    loadingChildJobs.value = doneLoading
+  }
 }
 
 const SEGMENT_COLORS: Record<string, string> = {
@@ -298,9 +397,11 @@ function progressSegments(j: JobStatus): ProgressSegment[] {
   const assigned = counts['assigned'] ?? 0
   const failed = counts['failed'] ?? 0
   const workerFailed = counts['worker_failed'] ?? 0
+  const coschedFailed = counts['cosched_failed'] ?? 0
   const preempted = counts['preempted'] ?? 0
   const killed = counts['killed'] ?? 0
-  const pending = total - succeeded - running - building - assigned - failed - workerFailed - preempted - killed
+  const pending =
+    total - succeeded - running - building - assigned - failed - workerFailed - coschedFailed - preempted - killed
   return [
     { count: succeeded, colorClass: SEGMENT_COLORS['succeeded'], label: 'succeeded' },
     { count: running, colorClass: SEGMENT_COLORS['running'], label: 'running' },
@@ -308,6 +409,7 @@ function progressSegments(j: JobStatus): ProgressSegment[] {
     { count: assigned, colorClass: SEGMENT_COLORS['assigned'], label: 'assigned' },
     { count: failed, colorClass: SEGMENT_COLORS['failed'], label: 'failed' },
     { count: workerFailed, colorClass: SEGMENT_COLORS['worker_failed'], label: 'worker_failed' },
+    { count: coschedFailed, colorClass: SEGMENT_COLORS['cosched_failed'], label: 'cosched_failed' },
     { count: preempted, colorClass: SEGMENT_COLORS['preempted'], label: 'preempted' },
     { count: killed, colorClass: SEGMENT_COLORS['killed'], label: 'killed' },
     { count: Math.max(0, pending), colorClass: SEGMENT_COLORS['pending'], label: 'pending' },
@@ -346,7 +448,7 @@ const taskCounts = computed(() => {
     else if (state === 'building') counts.building++
     else if (state === 'assigned') counts.assigned++
     else if (state === 'pending') counts.pending++
-    else if (state === 'failed' || state === 'worker_failed' || state === 'preempted') counts.failed++
+    else if (state === 'failed' || state === 'worker_failed' || state === 'cosched_failed' || state === 'preempted') counts.failed++
   }
   return counts
 })
@@ -410,7 +512,7 @@ const diskDisplay = computed(() => {
 
 const STATE_SORT_ORDER: Record<string, number> = {
   running: 0, building: 1, assigned: 2, pending: 3,
-  succeeded: 4, killed: 5, failed: 6, worker_failed: 7, preempted: 8, unschedulable: 9,
+  succeeded: 4, killed: 5, failed: 6, worker_failed: 7, cosched_failed: 8, preempted: 9, unschedulable: 10,
 }
 
 function taskDurationMs(t: TaskStatus): number {
@@ -452,13 +554,13 @@ const filteredTasks = computed(() => {
         cmp = (STATE_SORT_ORDER[stateToName(a.state)] ?? 99) - (STATE_SORT_ORDER[stateToName(b.state)] ?? 99)
         break
       case 'mem':
-        cmp = (parseInt(a.resourceUsage?.memoryMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryMb ?? '0') || 0)
-        break
-      case 'peakMem':
-        cmp = (parseInt(a.resourceUsage?.memoryPeakMb ?? '0') || 0) - (parseInt(b.resourceUsage?.memoryPeakMb ?? '0') || 0)
+        // Sort by peak when present so the "biggest memory consumer" surfaces;
+        // current usage breaks ties for tasks without a peak sample yet.
+        cmp = (taskPeakMemBytes(a.taskId) || taskMemBytes(a.taskId))
+            - (taskPeakMemBytes(b.taskId) || taskMemBytes(b.taskId))
         break
       case 'cpu':
-        cmp = (a.resourceUsage?.cpuMillicores ?? 0) - (b.resourceUsage?.cpuMillicores ?? 0)
+        cmp = taskCpuMillicores(a.taskId) - taskCpuMillicores(b.taskId)
         break
       case 'duration':
         cmp = taskDurationMs(a) - taskDurationMs(b)
@@ -467,6 +569,38 @@ const filteredTasks = computed(() => {
     return cmp * dir
   })
   return result
+})
+
+// -- Task Pagination --
+
+const TASK_PAGE_SIZE = 50
+const taskPage = ref(0)
+
+const totalTaskPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / TASK_PAGE_SIZE)))
+
+const paginatedTasks = computed(() => {
+  // Clamp the effective page against the current filtered length so a shrink
+  // during auto-refresh never yields an empty slice on a stale page. The
+  // watcher below mirrors this into `taskPage` so the paginator footer stays
+  // in sync.
+  const effectivePage = Math.min(taskPage.value, totalTaskPages.value - 1)
+  const start = Math.max(0, effectivePage) * TASK_PAGE_SIZE
+  return filteredTasks.value.slice(start, start + TASK_PAGE_SIZE)
+})
+
+// Reset page when filters or sort change
+watch([taskSearch, stateFilter, sortColumn, sortDir], () => { taskPage.value = 0 })
+
+// Clamp taskPage when the filtered task list shrinks underneath us. This
+// happens during the 10s auto-refresh when task state transitions change
+// which tasks match the active state filter — without clamping, a user on
+// a later page can be left with an empty table body and a stale footer
+// range (e.g. "251-240 of 240"). The computed runs eagerly so the page is
+// corrected before `paginatedTasks` slices against the new length.
+watch(totalTaskPages, (pages) => {
+  if (taskPage.value >= pages) {
+    taskPage.value = Math.max(0, pages - 1)
+  }
 })
 
 // -- Profiling --
@@ -659,6 +793,11 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <InfoRow label="Failures">
             {{ job.failureCount ?? 0 }}
           </InfoRow>
+          <InfoRow v-if="jobRequest?.priorityBand" label="Priority">
+            <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
+              {{ bandDisplayName(jobRequest.priorityBand) }}
+            </span>
+          </InfoRow>
         </InfoCard>
 
         <InfoCard title="Task Summary">
@@ -680,6 +819,34 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </InfoCard>
       </div>
 
+      <!-- Live resource usage (min/max across running tasks) -->
+      <div
+        v-if="runningResourceRange"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Live Resource Usage (across running tasks)
+        </h3>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 text-sm">
+          <div>
+            <span class="text-text-muted">CPU:</span>
+            <span class="font-mono ml-1">{{ formatCpuMillicores(runningResourceRange.cpuMillicoresMin) }}</span>
+            <span class="text-text-muted mx-1">&ndash;</span>
+            <span class="font-mono">{{ formatCpuMillicores(runningResourceRange.cpuMillicoresMax) }}</span>
+          </div>
+          <div>
+            <span class="text-text-muted">Memory:</span>
+            <span class="font-mono ml-1">{{ formatBytes(runningResourceRange.memoryBytesMin) }}</span>
+            <span class="text-text-muted mx-1">&ndash;</span>
+            <span class="font-mono">{{ formatBytes(runningResourceRange.memoryBytesMax) }}</span>
+          </div>
+          <div v-if="runningResourceRange.memoryPeakBytesMax">
+            <span class="text-text-muted">Peak Memory:</span>
+            <span class="font-mono ml-1">{{ formatBytes(runningResourceRange.memoryPeakBytesMax) }}</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Constraints -->
       <div
         v-if="jobRequest?.constraints && jobRequest.constraints.length > 0"
@@ -699,6 +866,66 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
         </div>
       </div>
 
+      <!-- Job Request Details -->
+      <div
+        v-if="jobRequest?.entrypoint?.runCommand?.argv?.length || jobRequest?.submitArgv?.length || jobRequest?.environment?.envVars || jobRequest?.environment?.pipPackages?.length || jobRequest?.ports?.length"
+        class="mb-6 rounded-lg border border-surface-border bg-surface px-4 py-3"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-2">
+          Job Request
+        </h3>
+        <div class="flex flex-col gap-2 text-sm">
+          <div v-if="jobRequest.entrypoint?.runCommand?.argv?.length">
+            <span class="text-text-muted text-xs">Command</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.runCommand.argv.join(' ') }}</pre>
+          </div>
+          <div v-if="jobRequest.submitArgv?.length">
+            <span class="text-text-muted text-xs">Submitted via</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.submitArgv.join(' ') }}</pre>
+          </div>
+          <div v-if="jobRequest.entrypoint?.setupCommands?.length">
+            <span class="text-text-muted text-xs">Setup Commands</span>
+            <pre class="mt-0.5 px-2 py-1 bg-surface-sunken rounded font-mono text-xs whitespace-pre-wrap break-all">{{ jobRequest.entrypoint.setupCommands.join('\n') }}</pre>
+          </div>
+          <div v-if="jobRequest.environment?.envVars && Object.keys(jobRequest.environment.envVars).length">
+            <span class="text-text-muted text-xs">Environment Variables</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(val, key) in jobRequest.environment.envVars"
+                :key="key"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ key }}={{ val }}
+              </span>
+            </div>
+          </div>
+          <div v-if="jobRequest.environment?.pipPackages?.length">
+            <span class="text-text-muted text-xs">Pip Packages</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(pkg, i) in jobRequest.environment.pipPackages"
+                :key="i"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ pkg }}
+              </span>
+            </div>
+          </div>
+          <div v-if="jobRequest.ports?.length">
+            <span class="text-text-muted text-xs">Ports</span>
+            <div class="mt-0.5 flex flex-wrap gap-1.5">
+              <span
+                v-for="(port, i) in jobRequest.ports"
+                :key="i"
+                class="inline-block rounded bg-surface-sunken px-2 py-0.5 font-mono text-xs text-text-secondary"
+              >
+                {{ port }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Child Jobs -->
       <div v-if="flattenedChildJobs.length > 0" class="mb-6">
         <div class="mb-3 flex items-center justify-between gap-3">
@@ -706,20 +933,74 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             Child Jobs
           </h3>
         </div>
+        <!-- Mobile: card grid (one card per child job) -->
+        <div v-if="isMobile" class="grid grid-cols-1 gap-2">
+          <div
+            v-for="node in flattenedChildJobs"
+            :key="'child-card-' + node.job.jobId"
+            class="rounded-lg border border-surface-border bg-surface px-3 py-2"
+            :style="node.depth > 0 ? { marginLeft: (Math.min(node.depth, 3) * 12) + 'px' } : undefined"
+          >
+            <div class="flex items-start gap-1.5">
+              <button
+                v-if="node.job.hasChildren"
+                class="text-text-muted hover:text-text select-none w-4 text-center text-xs shrink-0 mt-0.5"
+                @click.stop="toggleExpandedChildJob(node.job)"
+              >
+                {{ loadingChildJobs.has(node.job.jobId) ? '…' : (expandedChildJobs.has(node.job.jobId) ? '▼' : '▶') }}
+              </button>
+              <span v-else class="w-4 shrink-0" />
+              <RouterLink
+                :to="'/job/' + encodeURIComponent(node.job.jobId)"
+                class="text-accent hover:underline font-mono text-[13px] flex-1 min-w-0 break-anywhere"
+              >
+                {{ getLeafJobName(node.job.name) }}
+              </RouterLink>
+            </div>
+            <div class="mt-1.5 pl-5 flex items-center gap-2 flex-wrap">
+              <StatusBadge :status="node.job.state" size="sm" />
+              <span class="text-xs text-text-muted font-mono">{{ jobDuration(node.job) }}</span>
+            </div>
+            <div
+              v-if="node.job.pendingReason"
+              class="mt-1 pl-5 text-xs text-text-muted"
+              :title="node.job.pendingReason"
+            >
+              {{ node.job.pendingReason }}
+            </div>
+            <div v-if="(node.job.taskCount ?? 0) > 0" class="mt-2 pl-5 flex items-center gap-2">
+              <div class="flex h-2 flex-1 rounded-full overflow-hidden bg-surface-sunken">
+                <div
+                  v-for="(seg, i) in progressSegments(node.job)"
+                  :key="i"
+                  :class="seg.colorClass"
+                  :style="{ width: (seg.count / (node.job.taskCount ?? 1) * 100).toFixed(1) + '%' }"
+                  :title="seg.label + ': ' + seg.count"
+                />
+              </div>
+              <span class="text-xs text-text-secondary whitespace-nowrap">
+                {{ progressSummary(node.job) }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Desktop: table -->
+        <div v-else class="overflow-x-auto">
         <table class="w-full border-collapse">
           <thead>
             <tr class="border-b border-surface-border">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('name')">
+              <th class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('name')">
                 Name <span v-if="childSortColumn === 'name'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('state')">
+              <th class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('state')">
                 State <span v-if="childSortColumn === 'state'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('duration')">
+              <th class="hidden sm:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleChildSort('duration')">
                 Duration <span v-if="childSortColumn === 'duration'" class="ml-0.5">{{ childSortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Tasks</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Diagnostic</th>
+              <th class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Tasks</th>
+              <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Diagnostic</th>
             </tr>
           </thead>
           <tbody>
@@ -729,38 +1010,38 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
               class="group/row border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
               <td
-                class="px-3 py-2 text-[13px]"
+                class="px-2 sm:px-3 py-2 text-[13px]"
                 :style="{ paddingLeft: (node.depth * 20 + 12) + 'px' }"
               >
-                <span class="inline-flex items-center gap-1">
+                <span class="inline-flex items-center gap-1 max-w-full">
                   <button
                     v-if="node.job.hasChildren"
-                    class="text-text-muted hover:text-text select-none w-4 text-center text-xs"
+                    class="text-text-muted hover:text-text select-none w-4 text-center text-xs shrink-0"
                     @click.stop="toggleExpandedChildJob(node.job)"
                   >
                     {{ loadingChildJobs.has(node.job.jobId) ? '…' : (expandedChildJobs.has(node.job.jobId) ? '▼' : '▶') }}
                   </button>
-                  <span v-else class="w-4" />
+                  <span v-else class="w-4 shrink-0" />
                   <RouterLink
                     :to="'/job/' + encodeURIComponent(node.job.jobId)"
-                    class="text-accent hover:underline font-mono"
+                    class="text-accent hover:underline font-mono break-anywhere"
                   >
                     {{ getLeafJobName(node.job.name) }}
                   </RouterLink>
                 </span>
               </td>
-              <td class="px-3 py-2 text-[13px]">
+              <td class="px-2 sm:px-3 py-2 text-[13px]">
                 <StatusBadge :status="node.job.state" size="sm" />
               </td>
-              <td class="px-3 py-2 text-[13px] text-text-secondary font-mono">
+              <td class="hidden sm:table-cell px-2 sm:px-3 py-2 text-[13px] text-text-secondary font-mono">
                 {{ jobDuration(node.job) }}
               </td>
-              <td class="px-3 py-2 text-[13px]">
+              <td class="px-2 sm:px-3 py-2 text-[13px]">
                 <div v-if="(node.job.taskCount ?? 0) === 0" class="text-xs text-text-muted">
                   no tasks
                 </div>
                 <div v-else class="flex items-center gap-1.5">
-                  <div class="flex h-2 w-28 rounded-full overflow-hidden bg-surface-sunken">
+                  <div class="flex h-2 w-16 sm:w-28 rounded-full overflow-hidden bg-surface-sunken">
                     <div
                       v-for="(seg, i) in progressSegments(node.job)"
                       :key="i"
@@ -769,25 +1050,26 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                       :title="seg.label + ': ' + seg.count"
                     />
                   </div>
-                  <span class="text-xs text-text-secondary whitespace-nowrap">
+                  <span class="hidden sm:inline text-xs text-text-secondary whitespace-nowrap">
                     {{ progressSummary(node.job) }}
                   </span>
                 </div>
               </td>
-              <td class="px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="node.job.pendingReason ?? ''">
+              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="node.job.pendingReason ?? ''">
                 {{ node.job.pendingReason || '—' }}
               </td>
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
       <!-- Tasks table -->
-      <div class="flex items-center justify-between mb-3">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <h3 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">
           Tasks
         </h3>
-        <div v-if="tasks.length > 0" class="flex items-center gap-2">
+        <div v-if="tasks.length > 0" class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <select
             v-model="stateFilter"
             class="px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
@@ -799,7 +1081,7 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             v-model="taskSearch"
             type="text"
             placeholder="Search workers..."
-            class="px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent w-64"
+            class="flex-1 sm:flex-initial sm:w-64 px-3 py-1.5 text-sm rounded-md border border-surface-border bg-surface-primary text-text-primary placeholder-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
           />
         </div>
       </div>
@@ -807,54 +1089,115 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
       <EmptyState v-if="tasks.length === 0" message="No tasks" />
       <EmptyState v-else-if="filteredTasks.length === 0" message="No matching tasks" />
 
-      <div v-else>
-        <table class="w-full border-collapse table-fixed">
-          <colgroup>
-            <col class="w-[4%]" />
-            <col class="w-[9%]" />
-            <col />
-            <col class="w-[6%]" />
-            <col class="w-[5%]" />
-            <col class="w-[13%]" />
-            <col class="w-[8%]" />
-            <col class="w-[4%]" />
-            <col class="w-[10%]" />
-            <col class="w-[11%]" />
+      <template v-else>
+      <!-- Mobile: card grid (one card per task) -->
+      <div v-if="isMobile" class="grid grid-cols-1 gap-2">
+        <div
+          v-for="task in paginatedTasks"
+          :key="'task-card-' + task.taskId"
+          class="rounded-lg border border-surface-border bg-surface px-3 py-2"
+        >
+          <div class="flex items-start gap-2 flex-wrap">
+            <RouterLink
+              :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
+              class="text-accent hover:underline font-mono text-[13px]"
+            >
+              Task {{ taskIndex(task.taskId) }}
+            </RouterLink>
+            <StatusBadge :status="task.state" size="sm" />
+          </div>
+          <div v-if="task.pendingReason" class="mt-1 text-xs text-status-warning" :title="task.pendingReason">
+            {{ task.pendingReason }}
+          </div>
+          <div class="mt-1 text-xs text-text-muted font-mono break-anywhere">
+            <RouterLink
+              v-if="task.workerId"
+              :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
+              class="text-accent hover:underline"
+            >
+              {{ task.workerId }}
+            </RouterLink>
+            <template v-if="task.startedAt">
+              <span v-if="task.workerId"> · </span>{{ formatTimestamp(task.startedAt) }}
+            </template>
+            <span> · {{ taskDuration(task) }}</span>
+            <span v-if="taskExitNonZero(task)" class="text-status-danger">
+              · exit {{ task.exitCode }}
+            </span>
+          </div>
+          <div class="mt-1 text-xs break-anywhere">
+            <MarkdownRenderer v-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" class="text-text-secondary" />
+            <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
+          </div>
+          <div v-if="stateToName(task.state) === 'running'" class="mt-2 flex gap-1">
+            <button
+              class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-purple text-white hover:opacity-80 disabled:opacity-50"
+              :disabled="profilingTaskId === task.taskId"
+              @click="handleProfile(task.taskId, 'cpu', 'SPEEDSCOPE')"
+            >
+              {{ profilingTaskId === task.taskId ? '⏳' : 'CPU' }}
+            </button>
+            <button
+              class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-success text-white hover:opacity-80 disabled:opacity-50"
+              :disabled="profilingTaskId === task.taskId"
+              @click="handleProfile(task.taskId, 'memory', 'RAW')"
+            >
+              {{ profilingTaskId === task.taskId ? '⏳' : 'MEM' }}
+            </button>
+            <RouterLink
+              :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}/threads`"
+              class="px-2 py-0.5 text-[11px] font-semibold rounded bg-accent text-white hover:opacity-80 inline-block text-center no-underline"
+            >
+              THR
+            </RouterLink>
+          </div>
+        </div>
+      </div>
+
+      <!-- Desktop: table -->
+      <div v-else class="overflow-x-auto">
+        <table class="w-full border-collapse md:table-fixed">
+          <colgroup class="hidden md:table-column-group">
+            <col class="w-[4%]" />   <!-- Task -->
+            <col class="w-[9%]" />   <!-- State -->
+            <col />                  <!-- Worker -->
+            <col class="w-[11%]" />  <!-- Memory / Peak -->
+            <col class="w-[5%]" />   <!-- CPU -->
+            <col class="w-[11%]" />  <!-- Started -->
+            <col class="w-[7%]" />   <!-- Duration -->
+            <col class="w-[19%]" />  <!-- Status (exit code or status text) -->
+            <col class="w-[9%]" />   <!-- Profiling -->
           </colgroup>
           <thead>
             <tr class="border-b border-surface-border">
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('task')">
+              <th class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('task')">
                 Task <span v-if="sortColumn === 'task'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('state')">
+              <th class="px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('state')">
                 State <span v-if="sortColumn === 'state'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Worker</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('mem')">
-                Mem <span v-if="sortColumn === 'mem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Worker</th>
+              <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('mem')">
+                Memory / Peak <span v-if="sortColumn === 'mem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('peakMem')">
-                Peak Mem <span v-if="sortColumn === 'peakMem'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
-              </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('cpu')">
+              <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('cpu')">
                 CPU <span v-if="sortColumn === 'cpu'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Started</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('duration')">
+              <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Started</th>
+              <th class="hidden sm:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary cursor-pointer select-none hover:text-text-primary" @click="toggleSort('duration')">
                 Duration <span v-if="sortColumn === 'duration'" class="ml-0.5">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
               </th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Exit</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Error</th>
-              <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Profiling</th>
+              <th class="hidden lg:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Status</th>
+              <th class="hidden md:table-cell px-2 sm:px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">Profiling</th>
             </tr>
           </thead>
           <tbody>
             <tr
-              v-for="task in filteredTasks"
+              v-for="task in paginatedTasks"
               :key="task.taskId"
               class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
-              <td class="px-3 py-2 text-[13px] font-mono">
+              <td class="px-2 sm:px-3 py-2 text-[13px] font-mono">
                 <RouterLink
                   :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
                   class="text-accent hover:underline"
@@ -862,44 +1205,48 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
                   {{ taskIndex(task.taskId) }}
                 </RouterLink>
               </td>
-              <td class="px-3 py-2 text-[13px]">
+              <td class="px-2 sm:px-3 py-2 text-[13px]">
                 <StatusBadge :status="task.state" size="sm" />
                 <div v-if="task.pendingReason" class="text-xs text-status-warning mt-0.5 max-w-xs truncate" :title="task.pendingReason">
                   {{ task.pendingReason }}
                 </div>
               </td>
-              <td class="px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
+              <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] truncate" :title="task.workerId ?? ''">
                 <RouterLink
                   v-if="task.workerId"
-                  :to="'/worker/' + encodeURIComponent(task.workerId)"
+                  :to="`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(task.taskId)}`"
                   class="text-accent hover:underline font-mono text-xs"
                 >
                   {{ task.workerId }}
                 </RouterLink>
                 <span v-else class="text-text-muted">&mdash;</span>
               </td>
-              <td class="px-3 py-2 text-[13px] font-mono">
-                {{ formatMemMb(task.resourceUsage) }}
+              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
+                <template v-if="taskMemBytes(task.taskId) || taskPeakMemBytes(task.taskId)">
+                  {{ taskMemBytes(task.taskId) ? formatBytes(taskMemBytes(task.taskId)) : '-' }}
+                  <span class="text-text-muted">/</span>
+                  {{ taskPeakMemBytes(task.taskId) ? formatBytes(taskPeakMemBytes(task.taskId)) : '-' }}
+                </template>
+                <span v-else class="text-text-muted">-</span>
               </td>
-              <td class="px-3 py-2 text-[13px] font-mono">
-                {{ formatPeakMemMb(task.resourceUsage) }}
+              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono">
+                {{ formatCpuMillicores(taskCpuMillicores(task.taskId)) }}
               </td>
-              <td class="px-3 py-2 text-[13px] font-mono">
-                {{ formatCpu(task.resourceUsage) }}
-              </td>
-              <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
+              <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono text-text-secondary">
                 {{ formatTimestamp(task.startedAt) }}
               </td>
-              <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
+              <td class="hidden sm:table-cell px-2 sm:px-3 py-2 text-[13px] font-mono text-text-secondary">
                 {{ taskDuration(task) }}
               </td>
-              <td class="px-3 py-2 text-[13px] font-mono">
-                {{ TERMINAL_STATES.has(stateToName(task.state)) && task.exitCode !== undefined ? task.exitCode : '-' }}
+              <td class="hidden lg:table-cell px-2 sm:px-3 py-2 text-xs max-w-xs">
+                <span v-if="taskExitNonZero(task)" class="text-status-danger font-mono">
+                  exit {{ task.exitCode }}
+                </span>
+                <MarkdownRenderer v-else-if="task.statusTextSummaryMd && !TERMINAL_STATES.has(stateToName(task.state))" :content="task.statusTextSummaryMd" />
+                <span v-else-if="task.error && FAILED_TERMINAL_STATES.has(stateToName(task.state))" class="text-status-danger break-anywhere" :title="task.error">{{ task.error.length > 160 ? task.error.slice(0, 160) + '…' : task.error }}</span>
+                <span v-else class="text-text-muted">—</span>
               </td>
-              <td class="px-3 py-2 text-xs text-text-muted max-w-xs truncate" :title="task.error ?? ''">
-                {{ task.error || '-' }}
-              </td>
-              <td class="px-3 py-2 text-[13px]">
+              <td class="hidden md:table-cell px-2 sm:px-3 py-2 text-[13px]">
                 <div v-if="stateToName(task.state) === 'running'" class="flex gap-1">
                   <button
                     class="px-2 py-0.5 text-[11px] font-semibold rounded bg-status-purple text-white hover:opacity-80 disabled:opacity-50"
@@ -928,6 +1275,32 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           </tbody>
         </table>
       </div>
+
+      <!-- Pagination (shared between mobile cards and desktop table) -->
+      <div v-if="totalTaskPages > 1" class="mt-2 flex items-center justify-between px-2 sm:px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
+        <span>
+          {{ taskPage * TASK_PAGE_SIZE + 1 }}&ndash;{{ Math.min((taskPage + 1) * TASK_PAGE_SIZE, filteredTasks.length) }}
+          of {{ filteredTasks.length }} tasks
+        </span>
+        <div class="flex items-center gap-1">
+          <button
+            :disabled="taskPage === 0"
+            class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+            @click="taskPage--"
+          >
+            &larr; Prev
+          </button>
+          <span class="px-2 font-mono">{{ taskPage + 1 }} / {{ totalTaskPages }}</span>
+          <button
+            :disabled="taskPage >= totalTaskPages - 1"
+            class="px-2 py-1 rounded hover:bg-surface-raised disabled:opacity-30 disabled:cursor-not-allowed"
+            @click="taskPage++"
+          >
+            Next &rarr;
+          </button>
+        </div>
+      </div>
+      </template>
 
       <!-- Job logs -->
       <div class="mt-6 mb-6">

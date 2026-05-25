@@ -17,8 +17,9 @@ from draccus import field
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
 from levanter.tracker import Tracker
+from levanter.tracker.background import maybe_wrap_background
 from levanter.tracker.helpers import generate_pip_freeze, infer_experiment_git_root
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.tracker import TrackerConfig
 from levanter.utils import jax_utils
 
@@ -41,7 +42,13 @@ class WandbTracker(Tracker):
     name: str = "wandb"
     run: WandbRun
 
-    def __init__(self, run: Optional[WandbRun], replicate_path: Optional[str] = None):
+    def __init__(
+        self,
+        run: Optional[WandbRun],
+        replicate_path: Optional[str] = None,
+        suppress_logging: bool = False,
+        minimum_log_step: int = 0,
+    ):
         import wandb
 
         if run is None:
@@ -58,13 +65,41 @@ class WandbTracker(Tracker):
 
         self._last_warning_step = -500
         self._replicate_path = replicate_path
+        self._suppress_logging = suppress_logging
+        self._minimum_log_step = minimum_log_step
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
+        if self._suppress_logging:
+            return
         self.run.config.update(_convert_value_to_loggable_rec(hparams), allow_val_change=True)
 
     def log(self, metrics: typing.Mapping[str, Any], *, step, commit=None):
         if step is None and not commit:
             step = self.run.step
+
+        if step < self._minimum_log_step:
+            if step - self._last_warning_step > 500:
+                logger.warning(
+                    f"Step {step} is less than the current step {self._minimum_log_step}. "
+                    "Cowardly refusing to log metrics."
+                )
+                self._last_warning_step = step
+            return
+
+        step = int(step)
+
+        # wandb histograms are pretty limited: they log only the counts and the bin edges.
+        # Our summary stats have the same scalar fields Tensorboard understands. We log those as separate values.
+        to_log = {}
+        for k, v in metrics.items():
+            if isinstance(v, SummaryStats):
+                to_log.update(_convert_summary_stats_to_loggable(k, v))
+            else:
+                # otherwise, just log the value normally
+                to_log[k] = _convert_value_to_loggable_rec(v)
+
+        if self._suppress_logging:
+            return
 
         if step < self.run.step:
             if step - self._last_warning_step > 500:
@@ -74,34 +109,16 @@ class WandbTracker(Tracker):
                 self._last_warning_step = step
             return
 
-        step = int(step)
-
-        # wandb histograms are pretty limited: they log only the counts and the bin edges.
-        # Our histograms have the same set of things Tensorboard. we log those as separate values.
-        to_log = {}
-        for k, v in metrics.items():
-            if isinstance(v, Histogram):
-                # if the value is a Histogram, convert it to a wandb Histogram
-                # this will log the histogram counts and bin edges
-                import wandb
-
-                counts, limits = v.to_numpy_histogram()
-                wandb_hist = wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
-                to_log[f"{k}/histogram"] = wandb_hist
-                to_log[f"{k}/min"] = v.min
-                to_log[f"{k}/max"] = v.max
-                to_log[f"{k}/mean"] = v.mean
-                to_log[f"{k}/variance"] = v.variance
-            else:
-                # otherwise, just log the value normally
-                to_log[k] = _convert_value_to_loggable_rec(v)
-
         self.run.log(to_log, step=step, commit=commit)
 
     def log_summary(self, metrics: typing.Mapping[str, Any]):
+        if self._suppress_logging:
+            return
         self.run.summary.update(_convert_value_to_loggable_rec(metrics))
 
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
+        if self._suppress_logging:
+            return
         artifact_name = name if name is not None else _default_wandb_artifact_name(artifact_path)
         self.run.log_artifact(
             artifact_path,
@@ -109,7 +126,26 @@ class WandbTracker(Tracker):
             type=type,
         )
 
+    def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
+        import wandb
+
+        if step is None and not commit:
+            step = self.run.step
+        if step is not None and step < self.run.step:
+            if step - self._last_warning_step > 500:
+                logger.warning(
+                    f"Step {step} is less than the current step {self.run.step}. Cowardly refusing to log HTML."
+                )
+                self._last_warning_step = step
+            return
+
+        wandb_step = None if step is None else int(step)
+        self.run.log({key: wandb.Html(str(html_path))}, step=wandb_step, commit=commit)
+
     def finish(self):
+        if self._suppress_logging:
+            return
+
         logger.info("Finishing wandb run...")
         # Finish wandb first to ensure all metrics are synced to the summary
         self.run.finish()
@@ -187,14 +223,30 @@ def _convert_value_to_loggable_rec(value: Any):
             return value.tolist()
     elif isinstance(value, np.generic):
         return value.item()
-    elif isinstance(value, Histogram):
-        import wandb
-
-        counts, limits = value.to_numpy_histogram()
-
-        return wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
+    elif isinstance(value, SummaryStats):
+        return _convert_summary_stats_to_loggable("", value, include_prefix=False)
     else:
         return value
+
+
+def _convert_summary_stats_to_loggable(prefix: str, value: SummaryStats, *, include_prefix: bool = True):
+    import wandb
+
+    out: dict[str, Any] = {}
+    base = f"{prefix}/" if include_prefix and prefix else ""
+    out[f"{base}min"] = _convert_value_to_loggable_rec(value.min)
+    out[f"{base}max"] = _convert_value_to_loggable_rec(value.max)
+    out[f"{base}num"] = _convert_value_to_loggable_rec(value.num)
+    out[f"{base}nonzero_count"] = _convert_value_to_loggable_rec(value.nonzero_count)
+    out[f"{base}sum"] = _convert_value_to_loggable_rec(value.sum)
+    out[f"{base}sum_squares"] = _convert_value_to_loggable_rec(value.sum_squares)
+    out[f"{base}mean"] = _convert_value_to_loggable_rec(value.mean)
+    out[f"{base}variance"] = _convert_value_to_loggable_rec(value.variance)
+    out[f"{base}rms"] = _convert_value_to_loggable_rec(value.rms)
+    if value.histogram is not None:
+        counts, limits = value.histogram.to_numpy_histogram()
+        out[f"{base}histogram"] = wandb.Histogram(np_histogram=(counts.tolist(), limits.tolist()))
+    return out
 
 
 def is_wandb_available():
@@ -237,7 +289,20 @@ class WandbConfig(TrackerConfig):
     replicate_path: Optional[str] = None
     """If set, write config and summary to this path (local or GCS) on finish()."""
 
-    def init(self, run_id: Optional[str]) -> WandbTracker:
+    background: bool = True
+    """If True (default), forward all log calls through a background thread that catches
+    exceptions from W&B. This keeps long-running training jobs alive when W&B is
+    unreachable, runs out of storage quota, or returns transient errors. Set to False
+    only if you need synchronous, fail-fast behavior (e.g. from tests)."""
+
+    background_max_queue_size: int = 10000
+    """Max number of pending tracker calls. If exceeded, additional calls are dropped
+    with a rate-limited warning rather than blocking the trainer."""
+
+    background_finish_timeout: float = 120.0
+    """Maximum seconds to wait for the background thread to drain on finish()."""
+
+    def init(self, run_id: Optional[str]) -> Tracker:
         import wandb
 
         if run_id is not None and self.id is not None and run_id != self.id:
@@ -254,10 +319,11 @@ class WandbConfig(TrackerConfig):
 
         # for distributed runs, we only want the primary worker to use wandb, so we make everyone else be disabled
         # however, we do share information about the run id, so that we can link to it from the other workers
-        if jax.process_index() == 0:
+        is_primary_process = jax.process_index() == 0
+        if is_primary_process:
             mode = self.mode
         else:
-            mode = "offline"
+            mode = "disabled"
 
         git_settings = self._git_settings()
 
@@ -283,6 +349,7 @@ class WandbConfig(TrackerConfig):
         if r.step != 0:
             logger.info("Resuming wandb run. Attempting to mitigate issues.")
 
+        minimum_log_step = int(r.step)
         if jax.process_count() > 1:
             # we need to share wandb run information across all hosts, because we use it for checkpoint paths and things
             metadata_to_share = dict(
@@ -292,10 +359,12 @@ class WandbConfig(TrackerConfig):
                 tags=r.tags,
                 id=r.id,
                 group=r.group,
+                minimum_log_step=minimum_log_step,
             )
             metadata_to_share = jax_utils.multihost_broadcast_sync(
                 metadata_to_share, is_source=jax.process_index() == 0
             )
+            minimum_log_step = int(metadata_to_share["minimum_log_step"])
 
             # if jax.process_index() != 0:
             # assert r.mode == "disabled", f"Only the primary worker should be using wandb. Got {r.mode}"
@@ -305,19 +374,30 @@ class WandbConfig(TrackerConfig):
             logger.info(f"Synced wandb run information from process 0: {r.name} {r.id}")
 
         # generate a pip freeze
-        with tempfile.TemporaryDirectory() as tmpdir:
-            requirements_path = os.path.join(tmpdir, "requirements.txt")
-            requirements = generate_pip_freeze()
-            with open(requirements_path, "w") as f:
-                f.write(requirements)
-            if wandb.run is not None:
-                wandb.run.log_artifact(str(requirements_path), name="requirements.txt", type="requirements")
+        if is_primary_process:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                requirements_path = os.path.join(tmpdir, "requirements.txt")
+                requirements = generate_pip_freeze()
+                with open(requirements_path, "w") as f:
+                    f.write(requirements)
+                if wandb.run is not None:
+                    wandb.run.log_artifact(str(requirements_path), name="requirements.txt", type="requirements")
 
-        wandb.summary["num_devices"] = jax.device_count()  # type: ignore
-        wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
-        wandb.summary["backend"] = jax.default_backend()  # type: ignore
+            wandb.summary["num_devices"] = jax.device_count()  # type: ignore
+            wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
+            wandb.summary["backend"] = jax.default_backend()  # type: ignore
 
-        return WandbTracker(r, replicate_path=self.replicate_path)
+        return maybe_wrap_background(
+            WandbTracker(
+                r,
+                replicate_path=self.replicate_path,
+                suppress_logging=not is_primary_process,
+                minimum_log_step=minimum_log_step,
+            ),
+            enabled=self.background,
+            max_queue_size=self.background_max_queue_size,
+            finish_timeout=self.background_finish_timeout,
+        )
 
     def _git_settings(self):
         other_settings = dict()

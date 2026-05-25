@@ -9,7 +9,6 @@ to remote storage and restoring the DB file from a remote checkpoint.
 Checkpoint layout (remote):
     {remote_state_dir}/controller-state/{epoch_ms}/controller.sqlite3.zst
     {remote_state_dir}/controller-state/{epoch_ms}/auth.sqlite3.zst
-    {remote_state_dir}/controller-state/{epoch_ms}/profiles.sqlite3.zst
 
 Files are compressed with zstandard (level 3) before upload.  On download,
 compressed (.zst) files are preferred; uncompressed files are accepted as
@@ -26,16 +25,22 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sqlite3
+import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import fsspec.core
 import zstandard
+from rigging.timing import Duration, Timestamp
+from sqlalchemy import func, select
 
 from iris.cluster.controller.db import ControllerDB
-from rigging.timing import Duration, Timestamp
+from iris.cluster.controller.schema import jobs_table, tasks_table, workers_table
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +118,6 @@ class DatabaseBackup:
 
     main_path: Path
     auth_path: Path | None
-    profiles_path: Path | None
     created_at: Timestamp
 
     def cleanup(self) -> None:
@@ -121,54 +125,83 @@ class DatabaseBackup:
         self.main_path.unlink(missing_ok=True)
         if self.auth_path is not None:
             self.auth_path.unlink(missing_ok=True)
-        if self.profiles_path is not None:
-            self.profiles_path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _reserved_tmp_sqlite(tmp_dir: Path) -> Iterator[Path]:
+    """Reserve a tempfile path under *tmp_dir* and guarantee cleanup on error.
+
+    On normal exit the file is left in place -- callers adopt ownership
+    (via ``ExitStack.pop_all``).  On exception the reserved file and its
+    SQLite sidecars are removed so no orphans survive.  SQLite may create
+    ``<name>-journal``/``-wal``/``-shm`` sidecars during backup even
+    though we never open the file in WAL mode; we unlink all three
+    defensively.
+
+    We deliberately catch ``Exception`` rather than ``BaseException``:
+    after ``pop_all()`` transfers our callback to a discarded stack, GC
+    of the held generator raises ``GeneratorExit`` here, and we must
+    treat that as a successful hand-off -- not unlink the file.
+    """
+    fd, tmp_name = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
+    os.close(fd)
+    path = Path(tmp_name)
+    try:
+        yield path
+    except Exception:
+        path.unlink(missing_ok=True)
+        for suffix in ("-journal", "-wal", "-shm"):
+            path.with_name(path.name + suffix).unlink(missing_ok=True)
+        raise
 
 
 def backup_databases(db: ControllerDB) -> DatabaseBackup:
-    """Create local SQLite backup copies of the main and auth databases.
+    """Create local SQLite backup copies of the main, auth and profiles DBs.
 
     Should be called while holding the write lock against the main DB -- it
     uses the SQLite backup API for a consistent snapshot.  The returned
     ``DatabaseBackup`` owns the temporary files and must be cleaned up by the
-    caller (via ``DatabaseBackup.cleanup``).
+    caller (via ``DatabaseBackup.cleanup``) on the success path.  If any of
+    the backup operations raise, all reserved temp files are unlinked before
+    the exception propagates.
     """
     created_at = Timestamp.now()
     tmp_dir = db.db_path.parent
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    fd, tmp_name = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
-    os.close(fd)
-    main_tmp = Path(tmp_name)
-
-    auth_tmp: Path | None = None
-    auth_path = db.auth_db_path
-    if auth_path.exists():
-        fd2, tmp_name2 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
-        os.close(fd2)
-        auth_tmp = Path(tmp_name2)
-
-    profiles_tmp: Path | None = None
-    profiles_path = db.profiles_db_path
-    if profiles_path.exists():
-        fd3, tmp_name3 = tempfile.mkstemp(suffix=".sqlite3", dir=tmp_dir)
-        os.close(fd3)
-        profiles_tmp = Path(tmp_name3)
-
-    backup = DatabaseBackup(main_path=main_tmp, auth_path=auth_tmp, profiles_path=profiles_tmp, created_at=created_at)
-    ok = False
-    try:
+    with ExitStack() as stack:
+        main_tmp = stack.enter_context(_reserved_tmp_sqlite(tmp_dir))
         db.backup_to(main_tmp)
-        if auth_tmp is not None:
-            _backup_sqlite_file(auth_path, auth_tmp)
-        if profiles_tmp is not None:
-            _backup_sqlite_file(profiles_path, profiles_tmp)
-        ok = True
-    finally:
-        if not ok:
-            backup.cleanup()
 
-    return backup
+        auth_tmp: Path | None = None
+        if db.auth_db_path.exists():
+            auth_tmp = stack.enter_context(_reserved_tmp_sqlite(tmp_dir))
+            _backup_sqlite_file(db.auth_db_path, auth_tmp)
+
+        # Success: transfer temp-file ownership to the returned DatabaseBackup,
+        # whose .cleanup() is the caller's responsibility.
+        stack.pop_all()
+        return DatabaseBackup(
+            main_path=main_tmp,
+            auth_path=auth_tmp,
+            created_at=created_at,
+        )
+
+
+def _compress_and_upload_db(local_path: Path, remote_url: str, label: str) -> None:
+    """Compress *local_path* with zstd, upload to *remote_url*, and clean up the .zst tmp.
+
+    The intermediate ``.zst`` lives next to the source backup file; only that
+    intermediate is removed here. The source backup itself is owned by the
+    caller (``DatabaseBackup.cleanup``).
+    """
+    tmp_zst = local_path.with_suffix(".sqlite3.zst")
+    try:
+        _compress_zstd(local_path, tmp_zst)
+        _fsspec_copy(str(tmp_zst), remote_url)
+        logger.info("checkpoint %s DB uploaded to %s", label, remote_url)
+    finally:
+        tmp_zst.unlink(missing_ok=True)
 
 
 def upload_checkpoint(
@@ -184,46 +217,17 @@ def upload_checkpoint(
     prefix = remote_state_dir.rstrip("/") + "/controller-state"
     checkpoint_dir = f"{prefix}/{backup.created_at.epoch_ms()}"
 
-    # Compress and upload main DB.  Backup files are owned by the caller
-    # (via DatabaseBackup.cleanup); we only clean up the intermediate .zst.
-    main_remote = f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst"
-    tmp_zst = backup.main_path.with_suffix(".sqlite3.zst")
-    try:
-        _compress_zstd(backup.main_path, tmp_zst)
-        _fsspec_copy(str(tmp_zst), main_remote)
-        logger.info("checkpoint main DB uploaded to %s", main_remote)
-    finally:
-        tmp_zst.unlink(missing_ok=True)
-
-    # Compress and upload auth DB.
+    _compress_and_upload_db(backup.main_path, f"{checkpoint_dir}/{ControllerDB.DB_FILENAME}.zst", "main")
     if backup.auth_path is not None:
-        auth_remote = f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst"
-        tmp_zst2 = backup.auth_path.with_suffix(".sqlite3.zst")
-        try:
-            _compress_zstd(backup.auth_path, tmp_zst2)
-            _fsspec_copy(str(tmp_zst2), auth_remote)
-            logger.info("checkpoint auth DB uploaded to %s", auth_remote)
-        finally:
-            tmp_zst2.unlink(missing_ok=True)
-
-    # Compress and upload profiles DB.
-    if backup.profiles_path is not None:
-        profiles_remote = f"{checkpoint_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst"
-        tmp_zst3 = backup.profiles_path.with_suffix(".sqlite3.zst")
-        try:
-            _compress_zstd(backup.profiles_path, tmp_zst3)
-            _fsspec_copy(str(tmp_zst3), profiles_remote)
-            logger.info("checkpoint profiles DB uploaded to %s", profiles_remote)
-        finally:
-            tmp_zst3.unlink(missing_ok=True)
+        _compress_and_upload_db(backup.auth_path, f"{checkpoint_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst", "auth")
 
     # Row counts are read from the live DB (not the backup) for convenience.
     # They may diverge slightly from the backup contents if writes occurred
     # between backup and upload, but this is acceptable for checkpoint metadata.
     with db.read_snapshot() as snapshot:
-        job_count = snapshot.fetchone("SELECT COUNT(*) FROM jobs")[0]  # type: ignore[index]
-        task_count = snapshot.fetchone("SELECT COUNT(*) FROM tasks")[0]  # type: ignore[index]
-        worker_count = snapshot.fetchone("SELECT COUNT(*) FROM workers")[0]  # type: ignore[index]
+        job_count = snapshot.execute(select(func.count()).select_from(jobs_table)).scalar()
+        task_count = snapshot.execute(select(func.count()).select_from(tasks_table)).scalar()
+        worker_count = snapshot.execute(select(func.count()).select_from(workers_table)).scalar()
     result = CheckpointResult(
         created_at=backup.created_at,
         job_count=job_count,
@@ -308,34 +312,6 @@ def _find_latest_checkpoint_dir(remote_state_dir: str) -> str | None:
     return _reconstruct_uri(remote_state_dir, latest_path)
 
 
-def _pick_remote(zst_path: str, plain_path: str) -> tuple[str | None, bool]:
-    """Return (remote_path, is_compressed) preferring the .zst variant."""
-    fs, fs_path = fsspec.core.url_to_fs(zst_path)
-    if fs.exists(fs_path):
-        return zst_path, True
-    fs2, fs_path2 = fsspec.core.url_to_fs(plain_path)
-    if fs2.exists(fs_path2):
-        return plain_path, False
-    return None, False
-
-
-def _download_one(remote: str, local: Path, *, compressed: bool) -> None:
-    """Download a single file, decompressing if needed. Uses atomic rename."""
-    if compressed:
-        tmp_zst = local.with_suffix(".download.zst.tmp")
-        _fsspec_copy(remote, str(tmp_zst))
-        tmp_plain = local.with_suffix(".download.tmp")
-        try:
-            _decompress_zstd(tmp_zst, tmp_plain)
-        finally:
-            tmp_zst.unlink(missing_ok=True)
-        tmp_plain.rename(local)
-    else:
-        tmp_path = local.with_suffix(".download.tmp")
-        _fsspec_copy(remote, str(tmp_path))
-        tmp_path.rename(local)
-
-
 def prune_old_checkpoints(
     remote_state_dir: str,
     max_age: Duration = DEFAULT_PRUNE_AGE,
@@ -365,21 +341,51 @@ def prune_old_checkpoints(
     return pruned
 
 
+def _sync_dir(source_dir: str, local_dir: Path) -> None:
+    """Mirror the immediate file contents of *source_dir* into *local_dir*.
+
+    ``gs://`` sources use ``gcloud storage rsync`` when the CLI is available
+    (parallel, skip-if-current transfers). Other schemes fall back to a
+    per-file fsspec copy with atomic rename.
+    """
+    local_dir.mkdir(parents=True, exist_ok=True)
+
+    if source_dir.startswith("gs://") and shutil.which("gcloud") is not None:
+        subprocess.check_call(
+            ["gcloud", "storage", "rsync", source_dir.rstrip("/") + "/", str(local_dir) + "/"],
+            stdout=subprocess.DEVNULL,
+        )
+        return
+
+    fs, fs_path = fsspec.core.url_to_fs(source_dir)
+    if not fs.exists(fs_path):
+        return
+    for entry in fs.ls(fs_path, detail=False):
+        basename = entry.rstrip("/").rsplit("/", 1)[-1]
+        dest = local_dir / basename
+        tmp = dest.with_suffix(dest.suffix + ".download.tmp")
+        # `fs.ls` returns bare keys for non-local schemes (e.g. s3 returns
+        # "marin-na/path/file" without the "s3://" prefix). Pass the bytes
+        # directly via fs.open so we don't accidentally fall back to the
+        # local filesystem when the entry has no protocol.
+        with fs.open(entry, "rb") as f_src, open(tmp, "wb") as f_dst:
+            f_dst.write(f_src.read())
+        tmp.rename(dest)
+
+
 def download_checkpoint_to_local(
     remote_state_dir: str,
     local_db_dir: Path,
     checkpoint_dir: str | None = None,
 ) -> bool:
-    """Download a remote checkpoint directory to a local db_dir.
+    """Sync a remote checkpoint directory to ``local_db_dir``.
 
-    Looks for controller.sqlite3(.zst), auth.sqlite3(.zst), and
-    profiles.sqlite3(.zst) in the checkpoint directory. Compressed files are preferred; uncompressed
-    files are accepted as a fallback.
+    If ``checkpoint_dir`` is not provided, finds the most recent timestamped
+    checkpoint under ``{remote_state_dir}/controller-state/``. After the sync,
+    any ``.zst`` file is decompressed to its sibling so the resulting layout
+    matches what ControllerDB expects.
 
-    If ``checkpoint_dir`` is not provided, finds the most recent
-    timestamped checkpoint under ``remote_state_dir/controller-state/``.
-
-    Returns True if a checkpoint was downloaded, False if none found.
+    Returns True if the sync produced a usable ``controller.sqlite3``.
     """
     if checkpoint_dir:
         source_dir = checkpoint_dir.rstrip("/")
@@ -390,37 +396,14 @@ def download_checkpoint_to_local(
             return False
         source_dir = found
 
-    # Prefer compressed (.zst), fall back to uncompressed for old checkpoints
-    main_zst = f"{source_dir}/{ControllerDB.DB_FILENAME}.zst"
-    main_plain = f"{source_dir}/{ControllerDB.DB_FILENAME}"
-    main_source, compressed = _pick_remote(main_zst, main_plain)
-    if main_source is None:
-        logger.info("No remote checkpoint at %s, starting fresh", source_dir)
+    _sync_dir(source_dir, local_db_dir)
+    for zst_path in list(local_db_dir.glob("*.zst")):
+        _decompress_zstd(zst_path, zst_path.with_suffix(""))
+        zst_path.unlink()
+
+    if not (local_db_dir / ControllerDB.DB_FILENAME).exists():
+        logger.info("No checkpoint at %s, starting fresh", source_dir)
         return False
 
-    local_db_dir.mkdir(parents=True, exist_ok=True)
-
-    # Download main DB
-    local_main = local_db_dir / ControllerDB.DB_FILENAME
-    _download_one(main_source, local_main, compressed=compressed)
-    logger.info("Downloaded checkpoint from %s to %s", main_source, local_main)
-
-    # Download auth DB if available
-    auth_zst = f"{source_dir}/{ControllerDB.AUTH_DB_FILENAME}.zst"
-    auth_plain = f"{source_dir}/{ControllerDB.AUTH_DB_FILENAME}"
-    auth_source, auth_compressed = _pick_remote(auth_zst, auth_plain)
-    if auth_source is not None:
-        local_auth = local_db_dir / ControllerDB.AUTH_DB_FILENAME
-        _download_one(auth_source, local_auth, compressed=auth_compressed)
-        logger.info("Downloaded auth checkpoint from %s to %s", auth_source, local_auth)
-
-    # Download profiles DB if available
-    profiles_zst = f"{source_dir}/{ControllerDB.PROFILES_DB_FILENAME}.zst"
-    profiles_plain = f"{source_dir}/{ControllerDB.PROFILES_DB_FILENAME}"
-    profiles_source, profiles_compressed = _pick_remote(profiles_zst, profiles_plain)
-    if profiles_source is not None:
-        local_profiles = local_db_dir / ControllerDB.PROFILES_DB_FILENAME
-        _download_one(profiles_source, local_profiles, compressed=profiles_compressed)
-        logger.info("Downloaded profiles checkpoint from %s to %s", profiles_source, local_profiles)
-
+    logger.info("Synced checkpoint %s to %s", source_dir, local_db_dir)
     return True

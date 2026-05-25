@@ -15,7 +15,7 @@ from haliax.partitioning import round_axis_for_partitioning
 
 import levanter
 from levanter.callbacks import profile_ctx
-from levanter.checkpoint import load_checkpoint
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
@@ -77,9 +77,10 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
     if config.checkpoint_path is not None:
         with use_cpu_device():
             model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
+            checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
             model = load_checkpoint(
                 model,
-                config.checkpoint_path,
+                checkpoint_path,
                 subpath="model",
                 axis_mapping=config.trainer.parameter_axis_mapping,
             )
@@ -103,15 +104,14 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
 def main(config: SampleLmConfig):
     levanter.initialize(config)
     tok_string: str | None = config.tokenizer
-    if config.tokenizer is None:
-        if config.hf_checkpoint is not None:
-            # If we have an HF checkpoint, we can load the tokenizer from it
-            tok_string = config.hf_checkpoint.model_name_or_path
+    if tok_string is None and config.hf_checkpoint is not None:
+        # If we have an HF checkpoint, we can load the tokenizer from it
+        tok_string = config.hf_checkpoint.model_name_or_path
 
     if tok_string is None:
         raise ValueError("Must specify a tokenizer or an HF checkpoint with a tokenizer")
 
-    tokenizer = load_tokenizer(config.tokenizer)
+    tokenizer = load_tokenizer(tok_string)
 
     key = jrandom.PRNGKey(config.seed)
 

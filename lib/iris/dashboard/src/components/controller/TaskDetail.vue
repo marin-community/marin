@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { RouterLink } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { RouterLink, useRouter } from 'vue-router'
+import { useControllerRpc, useLogServerStatsRpc } from '@/composables/useRpc'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { stateToName } from '@/types/status'
 import type {
@@ -9,14 +9,20 @@ import type {
   GetTaskStatusResponse,
 } from '@/types/rpc'
 import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { decodeArrowIpc } from '@/utils/arrow'
 
+import { controllerRpcCall } from '@/composables/useRpc'
+import { useProfileAction } from '@/composables/useProfileAction'
 import PageShell from '@/components/layout/PageShell.vue'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import InfoRow from '@/components/shared/InfoRow.vue'
 import ResourceGauge from '@/components/shared/ResourceGauge.vue'
 import Sparkline from '@/components/shared/Sparkline.vue'
+import ProfileButtons from '@/components/shared/ProfileButtons.vue'
+import ProfileHistory from '@/components/shared/ProfileHistory.vue'
 import LogViewer from '@/components/shared/LogViewer.vue'
+import MarkdownRenderer from '@/components/shared/MarkdownRenderer.vue'
 
 const props = defineProps<{
   jobId: string
@@ -31,6 +37,7 @@ const {
 } = useControllerRpc<GetTaskStatusResponse>('GetTaskStatus', () => ({ taskId: props.taskId }))
 
 const task = computed(() => taskResponse.value?.task ?? null)
+const jobResources = computed(() => taskResponse.value?.jobResources ?? null)
 
 const normalizedState = computed(() => (task.value ? stateToName(task.value.state) : ''))
 
@@ -51,36 +58,94 @@ const startedDisplay = computed(() =>
   startedMs.value ? formatRelativeTime(startedMs.value) : '-'
 )
 
-// Resource gauge values from resourceUsage (MB -> bytes for the gauge)
-const cpuUsed = computed(() => (task.value?.resourceUsage?.cpuMillicores ?? 0) / 1000)
-const memUsedMb = computed(() => {
-  const raw = task.value?.resourceUsage?.memoryMb
-  return raw ? parseFloat(raw) : 0
-})
-const memPeakMb = computed(() => {
-  const raw = task.value?.resourceUsage?.memoryPeakMb
-  return raw ? parseFloat(raw) : 0
-})
-const diskUsedMb = computed(() => {
-  const raw = task.value?.resourceUsage?.diskMb
-  return raw ? parseFloat(raw) : 0
+// --- Per-task resource history sourced from finelog stats (iris.task) ---
+//
+// One row per attempt-resource update emitted by the worker. The namespace
+// is registered eagerly by every worker at startup, so any task we can
+// navigate to has a registered table. Rows come back ts DESC; reverse for
+// the sparkline (oldest -> newest). Filtered by attempt_id so retried tasks
+// do not mix samples from prior attempts.
+interface TaskStatRow {
+  ts?: string
+  cpu_millicores?: number
+  memory_mb?: number
+  memory_peak_mb?: number
+  disk_mb?: number
+}
+
+interface QueryResponse {
+  arrowIpc?: string
+}
+
+function buildTaskStatsSql(taskId: string, attemptId: number | undefined): string {
+  // QueryRequest has no param binding; manual DuckDB single-quote escape.
+  const escaped = taskId.replace(/'/g, "''")
+  const attemptPredicate =
+    attemptId !== undefined && attemptId !== null
+      ? `AND attempt_id = ${Number(attemptId)}`
+      : ''
+  return `
+SELECT ts, cpu_millicores, memory_mb, memory_peak_mb, disk_mb
+FROM "iris.task"
+WHERE task_id = '${escaped}'
+${attemptPredicate}
+ORDER BY ts DESC
+LIMIT 200
+`.trim()
+}
+
+const { data: taskStatsData, refresh: fetchTaskStats } = useLogServerStatsRpc<QueryResponse>(
+  'Query',
+  () => ({ sql: buildTaskStatsSql(props.taskId, task.value?.currentAttemptId) }),
+)
+
+const taskStatsRows = computed<TaskStatRow[]>(() => {
+  const ipc = taskStatsData.value?.arrowIpc
+  if (!ipc) return []
+  return decodeArrowIpc(ipc).rows as TaskStatRow[]
 })
 
-const cpuHistory = ref<number[]>([])
-const memHistory = ref<number[]>([])
-const MAX_HISTORY = 60
+const orderedTaskStats = computed(() => taskStatsRows.value.slice().reverse())
 
-watch(task, (t) => {
-  if (!t?.resourceUsage) return
-  cpuHistory.value = [...cpuHistory.value, (t.resourceUsage.cpuMillicores ?? 0) / 1000].slice(-MAX_HISTORY)
-  const memMb = t.resourceUsage.memoryMb ? parseFloat(t.resourceUsage.memoryMb) : 0
-  memHistory.value = [...memHistory.value, memMb].slice(-MAX_HISTORY)
-})
+// Latest sample drives the current-value gauges and labels. resource_usage
+// is no longer populated on TaskStatus — the iris.task stats namespace is
+// the single source of truth for per-attempt usage.
+const latestStat = computed<TaskStatRow | null>(() => taskStatsRows.value[0] ?? null)
+const cpuUsed = computed(() => Number(latestStat.value?.cpu_millicores ?? 0) / 1000)
+const memUsedMb = computed(() => Number(latestStat.value?.memory_mb ?? 0))
+const memPeakMb = computed(() => Number(latestStat.value?.memory_peak_mb ?? 0))
+const diskUsedMb = computed(() => Number(latestStat.value?.disk_mb ?? 0))
 
+const cpuHistory = computed(() =>
+  orderedTaskStats.value.map((r) => Number(r.cpu_millicores ?? 0) / 1000)
+)
+const memHistory = computed(() =>
+  orderedTaskStats.value.map((r) => Number(r.memory_mb ?? 0))
+)
+
+// Use job-level resource limits for gauge totals when available.
 const cpuTotal = computed(() => {
+  const jobCpu = (jobResources.value?.cpuMillicores ?? 0) / 1000
+  if (jobCpu > 0) return jobCpu
   const maxObserved = Math.max(...cpuHistory.value, cpuUsed.value, 0)
   if (maxObserved <= 0) return 1
   return Math.max(1, maxObserved * 1.5)
+})
+
+const memTotalMb = computed(() => {
+  const jobMemBytes = jobResources.value?.memoryBytes
+  if (jobMemBytes) return parseFloat(jobMemBytes) / (1024 * 1024)
+  const historyMax = memHistory.value.length > 0 ? Math.max(...memHistory.value) : 0
+  const best = Math.max(historyMax, memPeakMb.value, memUsedMb.value)
+  if (best <= 0) return 1
+  return best * 1.2
+})
+
+const diskTotalMb = computed(() => {
+  const jobDiskBytes = jobResources.value?.diskBytes
+  if (jobDiskBytes) return parseFloat(jobDiskBytes) / (1024 * 1024)
+  if (diskUsedMb.value <= 0) return 1
+  return diskUsedMb.value * 2
 })
 
 // Build metrics
@@ -96,26 +161,65 @@ const { active: autoRefreshActive, start: startRefresh, stop: stopRefresh } = us
   5_000,
   false,
 )
+const { start: startStatsRefresh, stop: stopStatsRefresh } = useAutoRefresh(
+  fetchTaskStats,
+  5_000,
+  false,
+)
 
 watch(isActive, (active) => {
-  if (active) startRefresh()
-  else stopRefresh()
+  if (active) {
+    startRefresh()
+    startStatsRefresh()
+  } else {
+    stopRefresh()
+    stopStatsRefresh()
+  }
 })
 
 onMounted(async () => {
   await fetchTask()
-  if (isActive.value) startRefresh()
+  fetchTaskStats()
+  if (isActive.value) {
+    startRefresh()
+    startStatsRefresh()
+  }
 })
+
+const router = useRouter()
+const { profiling, profile } = useProfileAction(controllerRpcCall, () => props.taskId)
+
+function handleProfile(type: 'cpu' | 'memory' | 'threads') {
+  if (type === 'threads') {
+    router.push(`/job/${encodeURIComponent(props.jobId)}/task/${encodeURIComponent(props.taskId)}/threads`)
+  } else {
+    profile(type)
+  }
+}
+
+const logViewerRef = ref<{ selectedAttemptId: number } | null>(null)
+
+function selectAttempt(attemptId: number) {
+  if (logViewerRef.value) {
+    logViewerRef.value.selectedAttemptId = attemptId
+  }
+  const logsEl = document.getElementById('task-logs-section')
+  if (logsEl) logsEl.scrollIntoView({ behavior: 'smooth' })
+}
 
 // Re-fetch when navigating between tasks (Vue Router reuses the component).
 // Clear stale data first so loading/error states render correctly if the fetch fails.
 watch(() => props.taskId, async () => {
   taskResponse.value = null
-  cpuHistory.value = []
-  memHistory.value = []
+  taskStatsData.value = null
   stopRefresh()
+  stopStatsRefresh()
   await fetchTask()
-  if (isActive.value) startRefresh()
+  fetchTaskStats()
+  if (isActive.value) {
+    startRefresh()
+    startStatsRefresh()
+  }
 })
 </script>
 
@@ -177,33 +281,36 @@ watch(() => props.taskId, async () => {
           <InfoRow v-if="task.pendingReason" label="Pending Reason">
             <span class="text-status-warning">{{ task.pendingReason }}</span>
           </InfoRow>
+          <div v-if="isActive" class="mt-3 pt-3 border-t border-surface-border">
+            <ProfileButtons :profiling="profiling" @profile="handleProfile" />
+          </div>
         </InfoCard>
 
-        <!-- Resources card -->
+        <!-- Resources card. Driven entirely by the latest iris.task sample. -->
         <InfoCard title="Resources">
-          <template v-if="task.resourceUsage">
+          <template v-if="latestStat">
             <div class="space-y-3">
               <ResourceGauge label="CPU" :used="cpuUsed" :total="cpuTotal" unit="cores" />
               <ResourceGauge
                 label="Memory"
                 :used="memUsedMb * 1024 * 1024"
-                :total="(memPeakMb || memUsedMb * 1.5) * 1024 * 1024"
+                :total="memTotalMb * 1024 * 1024"
                 unit="bytes"
               />
               <ResourceGauge
                 v-if="diskUsedMb > 0"
                 label="Disk"
                 :used="diskUsedMb * 1024 * 1024"
-                :total="diskUsedMb * 2 * 1024 * 1024"
+                :total="diskTotalMb * 1024 * 1024"
                 unit="bytes"
               />
             </div>
             <div class="mt-2 text-xs text-text-muted space-y-0.5">
-              <div v-if="task.resourceUsage.processCount">
-                Processes: {{ task.resourceUsage.processCount }}
+              <div v-if="latestStat.cpu_millicores">
+                CPU: {{ formatCpuMillicores(Number(latestStat.cpu_millicores)) }}
               </div>
-              <div v-if="task.resourceUsage.cpuMillicores">
-                CPU: {{ formatCpuMillicores(task.resourceUsage.cpuMillicores) }}
+              <div v-if="memPeakMb > 0">
+                Peak Memory: {{ memPeakMb.toFixed(0) }} MB
               </div>
             </div>
           </template>
@@ -235,15 +342,22 @@ watch(() => props.taskId, async () => {
       <div v-if="cpuHistory.length > 1" class="grid grid-cols-2 gap-4 mb-6">
         <div class="rounded-lg border border-surface-border bg-surface p-3">
           <div class="text-xs text-text-secondary mb-2">CPU %</div>
-          <Sparkline :data="cpuHistory" :width="200" :height="40" color="var(--color-accent, #2563eb)" />
+          <Sparkline :data="cpuHistory" :height="40" color="var(--color-accent, #2563eb)" />
           <div class="text-xs font-mono text-text-muted mt-1">{{ cpuUsed.toFixed(0) }}%</div>
         </div>
         <div class="rounded-lg border border-surface-border bg-surface p-3">
           <div class="text-xs text-text-secondary mb-2">Memory (MB)</div>
-          <Sparkline :data="memHistory" :width="200" :height="40" color="var(--color-status-purple, #8b5cf6)" />
+          <Sparkline :data="memHistory" :height="40" color="var(--color-status-purple, #8b5cf6)" />
           <div class="text-xs font-mono text-text-muted mt-1">{{ memUsedMb.toFixed(0) }} MB</div>
         </div>
       </div>
+
+      <!-- Status text -->
+      <InfoCard v-if="task.statusTextDetailMd" title="Status Text" class="mb-6">
+        <div class="text-sm text-text">
+          <MarkdownRenderer :content="task.statusTextDetailMd" />
+        </div>
+      </InfoCard>
 
       <!-- Error display -->
       <div
@@ -255,14 +369,20 @@ watch(() => props.taskId, async () => {
       </div>
 
       <!-- Attempts table -->
-      <div v-if="task.attempts && task.attempts.length > 1" class="mb-6">
-        <h3 class="text-sm font-semibold text-text mb-3">Attempts</h3>
+      <div v-if="task.attempts && task.attempts.length > 0" class="mb-6">
+        <h3 class="text-sm font-semibold text-text mb-3">
+          Attempts
+          <span class="text-text-muted font-normal ml-1">({{ task.attempts.length }})</span>
+        </h3>
         <div class="overflow-x-auto rounded-lg border border-surface-border">
           <table class="w-full border-collapse">
             <thead>
               <tr class="border-b border-surface-border">
                 <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
                   Attempt
+                </th>
+                <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
+                  UID
                 </th>
                 <th class="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-text-secondary text-left">
                   State
@@ -285,9 +405,17 @@ watch(() => props.taskId, async () => {
               <tr
                 v-for="attempt in task.attempts"
                 :key="attempt.attemptId"
-                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
+                class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors cursor-pointer"
+                :class="attempt.attemptId === task.currentAttemptId ? 'bg-accent-subtle border-l-2 border-l-accent' : ''"
+                @click="selectAttempt(attempt.attemptId)"
               >
-                <td class="px-3 py-2 text-[13px] font-mono">{{ attempt.attemptId }}</td>
+                <td class="px-3 py-2 text-[13px] font-mono">
+                  {{ attempt.attemptId }}
+                  <span v-if="attempt.attemptId === task.currentAttemptId" class="ml-1 text-xs text-accent font-semibold">current</span>
+                </td>
+                <td class="px-3 py-2 text-[13px] font-mono text-text-muted">
+                  {{ attempt.attemptUid ? attempt.attemptUid.slice(0, 8) : '-' }}
+                </td>
                 <td class="px-3 py-2 text-[13px]">
                   <StatusBadge :status="attempt.state" size="sm" />
                 </td>
@@ -296,6 +424,7 @@ watch(() => props.taskId, async () => {
                     v-if="attempt.workerId"
                     :to="`/worker/${attempt.workerId}`"
                     class="font-mono text-accent hover:underline"
+                    @click.stop
                   >
                     {{ attempt.workerId }}
                   </RouterLink>
@@ -316,10 +445,12 @@ watch(() => props.taskId, async () => {
         </div>
       </div>
 
+      <ProfileHistory :source="taskId" class="mb-6" />
+
       <!-- Task logs -->
-      <div class="mb-6">
+      <div id="task-logs-section" class="mb-6">
         <h3 class="text-sm font-semibold text-text mb-3">Logs</h3>
-        <LogViewer :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
+        <LogViewer ref="logViewerRef" :task-id="taskId" :attempts="task.attempts" :current-attempt-id="task.currentAttemptId" />
       </div>
     </template>
   </PageShell>

@@ -22,6 +22,7 @@ import os
 import socket
 import threading
 import time
+import urllib.request
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -81,8 +82,6 @@ def _resolve_advertise_host() -> str:
     """
     # Try GCP metadata server first (works on TPU VMs)
     try:
-        import urllib.request
-
         req = urllib.request.Request(
             "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip",
             headers={"Metadata-Flavor": "Google"},
@@ -95,8 +94,8 @@ def _resolve_advertise_host() -> str:
         pass
 
     hostname = socket.gethostname()
-    # gRPC's c-ares DNS resolver can't handle .local (mDNS) hostnames
-    if hostname.endswith(".local"):
+    # gRPC's c-ares DNS resolver can't handle .local (mDNS) or .localdomain hostnames
+    if hostname.endswith(".local") or hostname.endswith(".localdomain"):
         return "localhost"
     return hostname
 
@@ -241,7 +240,7 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
 
 
 class ArrowFlightCoordinator:
-    """Ray actor for coordinating Arrow Flight weight transfers."""
+    """Actor for coordinating Arrow Flight weight transfers."""
 
     _server_info: ServerInfo | None
 

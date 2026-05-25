@@ -35,6 +35,8 @@ Current datasets:
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
 22. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
+23. lm-provers/FineProofs-SFT
+24. lm-provers/FineProofs-SFT/proof-only
 """
 
 import dataclasses
@@ -44,24 +46,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
-from marin.execution.executor import (
-    ExecutorStep,
-    executor_main,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
-from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
+
+from experiments.defaults import default_tokenize
+from experiments.llama import llama3_tokenizer
 
 SMOLTALK2_SPLITS = [
     "LongAlign_64k_Qwen3_32B_yarn_131k_think",
@@ -245,6 +242,15 @@ class ReasoningToChatKwargs:
 
 reasoning_to_chat_kwargs = ReasoningToChatKwargs()
 
+FINEPROOFS_SFT_REVISION = "73661e6"
+FINEPROOFS_SFT_METADATA_COLUMNS = [
+    "category",
+    "competition",
+    "gemini-3-pro-grade",
+    "qwen3-4b-thinking-reward@128",
+    "source",
+]
+
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     "meta-math/MetaMathQA": InstructionDatasetConfig(
@@ -387,6 +393,27 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ),
         metadata_columns=["source", "task_type", "problem_id"],
         name="PrimeIntellect/verifiable-math-problems",
+    ),
+    "lm-provers/FineProofs-SFT": InstructionDatasetConfig(
+        hf_dataset_id="lm-provers/FineProofs-SFT",
+        revision=FINEPROOFS_SFT_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=FINEPROOFS_SFT_METADATA_COLUMNS,
+        name="lm-provers/FineProofs-SFT",
+        subsets=["default"],
+        splits=["train"],
+    ),
+    "lm-provers/FineProofs-SFT/proof-only": InstructionDatasetConfig(
+        hf_dataset_id="lm-provers/FineProofs-SFT",
+        revision=FINEPROOFS_SFT_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="proof",
+        ),
+        metadata_columns=FINEPROOFS_SFT_METADATA_COLUMNS,
+        name="lm-provers/FineProofs-SFT/proof-only",
+        subsets=["default"],
+        splits=["train"],
     ),
     "sherryy/tulu-3-sft-personas-instruction-following-expanded": InstructionDatasetConfig(
         hf_dataset_id="sherryy/tulu-3-sft-personas-instruction-following-expanded",

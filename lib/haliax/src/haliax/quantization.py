@@ -7,6 +7,7 @@
 # https://github.com/google/flax/blob/main/flax/linen/fp8_ops.py
 import dataclasses
 import functools
+import re
 import warnings
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
@@ -304,8 +305,6 @@ def _matches_target(key_path, config: QuantizationConfig) -> bool:
         return True
     if isinstance(config.targets, list):
         return key in config.targets
-
-    import re
 
     key_path_str = _key_path_to_str(key_path)
     return re.match(config.targets, key_path_str) is not None

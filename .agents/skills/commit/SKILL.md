@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Run lint/format, create an informative commit describing recent work, and push to the current remote branch. Use when checkpointing progress on a feature branch.
+description: Lint, commit, and push work-in-progress to the branch.
 ---
 
 # Skill: Commit
@@ -29,16 +29,14 @@ Stage all modified and new files that are part of the current work. Review
 
 ### 3. Write the commit message
 
-Examine the diff of staged changes and recent git log to understand what was
-done. Write a commit message following these rules:
+Examine the staged diff and recent git log, then write a message:
 
-- **Subject line**: short imperative sentence (<72 chars). Optional `[scope]`
-  prefix matching the area of work (e.g. `[zephyr]`, `[iris]`, `[docs]`).
-- **Body** (optional, separated by blank line): 1-3 sentences explaining *why*
-  the change was made, not *what* changed (the diff shows that). Include
-  context a reviewer would need.
-- No emoji, no markdown, no bullet lists in the subject.
-- Do not credit yourself in the commit message.
+- **Subject**: imperative sentence (<72 chars). Optional `[scope]` prefix
+  (e.g. `[zephyr]`, `[iris]`, `[docs]`).
+- **Body** (optional, blank-line separated): 1-3 sentences on *why*, not
+  *what*. Include context a reviewer needs.
+- No emoji, no markdown, no bullets in the subject.
+- Do not credit yourself.
 
 ### 4. Commit
 

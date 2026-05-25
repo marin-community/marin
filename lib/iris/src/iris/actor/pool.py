@@ -6,19 +6,19 @@
 import logging
 import threading
 import time
-from collections.abc import Callable, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 import cloudpickle
+from rigging.timing import ExponentialBackoff
 
 from iris.actor.client import unwrap_actor_response
-from iris.actor.resolver import ResolvedEndpoint, ResolveResult, Resolver
+from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
 from iris.rpc import actor_pb2
 from iris.rpc.actor_connect import ActorServiceClientSync
 from iris.rpc.errors import call_with_retry
-from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
@@ -53,28 +53,6 @@ class BroadcastFuture(Generic[T]):
             except Exception as e:
                 results.append(CallResult(endpoint=endpoint, exception=e))
         return results
-
-    def wait_any(self, timeout: float | None = None) -> CallResult:
-        for future in as_completed([f for _, f in self._futures], timeout=timeout):
-            idx = next(i for i, (_, f) in enumerate(self._futures) if f is future)
-            endpoint = self._futures[idx][0]
-            try:
-                value = future.result()
-                return CallResult(endpoint=endpoint, value=value)
-            except Exception as e:
-                return CallResult(endpoint=endpoint, exception=e)
-        raise TimeoutError("No results within timeout")
-
-    def as_completed(self, timeout: float | None = None) -> Iterator[CallResult]:
-        """Iterate over results as they complete."""
-        endpoint_map = {id(f): ep for ep, f in self._futures}
-        for future in as_completed([f for _, f in self._futures], timeout=timeout):
-            endpoint = endpoint_map[id(future)]
-            try:
-                value = future.result()
-                yield CallResult(endpoint=endpoint, value=value)
-            except Exception as e:
-                yield CallResult(endpoint=endpoint, exception=e)
 
 
 class ActorPool(Generic[T]):

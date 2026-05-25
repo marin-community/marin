@@ -1,12 +1,12 @@
 # Busted Buddy's: UVA has demolished civil rights landmark | The Hook - Charlottesville's weekly newspaper, news magazine
 
-The Hook - Charlottesville's weekly newspaper, news magazine               
+The Hook - Charlottesville's weekly newspaper, news magazine
 
 # Busted Buddy's: UVA has demolished civil rights landmark
 
 By Hawes Spencer | hawesinsky@gmail.com  
 Published online 3:44pm Tuesday Nov 29th, 2011   
-and in print issue #1050 dated Thursday Dec 15th, 2011      
+and in print issue #1050 dated Thursday Dec 15th, 2011
 
 The building that housed infamously non-segregating Buddy's restaurant is no more. Crews were on the scene Tuesday, November 29, tearing down the brick structure near the corner of Emmet Street and Ivy Road.
 
@@ -34,7 +34,9 @@ Hearing about the demolition of Buddy's reminds Gaston of something else he lear
 
 *–story updated 5:52pm, November 29 to remove references to the brand of fuel sold at the site<br>–story updated 1:25pm, December 2 to add the entire second half consisting of the interview with Gaston*
 
-**Read more on:**  buddy's restaurantcivil rightslost charlottesvillepaul gaston                  * © 2002-2012 Better Publications LLC - The Hook
+**Read more on:**  buddy's restaurantcivil rightslost charlottesvillepaul gaston
+
+* © 2002-2012 Better Publications LLC - The Hook
 * 100 Second Street NW - Charlottesville, VA 22902
 * 434-295-8700 (fax: 434-295-8097)
 * Login

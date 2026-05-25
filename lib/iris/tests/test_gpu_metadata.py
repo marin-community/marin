@@ -83,7 +83,7 @@ def test_gpu_worker_metadata(tmp_path):
 
                 attrs = meta.attributes
                 assert WellKnownAttribute.GPU_VARIANT in attrs
-                assert "H100" in attrs[WellKnownAttribute.GPU_VARIANT].string_value
+                assert "h100" in attrs[WellKnownAttribute.GPU_VARIANT].string_value
                 assert WellKnownAttribute.GPU_COUNT in attrs
                 assert attrs[WellKnownAttribute.GPU_COUNT].int_value == 8
 

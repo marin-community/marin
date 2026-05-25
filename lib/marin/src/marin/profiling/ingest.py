@@ -19,13 +19,8 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import wandb
+from google.protobuf.message import DecodeError
 
-from marin.profiling.semantics import (
-    canonical_op_name,
-    classify_semantic_family,
-    estimate_flop_proxy,
-    extract_shape_signature,
-)
 from marin.profiling.schema import (
     BreakdownPart,
     CommunicationOp,
@@ -41,8 +36,14 @@ from marin.profiling.schema import (
     StepClassSummary,
     StepTimeSummary,
     TimeBreakdown,
-    TraceProvenance,
     TraceOverview,
+    TraceProvenance,
+)
+from marin.profiling.semantics import (
+    canonical_op_name,
+    classify_semantic_family,
+    estimate_flop_proxy,
+    extract_shape_signature,
 )
 
 logger = logging.getLogger(__name__)
@@ -266,14 +267,49 @@ def summarize_profile_artifact(
         warmup_steps: Number of initial steps to exclude from steady-state stats.
         hot_op_limit: Maximum number of hot ops to include.
     """
-    trace_path = find_profile_trace(profile_dir)
-    return summarize_trace(
-        trace_path,
-        run_metadata=run_metadata,
-        warmup_steps=warmup_steps,
-        hot_op_limit=hot_op_limit,
-        breakdown_mode=breakdown_mode,
-    )
+    from marin.profiling.xplane import MultipleXPlaneFilesError, find_xplane_file, summarize_xplane
+
+    try:
+        return summarize_xplane(
+            find_xplane_file(profile_dir),
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+        )
+    except DecodeError:
+        trace_path = find_profile_trace(profile_dir)
+        return summarize_trace(
+            trace_path,
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+        )
+    except FileNotFoundError as xplane_error:
+        try:
+            trace_path = find_profile_trace(profile_dir)
+        except FileNotFoundError:
+            raise xplane_error from None
+        return summarize_trace(
+            trace_path,
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+        )
+    except MultipleXPlaneFilesError as xplane_error:
+        try:
+            trace_path = find_profile_trace(profile_dir)
+        except FileNotFoundError:
+            raise xplane_error from None
+        return summarize_trace(
+            trace_path,
+            run_metadata=run_metadata,
+            warmup_steps=warmup_steps,
+            hot_op_limit=hot_op_limit,
+            breakdown_mode=breakdown_mode,
+        )
 
 
 def summarize_trace(
@@ -300,15 +336,47 @@ def summarize_trace(
         raise ValueError(f"Trace at '{trace_path}' does not contain a list under 'traceEvents'.")
 
     parsed_events, process_names, thread_names = _parse_complete_events(all_events)
+    return _summarize_complete_events(
+        parsed_events,
+        source_format="perfetto_trace_json",
+        source_path=trace_path,
+        display_time_unit=display_time_unit if isinstance(display_time_unit, str) else None,
+        num_events_total=len(all_events),
+        process_names=process_names,
+        thread_names=thread_names,
+        trace_sha256=_sha256_for_path(trace_path),
+        run_metadata=run_metadata,
+        warmup_steps=warmup_steps,
+        hot_op_limit=hot_op_limit,
+        breakdown_mode=breakdown_mode,
+    )
+
+
+def _summarize_complete_events(
+    parsed_events: list[_CompleteTraceEvent],
+    *,
+    source_format: str,
+    source_path: Path,
+    display_time_unit: str | None,
+    num_events_total: int,
+    process_names: dict[int, str],
+    thread_names: dict[tuple[int, int], str],
+    trace_sha256: str,
+    run_metadata: RunMetadata | None,
+    warmup_steps: int,
+    hot_op_limit: int,
+    breakdown_mode: str,
+    extra_quality_warnings: list[str] | None = None,
+) -> ProfileSummary:
     exclusive_durations = _compute_exclusive_durations(parsed_events)
-    trace_sha256 = _sha256_for_path(trace_path)
 
     trace_overview = _make_trace_overview(
-        display_time_unit=display_time_unit if isinstance(display_time_unit, str) else None,
-        all_events=all_events,
+        display_time_unit=display_time_unit,
+        num_events_total=num_events_total,
         complete_events=parsed_events,
         process_names=process_names,
         thread_names=thread_names,
+        extra_quality_warnings=extra_quality_warnings,
     )
     trace_provenance = _make_trace_provenance(parsed_events, trace_sha256=trace_sha256)
     step_time = _summarize_step_times(parsed_events, warmup_steps=warmup_steps)
@@ -332,8 +400,8 @@ def summarize_trace(
     )
 
     summary = ProfileSummary.create(
-        source_format="perfetto_trace_json",
-        source_path=str(trace_path),
+        source_format=source_format,
+        source_path=str(source_path),
         run_metadata=run_metadata or RunMetadata(),
         trace_overview=trace_overview,
         trace_provenance=trace_provenance,
@@ -379,34 +447,20 @@ def normalize_run_target(target: str, *, entity: str | None, project: str | None
     - W&B run URL (`https://wandb.ai/entity/project/runs/run_id`)
     """
     if target.startswith(("http://", "https://")):
-        parsed = urlparse(target)
-        parts = [part for part in parsed.path.split("/") if part]
+        parts = [part for part in urlparse(target).path.split("/") if part]
         if len(parts) < 3:
             raise ValueError(f"Could not parse run information from URL: {target}")
-        run_entity = parts[0]
-        run_project = parts[1]
-        if parts[2] == "runs" and len(parts) >= 4:
-            run_id = parts[3]
-        else:
-            run_id = parts[2]
-        return run_entity, run_project, run_id
+    else:
+        parts = [part for part in target.split("/") if part]
+        if len(parts) == 1:
+            if entity is None or project is None:
+                raise ValueError("Bare run ids require --entity and --project.")
+            return entity, project, parts[0]
+        if len(parts) < 3:
+            raise ValueError(f"Unrecognized run target: {target}")
 
-    parts = [part for part in target.split("/") if part]
-    if len(parts) == 1:
-        if entity is None or project is None:
-            raise ValueError("Bare run ids require --entity and --project.")
-        return entity, project, parts[0]
-
-    if len(parts) >= 3:
-        run_entity = parts[0]
-        run_project = parts[1]
-        if parts[2] == "runs" and len(parts) >= 4:
-            run_id = parts[3]
-        else:
-            run_id = parts[2]
-        return run_entity, run_project, run_id
-
-    raise ValueError(f"Unrecognized run target: {target}")
+    run_id = parts[3] if parts[2] == "runs" and len(parts) >= 4 else parts[2]
+    return parts[0], parts[1], run_id
 
 
 def _load_trace_payload(trace_path: Path) -> dict[str, Any]:
@@ -609,10 +663,11 @@ def _sha256_for_path(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
 def _make_trace_overview(
     *,
     display_time_unit: str | None,
-    all_events: list[Any],
+    num_events_total: int,
     complete_events: list[_CompleteTraceEvent],
     process_names: dict[int, str],
     thread_names: dict[tuple[int, int], str],
+    extra_quality_warnings: list[str] | None = None,
 ) -> TraceOverview:
     if complete_events:
         start = min(event.ts for event in complete_events)
@@ -621,10 +676,12 @@ def _make_trace_overview(
         start = None
         end = None
     suspected_truncation, quality_warnings = _trace_quality_warnings(num_complete_events=len(complete_events))
+    if extra_quality_warnings:
+        quality_warnings.extend(extra_quality_warnings)
 
     return TraceOverview(
         display_time_unit=display_time_unit,
-        num_events_total=len(all_events),
+        num_events_total=num_events_total,
         num_complete_events=len(complete_events),
         num_processes=len(process_names),
         num_threads=len(thread_names),

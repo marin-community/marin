@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     # workspaces
     "marin-iris",
+    "marin-finelog",
     "marin-fray",
     "marin-haliax",
     "marin-levanter",
@@ -19,27 +20,91 @@ dependencies = [
     "marin-zephyr",
     # top level deps. try to keep these small.
     "watchdog",
-    "dupekit >= 0.1.0",
+    # `>= 0.1.0.dev0` opts uv into pre-releases for this one package so the
+    # daily nightly published by .github/workflows/dupekit-release-wheels.yaml
+    # (`X.Y.Z.dev<YYYYMMDDhhmm>`) is picked up by `uv lock` automatically.
+    # Cut a stable tag (`dupekit-v<X.Y.Z>`) when promoting; uv prefers the
+    # higher version, so a stable supersedes any earlier dev of the same Z.
+    "marin-dupekit >= 0.1.0.dev0",
 ]
 
 [tool.uv]
 fork-strategy = "fewest"
+# Allow pre-releases globally so `uv lock` resolves marin-dupekit to its
+# latest nightly (`X.Y.Z.dev<timestamp>` published by the dupekit release
+# workflow). uv has no per-package prerelease config; in practice almost
+# none of our other dependencies publish pre-releases on PyPI, so this
+# only affects dupekit and the already-pinned `omegaconf>=2.4.0.dev4`
+# below.
+prerelease = "allow"
 find-links = [
-    "https://github.com/marin-community/marin/releases/expanded_assets/dupekit-0.1.0-40ac799",
     "https://github.com/marin-community/kitoken/releases/expanded_assets/kitoken-0.10.2-a3012f4",
 ]
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
+    "aiofiles>=24.1.0",
+    "anthropic>=0.71.0",
     "antlr4-python3-runtime==4.11",
-    "python-multipart>=0.0.22",
+    "python-multipart>=0.0.27",
     "wheel>=0.46.2",
-    "datasets>=3.1.0,<4.0.0",
-    "equinox>=0.11.10",  # Override vizier's pin for JAX 0.8 compatibility
+    "datasets>=3.1.0,<5.0.0",
+    "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
+    "authlib>=1.7.2",
+    "cbor2>=6.0.1",
+    "click>=8.3.1",
+    "gitpython>=3.1.50",
+    "gradio>=6.14.0",
+    "jupyter-server>=2.18.2",
+    "jupyterlab>=4.5.7",
+    "litellm>=1.83.14",
+    "lxml>=6.1.0",
+    "mistune>=3.2.1",
+    "multipart>=1.3.1",
+    "nltk>=3.9.4",
+    "notebook>=7.5.6",
+    "orjson>=3.11.9",
+    "pillow>=12.2.0",
+    "pyasn1>=0.6.3",
+    "python-dotenv>=1.1.1",
+    "ray>=2.55.1",
+    "rich>=14.1.0",
+    "setuptools>=82.0.1",
+    "tiktoken>=0.12.0",
+    "tornado>=6.5.5",
+]
+conflicts = [
+    # Temporary cross-package conflicts for the GPU JAX 0.10 / non-GPU JAX 0.9 split.
+    # Remove these once CPU, TPU, vLLM, and Fray TPU test paths can share the GPU JAX line.
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin", extra = "cpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin", extra = "tpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin", extra = "vllm" },
+    ],
+    [
+        { package = "marin", extra = "gpu" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
+    [
+        { package = "marin", extra = "gpu" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-levanter", extra = "gpu" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
 ]
 
 [tool.uv.workspace]
 members = [
     "lib/iris",
+    "lib/finelog",
     "lib/fray",
     "lib/haliax",
     "lib/levanter",
@@ -50,6 +115,7 @@ members = [
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
+marin-finelog = { workspace = true }
 marin-fray = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
@@ -80,14 +146,21 @@ line-length = 121
 target-version = "py310"
 
 # Note :: Grow more strict over time!
+# Most of `scripts/**` is excluded until cleaned up, but `scripts/workflows/**`
+# is CI infrastructure and stays under ruff.
 extend-exclude = ["scripts/"]
+extend-include = ["scripts/workflows/**/*.py"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015", "A005", "I001", "E741"]
+ignore = ["F722", "B008", "UP015", "A005", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["experiments"]
+known-third-party = ["wandb"]
 
 
 [tool.mypy]
@@ -99,6 +172,11 @@ exclude = ["marin/", "scripts/"]
 
 # Pyrefly type checker configuration
 [tool.pyrefly]
+# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
+# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
+# the entire project when running from those paths.
+disable-project-excludes-heuristics = true
+
 project-includes = [
     "lib/marin/src/**/*.py",
     "lib/levanter/src/**/*.py",
@@ -107,6 +185,7 @@ project-includes = [
     "lib/iris/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "scripts/workflows",
 ]
 
 # Explicitly tell Pyrefly where our editable packages live so it resolves imports
@@ -127,15 +206,26 @@ disable-search-path-heuristics = true
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
 use-ignore-files = false
-# Worktrees often live under hidden parent directories (e.g. `.codex/worktrees/*`).
-# Disable pyrefly's built-in exclude heuristics so hidden ancestors do not exclude
-# the entire project when running from those paths.
-disable-project-excludes-heuristics = true
 
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
-    "scripts/**",
+    "scripts/canary/**",
+    "scripts/datakit/**",
+    "scripts/debug/**",
+    "scripts/ferries/**",
+    "scripts/gcp-ssh/**",
+    "scripts/gcs-reorganization/**",
+    "scripts/gpu_eval/**",
+    "scripts/iris/**",
+    "scripts/migrations/**",
+    "scripts/ops/**",
+    "scripts/pm/**",
+    "scripts/ray/**",
+    "scripts/speedrun/**",
+    "scripts/storage/**",
+    "scripts/training/**",
+    "scripts/*.py",
     "tests/**",
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
@@ -156,7 +246,7 @@ missing-import = false
 # Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
 unexpected-keyword = false
 
-# Missing attributes (315 occurrences) - often from untyped libraries like ray, jax, etc.
+# Missing attributes (315 occurrences) - often from untyped libraries like JAX, etc.
 # These are mostly false positives from libraries without complete type stubs
 missing-attribute = false
 
@@ -219,8 +309,14 @@ markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
     "integration: mark tests as integration tests that require cluster infrastructure",
+    "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
+    "requires_cluster: mark tests that need a running iris cluster",
 ]
 testpaths = ["tests", "experiments"]
 
-# Don't run TPU or slow tests by default
-addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"
+# Don't run TPU, slow, integration, data_integration, or cluster-bound tests by default.
+# Integration tests require external infrastructure (Iris cluster, GCS,
+# gated HF repos, etc.); data_integration tests fetch fixtures from HF;
+# requires_cluster tests need a running iris cluster (local or remote).
+# All are run from dedicated CI workflows.
+addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster'"

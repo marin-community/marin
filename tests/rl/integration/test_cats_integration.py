@@ -10,10 +10,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
+
 from tests.rl.integration.config import (
     DummyTokenizer,
     RolloutBatchFeeder,
@@ -23,11 +24,11 @@ from tests.rl.integration.config import (
     create_nano_llama_config,
     create_nano_optimizer_config,
     create_nano_trainer_config,
+    create_qwen_config,
+    create_qwen_tokenizer,
     create_test_curriculum_config,
     create_test_rollout_storage_config,
     create_vllm_inference_config,
-    create_qwen_config,
-    create_qwen_tokenizer,
 )
 from tests.rl.integration.tasks import create_cats_rollout_batch, validate_cats_model
 
@@ -57,7 +58,7 @@ def test_train_worker_with_manual_cats_rollout(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0),
+            rl_loss=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
             replay_buffer=ReplayBufferConfig(
                 capacity=2048,
                 alpha=3.0,
@@ -116,7 +117,11 @@ def test_full_integration_moar_cats(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            rl_loss=RLOOLoss(
+                kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+                clip_epsilon_low=0.2,
+                clip_epsilon_high=0.2,
+            ),
             replay_buffer=ReplayBufferConfig(
                 capacity=4096,
                 alpha=3.0,
@@ -172,7 +177,11 @@ def test_full_integration_moar_cats_vllm(tmp_path):
         trainer=trainer_config,
         train_params=TrainParams(
             optimizer=create_nano_optimizer_config(),
-            rl_loss=RLOOLoss(kl_coef=0.0, clip_epsilon_low=0.2, clip_epsilon_high=0.2),
+            rl_loss=RLOOLoss(
+                kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+                clip_epsilon_low=0.2,
+                clip_epsilon_high=0.2,
+            ),
             replay_buffer=ReplayBufferConfig(
                 capacity=4096,
                 alpha=3.0,

@@ -1,24 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Callable, Iterator
-from enum import StrEnum, auto
 import logging
 import os
+from collections.abc import Callable, Iterator
+from enum import StrEnum, auto
+
 import pyarrow as pa
 import pyarrow.json as pa_json
+import pyarrow.parquet as pq
 import wandb
-
-from fray.v2 import ResourceConfig
-from marin.utilities.wandb_utils import init_wandb
-from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import counters, write_parquet_file
 from zephyr.readers import SUPPORTED_EXTENSIONS, open_file
+
+from marin.utilities.wandb_utils import init_wandb
+from marin.utils import fsspec_glob, rebase_file_path
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FILETYPES: list[str] = ["jsonl", "jsonl.gz", "jsonl.zst", "parquet"]
-DEFAULT_COORDINATOR_RESOURCES: ResourceConfig = ResourceConfig(cpu=1, ram="5g")
 
 
 class DedupMode(StrEnum):
@@ -50,37 +50,23 @@ def _aggregate_shard_counters(shard_results: list[dict], method: str, level: str
     }
 
 
-def group_files(files: list[str], num_groups: int) -> list[list[str]]:
-    """Group files into at most num_groups buckets deterministically.
-
-    Files are sorted then distributed round-robin, so the same set of files always
-    produces the same grouping. Use this to cap Zephyr shard count when
-    num_files >> max_parallelism.
-    """
-    sorted_files = sorted(files)
-    n = min(num_groups, len(sorted_files))
-    groups: list[list[str]] = [[] for _ in range(n)]
-    for i, f in enumerate(sorted_files):
-        groups[i % n].append(f)
-    return groups
-
-
 def _collect_input_files(*, input_paths: str | list[str], filetypes: list[str]) -> list[str]:
-    """Given an input path or list of paths, collect all matching files"""
+    """Given an input path or list of paths, collect all matching files and return them sorted."""
     input_paths = input_paths if isinstance(input_paths, list) else [input_paths]
     all_files = []
-    ext_glob = ",".join(set(filetypes))
     for path in input_paths:
         logger.info(f"Collecting files from path: {path}")
-        files = fsspec_glob(f"{path.rstrip('/')}/**/*.{{{ext_glob}}}")
-        if files:
-            all_files.extend(files)
+        path_files: list[str] = []
+        for ext in filetypes:
+            path_files.extend(fsspec_glob(f"{path.rstrip('/')}/**/*.{ext}"))
+        if path_files:
+            all_files.extend(path_files)
         else:
             if not any(path.endswith(ext) for ext in filetypes):
                 raise FileNotFoundError(f"No files found in path: {path}")
             all_files.append(path)  # Assume it's a single file
     assert all_files, "No input files found for deduplication."
-    return all_files
+    return sorted(all_files)
 
 
 def _init_wandb(*, mode: DedupMode, input_paths: str | list[str], processes: int = 1):
@@ -121,8 +107,6 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
         raise ValueError(f"Unsupported extension: {file_path}.")
     with open_file(file_path, "rb") as f:
         if file_path.endswith(".parquet"):
-            import pyarrow.parquet as pq
-
             if columns is not None:
                 parquet_kwargs = {**parquet_kwargs, "columns": columns}
 

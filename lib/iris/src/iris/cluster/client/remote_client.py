@@ -6,26 +6,26 @@
 import logging
 import time
 import uuid
-from pathlib import Path
-
 from collections.abc import Iterable
+from pathlib import Path
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import InterceptorSync
+from finelog.client import LogClient
+from finelog.rpc import logging_pb2
+from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import BundleCreator
-from iris.cluster.log_store._types import build_log_source
+from iris.cluster.log_store_helpers import build_log_source
 from iris.cluster.runtime.entrypoint import build_runtime_entrypoint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, TaskAttempt, adjust_tpu_replicas, is_job_finished
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
+from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceClientSync
-from iris.rpc.logging_connect import LogServiceClientSync
 from iris.rpc.errors import call_with_retry, format_connect_error, poll_with_retries
 from iris.time_proto import duration_to_proto
-from rigging.timing import Deadline, Duration, ExponentialBackoff
+from iris.version import client_revision_date
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,27 @@ logger = logging.getLogger(__name__)
 # The job itself keeps running server-side; this only affects the client's ability
 # to poll status. One hour gives ample time for controller restarts/upgrades.
 CONTROLLER_UNAVAILABLE_TOLERANCE = 3600.0
+
+# Upper bound on GetJobState polling cadence for long-running jobs. The loop
+# ramps 100ms -> 1s within a handful of polls (factor=1.5 in ExponentialBackoff)
+# and then caps here, so long jobs cost ~1 state RPC / 30s.
+MAX_STATE_POLL_INTERVAL = 30.0
+
+# Floor on the backoff cap. ``ExponentialBackoff`` requires ``maximum >= initial``
+# (currently 100ms), so callers asking for a sub-100ms cap are clamped to this
+# value before being handed to the backoff.
+MIN_STATE_POLL_INTERVAL = 0.1
+
+# Floor on the per-call deadline for LaunchJob. The handler can legitimately
+# run well past the default 30s client timeout when replacing a still-draining
+# predecessor (_JOB_REPLACEMENT_DRAIN_WAIT is 120s on the controller) or when
+# uploading a large workspace bundle. Setting this below the worst-case server
+# budget guarantees a deadline timeout + retry, which then races the original
+# in-flight INSERT and trips a UNIQUE constraint. Pad past 120s for bundle
+# upload, autoscaler feasibility, and connection overhead. Bump alongside
+# _JOB_REPLACEMENT_DRAIN_WAIT if that grows. Callers that configured a larger
+# RemoteClusterClient timeout keep theirs — this is a floor, not a ceiling.
+LAUNCH_JOB_TIMEOUT_FLOOR_MS = 180_000
 
 
 class RemoteClusterClient:
@@ -67,9 +88,11 @@ class RemoteClusterClient:
             address=controller_address,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
+            accept_compression=IRIS_RPC_COMPRESSIONS,
+            send_compression=None,
         )
-        self._log_client = LogServiceClientSync(
-            address=controller_address,
+        self._log_client = LogClient.connect(
+            controller_address,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
         )
@@ -91,6 +114,9 @@ class RemoteClusterClient:
         reservation: job_pb2.ReservationConfig | None = None,
         preemption_policy: job_pb2.JobPreemptionPolicy = job_pb2.JOB_PREEMPTION_POLICY_UNSPECIFIED,
         existing_job_policy: job_pb2.ExistingJobPolicy = job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED,
+        task_image: str | None = None,
+        priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+        submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
             raise ValueError(f"replicas must be >= 1, got {replicas}")
@@ -114,6 +140,10 @@ class RemoteClusterClient:
             max_retries_preemption=max_retries_preemption,
             preemption_policy=preemption_policy,
             existing_job_policy=existing_job_policy,
+            task_image=task_image or "",
+            priority_band=priority_band,
+            submit_argv=submit_argv or [],
+            client_revision_date=client_revision_date(),
         )
         if self._bundle_id:
             request.bundle_id = self._bundle_id
@@ -133,8 +163,10 @@ class RemoteClusterClient:
         if reservation is not None:
             request.reservation.CopyFrom(reservation)
 
+        launch_timeout_ms = max(self._timeout_ms, LAUNCH_JOB_TIMEOUT_FLOOR_MS)
+
         def _call():
-            return self._client.launch_job(request)
+            return self._client.launch_job(request, timeout_ms=launch_timeout_ms)
 
         response = call_with_retry(f"launch_job({job_id})", _call)
         return JobName.from_wire(response.job_id)
@@ -171,7 +203,7 @@ class RemoteClusterClient:
         self,
         job_id: JobName,
         timeout: float = 300.0,
-        poll_interval: float = 2.0,
+        poll_interval: float = MAX_STATE_POLL_INTERVAL,
     ) -> job_pb2.JobStatus:
         """Wait for job to complete with exponential backoff polling.
 
@@ -183,7 +215,9 @@ class RemoteClusterClient:
         Args:
             job_id: Full job ID
             timeout: Maximum time to wait in seconds
-            poll_interval: Maximum time between status checks
+            poll_interval: Upper bound on the state-poll backoff. The loop
+                starts at 100ms and grows exponentially until reaching this
+                cap.
 
         Returns:
             Final JobStatus
@@ -192,7 +226,10 @@ class RemoteClusterClient:
             TimeoutError: If job doesn't complete within timeout
         """
         deadline = Deadline.from_seconds(timeout)
-        backoff = ExponentialBackoff(initial=0.1, maximum=poll_interval)
+        backoff = ExponentialBackoff(
+            initial=MIN_STATE_POLL_INTERVAL,
+            maximum=max(poll_interval, MIN_STATE_POLL_INTERVAL),
+        )
 
         while True:
             # Poll with lightweight state-only RPC during the loop.
@@ -223,7 +260,7 @@ class RemoteClusterClient:
         job_id: JobName,
         *,
         timeout: float,
-        poll_interval: float,
+        poll_interval: float = MAX_STATE_POLL_INTERVAL,
         since_ms: int = 0,
         min_level: str = "",
     ) -> job_pb2.JobStatus:
@@ -232,6 +269,10 @@ class RemoteClusterClient:
         Delegates log reading to the controller (which has the correct storage
         credentials and endpoint configuration), avoiding client-side S3 access.
 
+        ``poll_interval`` caps the state-poll backoff; the loop starts at 100ms
+        and grows exponentially until reaching that bound, matching
+        :py:meth:`wait_for_job`.
+
         If the controller becomes unavailable, retries with backoff for up to
         ``CONTROLLER_UNAVAILABLE_TOLERANCE`` seconds or until the caller's
         *timeout* expires -- whichever comes first. Log fetch failures are
@@ -239,8 +280,12 @@ class RemoteClusterClient:
         """
         deadline = Deadline.from_seconds(timeout)
         terminal_status: job_pb2.JobStatus | None = None
-        source = build_log_source(job_id)
+        source, match_scope = build_log_source(job_id)
         cursor: int = 0
+        backoff = ExponentialBackoff(
+            initial=MIN_STATE_POLL_INTERVAL,
+            maximum=max(poll_interval, MIN_STATE_POLL_INTERVAL),
+        )
 
         while True:
             # Poll with lightweight state-only RPC during the loop.
@@ -254,7 +299,13 @@ class RemoteClusterClient:
             state_name = job_pb2.JobState.Name(state)
 
             try:
-                log_response = self.fetch_logs(source, since_ms=since_ms, cursor=cursor, min_level=min_level)
+                log_response = self.fetch_logs(
+                    source,
+                    match_scope=match_scope,
+                    since_ms=since_ms,
+                    cursor=cursor,
+                    min_level=min_level,
+                )
             except Exception as e:
                 msg = format_connect_error(e) if isinstance(e, ConnectError) else str(e)
                 logger.warning("Failed to fetch logs for %s, will retry: %s", job_id, msg)
@@ -289,7 +340,8 @@ class RemoteClusterClient:
                 continue
 
             deadline.raise_if_expired(f"Job {job_id} did not complete in {timeout}s")
-            time.sleep(poll_interval)
+            interval = backoff.next_interval()
+            time.sleep(min(interval, deadline.remaining_seconds()))
 
     def terminate_job(self, job_id: JobName) -> None:
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire())
@@ -341,13 +393,37 @@ class RemoteClusterClient:
 
         return call_with_retry("list_workers", _call)
 
-    def list_jobs(self) -> list[job_pb2.JobStatus]:
-        def _call():
-            request = controller_pb2.Controller.ListJobsRequest()
-            response = self._client.list_jobs(request)
-            return list(response.jobs)
+    def list_jobs(
+        self,
+        *,
+        query: controller_pb2.Controller.JobQuery,
+        page_size: int = 500,
+    ) -> list[job_pb2.JobStatus]:
+        """Fetch all jobs matching ``query`` by paging through ``ListJobs``.
 
-        return call_with_retry("list_jobs", _call)
+        The server caps each page at ``MAX_LIST_JOBS_LIMIT`` and rejects deep
+        offsets (``MAX_LIST_JOBS_OFFSET``). Callers must supply a query that
+        narrows the result set with ``state_filter`` / ``name_filter`` /
+        ``parent_job_id``; otherwise the page walk will fail once it reaches
+        the offset cap.
+        """
+        jobs: list[job_pb2.JobStatus] = []
+        offset = query.offset or 0
+        while True:
+            page_query = controller_pb2.Controller.JobQuery()
+            page_query.CopyFrom(query)
+            page_query.offset = offset
+            page_query.limit = page_size
+
+            def _call(q=page_query):
+                request = controller_pb2.Controller.ListJobsRequest(query=q)
+                return self._client.list_jobs(request)
+
+            response = call_with_retry("list_jobs", _call)
+            jobs.extend(response.jobs)
+            if not response.has_more or not response.jobs:
+                return jobs
+            offset += len(response.jobs)
 
     def shutdown(self, wait: bool = True) -> None:
         del wait
@@ -393,6 +469,7 @@ class RemoteClusterClient:
         self,
         source: str,
         *,
+        match_scope: int = logging_pb2.MATCH_SCOPE_UNSPECIFIED,
         since_ms: int = 0,
         cursor: int = 0,
         max_lines: int = 0,
@@ -402,6 +479,7 @@ class RemoteClusterClient:
     ) -> logging_pb2.FetchLogsResponse:
         request = logging_pb2.FetchLogsRequest(
             source=source,
+            match_scope=match_scope,
             since_ms=since_ms,
             cursor=cursor,
             max_lines=max_lines,
@@ -427,3 +505,18 @@ class RemoteClusterClient:
             return self._client.get_autoscaler_status(request)
 
         return call_with_retry("get_autoscaler_status", _call)
+
+    def report_task_status_text(self, task_id: JobName, detail_md: str, summary_md: str) -> None:
+        """Push markdown status text to the controller for UI display.
+
+        Args:
+            task_id: Full task ID of the currently-running task.
+            detail_md: Full markdown for the task detail page.
+            summary_md: Short summary (up to ~3 lines) for the task list table.
+        """
+        request = job_pb2.SetTaskStatusTextRequest(
+            task_id=task_id.to_wire(),
+            status_text_detail_md=detail_md,
+            status_text_summary_md=summary_md,
+        )
+        self._client.set_task_status_text(request)

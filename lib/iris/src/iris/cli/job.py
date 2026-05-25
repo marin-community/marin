@@ -8,6 +8,7 @@ Usage:
     iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
+import difflib
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ import click
 import humanfriendly
 import yaml
 from google.protobuf import json_format
+from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
 from iris.cli.bug_report import file_github_issue, format_bug_report, gather_bug_report
@@ -30,10 +32,13 @@ from iris.cluster.constraints import (
     WellKnownAttribute,
     device_variant_constraint,
     infer_preemptible_constraint,
+    preemptible_constraint,
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import (
+    TERMINAL_TASK_STATES,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -46,9 +51,13 @@ from iris.cluster.types import (
 )
 from iris.rpc import job_pb2
 from iris.rpc.auth import TokenProvider
-from iris.rpc.proto_utils import job_state_friendly, task_state_friendly
+from iris.rpc.proto_utils import (
+    PRIORITY_BAND_NAMES,
+    job_state_friendly,
+    priority_band_value,
+    task_state_friendly,
+)
 from iris.time_proto import timestamp_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -62,38 +71,6 @@ _STATE_MAP: dict[str, job_pb2.JobState] = {
     "worker_failed": job_pb2.JOB_STATE_WORKER_FAILED,
     "unschedulable": job_pb2.JOB_STATE_UNSCHEDULABLE,
 }
-
-
-def _format_resources(resources: job_pb2.ResourceSpecProto | None) -> str:
-    """Format job resources as a compact human-readable string."""
-    if not resources:
-        return "-"
-
-    parts = []
-
-    # CPU
-    if resources.cpu_millicores:
-        parts.append(f"{resources.cpu_millicores / 1000:g}cpu")
-
-    # Memory
-    if resources.memory_bytes:
-        parts.append(humanfriendly.format_size(resources.memory_bytes, binary=True))
-
-    # Disk
-    if resources.disk_bytes:
-        parts.append(f"{humanfriendly.format_size(resources.disk_bytes, binary=True)} disk")
-
-    # Device (TPU/GPU)
-    if resources.HasField("device"):
-        device = resources.device
-        if device.HasField("tpu"):
-            parts.append(device.tpu.variant)
-        elif device.HasField("gpu"):
-            gpu = device.gpu
-            gpu_str = f"{gpu.count}x{gpu.variant}" if gpu.variant else f"{gpu.count}gpu"
-            parts.append(gpu_str)
-
-    return ", ".join(parts) if parts else "-"
 
 
 def _terminate_jobs(
@@ -185,6 +162,7 @@ KNOWN_GPU_VARIANTS: frozenset[str] = frozenset(
         "B100",
         "B200",
         "GB200",
+        "GH200",
         "H100",
         "H200",
         "L4",
@@ -235,26 +213,10 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
     )
 
 
-def _levenshtein(a: str, b: str) -> int:
-    if len(a) < len(b):
-        return _levenshtein(b, a)
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a):
-        curr = [i + 1] + [0] * len(b)
-        for j, cb in enumerate(b):
-            curr[j + 1] = min(prev[j + 1] + 1, curr[j] + 1, prev[j] + (ca != cb))
-        prev = curr
-    return prev[-1]
-
-
-def _find_closest(value: str, known: set[str], max_distance: int = 5) -> str | None:
-    """Return the closest match from *known* by edit distance, or None."""
-    best, best_dist = None, max_distance + 1
-    for candidate in sorted(known):
-        dist = _levenshtein(value, candidate)
-        if dist < best_dist:
-            best, best_dist = candidate, dist
-    return best if best_dist <= max_distance else None
+def _find_closest(value: str, known: set[str]) -> str | None:
+    """Return the closest match from *known* by sequence similarity, or None."""
+    matches = difflib.get_close_matches(value, sorted(known), n=1, cutoff=0.6)
+    return matches[0] if matches else None
 
 
 def _known_regions_and_zones(config) -> tuple[set[str], set[str]]:
@@ -530,6 +492,41 @@ def resolve_multinode_defaults(
     return replicas, coscheduling
 
 
+def build_job_constraints(
+    resources_proto: job_pb2.ResourceSpecProto,
+    tpu_variants: list[str],
+    replicas: int,
+    regions: tuple[str, ...] | None = None,
+    zone: str | None = None,
+    preemptible: bool | None = None,
+) -> list[Constraint]:
+    """Assemble the constraint list for a submitted job.
+
+    An explicit ``preemptible`` value wins over the executor heuristic:
+    ``infer_preemptible_constraint`` short-circuits when any preemptible
+    constraint is already present, so we append the user's choice first.
+    """
+    constraints: list[Constraint] = []
+    if regions:
+        constraints.append(region_constraint(list(regions)))
+    if zone:
+        constraints.append(zone_constraint(zone))
+    if len(tpu_variants) > 1:
+        constraints.append(device_variant_constraint(tpu_variants))
+    if preemptible is not None:
+        constraints.append(preemptible_constraint(preemptible))
+
+    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
+    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
+    # coordinators survive spot reclamation. Skipped when the user supplied
+    # --preemptible / --no-preemptible.
+    inferred = infer_preemptible_constraint(resources_proto, replicas, constraints)
+    if inferred is not None:
+        constraints.append(inferred)
+        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
+    return constraints
+
+
 def run_iris_job(
     command: list[str],
     env_vars: dict[str, str],
@@ -550,7 +547,10 @@ def run_iris_job(
     zone: str | None = None,
     user: str | None = None,
     reserve: tuple[str, ...] | None = None,
+    priority: str | None = None,
+    preemptible: bool | None = None,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Core job submission logic.
 
@@ -561,6 +561,8 @@ def run_iris_job(
         regions: If provided, restrict the job to workers in these regions.
         zone: If provided, restrict the job to workers in this zone.
         reserve: Reservation specs (e.g., ("4:H100x8", "v5litepod-16")).
+        preemptible: If True/False, force scheduling on (non-)preemptible workers
+            and bypass the executor heuristic. If None (default), the heuristic runs.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -575,25 +577,29 @@ def run_iris_job(
 
     replicas, coscheduling = resolve_multinode_defaults(primary_tpu, gpu, replicas)
 
-    constraints: list[Constraint] = []
-    if regions:
-        constraints.append(region_constraint(list(regions)))
-    if zone:
-        constraints.append(zone_constraint(zone))
-    if len(tpu_variants) > 1:
-        constraints.append(device_variant_constraint(tpu_variants))
-
-    # Executor heuristic: small CPU-only CLI jobs (no accelerators, 1 replica,
-    # CPU ≤ 0.5 cores, RAM ≤ 4 GiB) are auto-tagged as non-preemptible so
-    # coordinators survive spot reclamation.
     resources_proto = resources.to_proto()
-    preemptible = infer_preemptible_constraint(resources_proto, replicas, constraints)
-    if preemptible is not None:
-        constraints.append(preemptible)
-        logger.info("Executor heuristic: auto-tagging job as non-preemptible")
+    constraints = build_job_constraints(
+        resources_proto=resources_proto,
+        tpu_variants=tpu_variants,
+        replicas=replicas,
+        regions=regions,
+        zone=zone,
+        preemptible=preemptible,
+    )
 
     reservation: list[ReservationEntry] | None = None
     if reserve:
+        # --reserve is mutually exclusive with --region/--zone: the controller's
+        # claim loop only evaluates each reservation entry's own constraints, so
+        # job-level routing constraints would not gate worker claims (#4988).
+        # A caller who needs a specific region/zone should name it directly; a
+        # caller who uses a reservation is by definition not picking the region.
+        if regions or zone:
+            raise click.UsageError(
+                "--reserve cannot be combined with --region or --zone. "
+                "Use --region/--zone to target a specific location, or --reserve "
+                "to claim from a reservation (which chooses the location for you)."
+            )
         reservation = []
         for spec in reserve:
             reservation.extend(parse_reservation_spec(spec))
@@ -617,10 +623,17 @@ def run_iris_job(
         logger.info(f"Region constraint: {', '.join(regions)}")
     if zone:
         logger.info(f"Zone constraint: {zone}")
+    if preemptible is not None:
+        logger.info(f"Preemptible constraint: {preemptible}")
     if reservation:
         logger.info(f"Reservation: {len(reservation)} entries")
 
     logger.info(f"Using controller: {controller_url}")
+    priority_band = job_pb2.PRIORITY_BAND_UNSPECIFIED
+    if priority is not None:
+        priority_band = priority_band_value(priority)
+        logger.info(f"Priority band: {priority}")
+
     return _submit_and_wait_job(
         controller_url=controller_url,
         job_name=job_name,
@@ -637,7 +650,9 @@ def run_iris_job(
         coscheduling=coscheduling,
         user=user,
         reservation=reservation,
+        priority_band=priority_band,
         token_provider=token_provider,
+        submit_argv=submit_argv,
     )
 
 
@@ -657,7 +672,9 @@ def _submit_and_wait_job(
     coscheduling: CoschedulingConfig | None = None,
     user: str | None = None,
     reservation: list[ReservationEntry] | None = None,
+    priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_UNSPECIFIED,
     token_provider: TokenProvider | None = None,
+    submit_argv: list[str] | None = None,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -679,6 +696,8 @@ def _submit_and_wait_job(
         timeout=Duration.from_seconds(timeout) if timeout else None,
         user=user,
         reservation=reservation,
+        priority_band=priority_band,
+        submit_argv=submit_argv,
     )
 
     logger.info(f"Job submitted: {job.job_id}")
@@ -774,7 +793,7 @@ Examples:
         "requested by worker tasks spawned by the job."
     ),
 )
-@click.option("--cpu", type=float, default=0.5, show_default=True, help="Number of CPUs to request")
+@click.option("--cpu", type=float, default=0.1, show_default=True, help="Number of CPUs to request")
 @click.option("--memory", type=str, default="1GB", show_default=True, help="Memory size to request (e.g., 8GB, 512MB)")
 @click.option(
     "--disk", type=str, default="5GB", show_default=True, help="Ephemeral disk size to request (e.g., 64GB, 1TB)"
@@ -797,6 +816,22 @@ Examples:
         "Reserve workers before scheduling. Format: [COUNT:]DEVICE "
         "(e.g., 4:H100x8, v5litepod-16). Can be repeated. Reservation does not "
         "attach accelerator devices to the task; use --tpu/--gpu for accelerator jobs."
+    ),
+)
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Priority band for scheduling (default: interactive). Lower bands run first; batch jobs yield to interactive.",
+)
+@click.option(
+    "--preemptible/--no-preemptible",
+    "preemptible",
+    default=None,
+    help=(
+        "Force scheduling on preemptible (--preemptible) or non-preemptible "
+        "(--no-preemptible) workers. Overrides the executor heuristic. "
+        "Default: heuristic-based (small CPU-only jobs pinned to non-preemptible)."
     ),
 )
 @click.option(
@@ -825,6 +860,8 @@ def run(
     zone: str | None,
     extra: tuple[str, ...],
     reserve: tuple[str, ...],
+    priority: str | None,
+    preemptible: bool | None,
     terminate_on_exit: bool,
     cmd: tuple[str, ...],
 ):
@@ -836,6 +873,8 @@ def run(
     command = list(cmd)
     if not command:
         raise click.UsageError("No command provided after --")
+
+    submit_argv = redact_submit_argv(list(sys.argv))
 
     # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
     # instead of --reserve) into cmd. Catch any flags that leaked through
@@ -871,7 +910,10 @@ def run(
             regions=region or None,
             zone=zone,
             reserve=reserve or None,
+            priority=priority,
+            preemptible=preemptible,
             token_provider=ctx.obj.get("token_provider"),
+            submit_argv=submit_argv,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")
@@ -919,7 +961,12 @@ def kill(ctx, job_id: tuple[str, ...], include_children: bool) -> None:
 
 @job.command("list")
 @click.option("--state", type=str, default=None, help="Filter by state (e.g., running, pending, failed)")
-@click.option("--prefix", type=str, default=None, help="Filter by job name prefix")
+@click.option(
+    "--prefix",
+    type=str,
+    default=None,
+    help="Anchored prefix match against the wire-form job_id (e.g. '/alice/exp-').",
+)
 @click.option("--json", "json_output", is_flag=True, help="Output as JSON")
 @click.pass_context
 def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> None:
@@ -927,16 +974,15 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
     controller_url = require_controller_url(ctx)
     client = IrisClient.remote(controller_url, workspace=Path.cwd(), token_provider=ctx.obj.get("token_provider"))
 
-    states: list[job_pb2.JobState] | None = None
+    state_value: job_pb2.JobState | None = None
     if state is not None:
         state_lower = state.lower()
         if state_lower not in _STATE_MAP:
             valid = ", ".join(sorted(_STATE_MAP.keys()))
             raise click.UsageError(f"Unknown state '{state}'. Valid states: {valid}")
-        states = [_STATE_MAP[state_lower]]
+        state_value = _STATE_MAP[state_lower]
 
-    prefix_name = JobName.from_wire(prefix) if prefix else None
-    jobs = client.list_jobs(states=states, prefix=prefix_name)
+    jobs = client.list_jobs(state=state_value, prefix=prefix)
 
     # Sort by submitted_at descending (most recent first)
     jobs.sort(key=lambda j: j.submitted_at.epoch_ms, reverse=True)
@@ -950,7 +996,6 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         click.echo("No jobs found.")
         return
 
-    # Build table rows
     rows: list[list[str]] = []
     has_reasons = False
 
@@ -958,39 +1003,21 @@ def list_jobs(ctx, state: str | None, prefix: str | None, json_output: bool) -> 
         job_id = j.job_id
         state_name = job_state_friendly(j.state)
         submitted = timestamp_from_proto(j.submitted_at).as_formatted_date() if j.submitted_at.epoch_ms else "-"
-        resources = _format_resources(j.resources) if j.HasField("resources") else "-"
 
-        # Show error for failed jobs, pending_reason for pending/unschedulable
         reason = j.error or j.pending_reason or ""
         if reason:
             has_reasons = True
-            # Truncate long reasons
             reason = (reason[:60] + "...") if len(reason) > 63 else reason
 
-        rows.append([job_id, state_name, resources, submitted, reason])
+        rows.append([job_id, state_name, submitted, reason])
 
-    # Build headers - only include REASON column if there are any reasons
     if has_reasons:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED", "REASON"]
+        headers = ["JOB ID", "STATE", "SUBMITTED", "REASON"]
     else:
-        headers = ["JOB ID", "STATE", "RESOURCES", "SUBMITTED"]
-        rows = [row[:4] for row in rows]
+        headers = ["JOB ID", "STATE", "SUBMITTED"]
+        rows = [row[:3] for row in rows]
 
     click.echo(tabulate(rows, headers=headers, tablefmt="plain"))
-
-
-# Mirrors iris.cluster.controller.db.TERMINAL_TASK_STATES. Duplicated here to
-# avoid a CLI → controller.db import dependency just for the constant.
-_TERMINAL_TASK_STATES: frozenset[int] = frozenset(
-    {
-        job_pb2.TASK_STATE_SUCCEEDED,
-        job_pb2.TASK_STATE_FAILED,
-        job_pb2.TASK_STATE_KILLED,
-        job_pb2.TASK_STATE_UNSCHEDULABLE,
-        job_pb2.TASK_STATE_WORKER_FAILED,
-        job_pb2.TASK_STATE_PREEMPTED,
-    }
-)
 
 
 def _task_index(task_id: str) -> str:
@@ -1046,7 +1073,7 @@ def build_job_summary(
                 # Only surface exit_code once the task is terminal. Proto scalar
                 # defaults mean a RUNNING/ASSIGNED/BUILDING task would otherwise
                 # report exit=0 and look like a clean success.
-                "exit_code": int(t.exit_code) if t.state in _TERMINAL_TASK_STATES else None,
+                "exit_code": int(t.exit_code) if t.state in TERMINAL_TASK_STATES else None,
                 "duration_ms": _task_duration_ms(t),
                 "memory_mb": int(usage.memory_mb) if usage.memory_mb else 0,
                 "memory_peak_mb": int(usage.memory_peak_mb) if usage.memory_peak_mb else 0,
@@ -1140,7 +1167,7 @@ def summary(ctx, job_id: str, json_output: bool) -> None:
     default=0,
     help="Maximum number of log lines to return (0 = server default, currently 1000).",
 )
-@click.option("--tail", is_flag=True, help="Return the most recent lines instead of the earliest.")
+@click.option("--tail/--no-tail", default=True, help="Return the most recent lines instead of the earliest.")
 @click.option(
     "--level",
     type=click.Choice(["debug", "info", "warning", "error", "critical"], case_sensitive=False),
@@ -1158,7 +1185,7 @@ def logs(
     tail: bool,
     level: str | None,
 ) -> None:
-    """Stream task logs for a job using batch log fetching."""
+    """Stream task logs for a job and its descendants using batch log fetching."""
     if since_ms is not None and since_seconds is not None:
         raise click.UsageError("Specify only one of --since-ms or --since-seconds.")
 

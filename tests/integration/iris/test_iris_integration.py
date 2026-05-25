@@ -9,30 +9,28 @@ No dashboard screenshots are taken here; those remain in lib/iris/tests/e2e/test
 
 import logging
 import os
-import re
 import time
 import uuid
 
 import pytest
+from finelog.rpc import logging_pb2
 from iris.cluster.constraints import region_constraint
 from iris.cluster.types import (
     ReservationEntry,
     ResourceSpec,
     gpu_device,
 )
-from iris.rpc import logging_pb2
-from iris.rpc import job_pb2
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Duration, ExponentialBackoff
 
 from .jobs import (
     busy_loop,
+    fail,
     log_verbose,
     noop,
     quick,
-    fail,
-    sleep,
     register_endpoint,
+    sleep,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,9 +124,9 @@ def test_log_levels_populated(integration_cluster, verbose_job):
 
     deadline = time.monotonic() + integration_cluster.job_timeout
     entries = []
-    source = re.escape(task_id) + ":.*"
+    source = f"{task_id}:"
     while time.monotonic() < deadline:
-        response = integration_cluster.fetch_logs(source)
+        response = integration_cluster.fetch_logs(source, match_scope=logging_pb2.MATCH_SCOPE_PREFIX)
         entries = list(response.entries)
         if any("info-marker" in e.data for e in entries):
             break
@@ -150,7 +148,9 @@ def test_log_level_filter(integration_cluster, verbose_job):
     """min_level=WARNING excludes INFO."""
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    response = integration_cluster.fetch_logs(re.escape(task_id) + ":.*", min_level="WARNING")
+    response = integration_cluster.fetch_logs(
+        f"{task_id}:", match_scope=logging_pb2.MATCH_SCOPE_PREFIX, min_level="WARNING"
+    )
     filtered = list(response.entries)
 
     filtered_data = [e.data for e in filtered]

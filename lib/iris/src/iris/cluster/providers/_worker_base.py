@@ -18,13 +18,14 @@ import shlex
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from rigging.timing import Duration
+
 from iris.cluster.providers.remote_exec import (
     RemoteExec,
     run_streaming_with_retry,
     wait_for_connection,
 )
 from iris.cluster.providers.types import CommandResult
-from rigging.timing import Duration
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class RemoteExecWorkerBase:
     _remote_exec: RemoteExec
     _vm_id: str
     _internal_address: str
+    _port: int
     _external_address: str | None = None
     _bootstrap_log_lines: list[str] = field(default_factory=list)
 
@@ -57,6 +59,12 @@ class RemoteExecWorkerBase:
     @property
     def internal_address(self) -> str:
         return self._internal_address
+
+    @property
+    def worker_url(self) -> str:
+        if not self._internal_address:
+            return ""
+        return f"http://{self._internal_address}:{self._port}"
 
     @property
     def external_address(self) -> str | None:

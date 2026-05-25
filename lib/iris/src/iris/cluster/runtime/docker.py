@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rigging.timing import Timestamp
+
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.env import write_workdir_files
 from iris.cluster.runtime.profile import (
@@ -50,8 +52,7 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
-from iris.rpc import job_pb2
-from rigging.timing import Timestamp
+from iris.rpc import config_pb2, job_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -348,7 +349,8 @@ class DockerContainerHandle:
         setup_script = self._generate_setup_script()
         self._write_setup_script(setup_script)
 
-        # Build containers get max(8 GB, task request) memory
+        # Build containers get max(32 GB, task request) memory — uv sync on a large
+        # workspace OOMed at the old 8 GB ceiling on a host with 1.4 TB free.
         task_memory_bytes = self.config.resources.memory_bytes if self.config.resources else 0
         build_memory_bytes = (
             max(self._BUILD_MEMORY_LIMIT_BYTES, task_memory_bytes)
@@ -602,7 +604,7 @@ exec {quoted_cmd}
     # Docker CLI helpers
     # -------------------------------------------------------------------------
 
-    _BUILD_MEMORY_LIMIT_BYTES = 8 * 1024**3
+    _BUILD_MEMORY_LIMIT_BYTES = 32 * 1024**3
 
     def _docker_create(
         self,
@@ -675,6 +677,8 @@ exec {quoted_cmd}
             cmd.extend(["--label", f"iris.job_id={config.job_id}"])
         if config.attempt_id is not None:
             cmd.extend(["--label", f"iris.attempt_id={config.attempt_id}"])
+        if config.attempt_uid:
+            cmd.extend(["--label", f"iris.attempt_uid={config.attempt_uid}"])
         if config.worker_id:
             cmd.extend(["--label", f"iris.worker_id={config.worker_id}"])
         # Phase label: used during adoption to distinguish adoptable run
@@ -685,8 +689,13 @@ exec {quoted_cmd}
         # Resource limits (cgroups v2) — always applied
         cpu_millicores = config.get_cpu_millicores()
         if cpu_millicores:
-            cpus = cpu_millicores / 1000
-            cmd.extend(["--cpus", str(cpus)])
+            if self.runtime.capacity_type == config_pb2.CAPACITY_TYPE_ON_DEMAND:
+                # Soft weight: on-demand workers let containers burst onto idle
+                # host CPU; the scheduler still places by cpu_millicores.
+                shares = max(2, int(cpu_millicores * 1024 / 1000))
+                cmd.extend(["--cpu-shares", str(shares)])
+            else:
+                cmd.extend(["--cpus", str(cpu_millicores / 1000)])
         effective_memory_mb = memory_limit_mb or config.get_memory_mb()
         if effective_memory_mb:
             cmd.extend(["--memory", f"{effective_memory_mb}m"])
@@ -863,8 +872,13 @@ class DockerRuntime:
     Tracks all created containers for cleanup on shutdown.
     """
 
-    def __init__(self, cache_dir: Path) -> None:
+    def __init__(self, cache_dir: Path, capacity_type: int = 0) -> None:
         self._cache_dir = cache_dir
+        # Drives whether per-container CPU is a hard cap (`--cpus`) or a soft
+        # weight (`--cpu-shares`). On-demand workers use soft weights so small
+        # entrypoint/coordinator containers can burst onto otherwise-idle host
+        # CPU; preemptible/reserved keep the hard cap for predictability.
+        self.capacity_type = capacity_type
         self._handles: list[DockerContainerHandle] = []
         self._created_containers: set[str] = set()
         # Serializes `docker pull` per image tag so that concurrent task threads
@@ -1033,6 +1047,7 @@ class DockerRuntime:
                     container_id=info["Id"],
                     task_id=task_id,
                     attempt_id=int(attempt_id_str),
+                    attempt_uid=labels.get("iris.attempt_uid", ""),
                     job_id=labels.get("iris.job_id", ""),
                     worker_id=labels.get("iris.worker_id", ""),
                     phase=ExecutionStage(labels.get("iris.phase", "run")),

@@ -20,17 +20,15 @@ The run_once() flow splits into two phases:
 from __future__ import annotations
 
 import logging
+import urllib.error
+import urllib.request
 from collections import deque
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 
-from iris.cluster.providers.protocols import WorkerInfraProvider
-from iris.cluster.providers.types import (
-    CloudSliceState,
-    QuotaExhaustedError,
-    RemoteWorkerHandle,
-    SliceHandle,
-)
-from iris.cluster.constraints import ConstraintIndex, routing_constraints
+from rigging.timing import Duration, Timestamp
+
+from iris.cluster.constraints import Constraint
 from iris.cluster.controller.autoscaler.models import (
     DemandEntry,
     ScalingAction,
@@ -38,6 +36,8 @@ from iris.cluster.controller.autoscaler.models import (
 )
 from iris.cluster.controller.autoscaler.operations import (
     restart_worker as restart_worker_operation,
+)
+from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
@@ -45,26 +45,55 @@ from iris.cluster.controller.autoscaler.recovery import (
     load_autoscaler_checkpoint,
     restore_autoscaler_state,
 )
-from iris.cluster.controller.autoscaler.routing import route_demand
-from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
-from iris.cluster.controller.autoscaler.status import routing_decision_to_proto
+from iris.cluster.controller.autoscaler.routing import job_feasibility, route_demand
+from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup, build_worker_config_for_group
+from iris.cluster.controller.autoscaler.status import PendingHint, build_job_pending_hints, routing_decision_to_proto
 from iris.cluster.controller.autoscaler.worker_registry import TrackedWorker, WorkerRegistry
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.worker_health import PING_FAILURE_THRESHOLD
+from iris.cluster.providers.protocols import WorkerInfraProvider
+from iris.cluster.providers.types import (
+    CloudSliceState,
+    QuotaExhaustedError,
+    RemoteWorkerHandle,
+    SliceHandle,
+)
 from iris.cluster.types import WorkerStatusMap
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import config_pb2, vm_pb2
-from iris.rpc import job_pb2
 from iris.time_proto import duration_from_proto, timestamp_to_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
 
-# Slices that die within this time of creation trigger backoff (preemption detection)
-SHORT_LIVED_SLICE_THRESHOLD = Duration.from_minutes(5)
-
 # After this long in UNKNOWN state, treat the slice as FAILED (quota timeout is 5 min, so this is conservative)
 DEFAULT_UNRESOLVABLE_TIMEOUT = Duration.from_minutes(15)
+
+# How long the autoscaler waits for a worker /health response per probe.
+_HEALTH_PROBE_TIMEOUT_SECONDS = 3.0
+
+# Bypass any HTTP_PROXY env var: worker addresses are private cluster IPs,
+# never reachable via an upstream proxy.
+_HEALTH_PROBE_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+# Cap concurrent /health probes. ~1000 VMs in production; serializing 3 s
+# timeouts would blow past evaluation_interval (10 s default).
+_HEALTH_PROBE_MAX_WORKERS = 64
+
+
+def _probe_worker_health(worker_url: str) -> bool:
+    """Probe a worker's /health endpoint. ``worker_url`` is an ``http://host:port`` base URL.
+
+    Returns True iff the response is 2xx.
+    """
+    try:
+        resp = _HEALTH_PROBE_OPENER.open(
+            f"{worker_url}/health",
+            timeout=_HEALTH_PROBE_TIMEOUT_SECONDS,
+        )
+        return 200 <= resp.status < 300
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
+        return False
 
 
 class Autoscaler:
@@ -118,6 +147,13 @@ class Autoscaler:
         # Most recent routing decision (for status API)
         self._last_scale_plan: ScalePlan | None = None
         self._last_evaluation: Timestamp = Timestamp.from_ms(0)
+
+        # Derived views of _last_scale_plan, built lazily and invalidated by
+        # evaluate(). Dashboard polls (GetJobStatus, ListJobs) hit these on
+        # every pending job; building them per request was the bottleneck
+        # described in #4844.
+        self._last_routing_decision_proto: vm_pb2.RoutingDecision | None = None
+        self._last_pending_hints: dict[str, PendingHint] | None = None
 
         # Thread management
         self._threads = threads if threads is not None else get_thread_container()
@@ -222,6 +258,14 @@ class Autoscaler:
             status=status,
         )
         self._action_log.append(action)
+        logger.info(
+            "event=autoscaler action=%s entity=%s trigger=- group=%s status=%s reason=%s",
+            action_type,
+            slice_id or scale_group,
+            scale_group,
+            status,
+            reason,
+        )
         return action
 
     def evaluate(
@@ -247,6 +291,13 @@ class Autoscaler:
         routing_decision = route_demand(list(self._groups.values()), demand_entries, ts)
         scale_plan = build_scale_plan(self._groups, routing_decision, ts)
         self._last_scale_plan = scale_plan
+        # Build cached views eagerly here so dashboard/service RPCs never pay
+        # the conversion cost on the hot path (#4844).
+        self._last_routing_decision_proto = routing_decision_to_proto(
+            routing_decision,
+            group_to_launch=scale_plan.launch_counts(),
+        )
+        self._last_pending_hints = build_job_pending_hints(self._last_routing_decision_proto)
 
         if routing_decision.unmet_entries:
             logger.debug(
@@ -284,6 +335,9 @@ class Autoscaler:
             decisions: List of scaling decisions to execute.
             timestamp: Current timestamp.
         """
+        # Aggregate rate-limited decisions per group so we emit a single summary
+        # line per group per cycle instead of one per deferred slice (#5580).
+        rate_limited: dict[str, list[ScalingDecision]] = {}
         for decision in decisions:
             group = self._groups.get(decision.scale_group)
             if not group:
@@ -291,15 +345,27 @@ class Autoscaler:
                 continue
 
             if decision.action == ScalingAction.SCALE_UP:
-                if not group.acquire_scale_up_token(timestamp):
-                    logger.info("Rate-limited scale-up for %s: %s", decision.scale_group, decision.reason)
-                    self._log_action(
-                        "rate_limited",
-                        decision.scale_group,
-                        reason=decision.reason,
-                    )
+                if not group.try_acquire_scale_up(timestamp):
+                    rate_limited.setdefault(decision.scale_group, []).append(decision)
                     continue
                 self._execute_scale_up(group, timestamp, reason=decision.reason)
+
+        for scale_group, deferred in rate_limited.items():
+            # All decisions in a cycle share the same target/demand snapshot;
+            # the first reason is representative of the whole batch.
+            sample_reason = deferred[0].reason
+            summary = f"deferred={len(deferred)} sample_reason={sample_reason}"
+            logger.info(
+                "Rate-limited scale-up for %s: deferred %d slice(s) (sample reason: %s)",
+                scale_group,
+                len(deferred),
+                sample_reason,
+            )
+            self._log_action(
+                "rate_limited",
+                scale_group,
+                reason=summary,
+            )
 
     def _execute_scale_up(self, group: ScalingGroup, ts: Timestamp, reason: str = "") -> None:
         """Initiate async scale-up for a scale group.
@@ -354,36 +420,12 @@ class Autoscaler:
             logger.exception("Failed to create slice for %s: %s", group.name, e)
             action.status = "failed"
             action.reason = f"{reason} - error: {e}"
-            group.record_failure(ts)
+            group.record_create_failed(ts)
             return False
 
     def _per_group_worker_config(self, group: ScalingGroup) -> config_pb2.WorkerConfig | None:
         """Build per-group WorkerConfig by merging base config with scale group overrides."""
-        if not self._base_worker_config:
-            return None
-
-        wc = config_pb2.WorkerConfig()
-        wc.CopyFrom(self._base_worker_config)
-
-        # Accelerator config from scale group resources
-        resources = group.config.resources if group.config.HasField("resources") else None
-        if resources is not None:
-            wc.accelerator_type = resources.device_type
-            if resources.device_variant:
-                wc.accelerator_variant = resources.device_variant
-            if resources.device_type == config_pb2.ACCELERATOR_TYPE_GPU and resources.device_count > 0:
-                wc.gpu_count = resources.device_count
-            wc.capacity_type = resources.capacity_type
-
-        # Worker attributes from scale group
-        if group.config.HasField("worker"):
-            for k, v in group.config.worker.attributes.items():
-                wc.worker_attributes[k] = v
-
-        if group.config.name:
-            wc.worker_attributes["scale-group"] = group.config.name
-
-        return wc
+        return build_worker_config_for_group(self._base_worker_config, group.config)
 
     def _register_slice_workers(
         self,
@@ -414,7 +456,8 @@ class Autoscaler:
 
                 if status.state == CloudSliceState.READY:
                     worker_ids = [w.worker_id for w in status.workers]
-                    group.mark_slice_ready(slice_id, worker_ids)
+                    worker_urls = self._worker_urls(status.workers)
+                    group.mark_slice_ready(slice_id, worker_ids, worker_urls=worker_urls)
                     self._register_slice_workers(status.workers, slice_id, group.name)
                     self._log_action(
                         "slice_ready",
@@ -426,7 +469,7 @@ class Autoscaler:
                     group.mark_slice_failed(slice_id, error_message=status.error_message)
                     group.scale_down(slice_id)
                     self._unregister_slice_workers(slice_id)
-                    group.record_failure()
+                    group.record_slice_boot_failed(slice_id, timestamp)
                     reason = status.error_message if status.error_message else "bootstrap failed"
                     self._log_action(
                         "slice_failed",
@@ -441,7 +484,7 @@ class Autoscaler:
                         group.mark_slice_failed(slice_id, error_message="unresolvable after timeout")
                         group.scale_down(slice_id)
                         self._unregister_slice_workers(slice_id)
-                        group.record_failure()
+                        group.record_slice_boot_failed(slice_id, timestamp)
                         self._log_action(
                             "slice_failed",
                             group.name,
@@ -470,6 +513,95 @@ class Autoscaler:
                     reason=f"idle slice (target={target_capacity}, ready={ready_before})",
                 )
 
+    def probe_health(self, timestamp: Timestamp | None = None) -> None:
+        """Probe each READY slice's worker /health endpoint and terminate dead slices.
+
+        Catches zombie slices whose VM is still up in the cloud but whose
+        worker process is dead — these would otherwise be invisible to the
+        heartbeat path (no worker row → no heartbeat to time out) and pin the
+        scale group at max_slices indefinitely.
+
+        Per-worker counters live on SliceState. PING_FAILURE_THRESHOLD
+        consecutive failures (~100s at the default 10s evaluation interval,
+        matching the heartbeat-path threshold) trip termination. Worker URLs
+        come from the slice handle, refreshed lazily via ``handle.describe()``
+        when SliceState has none cached (e.g. after a controller restart).
+        Probes are fanned out across a thread pool so a partitioned AZ
+        doesn't burn the entire evaluation interval at the 3s per-probe
+        timeout. Slice teardown runs serially after all probes complete.
+        """
+        timestamp = timestamp or Timestamp.now()
+
+        # Phase 1: collect every (group, slice_id, worker_id, worker_url) probe target.
+        probes: list[tuple[ScalingGroup, str, str, str]] = []
+        for group in self._groups.values():
+            for slice_id, handle, worker_urls in group.ready_slice_probe_targets():
+                if not worker_urls:
+                    worker_urls = self._refresh_slice_worker_urls(group, slice_id, handle)
+                    if not worker_urls:
+                        continue  # describe() failed or partial; retry next tick
+                for worker_id, worker_url in worker_urls.items():
+                    probes.append((group, slice_id, worker_id, worker_url))
+        if not probes:
+            return
+
+        # Phase 2: fan out probes. Bound the pool so we don't melt the controller.
+        workers = min(_HEALTH_PROBE_MAX_WORKERS, len(probes))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="health-probe") as pool:
+            results = list(pool.map(lambda p: _probe_worker_health(p[3]), probes))
+
+        # Phase 3: record results and collect slices that tripped the threshold.
+        tripped: dict[str, tuple[ScalingGroup, str]] = {}  # slice_id -> (group, reason)
+        for (group, slice_id, worker_id, _url), healthy in zip(probes, results, strict=True):
+            count = group.record_health_probe_result(slice_id, worker_id, healthy)
+            if count >= PING_FAILURE_THRESHOLD and slice_id not in tripped:
+                reason = f"worker {worker_id} failed /health {count}x"
+                logger.warning("Slice %s: %s; terminating", slice_id, reason)
+                tripped[slice_id] = (group, reason)
+
+        # Phase 4: terminate tripped slices. Record as a PREEMPTED-style death,
+        # not a boot failure — these slices booted cleanly and only died at
+        # runtime, so the BackoffDetector's scale-up budget shouldn't decay.
+        for slice_id, (group, reason) in tripped.items():
+            group.mark_slice_failed(slice_id, error_message=reason)
+            group.scale_down(slice_id, timestamp)
+            self._unregister_slice_workers(slice_id)
+            self._log_action(
+                "slice_failed",
+                group.name,
+                slice_id,
+                reason=reason,
+                status="failed",
+            )
+
+    def _worker_urls(self, workers: Sequence[RemoteWorkerHandle]) -> dict[str, str]:
+        """Map worker_id to the worker's reachable ``http://host:port`` URL.
+
+        Workers with no internal address yet (mid-boot) report an empty
+        ``worker_url`` and are skipped.
+        """
+        return {w.worker_id: w.worker_url for w in workers if w.worker_url}
+
+    def _refresh_slice_worker_urls(self, group: ScalingGroup, slice_id: str, handle: SliceHandle) -> dict[str, str]:
+        """Resolve worker URLs for a slice by calling handle.describe().
+
+        Returns the full map only when every worker has a URL. A partial set
+        is dropped: caching it would permanently exclude the missing workers
+        from probing, and probing the incomplete set risks terminating a
+        slice for a worker that simply hasn't published its IP yet. Next tick
+        re-describes.
+        """
+        try:
+            status = handle.describe()
+        except Exception as e:
+            logger.warning("Failed to describe slice %s for health probe: %s", slice_id, e)
+            return {}
+        worker_urls = self._worker_urls(status.workers)
+        if len(worker_urls) != len(status.workers):
+            return {}
+        group.set_worker_urls(slice_id, worker_urls)
+        return worker_urls
+
     def update(
         self,
         demand_entries: list[DemandEntry],
@@ -491,10 +623,11 @@ class Autoscaler:
         worker_status_map: WorkerStatusMap,
         timestamp: Timestamp | None = None,
     ) -> list[ScalingDecision]:
-        """Full cycle: refresh + update. Preserved for tests."""
+        """Full cycle: refresh + probe_health + update. Preserved for tests."""
         timestamp = timestamp or Timestamp.now()
         logger.debug("Autoscaler run_once: demand_entries=%s", demand_entries)
         self.refresh(worker_status_map, timestamp)
+        self.probe_health(timestamp)
         return self.update(demand_entries, timestamp)
 
     def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:
@@ -530,41 +663,43 @@ class Autoscaler:
         """Get bootstrap log for a VM by platform worker ID."""
         return self._worker_registry.init_log(vm_id, tail)
 
-    def check_coscheduling_feasibility(
+    def job_feasibility(
         self,
-        replicas: int,
-        constraints: list[job_pb2.Constraint],
+        constraints: list[Constraint],
+        *,
+        replicas: int | None = None,
     ) -> str | None:
-        """Check if a coscheduled job with the given replicas can ever be scheduled.
+        """Gate LaunchJob: can this job shape ever be scheduled?
 
-        A coscheduled job is feasible when its replica count is an exact multiple of
-        some matching group's num_vms (e.g. 4 VMs can serve 4, 8, 12, ... replicas).
+        Returns None if some scaling group can, in principle, host the job
+        (autoscaler may still need to scale up); otherwise a human-readable
+        reason suitable for returning to the caller.
 
-        Returns None if feasible, or a human-readable error message if no scaling
-        group can accommodate the replica count.
+        `replicas` applies only to coscheduled jobs — None skips the
+        num_vms-divisibility check.
         """
-        groups = list(self._groups.values())
-        if not groups:
-            return None
+        result = job_feasibility(self._groups.values(), constraints, replicas=replicas)
+        return result.reason
 
-        group_attrs = {g.name: g.to_attributes() for g in groups}
-        group_index = ConstraintIndex.build(group_attrs)
-        routing_cs = routing_constraints(constraints)
-        matching_names = group_index.matching_entities(routing_cs)
-        matching_groups = [g for g in groups if g.name in matching_names]
+    def get_last_routing_decision_proto(self) -> vm_pb2.RoutingDecision | None:
+        """Return the last routing decision as a proto.
 
-        if not matching_groups:
-            return f"no scaling group matches the job constraints; " f"available groups: {[g.name for g in groups]}"
+        Populated by evaluate() so dashboard/service callers (GetJobStatus,
+        ListJobs) never pay the per-entry conversion cost on the hot path
+        (#4844). Returns None before the first evaluate() cycle.
+        """
+        return self._last_routing_decision_proto
 
-        if any(replicas % g.num_vms == 0 for g in matching_groups):
-            return None
+    def get_pending_hints(self) -> dict[str, PendingHint]:
+        """Return autoscaler pending hints keyed by job id.
 
-        group_sizes = {g.name: g.num_vms for g in matching_groups}
-        return (
-            f"job requires {replicas} coscheduled replicas but no matching scaling group "
-            f"has a compatible size (replicas must be an exact multiple of num_vms); "
-            f"matching group sizes: {group_sizes}"
-        )
+        Populated by evaluate(); the service never triggers a live rebuild.
+        Returns an empty dict before the first evaluate() cycle or if no
+        hints are cached yet (#4844).
+        """
+        if self._last_pending_hints is None:
+            return {}
+        return self._last_pending_hints
 
     def get_status(self) -> vm_pb2.AutoscalerStatus:
         """Build status for the status API."""
@@ -574,13 +709,9 @@ class Autoscaler:
             last_evaluation=timestamp_to_proto(self._last_evaluation),
             recent_actions=list(self._action_log),
         )
-        if self._last_scale_plan is not None:
-            status.last_routing_decision.CopyFrom(
-                routing_decision_to_proto(
-                    self._last_scale_plan.routing_decision,
-                    group_to_launch=self._last_scale_plan.launch_counts(),
-                )
-            )
+        routing_proto = self.get_last_routing_decision_proto()
+        if routing_proto is not None:
+            status.last_routing_decision.CopyFrom(routing_proto)
         return status
 
     def get_group(self, name: str) -> ScalingGroup | None:
@@ -604,7 +735,6 @@ class Autoscaler:
             unregister_slice_workers=self._unregister_slice_workers,
             log_action=self._log_action,
             timestamp=Timestamp.now(),
-            short_lived_slice_threshold=SHORT_LIVED_SLICE_THRESHOLD,
         )
         for request in result.termination_requests:
 

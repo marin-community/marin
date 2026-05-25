@@ -14,26 +14,28 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 
+from rigging.timing import Duration, Timestamp
+
 from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restart_controller
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
+from iris.cluster.providers._worker_base import RemoteExecWorkerBase
+from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
+from iris.cluster.providers.remote_exec import DirectSshRemoteExec
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
     InfraError,
     Labels,
+    ListedSlice,
     SliceStatus,
     WorkerStatus,
     default_stop_all,
     generate_slice_suffix,
 )
-from iris.cluster.providers._worker_base import RemoteExecWorkerBase
-from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
-from iris.cluster.providers.remote_exec import DirectSshRemoteExec
 from iris.cluster.worker.env_probe import construct_worker_id
 from iris.rpc import config_pb2
 from iris.time_proto import duration_from_proto
-from rigging.timing import Duration, Timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +108,7 @@ class ManualSliceHandle:
         _labels: dict[str, str],
         _created_at: Timestamp,
         _label_prefix: str,
+        _worker_port: int,
         _ssh_connections: list[DirectSshRemoteExec],
         _on_terminate: Callable[[list[str]], None] | None = None,
         _bootstrapping: bool = False,
@@ -115,6 +118,7 @@ class ManualSliceHandle:
         self._labels = _labels
         self._created_at = _created_at
         self._label_prefix = _label_prefix
+        self._worker_port = _worker_port
         self._iris_labels = Labels(_label_prefix)
         self._ssh_connections = _ssh_connections
         self._on_terminate = _on_terminate
@@ -152,6 +156,7 @@ class ManualSliceHandle:
             ManualWorkerHandle(
                 _vm_id=construct_worker_id(self._slice_id, i),
                 _internal_address=host,
+                _port=self._worker_port,
                 _remote_exec=ssh,
             )
             for i, (host, ssh) in enumerate(zip(self._hosts, self._ssh_connections, strict=True))
@@ -199,10 +204,12 @@ class ManualWorkerProvider:
     def __init__(
         self,
         label_prefix: str,
+        worker_port: int,
         ssh_config: config_pb2.SshConfig | None = None,
         hosts: list[str] | None = None,
     ):
         self._label_prefix = label_prefix
+        self._worker_port = worker_port
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._all_hosts = list(hosts or [])
@@ -246,6 +253,7 @@ class ManualWorkerProvider:
         handle = ManualStandaloneWorkerHandle(
             _vm_id=config.name,
             _internal_address=host,
+            _port=self._worker_port,
             _remote_exec=remote_exec,
             _labels=dict(config.labels),
             _metadata=dict(config.metadata),
@@ -294,6 +302,7 @@ class ManualWorkerProvider:
             _labels=dict(config.labels),
             _created_at=Timestamp.now(),
             _label_prefix=self._label_prefix,
+            _worker_port=self._worker_port,
             _ssh_connections=ssh_connections,
             _on_terminate=on_terminate,
             _bootstrapping=worker_config is not None,
@@ -333,8 +342,23 @@ class ManualWorkerProvider:
             results = [s for s in results if all(s.labels.get(k) == v for k, v in labels.items())]
         return results
 
-    def list_all_slices(self) -> list[ManualSliceHandle]:
-        return self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
+    def list_all_slices(self) -> list[ListedSlice]:
+        """List autoscaler-managed slices paired with cloud state.
+
+        Excludes slices tagged iris_manual=true (operator-created via
+        `iris cluster create-slice`). Manual slices have no real cloud
+        lifecycle; non-terminated ones report READY.
+        """
+        all_managed = self.list_slices(zones=[], labels={self._iris_labels.iris_managed: "true"})
+        manual_label = self._iris_labels.iris_manual
+        return [
+            ListedSlice(
+                handle=s,
+                state=CloudSliceState.DELETING if s._terminated else CloudSliceState.READY,
+            )
+            for s in all_managed
+            if s.labels.get(manual_label) != "true"
+        ]
 
     def list_vms(
         self,
@@ -428,11 +452,12 @@ class ManualControllerProvider:
         port = manual.port or 10000
         return f"{manual.host}:{port}"
 
-    def start_controller(self, config: config_pb2.IrisClusterConfig) -> str:
+    def start_controller(self, config: config_pb2.IrisClusterConfig, *, fresh: bool = False) -> str:
         address, _vm = vm_start_controller(
             self.worker_provider,
             config,
             resolve_image=self.worker_provider.resolve_image,
+            fresh=fresh,
         )
         return address
 

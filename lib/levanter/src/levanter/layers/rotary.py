@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
+import math
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -188,8 +189,6 @@ class YarnRotaryEmbeddings(RotaryEmbeddings):
     config: "YarnRotaryEmbeddingsConfig" = eqx.field(static=True)
 
     def __call__(self, q: NamedArray, position_ids: NamedArray) -> NamedArray:
-        import math
-
         with jax.ensure_compile_time_eval():
             half_dim = self.HeadDim.size // 2
             head_dim = self.HeadDim.size

@@ -12,10 +12,9 @@ import operator
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
-if TYPE_CHECKING:
-    import pyarrow.compute as pc
+import pyarrow.compute as pc
 
 
 class Expr(ABC):
@@ -308,8 +307,6 @@ def to_pyarrow_expr(expr: Expr) -> pc.Expression:
         >>> pa_expr = to_pyarrow_expr(col("score") > 0.5)
         >>> # Can be used with pq.read_table(..., filter=pa_expr)
     """
-    import pyarrow.compute as pc
-
     if isinstance(expr, ColumnExpr):
         return pc.field(expr.name)
     elif isinstance(expr, LiteralExpr):

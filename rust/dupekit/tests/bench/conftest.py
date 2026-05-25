@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+from typing import Any
+
 import pyarrow as pa
 import pyarrow.parquet as pq
-from typing import Any
+import pytest
 from huggingface_hub import hf_hub_download
 
 REPO_ID = "HuggingFaceFW/fineweb-edu"

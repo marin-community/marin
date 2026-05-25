@@ -2,15 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-import traceback
 from dataclasses import dataclass
 from typing import ClassVar
 
-from fray.v1.cluster import ResourceConfig
-
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig, launch_evaluate_with_ray
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, resolve_model_name_or_path, resolve_vllm_mode
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.inference.vllm_server import resolve_model_name_or_path
 
 
 @dataclass(frozen=True)
@@ -131,69 +128,39 @@ class SimpleEvaluator(Evaluator):
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
     ) -> None:
-        try:
-            from vllm import LLM, SamplingParams
+        from vllm import LLM, SamplingParams
 
-            # Download and load the model with vLLM
-            # Use the model name if a path is not specified (e.g., for Hugging Face models)
-            model_name_or_path, model = resolve_model_name_or_path(model)
-            llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
+        # Download and load the model with vLLM
+        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        model_name_or_path, model = resolve_model_name_or_path(model)
+        llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
 
-            inference_times: dict[str, float] = {}
-            for eval_config in evals:
-                eval_name = eval_config.name
-                assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
-                test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
+        inference_times: dict[str, float] = {}
+        for eval_config in evals:
+            eval_name = eval_config.name
+            assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
+            test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
 
-                # Set sampling parameters based on the test plan
-                sampling_params = SamplingParams(
-                    temperature=test_plan.temperature,
-                    n=test_plan.num_outputs,
-                    max_tokens=test_plan.max_tokens,
-                    # Currently, top-p sampling is disabled. `top_p` should be 1.0.
-                    top_p=1.0,
-                )
+            # Set sampling parameters based on the test plan
+            sampling_params = SamplingParams(
+                temperature=test_plan.temperature,
+                n=test_plan.num_outputs,
+                max_tokens=test_plan.max_tokens,
+                # Currently, top-p sampling is disabled. `top_p` should be 1.0.
+                top_p=1.0,
+            )
 
-                # Run inference and time it
-                start_time: float = time.time()
-                outputs = llm.generate(test_plan.prompts, sampling_params)
-                inference_times[eval_name] = time.time() - start_time
+            # Run inference and time it
+            start_time: float = time.time()
+            outputs = llm.generate(test_plan.prompts, sampling_params)
+            inference_times[eval_name] = time.time() - start_time
 
-                # Print the outputs for debugging
-                for output in outputs:
-                    prompt: str = output.prompt
-                    print(f"Prompt: {prompt!r}")
-                    for i, generation in enumerate(output.outputs):
-                        print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")
-                    print("-" * 100)
+            # Print the outputs for debugging
+            for output in outputs:
+                prompt: str = output.prompt
+                print(f"Prompt: {prompt!r}")
+                for i, generation in enumerate(output.outputs):
+                    print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")
+                print("-" * 100)
 
-            print(f"Inference times (in seconds): {inference_times}")
-        except Exception as e:
-            traceback.print_exc()
-            raise RuntimeError("SimpleEvaluator failed. Please check the logs for more information.") from e
-
-    def launch_evaluate_with_ray(
-        self,
-        model: ModelConfig,
-        evals: list[EvalTaskConfig],
-        output_path: str,
-        resource_config: ResourceConfig,
-        max_eval_instances: int | None = None,
-        wandb_tags: list[str] | None = None,
-    ) -> None:
-        """Launch the evaluation run with Fray."""
-
-        mode_str = resolve_vllm_mode(None)
-        pip_packages = VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()
-        launch_evaluate_with_ray(
-            evaluator=self,
-            job_name="simple-eval",
-            model=model,
-            evals=evals,
-            output_path=output_path,
-            resource_config=resource_config,
-            max_eval_instances=max_eval_instances,
-            wandb_tags=wandb_tags,
-            extras=("eval", "tpu"),
-            pip_packages=pip_packages,
-        )
+        print(f"Inference times (in seconds): {inference_times}")

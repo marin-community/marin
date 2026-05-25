@@ -34,8 +34,6 @@ uv run pytest -m 'not slow' <relevant test paths>
 
 Use `make test` when you need the full default test suite.
 
-*Note* that to run the unit tests, you must not have set `RAY_ADDRESS`. You can unset it with `unset RAY_ADDRESS` or `export RAY_ADDRESS=""`.
-
 ### Opening a pull request
 
 Before opening a pull request:

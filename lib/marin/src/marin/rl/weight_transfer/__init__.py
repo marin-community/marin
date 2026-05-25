@@ -6,7 +6,7 @@ Weight transfer management.
 
 This module provides abstractions for communicating weights between training and inference workers.
 
-Currently GCS, Ray remoting, and JAX transfer server methods are supported.
+Currently GCS checkpoint and Arrow Flight methods are supported.
 """
 
 import logging
@@ -26,17 +26,7 @@ from .base import (
 )
 from .checkpoint import GCSCheckpointClient, GCSCheckpointServer
 
-try:
-    from .jax import JAXTransferClient, JAXTransferServer, WeightTransferCoordinator
-except (ImportError, AttributeError):
-    JAXTransferClient = None
-    JAXTransferServer = None
-    WeightTransferCoordinator = None
-
 logger = logging.getLogger(__name__)
-
-# Check if JAX transfer is available
-JAX_TRANSFER_AVAILABLE = JAXTransferClient is not None and JAXTransferServer is not None
 
 
 def create_weight_transfer_server(
@@ -54,10 +44,7 @@ def create_weight_transfer_server(
         coordinator_handle: Pre-created actor handle for the coordinator.
             If provided, the server uses it directly instead of discovering via fray v1.
     """
-    if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        return JAXTransferServer(config, mesh, axis_mapping)
-
-    elif config.mode == WeightTransferMode.ARROW_FLIGHT:
+    if config.mode == WeightTransferMode.ARROW_FLIGHT:
         return ArrowFlightServer(config, mesh, axis_mapping, coordinator_handle=coordinator_handle)
 
     # Default to GCS checkpoint mode
@@ -83,10 +70,7 @@ def create_weight_transfer_client(
         coordinator_handle: Pre-created actor handle for the coordinator.
             If provided, the client uses it directly instead of discovering via fray v1.
     """
-    if config.mode == WeightTransferMode.JAX_TRANSFER_SERVER:
-        return JAXTransferClient(config, mesh, axis_mapping)
-
-    elif config.mode == WeightTransferMode.ARROW_FLIGHT:
+    if config.mode == WeightTransferMode.ARROW_FLIGHT:
         return ArrowFlightClient(config, mesh, axis_mapping, coordinator_handle=coordinator_handle)
 
     # Default to GCS checkpoint mode
@@ -103,12 +87,9 @@ __all__ = [
     "ArrowFlightServer",
     "GCSCheckpointClient",
     "GCSCheckpointServer",
-    "JAXTransferClient",
-    "JAXTransferServer",
     "WeightTransferClient",
     "WeightTransferClientMetrics",
     "WeightTransferConfig",
-    "WeightTransferCoordinator",
     "WeightTransferMode",
     "WeightTransferServer",
     "WeightTransferServerMetrics",

@@ -6,14 +6,14 @@ import os
 import sys
 import time
 import traceback
-from typing import Literal
 from urllib.parse import urlparse
 
 import requests
-from fray.v1.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray import current_client
+from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
 from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.inference.vllm_server import VLLM_NATIVE_PIP_PACKAGES, VllmEnvironment, resolve_vllm_mode
+from marin.inference.vllm_server import VllmEnvironment
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -23,8 +23,6 @@ def run_one_query(
     prompt: str,
     load_format: str | None,
     max_model_len: int | None,
-    mode: Literal["docker", "native"] | None,
-    docker_image: str | None,
     port: int | None,
     use_completions: bool,
 ) -> str:
@@ -46,8 +44,6 @@ def run_one_query(
         host="127.0.0.1",
         port=port,
         timeout_seconds=3600,
-        mode=mode,
-        docker_image=docker_image,
     )
     try:
         with env:
@@ -100,7 +96,7 @@ def run_one_query(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Smoke-test vLLM TPU Docker sidecar via OpenAI-compatible HTTP API.")
+    parser = argparse.ArgumentParser(description="Smoke-test a vLLM TPU server via OpenAI-compatible HTTP API.")
     parser.add_argument(
         "--model",
         required=True,
@@ -134,17 +130,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--prompt", default="Write a short haiku about TPUs.", help="Prompt to send.")
     parser.add_argument(
-        "--mode",
-        choices=["docker", "native"],
-        default=None,
-        help="Override MARIN_VLLM_MODE (default: use env; docker if unset).",
-    )
-    parser.add_argument(
-        "--docker-image",
-        default=None,
-        help="Override MARIN_VLLM_DOCKER_IMAGE (required in docker mode if env var unset).",
-    )
-    parser.add_argument(
         "--port",
         type=int,
         default=8000,
@@ -158,12 +143,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--tpu-type",
         default="v5p-8",
-        help="TPU type to request when launching via Ray/Fray (default: v5p-8).",
+        help="TPU type to request when launching via Fray (default: v5p-8).",
     )
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Run in the current process instead of launching a Ray/Fray job.",
+        help="Run in the current process instead of launching a Fray job.",
     )
     args = parser.parse_args(argv)
 
@@ -182,8 +167,6 @@ def main(argv: list[str] | None = None) -> int:
                 prompt=args.prompt,
                 load_format=args.load_format,
                 max_model_len=args.max_model_len,
-                mode=args.mode,
-                docker_image=args.docker_image,
                 port=args.port,
                 use_completions=args.use_completions,
             )
@@ -192,13 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             print(output)
         return 0
 
-    mode_str = resolve_vllm_mode(args.mode)
-
     env_vars: dict[str, str] = {}
-    if args.mode is not None:
-        env_vars["MARIN_VLLM_MODE"] = args.mode
-    if args.docker_image is not None:
-        env_vars["MARIN_VLLM_DOCKER_IMAGE"] = args.docker_image
     if args.local_cache_dir is not None:
         env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
         env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
@@ -213,8 +190,6 @@ def main(argv: list[str] | None = None) -> int:
                         prompt=args.prompt,
                         load_format=args.load_format,
                         max_model_len=args.max_model_len,
-                        mode=args.mode,
-                        docker_image=args.docker_image,
                         port=args.port,
                         use_completions=args.use_completions,
                     )
@@ -225,20 +200,20 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
                 print(output)
 
-    cluster = current_cluster()
+    client = current_client()
     resources = ResourceConfig.with_tpu(args.tpu_type)
     job_request = JobRequest(
         name=f"vllm-smoke:{args.tpu_type}",
         entrypoint=Entrypoint.from_callable(_run),
         resources=resources,
-        environment=EnvironmentConfig.create(
-            extras=["eval", "tpu"],
-            pip_packages=VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else (),
+        environment=create_environment(
+            extras=["eval", "tpu", "vllm"],
+            pip_packages=(),
             env_vars=env_vars or None,
         ),
     )
-    job_id = cluster.launch(job_request)
-    cluster.wait(job_id, raise_on_failure=True)
+    job = client.submit(job_request)
+    job.wait(raise_on_failure=True)
     return 0
 
 

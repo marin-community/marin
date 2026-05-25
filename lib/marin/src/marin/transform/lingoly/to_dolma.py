@@ -78,7 +78,7 @@ def convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl")
     )
     ctx = ZephyrContext(name="lingoly-to-dolma")
-    list(ctx.execute(pipeline))
+    ctx.execute(pipeline)
 
 
 @draccus.wrap()

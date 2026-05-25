@@ -13,7 +13,7 @@ import pytest
 from iris.chaos import enable_chaos
 from iris.rpc import job_pb2
 
-pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
 
 
 def _fail_then_succeed(attempt_marker: str):

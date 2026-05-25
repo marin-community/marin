@@ -1,6 +1,6 @@
-# zephyr
+# Zephyr
 
-Simple data processing library for Marin pipelines. Build lazy dataset pipelines that run on Ray clusters, thread pools, or synchronously.
+Simple data processing library for Marin pipelines. Build lazy dataset pipelines that run on Iris jobs or a local backend.
 
 ## Quick Start
 
@@ -16,7 +16,7 @@ pipeline = (
     .map(lambda x: transform_record(x))
     .write_jsonl("gs://output/data-{shard:05d}-of-{total:05d}.jsonl.gz")
 )
-list(ctx.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 ## Key Patterns
@@ -42,9 +42,9 @@ list(ctx.execute(pipeline))
 - `.write_vortex(pattern)` - write to a Vortex file
 
 **Execution (`ZephyrContext`):**
-- `ZephyrContext(max_workers=N)` — auto-detects backend (Ray, Iris, or local) via `fray.v2.current_client()`
+- `ZephyrContext(max_workers=N)` — auto-detects the backend (Iris inside an Iris job, local otherwise) via `fray.current_client()`
 - `ZephyrContext(client=LocalClient())` — explicit local backend (testing)
-- `list(ctx.execute(pipeline))` — runs the pipeline and returns results
+- `ctx.execute(pipeline)` — runs the pipeline; returns a `ZephyrExecutionResult(results, counters)`
 
 ## Real Usage
 
@@ -60,7 +60,7 @@ pipeline = (
     .filter(lambda x: x is not None)
     .write_jsonl(f"{output}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
 )
-list(ctx.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 **Dataset Sampling:**
@@ -73,7 +73,7 @@ pipeline = (
     .map(lambda path: sample_file(path, weights))
     .write_jsonl(f"{output}/sampled-{{shard:05d}}.jsonl.gz")
 )
-list(ctx.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 **Parallel Downloads:**
@@ -83,7 +83,7 @@ from zephyr import Dataset, ZephyrContext
 tasks = [(config, fs, src, dst) for src, dst in file_pairs]
 ctx = ZephyrContext(max_workers=32)
 pipeline = Dataset.from_list(tasks).map(lambda t: download(*t))
-list(ctx.execute(pipeline))
+ctx.execute(pipeline)
 ```
 
 ## Installation
@@ -112,20 +112,19 @@ uv run pytest lib/zephyr/tests
 ```bash
 uv run pytest lib/zephyr/tests -k "local"
 uv run pytest lib/zephyr/tests -k "iris"
-uv run pytest lib/zephyr/tests -k "ray"
 ```
 
 The Iris cluster is started once per test session and reused across all tests for efficiency.
 
 ## Design
 
-Zephyr consolidates 100+ ad-hoc Ray/HF dataset patterns in Marin into a simple abstraction.
+Zephyr consolidates ad-hoc distributed and Hugging Face dataset processing patterns in Marin into a simple abstraction.
 
 **Key Features:**
 - Lazy evaluation with operation fusion
 - Disk-based inter-stage data flow for low memory footprint
 - Chunk-by-chunk streaming to minimize memory pressure
-- Distributed execution with bounded parallelism (Ray/Iris/local backends)
+- Distributed execution with bounded parallelism (Iris/local backends)
 - Automatic chunking to prevent large object overhead
 - fsspec integration (GCS, S3, local)
 - Type-safe operation chaining
