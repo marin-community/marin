@@ -26,5 +26,6 @@ from iris.cluster.providers.types import (
     find_free_port,
     generate_slice_suffix,
     port_is_open,
+    probe_outbound_ip,
     resolve_external_host,
 )

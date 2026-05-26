@@ -175,6 +175,7 @@ def create_run_task_request(
     ports: list[str] | None = None,
     attempt_id: int = 0,
     task_image: str = "",
+    attempt_uid: str = "",
 ):
     def test_fn():
         print("Hello from test")
@@ -196,6 +197,7 @@ def create_run_task_request(
         task_id=task_id,
         num_tasks=num_tasks,
         attempt_id=attempt_id,
+        attempt_uid=attempt_uid,
         entrypoint=entrypoint_proto,
         environment=env_config,
         bundle_id="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

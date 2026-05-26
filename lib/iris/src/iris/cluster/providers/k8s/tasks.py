@@ -1042,14 +1042,12 @@ class ResourceCollector:
             cpu_millicores=top.cpu_millicores,
             memory_mb=top.memory_bytes // (1024 * 1024),
         )
-        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
         stat = build_task_stat(
             task_id=task_id_wire,
             attempt_id=attempt_id,
             # Pod name is the per-attempt platform identity on k8s, mirroring
             # worker_id on the GCE/TPU path.
             worker_id=pod_name,
-            ts=ts,
             usage=usage,
         )
         try:

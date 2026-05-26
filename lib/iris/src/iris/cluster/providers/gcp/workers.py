@@ -254,11 +254,13 @@ class GcpWorkerProvider:
         self,
         gcp_config: config_pb2.GcpPlatformConfig,
         label_prefix: str,
+        worker_port: int,
         ssh_config: config_pb2.SshConfig | None = None,
         gcp_service: GcpService | None = None,
     ):
         self._project_id = gcp_config.project_id
         self._label_prefix = label_prefix
+        self._worker_port = worker_port
         self._iris_labels = Labels(label_prefix)
         self._ssh_config = ssh_config
         self._zones = list(gcp_config.zones)
@@ -353,6 +355,7 @@ class GcpWorkerProvider:
         return GcpStandaloneWorkerHandle(
             _vm_id=construct_worker_id(config.name, 0),
             _internal_address=vm_info.internal_ip,
+            _port=self._worker_port,
             _external_address=vm_info.external_ip,
             _gce_vm_name=config.name,
             _zone=zone,
@@ -445,6 +448,7 @@ class GcpWorkerProvider:
             _labels=dict(config.labels),
             _created_at=Timestamp.now(),
             _label_prefix=self._label_prefix,
+            _worker_port=self._worker_port,
             _accelerator_variant=config.accelerator_variant,
             _gcp_service=self._gcp,
             _ssh_config=self._ssh_config,
@@ -455,7 +459,7 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle, worker_config),
+                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle),
             )
 
         return handle
@@ -512,6 +516,7 @@ class GcpWorkerProvider:
             _labels=labels,
             _created_at=Timestamp.now(),
             _label_prefix=self._label_prefix,
+            _worker_port=self._worker_port,
             _accelerator_variant=config.accelerator_variant,
             _gcp_service=self._gcp,
             _ssh_config=self._ssh_config,
@@ -523,7 +528,7 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle, worker_config),
+                lambda: _run_tpu_bootstrap(self._gcp, self._project_id, handle),
             )
 
         return handle
@@ -591,6 +596,7 @@ class GcpWorkerProvider:
             _labels=labels,
             _created_at=Timestamp.now(),
             _label_prefix=self._label_prefix,
+            _worker_port=self._worker_port,
             _ssh_config=self._ssh_config,
             _service_account=request.service_account,
             _bootstrapping=worker_config is not None,
@@ -599,7 +605,7 @@ class GcpWorkerProvider:
         if worker_config:
             _spawn_bootstrap_thread(
                 handle,
-                lambda: _run_vm_slice_bootstrap(self._gcp, handle, worker_config),
+                lambda: _run_vm_slice_bootstrap(self._gcp, handle),
             )
 
         return handle
@@ -628,6 +634,7 @@ class GcpWorkerProvider:
                     _labels=tpu.labels,
                     _created_at=tpu.created_at,
                     _label_prefix=self._label_prefix,
+                    _worker_port=self._worker_port,
                     _accelerator_variant=tpu.accelerator_type,
                     _gcp_service=self._gcp,
                     _ssh_config=self._ssh_config,
@@ -653,6 +660,7 @@ class GcpWorkerProvider:
                     _labels=vm.labels,
                     _created_at=vm.created_at,
                     _label_prefix=self._label_prefix,
+                    _worker_port=self._worker_port,
                     _ssh_config=self._ssh_config,
                     _service_account=vm.service_account,
                 )
@@ -694,6 +702,7 @@ class GcpWorkerProvider:
                 _labels=tpu.labels,
                 _created_at=tpu.created_at,
                 _label_prefix=self._label_prefix,
+                _worker_port=self._worker_port,
                 _accelerator_variant=tpu.accelerator_type,
                 _gcp_service=self._gcp,
                 _ssh_config=self._ssh_config,
@@ -721,6 +730,7 @@ class GcpWorkerProvider:
                 or {CAPACITY_TYPE_LABEL: CAPACITY_TYPE_RESERVED_VALUE, self._iris_labels.iris_managed: "true"},
                 _created_at=Timestamp.now(),
                 _label_prefix=self._label_prefix,
+                _worker_port=self._worker_port,
                 _accelerator_variant="",
                 _gcp_service=self._gcp,
                 _ssh_config=self._ssh_config,
@@ -746,6 +756,7 @@ class GcpWorkerProvider:
                 _labels=vm.labels,
                 _created_at=vm.created_at,
                 _label_prefix=self._label_prefix,
+                _worker_port=self._worker_port,
                 _ssh_config=self._ssh_config,
                 _service_account=vm.service_account,
             )
@@ -775,6 +786,7 @@ class GcpWorkerProvider:
                 GcpStandaloneWorkerHandle(
                     _vm_id=construct_worker_id(vm.name, 0),
                     _internal_address=vm.internal_ip,
+                    _port=self._worker_port,
                     _external_address=vm.external_ip,
                     _gce_vm_name=vm.name,
                     _zone=vm.zone,
@@ -799,7 +811,6 @@ def _run_tpu_bootstrap(
     gcp_service: GcpService,
     project_id: str,
     handle: GcpSliceHandle,
-    worker_config: config_pb2.WorkerConfig,
     poll_interval: float = 10.0,
     cloud_ready_timeout: float | None = None,
     bootstrap_timeout: float | None = None,
@@ -866,7 +877,7 @@ def _run_tpu_bootstrap(
         raise InfraError(f"Slice {handle.slice_id} did not reach cloud READY within {effective_cloud_ready_timeout}s")
 
     workers = cloud_status.workers
-    worker_addrs = [(w.worker_id, w.internal_address) for w in workers]
+    worker_urls = [(w.worker_id, w.worker_url) for w in workers]
     healthy_workers: set[str] = set()
     last_probe_errors: dict[str, str] = {}
     health_deadline = Deadline.from_now(Duration.from_seconds(effective_bootstrap_timeout))
@@ -874,19 +885,16 @@ def _run_tpu_bootstrap(
 
     logger.info(
         "Polling health endpoints for %d workers in slice %s",
-        len(worker_addrs),
+        len(worker_urls),
         handle.slice_id,
     )
 
     while not health_deadline.expired():
-        for worker_id, addr in worker_addrs:
+        for worker_id, worker_url in worker_urls:
             if worker_id in healthy_workers:
                 continue
             try:
-                resp = urllib.request.urlopen(
-                    f"http://{addr}:{worker_config.port}/health",
-                    timeout=5,
-                )
+                resp = urllib.request.urlopen(f"{worker_url}/health", timeout=5)
                 if resp.status == 200:
                     healthy_workers.add(worker_id)
                     last_probe_errors.pop(worker_id, None)
@@ -894,32 +902,32 @@ def _run_tpu_bootstrap(
             except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError) as e:
                 last_probe_errors[worker_id] = str(e).strip() or type(e).__name__
 
-        if len(healthy_workers) == len(worker_addrs):
+        if len(healthy_workers) == len(worker_urls):
             break
         if time.monotonic() >= next_progress_log:
-            missing_workers = [worker_id for worker_id, _addr in worker_addrs if worker_id not in healthy_workers]
+            missing_workers = [worker_id for worker_id, _url in worker_urls if worker_id not in healthy_workers]
             logger.info(
                 "TPU bootstrap progress for %s: %d/%d workers healthy; missing=%s",
                 handle.slice_id,
                 len(healthy_workers),
-                len(worker_addrs),
+                len(worker_urls),
                 _summarize_missing_workers(missing_workers, last_probe_errors),
             )
             next_progress_log = time.monotonic() + TPU_BOOTSTRAP_PROGRESS_LOG_INTERVAL
         time.sleep(poll_interval)
     else:
-        missing_workers = [worker_id for worker_id, _addr in worker_addrs if worker_id not in healthy_workers]
+        missing_workers = [worker_id for worker_id, _url in worker_urls if worker_id not in healthy_workers]
         logger.error(
             "TPU bootstrap stalled for %s: %d/%d workers healthy; missing=%s",
             handle.slice_id,
             len(healthy_workers),
-            len(worker_addrs),
+            len(worker_urls),
             _summarize_missing_workers(missing_workers, last_probe_errors),
         )
         _fetch_bootstrap_logs(gcp_service, handle)
         raise InfraError(
             f"TPU slice {handle.slice_id} bootstrap timed out: "
-            f"{len(healthy_workers)}/{len(worker_addrs)} workers healthy"
+            f"{len(healthy_workers)}/{len(worker_urls)} workers healthy"
         )
 
     logger.info("Bootstrap completed for TPU slice %s (%d workers)", handle.slice_id, len(workers))
@@ -944,10 +952,10 @@ def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> No
         logger.warning("No Cloud Logging entries found for %s", handle.slice_id)
 
 
-def _probe_worker_health(address: str, port: int) -> bool:
+def _probe_worker_health(worker_url: str) -> bool:
     """Probe the worker's HTTP health endpoint. Returns True if healthy."""
     try:
-        resp = urllib.request.urlopen(f"http://{address}:{port}/health", timeout=5)
+        resp = urllib.request.urlopen(f"{worker_url}/health", timeout=5)
         return resp.status == 200
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError):
         return False
@@ -956,7 +964,6 @@ def _probe_worker_health(address: str, port: int) -> bool:
 def _run_vm_slice_bootstrap(
     gcp_service: GcpService,
     handle: GcpVmSliceHandle,
-    worker_config: config_pb2.WorkerConfig,
     poll_interval: float = 5.0,
     cloud_ready_timeout: float = 600.0,
     bootstrap_timeout: float = 300.0,
@@ -985,8 +992,7 @@ def _run_vm_slice_bootstrap(
     else:
         raise InfraError(f"VM slice {handle.slice_id} did not reach cloud READY within {cloud_ready_timeout}s")
 
-    worker_address = cloud_status.workers[0].internal_address
-    worker_port = worker_config.port
+    worker_url = cloud_status.workers[0].worker_url
 
     # Phase 2: poll health endpoint + serial port with a fresh deadline
     bootstrap_deadline = Deadline.from_now(Duration.from_seconds(bootstrap_timeout))
@@ -994,7 +1000,7 @@ def _run_vm_slice_bootstrap(
 
     while not bootstrap_deadline.expired():
         # Primary signal: HTTP health probe
-        if _probe_worker_health(worker_address, worker_port):
+        if _probe_worker_health(worker_url):
             logger.info("Worker health probe succeeded for VM slice %s", handle.slice_id)
             break
 

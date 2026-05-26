@@ -11,7 +11,7 @@ permissions:
 jobs:
   datakit-tier2-ferry:
     runs-on: ubuntu-latest
-    timeout-minutes: 180  # ~10–20 min run; ample buffer
+    timeout-minutes: 350
     concurrency:
       group: datakit-tier2-ferry
       cancel-in-progress: true
@@ -63,7 +63,7 @@ jobs:
 
       # If you change the iris flags below, also update the matching tier
       # entry in scripts/datakit/submit_perf_run.py (TIERS["2"]) so the
-      # zephyr-perf skill's treatment job stays comparable to this baseline.
+      # evaluate-zephyr-perf skill's treatment job stays comparable to this baseline.
       - name: Submit datakit tier2 ferry
         id: submit
         shell: bash -l {0}
@@ -71,6 +71,7 @@ jobs:
           set -euo pipefail
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
+            --memory=2G \
             --extra=cpu \
             -e SMOKE_RUN_ID "$SMOKE_RUN_ID" \
             -e FERRY_STATUS_PATH "$FERRY_STATUS_PATH" \

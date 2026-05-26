@@ -84,8 +84,8 @@ def convert_rollout_to_training_format(
         "loss_weights": loss_weight,
         "loss_masks": loss_mask,
         "policy_logprobs": policy_logprob,
-        "temperature": rollout.temperature,
-        "top_k": rollout.top_k if rollout.top_k is not None else -1,
+        "temperature": rollout.decoding.temperature,
+        "top_k": rollout.decoding.top_k if rollout.decoding.top_k is not None else -1,
         "truncated": rollout.is_truncated,
     }
 

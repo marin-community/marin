@@ -10,6 +10,7 @@ from levanter.models.llama import LlamaConfig
 from marin.execution.artifact import PathMetadata
 from marin.execution.executor import ExecutorStep, output_path_of
 from marin.rl.curriculum import CurriculumConfig
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.model_utils import is_hf_checkpoint
 from marin.rl.rl_experiment_utils import (
     ModelConfig,
@@ -71,7 +72,7 @@ def _test_config(
             config_class_path=config_class_path(LlamaConfig),
         ),
         rl_loss=RLOOLoss(
-            kl_coef=0.0,
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
             clip_epsilon_low=0.2,
             clip_epsilon_high=0.28,
             synchronous=True,
@@ -191,8 +192,34 @@ def test_build_rl_job_config_resolves_runtime_output_paths(monkeypatch):
 
     assert job_config.trainer.checkpointer.base_path == "gs://marin-us-central1/rl_testing/rl-test/checkpoints"
     assert job_config.rollout_storage.path == "gs://marin-us-central1/rl_testing/rl-test/rollouts"
-    assert job_config.inference_config.load_format == "runai_streamer"
-    assert job_config.inference_config.canonical_model_name == MODEL_NAME
+    assert job_config.inference_config.engine.load_format == "runai_streamer"
+    assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
+
+
+def test_build_rl_job_config_keeps_rollout_policy_out_of_vllm_fallback_sampling(monkeypatch):
+    class _FakeConverter:
+        def __init__(self, *args, **kwargs):
+            self.default_hf_config = SimpleNamespace(vocab_size=32000)
+
+    monkeypatch.setattr("marin.rl.rl_experiment_utils._resolve_config_class", lambda _path: _FakeRuntimeLmConfig)
+    monkeypatch.setattr("marin.rl.rl_experiment_utils.HFCheckpointConverter", _FakeConverter)
+
+    config = dataclasses.replace(
+        _test_config(train_tpu_type="v5p-8", inference_tpu_type="v5p-8"),
+        n_generations_per_prompt=16,
+        train_decoding_top_k=4096,
+    )
+    job_config = _build_rl_job_config(
+        name="rl-test",
+        config=config,
+        curriculum=_test_curriculum(),
+        model_path=MODEL_NAME,
+        output_path="gs://marin-us-central1/rl_testing/rl-test",
+    )
+
+    assert job_config.inference_config.engine.max_model_len == config.max_input_tokens + config.max_output_tokens
+    assert job_config.inference_config.fallback_sampling.top_k is None
+    assert job_config.inference_config.fallback_sampling.stop_strings == ["<|eot_id|>"]
 
 
 def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_path(monkeypatch):
@@ -211,8 +238,8 @@ def test_build_rl_job_config_uses_dummy_load_format_for_non_object_store_model_p
         output_path="gs://marin-us-central1/rl_testing/rl-test",
     )
 
-    assert job_config.inference_config.load_format == "dummy"
-    assert job_config.inference_config.canonical_model_name == MODEL_NAME
+    assert job_config.inference_config.engine.load_format == "dummy"
+    assert job_config.inference_config.engine.canonical_model_name == MODEL_NAME
 
 
 def test_build_rl_job_config_propagates_ram_overrides(monkeypatch):

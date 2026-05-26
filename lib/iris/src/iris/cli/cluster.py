@@ -1008,6 +1008,16 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     default=60,
     help="Seconds to observe restarted workers for failures before advancing",
 )
+@click.option(
+    "--rpc-timeout",
+    type=int,
+    default=600,
+    help=(
+        "Per-RPC deadline for the restart_worker call (seconds). The server-side handler "
+        "runs the full SSH bootstrap synchronously (image pull + container restart), which "
+        "can take several minutes under autoscaler load; size this independently of --timeout."
+    ),
+)
 @click.pass_context
 def worker_restart(
     ctx,
@@ -1015,6 +1025,7 @@ def worker_restart(
     timeout: int,
     max_batch: int,
     observation_window: int,
+    rpc_timeout: int,
 ):
     """Rolling restart of workers with adaptive batch sizing.
 
@@ -1051,7 +1062,8 @@ def worker_restart(
         total = len(worker_ids)
         click.echo(
             f"Restarting {total} worker(s) "
-            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
+            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch}, "
+            f"rpc_timeout={rpc_timeout}s)"
         )
 
         succeeded = 0
@@ -1067,7 +1079,7 @@ def worker_restart(
                 click.echo(f"  Restarting {wid}...")
                 resp = client.restart_worker(
                     controller_pb2.Controller.RestartWorkerRequest(worker_id=wid),
-                    timeout_ms=timeout * 1000,
+                    timeout_ms=rpc_timeout * 1000,
                 )
                 if not resp.accepted:
                     click.echo(f"  ABORT: restart rejected for {wid}: {resp.error}", err=True)

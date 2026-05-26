@@ -20,7 +20,7 @@ from marin.datakit.ingestion_manifest import (
     write_ingestion_metadata_json,
 )
 from marin.transform.huggingface.dataset_to_eval import get_nested_item
-from marin.utils import fsspec_mkdirs
+from marin.utils import fsspec_mkdirs, fsspec_url
 from rigging.filesystem import open_url, url_to_fs
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
@@ -90,17 +90,6 @@ def _existing_record_count(output_file: str) -> int:
         return sum(1 for line in infile if line.strip())
 
 
-def _fsspec_url(fs: Any, path: str) -> str:
-    protocol = fs.protocol
-    if isinstance(protocol, (list, tuple)):
-        protocol = protocol[0]
-    if protocol in (None, "file"):
-        return path
-    if path.startswith(f"{protocol}://"):
-        return path
-    return f"{protocol}://{path}"
-
-
 def _surface_data_files(input_path: str, surface: HfRawTextSurfaceConfig) -> list[str]:
     fs, root = url_to_fs(input_path)
     pattern = posixpath.join(root, surface.input_glob)
@@ -109,7 +98,7 @@ def _surface_data_files(input_path: str, surface: HfRawTextSurfaceConfig) -> lis
         raise FileNotFoundError(
             f"No parquet files matched {surface.input_glob!r} for surface {surface.name!r} under {input_path}"
         )
-    return [_fsspec_url(fs, path) for path in matches]
+    return [fsspec_url(fs, path) for path in matches]
 
 
 def _load_surface_rows(input_path: str, surface: HfRawTextSurfaceConfig) -> Any:

@@ -7,15 +7,14 @@ This module encapsulates the full lifecycle of a single task execution attempt:
 bundle download -> image build -> container run -> monitor -> cleanup.
 """
 
+import contextlib
 import logging
 import shutil
-import socket
 import subprocess
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from finelog.client import LogClient, Table
@@ -28,6 +27,7 @@ from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.log_store_helpers import task_log_key
+from iris.cluster.providers.types import probe_outbound_ip
 from iris.cluster.runtime.docker import DockerContainerHandle
 from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.runtime.types import (
@@ -43,6 +43,7 @@ from iris.cluster.runtime.types import (
     RuntimeLogReader,
 )
 from iris.cluster.types import (
+    AttemptUid,
     JobName,
     is_task_finished,
 )
@@ -77,6 +78,13 @@ _SIGNAL_NAMES = {
 # reaps within milliseconds; the bound keeps a wedged container (uninterruptible
 # sleep, runtime daemon hang) from blocking the monitor indefinitely.
 _KILL_EXIT_WAIT_TIMEOUT = Duration.from_seconds(30.0)
+
+# States from which a kill is meaningful. Killing a terminal attempt is a no-op.
+_KILLABLE_STATES = (
+    job_pb2.TASK_STATE_RUNNING,
+    job_pb2.TASK_STATE_BUILDING,
+    job_pb2.TASK_STATE_PENDING,
+)
 
 
 def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
@@ -121,6 +129,11 @@ class TaskAttemptConfig:
     num_tasks: int
     request: job_pb2.RunTaskRequest
     cache_dir: Path
+    # Controller-minted routing key. Empty (``AttemptUid("")``) when set by an
+    # older controller, or when the attempt is adopted from a container that
+    # predates the iris.attempt_uid label. Required: both call sites
+    # (Worker.submit_task and TaskAttempt.adopt) always know the value.
+    attempt_uid: AttemptUid
 
     @property
     def task_id(self) -> JobName:
@@ -129,21 +142,6 @@ class TaskAttemptConfig:
     @property
     def attempt_id(self) -> int:
         return self.task_attempt.require_attempt()
-
-
-def _get_host_ip() -> str:
-    """Get the routable IP of this host via the default route.
-
-    Opens a UDP socket to a public IP (no traffic sent) and reads back the
-    local address the OS selected. With --network=host this returns the real
-    machine IP visible to other machines in the same VPC.
-    """
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    finally:
-        s.close()
 
 
 def build_iris_env(
@@ -176,7 +174,7 @@ def build_iris_env(
     # With --network=host, containers share the host's network stack.
     # Compute the host's routable IP so container code can read it via
     # get_job_info().advertise_host without needing its own socket tricks.
-    env["IRIS_ADVERTISE_HOST"] = _get_host_ip()
+    env["IRIS_ADVERTISE_HOST"] = probe_outbound_ip()
 
     # Override port placeholders with real allocated values
     for name, port in task.ports.items():
@@ -273,6 +271,10 @@ class TaskAttempt:
         self.task_id: JobName = config.task_id
         self.num_tasks: int = config.num_tasks
         self.attempt_id: int = config.attempt_id
+        # Controller-minted routing key. Mutable: an attempt adopted from a
+        # pre-upgrade container starts with "" and is stamped on the first
+        # Reconcile tick that composite-matches it.
+        self.attempt_uid: AttemptUid = config.attempt_uid
         self.request: job_pb2.RunTaskRequest = config.request
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
@@ -335,6 +337,7 @@ class TaskAttempt:
             num_tasks=1,
             request=request,
             cache_dir=Path(discovered.workdir_host_path).parent.parent if discovered.workdir_host_path else Path("/tmp"),
+            attempt_uid=AttemptUid(discovered.attempt_uid),
         )
 
         instance = cls(
@@ -413,6 +416,35 @@ class TaskAttempt:
         self.should_stop = True
         if self._container_handle:
             self._container_handle.stop(force=force)
+
+    def kill(self, term_timeout_ms: int = 5000) -> bool:
+        """Stop this attempt, escalating to a force-kill on timeout.
+
+        Issues SIGTERM, waits up to ``term_timeout_ms`` for the container to
+        exit, then force-kills if it is still running. Idempotent: returns
+        ``False`` without acting when the attempt is already terminal.
+        """
+        if self.status not in _KILLABLE_STATES:
+            return False
+        # Signal the execution thread immediately, even with no container yet:
+        # this bails an in-progress BUILDING-phase bundle download.
+        self.should_stop = True
+        if not self.has_container:
+            return True
+        try:
+            self.stop(force=False)
+            running = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
+            stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
+                lambda: self.status not in running,
+                timeout=Duration.from_ms(term_timeout_ms),
+            )
+            if not stopped:
+                with contextlib.suppress(RuntimeError):
+                    self.stop(force=True)
+        except RuntimeError:
+            # Container was already removed or stopped.
+            pass
+        return True
 
     @property
     def has_container(self) -> bool:
@@ -744,6 +776,7 @@ class TaskAttempt:
             workdir_host_path=self.workdir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
+            attempt_uid=self.attempt_uid,
             job_id=job_id.to_wire(),
             worker_id=self._worker_id,
             worker_metadata=self._worker_metadata,
@@ -954,12 +987,10 @@ class TaskAttempt:
             cpu_millicores=self.current_cpu_millicores,
             process_count=self.process_count,
         )
-        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
         stat = build_task_stat(
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             worker_id=self._worker_id,
-            ts=ts,
             usage=usage,
         )
         table.write([stat])

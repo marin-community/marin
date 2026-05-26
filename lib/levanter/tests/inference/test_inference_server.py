@@ -25,7 +25,11 @@ try:
         InferenceEngineConfig,
         score_token_sequence_logprobs,
     )
-    from levanter.inference.openai import InferenceResponse, InferenceServer, InferenceServerConfig
+    from levanter.inference.openai import (
+        InferenceResponse,
+        InferenceServer,
+        InferenceServerConfig,
+    )
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -232,6 +236,7 @@ class _FakeCompletionContext:
         prompt_tokens: list[int],
         max_tokens: int,
         temperature: float,
+        top_p: float | None,
         stop_tokens: list[int] | None,
         seed: int | None,
         future,
