@@ -38,12 +38,18 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. open-r1/verifiable-coding-problems-python_decontaminated-tested
+27. open-r1/OpenThoughts-114k-Code_decontaminated
+28. open-r1/codeforces-cots/solutions_decontaminated/finish_stop
+29. open-r1/codeforces-cots/solutions_py_decontaminated/finish_stop
+30. open-r1/ioi-cots/ac-target-subtask-finish-stop
+31. open-r1/ioi-cots/all-subtasks-100-finish-stop
 """
 
 import dataclasses
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -141,6 +147,7 @@ def multi_turn_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    row_filter_fn: Callable[[dict[str, Any]], bool] | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
@@ -153,6 +160,7 @@ def multi_turn_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        row_filter_fn=row_filter_fn,
     )
 
 
@@ -165,6 +173,7 @@ def instruction_response_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    row_filter_fn: Callable[[dict[str, Any]], bool] | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
@@ -175,6 +184,7 @@ def instruction_response_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        row_filter_fn=row_filter_fn,
     )
 
 
@@ -185,6 +195,7 @@ def instruct_column_response_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    row_filter_fn: Callable[[dict[str, Any]], bool] | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE,
@@ -194,6 +205,7 @@ def instruct_column_response_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        row_filter_fn=row_filter_fn,
     )
 
 
@@ -209,6 +221,7 @@ def instruct_msg_response_adapter(
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
+    row_filter_fn: Callable[[dict[str, Any]], bool] | None = None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCT_MSG_RESPONSE,
@@ -222,6 +235,7 @@ def instruct_msg_response_adapter(
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
+        row_filter_fn=row_filter_fn,
     )
 
 
@@ -243,6 +257,62 @@ class ReasoningToChatKwargs:
 
 
 reasoning_to_chat_kwargs = ReasoningToChatKwargs()
+
+OPEN_R1_VERIFIABLE_CODE_HF_ID = "open-r1/verifiable-coding-problems-python_decontaminated-tested"
+OPEN_R1_VERIFIABLE_CODE_REVISION = "77ace849f7cc8f10d23945c748f9ff464427f83b"
+OPEN_R1_VERIFIABLE_CODE_METADATA_COLUMNS = ["source", "task_type", "in_source_id", "problem_id", "test_reward"]
+
+OPEN_R1_OPENTHOUGHTS_CODE_HF_ID = "open-r1/OpenThoughts-114k-Code_decontaminated"
+OPEN_R1_OPENTHOUGHTS_CODE_REVISION = "b90307fcdb68ae52d01f60cfd38d5f0b4852115a"
+OPEN_R1_OPENTHOUGHTS_CODE_METADATA_COLUMNS = ["domain", "source", "num_tokens"]
+
+OPEN_R1_CODEFORCES_COTS_HF_ID = "open-r1/codeforces-cots"
+OPEN_R1_CODEFORCES_COTS_REVISION = "39ac85c150806230473c70ad72c31f6232fe3f41"
+OPEN_R1_CODEFORCES_COTS_PRIMARY_SPLITS = ["solutions_decontaminated", "solutions_py_decontaminated"]
+OPEN_R1_CODEFORCES_COTS_METADATA_COLUMNS = [
+    "id",
+    "contest_id",
+    "contest_type",
+    "contest_start_year",
+    "index",
+    "title",
+    "problem_type",
+    "finish_reason",
+]
+
+OPEN_R1_IOI_COTS_HF_ID = "open-r1/ioi-cots"
+OPEN_R1_IOI_COTS_REVISION = "d07e70f8ed8b8b0b1843046a2a140b9dac9e9741"
+OPEN_R1_IOI_COTS_METADATA_COLUMNS = [
+    "year",
+    "day",
+    "problem_name",
+    "problem_id",
+    "target_subtask",
+    "uuid",
+    "finish_reason",
+    "code_compiles",
+    "target_subtask_score",
+    "target_subtask_status",
+    "all_subtasks_points",
+]
+
+
+def finish_reason_stop(row: dict[str, Any]) -> bool:
+    return row.get("finish_reason") == "stop"
+
+
+def ioi_target_subtask_ac(row: dict[str, Any]) -> bool:
+    return (
+        finish_reason_stop(row)
+        and row.get("code_compiles") is True
+        and row.get("target_subtask_status") == "AC"
+        and row.get("target_subtask_score") == 1.0
+    )
+
+
+def ioi_all_subtasks_100(row: dict[str, Any]) -> bool:
+    return ioi_target_subtask_ac(row) and row.get("all_subtasks_points") == 100.0
+
 
 SYNTHETIC2_SFT_VERIFIED_HF_ID = "PrimeIntellect/SYNTHETIC-2-SFT-verified"
 SYNTHETIC2_SFT_VERIFIED_REVISION = "fce247fe48af8ff9624fb51d1de63aa1b2332cef"
@@ -358,6 +428,45 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter=multi_turn_adapter(),
         metadata_columns=["system", "source", "generated_token_count", "correct"],
         name="open-r1/OpenThoughts-114k-math",
+    ),
+    OPEN_R1_VERIFIABLE_CODE_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=OPEN_R1_VERIFIABLE_CODE_HF_ID,
+        revision=OPEN_R1_VERIFIABLE_CODE_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="gold_standard_solution",
+        ),
+        metadata_columns=OPEN_R1_VERIFIABLE_CODE_METADATA_COLUMNS,
+        name=OPEN_R1_VERIFIABLE_CODE_HF_ID,
+        subsets=["default"],
+        splits=["train"],
+    ),
+    OPEN_R1_OPENTHOUGHTS_CODE_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=OPEN_R1_OPENTHOUGHTS_CODE_HF_ID,
+        revision=OPEN_R1_OPENTHOUGHTS_CODE_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=OPEN_R1_OPENTHOUGHTS_CODE_METADATA_COLUMNS,
+        name=OPEN_R1_OPENTHOUGHTS_CODE_HF_ID,
+        subsets=["default"],
+        splits=["train"],
+    ),
+    "open-r1/ioi-cots/ac-target-subtask-finish-stop": InstructionDatasetConfig(
+        hf_dataset_id=OPEN_R1_IOI_COTS_HF_ID,
+        revision=OPEN_R1_IOI_COTS_REVISION,
+        adapter=multi_turn_adapter(row_filter_fn=ioi_target_subtask_ac),
+        metadata_columns=OPEN_R1_IOI_COTS_METADATA_COLUMNS,
+        name="open-r1/ioi-cots/ac-target-subtask-finish-stop",
+        subsets=["default"],
+        splits=["train"],
+    ),
+    "open-r1/ioi-cots/all-subtasks-100-finish-stop": InstructionDatasetConfig(
+        hf_dataset_id=OPEN_R1_IOI_COTS_HF_ID,
+        revision=OPEN_R1_IOI_COTS_REVISION,
+        adapter=multi_turn_adapter(row_filter_fn=ioi_all_subtasks_100),
+        metadata_columns=OPEN_R1_IOI_COTS_METADATA_COLUMNS,
+        name="open-r1/ioi-cots/all-subtasks-100-finish-stop",
+        subsets=["default"],
+        splits=["train"],
     ),
     "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
         hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
@@ -560,6 +669,18 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         splits=["genselect"],
     ),
 }
+
+for split_name in OPEN_R1_CODEFORCES_COTS_PRIMARY_SPLITS:
+    dataset_key = f"{OPEN_R1_CODEFORCES_COTS_HF_ID}/{split_name}/finish_stop"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=OPEN_R1_CODEFORCES_COTS_HF_ID,
+        revision=OPEN_R1_CODEFORCES_COTS_REVISION,
+        adapter=multi_turn_adapter(row_filter_fn=finish_reason_stop),
+        metadata_columns=OPEN_R1_CODEFORCES_COTS_METADATA_COLUMNS,
+        subsets=[split_name],
+        splits=["train"],
+    )
 
 for split_name in SMOLTALK2_SPLITS:
     dataset_key = f"HuggingFaceTB/smoltalk2/{split_name}"

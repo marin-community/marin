@@ -87,6 +87,7 @@ class TransformAdapter:
     metadata_remap: dict[str, str] = field(default_factory=dict)
     replacements: dict[str, str] | None = None
     extra_metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    row_filter_fn: Callable[[dict[str, Any]], bool] | None = None
 
     def transform_conversation_to_openai_format(
         self,
