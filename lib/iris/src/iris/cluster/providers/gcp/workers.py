@@ -50,6 +50,7 @@ from iris.cluster.providers.types import (
     InfraError,
     Labels,
     ListedSlice,
+    RemoteWorkerHandle,
     SliceHandle,
     generate_slice_suffix,
 )
@@ -316,6 +317,60 @@ class GcpWorkerProvider:
         except InfraError as e:
             logger.warning("Cleanup of VM %s failed: %s", vm_name, e)
 
+    def _build_standalone_worker_handle(
+        self,
+        worker_id: str,
+        zone: str,
+        instance_name: str,
+        internal_address: str,
+        external_address: str | None = None,
+        service_account: str | None = None,
+    ) -> GcpStandaloneWorkerHandle:
+        """Construct a standalone worker handle from VM coordinates.
+
+        Shared between create_vm (newly-created VMs) and worker_handle (existing
+        VMs looked up by coordinates). Both must produce identical SSH plumbing
+        so the CLI-side restart driver matches the controller-side flow.
+        """
+        remote_exec = GceRemoteExec(
+            project_id=self._project_id,
+            zone=zone,
+            vm_name=instance_name,
+            ssh_key_file=ssh_key_file(self._ssh_config),
+            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+        )
+        return GcpStandaloneWorkerHandle(
+            _vm_id=worker_id,
+            _internal_address=internal_address,
+            _port=self._worker_port,
+            _external_address=external_address,
+            _gce_vm_name=instance_name,
+            _zone=zone,
+            _project_id=self._project_id,
+            _gcp_service=self._gcp,
+            _remote_exec=remote_exec,
+            _service_account=service_account,
+        )
+
+    def worker_handle(self, worker_id: str, slice_id: str, zone: str) -> RemoteWorkerHandle:
+        """Look up a worker handle for an existing slice.
+
+        Discovers the slice via ``list_slices`` (same path the controller's
+        autoscaler uses) and returns the per-worker handle from
+        ``slice.describe().workers``. The handle type — TPU vs standalone GCE —
+        is dispatched by the slice handle itself, so SSH plumbing matches
+        whatever the autoscaler would have used.
+        """
+        candidates = self.list_slices(zones=[zone])
+        for slice_handle in candidates:
+            if slice_handle.slice_id != slice_id:
+                continue
+            for worker in slice_handle.describe().workers:
+                if worker.worker_id == worker_id:
+                    return worker
+            raise ValueError(f"Worker {worker_id!r} not found in slice {slice_id!r}")
+        raise ValueError(f"Slice {slice_id!r} not found in zone {zone!r}")
+
     def create_vm(self, config: config_pb2.VmConfig) -> GcpStandaloneWorkerHandle:
         """Create a GCE instance. Returns a handle with SSH and label/metadata support."""
         _validate_vm_config(config)
@@ -344,25 +399,13 @@ class GcpWorkerProvider:
             self._best_effort_delete_vm(config.name, zone)
             raise
 
-        remote_exec = GceRemoteExec(
-            project_id=self._project_id,
+        return self._build_standalone_worker_handle(
+            worker_id=construct_worker_id(config.name, 0),
             zone=zone,
-            vm_name=config.name,
-            ssh_key_file=ssh_key_file(self._ssh_config),
-            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
-        )
-
-        return GcpStandaloneWorkerHandle(
-            _vm_id=construct_worker_id(config.name, 0),
-            _internal_address=vm_info.internal_ip,
-            _port=self._worker_port,
-            _external_address=vm_info.external_ip,
-            _gce_vm_name=config.name,
-            _zone=zone,
-            _project_id=self._project_id,
-            _gcp_service=self._gcp,
-            _remote_exec=remote_exec,
-            _service_account=request.service_account,
+            instance_name=config.name,
+            internal_address=vm_info.internal_ip,
+            external_address=vm_info.external_ip,
+            service_account=request.service_account,
         )
 
     def create_slice(

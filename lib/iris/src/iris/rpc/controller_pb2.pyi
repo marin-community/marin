@@ -547,18 +547,6 @@ class Controller(_message.Message):
         provider_version: str
         node_pools: _containers.RepeatedCompositeFieldContainer[Controller.NodePoolStatus]
         def __init__(self, namespace: _Optional[str] = ..., total_nodes: _Optional[int] = ..., schedulable_nodes: _Optional[int] = ..., allocatable_cpu: _Optional[str] = ..., allocatable_memory: _Optional[str] = ..., pod_statuses: _Optional[_Iterable[_Union[Controller.KubernetesPodStatus, _Mapping]]] = ..., provider_version: _Optional[str] = ..., node_pools: _Optional[_Iterable[_Union[Controller.NodePoolStatus, _Mapping]]] = ...) -> None: ...
-    class RestartWorkerRequest(_message.Message):
-        __slots__ = ("worker_id",)
-        WORKER_ID_FIELD_NUMBER: _ClassVar[int]
-        worker_id: str
-        def __init__(self, worker_id: _Optional[str] = ...) -> None: ...
-    class RestartWorkerResponse(_message.Message):
-        __slots__ = ("accepted", "error")
-        ACCEPTED_FIELD_NUMBER: _ClassVar[int]
-        ERROR_FIELD_NUMBER: _ClassVar[int]
-        accepted: bool
-        error: str
-        def __init__(self, accepted: _Optional[bool] = ..., error: _Optional[str] = ...) -> None: ...
     class SetUserBudgetRequest(_message.Message):
         __slots__ = ("user_id", "budget_limit", "max_band")
         USER_ID_FIELD_NUMBER: _ClassVar[int]

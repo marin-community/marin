@@ -35,9 +35,6 @@ from iris.cluster.controller.autoscaler.models import (
     ScalingDecision,
 )
 from iris.cluster.controller.autoscaler.operations import (
-    restart_worker as restart_worker_operation,
-)
-from iris.cluster.controller.autoscaler.operations import (
     terminate_slices_for_workers as terminate_slices_for_workers_operation,
 )
 from iris.cluster.controller.autoscaler.planning import ScalePlan, build_scale_plan
@@ -633,11 +630,6 @@ class Autoscaler:
     def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:
         """Look up a tracked worker by ID."""
         return self._worker_registry.tracked_worker(worker_id)
-
-    def restart_worker(self, worker_id: str) -> None:
-        """Restart a worker with a fresh bootstrap script using the latest image."""
-
-        restart_worker_operation(self._groups, self._db, worker_id, self._per_group_worker_config)
 
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
