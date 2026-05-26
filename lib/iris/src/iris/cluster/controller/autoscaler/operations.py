@@ -10,9 +10,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
+from sqlalchemy import select
 
 from iris.cluster.controller.autoscaler.scaling_group import ScalingGroup
 from iris.cluster.controller.db import ControllerDB
+from iris.cluster.controller.schema import workers_table
 from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
 from iris.cluster.providers.types import SliceHandle
 from iris.rpc import config_pb2, vm_pb2
@@ -49,13 +51,13 @@ def restart_worker(
         raise ValueError("No DB configured — cannot look up worker")
 
     with db.read_snapshot() as snapshot:
-        rows = snapshot.raw(
-            "SELECT slice_id, scale_group FROM workers WHERE worker_id = ? AND slice_id != ''",
-            params=(worker_id,),
-        )
-    if not rows:
+        row = snapshot.execute(
+            select(workers_table.c.slice_id, workers_table.c.scale_group).where(
+                (workers_table.c.worker_id == worker_id) & (workers_table.c.slice_id != "")
+            )
+        ).first()
+    if row is None:
         raise ValueError(f"Worker {worker_id} not found in workers table (or has no slice_id)")
-    row = rows[0]
 
     group = groups.get(row.scale_group)
     if group is None:
