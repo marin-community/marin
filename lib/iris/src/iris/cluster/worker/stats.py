@@ -120,16 +120,19 @@ class IrisTaskStat:
 def build_worker_stat(
     *,
     worker_id: str,
-    ts: datetime,
     status: str,
     address: str,
     snapshot: job_pb2.WorkerResourceSnapshot,
     metadata: job_pb2.WorkerMetadata,
+    ts: datetime | None = None,
 ) -> IrisWorkerStat:
-    """Build a heartbeat row from the per-tick snapshot and worker metadata."""
+    """Build a heartbeat row from the per-tick snapshot and worker metadata.
+
+    ``ts`` defaults to :func:`stats_timestamp` (current UTC, tz-naive).
+    """
     return IrisWorkerStat(
         worker_id=worker_id,
-        ts=ts,
+        ts=ts if ts is not None else stats_timestamp(),
         status=status,
         address=address,
         cpu_pct=float(snapshot.host_cpu_percent),
@@ -156,17 +159,20 @@ def build_task_stat(
     task_id: str,
     attempt_id: int,
     worker_id: str,
-    ts: datetime,
     usage: job_pb2.ResourceUsage,
+    ts: datetime | None = None,
     accelerator_util_pct: float | None = None,
     accelerator_mem_bytes: int | None = None,
 ) -> IrisTaskStat:
-    """Build a per-attempt resource row from a ResourceUsage proto."""
+    """Build a per-attempt resource row from a ResourceUsage proto.
+
+    ``ts`` defaults to :func:`stats_timestamp` (current UTC, tz-naive).
+    """
     return IrisTaskStat(
         task_id=task_id,
         attempt_id=attempt_id,
         worker_id=worker_id,
-        ts=ts,
+        ts=ts if ts is not None else stats_timestamp(),
         cpu_millicores=int(usage.cpu_millicores),
         memory_mb=int(usage.memory_mb),
         disk_mb=int(usage.disk_mb),

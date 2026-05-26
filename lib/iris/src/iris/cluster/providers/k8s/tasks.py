@@ -53,7 +53,7 @@ from iris.cluster.runtime.profile import (
     resolve_memory_spec,
 )
 from iris.cluster.types import JobName, TaskAttempt, get_gpu_count
-from iris.cluster.worker.stats import build_task_stat, stats_timestamp
+from iris.cluster.worker.stats import build_task_stat
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.time_proto import timestamp_to_proto
 
@@ -1042,14 +1042,12 @@ class ResourceCollector:
             cpu_millicores=top.cpu_millicores,
             memory_mb=top.memory_bytes // (1024 * 1024),
         )
-        ts = stats_timestamp()
         stat = build_task_stat(
             task_id=task_id_wire,
             attempt_id=attempt_id,
             # Pod name is the per-attempt platform identity on k8s, mirroring
             # worker_id on the GCE/TPU path.
             worker_id=pod_name,
-            ts=ts,
             usage=usage,
         )
         try:

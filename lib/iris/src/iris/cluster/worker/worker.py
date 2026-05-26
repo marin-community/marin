@@ -49,7 +49,6 @@ from iris.cluster.worker.stats import (
     IrisWorkerStat,
     WorkerStatus,
     build_worker_stat,
-    stats_timestamp,
 )
 from iris.cluster.worker.task_attempt import TaskAttempt, TaskAttemptConfig
 from iris.cluster.worker.worker_types import TaskInfo
@@ -995,7 +994,6 @@ class Worker:
         status = WorkerStatus.RUNNING if self._tasks else WorkerStatus.IDLE
         stat = build_worker_stat(
             worker_id=self._worker_id,
-            ts=stats_timestamp(),
             status=status,
             address=self._resolve_address(),
             snapshot=snapshot,
