@@ -1070,6 +1070,7 @@ class Worker:
                     desired_attempts.add(id(match))
             snapshot = list(self._tasks)
 
+        zombie_attempts: set[int] = set()
         for task in snapshot:
             if id(task) in desired_attempts or task.status in self._TERMINAL_STATES:
                 continue
@@ -1078,12 +1079,22 @@ class Worker:
                 task.task_id,
                 task.attempt_id,
             )
+            zombie_attempts.add(id(task))
             self._kill_async(task)
 
+        # Observations are bounded by what the controller asked about. Emitting
+        # terminal local history the controller did not request is wasted wire
+        # bandwidth and a wasted DB write on the apply side. We report:
+        #   - attempts that resolve to a DesiredAttempt (live or terminal twin
+        #     the controller still tracks), and
+        #   - zombies we are killing this tick, so the controller can confirm
+        #     the kill it implicitly requested by omitting the attempt.
         observations: list[worker_pb2.Worker.AttemptObservation] = []
         with self._lock:
             snapshot = list(self._tasks)
             for task in snapshot:
+                if id(task) not in desired_attempts and id(task) not in zombie_attempts:
+                    continue
                 observations.append(self._build_observation(task))
 
             # Synthesize MISSING for run intents that resolved to no local attempt.
