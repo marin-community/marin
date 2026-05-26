@@ -15,7 +15,6 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
 from finelog.client import LogClient, Table
@@ -988,12 +987,10 @@ class TaskAttempt:
             cpu_millicores=self.current_cpu_millicores,
             process_count=self.process_count,
         )
-        ts = datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
         stat = build_task_stat(
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             worker_id=self._worker_id,
-            ts=ts,
             usage=usage,
         )
         table.write([stat])

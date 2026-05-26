@@ -213,13 +213,9 @@ class Olmo2Config(HFCompatConfig):
         # All transformer layers plus final layer norm
         transformer = self.num_layers * transformer_layer + self.hidden_dim  # plus final rmsnorm
 
-        # Input embedding norm if used
-        if hasattr(self, "input_embedding_norm") and self.input_embedding_norm:
-            transformer += self.hidden_dim
-
         # Total parameters (transformer + embeddings + LM head)
         # LM head shares weights with token embeddings if tie_word_embeddings is True
-        lm_head = 0 if (hasattr(self, "tie_word_embeddings") and self.tie_word_embeddings) else token_embedding
+        lm_head = 0 if self.tie_word_embeddings else token_embedding
 
         return transformer + token_embedding + lm_head
 

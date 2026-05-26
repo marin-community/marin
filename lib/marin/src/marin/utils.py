@@ -144,6 +144,22 @@ def fsspec_mtime(file_path: str) -> datetime:
     return fs.modified(file_path)
 
 
+def fsspec_url(fs: fsspec.AbstractFileSystem, path: str) -> str:
+    """Re-attach ``fs``'s protocol to a bare ``path`` so it round-trips through ``url_to_fs``.
+
+    ``fsspec`` glob/find results drop the protocol prefix (e.g. ``gs://``), which makes them
+    ambiguous to reopen on a non-local filesystem. Local paths are returned unchanged.
+    """
+    protocol = fs.protocol
+    if isinstance(protocol, (list, tuple)):
+        protocol = protocol[0]
+    if protocol in (None, "file"):
+        return path
+    if path.startswith(f"{protocol}://"):
+        return path
+    return f"{protocol}://{path}"
+
+
 def is_path_like(path: str) -> bool:
     """Return True if path is a URL (gs://, s3://, etc.) or an existing local path.
 

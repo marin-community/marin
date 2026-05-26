@@ -224,63 +224,10 @@ def read_dataset_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
     return {"reader": "dataset_scatter", **_measure(run)}
 
 
-def read_rowgroups_scatter(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read one (shard, chunk) via iter_parquet_row_groups — the new scatter reader.
-
-    Uses equality_predicates for row-group-level skipping via statistics.
-    No row_filter needed because each row group has exactly one (shard, chunk)
-    pair — statistics are exact (min == max), so every row in a matching row
-    group is a hit.
-    """
-    from zephyr.readers import iter_parquet_row_groups
-
-    target_shard = _NUM_SHARDS // 2
-    target_chunk = _CHUNKS_PER_SHARD // 2
-
-    def run():
-        n = 0
-        for table in iter_parquet_row_groups(
-            path,
-            columns=["item"],
-            equality_predicates={"shard_idx": target_shard, "chunk_idx": target_chunk},
-        ):
-            n += len(table)
-            del table
-        return n
-
-    return {"reader": "rowgroups_scatter", **_measure(run)}
-
-
-def read_rowgroups_scatter_no_skip(path: str, limit: int | None = None) -> dict[str, Any]:
-    """Read one (shard, chunk) via iter_parquet_row_groups WITHOUT statistics skipping.
-
-    Reads every row group and filters post-hoc. Shows the cost of not having
-    row-group-level predicate pushdown.
-    """
-    import pyarrow.compute as pc
-    from zephyr.readers import iter_parquet_row_groups
-
-    target_shard = _NUM_SHARDS // 2
-    target_chunk = _CHUNKS_PER_SHARD // 2
-
-    def run():
-        filt = (pc.field("shard_idx") == target_shard) & (pc.field("chunk_idx") == target_chunk)
-        n = 0
-        for table in iter_parquet_row_groups(path):
-            table = table.filter(filt).select(["item"])
-            n += len(table)
-            del table
-        return n
-
-    return {"reader": "rowgroups_no_skip", **_measure(run)}
-
-
 READERS = {
     "dataset_full": read_dataset_full,
     "rowgroups_full": read_rowgroups_full,
     "dataset_scatter": read_dataset_scatter,
-    "rowgroups_scatter": read_rowgroups_scatter,
-    "rowgroups_no_skip": read_rowgroups_scatter_no_skip,
 }
 
 
