@@ -397,41 +397,6 @@ def _klsoaph_step_local(
         _, q = jnp.linalg.eigh(sym)
         return q[..., :, ::-1]
 
-    # init branch (upstream KLSOAPH: GG from first gradient, Q from flipped-eigh)
-    init_gg_l = _symmetrize(jnp.einsum("...ik,...jk->...ij", g32, g32) / inner_cols)
-    init_gg_r = _symmetrize(jnp.einsum("...ki,...kj->...ij", g32, g32) / inner_rows)
-    init_q_l = _flip(init_gg_l)
-    init_q_r = _flip(init_gg_r)
-    init_esi_l = jnp.full_like(esi_l, init_factor**-0.5)
-    init_esi_r = jnp.full_like(esi_r, init_factor**-0.5)
-    init_dir = jnp.zeros_like(g32)
-    init_exp_avg = jnp.zeros_like(exp_avg)
-    init_exp_avg_sq = jnp.zeros_like(exp_avg_sq)
-
-    # normal branch: project, Adam-in-projected-basis, direction.
-    g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r)
-    g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr)
-    nb_exp_avg = beta1 * exp_avg + (1.0 - beta1) * g_proj
-    nb_exp_avg_sq = beta2 * exp_avg_sq + (1.0 - beta2) * g_proj * g_proj
-    precond_proj = nb_exp_avg / (jnp.sqrt(nb_exp_avg_sq) + eps)
-    p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r)
-    nb_direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt)
-
-    # whitened Gram update
-    g_qr_white = g_qr * esi_r[..., None, :]
-    left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white) / inner_cols
-    qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32)
-    qlT_g_white = qlT_g * esi_l[..., :, None]
-    right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white) / inner_rows
-    nb_gg_l = _symmetrize(shampoo_beta * gg_l + (1.0 - shampoo_beta) * left_target)
-    nb_gg_r = _symmetrize(shampoo_beta * gg_r + (1.0 - shampoo_beta) * right_target)
-
-    # ESI update (inside shard_map → plain ops are safe)
-    proj_col_white = g_proj * esi_r[..., None, :]
-    left_diag = jnp.mean(proj_col_white * proj_col_white, axis=-1)
-    proj_row_white = g_proj * esi_l[..., :, None]
-    right_diag = jnp.mean(proj_row_white * proj_row_white, axis=-2)
-
     def _update_esi(esi, diag):
         old_eigen = jnp.reciprocal(jnp.square(esi))
         old_eigen = jnp.nan_to_num(old_eigen, nan=0.0, posinf=0.0, neginf=0.0)
@@ -442,49 +407,96 @@ def _klsoaph_step_local(
         inv_sqrt = jnp.nan_to_num(inv_sqrt, nan=0.0, posinf=0.0, neginf=0.0)
         return inv_sqrt
 
-    nb_esi_l = _update_esi(esi_l, left_diag)
-    nb_esi_r = _update_esi(esi_r, right_diag)
+    # We dispatch init vs normal via ``lax.cond`` rather than an arithmetic
+    # blend. Inside a shard_map local body the predicate has no sharding
+    # conflict, and lax.cond gives XLA the freedom to dead-code the
+    # uncalled branch — saving the (very expensive on TPU) batched eigh on
+    # every step after the first.
 
-    # warm-started QR refresh
-    ea_qrT = jnp.einsum("...ij,...kj->...ik", nb_exp_avg, q_r)
-    ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT)
-    gg_l_q = jnp.einsum("...ij,...jk->...ik", nb_gg_l, q_l)
-    gg_r_q = jnp.einsum("...ij,...jk->...ik", nb_gg_r, q_r)
-    ql_refresh, _ = jnp.linalg.qr(gg_l_q)
-    qr_refresh, _ = jnp.linalg.qr(gg_r_q)
-    ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_refresh)
-    ea_refresh = jnp.einsum("...ki,...kj->...ij", ql_refresh, ea_qr_new)
+    def _init_branch(operands):
+        g32, exp_avg, exp_avg_sq, _gg_l, _gg_r, _q_l, _q_r, esi_l, esi_r = operands
+        init_gg_l = _symmetrize(jnp.einsum("...ik,...jk->...ij", g32, g32) / inner_cols)
+        init_gg_r = _symmetrize(jnp.einsum("...ki,...kj->...ij", g32, g32) / inner_rows)
+        init_q_l = _flip(init_gg_l)
+        init_q_r = _flip(init_gg_r)
+        init_esi_l = jnp.full_like(esi_l, init_factor**-0.5)
+        init_esi_r = jnp.full_like(esi_r, init_factor**-0.5)
+        return (
+            jnp.zeros_like(g32),
+            jnp.zeros_like(exp_avg),
+            jnp.zeros_like(exp_avg_sq),
+            init_gg_l,
+            init_gg_r,
+            init_q_l,
+            init_q_r,
+            init_esi_l,
+            init_esi_r,
+        )
 
-    should_refresh = jnp.equal(jnp.remainder(step, precond_freq), 0)
-    wr = should_refresh.astype(jnp.float32)
-    nb_q_l = wr * ql_refresh + (1.0 - wr) * q_l
-    nb_q_r = wr * qr_refresh + (1.0 - wr) * q_r
-    nb_exp_avg_out = wr * ea_refresh + (1.0 - wr) * nb_exp_avg
+    def _normal_branch(operands):
+        g32, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r = operands
 
+        # project, Adam-in-projected-basis, direction
+        g_qr = jnp.einsum("...ij,...jk->...ik", g32, q_r)
+        g_proj = jnp.einsum("...ki,...kj->...ij", q_l, g_qr)
+        nb_exp_avg = beta1 * exp_avg + (1.0 - beta1) * g_proj
+        nb_exp_avg_sq = beta2 * exp_avg_sq + (1.0 - beta2) * g_proj * g_proj
+        precond_proj = nb_exp_avg / (jnp.sqrt(nb_exp_avg_sq) + eps)
+        p_qrt = jnp.einsum("...ij,...kj->...ik", precond_proj, q_r)
+        direction = jnp.einsum("...ij,...jk->...ik", q_l, p_qrt)
+
+        # whitened Gram update
+        g_qr_white = g_qr * esi_r[..., None, :]
+        left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white) / inner_cols
+        qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32)
+        qlT_g_white = qlT_g * esi_l[..., :, None]
+        right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white) / inner_rows
+        nb_gg_l = _symmetrize(shampoo_beta * gg_l + (1.0 - shampoo_beta) * left_target)
+        nb_gg_r = _symmetrize(shampoo_beta * gg_r + (1.0 - shampoo_beta) * right_target)
+
+        # ESI update
+        proj_col_white = g_proj * esi_r[..., None, :]
+        left_diag = jnp.mean(proj_col_white * proj_col_white, axis=-1)
+        proj_row_white = g_proj * esi_l[..., :, None]
+        right_diag = jnp.mean(proj_row_white * proj_row_white, axis=-2)
+        nb_esi_l = _update_esi(esi_l, left_diag)
+        nb_esi_r = _update_esi(esi_r, right_diag)
+
+        # warm-started QR refresh (also via lax.cond on the freq predicate)
+        def _do_refresh(_):
+            ea_qrT = jnp.einsum("...ij,...kj->...ik", nb_exp_avg, q_r)
+            ea_original = jnp.einsum("...ij,...jk->...ik", q_l, ea_qrT)
+            gg_l_q = jnp.einsum("...ij,...jk->...ik", nb_gg_l, q_l)
+            gg_r_q = jnp.einsum("...ij,...jk->...ik", nb_gg_r, q_r)
+            ql_refresh, _ = jnp.linalg.qr(gg_l_q)
+            qr_refresh, _ = jnp.linalg.qr(gg_r_q)
+            ea_qr_new = jnp.einsum("...ij,...jk->...ik", ea_original, qr_refresh)
+            ea_refresh = jnp.einsum("...ki,...kj->...ij", ql_refresh, ea_qr_new)
+            return ql_refresh, qr_refresh, ea_refresh
+
+        def _no_refresh(_):
+            return q_l, q_r, nb_exp_avg
+
+        should_refresh = jnp.equal(jnp.remainder(step, precond_freq), 0)
+        new_q_l, new_q_r, new_exp_avg_out = jax.lax.cond(
+            should_refresh, _do_refresh, _no_refresh, operand=None
+        )
+
+        return (
+            direction,
+            new_exp_avg_out,
+            nb_exp_avg_sq,
+            nb_gg_l,
+            nb_gg_r,
+            new_q_l,
+            new_q_r,
+            nb_esi_l,
+            nb_esi_r,
+        )
+
+    operands = (g32, exp_avg, exp_avg_sq, gg_l, gg_r, q_l, q_r, esi_l, esi_r)
     is_first = jnp.equal(step, 1)
-    wi = is_first.astype(jnp.float32)
-
-    direction = wi * init_dir + (1.0 - wi) * nb_direction
-    new_exp_avg = wi * init_exp_avg + (1.0 - wi) * nb_exp_avg_out
-    new_exp_avg_sq = wi * init_exp_avg_sq + (1.0 - wi) * nb_exp_avg_sq
-    new_gg_l = wi * init_gg_l + (1.0 - wi) * nb_gg_l
-    new_gg_r = wi * init_gg_r + (1.0 - wi) * nb_gg_r
-    new_q_l = wi * init_q_l + (1.0 - wi) * nb_q_l
-    new_q_r = wi * init_q_r + (1.0 - wi) * nb_q_r
-    new_esi_l = wi * init_esi_l + (1.0 - wi) * nb_esi_l
-    new_esi_r = wi * init_esi_r + (1.0 - wi) * nb_esi_r
-
-    return (
-        direction,
-        new_exp_avg,
-        new_exp_avg_sq,
-        new_gg_l,
-        new_gg_r,
-        new_q_l,
-        new_q_r,
-        new_esi_l,
-        new_esi_r,
-    )
+    return jax.lax.cond(is_first, _init_branch, _normal_branch, operands)
 
 
 def _klsoaph_step_blocked(
