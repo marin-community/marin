@@ -38,7 +38,19 @@ _HIDDEN_DIM: int = 512
 _BUDGET: float = 2.19e17
 _TARGET_STEPS: int = 2**14
 _TPU: str = "v5p-8"
-_RUN_SUFFIX: str = "amuse-v5-w0.01-t0-500"
+_RUN_SUFFIX: str = "amuse-v6-lr1.5x-b1-0.4-rho-0.6"
+# AMUSE sweep knobs (override per run):
+#   _LR_MULTIPLIER scales the matrix LR (and adam_lr proportionally) over the
+#     heuristic MuonH baseline. AMUSE has no decay phase so the *average*
+#     effective LR is higher than a cosine-decay baseline at the same peak.
+#   _AMUSE_BETA1 is the SF interpolation coefficient initial value
+#     (paper d512: {0.4, 0.6}). Smaller β_1 → more "fast Muon" early.
+#   _AMUSE_RHO is the β_t growth exponent (paper d512: {0.6, 0.8}).
+#     Smaller ρ → slower β_t ramp toward 1.
+_LR_MULTIPLIER: float = 1.5
+_AMUSE_BETA1: float = 0.4
+_AMUSE_RHO: float = 0.6
+_AMUSE_T0: int = 500
 
 
 def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
@@ -49,23 +61,21 @@ def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
     )
 
     # AMUSE recommended d512 LLM hyperparameters from arxiv 2605.22432:
-    #   β_1 ∈ {0.4, 0.6} → 0.6, ρ ∈ {0.6, 0.8} → 0.8, T_0 = 2000.
-    # LR/weight_decay inherit from the heuristic baseline; LR schedule is
-    # constant (warmup + flat) per AMUSE's "no decay needed" principle.
+    #   β_1 ∈ {0.4, 0.6}, ρ ∈ {0.6, 0.8}, T_0 = 2000.
+    # LR schedule is constant (warmup + flat) per AMUSE's "no decay needed"
+    # principle; we sweep LR multiplier (vs heuristic MuonH baseline) and
+    # (β_1, ρ) here.
     optimizer = GrugMoeAmuseConfig(
-        learning_rate=base_optimizer.learning_rate,
-        adam_lr=base_optimizer.adam_lr,
+        learning_rate=base_optimizer.learning_rate * _LR_MULTIPLIER,
+        adam_lr=base_optimizer.adam_lr * _LR_MULTIPLIER,
         min_lr_ratio=base_optimizer.min_lr_ratio,
         # Shorter LR warmup matching the MuonH baseline (warmup=0.01 → ~63
         # steps at 6302 total). Then constant LR per AMUSE.
         warmup=0.01,
         weight_decay=base_optimizer.weight_decay,
-        amuse_beta1=0.6,
-        amuse_rho=0.8,
-        # AMUSE's β_t schedule T_0 (independent of LR warmup): paper uses
-        # T_0=2000 with 16k steps (~12.5%). Scaled down to ~8% of our 6302
-        # for a shorter "fast Muon-like" phase before β_t ramps toward 1.
-        amuse_warmup_steps=500,
+        amuse_beta1=_AMUSE_BETA1,
+        amuse_rho=_AMUSE_RHO,
+        amuse_warmup_steps=_AMUSE_T0,
         muon_momentum=0.95,
         backend_steps=5,
         coefficient_type="quintic",
