@@ -38,7 +38,7 @@ _HIDDEN_DIM: int = 512
 _BUDGET: float = 2.19e17
 _TARGET_STEPS: int = 2**14
 _TPU: str = "v5p-8"
-_RUN_SUFFIX: str = "amuse-v4-lr-tracer-fix"
+_RUN_SUFFIX: str = "amuse-v5-w0.01-t0-500"
 
 
 def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
@@ -56,11 +56,16 @@ def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
         learning_rate=base_optimizer.learning_rate,
         adam_lr=base_optimizer.adam_lr,
         min_lr_ratio=base_optimizer.min_lr_ratio,
-        warmup=2000,
+        # Shorter LR warmup matching the MuonH baseline (warmup=0.01 → ~63
+        # steps at 6302 total). Then constant LR per AMUSE.
+        warmup=0.01,
         weight_decay=base_optimizer.weight_decay,
         amuse_beta1=0.6,
         amuse_rho=0.8,
-        amuse_warmup_steps=2000,
+        # AMUSE's β_t schedule T_0 (independent of LR warmup): paper uses
+        # T_0=2000 with 16k steps (~12.5%). Scaled down to ~8% of our 6302
+        # for a shorter "fast Muon-like" phase before β_t ramps toward 1.
+        amuse_warmup_steps=500,
         muon_momentum=0.95,
         backend_steps=5,
         coefficient_type="quintic",
