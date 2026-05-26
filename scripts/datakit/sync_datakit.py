@@ -86,7 +86,7 @@ from marin.execution.step_spec import StepSpec
 from rigging.filesystem import marin_prefix
 from rigging.log_setup import configure_logging
 from zephyr import Dataset, ZephyrContext, counters
-from zephyr.plan import deterministic_hash
+from zephyr.shuffle import deterministic_hash
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)

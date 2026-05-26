@@ -47,7 +47,7 @@ from rigging.log_setup import configure_logging
 from zephyr import Dataset
 from zephyr.dataset import ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.plan import deterministic_hash
+from zephyr.shuffle import deterministic_hash
 
 logger = logging.getLogger(__name__)
 
