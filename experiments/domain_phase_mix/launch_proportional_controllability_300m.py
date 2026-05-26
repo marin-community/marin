@@ -183,20 +183,19 @@ class LaunchArtifacts:
     name_prefix: str
     run_specs: list[ControllabilityRunSpec]
     run_manifest_step: ExecutorStep
-    cache_eval_datasets_step: ExecutorStep
+    cache_eval_datasets_step: ExecutorStep | None
     training_steps: list[ExecutorStep]
     results_step: ExecutorStep
     fit_dataset_step: ExecutorStep
 
     @property
     def steps(self) -> list[object]:
-        return [
-            self.run_manifest_step,
-            self.cache_eval_datasets_step,
-            *self.training_steps,
-            self.results_step,
-            self.fit_dataset_step,
-        ]
+        steps: list[object] = [self.run_manifest_step]
+        if self.cache_eval_datasets_step is not None:
+            steps.append(self.cache_eval_datasets_step)
+        steps.extend(self.training_steps)
+        steps.extend([self.results_step, self.fit_dataset_step])
+        return steps
 
 
 def _slug(value: str) -> str:
@@ -508,6 +507,21 @@ def build_run_specs() -> list[ControllabilityRunSpec]:
     return [_run_spec(intervention) for intervention in build_interventions()]
 
 
+def _select_interventions(
+    interventions: list[ControllabilityInterventionSpec],
+    only_run_names: tuple[str, ...],
+) -> list[ControllabilityInterventionSpec]:
+    if not only_run_names:
+        return interventions
+    requested_run_names = tuple(dict.fromkeys(only_run_names))
+    known_run_names = {intervention.run_name for intervention in interventions}
+    unknown_run_names = sorted(set(requested_run_names) - known_run_names)
+    if unknown_run_names:
+        raise ValueError(f"Unknown proportional-controllability run names: {unknown_run_names}")
+    requested = set(requested_run_names)
+    return [intervention for intervention in interventions if intervention.run_name in requested]
+
+
 def _run_manifest_step(
     *,
     execution_name_prefix: str,
@@ -552,6 +566,7 @@ def build_launch_artifacts(
     tpu_zone: str,
     eval_datasets_cache_path: str,
     include_eval_harness: bool,
+    only_run_names: tuple[str, ...] = (),
 ) -> LaunchArtifacts:
     """Resolve the launch graph without submitting it."""
     if tpu_regions != (DEFAULT_TPU_REGION,) or tpu_zone != DEFAULT_TPU_ZONE:
@@ -561,8 +576,10 @@ def build_launch_artifacts(
     if "us-central" in eval_datasets_cache_path:
         raise ValueError(f"Eval cache path must be east5-local, got {eval_datasets_cache_path}")
     scale_spec = resolve_scale_spec(SCALE)
-    interventions = build_interventions()
-    run_specs = build_run_specs()
+    interventions = _select_interventions(build_interventions(), only_run_names)
+    run_specs = [_run_spec(intervention) for intervention in interventions]
+    if not run_specs:
+        raise ValueError("No proportional-controllability runs selected")
     experiment = create_qsplit240_replay_experiment(
         name=base_name_prefix,
         experiment_budget=run_specs[0].experiment_budget,
@@ -583,10 +600,14 @@ def build_launch_artifacts(
         experiment_name=base_name_prefix,
         run_specs=run_specs,
     )
-    cache_eval_datasets_step = create_cache_eval_datasets_step(
-        eval_tasks=QSPLIT240_300M_EVAL_TASKS,
-        gcs_path=resolved_eval_cache_path,
-        name_prefix=base_name_prefix,
+    cache_eval_datasets_step = (
+        create_cache_eval_datasets_step(
+            eval_tasks=QSPLIT240_300M_EVAL_TASKS,
+            gcs_path=resolved_eval_cache_path,
+            name_prefix=base_name_prefix,
+        )
+        if include_eval_harness
+        else None
     )
     training_steps: list[ExecutorStep] = []
     for run_spec in run_specs:
@@ -597,7 +618,8 @@ def build_launch_artifacts(
             data_seed=run_spec.data_seed,
             simulated_epoch_subset_seed=run_spec.simulated_epoch_subset_seed,
         )
-        training_step = add_eval_cache_dependency_to_training_step(training_step, cache_eval_datasets_step)
+        if cache_eval_datasets_step is not None:
+            training_step = add_eval_cache_dependency_to_training_step(training_step, cache_eval_datasets_step)
         training_step = _configure_training_step(
             training_step,
             tpu_region=tpu_regions[0],
@@ -635,11 +657,18 @@ def build_launch_artifacts(
 
 def validate_launch_artifacts(artifacts: LaunchArtifacts, *, include_eval_harness: bool) -> None:
     """Validate graph invariants before launch."""
-    if len(artifacts.interventions) != 117 or len(artifacts.run_specs) != 117 or len(artifacts.training_steps) != 117:
+    expected_count = len(artifacts.run_specs)
+    if expected_count <= 0:
+        raise ValueError("Expected at least one run spec")
+    if len(artifacts.interventions) != expected_count or len(artifacts.training_steps) != expected_count:
         raise ValueError(
-            "Expected 117 interventions, 117 run specs, and 117 training steps; "
+            "Expected matching intervention, run spec, and training step counts; "
             f"got {len(artifacts.interventions)}, {len(artifacts.run_specs)}, {len(artifacts.training_steps)}"
         )
+    if include_eval_harness and artifacts.cache_eval_datasets_step is None:
+        raise ValueError("Eval harness is enabled but eval-dataset cache step is missing")
+    if not include_eval_harness and artifacts.cache_eval_datasets_step is not None:
+        raise ValueError("Eval harness is skipped but eval-dataset cache step is present")
     expected_steps = resolve_scale_spec(SCALE).num_train_steps_for_multiplier(TARGET_BUDGET_MULTIPLIER)
     run_names = [run_spec.run_name for run_spec in artifacts.run_specs]
     if len(set(run_names)) != len(run_names):
@@ -667,6 +696,8 @@ def validate_launch_artifacts(artifacts: LaunchArtifacts, *, include_eval_harnes
         eval_cache_dep = str(env_vars.get(EVAL_DATASETS_CACHE_DEP_ENV_VAR, ""))
         if "us-central" in eval_cache_dep:
             raise ValueError(f"{training_step.name} has central-region eval cache dependency")
+        if not include_eval_harness and eval_cache_dep:
+            raise ValueError(f"{training_step.name} has eval cache dependency despite skipped eval harness")
         has_skip = env_vars.get(SKIP_EVAL_HARNESS_ENV_VAR) == "1"
         if include_eval_harness and has_skip:
             raise ValueError(f"{training_step.name} unexpectedly skips eval harness")
@@ -758,11 +789,11 @@ def _has_iris_context() -> bool:
 def _executor_prefix(executor_prefix: str | None, default_tpu_region: str) -> str | None:
     if executor_prefix is None:
         return None
-    if executor_prefix.startswith("gs://"):
-        return executor_prefix
-    if executor_prefix.startswith("/"):
-        raise ValueError(f"Executor prefix must be a GCS path or relative key, got {executor_prefix!r}")
-    return os.path.join(marin_prefix_for_region(default_tpu_region), executor_prefix)
+    raise ValueError(
+        "--executor-prefix is disabled for this training launcher. A custom executor prefix rewrites the shared "
+        "raw/tokenized data-prep output paths, causing expensive re-download/re-tokenization instead of reusing "
+        f"{marin_prefix_for_region(default_tpu_region)} caches. Resubmit without --executor-prefix."
+    )
 
 
 def _parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -775,9 +806,25 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument("--tpu-regions")
     parser.add_argument("--tpu-zone", default=DEFAULT_TPU_ZONE)
     parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
-    parser.add_argument("--executor-prefix")
+    parser.add_argument(
+        "--executor-prefix",
+        help=(
+            "Disabled for this launcher: setting it would rewrite shared raw/tokenized cache paths and trigger "
+            "data re-materialization."
+        ),
+    )
     parser.add_argument("--eval-datasets-cache-path", default=DEFAULT_EVAL_DATASETS_CACHE_PATH)
     parser.add_argument("--local-artifact-dir", default=str(DEFAULT_LOCAL_ARTIFACT_DIR))
+    parser.add_argument(
+        "--only-run-name",
+        action="append",
+        default=[],
+        help="Restrict launch to one run name. Can be passed multiple times for targeted retries.",
+    )
+    parser.add_argument(
+        "--only-run-name-file",
+        help="Restrict launch to run names listed one per line. Blank lines and # comments are ignored.",
+    )
     parser.add_argument(
         "--include-eval-harness",
         action="store_true",
@@ -786,12 +833,22 @@ def _parse_args() -> tuple[argparse.Namespace, list[str]]:
     return parser.parse_known_args()
 
 
+def _read_only_run_names(args: argparse.Namespace) -> tuple[str, ...]:
+    run_names = list(args.only_run_name or [])
+    if args.only_run_name_file:
+        with Path(args.only_run_name_file).open() as handle:
+            run_names.extend(stripped for line in handle if (stripped := line.strip()) and not stripped.startswith("#"))
+    return tuple(dict.fromkeys(run_names))
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args, remaining = _parse_args()
     sys.argv = [sys.argv[0], *remaining]
     tpu_regions = normalize_tpu_regions(args.tpu_regions or args.tpu_region)
+    only_run_names = _read_only_run_names(args)
     os.environ.setdefault("MARIN_PREFIX", marin_prefix_for_region(DEFAULT_TPU_REGION))
+    _executor_prefix(args.executor_prefix, DEFAULT_TPU_REGION)
     if not args.dry_run and not args.allow_local and os.getenv("CI") is None and not _has_iris_context():
         raise ValueError("Non-dry-run launches must run inside Iris, e.g. via 'uv run iris --cluster=marin job run'.")
 
@@ -802,12 +859,15 @@ def main() -> None:
         tpu_zone=args.tpu_zone,
         eval_datasets_cache_path=args.eval_datasets_cache_path,
         include_eval_harness=args.include_eval_harness,
+        only_run_names=only_run_names,
     )
     write_local_manifests(artifacts, Path(args.local_artifact_dir))
     logger.info("Wrote local manifests to %s", args.local_artifact_dir)
     intervention_count = len(artifacts.interventions)
     training_step_count = len(artifacts.training_steps)
     logger.info("Prepared %d interventions and %d training steps.", intervention_count, training_step_count)
+    if only_run_names:
+        logger.info("Subset retry includes %d requested run names.", len(only_run_names))
     logger.info(
         "Launch config: tpu=%s regions=%s zone=%s max_concurrent=%d eval_harness=%s",
         args.tpu_type,
@@ -819,13 +879,12 @@ def main() -> None:
     if args.dry_run or os.getenv("CI") is not None:
         return
 
-    executor_prefix = _executor_prefix(args.executor_prefix, DEFAULT_TPU_REGION)
     executor_main(
-        ExecutorMainConfig(prefix=executor_prefix, max_concurrent=args.max_concurrent),
+        ExecutorMainConfig(prefix=None, max_concurrent=args.max_concurrent),
         steps=artifacts.steps,
         description=(
             f"{args.base_name_prefix}: 300M proportional domain-deletion and log-tilt diagnostics. "
-            f"Runs 39 domain deletions and 78 central log-tilt endpoints. Outputs include "
+            f"Runs {training_step_count} selected endpoint(s). Outputs include "
             f"{RUN_MANIFEST_FILE}, {RESULTS_CSV}, {FIT_DATASET_CSV}, and {FIT_DATASET_SUMMARY_JSON}."
         ),
     )

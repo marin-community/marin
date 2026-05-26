@@ -256,3 +256,5 @@ experiments/domain_phase_mix/exploratory/two_phase_many/chatgpt_pro_hybrid_data_
 .worktrees
 .obsidian
 .cw_env
+
+.fieldbook.session

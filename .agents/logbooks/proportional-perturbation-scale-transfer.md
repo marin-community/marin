@@ -680,3 +680,390 @@
 - Next action:
   - After children finish, collect from retry4/retry2 prefixes, rebuild the perturbation coverage
     overlays, and use a failure-only retry if individual children fail transiently.
+
+### 2026-05-22 - perturbation eval collection and transient-only retry
+- Active Fieldbook experiment: `exp_01ks48kds4x1s1gbqhg0skatdc`
+  (`Proportional perturbation coverage completion`).
+- Collection from existing retry prefixes:
+  - Parity aliases from retry4 + retry5:
+    `/tmp/ppert_parity_collected_retry4_retry5.csv` has `39` rows:
+    `30` collected and `9` executor-not-success.
+  - Raw-PPL from retry2 + retry3:
+    `/tmp/ppert_raw_ppl_collected_retry2_retry3.csv` has `68` retry3 rows:
+    `32` collected and `36` missing summaries.
+- Failure triage:
+  - Parity retry5 failures split into `2` transient `SIGSEGV/add_port.cc` failures and `7`
+    missing-HF-config failures.
+  - Raw-PPL retry3 failures split into `19` transient failures (`16` GCS/HF rate-limit or east5
+    egress quota, `3` `SIGSEGV/add_port.cc`) and `17` missing-HF-config failures.
+  - Missing-HF-config rows are not eval-retryable; they need HF export/checkpoint repair before more
+    eval attempts.
+- Local code repair:
+  - Restored `experiments/evals/long_tail_ppl_runnable.py` as a compatibility registry for the
+    historical `long_tail_ppl_runnable/...` dataset keys used by raw-PPL state/result files.
+  - Verified `uv run python -m py_compile experiments/domain_phase_mix/launch_300m_raw_ppl_evals.py
+    experiments/evals/long_tail_ppl_runnable.py`.
+- Transient-only retry state files:
+  - Local parity state:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_noise_parity_completion/ppert_noise_parity_retry6_transient_state.csv`
+    (`2` rows).
+  - Local raw-PPL state:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/300m_raw_ppl_completion/ppert_raw_ppl_retry4_transient_state.csv`
+    (`19` rows).
+  - Uploaded GCS copies:
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/proportional_perturbation_scale_transfer/ppert_noise_parity_retry6_transient_state_20260522.csv`
+    and
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/proportional_perturbation_scale_transfer/ppert_raw_ppl_retry4_transient_state_20260522.csv`.
+- Guardrail: two attempted local/remote submissions were superseded and should be ignored:
+  - `ngd3dm2_ppert_noise_parity_full_retry6_20260522` fell back to `LocalClient`; the local process
+    was killed.
+  - Iris parents `dm-ppert-noise-parity-full-retry6b-20260522-0222` and
+    `dm-ppert-raw-ppl-full-retry4b-20260522-0223` used local-only state CSV paths and failed before
+    creating useful eval children.
+- Correct active transient retries:
+  - Parity: `/calvinxu/dm-ppert-noise-parity-full-retry6c-20260522-0224`, prefix
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry6c_20260522`.
+    Immediate check: parent running, cache step succeeded, both eval children pending on `v5p-8`
+    capacity in `us-east5-a`.
+  - Raw-PPL: `/calvinxu/dm-ppert-raw-ppl-full-retry4c-20260522-0225`, prefix
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry4c_20260522`.
+    Immediate check: parent running with `4` raw-PPL children pending on `v5p-8` capacity in
+    `us-east5-a` (`max_concurrent=4` to reduce east5 egress-quota pressure).
+- Next action:
+  - Monitor retry6c/retry4c to terminal state.
+  - Collect from retry4/retry5/retry6c for parity and retry2/retry3/retry4c for raw-PPL.
+  - Separately plan HF export/checkpoint repair for the missing-HF-config rows before claiming full
+    perturbation downstream coverage.
+
+### 2026-05-22 - perturbation eval collection after transient retries
+- Iris terminal-state check:
+  - `/calvinxu/dm-ppert-noise-parity-full-retry6c-20260522-0224`: `4` succeeded cells, `0` failed.
+  - `/calvinxu/dm-ppert-raw-ppl-full-retry4c-20260522-0225`: `20` succeeded cells, `0` failed.
+- Collection commands:
+  - Parity retry5-state collection from retry4/retry5/retry6c wrote
+    `/tmp/ppert_parity_collected_retry4_retry5_retry6c.csv`: `30/39` collected.
+  - Parity transient-state collection from retry6c wrote `/tmp/ppert_parity_collected_retry6c.csv`:
+    `2/2` collected.
+  - Raw-PPL retry3-state collection from retry2/retry3 wrote
+    `/tmp/ppert_raw_ppl_collected_retry2_retry3.csv`: `32/68` collected.
+  - Raw-PPL transient-state collection from retry4c wrote `/tmp/ppert_raw_ppl_collected_retry4c.csv`:
+    `19/19` collected.
+- Merged local overlays:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/ppert_noise_parity_eval_results.csv`:
+    `112` rows total, `105` collected and `7` remaining failed rows.
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/ppert_raw_ppl_eval_results.csv`:
+    `112` rows total, `95` collected and `17` remaining missing-summary rows.
+- Registry refresh:
+  - Ran
+    `uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.build_metric_registry --no-gcs`.
+  - Output summary: `983` runs, `1,354` canonical metrics, `595,622` canonical metric facts,
+    `0` conflicts.
+- Coverage after refresh:
+  - Issue #5416 selected aggregate columns are complete for `54/55` 300M perturbations and
+    `49/55` 60M perturbations.
+  - Raw-PPL BPB columns are complete for `55/55` 300M perturbations and `38/55` 60M perturbations.
+  - Remaining issue #5416 parity gaps are `ppert_qswap_crime_and_law` at 300M and six 60M
+    perturbation rows; remaining raw-PPL gaps are `17` 60M rows.
+- Interpretation:
+  - Transient retries are fully collected.
+  - The remaining gaps are consistent with missing HF export/config rows and should be handled as
+    checkpoint/HF repair before launching further eval retries.
+
+### 2026-05-23 - remaining perturbation eval retries after HF audit
+- Current local coverage before retry:
+  - `ppert_noise_parity_eval_results.csv`: `105/112` rows collected; `7` rows had
+    `collection_status=executor_not_success`.
+  - `ppert_raw_ppl_eval_results.csv`: `95/112` rows collected; `17` rows were missing all raw-PPL
+    metric columns.
+- HF audit:
+  - Rebuilt state from the current missing rows and checked `hf_checkpoint_latest/config.json` for
+    all unique missing-row checkpoints.
+  - Result: `23` unique HF checkpoint paths, `0` missing `config.json`.
+  - Interpretation: the remaining rows are retryable now; do not treat the stale missing-HF diagnosis
+    from 2026-05-22 as still current without rechecking.
+- Retry state files:
+  - Local parity state:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/retry_states_20260523/ppert_noise_parity_retry7_state.csv`
+    (`7` rows).
+  - Local raw-PPL state:
+    `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/retry_states_20260523/ppert_raw_ppl_retry5_state.csv`
+    (`17` rows).
+  - GCS parity state:
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260523/ppert_noise_parity_retry7_state.csv`.
+  - GCS raw-PPL state:
+    `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260523/ppert_raw_ppl_retry5_state.csv`.
+- Dry-runs:
+  - Parity command prepared exactly `7` eval steps over `7` candidate checkpoints.
+  - Raw-PPL command prepared exactly `17` eval steps over `17` candidate checkpoints and selected
+    `55` raw-PPL datasets from `priority+fineweb2-representative`.
+- Claude Code review:
+  - Reviewed with `env -u ANTHROPIC_API_KEY claude --resume d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490 --model claude-opus-4-7 --effort max --permission-mode dontAsk`.
+  - Preflight showed `plambdafour@proton.me`, `stripe_subscription`, and no inherited
+    `ANTHROPIC_API_KEY`.
+  - Verdict: no blockers. Review specifically checked state scoping, GCS state readability, east5
+    checkpoint locality, and executor prefixes.
+- Submitted:
+  - Parity retry7:
+    `/calvinxu/dm-ppert-noise-parity-full-retry7-20260523-1630`.
+
+    Command:
+    `uv run iris --cluster=marin job run --no-wait --job-name dm-ppert-noise-parity-full-retry7-20260523-1630 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 1 --memory 16GB --disk 20GB -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- python -m experiments.domain_phase_mix.launch_300m_noise_parity_evals --name-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry7_20260523 --executor-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry7_20260523 --state-csv gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260523/ppert_noise_parity_retry7_state.csv --max-concurrent 7`
+  - Raw-PPL retry5:
+    `/calvinxu/dm-ppert-raw-ppl-full-retry5-20260523-1630`.
+
+    Command:
+    `uv run iris --cluster=marin job run --no-wait --job-name dm-ppert-raw-ppl-full-retry5-20260523-1630 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 1 --memory 16GB --disk 20GB -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- python -m experiments.domain_phase_mix.launch_300m_raw_ppl_evals --name-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5_20260523 --executor-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5_20260523 --state-csv gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260523/ppert_raw_ppl_retry5_state.csv --bundle priority --bundle fineweb2-representative --allow-partial --max-concurrent 17`
+- Fieldbook:
+  - Added running jobs `job_01ksbjtnqxynxnv26at22drjex` and
+    `job_01ksbjtns6k0ytphs5wwf2thcq` to experiment `exp_01ks48kds4x1s1gbqhg0skatdc`.
+  - Added debug note `note_01ksbjv0w7d9sb9s3aqgqdaghq` with the retry scope and HF audit result.
+- Next action:
+  - Monitor both parents to terminal state.
+  - Collect parity from retry4/retry5/retry6c/retry7 and raw-PPL from retry2/retry3/retry4c/retry5,
+    then rebuild the metric registry.
+
+### 2026-05-23 - retry7b/retry5b nonpreemptible parent replacement
+- Issue:
+  A simultaneous Grug eval retry showed a child killed by `Parent task preempted`. The just-submitted
+  perturbation retry7/retry5 parents were also preemptible CPU parents, and their eval children were
+  still only pending, so replacing them before TPU work began avoided likely parent-preemption loss.
+- Claude Code review:
+  Reviewed the stop/relaunch decision with `env -u ANTHROPIC_API_KEY`, Opus 4.7, max effort, session
+  `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`. Verdict: stop the preemptible parents now, relaunch with
+  `--no-preemptible`, and use fresh executor prefixes to avoid stale locks/status files.
+- Action:
+  Stopped:
+  - `/calvinxu/dm-ppert-noise-parity-full-retry7-20260523-1630`
+  - `/calvinxu/dm-ppert-raw-ppl-full-retry5-20260523-1630`
+- Submitted:
+  - Parity retry7b:
+    `/calvinxu/dm-ppert-noise-parity-full-retry7b-20260523-1638`
+
+    Command:
+    `uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-ppert-noise-parity-full-retry7b-20260523-1638 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 1 --memory 16GB --disk 20GB -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- python -m experiments.domain_phase_mix.launch_300m_noise_parity_evals --name-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry7b_20260523 --executor-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry7b_20260523 --state-csv gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260523/ppert_noise_parity_retry7_state.csv --max-concurrent 7`
+  - Raw-PPL retry5b:
+    `/calvinxu/dm-ppert-raw-ppl-full-retry5b-20260523-1638`
+
+    Command:
+    `uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-ppert-raw-ppl-full-retry5b-20260523-1638 --region us-east5 --zone us-east5-a --enable-extra-resources --cpu 1 --memory 16GB --disk 20GB -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- python -m experiments.domain_phase_mix.launch_300m_raw_ppl_evals --name-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5b_20260523 --executor-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5b_20260523 --state-csv gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260523/ppert_raw_ppl_retry5_state.csv --bundle priority --bundle fineweb2-representative --allow-partial --max-concurrent 17`
+- Fieldbook:
+  Marked retry7/retry5 jobs `killed`, added retry7b/retry5b jobs
+  `job_01ksbkbj94f9jcpmwxp0874fy0` and `job_01ksbkbjbr65js7mptxa1y12wb`, and replaced the current
+  next-action note with the retry7b/retry5b collection plan.
+- Next action:
+  - Monitor retry7b/retry5b to terminal state.
+  - Collect parity from retry4/retry5/retry6c/retry7b and raw-PPL from
+    retry2/retry3/retry4c/retry5b.
+
+### 2026-05-23 - retry7c/retry5c parent capacity recovery
+- Issue:
+  retry7b/retry5b had correct nonpreemptible semantics but were pinned to
+  `us-east5-a` for the parent and remained pending on parent CPU capacity. No
+  useful eval child work had started.
+- Claude Code review:
+  Reviewed the capacity recovery with `env -u ANTHROPIC_API_KEY`, Opus 4.7,
+  max effort, session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`. Verdict: stop
+  retry7b/retry5b and relaunch with nonpreemptible placement-unconstrained CPU
+  parents; retain child locality through launcher resources and checkpoint
+  paths.
+- Action:
+  Stopped:
+  - `/calvinxu/dm-ppert-noise-parity-full-retry7b-20260523-1638`
+  - `/calvinxu/dm-ppert-raw-ppl-full-retry5b-20260523-1638`
+
+  Submitted:
+  - `/calvinxu/dm-ppert-noise-parity-full-retry7c-20260523-1645`
+  - `/calvinxu/dm-ppert-raw-ppl-full-retry5c-20260523-1645`
+
+  Both parents use `--no-preemptible --cpu 1 --memory 2GB --disk 10GB` and no
+  parent region/zone pin. The parity retry still targets `7` rows; raw-PPL
+  still targets `17` rows with the `priority+fineweb2-representative` bundle.
+- Current status:
+  retry7c is running, has cached eval datasets, and has `7` parity eval
+  children pending on v5p-8 east5-a capacity. retry5c is running and has
+  active raw-PPL materialization/eval work; the killed Zephyr worker rows seen
+  under the prefix are cleanup/coordination artifacts while the parent remains
+  active, not final failed eval cells yet.
+- Fieldbook:
+  Marked retry7b/retry5b `killed`, added running retry7c/retry5c jobs
+  `job_01ksbkr57aemsp51fy0rs6n69e` and
+  `job_01ksbkr54rntj1kgr9wpm7kvzs`, and updated the current next-action note.
+- Next action:
+  - Monitor retry7c/retry5c to terminal state.
+  - Collect parity from retry4/retry5/retry6c/retry7c and raw-PPL from
+    retry2/retry3/retry4c/retry5c.
+
+### 2026-05-23 - raw-PPL retry5d after parent OOM
+- Status:
+  `/calvinxu/dm-ppert-raw-ppl-full-retry5c-20260523-1645` failed at the parent
+  with exit `137` while materializing raw-PPL datasets. Its child jobs were
+  Zephyr cache/materialization workers only; no raw-PPL eval cells had launched.
+- Interpretation:
+  The earlier 2GB placement-unconstrained parent was too small for
+  `priority+fineweb2-representative` raw-PPL dataset materialization.
+- Claude Code review:
+  Reviewed the fix with `env -u ANTHROPIC_API_KEY`, Opus 4.7 max effort,
+  session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`. Verdict: no blockers; use a
+  fresh executor prefix and restore parent memory to `16GB` with `20GB` disk.
+- Dry-run:
+  `uv run python -m experiments.domain_phase_mix.launch_300m_raw_ppl_evals --dry-run --name-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5d_20260523 --executor-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5d_20260523 --state-csv gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260523/ppert_raw_ppl_retry5_state.csv --bundle priority --bundle fineweb2-representative --allow-partial --max-concurrent 17`
+  prepared `17` raw-PPL eval steps over `17` candidate checkpoints.
+- Submitted:
+  `/calvinxu/dm-ppert-raw-ppl-full-retry5d-20260523-2228`
+
+  Command:
+  `uv run iris --cluster=marin job run --no-wait --no-preemptible --job-name dm-ppert-raw-ppl-full-retry5d-20260523-2228 --enable-extra-resources --cpu 1 --memory 16GB --disk 20GB -e WANDB_API_KEY "$WANDB_API_KEY" -e HF_TOKEN "$HF_TOKEN" -- python -m experiments.domain_phase_mix.launch_300m_raw_ppl_evals --name-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5d_20260523 --executor-prefix pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5d_20260523 --state-csv gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260523/ppert_raw_ppl_retry5_state.csv --bundle priority --bundle fineweb2-representative --allow-partial --max-concurrent 17`
+- Fieldbook:
+  Marked retry5c failed and added running retry5d as
+  `job_01ksc73ez4dz0pbsknkkemc2vx`.
+
+### 2026-05-24 - cross-region egress incident
+
+Rohith's egress report flagged perturbation eval retries, especially
+`/calvinxu/dm-ppert-raw-ppl-full-retry5d-20260523-2228` and smaller
+retry7c activity. The problematic retry5d command restored parent memory but
+also omitted explicit parent `--region us-east5 --zone us-east5-a` while using
+east5 state CSV and executor paths. That parent placement pattern is no longer
+acceptable.
+
+Immediate status/actions:
+
+- Stop request for
+  `/calvinxu/dm-ppert-raw-ppl-full-retry5d-20260523-2228` found no running
+  jobs; the prefix was already terminal with `16` failed and `2` succeeded.
+- `/calvinxu/dm-ppert-noise-parity-full-retry7c-20260523-1645` was also
+  terminal with `6` failed and `3` succeeded.
+- Marked Fieldbook jobs `job_01ksc73ez4dz0pbsknkkemc2vx` and
+  `job_01ksbkr57aemsp51fy0rs6n69e` as failed.
+
+CC review:
+
+- Invoked with `env -u ANTHROPIC_API_KEY`, Opus 4.7 max effort, resumed Marin
+  session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`; preflight showed
+  `plambdafour@proton.me`, `stripe_subscription`, and no inherited
+  `ANTHROPIC_API_KEY`.
+- Diagnosis: missing parent placement is the dominant root cause. A central or
+  unconstrained parent can repeatedly read/write east5 GCS state, status, and
+  materialization artifacts even when child eval jobs are east5-a.
+
+Policy from this point:
+
+- No perturbation eval retry without explicit parent
+  `--region us-east5 --zone us-east5-a`.
+- No placement-unconstrained CPU parent for east5 eval/materialization work,
+  even for capacity recovery.
+- State CSVs, executor prefixes, checkpoint roots, and eval caches must all use
+  `gs://marin-us-east5`.
+- Run CC review before every live retry submission.
+
+### 2026-05-25 - collected partial retry7c/retry5d successes
+
+Read-only collection from the latest terminal retry prefixes found additional
+usable outputs:
+
+- Parity retry7c
+  `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry7c_20260523`
+  contributed `2/7` rows:
+  - `proportional_perturbation_300m_6b:ppert_qswap_crime_and_law`
+  - `proportional_perturbation_60m_1p2b:ppert_domain_dolma3_cc_electronics_and_hardware_high`
+- Raw-PPL retry5d
+  `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry5d_20260523`
+  contributed `2/17` rows:
+  - `proportional_perturbation_60m_1p2b:ppert_domain_dolmino_synth_code`
+  - `proportional_perturbation_60m_1p2b:ppert_qswap_health`
+
+Actions:
+
+- Merged the new collected rows into:
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/ppert_noise_parity_eval_results.csv`
+  - `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/ppert_raw_ppl_eval_results.csv`
+- Rebuilt the local metric registry with:
+  `uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.build_metric_registry --no-gcs`
+- Refreshed Fieldbook artifacts and validation counts for experiment
+  `exp_01ks48kds4x1s1gbqhg0skatdc`.
+
+Current coverage:
+
+- Parity: `107/112` collected. Remaining `5` rows are all 60M and have
+  `executor_not_success`.
+- Raw-PPL: `97/112` collected. Remaining `15` rows are all 60M and have
+  `missing_summary`.
+- The previous 300M issue #5416 parity gap
+  `ppert_qswap_crime_and_law` is now collected.
+
+Next action:
+build a fresh failure-only retry state from the updated canonical CSVs, not from
+the stale retry5/retry7 state files. Submit only after CC review and only with
+explicit east5 parent placement plus east5-a child TPU placement.
+
+### 2026-05-25 - submitted retry8/retry6 after CC review
+
+Fresh state files were generated from the updated canonical result CSVs and
+uploaded to:
+
+- `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260525/ppert_noise_parity_retry8_state.csv`
+- `gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260525/ppert_raw_ppl_retry6_state.csv`
+
+Dry-runs prepared exactly `5` parity eval steps and `15` raw-PPL eval steps.
+CC reviewed the submission plan with `env -u ANTHROPIC_API_KEY`, Opus 4.7 max
+effort, resumed Marin session `d0a45bcd-ae4f-4efd-8bd5-3cbcdf4b3490`, and found
+no blockers.
+
+The first two parity parent attempts dispatched no children and were stopped:
+
+- `/calvinxu/dm-ppert-noise-parity-full-retry8-20260525-1850`: pinned
+  `us-east5-a`, blocked on east5-a CPU/highmem capacity.
+- `/calvinxu/dm-ppert-noise-parity-full-retry8-region-20260525-1901`:
+  region-only east5 parent, still blocked on the 16GB highmem parent shape.
+
+After a focused CC review, the parity parent was resubmitted as a lightweight
+coordination-only parent:
+
+- `/calvinxu/dm-ppert-noise-parity-full-retry8-region-lite-20260525-1909`
+- parent: `--region us-east5`, `--cpu 0.5`, `--memory 8GB`, `--disk 20GB`
+- children: `--tpu-region us-east5 --tpu-zone us-east5-a`
+- executor prefix:
+  `pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry8_region_lite_20260525`
+
+This parent started, completed the eval-cache step, and dispatched all `5`
+parity eval children. The eval children are currently waiting for east5-a TPU
+capacity.
+
+Raw-PPL retry6 was submitted after parity dispatch was proven:
+
+- `/calvinxu/dm-ppert-raw-ppl-full-retry6-region-20260525-1913`
+- parent: `--region us-east5`, `--cpu 1`, `--memory 16GB`, `--disk 20GB`
+- children: `--tpu-region us-east5 --tpu-zone us-east5-a`
+- executor prefix:
+  `pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_raw_ppl_full_retry6_region_20260525`
+
+The raw-PPL parent is currently waiting for the east5 highmem CPU worker scale-up.
+Keep the 16GB parent memory for raw-PPL because retry5c previously OOMed during
+raw-PPL dataset materialization. The updated operational rule is: use explicit
+east5 placement for parent and children; a region-only east5 parent is acceptable
+after CC review when a zone-pinned CPU parent is capacity-blocked, because it
+keeps all GCS traffic intra-region while allowing the CPU parent to land in
+another east5 zone.
+
+### 2026-05-25 - parity retry8 collected
+
+Live Iris check showed
+`/calvinxu/dm-ppert-noise-parity-full-retry8-region-lite-20260525-1909`
+finished successfully. Collected the five retry8 rows with:
+
+`uv run python experiments/domain_phase_mix/launch_300m_noise_parity_evals.py --state-csv gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ppert_recovery_state_20260525/ppert_noise_parity_retry8_state.csv --collect-from-prefix gs://marin-us-east5/pinlin_calvin_xu/data_mixture/ngd3dm2_ppert_noise_parity_full_retry8_region_lite_20260525 --collect-output-csv /tmp/ppert_parity_collected_retry8.csv`
+
+Result:
+
+- Retry8 collection status: `5/5` collected.
+- Merged those rows into
+  `experiments/domain_phase_mix/exploratory/two_phase_many/metric_registry/proportional_perturbation_scale_transfer/ppert_noise_parity_eval_results.csv`.
+- Rebuilt the local registry with
+  `uv run python -m experiments.domain_phase_mix.exploratory.two_phase_many.metric_registry.build_metric_registry --no-gcs`.
+- Updated Fieldbook job `job_01ksh0xsded45vs31g4gyab25s` to `succeeded`.
+- Updated Fieldbook validation `perturbation.parity_collection` to pass:
+  `112/112` collected.
+
+Remaining gap:
+
+- Raw-PPL remains `97/112`; retry6 is pending on east5 CPU capacity.

@@ -11,6 +11,7 @@ follow-up logprob evals come from ``gs://marin-us-east5/evaluation/grug_logprob`
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import re
@@ -40,10 +41,33 @@ TRACK_LABELS = {
     "grug_moe_mix_v3": "v3",
     "grug_moe_mix_v4": "v4",
 }
+PATH_ENDPOINT_TRACKS = ("grug_moe_mix_v4",)
+PATH_T_BY_SLUG = {
+    "t025": 0.25,
+    "t050": 0.50,
+    "t075": 0.75,
+}
+PATH_MIXTURE_ORDER = (
+    "Proportional",
+    "v4 path t=0.25",
+    "v4 path t=0.50",
+    "v4 path t=0.75",
+    "v4",
+)
+PATH_MIXTURE_COLORS = {
+    "Proportional": "#d7191c",
+    "v4 path t=0.25": "#fdae61",
+    "v4 path t=0.50": "#fee08b",
+    "v4 path t=0.75": "#a6d96a",
+    "v4": "#1a9641",
+}
 
 RUN_RE = re.compile(r"^(grug_moe_mix(?:_v\d+)?)_d(\d+)-([0-9.]+e[+-]\d+)(?:-[0-9a-f]+)?$")
 ROOT_RE = re.compile(r"gs://marin-us-east5/grug/(grug_moe_mix(?:_v\d+)?_d\d+-[0-9.]+e[+-]\d+-[0-9a-f]+)/?$")
+PATH_RUN_RE = re.compile(r"^(grug_moe_mix_v4_path_r1)_(t\d{3})_d(\d+)-([0-9.]+e[+-]\d+)(?:-[0-9a-f]+)?$")
+PATH_ROOT_RE = re.compile(r"gs://marin-us-east5/grug/(grug_moe_mix_v4_path_r1_t\d{3}_d\d+-[0-9.]+e[+-]\d+-[0-9a-f]+)/?$")
 TASK_HASH_RE = re.compile(r"-[0-9a-f]{6}$")
+NUMERIC_RETRY_RE = re.compile(r"numeric_retry(?P<attempt>\d+)-[0-9a-f]+$")
 METRIC_SUFFIX = ",none"
 
 
@@ -62,8 +86,12 @@ def run_text(args: list[str], *, allow_failure: bool = False) -> str:
     return completed.stdout
 
 
-def gcloud_ls(path: str) -> list[GcsObject]:
-    return [GcsObject(line.strip()) for line in run_text(["gcloud", "storage", "ls", path]).splitlines() if line.strip()]
+def gcloud_ls(path: str, *, allow_failure: bool = False) -> list[GcsObject]:
+    return [
+        GcsObject(line.strip())
+        for line in run_text(["gcloud", "storage", "ls", path], allow_failure=allow_failure).splitlines()
+        if line.strip()
+    ]
 
 
 def gcloud_cat(path: str, *, allow_failure: bool = False) -> str:
@@ -81,8 +109,37 @@ def parse_run_key(run_key: str) -> tuple[str, int, str]:
     return track, int(hidden_dim), budget
 
 
+def parse_path_run_key(run_key: str) -> tuple[str, float, int, str]:
+    """Return ``(t_slug, t_value, hidden_dim, budget)`` from a path run key."""
+    match = PATH_RUN_RE.match(run_key)
+    if match is None:
+        raise ValueError(f"Could not parse path run key: {run_key}")
+    _, t_slug, hidden_dim, budget = match.groups()
+    if t_slug not in PATH_T_BY_SLUG:
+        raise ValueError(f"Unexpected path t slug: {t_slug}")
+    return t_slug, PATH_T_BY_SLUG[t_slug], int(hidden_dim), budget
+
+
 def scale_label(hidden_dim: int, budget: str) -> str:
     return f"d{hidden_dim}\n{budget}"
+
+
+def normalize_scale_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize scale key dtypes after CSV roundtrips."""
+    if df.empty:
+        return df
+
+    out = df.copy()
+    if "hidden_dim" in out.columns:
+        out["hidden_dim"] = pd.to_numeric(out["hidden_dim"], errors="raise").astype(int)
+    if "budget" in out.columns:
+        out["budget"] = pd.to_numeric(out["budget"], errors="raise")
+    if {"hidden_dim", "budget", "scale_label"}.issubset(out.columns):
+        out["scale_label"] = [
+            scale_label(int(hidden_dim), f"{float(budget):.2e}")
+            for hidden_dim, budget in zip(out["hidden_dim"], out["budget"], strict=True)
+        ]
+    return out
 
 
 def domain_family(domain: str) -> str:
@@ -221,6 +278,51 @@ def collect_training_metadata() -> tuple[pd.DataFrame, pd.DataFrame, dict[str, s
     return runs_df, weights_df, checkpoint_by_run_id
 
 
+def collect_path_training_metadata() -> pd.DataFrame:
+    """Collect training status for proportional-to-v4 path runs."""
+    rows: list[dict[str, Any]] = []
+    for obj in gcloud_ls(f"{GCS_GRUG_PREFIX}/"):
+        match = PATH_ROOT_RE.match(obj.path)
+        if match is None:
+            continue
+        root_name = match.group(1)
+        t_slug, t_value, hidden_dim, budget = parse_path_run_key(root_name.rsplit("-", maxsplit=1)[0])
+        root_path = obj.path.rstrip("/")
+        state = executor_status(root_path)
+        info_text = gcloud_cat(f"{root_path}/.executor_info", allow_failure=True)
+        config: dict[str, Any] = {}
+        if info_text:
+            try:
+                config = json.loads(info_text).get("config", {})
+            except json.JSONDecodeError:
+                config = {}
+        rows.append(
+            {
+                "endpoint_track": "grug_moe_mix_v4",
+                "endpoint_label": TRACK_LABELS["grug_moe_mix_v4"],
+                "t_slug": t_slug,
+                "t": t_value,
+                "hidden_dim": hidden_dim,
+                "budget": budget,
+                "scale_label": scale_label(hidden_dim, budget),
+                "root_name": root_name,
+                "run_id": str(config.get("run_id") or root_name.rsplit("-", maxsplit=1)[0]),
+                "state": state,
+                "target_steps": config.get("steps"),
+                "checkpoint_root": f"{root_path}/checkpoints",
+                "wandb_group": (config.get("tracker") or {}).get("group"),
+                "seed": config.get("seed"),
+            }
+        )
+
+    path_runs_df = pd.DataFrame(rows)
+    if path_runs_df.empty:
+        return path_runs_df
+    return path_runs_df.sort_values(["t", "hidden_dim", "root_name"]).drop_duplicates(
+        ["t_slug", "hidden_dim", "budget"], keep="last"
+    )
+
+
 def eval_results_paths() -> list[str]:
     """List per-task Grug logprob result files.
 
@@ -235,12 +337,57 @@ def eval_results_paths() -> list[str]:
     return paths
 
 
+def result_path_attempt_rank(path: str) -> int:
+    """Return a monotone retry rank for de-duplicating result files."""
+    result_parent = path.rstrip("/").rsplit("/", maxsplit=1)[0].rsplit("/", maxsplit=1)[-1]
+    match = NUMERIC_RETRY_RE.match(result_parent)
+    if match is None:
+        return 0
+    return int(match.group("attempt"))
+
+
+def path_eval_results_paths() -> list[str]:
+    """List Grug logprob result files for path-test checkpoints, if present."""
+    # `gcloud storage ls prefix/**/results.json` has missed nested retry outputs
+    # in practice, so explicitly include the direct task-child and one retry
+    # level layouts used by the executor.
+    patterns = [
+        f"{GCS_EVAL_PREFIX}/grug_moe_mix_v4_path_r1_*/*/results.json",
+        f"{GCS_EVAL_PREFIX}/grug_moe_mix_v4_path_r1_*/*/*/results.json",
+    ]
+    paths: dict[str, None] = {}
+    for pattern in patterns:
+        for obj in gcloud_ls(pattern, allow_failure=True):
+            rel = obj.path.split(f"{GCS_EVAL_PREFIX}/", maxsplit=1)[1]
+            if len(rel.split("/")) >= 3:
+                paths[obj.path] = None
+    return sorted(paths)
+
+
+def deduplicate_eval_metric_rows(df: pd.DataFrame, key_cols: list[str]) -> pd.DataFrame:
+    """Keep the latest retry output for each logical task metric cell."""
+    if df.empty:
+        return df
+    out = df.copy()
+    out["result_attempt_rank"] = out["result_path"].map(result_path_attempt_rank)
+    out = out.sort_values([*key_cols, "result_attempt_rank", "result_path"])
+    return out.drop_duplicates(key_cols, keep="last").reset_index(drop=True)
+
+
 def parse_eval_path(path: str) -> tuple[str, int, str, str]:
     rel = path.split(f"{GCS_EVAL_PREFIX}/", maxsplit=1)[1]
     parent, task_hash, *_ = rel.split("/")
     track, hidden_dim, budget = parse_run_key(parent)
     task_alias = TASK_HASH_RE.sub("", task_hash)
     return track, hidden_dim, budget, task_alias
+
+
+def parse_path_eval_path(path: str) -> tuple[str, float, int, str, str]:
+    rel = path.split(f"{GCS_EVAL_PREFIX}/", maxsplit=1)[1]
+    parent, task_hash, *_ = rel.split("/")
+    t_slug, t_value, hidden_dim, budget = parse_path_run_key(parent)
+    task_alias = TASK_HASH_RE.sub("", task_hash)
+    return t_slug, t_value, hidden_dim, budget, task_alias
 
 
 def aggregate_result_key(task_alias: str, results: dict[str, Any]) -> str:
@@ -313,6 +460,47 @@ def collect_one_eval(path: str) -> list[dict[str, Any]]:
     return rows
 
 
+def collect_one_path_eval(path: str) -> list[dict[str, Any]]:
+    t_slug, t_value, hidden_dim, budget, task_alias = parse_path_eval_path(path)
+    data = json.loads(gcloud_cat(path))
+    results = data.get("results", {})
+    if not isinstance(results, dict) or not results:
+        return []
+    result_key = aggregate_result_key(task_alias, results)
+    metric_dict = results[result_key]
+    checkpoint_path = None
+    info_path = path.rsplit("/", maxsplit=1)[0] + "/.executor_info"
+    info_text = gcloud_cat(info_path, allow_failure=True)
+    if info_text:
+        try:
+            checkpoint_path = json.loads(info_text)["config"].get("checkpoint_path")
+        except (KeyError, json.JSONDecodeError):
+            checkpoint_path = None
+    rows = []
+    for metric, value in numeric_metrics(metric_dict).items():
+        rows.append(
+            {
+                "track": f"grug_moe_mix_v4_path_r1_{t_slug}",
+                "track_label": f"v4 path t={t_value:.2f}",
+                "endpoint_track": "grug_moe_mix_v4",
+                "endpoint_label": TRACK_LABELS["grug_moe_mix_v4"],
+                "path_t_slug": t_slug,
+                "path_t": t_value,
+                "hidden_dim": hidden_dim,
+                "budget": budget,
+                "scale_label": scale_label(hidden_dim, budget),
+                "task_alias": task_alias,
+                "task_group": task_group(task_alias),
+                "result_key": result_key,
+                "metric": metric,
+                "value": value,
+                "result_path": path,
+                "checkpoint_path": checkpoint_path,
+            }
+        )
+    return rows
+
+
 def collect_eval_metrics() -> pd.DataFrame:
     paths = eval_results_paths()
     rows: list[dict[str, Any]] = []
@@ -320,7 +508,19 @@ def collect_eval_metrics() -> pd.DataFrame:
         futures = [executor.submit(collect_one_eval, path) for path in paths]
         for future in as_completed(futures):
             rows.extend(future.result())
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    return deduplicate_eval_metric_rows(df, ["track", "hidden_dim", "budget", "task_alias", "metric"])
+
+
+def collect_path_eval_metrics() -> pd.DataFrame:
+    paths = path_eval_results_paths()
+    rows: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        futures = [executor.submit(collect_one_path_eval, path) for path in paths]
+        for future in as_completed(futures):
+            rows.extend(future.result())
+    df = pd.DataFrame(rows)
+    return deduplicate_eval_metric_rows(df, ["track", "hidden_dim", "budget", "task_alias", "metric"])
 
 
 def preferred_task_values(metrics_df: pd.DataFrame) -> pd.DataFrame:
@@ -496,6 +696,118 @@ def power_law_fits(loss_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def path_t_from_track(track: str) -> float:
+    match = re.search(r"_(t\d{3})$", track)
+    if match is None:
+        raise ValueError(f"Could not infer path t from track: {track}")
+    return PATH_T_BY_SLUG[match.group(1)]
+
+
+def path_task_deltas(preferred_df: pd.DataFrame, path_metrics_df: pd.DataFrame) -> pd.DataFrame:
+    """Build endpoint-path task deltas relative to proportional at the same scale."""
+    if preferred_df.empty:
+        return pd.DataFrame()
+
+    key_cols = ["hidden_dim", "budget", "scale_label", "task_alias"]
+    value_cols = [
+        "task_group",
+        "preferred_metric",
+        "raw_metric",
+        "raw_value",
+        "oriented_value",
+    ]
+    baseline = preferred_df[preferred_df["track"].eq("grug_moe_mix")][key_cols + value_cols].rename(
+        columns={
+            "task_group": "baseline_task_group",
+            "preferred_metric": "baseline_preferred_metric",
+            "raw_metric": "baseline_raw_metric",
+            "raw_value": "baseline_raw_value",
+            "oriented_value": "baseline_oriented_value",
+        }
+    )
+    if baseline.empty:
+        return pd.DataFrame()
+
+    rows: list[pd.DataFrame] = []
+    endpoint_values = preferred_df[preferred_df["track"].isin(PATH_ENDPOINT_TRACKS)].copy()
+    if not endpoint_values.empty:
+        endpoint_pairs = endpoint_values.merge(baseline, on=key_cols, how="inner")
+        endpoint_pairs["endpoint_track"] = endpoint_pairs["track"]
+        endpoint_pairs["endpoint_label"] = endpoint_pairs["track"].map(TRACK_LABELS)
+        endpoint_pairs["t"] = 1.0
+        endpoint_pairs["path_source"] = "endpoint"
+        rows.append(endpoint_pairs)
+
+        baseline_pairs = endpoint_pairs.copy()
+        baseline_pairs["track"] = "grug_moe_mix"
+        baseline_pairs["track_label"] = "Proportional"
+        baseline_pairs["task_group"] = baseline_pairs["baseline_task_group"]
+        baseline_pairs["preferred_metric"] = baseline_pairs["baseline_preferred_metric"]
+        baseline_pairs["raw_metric"] = baseline_pairs["baseline_raw_metric"]
+        baseline_pairs["raw_value"] = baseline_pairs["baseline_raw_value"]
+        baseline_pairs["oriented_value"] = baseline_pairs["baseline_oriented_value"]
+        baseline_pairs["t"] = 0.0
+        baseline_pairs["path_source"] = "proportional"
+        rows.append(baseline_pairs)
+
+    if not path_metrics_df.empty:
+        path_preferred = preferred_task_values(path_metrics_df)
+        if not path_preferred.empty:
+            path_pairs = path_preferred.merge(baseline, on=key_cols, how="inner")
+            path_pairs["endpoint_track"] = "grug_moe_mix_v4"
+            path_pairs["endpoint_label"] = TRACK_LABELS["grug_moe_mix_v4"]
+            path_pairs["t"] = path_pairs["track"].map(path_t_from_track)
+            path_pairs["path_source"] = "intermediate"
+            rows.append(path_pairs)
+
+    if not rows:
+        return pd.DataFrame()
+
+    path_df = pd.concat(rows, ignore_index=True)
+    path_df["delta_oriented"] = path_df["oriented_value"] - path_df["baseline_oriented_value"]
+    path_df["benchmark_metric"] = path_df["task_alias"] + " / " + path_df["preferred_metric"]
+    path_df = path_df.sort_values(["task_alias", "endpoint_label", "hidden_dim", "t"])
+    return path_df.drop_duplicates(["endpoint_track", "hidden_dim", "budget", "task_alias", "t"], keep="last")
+
+
+def path_task_loss_values(loss_df: pd.DataFrame, path_metrics_df: pd.DataFrame) -> pd.DataFrame:
+    """Build path-test loss-like task values in scaling-law coordinates."""
+    if loss_df.empty:
+        return pd.DataFrame()
+
+    path_parts: list[pd.DataFrame] = []
+    endpoint_df = loss_df[loss_df["track"].isin(["grug_moe_mix", "grug_moe_mix_v4"])].copy()
+    if not endpoint_df.empty:
+        endpoint_df["endpoint_track"] = "grug_moe_mix_v4"
+        endpoint_df["endpoint_label"] = TRACK_LABELS["grug_moe_mix_v4"]
+        endpoint_df["t"] = endpoint_df["track"].map({"grug_moe_mix": 0.0, "grug_moe_mix_v4": 1.0})
+        endpoint_df["mixture_label"] = endpoint_df["track"].map(
+            {"grug_moe_mix": "Proportional", "grug_moe_mix_v4": "v4"}
+        )
+        endpoint_df["path_source"] = endpoint_df["track"].map(
+            {"grug_moe_mix": "proportional", "grug_moe_mix_v4": "endpoint"}
+        )
+        path_parts.append(endpoint_df)
+
+    if not path_metrics_df.empty:
+        path_loss_df = loss_like_task_values(path_metrics_df)
+        if not path_loss_df.empty:
+            path_loss_df["endpoint_track"] = "grug_moe_mix_v4"
+            path_loss_df["endpoint_label"] = TRACK_LABELS["grug_moe_mix_v4"]
+            path_loss_df["t"] = path_loss_df["track"].map(path_t_from_track)
+            path_loss_df["mixture_label"] = path_loss_df["t"].map(lambda value: f"v4 path t={float(value):.2f}")
+            path_loss_df["path_source"] = "intermediate"
+            path_parts.append(path_loss_df)
+
+    if not path_parts:
+        return pd.DataFrame()
+    path_loss_df = pd.concat(path_parts, ignore_index=True)
+    path_loss_df["mixture_label"] = pd.Categorical(
+        path_loss_df["mixture_label"], categories=PATH_MIXTURE_ORDER, ordered=True
+    )
+    return path_loss_df.sort_values(["task_alias", "mixture_label", "hidden_dim"])
+
+
 def write_plot(fig: go.Figure, path: Path) -> str:
     fig.update_layout(template="plotly_white")
     fig.write_html(path, include_plotlyjs="cdn")
@@ -592,6 +904,167 @@ def task_loss_scaling_plot(loss_df: pd.DataFrame, fit_df: pd.DataFrame) -> go.Fi
     return fig
 
 
+def path_task_scaling_plot(path_loss_df: pd.DataFrame) -> go.Figure:
+    """Create per-task path plots in scaling-law coordinates."""
+    if path_loss_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Path test scaling: no task metrics available")
+        return fig
+
+    plot_df = path_loss_df[path_loss_df["loss_value"] > 0].copy()
+    tasks = sorted(plot_df["task_alias"].unique())
+    n_cols = 4
+    n_rows = math.ceil(len(tasks) / n_cols)
+    subplot_titles = []
+    for task in tasks:
+        task_rows = plot_df[plot_df["task_alias"].eq(task)]
+        metric = task_rows["loss_metric"].mode().iloc[0]
+        subplot_titles.append(f"{task}<br><sup>{metric}, lower is better</sup>")
+
+    fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=subplot_titles, horizontal_spacing=0.055)
+    for task_idx, task in enumerate(tasks):
+        row = task_idx // n_cols + 1
+        col = task_idx % n_cols + 1
+        task_df = plot_df[plot_df["task_alias"].eq(task)].copy()
+        for mixture_label in PATH_MIXTURE_ORDER:
+            group = task_df[task_df["mixture_label"].astype(str).eq(mixture_label)].sort_values("budget")
+            if group.empty:
+                continue
+            color = PATH_MIXTURE_COLORS[mixture_label]
+            showlegend = task_idx == 0
+            fig.add_trace(
+                go.Scatter(
+                    x=group["budget"],
+                    y=group["loss_value"],
+                    mode="lines+markers",
+                    name=mixture_label,
+                    legendgroup=mixture_label,
+                    showlegend=showlegend,
+                    marker={"color": color, "size": 7},
+                    line={"color": color, "width": 2.0},
+                    customdata=np.stack(
+                        [
+                            group["hidden_dim"],
+                            group["t"],
+                            group["raw_metric"],
+                            group["raw_value"],
+                            group["path_source"],
+                        ],
+                        axis=-1,
+                    ),
+                    hovertemplate=(
+                        "mixture=%{fullData.name}<br>"
+                        "FLOPs=%{x:.2e}<br>"
+                        "loss-like=%{y:.4g}<br>"
+                        "hidden_dim=%{customdata[0]}<br>"
+                        "t=%{customdata[1]:.2f}<br>"
+                        "raw_metric=%{customdata[2]}<br>"
+                        "raw_value=%{customdata[3]:.4g}<br>"
+                        "source=%{customdata[4]}<extra></extra>"
+                    ),
+                ),
+                row=row,
+                col=col,
+            )
+        fig.update_xaxes(type="log", row=row, col=col)
+        fig.update_yaxes(type="log", row=row, col=col)
+
+    fig.update_layout(
+        title="Path test: available loss-like metrics vs training FLOPs",
+        height=max(820, 255 * n_rows),
+        legend={"orientation": "h", "yanchor": "bottom", "y": -0.04, "xanchor": "center", "x": 0.5},
+        margin={"t": 95, "b": 95, "l": 45, "r": 20},
+    )
+    fig.update_annotations(font_size=11)
+    return fig
+
+
+def path_task_delta_plot(path_df: pd.DataFrame) -> go.Figure:
+    """Create per-task path plots as oriented deltas from proportional."""
+    if path_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Path test deltas: no task metrics available")
+        return fig
+
+    plot_df = path_df.copy()
+    plot_df["mixture_label"] = plot_df["t"].map(
+        {
+            0.0: "Proportional",
+            0.25: "v4 path t=0.25",
+            0.50: "v4 path t=0.50",
+            0.75: "v4 path t=0.75",
+            1.0: "v4",
+        }
+    )
+    tasks = sorted(plot_df["task_alias"].unique())
+    n_cols = 4
+    n_rows = math.ceil(len(tasks) / n_cols)
+    subplot_titles = []
+    for task in tasks:
+        task_rows = plot_df[plot_df["task_alias"].eq(task)]
+        metric = task_rows["preferred_metric"].mode().iloc[0]
+        subplot_titles.append(f"{task}<br><sup>{metric}, delta vs proportional; higher is better</sup>")
+
+    fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=subplot_titles, horizontal_spacing=0.055)
+    for task_idx, task in enumerate(tasks):
+        row = task_idx // n_cols + 1
+        col = task_idx % n_cols + 1
+        task_df = plot_df[plot_df["task_alias"].eq(task)].copy()
+        for mixture_label in PATH_MIXTURE_ORDER:
+            group = task_df[task_df["mixture_label"].astype(str).eq(mixture_label)].sort_values("budget")
+            if group.empty:
+                continue
+            color = PATH_MIXTURE_COLORS[mixture_label]
+            showlegend = task_idx == 0
+            fig.add_trace(
+                go.Scatter(
+                    x=group["budget"],
+                    y=group["delta_oriented"],
+                    mode="lines+markers",
+                    name=mixture_label,
+                    legendgroup=mixture_label,
+                    showlegend=showlegend,
+                    marker={"color": color, "size": 7},
+                    line={"color": color, "width": 2.0},
+                    customdata=np.stack(
+                        [
+                            group["hidden_dim"],
+                            group["t"],
+                            group["preferred_metric"],
+                            group["raw_value"],
+                            group["baseline_raw_value"],
+                            group["path_source"],
+                        ],
+                        axis=-1,
+                    ),
+                    hovertemplate=(
+                        "mixture=%{fullData.name}<br>"
+                        "FLOPs=%{x:.2e}<br>"
+                        "oriented delta=%{y:.4g}<br>"
+                        "hidden_dim=%{customdata[0]}<br>"
+                        "t=%{customdata[1]:.2f}<br>"
+                        "metric=%{customdata[2]}<br>"
+                        "raw_value=%{customdata[3]:.4g}<br>"
+                        "proportional_raw=%{customdata[4]:.4g}<br>"
+                        "source=%{customdata[5]}<extra></extra>"
+                    ),
+                ),
+                row=row,
+                col=col,
+            )
+        fig.add_hline(y=0.0, line={"color": "#666", "width": 1, "dash": "dot"}, row=row, col=col)
+        fig.update_xaxes(type="log", row=row, col=col)
+
+    fig.update_layout(
+        title="Path test: oriented task deltas vs proportional at the same scale",
+        height=max(820, 255 * n_rows),
+        legend={"orientation": "h", "yanchor": "bottom", "y": -0.04, "xanchor": "center", "x": 0.5},
+        margin={"t": 95, "b": 95, "l": 45, "r": 20},
+    )
+    fig.update_annotations(font_size=11)
+    return fig
+
+
 def make_dashboard(
     runs_df: pd.DataFrame,
     weights_df: pd.DataFrame,
@@ -601,6 +1074,10 @@ def make_dashboard(
     accuracy_df: pd.DataFrame,
     loss_df: pd.DataFrame,
     fit_df: pd.DataFrame,
+    path_runs_df: pd.DataFrame,
+    path_eval_metrics_df: pd.DataFrame,
+    path_df: pd.DataFrame,
+    path_loss_df: pd.DataFrame,
 ) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     img_dir = OUTPUT_DIR / "img"
@@ -659,6 +1136,11 @@ def make_dashboard(
 
     fig_loss_scaling = task_loss_scaling_plot(loss_df, fit_df)
     loss_scaling_html = write_plot(fig_loss_scaling, img_dir / "task_loss_scaling_loglog.html")
+
+    fig_path = path_task_scaling_plot(path_loss_df)
+    path_html = write_plot(fig_path, img_dir / "path_task_scaling_facets.html")
+    fig_delta = path_task_delta_plot(path_df)
+    delta_html = write_plot(fig_delta, img_dir / "path_task_delta_facets.html")
 
     all_domains = sorted(weights_df["domain"].unique())
     heat_df = weights_df.copy()
@@ -725,6 +1207,31 @@ def make_dashboard(
         .drop_duplicates()
         .sort_values(["common_task", "task_group", "task_alias"], ascending=[True, True, True])
     )
+    if path_runs_df.empty:
+        path_training_status = pd.DataFrame()
+    else:
+        path_training_status = (
+            path_runs_df.groupby(["t", "state"], as_index=False)
+            .agg(
+                run_count=("run_id", "nunique"),
+                min_hidden_dim=("hidden_dim", "min"),
+                max_hidden_dim=("hidden_dim", "max"),
+            )
+            .sort_values(["t", "state"])
+        )
+    if path_loss_df.empty:
+        path_metric_status = pd.DataFrame()
+    else:
+        path_metric_status = (
+            path_loss_df.groupby(["mixture_label", "t", "path_source"], observed=True, as_index=False)
+            .agg(task_cells=("task_alias", "count"), tasks=("task_alias", "nunique"), scales=("hidden_dim", "nunique"))
+            .sort_values(["t", "mixture_label", "path_source"])
+        )
+    path_eval_cell_count = 0
+    if not path_eval_metrics_df.empty:
+        path_eval_cell_count = (
+            path_eval_metrics_df[["track", "hidden_dim", "budget", "task_alias"]].drop_duplicates().shape[0]
+        )
 
     html = f"""<!doctype html>
 <html>
@@ -780,6 +1287,35 @@ def make_dashboard(
   </p>
   <iframe class="tall" src="img/{loss_scaling_html}"></iframe>
 
+  <h2>Path Test: Proportional to Endpoint Mixtures</h2>
+  <p class="note">
+    The path plot keeps the same scaling-law coordinates as the main dashboard:
+    x is training FLOPs, y is a loss-like task metric, and lower is better. The
+    <code>t=0</code> curve is the proportional track, <code>t=1</code> is the
+    v4 endpoint track, and intermediate curves are included only when follow-up
+    <code>evaluation/grug_logprob</code> results exist for the path checkpoints.
+    Current path follow-up eval cells found: <code>{path_eval_cell_count}</code>.
+  </p>
+  <h3>Path Training Status</h3>
+  {
+    path_training_status.to_html(index=False, float_format=lambda x: f"{x:.4f}")
+    if not path_training_status.empty
+    else "<p class='note'>No path training roots found.</p>"
+  }
+  <h3>Path Metric Coverage</h3>
+  {
+    path_metric_status.to_html(index=False, float_format=lambda x: f"{x:.4f}")
+    if not path_metric_status.empty
+    else "<p class='note'>No path metric rows found.</p>"
+  }
+  <iframe class="tall" src="img/{path_html}"></iframe>
+  <h3>Path Deltas vs Proportional</h3>
+  <p class="note">
+    This view uses oriented task metrics and subtracts the proportional value
+    at the same scale. Positive values mean better than proportional.
+  </p>
+  <iframe class="tall" src="img/{delta_html}"></iframe>
+
   <h2>Task Coverage</h2>
   <div class="table-scroll">
   {task_coverage.to_html(index=False)}
@@ -801,26 +1337,71 @@ def make_dashboard(
     (OUTPUT_DIR / "dashboard.html").write_text(html)
 
 
-def main() -> None:
+def cached_csv(name: str) -> pd.DataFrame:
+    path = OUTPUT_DIR / name
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path)
+
+
+def main(*, use_cached_inputs: bool = False) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    runs_df, weights_df, checkpoint_by_run_id = collect_training_metadata()
-    metrics_df = collect_eval_metrics()
+    if use_cached_inputs:
+        runs_df = cached_csv("grug_moe_mix_runs.csv")
+        weights_df = cached_csv("grug_moe_mix_weights_long.csv")
+        metrics_df = cached_csv("grug_moe_mix_eval_metrics_long.csv")
+        if runs_df.empty or weights_df.empty or metrics_df.empty:
+            raise FileNotFoundError(
+                "--use-cached-inputs requires existing grug_moe_mix_runs.csv, "
+                "grug_moe_mix_weights_long.csv, and grug_moe_mix_eval_metrics_long.csv"
+            )
+        checkpoint_path = OUTPUT_DIR / "checkpoint_by_run_id.json"
+        checkpoint_by_run_id = json.loads(checkpoint_path.read_text()) if checkpoint_path.exists() else {}
+    else:
+        runs_df, weights_df, checkpoint_by_run_id = collect_training_metadata()
+        metrics_df = collect_eval_metrics()
+
+    path_runs_df = collect_path_training_metadata()
+    path_eval_metrics_df = collect_path_eval_metrics()
+    runs_df = normalize_scale_columns(runs_df)
+    metrics_df = normalize_scale_columns(metrics_df)
+    path_runs_df = normalize_scale_columns(path_runs_df)
+    path_eval_metrics_df = normalize_scale_columns(path_eval_metrics_df)
     preferred_df = preferred_task_values(metrics_df)
     summary_df = cell_summary(preferred_df)
     accuracy_df = hard_accuracy_summary(metrics_df)
     loss_df = loss_like_task_values(metrics_df)
     fit_df = power_law_fits(loss_df)
+    path_df = path_task_deltas(preferred_df, path_eval_metrics_df)
+    path_loss_df = path_task_loss_values(loss_df, path_eval_metrics_df)
 
     runs_df.to_csv(OUTPUT_DIR / "grug_moe_mix_runs.csv", index=False)
+    path_runs_df.to_csv(OUTPUT_DIR / "grug_moe_v4_path_training_runs.csv", index=False)
     weights_df.to_csv(OUTPUT_DIR / "grug_moe_mix_weights_long.csv", index=False)
     metrics_df.to_csv(OUTPUT_DIR / "grug_moe_mix_eval_metrics_long.csv", index=False)
+    path_eval_metrics_df.to_csv(OUTPUT_DIR / "grug_moe_v4_path_eval_metrics_long.csv", index=False)
     preferred_df.to_csv(OUTPUT_DIR / "grug_moe_mix_preferred_task_metrics.csv", index=False)
     summary_df.to_csv(OUTPUT_DIR / "grug_moe_mix_cell_summary.csv", index=False)
     accuracy_df.to_csv(OUTPUT_DIR / "grug_moe_mix_accuracy_summary.csv", index=False)
     loss_df.to_csv(OUTPUT_DIR / "grug_moe_mix_task_loss_like_metrics.csv", index=False)
     fit_df.to_csv(OUTPUT_DIR / "grug_moe_mix_task_powerlaw_fits.csv", index=False)
+    path_df.to_csv(OUTPUT_DIR / "grug_moe_path_task_deltas.csv", index=False)
+    path_loss_df.to_csv(OUTPUT_DIR / "grug_moe_path_task_scaling.csv", index=False)
     (OUTPUT_DIR / "checkpoint_by_run_id.json").write_text(json.dumps(checkpoint_by_run_id, indent=2, sort_keys=True))
-    make_dashboard(runs_df, weights_df, metrics_df, preferred_df, summary_df, accuracy_df, loss_df, fit_df)
+    make_dashboard(
+        runs_df,
+        weights_df,
+        metrics_df,
+        preferred_df,
+        summary_df,
+        accuracy_df,
+        loss_df,
+        fit_df,
+        path_runs_df,
+        path_eval_metrics_df,
+        path_df,
+        path_loss_df,
+    )
 
     best_overall = (
         summary_df.groupby(["track_label"], as_index=False)
@@ -828,8 +1409,19 @@ def main() -> None:
         .sort_values("mean_aggregate_z", ascending=False)
     )
     print(f"Wrote dashboard to {OUTPUT_DIR / 'dashboard.html'}")
+    if not path_runs_df.empty:
+        print(path_runs_df.groupby(["t", "state"]).size().rename("runs").reset_index().to_string(index=False))
+    if path_eval_metrics_df.empty:
+        print("No Grug path follow-up eval metrics found yet.")
     print(best_overall.to_string(index=False))
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--use-cached-inputs",
+        action="store_true",
+        help="Reuse existing base-track CSVs and refresh only path status/eval rows.",
+    )
+    args = parser.parse_args()
+    main(use_cached_inputs=args.use_cached_inputs)

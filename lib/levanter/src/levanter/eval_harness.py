@@ -419,6 +419,16 @@ def get_padding_count_from_batch(batch: LmExample, pad_token_id: int) -> tuple[i
     return padding_count, total_tokens
 
 
+def _effective_pad_token_id(tokenizer: MarinTokenizer) -> int:
+    """Return a padding token id without mutating read-only tokenizer wrappers."""
+    if tokenizer.pad_token_id is not None:
+        return tokenizer.pad_token_id
+    if tokenizer.eos_token_id is None:
+        raise ValueError("Tokenizer must define pad_token_id or eos_token_id for lm-eval packing.")
+    logger.warning("No pad token set. Using eos token as the lm-eval packing pad token.")
+    return tokenizer.eos_token_id
+
+
 class LevanterHarnessLM(TemplateLM):
     """
     Levanter implementation of the LM Eval Harness TemplateLM interface.
@@ -505,6 +515,14 @@ class LevanterHarnessLM(TemplateLM):
         """Return the end-of-text token ID."""
         return self.tokenizer.eos_token_id
 
+    def tok_decode(self, tokens, *, skip_special_tokens: bool = False) -> str:
+        """Decode token IDs, normalizing scalar IDs for Marin tokenizers."""
+        if isinstance(tokens, (int, np.integer)):
+            tokens = [int(tokens)]
+        elif isinstance(tokens, np.ndarray) and tokens.ndim == 0:
+            tokens = [int(tokens.item())]
+        return self.tokenizer.decode(tokens, skip_special_tokens=skip_special_tokens)
+
     def set_current_task(self, task_name: str):
         self._current_task = task_name
         if self.sample_logging_config.should_log() and task_name not in self.sample_outputs:
@@ -588,9 +606,7 @@ class LevanterHarnessLM(TemplateLM):
         Downstream tasks should attempt to use loglikelihood instead of other
         LM calls whenever possible.
         """
-        if self.tokenizer.pad_token_id is None:
-            logger.warning("No pad token set. Setting to eos token.")
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        pad_token_id = _effective_pad_token_id(self.tokenizer)
 
         current_task = getattr(self, "_current_task", "loglikelihood_task")
         for request in requests:
@@ -606,7 +622,13 @@ class LevanterHarnessLM(TemplateLM):
                 }
             )
 
-        packed = _pack_requests(requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)
+        packed = _pack_requests(
+            requests,
+            self.tokenizer,
+            self.EvalPos,
+            self.leader.max_packed_segments,
+            pad_token_id=pad_token_id,
+        )
         packed_iterator = stack_batches(iter(packed), self.EvalPos, self.EvalBatch)
         packed_iterator = BackgroundIterator(packed_iterator, max_capacity=1024)
 
@@ -629,7 +651,7 @@ class LevanterHarnessLM(TemplateLM):
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
-            padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
+            padding_count, batch_tokens = get_padding_count_from_batch(batch, pad_token_id)
             batch = jax.device_put(batch)
 
             batch = jax.device_put(batch)
@@ -697,12 +719,21 @@ class LevanterHarnessLM(TemplateLM):
         """
         if not add_special_tokens:
             add_special_tokens = False
-        encoding: Union[List[List[int]], List[int]] = self.tokenizer(
-            string,
-            add_special_tokens=add_special_tokens,
-            truncation=truncation,
-            return_attention_mask=False,
-        ).input_ids
+        if callable(self.tokenizer):
+            hf_encoding = self.tokenizer(
+                string,
+                add_special_tokens=add_special_tokens,
+                truncation=truncation,
+                return_attention_mask=False,
+            )
+            encoding: Union[List[List[int]], List[int]] = hf_encoding.input_ids
+        else:
+            if truncation:
+                raise ValueError("MarinTokenizer tok_encode path does not support tokenizer-side truncation.")
+            is_single = isinstance(string, str)
+            texts = [string] if is_single else list(string)
+            batch_encoding = self.tokenizer.encode_batch(texts, add_special_tokens=add_special_tokens)
+            encoding = batch_encoding[0] if is_single else batch_encoding
 
         # left-truncate the encoded context to be at most `left_truncate_len` tokens long
         if left_truncate_len:
@@ -772,9 +803,7 @@ class LevanterHarnessLM(TemplateLM):
         # Implement simple generation using InferenceEngine.
         # requests: list[Instance] where args[0] = prompt, args[1] may be stop strings (list[str])
         # kwargs may include max_gen_toks, temperature, n (n_generations), seed
-        if self.tokenizer.pad_token_id is None:
-            logger.warning("No pad token set. Setting to eos token.")
-            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+        _effective_pad_token_id(self.tokenizer)
 
         # Require a model with paged decode support
         if not hasattr(self.leader.model, "initial_cache") or not hasattr(self.leader.model, "decode"):
@@ -822,7 +851,7 @@ class LevanterHarnessLM(TemplateLM):
 
         # Process stop sequences for each request individually
         # Get EOS token for stop sequence handling
-        eos = self.tokenizer.decode(self.eot_token_id)
+        eos = self.tok_decode(self.eot_token_id)
 
         # Process stop sequences and tokenize them for each request
         for gen_kwargs in processed_kwargs_list:
@@ -856,7 +885,7 @@ class LevanterHarnessLM(TemplateLM):
             model=self.leader.model,
             tokenizer=self.tokenizer,
             config=engine_cfg,
-            axis_resources=self.compute_axis_resources,
+            axis_resources=self.axis_resources,
         )
 
         # Build generation requests
@@ -912,7 +941,7 @@ class LevanterHarnessLM(TemplateLM):
             if output_idx < len(result.tokens):
                 full_tokens = result.tokens[output_idx]
                 # Engine tokens are generated tokens only (prompt not included)
-                text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
+                text = self.tok_decode(full_tokens, skip_special_tokens=True)
 
                 # Post-process the generated text using the imported utility function
                 text = postprocess_generated_text(
@@ -928,7 +957,7 @@ class LevanterHarnessLM(TemplateLM):
             current_task = getattr(self, "_current_task", "generation_task")
             bucket = self._prepare_bucket(current_task)
             if bucket is not None:
-                prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
+                prompt_text = self.tok_decode(toks, skip_special_tokens=False)
                 bucket.append(
                     {
                         "prompt": prompt_text,
@@ -1685,7 +1714,7 @@ def _adjust_config(task_dict, fewshot_random_seed=0):
     return adjusted_task_dict
 
 
-def _encode_batch(tokenizer, texts: list[str]) -> list[list[int]]:
+def _encode_batch_texts(tokenizer, texts: list[str]) -> list[list[int]]:
     # MarinTokenizer returns list[list[int]]; bare tokenizers.Tokenizer returns list[Encoding];
     # HF PreTrainedTokenizerFast has no encode_batch but supports __call__.
     if hasattr(tokenizer, "encode_batch"):
@@ -1715,8 +1744,8 @@ def _iterate_tokenized_requests(
         combined_batch = [combined_texts[i] for i in batch_indices]
         context_batch = [contexts[i] for i in batch_indices]
         # Tokenize batched inputs
-        combined_encodings = {"input_ids": _encode_batch(tokenizer, combined_batch)}
-        context_encodings = {"input_ids": _encode_batch(tokenizer, context_batch)}
+        combined_encodings = {"input_ids": _encode_batch_texts(tokenizer, combined_batch)}
+        context_encodings = {"input_ids": _encode_batch_texts(tokenizer, context_batch)}
 
         for off in range(len(batch_indices)):
             i = batch_indices[off]
@@ -1741,14 +1770,18 @@ def _pack_requests(
     tokenizer: MarinTokenizer,
     Pos: hax.Axis,
     max_pack_size: int,
+    *,
+    pad_token_id: int | None = None,
 ) -> list[LmExample]:
     packed_iterator = _iterate_tokenized_requests(requests, tokenizer, Pos.size, batch_size=128)
+    if pad_token_id is None:
+        pad_token_id = _effective_pad_token_id(tokenizer)
     # TODO: use a better packing algorithm?
     return greedy_pack_prompt_completions(
         Pos,
         packed_iterator,
         max_segments_per_example=max_pack_size,
-        pad_token=tokenizer.pad_token_id,
+        pad_token=pad_token_id,
     )
 
 

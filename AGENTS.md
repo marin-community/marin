@@ -42,6 +42,14 @@ uv run pyrefly
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
 - In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
+- For east5 data-mixing work, every live Iris parent submission must include explicit parent placement:
+  `--region us-east5 --zone us-east5-a`. Child TPU placement inside a launcher is not enough; the parent also reads and writes GCS state. State CSVs, executor prefixes, checkpoint roots, eval caches, and `MARIN_PREFIX` must use `gs://marin-us-east5` unless the user explicitly approves a different region.
+  Before submitting, validate the exact command with
+  `uv run python -m experiments.domain_phase_mix.east5_launch_safety --command '<iris job run ...>'`.
+- Region-specific exceptions, such as historical StarCoder work in central1, must still be region-local:
+  parent `--region/--zone`, child TPU region/zone, `MARIN_PREFIX`, eval caches, tokenizers, checkpoint roots,
+  and state/executor paths must all point to the same approved region. Validate central1 StarCoder commands with
+  `uv run python -m experiments.domain_phase_mix.east5_launch_safety --expected-region us-central1 --expected-zone us-central1-a --expected-bucket-prefix gs://marin-us-central1 --command '<iris job run ...>'`.
 
 ## Communication & Commits
 

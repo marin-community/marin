@@ -79,7 +79,7 @@
   <tbody>
     <tr>
       <td>512</td>
-      <td>2.19e+17</td>
+      <td>219000000000000000.0000</td>
       <td>v2</td>
       <td>-0.3432</td>
       <td>1.0000</td>
@@ -87,7 +87,7 @@
     </tr>
     <tr>
       <td>768</td>
-      <td>1.70e+18</td>
+      <td>1700000000000000000.0000</td>
       <td>v2</td>
       <td>-0.1639</td>
       <td>1.0000</td>
@@ -95,7 +95,7 @@
     </tr>
     <tr>
       <td>1024</td>
-      <td>9.00e+18</td>
+      <td>9000000000000000000.0000</td>
       <td>v2</td>
       <td>0.0337</td>
       <td>1.0000</td>
@@ -103,7 +103,7 @@
     </tr>
     <tr>
       <td>1280</td>
-      <td>2.83e+19</td>
+      <td>28300000000000000000.0000</td>
       <td>v2</td>
       <td>0.4627</td>
       <td>1.0000</td>
@@ -111,7 +111,7 @@
     </tr>
     <tr>
       <td>1536</td>
-      <td>9.00e+19</td>
+      <td>90000000000000000000.0000</td>
       <td>v2</td>
       <td>1.4637</td>
       <td>1.0000</td>
@@ -135,6 +135,134 @@
     one missing eval are still shown and visibly marked.
   </p>
   <iframe class="tall" src="img/task_loss_scaling_loglog.html"></iframe>
+
+  <h2>Path Test: Proportional to Endpoint Mixtures</h2>
+  <p class="note">
+    The path plot keeps the same scaling-law coordinates as the main dashboard:
+    x is training FLOPs, y is a loss-like task metric, and lower is better. The
+    <code>t=0</code> curve is the proportional track, <code>t=1</code> is the
+    v4 endpoint track, and intermediate curves are included only when follow-up
+    <code>evaluation/grug_logprob</code> results exist for the path checkpoints.
+    Current path follow-up eval cells found: <code>220</code>.
+  </p>
+  <h3>Path Training Status</h3>
+  <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>t</th>
+      <th>state</th>
+      <th>run_count</th>
+      <th>min_hidden_dim</th>
+      <th>max_hidden_dim</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>0.2500</td>
+      <td>RUNNING</td>
+      <td>1</td>
+      <td>1536</td>
+      <td>1536</td>
+    </tr>
+    <tr>
+      <td>0.2500</td>
+      <td>SUCCESS</td>
+      <td>4</td>
+      <td>512</td>
+      <td>1280</td>
+    </tr>
+    <tr>
+      <td>0.5000</td>
+      <td>RUNNING</td>
+      <td>1</td>
+      <td>1536</td>
+      <td>1536</td>
+    </tr>
+    <tr>
+      <td>0.5000</td>
+      <td>SUCCESS</td>
+      <td>4</td>
+      <td>512</td>
+      <td>1280</td>
+    </tr>
+    <tr>
+      <td>0.7500</td>
+      <td>RUNNING</td>
+      <td>1</td>
+      <td>1536</td>
+      <td>1536</td>
+    </tr>
+    <tr>
+      <td>0.7500</td>
+      <td>SUCCESS</td>
+      <td>4</td>
+      <td>512</td>
+      <td>1280</td>
+    </tr>
+  </tbody>
+</table>
+  <h3>Path Metric Coverage</h3>
+  <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>mixture_label</th>
+      <th>t</th>
+      <th>path_source</th>
+      <th>task_cells</th>
+      <th>tasks</th>
+      <th>scales</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Proportional</td>
+      <td>0.0000</td>
+      <td>proportional</td>
+      <td>108</td>
+      <td>22</td>
+      <td>5</td>
+    </tr>
+    <tr>
+      <td>v4 path t=0.25</td>
+      <td>0.2500</td>
+      <td>intermediate</td>
+      <td>60</td>
+      <td>20</td>
+      <td>3</td>
+    </tr>
+    <tr>
+      <td>v4 path t=0.50</td>
+      <td>0.5000</td>
+      <td>intermediate</td>
+      <td>80</td>
+      <td>20</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td>v4 path t=0.75</td>
+      <td>0.7500</td>
+      <td>intermediate</td>
+      <td>80</td>
+      <td>20</td>
+      <td>4</td>
+    </tr>
+    <tr>
+      <td>v4</td>
+      <td>1.0000</td>
+      <td>endpoint</td>
+      <td>98</td>
+      <td>20</td>
+      <td>5</td>
+    </tr>
+  </tbody>
+</table>
+  <iframe class="tall" src="img/path_task_scaling_facets.html"></iframe>
+  <h3>Path Deltas vs Proportional</h3>
+  <p class="note">
+    This view uses oriented task metrics and subtracts the proportional value
+    at the same scale. Positive values mean better than proportional.
+  </p>
+  <iframe class="tall" src="img/path_task_delta_facets.html"></iframe>
 
   <h2>Task Coverage</h2>
   <div class="table-scroll">
