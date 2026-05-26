@@ -374,6 +374,7 @@ def trial_tags(run: IsoFlopRun) -> list[str]:
         "exp31",
         "isoflop",
         "qwen3",
+        f"version={VERSION}",
         f"budget={fmt_budget(run.budget)}",
         f"budget_exact={run.budget:.1e}",
         f"params={fmt_count(run.params)}",
