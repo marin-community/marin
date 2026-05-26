@@ -13,6 +13,7 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+from experiments.grug.moe.amuse import amuse
 from experiments.grug.moe.klsoaph import scale_by_klsoaph
 
 
@@ -817,8 +818,141 @@ class GrugMoeKLSoapMuonHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+@OptimizerConfig.register_subclass("grug_moe_amuse_v1")
+@dataclass(frozen=True)
+class GrugMoeAmuseConfig(OptimizerConfig):
+    """AMUSE for Grug MoE (arxiv 2605.22432).
+
+    Time-varying Schedule-Free wrapper over per-group base optimizers:
+      - matrix params (ndim in (2, 3)) outside the baseline-adam group → AMUSE(Muon-base)
+      - lm head / output proj → AMUSE(AdamW-no-β1 base) at adam_lr
+      - 1-D / embedding / router params → AMUSE(AdamW-no-β1 base) at adam_lr
+
+    Per the AMUSE algorithm, the Adam path drops β_1 momentum (SF replaces it
+    with the time-varying β_t interpolation). Muon keeps its own μ momentum
+    (operates pre-orthogonalization, distinct from SF). The LR schedule is
+    warmup + constant (AMUSE removes the need for a decay phase).
+
+    Defaults: β_1=0.6, ρ=0.8, T_0=2000 from the paper's d512 LLM recipe.
+    Note: this initial integration evaluates loss at Y (current params), not
+    at X (the averaged sequence). Final β_T is close to 1 so Y ≈ X near the
+    end of training; expect a slight underestimate of AMUSE's true headline
+    metric. Full X-eval integration is a follow-up.
+    """
+
+    adam_lr: float = 6e-4
+    muon_momentum: float = 0.95
+    backend_steps: int = 5
+    muon_epsilon: float = 1e-8
+    coefficient_type: CoefficientType = "quintic"
+    # AMUSE hyperparameters
+    amuse_beta1: float = 0.6
+    amuse_rho: float = 0.8
+    amuse_warmup_steps: int = 2000
+    amuse_weight_lr_power: float = 2.0
+    # AdamW-no-β1 hyperparameters (β_1 forced to 0 per AMUSE pseudocode)
+    beta2: float = 0.95
+    epsilon: float = 1e-8
+    max_grad_norm: float | None = 1.0
+
+    def build(self, num_train_steps):
+        # AMUSE removes the LR decay phase; we still respect the user's
+        # warmup/lr_schedule from OptimizerConfig (default = warmup + cosine).
+        # Recommend setting ``lr_schedule="constant"`` in the launcher.
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, adam_lr):
+            def muon_amuse_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                # Base optimizer for the Muon path: MuonH (Muon orthogonalize +
+                # scale-invariant hyperball post-step). AMUSE passes ``params=Z``
+                # to the base, so the hyperball normalization operates against
+                # the base sequence Z (the right reference for the SF Z-update).
+                muonh_base = scale_with_grug_muonh(
+                    momentum=self.muon_momentum,
+                    nesterov=False,  # AMUSE pseudocode uses plain heavy-ball, not Nesterov
+                    steps=self.backend_steps,
+                    muon_eps=self.muon_epsilon,
+                    learning_rate=learning_rate,
+                    coefficient_type=self.coefficient_type,
+                )
+                components.append(
+                    amuse(
+                        base_optimizer=muonh_base,
+                        learning_rate=learning_rate,
+                        beta1=self.amuse_beta1,
+                        rho=self.amuse_rho,
+                        warmup_steps=self.amuse_warmup_steps,
+                        weight_decay=self.weight_decay,
+                        weight_lr_power=self.amuse_weight_lr_power,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adam_amuse_transform(lr):
+                # Base optimizer for Adam path: scale_by_adam with b1=0 (per AMUSE
+                # pseudocode), then × (-η_t).
+                adam_base = optax.chain(
+                    optax.scale_by_adam(b1=0.0, b2=self.beta2, eps=self.epsilon),
+                    optax.scale_by_learning_rate(lr, flip_sign=True),
+                )
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    amuse(
+                        base_optimizer=adam_base,
+                        learning_rate=lr,
+                        beta1=self.amuse_beta1,
+                        rho=self.amuse_rho,
+                        warmup_steps=self.amuse_warmup_steps,
+                        weight_decay=self.weight_decay,
+                        weight_lr_power=self.amuse_weight_lr_power,
+                    )
+                )
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "amuse_muon": muon_amuse_transform(),
+                    "amuse_adam_at_lr": adam_amuse_transform(learning_rate),  # for lm_head/output_proj
+                    "amuse_adam_at_adam_lr": adam_amuse_transform(adam_lr),  # for 1-D / embeddings
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            # 1-D / embedding / router / norm → adam (no SOAP, no Muon)
+            if _uses_adamh_baseline_adam_group(path_lower):
+                return "amuse_adam_at_adam_lr"
+            # lm head / output projection → adam at matrix LR
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "amuse_adam_at_lr"
+            # Matrix params → Muon under AMUSE
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "amuse_muon"
+            return "amuse_adam_at_adam_lr"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
 __all__ = [
     "GrugMoeAdamHConfig",
+    "GrugMoeAmuseConfig",
     "GrugMoeKLSoapHConfig",
     "GrugMoeKLSoapMuonHConfig",
     "GrugMoeMuonHConfig",
