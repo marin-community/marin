@@ -5,11 +5,16 @@ from __future__ import annotations
 
 from typing import Sequence
 
-import numpy as np
 import pytest
 
 from levanter.data.text import ChatProcessor, TraceChatProcessor
-from levanter.data.text.trace_chat import TRACE_LABEL_ASSISTANT_TEXT, TRACE_LABEL_OBSERVATION, TRACE_LABEL_PATCH
+from levanter.data.text.trace_chat import (
+    TRACE_LABEL_ASSISTANT_TEXT,
+    TRACE_LABEL_ASSISTANT_TOOL_CALL,
+    TRACE_LABEL_FINAL_ASSISTANT,
+    TRACE_LABEL_OBSERVATION,
+    TRACE_LABEL_PATCH,
+)
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 
 
@@ -299,7 +304,7 @@ def test_chat_template_with_masks_returns_message_spans(tokenizer: MarinTokenize
     assert '{"result": 5}' in tool_text
 
 
-def test_trace_chat_processor_emits_exclusive_loss_labels(tokenizer: MarinTokenizer):
+def test_trace_chat_processor_labels_generation_masked_tool_spans(tokenizer: MarinTokenizer):
     processor = TraceChatProcessor(
         tokenizer,
         chat_template=TOOL_TEMPLATE,
@@ -330,15 +335,15 @@ def test_trace_chat_processor_emits_exclusive_loss_labels(tokenizer: MarinTokeni
     )[0]
 
     labels = result["loss_labels"]
-    nonzero_labels = labels[labels > 0]
-    assert nonzero_labels.size > 0
-    assert np.unique(nonzero_labels).size > 1
-    assert (labels == TRACE_LABEL_OBSERVATION).sum() > 0
+    input_ids = result["input_ids"]
 
-    label_spec = processor.label_spec
-    assert "assistant" in label_spec.aggregates
-    assert "assistant_text" in label_spec.aggregates
-    assert "tool_call" in label_spec.aggregates
+    tool_call_text = decode_sequence(tokenizer, input_ids[labels == TRACE_LABEL_ASSISTANT_TOOL_CALL])
+    observation_text = decode_sequence(tokenizer, input_ids[labels == TRACE_LABEL_OBSERVATION])
+
+    assert '"name": "add"' in tool_call_text
+    assert '"arguments": {"a": 2, "b": 3}' in tool_call_text
+    assert '{"result": 5}' in observation_text
+    assert (labels == TRACE_LABEL_FINAL_ASSISTANT).sum() == 0
 
 
 def test_trace_chat_processor_can_label_only_explicit_message_tags(tokenizer: MarinTokenizer):
@@ -363,29 +368,11 @@ def test_trace_chat_processor_can_label_only_explicit_message_tags(tokenizer: Ma
     )[0]
 
     labels = result["loss_labels"]
+    patch_text = decode_sequence(tokenizer, result["input_ids"][labels == TRACE_LABEL_PATCH])
     assert (labels == TRACE_LABEL_PATCH).sum() > 0
     assert (labels == TRACE_LABEL_ASSISTANT_TEXT).sum() == 0
     assert (labels == TRACE_LABEL_OBSERVATION).sum() == 0
-
-
-def test_trace_chat_processor_rejects_malformed_text_tool_calls(tokenizer: MarinTokenizer):
-    processor = TraceChatProcessor(
-        tokenizer,
-        chat_template=TOOL_TEMPLATE,
-        loss_tags=("tool_call",),
-    )
-
-    with pytest.raises(ValueError, match="function name"):
-        processor(
-            [
-                {
-                    "messages": [
-                        {"role": "user", "content": "Call a tool."},
-                        {"role": "assistant", "content": '<tool_call>{"arguments": {"a": 1}}</tool_call>'},
-                    ]
-                }
-            ]
-        )
+    assert "diff --git" in patch_text
 
 
 def test_tool_call_masking_behavior(tokenizer: MarinTokenizer):

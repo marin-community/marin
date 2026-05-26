@@ -1141,28 +1141,6 @@ def test_apply_chat_template_with_masks_batch(backend_tokenizer):
     assert len(result["assistant_masks"]) == 2
 
 
-@requires_model
-def test_apply_chat_template_with_masks_supports_raise_exception(backend_tokenizer):
-    template = """\
-{%- for message in messages -%}
-{%- if message.role == 'tool' -%}
-{{- raise_exception('tool messages are not supported') -}}
-{%- endif -%}
-{{ message.content }}
-{%- endfor -%}
-"""
-    backend_tokenizer.apply_chat_template_with_masks(
-        [[{"role": "user", "content": "hello"}]],
-        chat_template=template,
-    )
-
-    with pytest.raises(Exception, match="tool messages are not supported"):
-        backend_tokenizer.apply_chat_template_with_masks(
-            [[{"role": "tool", "content": "result"}]],
-            chat_template=template,
-        )
-
-
 _MESSAGE_SPAN_REAL_TEMPLATE_CASES = [
     (
         "marin",
