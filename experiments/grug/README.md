@@ -102,6 +102,7 @@ Useful flags:
 - Training/eval metrics: tracker backend (default W&B).
 - Checkpoints: `<output_path>/checkpoints`.
 - Profiler traces (if enabled): `<trainer.log_dir>/<run_id>/profiler`.
+- Backward-flow artifacts: `<trainer.log_dir>/<run_id>/artifacts/backward_flow`, plus `backward_flow/dag` as native HTML media in W&B. Base Grug samples every 50 steps by default; set `trainer.backward_flow.interval=0` to disable.
 - Executor step outputs: `this_output_path()` root for the step.
 
 ## Logged metrics
@@ -133,6 +134,7 @@ Useful flags:
 - `eval/<tag>/loss`, `eval/<tag>/micro_loss`, `eval/<tag>/macro_loss`: per-tag loss views.
 - `eval/bpb`, `eval/macro_bpb`, `eval/<tag>/bpb`, `eval/<tag>/macro_bpb`: bits-per-byte metrics when tokenizer/BPB logging is enabled.
 - `grad/*`, `params/*`, `updates/*`, `opt_state/*`: optional watch metrics (norms/histograms) when watch is enabled.
+- `backward_flow/<scope>/*`: sampled activation and backward-gradient scale stats when `trainer.backward_flow.interval > 0`. Grug also logs `*_gradient_rms_scaled`, where gradients are multiplied by `sum(loss_weight)` to undo mean-loss scaling for the visualization.
 
 ## What should stay consistent
 
@@ -161,6 +163,7 @@ enforces these minimum interfaces:
 
 - Grug principles: [`/.agents/projects/grugformer.md`](../../.agents/projects/grugformer.md)
 - Change workflow: [`.agents/skills/change-grug/`](../../.agents/skills/change-grug/SKILL.md)
+- Backward-flow recipe: [`/docs/recipes/add_grug_backward_flow_logging.md`](../../docs/recipes/add_grug_backward_flow_logging.md)
 - HBM/OOM tuning guide: [`/docs/references/hbm-optimization.md`](../../docs/references/hbm-optimization.md)
 - Executor mechanics: [`/docs/explanations/executor.md`](../../docs/explanations/executor.md)
 - Executor tutorial: [`/docs/tutorials/executor-101.md`](../../docs/tutorials/executor-101.md)

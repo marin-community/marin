@@ -5,7 +5,7 @@
 
 import tempfile
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import wandb
 from fray import current_client
@@ -342,7 +342,7 @@ def _validation_urls(input_path: str | InputName) -> list[str | InputName]:
     matches = sorted(fsspec_glob(input_path))
     if not matches:
         raise FileNotFoundError(f"No files matched raw-text validation glob: {input_path}")
-    return matches
+    return cast(list[str | InputName], matches)
 
 
 def _summary_scalars(summary: dict[str, Any]) -> dict[str, float]:

@@ -3,6 +3,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.train_worker import (
     BatchPrepTiming,
@@ -18,7 +20,7 @@ from marin.rl.weight_transfer.base import WeightTransferServerMetrics
 def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled():
     worker = TrainWorker.__new__(TrainWorker)
     model = object()
-    worker.loss_module = RLOOLoss(kl_coef=0.0)
+    worker.loss_module = RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0))
     worker.initial_model = model
     worker.reference_model = model
 
@@ -28,10 +30,11 @@ def test_drop_bootstrap_model_references_clears_reference_model_when_kl_disabled
     assert worker.reference_model is None
 
 
-def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabled():
+@pytest.mark.parametrize("mode", [KLMode.K2_LOSS, KLMode.K3_LOSS])
+def test_drop_bootstrap_model_references_preserves_reference_model_when_kl_enabled(mode: KLMode):
     worker = TrainWorker.__new__(TrainWorker)
     model = object()
-    worker.loss_module = RLOOLoss(kl_coef=0.01)
+    worker.loss_module = RLOOLoss(kl=KLConfig(mode=mode, beta=0.01))
     worker.initial_model = model
     worker.reference_model = model
 

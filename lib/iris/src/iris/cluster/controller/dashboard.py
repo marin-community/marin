@@ -35,6 +35,7 @@ from finelog.rpc.finelog_stats_connect import (
 )
 from finelog.rpc.logging_connect import LogServiceASGIApplication
 from finelog.server import LogServiceImpl
+from rigging.rpc import ConcurrencyLimitInterceptor
 from starlette.applications import Starlette
 from starlette.middleware.wsgi import WSGIMiddleware
 from starlette.requests import Request
@@ -58,7 +59,7 @@ from iris.rpc.async_adapter import AsyncServiceAdapter
 from iris.rpc.auth import SESSION_COOKIE, NullAuthInterceptor, TokenVerifier, extract_bearer_token, resolve_auth
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication
-from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, ConcurrencyLimitInterceptor, RequestTimingInterceptor
+from iris.rpc.interceptors import SLOW_RPC_THRESHOLD_MS, RequestTimingInterceptor
 from iris.rpc.stats import RpcStatsCollector
 from iris.rpc.stats_connect import StatsServiceWSGIApplication
 from iris.rpc.stats_service import RpcStatsService
