@@ -43,6 +43,8 @@ class DataFusionSource:
     ``pa.Table`` per partition.
     """
 
+    # `ctx` lets us delegate to different DataFusion engines in the future,
+    # including distributed DataFusion (e.g. Ballista).
     ctx: SessionContext
     query: str
     params: tuple[tuple[str, Any], ...] = ()
@@ -459,6 +461,16 @@ class Dataset(Generic[T]):
          them with DataFusion via a SQL query. This will then return an iterable of records
         as dictionaries. This interface gets the best of both worlds: DataFusion and
         Zephyr predicate and filter pushdowns.
+
+        Memory profile: the full query result is materialized in coordinator memory
+        as Arrow tables before workers start, because zephyr's planner consumes
+        non-file sources eagerly. Partitioning is preserved for downstream parallelism,
+        but it does not bound peak coordinator RAM. Suitable for queries whose result
+        fits in coordinator memory (Arrow's columnar layout is ~10x more compact than
+        ``list[dict]`` for typical schemas, so the practical ceiling is higher than
+        it sounds). For larger result sets, write the query output to parquet
+        (``ctx.sql(q).write_parquet(path)``) and use ``load_parquet`` — that path
+        streams per-fragment without coordinator materialization.
 
         Args:
             ctx: A DataFusion context that's configured and has pre-registered SQL tables.
