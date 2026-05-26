@@ -546,9 +546,7 @@ def test_vllm_sampling_params_passes_stop_token_ids_when_supported(monkeypatch):
         vLLMInferenceContext,
         "_get_renderer",
         staticmethod(
-            lambda _model_name, _tokenizer: SimpleNamespace(
-                build_generation_prompt=lambda _messages, tools=None: []
-            )
+            lambda _model_name, _tokenizer: SimpleNamespace(build_generation_prompt=lambda _messages, tools=None: [])
         ),
     )
 
@@ -582,9 +580,7 @@ def test_vllm_sampling_params_rejects_stop_token_ids_when_unsupported(monkeypatc
         vLLMInferenceContext,
         "_get_renderer",
         staticmethod(
-            lambda _model_name, _tokenizer: SimpleNamespace(
-                build_generation_prompt=lambda _messages, tools=None: []
-            )
+            lambda _model_name, _tokenizer: SimpleNamespace(build_generation_prompt=lambda _messages, tools=None: [])
         ),
     )
 
@@ -882,13 +878,10 @@ def test_vllm_assistant_turn_from_choice_parses_tool_calls_without_im_end(monkey
     )
 
     ctx = vLLMInferenceContext(
-        vLLMInferenceContextConfig(
+        _test_vllm_inference_config(
             model_name="Qwen/Qwen3-8B",
             canonical_model_name="Qwen/Qwen3-8B",
-            max_model_len=1024,
             tensor_parallel_size=1,
-            gpu_memory_utilization=0.9,
-            sampling_params=VLLMSamplingConfig(),
         )
     )
 
@@ -925,13 +918,10 @@ def test_vllm_assistant_turn_from_choice_rejects_trailing_text_without_im_end(mo
     )
 
     ctx = vLLMInferenceContext(
-        vLLMInferenceContextConfig(
+        _test_vllm_inference_config(
             model_name="Qwen/Qwen3-8B",
             canonical_model_name="Qwen/Qwen3-8B",
-            max_model_len=1024,
             tensor_parallel_size=1,
-            gpu_memory_utilization=0.9,
-            sampling_params=VLLMSamplingConfig(),
         )
     )
 

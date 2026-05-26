@@ -48,3 +48,10 @@ def test_build_openreward_curriculum_reuses_train_manifest_for_eval():
     assert lesson.env_config.env_class == "marin.rl.integrations.openreward.env.OpenRewardEnv"
     assert lesson.env_config.env_args["train_manifest_path"] == "/tmp/train-manifest.json"
     assert lesson.env_config.env_args["eval_manifest_path"] == "/tmp/train-manifest.json"
+    assert lesson.sampling_params.n_prompts == 8
+    assert lesson.sampling_params.n_generations_per_prompt == 4
+    assert lesson.sampling_params.train_decoding.max_output_tokens == 1024
+    assert lesson.sampling_params.train_decoding.top_k == 4096
+    assert lesson.sampling_params.train_decoding.stop_strings == ["<|im_end|>"]
+    assert curriculum.eval_frequency == 3
+    assert curriculum.max_seq_len == 5120

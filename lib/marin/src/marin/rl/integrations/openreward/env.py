@@ -6,9 +6,11 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, Protocol
 
 import numpy as np
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.base import MarinEnv, extract_seed
 from marin.rl.environments.inference_ctx import BaseInferenceContext, ToolSpec
 from marin.rl.integrations.openreward.client import load_openreward_client
@@ -134,11 +136,15 @@ def _tool_specs(tools: list[OpenRewardToolSpec]) -> list[ToolSpec]:
     return rendered_tools
 
 
-def _merge_stop_sequences(stop: list[str] | None, tool_call_stop: str) -> list[str]:
-    merged = list(stop) if stop is not None else []
-    if tool_call_stop not in merged:
-        merged.append(tool_call_stop)
-    return merged
+def _decoding_with_tool_call_stop(decoding: DecodingConfig, tool_call_stop: str) -> DecodingConfig:
+    """Return a decoding config that stops after the XML tool-call envelope."""
+    if decoding.stop_token_ids is not None:
+        raise ValueError("OpenRewardEnv requires stop_strings so it can add the terminal tool-call stop sequence.")
+
+    stop_strings = list(decoding.stop_strings or [])
+    if tool_call_stop not in stop_strings:
+        stop_strings.append(tool_call_stop)
+    return replace(decoding, stop_strings=stop_strings)
 
 
 def _resolve_optional_env_var(env_var_name: str | None) -> str | None:
@@ -184,17 +190,16 @@ class OpenRewardEnv(MarinEnv):
         inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
-        temperature: float,
+        decoding: DecodingConfig,
         prng_key,
         mode: str = "train",
-        max_tokens: int | None = None,
-        top_k: int | None = None,
-        stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         manifest = _manifest_for_mode(mode, self.train_manifest, self.eval_manifest)
         if not manifest.tasks:
             raise ValueError(f"OpenReward manifest for mode {mode!r} contains no tasks.")
+
+        tool_decoding = _decoding_with_tool_call_stop(decoding, self.tool_call_stop)
 
         n_to_sample = min(n_examples, len(manifest.tasks))
         rng = np.random.default_rng(extract_seed(prng_key))
@@ -221,11 +226,8 @@ class OpenRewardEnv(MarinEnv):
                 tools = _tool_specs(entry.tools)
                 completion = inference_ctx.batch_completions(
                     prompts=[prompt],
-                    temperature=temperature,
                     n=n_generations,
-                    max_tokens=max_tokens,
-                    top_k=top_k,
-                    stop=_merge_stop_sequences(stop, self.tool_call_stop),
+                    decoding=tool_decoding,
                     system_prompt=system_prompt,
                     tools=tools,
                 )[0]
@@ -283,8 +285,7 @@ class OpenRewardEnv(MarinEnv):
                         env_name=f"openreward:{self.deployment_name}",
                         env_example_id=f"{manifest.split}:{entry.task_index}",
                         reward=reward,
-                        temperature=temperature,
-                        top_k=top_k,
+                        decoding=tool_decoding,
                         system_prompt=system_prompt,
                     )
                     group_rollouts.append(rollout)

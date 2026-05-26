@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import jax.random
 import numpy as np
 import pytest
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx.render import Qwen3Renderer
 from marin.rl.integrations.openreward import (
     OpenRewardPromptBlock,
@@ -62,22 +63,16 @@ class FakeInferenceContext:
     def batch_completions(
         self,
         prompts,
-        temperature,
         n,
-        max_tokens=None,
-        top_k=None,
-        stop=None,
+        decoding,
         system_prompt=None,
         tools=None,
     ) -> list[ChatCompletion]:
         self.batch_calls.append(
             {
                 "prompts": prompts,
-                "temperature": temperature,
                 "n": n,
-                "max_tokens": max_tokens,
-                "top_k": top_k,
-                "stop": stop,
+                "decoding": decoding,
                 "system_prompt": system_prompt,
                 "tools": tools,
             }
@@ -115,8 +110,7 @@ class FakeInferenceContext:
         env_name,
         env_example_id,
         reward,
-        temperature,
-        top_k=None,
+        decoding,
         system_prompt=None,
         correctness_reward=None,
     ) -> Rollout:
@@ -134,8 +128,7 @@ class FakeInferenceContext:
             response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
             token_rewards=token_rewards,
             episode_reward=float(reward),
-            temperature=temperature,
-            top_k=top_k,
+            decoding=decoding.as_trace(),
             is_truncated=False,
         )
 
@@ -267,7 +260,7 @@ def test_openreward_env_sample_executes_single_terminal_tool(monkeypatch, tmp_pa
         inference_ctx=inference_ctx,
         n_examples=1,
         n_generations=1,
-        temperature=0.7,
+        decoding=DecodingConfig(temperature=0.7, stop_strings=["<|im_end|>"]),
         prng_key=jax.random.PRNGKey(0),
         mode="train",
     )
@@ -276,7 +269,8 @@ def test_openreward_env_sample_executes_single_terminal_tool(monkeypatch, tmp_pa
     assert calls["base_url"] == "https://openreward.example"
     assert calls["deployment_name"] == "marin/openreward-math-agent"
     assert calls["variant"] == "math"
-    assert inference_ctx.batch_calls[0]["stop"] == ["</tool_call>"]
+    assert inference_ctx.batch_calls[0]["decoding"].stop_strings == ["<|im_end|>", "</tool_call>"]
+    assert rollout_groups[0].rollouts[0].decoding.stop_strings == ("<|im_end|>", "</tool_call>")
     assert inference_ctx.batch_calls[0]["prompts"] == ["What is 2+2?"]
     assert [tool.function.name for tool in inference_ctx.batch_calls[0]["tools"]] == ["submit_answer"]
     assert environment.session_calls == [("submit_answer", {"answer": "4"}, {"OPENAI_API_KEY": "secret"})]
@@ -303,7 +297,7 @@ def test_openreward_env_parse_failures_become_zero_reward(monkeypatch, tmp_path)
         inference_ctx=inference_ctx,
         n_examples=1,
         n_generations=1,
-        temperature=0.7,
+        decoding=DecodingConfig(temperature=0.7),
         prng_key=jax.random.PRNGKey(0),
         mode="train",
     )
@@ -313,6 +307,21 @@ def test_openreward_env_parse_failures_become_zero_reward(monkeypatch, tmp_path)
     assert environment.session_calls == []
     assert metrics["openreward.math-agent-v1.train.parse_failure_rate"] == pytest.approx(1.0)
     assert metrics["openreward.math-agent-v1.train.mean_reward"] == pytest.approx(0.0)
+
+
+def test_openreward_env_rejects_token_id_stops_because_tool_stop_is_string(tmp_path):
+    inference_ctx = FakeInferenceContext(['<tool_call>{"name":"submit_answer","arguments":{"answer":"4"}}</tool_call>'])
+    env = OpenRewardEnv(train_manifest_path=_manifest(tmp_path))
+
+    with pytest.raises(ValueError, match="requires stop_strings"):
+        env.sample(
+            inference_ctx=inference_ctx,
+            n_examples=1,
+            n_generations=1,
+            decoding=DecodingConfig(stop_token_ids=[99999]),
+            prng_key=jax.random.PRNGKey(0),
+            mode="train",
+        )
 
 
 def test_openreward_env_unfinished_tool_results_are_invalid(monkeypatch, tmp_path):
@@ -330,7 +339,7 @@ def test_openreward_env_unfinished_tool_results_are_invalid(monkeypatch, tmp_pat
         inference_ctx=inference_ctx,
         n_examples=1,
         n_generations=1,
-        temperature=0.7,
+        decoding=DecodingConfig(temperature=0.7),
         prng_key=jax.random.PRNGKey(0),
         mode="train",
     )
@@ -357,7 +366,7 @@ def test_openreward_env_invalid_tool_argument_errors_are_invalid(monkeypatch, tm
         inference_ctx=inference_ctx,
         n_examples=1,
         n_generations=1,
-        temperature=0.7,
+        decoding=DecodingConfig(temperature=0.7),
         prng_key=jax.random.PRNGKey(0),
         mode="train",
     )
@@ -385,7 +394,7 @@ def test_openreward_env_raises_runtime_failures(monkeypatch, tmp_path):
             inference_ctx=inference_ctx,
             n_examples=1,
             n_generations=1,
-            temperature=0.7,
+            decoding=DecodingConfig(temperature=0.7),
             prng_key=jax.random.PRNGKey(0),
             mode="train",
         )
@@ -418,7 +427,7 @@ def test_openreward_env_rejects_image_prompts(monkeypatch, tmp_path):
             inference_ctx=inference_ctx,
             n_examples=1,
             n_generations=1,
-            temperature=0.7,
+            decoding=DecodingConfig(temperature=0.7),
             prng_key=jax.random.PRNGKey(0),
             mode="train",
         )
