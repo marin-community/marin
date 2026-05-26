@@ -38,3 +38,75 @@ DELPHI_MIDTRAIN_CHECKPOINTS: dict[str, str] = {
     "1e22_p33m67_lr0.67": "checkpoints/delphi-1e22-p33m67-32p07b-lr0.67-54770ae7/hf",
     "1e22_p67m33_lr0.33": "checkpoints/delphi-1e22-p67m33-32p07b-lr0.33-4e8cc7a7/hf",
 }
+
+
+# Full 3-scale × 3-mix × 4-LR matrix used by the matrix eval (no SFT). Distinct
+# from DELPHI_MIDTRAIN_CHECKPOINTS above: this matrix is keyed on the canonical
+# 3e20 ladder point (d2304-L23, ~2.5B), not the off-ladder 1e20-iso d2048-L21
+# stand-in. Canonical (state=finished in W&B project marin-community/delphi-
+# midtraining) hashes selected per cell after cross-checking W&B status against
+# GCS file counts (failed runs left 0 HF subdirs; finished runs left ≥9). See
+# the 2026-05-26 plan section of `.agents/logbook/downstream_eval.md`.
+
+# Per-cell finished-in-W&B canonical hashes for 1e21 (9.25B token budget).
+_HASHES_1E21: dict[tuple[str, str], str] = {
+    ("p33m67", "0.33"): "58ebcb",
+    ("p33m67", "0.5"):  "efbc63",
+    ("p33m67", "0.67"): "9cf8da",
+    ("p33m67", "0.83"): "0cb048",
+    ("p50m50", "0.33"): "bccff4",
+    ("p50m50", "0.5"):  "973c46",
+    ("p50m50", "0.67"): "7e82b3",
+    ("p50m50", "0.83"): "f9edd2",
+    ("p67m33", "0.33"): "ab4e64",
+    ("p67m33", "0.5"):  "114e49",
+    ("p67m33", "0.67"): "ecbd27",
+    ("p67m33", "0.83"): "a1a261",
+}
+
+# Per-cell finished-in-W&B canonical hashes for 1e22 (32.07B token budget).
+# Long-hash variants are the canonical ones for the 6 cells with W&B duplicates;
+# short-hash variants for those cells are W&B-failed stubs with 0 HF subdirs.
+_HASHES_1E22: dict[tuple[str, str], str] = {
+    ("p33m67", "0.33"): "e9132105",
+    ("p33m67", "0.5"):  "0eeca70d",
+    ("p33m67", "0.67"): "54770ae7",
+    ("p33m67", "0.83"): "78fd44",
+    ("p50m50", "0.33"): "c43ada",
+    ("p50m50", "0.5"):  "ecfa99",
+    ("p50m50", "0.67"): "e78260",
+    ("p50m50", "0.83"): "3c9f70",
+    ("p67m33", "0.33"): "4e8cc7a7",
+    ("p67m33", "0.5"):  "f60cb12a",
+    ("p67m33", "0.67"): "3c17740e",
+    ("p67m33", "0.83"): "d35daa",
+}
+
+_MIXES: tuple[str, ...] = ("p33m67", "p50m50", "p67m33")
+_LRS: tuple[str, ...] = ("0.33", "0.5", "0.67", "0.83")
+# `lr0.5` in float form lands in GCS paths as `lr50` for k0p20-naming scales;
+# kept as `0.5` for 9p25b/32p07b-naming scales.
+_LR_K0P20_SUFFIX: dict[str, str] = {"0.33": "33", "0.5": "50", "0.67": "67", "0.83": "83"}
+
+
+def _build_midtrain_matrix() -> dict[str, str]:
+    matrix: dict[str, str] = {}
+    # 3e20 ladder point — d2304-L23 ~2.5B params, k0p20 token budget, replicate a001.
+    for mix in _MIXES:
+        for lr in _LRS:
+            slug = f"3e20_{mix}_lr{lr}"
+            matrix[slug] = f"checkpoints/delphi-3e20-{mix}-k0p20-lr{_LR_K0P20_SUFFIX[lr]}-a001/hf"
+    # 1e21 ladder point — 3.4B params, 9p25b token budget.
+    for mix in _MIXES:
+        for lr in _LRS:
+            slug = f"1e21_{mix}_lr{lr}"
+            matrix[slug] = f"checkpoints/delphi-1e21-{mix}-9p25b-lr{lr}-{_HASHES_1E21[(mix, lr)]}/hf"
+    # 1e22 ladder point — 9.7B params, 32p07b token budget.
+    for mix in _MIXES:
+        for lr in _LRS:
+            slug = f"1e22_{mix}_lr{lr}"
+            matrix[slug] = f"checkpoints/delphi-1e22-{mix}-32p07b-lr{lr}-{_HASHES_1E22[(mix, lr)]}/hf"
+    return matrix
+
+
+DELPHI_MIDTRAIN_MATRIX: dict[str, str] = _build_midtrain_matrix()
