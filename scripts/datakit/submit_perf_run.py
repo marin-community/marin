@@ -99,11 +99,10 @@ TIERS: dict[str, TierConfig] = {
         priority="production",
     ),
     # marin-canary-datakit-tier2.yaml — synthetic skewed long-tail stress.
-    # Uses iris defaults for memory/disk/cpu/priority (no overrides in the
-    # workflow), so we leave them unset here too.
     "2": TierConfig(
         ferry_module="experiments.ferries.datakit_tier2_skewed_ferry",
         extra="cpu",
+        memory="2G",
     ),
     # marin-canary-datakit-tier3.yaml — Nemotron quality=high, max_files=1000.
     # `FERRY_TEST_MAX_FILES=1000` caps the staged shard count to ~10% of the
@@ -222,7 +221,7 @@ def main() -> int:
     parser.add_argument("--cwd", required=True, help="Path to a worktree at the PR head SHA.")
     parser.add_argument(
         "--iris-config",
-        default="lib/iris/examples/marin.yaml",
+        default="lib/iris/config/marin.yaml",
         help="Iris cluster config; resolved relative to --cwd.",
     )
     parser.add_argument(

@@ -4,11 +4,9 @@
 from __future__ import annotations
 
 from functools import partial
-import os
 from typing import Optional
 
 import jax
-from jax.experimental import pallas as pl
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
@@ -30,7 +28,7 @@ _GB10_XLA_STREAMING_V_BLOCK_BATCH_4K = 3072
 _GB10_XLA_STREAMING_V_BLOCK_BATCH_8K = 3072
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_1K = 6144
 _GB10_CUSTOM_BWD_V_BLOCK_BATCH_2K_PLUS = 7168
-_GB10_NATIVE_FORWARD_OPT_IN_ENV_VAR = "LEVANTER_PALLAS_GPU_GB10_NATIVE_FORWARD"
+_GPU_MIN_B_BLOCK_SIZE = 128
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -51,11 +49,6 @@ def _device_kind() -> str:
     if not jax.devices():
         return ""
     return jax.devices()[0].device_kind.lower()
-
-
-def _gb10_native_forward_opt_in_enabled() -> bool:
-    opt_in_raw = os.environ.get(_GB10_NATIVE_FORWARD_OPT_IN_ENV_VAR, "")
-    return opt_in_raw.lower() in {"1", "true", "yes", "on"}
 
 
 def _max_weight_tile_bytes_for_device(device_kind: str) -> Optional[int]:
@@ -131,8 +124,8 @@ def _validate_inputs(
         raise PallasUnsupportedError(f"h_block_size must be positive, got {block_sizes.h_block_size}.")
     if block_sizes.v_block_size <= 0:
         raise PallasUnsupportedError(f"v_block_size must be positive, got {block_sizes.v_block_size}.")
-    if block_sizes.b_block_size < 16:
-        raise PallasUnsupportedError("b_block_size must be at least 16 on GPU.")
+    if block_sizes.b_block_size < _GPU_MIN_B_BLOCK_SIZE:
+        raise PallasUnsupportedError(f"b_block_size must be at least {_GPU_MIN_B_BLOCK_SIZE} on GPU.")
     if block_sizes.h_block_size < 16:
         raise PallasUnsupportedError("h_block_size must be at least 16 on GPU.")
     if block_sizes.v_block_size < 16:
@@ -193,154 +186,6 @@ def _validate_launch_feasibility(
             "pathological compile time. "
             f"num_h_blocks={num_h_blocks}, limit={max_h_tiles}, h_block_size={h_block_size}."
         )
-
-
-def _forward_pallas_gpu_tile_kernel(
-    x_ref,
-    labels_ref,
-    w_ref,
-    out_m_ref,
-    out_l_ref,
-    out_label_ref,
-    *,
-    v_dim: int,
-    h_block_size: int,
-    num_h_blocks: int,
-    v_block_size: int,
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-):
-    """Compute per-(B block, V block) partials for streaming softmax reduction."""
-    b_block_size = x_ref.shape[0]
-    v_block_index = pl.program_id(1)
-    v_start = v_block_index * v_block_size
-
-    labels = labels_ref[...]
-    in_block = labels >= 0
-
-    logits = jnp.zeros((b_block_size, v_block_size), dtype=jnp.float32)
-    for h_block_index in range(num_h_blocks):
-        h_start = h_block_index * h_block_size
-        h_end = h_start + h_block_size
-        x_block = x_ref[:, h_start:h_end]
-        w_block = w_ref[h_start:h_end, :]
-        logits = logits + jax.lax.dot_general(
-            x_block,
-            w_block,
-            (((1,), (0,)), ((), ())),
-            precision=precision,
-        )
-
-    logits = _apply_logit_soft_cap(logits, logit_soft_cap)
-
-    vocab_indices = v_start + jnp.arange(v_block_size, dtype=jnp.int32)
-    in_v_block = vocab_indices < v_dim
-    safe_logits = jnp.where(in_v_block[None, :], logits, -jnp.inf)
-
-    tile_m = jnp.max(safe_logits, axis=-1)
-    exp_shifted = jnp.where(in_v_block[None, :], jnp.exp(safe_logits - tile_m[:, None]), 0.0)
-    tile_l = jnp.sum(exp_shifted, axis=-1)
-
-    tile_m = jnp.where(in_block, tile_m, -jnp.inf)
-    tile_l = jnp.where(in_block, tile_l, 0.0)
-
-    label_offsets = labels.astype(jnp.int32) - jnp.int32(v_start)
-    label_in_block = in_block & (label_offsets >= 0) & (label_offsets < v_block_size)
-    safe_label_offsets = jnp.clip(label_offsets, 0, v_block_size - 1)
-    cols = jnp.arange(v_block_size, dtype=jnp.int32)[None, :]
-    label_one_hot = (cols == safe_label_offsets[:, None]).astype(logits.dtype)
-    tile_label_logits = jnp.sum(logits * label_one_hot, axis=-1)
-    tile_label_logits = jnp.where(label_in_block, tile_label_logits, -jnp.inf)
-
-    out_m_ref[0, 0, :] = tile_m.astype(out_m_ref.dtype)
-    out_l_ref[0, 0, :] = tile_l.astype(out_l_ref.dtype)
-    out_label_ref[0, 0, :] = tile_label_logits.astype(out_label_ref.dtype)
-
-
-@partial(
-    jax.jit,
-    static_argnames=[
-        "b_block_size",
-        "h_block_size",
-        "v_dim",
-        "num_b_blocks",
-        "num_v_blocks",
-        "num_h_blocks",
-        "v_block_size",
-        "logit_soft_cap",
-        "precision",
-    ],
-)
-def _linear_softmax_cross_entropy_loss_pallas_gpu_tiled(
-    x: Float[Array, "B H"],
-    labels: Int[Array, "B"],
-    w: Float[Array, "H V"],
-    *,
-    b_block_size: int,
-    v_dim: int,
-    h_block_size: int,
-    num_b_blocks: int,
-    num_v_blocks: int,
-    num_h_blocks: int,
-    v_block_size: int,
-    logit_soft_cap: Optional[float],
-    precision: jax.lax.PrecisionLike,
-) -> tuple[Float[Array, "NB NV BB"], Float[Array, "NB NV BB"], Float[Array, "NB NV BB"]]:
-    """Phase 1: parallel grid over (B-block, V-block) producing reduction partials."""
-    h_pad = x.shape[1]
-
-    return pl.pallas_call(
-        partial(
-            _forward_pallas_gpu_tile_kernel,
-            v_dim=v_dim,
-            h_block_size=h_block_size,
-            num_h_blocks=num_h_blocks,
-            v_block_size=v_block_size,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        ),
-        in_specs=[
-            pl.BlockSpec((b_block_size, h_pad), lambda b_index, v_index: (b_index, 0)),
-            pl.BlockSpec((b_block_size,), lambda b_index, v_index: (b_index,)),
-            pl.BlockSpec((h_pad, v_block_size), lambda b_index, v_index: (0, v_index)),
-        ],
-        out_specs=[
-            pl.BlockSpec((1, 1, b_block_size), lambda b_index, v_index: (b_index, v_index, 0)),
-            pl.BlockSpec((1, 1, b_block_size), lambda b_index, v_index: (b_index, v_index, 0)),
-            pl.BlockSpec((1, 1, b_block_size), lambda b_index, v_index: (b_index, v_index, 0)),
-        ],
-        out_shape=[
-            jax.ShapeDtypeStruct((num_b_blocks, num_v_blocks, b_block_size), dtype=jnp.float32),
-            jax.ShapeDtypeStruct((num_b_blocks, num_v_blocks, b_block_size), dtype=jnp.float32),
-            jax.ShapeDtypeStruct((num_b_blocks, num_v_blocks, b_block_size), dtype=jnp.float32),
-        ],
-        grid=(num_b_blocks, num_v_blocks),
-    )(x, labels, w)
-
-
-def _reduce_partials_flash_style(
-    partial_m: Float[Array, "NB NV BB"],
-    partial_l: Float[Array, "NB NV BB"],
-    partial_label: Float[Array, "NB NV BB"],
-) -> tuple[Float[Array, "NB BB"], Float[Array, "NB BB"]]:
-    """FlashAttention-style associative reduction over vocab tiles."""
-
-    def merge_fn(lhs, rhs):
-        m_l, l_l, label_l = lhs
-        m_r, l_r, label_r = rhs
-        m = jnp.maximum(m_l, m_r)
-        l = l_l * jnp.exp(m_l - m) + l_r * jnp.exp(m_r - m)
-        label = jnp.maximum(label_l, label_r)
-        return m, l, label
-
-    m_scan, l_scan, label_scan = jax.lax.associative_scan(merge_fn, (partial_m, partial_l, partial_label), axis=1)
-    m = m_scan[:, -1, :]
-    l = l_scan[:, -1, :]
-    label_logits = label_scan[:, -1, :]
-
-    lse = jnp.log(l) + m
-    loss = lse - label_logits
-    return loss, lse
 
 
 @partial(
@@ -455,7 +300,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
         "dtype",
         "logit_soft_cap",
         "precision",
-        "gb10_native_forward_opt_in",
         "return_argmax",
     ],
 )
@@ -468,20 +312,11 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-    gb10_native_forward_opt_in: bool = False,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     """GPU Pallas implementation returning per-example loss and logsumexp."""
     device_kind = _device_kind()
-    is_gb10 = "gb10" in device_kind
-    is_gb10_bf16 = is_gb10 and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
-    gb10_native_forward_opt_in = is_gb10_bf16 and gb10_native_forward_opt_in
-
-    if gb10_native_forward_opt_in and block_sizes is None:
-        raise PallasUnsupportedError(
-            "GB10 native Pallas forward opt-in requires explicit block sizes. "
-            "Set block_sizes=BlockSizes(...) to keep launch/memory behavior bounded."
-        )
+    is_gb10_bf16 = "gb10" in device_kind and x.dtype == jnp.bfloat16 and w.dtype == jnp.bfloat16
 
     if _should_use_gb10_full_matmul_fallback(x, w):
         return linear_softmax_cross_entropy_loss_reference(
@@ -493,7 +328,7 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
             precision=precision,
             return_argmax=return_argmax,
         )
-    if is_gb10_bf16 and not gb10_native_forward_opt_in:
+    if is_gb10_bf16:
         # On GB10 BF16 we intentionally keep forward on the XLA streaming path and attach
         # the custom backward via custom_vjp. This means forward loss/lse parity against
         # explicit XLA calls is expected to be exact by construction.
@@ -543,47 +378,27 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
 
     out_dtype = jnp.dtype(dtype) if dtype is not None else x.dtype
 
-    if gb10_native_forward_opt_in or return_argmax:
-        fa_out = _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
-            x_pad,
-            labels_pad,
-            w_pad,
-            b_block_size=b_block,
-            v_dim=v_dim,
-            h_block_size=h_block,
-            num_b_blocks=num_b_blocks,
-            num_v_blocks=num_v_blocks,
-            num_h_blocks=num_h_blocks,
-            v_block_size=v_block,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-            return_argmax=return_argmax,
-        )
-        if return_argmax:
-            loss_blocks, lse_blocks, argmax_blocks = fa_out
-        else:
-            loss_blocks, lse_blocks = fa_out
+    # JAX 0.10 Mosaic GPU does not lower the tiled pallas_call dot_general path.
+    # Keep forward on the FA-style streaming path until Mosaic GPU supports this lowering.
+    fa_out = _linear_softmax_cross_entropy_loss_pallas_gpu_fa_style_streaming(
+        x_pad,
+        labels_pad,
+        w_pad,
+        b_block_size=b_block,
+        v_dim=v_dim,
+        h_block_size=h_block,
+        num_b_blocks=num_b_blocks,
+        num_v_blocks=num_v_blocks,
+        num_h_blocks=num_h_blocks,
+        v_block_size=v_block,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        return_argmax=return_argmax,
+    )
+    if return_argmax:
+        loss_blocks, lse_blocks, argmax_blocks = fa_out
     else:
-        partial_m, partial_l, partial_label_logits = _linear_softmax_cross_entropy_loss_pallas_gpu_tiled(
-            x_pad,
-            labels_pad,
-            w_pad,
-            b_block_size=b_block,
-            v_dim=v_dim,
-            h_block_size=h_block,
-            num_b_blocks=num_b_blocks,
-            num_v_blocks=num_v_blocks,
-            num_h_blocks=num_h_blocks,
-            v_block_size=v_block,
-            logit_soft_cap=logit_soft_cap,
-            precision=precision,
-        )
-
-        loss_blocks, lse_blocks = _reduce_partials_flash_style(
-            partial_m,
-            partial_l,
-            partial_label_logits,
-        )
+        loss_blocks, lse_blocks = fa_out
     out_loss = loss_blocks.astype(out_dtype).reshape((b_pad,))
     out_lse = lse_blocks.astype(out_dtype).reshape((b_pad,))
     if return_argmax:
@@ -708,7 +523,7 @@ def _backward_streaming_from_lse(
     return grad_x.astype(x.dtype), grad_w.astype(w.dtype)
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6, 7))
+@partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5, 6))
 def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
     x: Float[Array, "B H"],
     labels: Int[Array, "B"],
@@ -717,7 +532,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-    gb10_native_forward_opt_in: bool,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]]:
     return _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
         x,
@@ -727,7 +541,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
         dtype=dtype,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
-        gb10_native_forward_opt_in=gb10_native_forward_opt_in,
     )
 
 
@@ -739,7 +552,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-    gb10_native_forward_opt_in: bool,
 ):
     loss, lse = _linear_softmax_cross_entropy_loss_pallas_gpu_impl(
         x,
@@ -749,7 +561,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_fwd(
         dtype=dtype,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
-        gb10_native_forward_opt_in=gb10_native_forward_opt_in,
     )
     # We carry this shape-derived tuning choice in residuals so bwd can use
     # exactly the same policy decision as fwd without recomputing dispatch logic.
@@ -762,7 +573,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward_bwd(
     dtype: Optional[jnp.dtype],
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
-    gb10_native_forward_opt_in: bool,
     residuals,
     output_cotangent,
 ):
@@ -797,7 +607,6 @@ _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward.defvjp(
         "dtype",
         "logit_soft_cap",
         "precision",
-        "gb10_native_forward_opt_in",
         "return_argmax",
     ],
 )
@@ -810,7 +619,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
     dtype: Optional[jnp.dtype] = jnp.float32,
     logit_soft_cap: Optional[float] = None,
     precision: jax.lax.PrecisionLike = jax.lax.Precision.HIGHEST,
-    gb10_native_forward_opt_in: bool = False,
     return_argmax: bool = False,
 ) -> tuple[Float[Array, "B"], Float[Array, "B"]] | tuple[Float[Array, "B"], Float[Array, "B"], Int[Array, "B"]]:
     if return_argmax:
@@ -822,7 +630,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
             dtype=dtype,
             logit_soft_cap=logit_soft_cap,
             precision=precision,
-            gb10_native_forward_opt_in=gb10_native_forward_opt_in,
             return_argmax=True,
         )
     return _linear_softmax_cross_entropy_loss_pallas_gpu_with_custom_backward(
@@ -833,7 +640,6 @@ def _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
         dtype,
         logit_soft_cap,
         precision,
-        gb10_native_forward_opt_in,
     )
 
 
@@ -862,7 +668,6 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
             return_argmax=return_argmax,
         )
 
-    gb10_native_forward_opt_in = _gb10_native_forward_opt_in_enabled()
     return _linear_softmax_cross_entropy_loss_pallas_gpu_dispatch(
         x,
         labels,
@@ -871,7 +676,6 @@ def linear_softmax_cross_entropy_loss_pallas_gpu(
         dtype=dtype,
         logit_soft_cap=logit_soft_cap,
         precision=precision,
-        gb10_native_forward_opt_in=gb10_native_forward_opt_in,
         return_argmax=return_argmax,
     )
 

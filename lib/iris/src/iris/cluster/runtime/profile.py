@@ -25,7 +25,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar
 
-from iris.cluster.types import TaskAttempt
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -317,18 +316,6 @@ def _run_memray_profile(pid: str, duration_seconds: int, memory_config: job_pb2.
             Path(trace_path).unlink(missing_ok=True)
         if output_path is not None:
             Path(output_path).unlink(missing_ok=True)
-
-
-def parse_profile_target(target: str) -> TaskAttempt:
-    """Parse a task target string into a TaskAttempt.
-
-    Examples:
-        >>> parse_profile_target("/alice/job/0")
-        TaskAttempt('/alice/job/0')
-        >>> parse_profile_target("/alice/job/0:3")
-        TaskAttempt('/alice/job/0:3')
-    """
-    return TaskAttempt.from_wire(target)
 
 
 def _check_tool(name: str) -> None:

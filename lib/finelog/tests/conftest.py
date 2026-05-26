@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import pyarrow as pa
 import pyarrow.ipc as paipc
 import pytest
@@ -49,11 +52,29 @@ def _worker_batch(worker_ids: list[str], mem_bytes: list[int], ts: list[int]) ->
 
 
 def _seal(store: DuckDBLogStore, namespace: str) -> None:
-    """Run flush -> compact -> sync synchronously, mirroring one bg-loop tick."""
-    ns = store._namespaces[namespace]
-    ns._flush_step()
-    ns._force_compact_l0()
-    ns._sync_step()
+    """Run flush -> force-merge-L0 -> sync+evict synchronously.
+
+    ``force_compact_l0`` is used (rather than ``compact``) because the
+    default planner ``level_targets`` are huge so tiny test segments
+    would never promote on their own. The trailing ``compact()`` runs
+    sync + eviction so remote uploads land before any test assertion.
+    """
+    ns = store.catalog[namespace]
+    ns.flush()
+    ns.force_compact_l0()
+    ns.compact()
+
+
+def _post_and_request_persistance(
+    store: DuckDBLogStore,
+    namespace: str,
+    post: Callable[[], httpx.Response],
+) -> httpx.Response:
+    """Run a persistence-blocking POST while requesting test-side flush."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(post)
+        store.request_persistance(namespace, timeout=5.0)
+        return future.result(timeout=5.0)
 
 
 @pytest.fixture()

@@ -22,14 +22,26 @@ on first ping rather than silently dropping rows.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import ClassVar
+
+from rigging.timing import Timestamp
 
 from iris.rpc import job_pb2
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
+
+
+def stats_timestamp() -> datetime:
+    """Current tz-naive UTC datetime for the stats namespaces' ``ts`` segment key.
+
+    Worker and task stats schemas key their parquet segments on a ``ts``
+    datetime column (stored as TIMESTAMP_MS by finelog). Built from rigging's
+    ``Timestamp.now()`` so the time source stays consistent with the rest of iris.
+    """
+    return datetime.fromtimestamp(Timestamp.now().epoch_seconds(), tz=timezone.utc).replace(tzinfo=None)
 
 
 class WorkerStatus(StrEnum):
@@ -50,7 +62,12 @@ def _attr_string(metadata: job_pb2.WorkerMetadata, key: str) -> str:
 class IrisWorkerStat:
     """One row per worker heartbeat (host-level utilization + identity)."""
 
-    key_column: ClassVar[str] = "ts"
+    # Dashboard reads cluster heartbeats one worker at a time (worker detail page,
+    # per-worker task assignment lookups). Clustering by worker_id lets parquet
+    # row-group min/max prune scans to a handful of groups; the original ts
+    # ordering was correct for the workload but produced wide worker_id ranges
+    # in every row group.
+    key_column: ClassVar[str] = "worker_id"
 
     # identity
     worker_id: str
@@ -81,7 +98,12 @@ class IrisWorkerStat:
 class IrisTaskStat:
     """One row per attempt resource update."""
 
-    key_column: ClassVar[str] = "ts"
+    # Dashboard hot path is ``WHERE task_id IN (...) ORDER BY ts DESC LIMIT 1``
+    # per task. Sorting compacted segments by task_id (with seq as the
+    # secondary key, monotonic with ts because seq is allocated at the
+    # insertion lock) gives parquet row-group pruning on task_id while
+    # preserving in-task time order within each group.
+    key_column: ClassVar[str] = "task_id"
 
     task_id: str
     attempt_id: int
@@ -98,16 +120,19 @@ class IrisTaskStat:
 def build_worker_stat(
     *,
     worker_id: str,
-    ts: datetime,
     status: str,
     address: str,
     snapshot: job_pb2.WorkerResourceSnapshot,
     metadata: job_pb2.WorkerMetadata,
+    ts: datetime | None = None,
 ) -> IrisWorkerStat:
-    """Build a heartbeat row from the per-tick snapshot and worker metadata."""
+    """Build a heartbeat row from the per-tick snapshot and worker metadata.
+
+    ``ts`` defaults to :func:`stats_timestamp` (current UTC, tz-naive).
+    """
     return IrisWorkerStat(
         worker_id=worker_id,
-        ts=ts,
+        ts=ts if ts is not None else stats_timestamp(),
         status=status,
         address=address,
         cpu_pct=float(snapshot.host_cpu_percent),
@@ -134,17 +159,20 @@ def build_task_stat(
     task_id: str,
     attempt_id: int,
     worker_id: str,
-    ts: datetime,
     usage: job_pb2.ResourceUsage,
+    ts: datetime | None = None,
     accelerator_util_pct: float | None = None,
     accelerator_mem_bytes: int | None = None,
 ) -> IrisTaskStat:
-    """Build a per-attempt resource row from a ResourceUsage proto."""
+    """Build a per-attempt resource row from a ResourceUsage proto.
+
+    ``ts`` defaults to :func:`stats_timestamp` (current UTC, tz-naive).
+    """
     return IrisTaskStat(
         task_id=task_id,
         attempt_id=attempt_id,
         worker_id=worker_id,
-        ts=ts,
+        ts=ts if ts is not None else stats_timestamp(),
         cpu_millicores=int(usage.cpu_millicores),
         memory_mb=int(usage.memory_mb),
         disk_mb=int(usage.disk_mb),

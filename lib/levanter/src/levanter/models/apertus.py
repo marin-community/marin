@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockFoldable, BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -26,7 +26,6 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.types import BlockFoldable
 
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
@@ -325,8 +324,6 @@ class ApertusTransformer(eqx.Module):
     def init(config: ApertusConfig, *, key) -> "ApertusTransformer":
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         layers = S.init(config.Layers, ApertusDecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(

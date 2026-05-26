@@ -22,12 +22,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from datasets import load_dataset
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     MaterializedOutputMetadata,
     write_ingestion_metadata_json,
 )
-from marin.utils import fsspec_mkdirs
+from marin.utils import fsspec_mkdirs, fsspec_url
 from rigging.filesystem import open_url, url_to_fs
 from zephyr.writers import atomic_rename
 
@@ -333,17 +334,6 @@ SERIALIZERS: dict[str, Any] = {
 data-agnostic."""
 
 
-def _fsspec_url(fs: Any, path: str) -> str:
-    protocol = fs.protocol
-    if isinstance(protocol, (list, tuple)):
-        protocol = protocol[0]
-    if protocol in (None, "file"):
-        return path
-    if path.startswith(f"{protocol}://"):
-        return path
-    return f"{protocol}://{path}"
-
-
 def _parquet_file_matches_split(path: str, split: str) -> bool:
     filename = os.path.basename(path)
     if not filename.endswith(".parquet"):
@@ -374,7 +364,7 @@ def _find_split_parquet_files(input_path: str, split: str, subset: str | None) -
     if not matches:
         raise FileNotFoundError(f"No parquet files found for split {split!r} under {input_path}")
 
-    return [_fsspec_url(fs, path) for path in sorted(set(matches))]
+    return [fsspec_url(fs, path) for path in sorted(set(matches))]
 
 
 def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterable[dict[str, Any]]:
@@ -384,8 +374,6 @@ def _load_hf_iterable(input_path: str, split: str, subset: str | None) -> Iterab
     module load time (e.g. when only the pure serializer functions are
     used in tests).
     """
-    from datasets import load_dataset  # local import to keep module importable without `datasets`
-
     data_files = _find_split_parquet_files(input_path, split, subset)
     dataset = load_dataset("parquet", data_files={split: data_files}, split=split, streaming=True)
     return dataset

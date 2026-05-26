@@ -737,10 +737,17 @@ def vm_status(ctx, scale_group):
         click.echo(f"    Initializing: {counts.get('initializing', 0)}")
         click.echo(f"    Failed: {counts.get('failed', 0)}")
         click.echo(f"  Demand: {group.current_demand} (peak: {group.peak_demand})")
-        backoff_ms = timestamp_from_proto(group.backoff_until).epoch_ms()
-        if backoff_ms > 0:
-            click.echo(f"  Backoff until: {_format_timestamp(backoff_ms)}")
-            click.echo(f"  Consecutive failures: {group.consecutive_failures}")
+        # Availability / churn status. ``consecutive_failures`` in the proto now
+        # carries the windowed failure count from BackoffDetector — see
+        # ``ScalingGroup.to_status``.
+        if group.availability_status and group.availability_status != "available":
+            reason = f" - {group.availability_reason}" if group.availability_reason else ""
+            click.echo(f"  Availability: {group.availability_status}{reason}")
+            blocked_ms = timestamp_from_proto(group.blocked_until).epoch_ms()
+            if blocked_ms > 0:
+                click.echo(f"  Blocked until: {_format_timestamp(blocked_ms)}")
+        if group.consecutive_failures > 0:
+            click.echo(f"  Recent failures: {group.consecutive_failures}")
         if group.slices:
             click.echo("  Slices:")
             for si in group.slices:
@@ -1001,6 +1008,16 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     default=60,
     help="Seconds to observe restarted workers for failures before advancing",
 )
+@click.option(
+    "--rpc-timeout",
+    type=int,
+    default=600,
+    help=(
+        "Per-RPC deadline for the restart_worker call (seconds). The server-side handler "
+        "runs the full SSH bootstrap synchronously (image pull + container restart), which "
+        "can take several minutes under autoscaler load; size this independently of --timeout."
+    ),
+)
 @click.pass_context
 def worker_restart(
     ctx,
@@ -1008,6 +1025,7 @@ def worker_restart(
     timeout: int,
     max_batch: int,
     observation_window: int,
+    rpc_timeout: int,
 ):
     """Rolling restart of workers with adaptive batch sizing.
 
@@ -1044,7 +1062,8 @@ def worker_restart(
         total = len(worker_ids)
         click.echo(
             f"Restarting {total} worker(s) "
-            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
+            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch}, "
+            f"rpc_timeout={rpc_timeout}s)"
         )
 
         succeeded = 0
@@ -1060,7 +1079,7 @@ def worker_restart(
                 click.echo(f"  Restarting {wid}...")
                 resp = client.restart_worker(
                     controller_pb2.Controller.RestartWorkerRequest(worker_id=wid),
-                    timeout_ms=timeout * 1000,
+                    timeout_ms=rpc_timeout * 1000,
                 )
                 if not resp.accepted:
                     click.echo(f"  ABORT: restart rejected for {wid}: {resp.error}", err=True)

@@ -52,7 +52,7 @@ class MinHashAttrData(BaseModel):
     """Co-partitioned MinHash bucket attrs computed for one ``NormalizedData``.
 
     Persisted as the step's ``.artifact``. Load via
-    ``Artifact.load(step, MinHashAttrData)``.
+    ``Artifact.from_path(step, MinHashAttrData)``.
 
     Attributes:
         version: Schema version of this artifact.
@@ -214,7 +214,7 @@ def compute_minhash_attrs_step(
         name=name,
         deps=[normalize],
         fn=lambda output_path: compute_minhash_attrs(
-            source=Artifact.load(normalize, NormalizedData),
+            source=Artifact.from_path(normalize, NormalizedData),
             output_path=output_path,
             num_perms=num_perms,
             num_bands=num_bands,

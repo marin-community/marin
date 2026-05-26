@@ -6,6 +6,8 @@ import functools as ft
 import typing
 import warnings
 import zlib
+
+import opt_einsum
 from typing import Any, Callable, Sequence
 
 import equinox as eqx
@@ -135,8 +137,6 @@ def maybe_rng_split(key: PRNGKeyArray | None, num: int = 2):
 
 @ft.wraps(eqx.filter_eval_shape)
 def filter_eval_shape(*args, **kwargs):
-    import warnings
-
     warnings.warn(
         "filter_eval_shape is deprecated, use eqx.filter_eval_shape instead",
         DeprecationWarning,
@@ -178,8 +178,6 @@ def broadcast_prefix(prefix_tree: Any, full_tree: Any, is_leaf: Callable[[Any], 
 
 @ft.wraps(eqx.combine)
 def combine(*args, **kwargs):
-    import warnings
-
     warnings.warn("combine is deprecated, use eqx.combine instead", DeprecationWarning)
     return eqx.combine(*args, **kwargs)
 
@@ -271,8 +269,6 @@ def _jittable_dg_einsum(
     spec = operands[0] if isinstance(operands[0], str) else None
     optimize = "optimal" if optimize is True else optimize
 
-    import opt_einsum
-
     # Allow handling of shape polymorphism
     non_constant_dim_types = {
         type(d) for op in operands if not isinstance(op, str) for d in np.shape(op) if not jax.core.is_constant_dim(d)
@@ -357,7 +353,7 @@ def multilevel_scan(f, carry, xs, outer_size, length, reverse=False, unroll=1):
 
 
 def to_jax_shape(shape):
-    from haliax.core import Axis, ensure_tuple
+    from haliax.core import Axis, ensure_tuple  # circular import: jax_utils -> core -> jax_utils
 
     shape = ensure_tuple(shape)
     return tuple(axis.size if isinstance(axis, Axis) else axis for axis in shape)

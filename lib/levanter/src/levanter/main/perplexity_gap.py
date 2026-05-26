@@ -187,12 +187,6 @@ def score_main(config: ModelPerplexityConfig) -> None:
             token_id_to_text=token_id_to_text,
         )
         levanter.tracker.log(_model_score_scalars(summary), step=0)
-        _log_model_score_artifact(
-            summary,
-            scored_documents,
-            vocab_size=len(runner.tokenizer),
-            token_id_to_text=token_id_to_text,
-        )
 
     levanter.tracker.current_tracker().finish()
 
@@ -468,31 +462,6 @@ def _log_report_artifact(summary: dict[str, Any]) -> None:
             tmpdir,
             name="perplexity_gap_report",
             type="perplexity_gap_report",
-        )
-
-
-def _log_model_score_artifact(
-    summary: dict[str, Any],
-    scored_documents: Sequence[ScoredDocument],
-    *,
-    vocab_size: int | None = None,
-    token_id_to_text: dict[int, str] | None = None,
-) -> None:
-    if jax.process_index() != 0:
-        return
-
-    with tempfile.TemporaryDirectory(prefix="model-perplexity-scores-") as tmpdir:
-        write_model_score_files(
-            tmpdir,
-            summary,
-            scored_documents,
-            vocab_size=vocab_size,
-            token_id_to_text=token_id_to_text,
-        )
-        levanter.tracker.current_tracker().log_artifact(
-            tmpdir,
-            name="model_perplexity_scores",
-            type="model_perplexity_scores",
         )
 
 

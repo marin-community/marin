@@ -14,7 +14,7 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -213,13 +213,9 @@ class Olmo2Config(HFCompatConfig):
         # All transformer layers plus final layer norm
         transformer = self.num_layers * transformer_layer + self.hidden_dim  # plus final rmsnorm
 
-        # Input embedding norm if used
-        if hasattr(self, "input_embedding_norm") and self.input_embedding_norm:
-            transformer += self.hidden_dim
-
         # Total parameters (transformer + embeddings + LM head)
         # LM head shares weights with token embeddings if tie_word_embeddings is True
-        lm_head = 0 if (hasattr(self, "tie_word_embeddings") and self.tie_word_embeddings) else token_embedding
+        lm_head = 0 if self.tie_word_embeddings else token_embedding
 
         return transformer + token_embedding + lm_head
 
@@ -412,8 +408,6 @@ class Olmo2Transformer(ModuleWithStateDictSerialization, eqx.Module):
     def init(config: Olmo2Config, *, key) -> "Olmo2Transformer":
         S = Stacked
         if not config.scan_layers:
-            from haliax.nn.scan import BlockSeq
-
             S = BlockSeq
 
         layers = S.init(config.Layers, Olmo2DecoderLayer, gradient_checkpointing=config.gradient_checkpointing)(

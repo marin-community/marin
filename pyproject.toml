@@ -310,11 +310,13 @@ markers = [
     "tpu_ci: mark tests that require a TPU",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
+    "requires_cluster: mark tests that need a running iris cluster",
 ]
 testpaths = ["tests", "experiments"]
 
-# Don't run TPU, slow, integration, or data_integration tests by default.
+# Don't run TPU, slow, integration, data_integration, or cluster-bound tests by default.
 # Integration tests require external infrastructure (Iris cluster, GCS,
-# gated HF repos, etc.); data_integration tests fetch fixtures from HF.
-# Both are run from dedicated CI workflows.
-addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration'"
+# gated HF repos, etc.); data_integration tests fetch fixtures from HF;
+# requires_cluster tests need a running iris cluster (local or remote).
+# All are run from dedicated CI workflows.
+addopts = "--session-timeout=600 -m 'not tpu_ci and not slow and not integration and not data_integration and not requires_cluster'"

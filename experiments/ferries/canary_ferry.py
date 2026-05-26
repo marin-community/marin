@@ -17,6 +17,7 @@ to the Iris container. workflow_dispatch inputs override CANARY_TARGET_TOKENS.
     CANARY_PROFILER_NUM_STEPS profiler duration in steps
     CANARY_PROFILER_START_STEP profiler start step
     CANARY_STEPS         explicit training step count; overrides CANARY_TARGET_TOKENS
+    CANARY_CACHE_COPY_MAX_WORKERS gpu-only cache-copy worker cap
     CANARY_TARGET_TOKENS total training tokens
     CANARY_TRACKER       wandb | json_logger
     RUN_ID               unique run identifier
@@ -97,7 +98,6 @@ def _build_step_from_env() -> ExecutorStep:
         wandb_tags = ["canary", "ferry", "grug", "moe"]
     else:
         batch_size = _env_int("CANARY_BATCH_SIZE", 32)
-        cache_copy_max_workers = _env_int("CANARY_CACHE_COPY_MAX_WORKERS", 12)
         target_tokens = _env_int("CANARY_TARGET_TOKENS", batch_size * GRUG_MOE_TRIAL_MODEL.max_seq_len * 50)
         gpu_type = os.environ.get("CANARY_GPU_TYPE", "H100")
         gpu_count = _env_int("CANARY_GPU_COUNT", 8)
@@ -116,7 +116,6 @@ def _build_step_from_env() -> ExecutorStep:
                 tokenize_step.config,
                 # SlimPajama-6B tokenization OOMs at the default 10g worker_resources.
                 worker_resources=ResourceConfig(ram="64g", disk="64g"),
-                cache_copy_max_workers=cache_copy_max_workers,
             ),
         )
         data = lm_data_config(

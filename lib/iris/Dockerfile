@@ -85,7 +85,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY lib/rigging/src/ ./lib/rigging/src/
 COPY lib/finelog/src/ ./lib/finelog/src/
 COPY lib/iris/src/ ./lib/iris/src/
-COPY lib/iris/examples/ ./lib/iris/examples/
+COPY lib/iris/config/ ./lib/iris/config/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --package marin-iris
 

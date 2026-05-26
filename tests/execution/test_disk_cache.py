@@ -83,7 +83,7 @@ def test_composition_with_save_load(tmp_path: Path):
         distributed_lock(counting_fn),
         output_path=output_path,
         save_fn=Artifact.save,
-        load_fn=Artifact.load,
+        load_fn=Artifact.from_path,
     )
 
     result1 = cached_fn(output_path)

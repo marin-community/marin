@@ -6,6 +6,8 @@ import dataclasses
 import logging
 import os
 import time
+import traceback
+from importlib.metadata import distributions
 from typing import Optional
 
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
@@ -47,8 +49,6 @@ def hparams_to_dict(hparams, **extra_hparams):
 def infer_experiment_git_root() -> Optional[str | os.PathLike[str]]:
     # sniff out the main directory (since we typically don't run from the root of the repo)
     # we'll walk the stack and directories for the files in the stack the until we're at a git root
-    import traceback
-
     stack = traceback.extract_stack()
     # start from the top of the stack and work our way down since we want to hit the main file first
     top_git_root = None
@@ -68,8 +68,6 @@ def infer_experiment_git_root() -> Optional[str | os.PathLike[str]]:
 
 
 def generate_pip_freeze():
-    from importlib.metadata import distributions
-
     dists = distributions()
     return "\n".join(f"{dist.name}=={dist.version}" for dist in dists)
 

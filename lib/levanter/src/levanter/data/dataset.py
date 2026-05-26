@@ -98,7 +98,7 @@ class AsyncDataset(DatasetBase[T_co]):
         return self.slice_dataset(end_index=n)
 
     def shuffle(self, key: PRNGKeyArray, *, perm_type: PermType = "feistel"):
-        import levanter.data.permutation as permutation
+        import levanter.data.permutation as permutation  # circular import: permutation imports dataset
 
         return permutation.PermutationDataset(self, key, perm_type=perm_type)
 
@@ -110,7 +110,7 @@ class AsyncDataset(DatasetBase[T_co]):
         key: PRNGKeyArray,
         perm_type: PermType = "feistel",
     ):
-        import levanter.data.permutation as permutation
+        import levanter.data.permutation as permutation  # circular import: permutation imports dataset
 
         return permutation.BlockShufflingDataset(
             self,

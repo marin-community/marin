@@ -28,7 +28,8 @@ from marin.execution.executor import ExecutorStep
 from experiments.bio_chem_notation import bio_chem_raw_validation_sets
 from experiments.defaults import default_raw_validation_sets
 from experiments.evals.fineweb2_multilingual import fineweb2_multilingual_raw_validation_sets
-from experiments.evals.long_tail_ppl_runnable import runnable_long_tail_raw_validation_sets
+from experiments.evals.formal_hardware_ppl import formal_hardware_raw_validation_sets
+from experiments.evals.web_markup_image_text_ppl import web_markup_image_text_raw_validation_sets
 from experiments.marin_models import marin_tokenizer
 
 DEFAULT_MAX_EVAL_LENGTH = 4096
@@ -85,11 +86,19 @@ def multilingual_bundle() -> PerplexityGapBundle:
     )
 
 
-def runnable_long_tail_bundle() -> PerplexityGapBundle:
+def web_markup_image_text_bundle() -> PerplexityGapBundle:
     return PerplexityGapBundle(
-        key="runnable_long_tail",
-        description="HF-backed long-tail slices that are directly runnable today.",
-        datasets_factory=runnable_long_tail_raw_validation_sets,
+        key="web_markup_image_text",
+        description="Raw web markup, SVG/XML, and image-text surface-form slices.",
+        datasets_factory=web_markup_image_text_raw_validation_sets,
+    )
+
+
+def formal_hardware_bundle() -> PerplexityGapBundle:
+    return PerplexityGapBundle(
+        key="formal_hardware",
+        description="Formal-methods and hardware-description surface-form slices.",
+        datasets_factory=formal_hardware_raw_validation_sets,
     )
 
 
@@ -105,7 +114,8 @@ def registered_perplexity_gap_bundles() -> tuple[PerplexityGapBundle, ...]:
     return (
         base_raw_bundle(),
         multilingual_bundle(),
-        runnable_long_tail_bundle(),
+        web_markup_image_text_bundle(),
+        formal_hardware_bundle(),
         bio_chem_bundle(),
     )
 

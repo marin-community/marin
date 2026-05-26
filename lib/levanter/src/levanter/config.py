@@ -13,9 +13,12 @@ from functools import wraps
 from typing import List, Optional, Union
 
 import draccus
+import jax.numpy as jnp
 import jmp
 from draccus import parse
+from draccus.parsers.decoding import decode_dataclass
 from fsspec import AbstractFileSystem
+from haliax import ScanCheckpointPolicy
 from rigging.filesystem import url_to_fs
 
 from levanter.utils.datetime_utils import encode_timedelta, parse_timedelta
@@ -30,8 +33,6 @@ def register_codecs():
     # draccus.decode.register(jnp.dtype, lambda dtype_name: jnp.dtype(dtype_name))
 
     # register raw dtypes
-    import jax.numpy as jnp
-
     dtype = jnp.float32
     draccus.encode.register(type(dtype), lambda dtype, decl_type=None: str(dtype))
     draccus.decode.register(type(dtype), lambda dtype_name, decl_type=None: jnp.dtype(dtype_name))
@@ -53,16 +54,12 @@ def register_codecs():
     draccus.decode.register(timedelta, parse_timedelta)
     draccus.encode.register(timedelta, encode_timedelta)
 
-    from haliax import ScanCheckpointPolicy
-
     def scan_checkpoint_policy_encode(policy: ScanCheckpointPolicy):
         return policy
 
     def scan_checkpoint_policy_decode(policy: str | dict | bool):
         if not isinstance(policy, dict):
             return ScanCheckpointPolicy.from_bool_or_str(policy)
-
-        from draccus.parsers.decoding import decode_dataclass
 
         return decode_dataclass(ScanCheckpointPolicy, policy)
 
@@ -143,9 +140,11 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
                 fs: AbstractFileSystem
                 fs, fs_path = url_to_fs(config_path)
                 temp_file = tempfile.NamedTemporaryFile(prefix="config", suffix=".yaml", delete=False)
-                atexit.register(lambda: os.unlink(temp_file.name))
-                fs.get(fs_path, temp_file.name)
-                config_path = temp_file.name
+                temp_config_path = temp_file.name
+                temp_file.close()
+                atexit.register(lambda path=temp_config_path: os.unlink(path))
+                fs.get(fs_path, temp_config_path)
+                config_path = temp_config_path
 
             config_paths.append(config_path)
             del args[config_path_index]
@@ -157,12 +156,13 @@ def _maybe_get_config_path_and_cmdline_args(args: List[str]):
         elif len(config_paths) > 1:
             # merge the configs by concatenating them
             temp_merged_config_path = tempfile.NamedTemporaryFile(prefix="config_merged", suffix=".yaml", delete=False)
-            atexit.register(lambda: os.unlink(temp_merged_config_path.name))
-            with open(temp_merged_config_path.name, "w") as f:
+            merged_config_path = temp_merged_config_path.name
+            temp_merged_config_path.close()
+            atexit.register(lambda path=merged_config_path: os.unlink(path))
+            with open(merged_config_path, "w") as f:
                 for config_path in config_paths:
                     with open(config_path) as config_file:
                         f.write(config_file.read())
-            merged_config_path = temp_merged_config_path.name
         else:
             raise ValueError("No config path found in args")
 

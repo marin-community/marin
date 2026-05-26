@@ -20,7 +20,7 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import BlockSeq, ScanCheckpointPolicy, Stacked
+from haliax.nn.scan import BlockFoldable, BlockSeq, ScanCheckpointPolicy, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -33,7 +33,6 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-from levanter.utils.types import BlockFoldable
 
 silence_transformer_nag()
 from transformers import Olmo3Config as HfOlmo3Config  # noqa: E402

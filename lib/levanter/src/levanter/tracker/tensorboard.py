@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import jax
-from rigging.filesystem import url_to_fs
 import numpy as np
+from rigging.filesystem import url_to_fs
 
 from levanter.tracker import Tracker, TrackerConfig
-from levanter.tracker.histogram import Histogram
+from levanter.tracker.histogram import SummaryStats
 
 pylogger = logging.getLogger(__name__)
 
@@ -23,6 +23,37 @@ if typing.TYPE_CHECKING:
 
 def _is_scalar(v) -> bool:
     return isinstance(v, numbers.Number) or (isinstance(v, np.ndarray | jax.Array) and v.ndim == 0)
+
+
+def _log_summary_stats(
+    writer: "SummaryWriter",
+    key: str,
+    value: SummaryStats,
+    *,
+    step: int | None,
+) -> None:
+    writer.add_scalar(f"{key}/min", value.min.item(), global_step=step)
+    writer.add_scalar(f"{key}/max", value.max.item(), global_step=step)
+    writer.add_scalar(f"{key}/num", int(value.num), global_step=step)
+    writer.add_scalar(f"{key}/nonzero_count", int(value.nonzero_count), global_step=step)
+    writer.add_scalar(f"{key}/sum", value.sum.item(), global_step=step)
+    writer.add_scalar(f"{key}/sum_squares", value.sum_squares.item(), global_step=step)
+    writer.add_scalar(f"{key}/mean", value.mean.item(), global_step=step)
+    writer.add_scalar(f"{key}/variance", value.variance.item(), global_step=step)
+    writer.add_scalar(f"{key}/rms", value.rms.item(), global_step=step)
+    if value.histogram is not None:
+        counts, limits = value.histogram.to_numpy_histogram()
+        writer.add_histogram_raw(
+            f"{key}/histogram",
+            min=value.min.item(),
+            max=value.max.item(),
+            num=int(value.num),
+            sum=value.sum.item(),
+            sum_squares=value.sum_squares.item(),
+            bucket_limits=np.array(limits).tolist(),
+            bucket_counts=np.concatenate([[0], np.array(counts)]).tolist(),
+            global_step=step,
+        )
 
 
 class TensorboardTracker(Tracker):
@@ -49,21 +80,8 @@ class TensorboardTracker(Tracker):
                     else:
                         value = np.array(value)
 
-                if isinstance(value, Histogram):
-                    num = value.num
-                    if hasattr(num, "item"):
-                        num = num.item()
-                    self.writer.add_histogram_raw(
-                        k,
-                        min=value.min.item(),
-                        max=value.max.item(),
-                        num=num,
-                        sum=value.sum.item(),
-                        sum_squares=value.sum_squares.item(),
-                        bucket_limits=np.array(value.bucket_limits).tolist(),
-                        bucket_counts=np.concatenate([[0], np.array(value.bucket_counts)]).tolist(),
-                        global_step=step,
-                    )
+                if isinstance(value, SummaryStats):
+                    _log_summary_stats(self.writer, k, value, step=step)
                 elif isinstance(value, str):
                     self.writer.add_text(k, value)
                 elif isinstance(value, np.ndarray):
@@ -88,6 +106,8 @@ class TensorboardTracker(Tracker):
         for k, v in metrics.items():
             if _is_scalar(v):
                 self.writer.add_scalar(k, v, global_step=None)
+            elif isinstance(v, SummaryStats):
+                _log_summary_stats(self.writer, k, v, step=None)
             elif isinstance(v, str):
                 self.writer.add_text(k, v, global_step=None)
             else:

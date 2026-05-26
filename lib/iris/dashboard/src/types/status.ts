@@ -30,6 +30,7 @@ export type TaskState =
   | 'unschedulable'
   | 'assigned'
   | 'preempted'
+  | 'cosched_failed'
 
 // The DB stores state as an integer column. This maps integer values to
 // normalized state names so the dashboard works with both proto enum strings
@@ -46,6 +47,7 @@ const STATE_INT_MAP: Record<number, string> = {
   8: 'unschedulable',
   9: 'assigned',
   10: 'preempted',
+  11: 'cosched_failed',
 }
 
 /**
@@ -77,6 +79,7 @@ const STATE_DISPLAY_NAMES: Record<string, string> = {
   unschedulable: 'Unschedulable',
   assigned: 'Assigned',
   preempted: 'Preempted',
+  cosched_failed: 'Cosched Failed',
   unknown: 'Unknown',
 }
 
@@ -150,6 +153,12 @@ const STATUS_COLORS: Record<string, StatusColorClasses> = {
     border: 'border-surface-border',
     dot: 'bg-text-muted',
   },
+  cosched_failed: {
+    text: 'text-status-danger',
+    bg: 'bg-status-danger-bg',
+    border: 'border-status-danger-border',
+    dot: 'bg-status-danger',
+  },
 }
 
 const DEFAULT_COLORS: StatusColorClasses = {
@@ -170,6 +179,7 @@ export const STATUS_COLOR_ORDER: readonly string[] = [
   'succeeded',
   'failed',
   'worker_failed',
+  'cosched_failed',
   'preempted',
   'pending',
   'unschedulable',
@@ -269,6 +279,7 @@ export const SEGMENT_COLORS: Record<string, string> = {
   assigned: 'bg-status-orange',
   failed: 'bg-status-danger',
   worker_failed: 'bg-status-danger',
+  cosched_failed: 'bg-status-danger',
   preempted: 'bg-status-warning',
   killed: 'bg-text-muted',
   pending: 'bg-surface-border',
@@ -282,6 +293,7 @@ export const SEGMENT_ORDER: readonly string[] = [
   'assigned',
   'failed',
   'worker_failed',
+  'cosched_failed',
   'preempted',
   'killed',
   'pending',

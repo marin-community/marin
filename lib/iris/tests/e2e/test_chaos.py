@@ -30,7 +30,7 @@ from rigging.timing import Duration
 
 from .helpers import TestJobs
 
-pytestmark = [pytest.mark.e2e, pytest.mark.timeout(60)]
+pytestmark = [pytest.mark.requires_cluster, pytest.mark.timeout(60)]
 
 
 # ---------------------------------------------------------------------------

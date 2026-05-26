@@ -34,13 +34,15 @@ MAX_CANDIDATES = 8
 MAX_CANDIDATES_PER_FILE = 2
 MIN_FAILURE_RUNS = 2
 MIN_SLOW_SECONDS = 8.0
-COOLDOWN_DAYS = 30
+# Require a test to land in the per-workflow `--durations` slow window in at least
+# this many distinct runs before treating it as actionable. Single-observation
+# slow hits are dominated by JIT warm-up cost and cold imports; they are not
+# evidence of a real perf regression.
+MIN_SLOW_RUNS = 2
 
 DURATION_RE = re.compile(r"(?P<seconds>\d+(?:\.\d+)?)s\s+(?:setup|call|teardown)\s+(?P<test>\S+::.+)$")
 FAILURE_RE = re.compile(r"(?:FAILED|ERROR)\s+(?P<test>\S+::.+?)(?:\s+-\s|$)")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-TEST_MARKER_RE = re.compile(r"<!--\s*nightshift-ci-test:\s*(?P<key>.+?)\s*-->")
-COOLDOWN_MARKER_RE = re.compile(r"<!--\s*nightshift-ci-cooldown-until:\s*(?P<date>\d{4}-\d{2}-\d{2})\s*-->")
 WORKFLOW_TEST_PREFIXES = (
     ("Iris -", "lib/iris/"),
     ("Levanter -", "lib/levanter/"),
@@ -90,13 +92,6 @@ def canonicalize_test_name(test_name: str, workflow_name: str = "") -> str:
     return f"{normalized_path}{sep}{remainder}"
 
 
-def parse_iso_date(value: str | None) -> dt.date | None:
-    """Parse an ISO date string if present."""
-    if not value:
-        return None
-    return dt.date.fromisoformat(value)
-
-
 def github_api(
     repo: str,
     path: str,
@@ -124,48 +119,6 @@ def github_api(
     if not parse_json:
         return payload
     return json.loads(payload)
-
-
-def paginated_issues(repo: str, token: str, labels: tuple[str, ...]) -> list[dict[str, Any]]:
-    """Fetch all issues and PRs with the requested labels."""
-    page = 1
-    issues: list[dict[str, Any]] = []
-    encoded_labels = parse.quote(",".join(labels))
-    while True:
-        payload = github_api(
-            repo,
-            f"/issues?state=all&per_page=100&page={page}&labels={encoded_labels}&sort=updated&direction=desc",
-            token=token,
-        )
-        if not payload:
-            return issues
-        issues.extend(payload)
-        page += 1
-
-
-def collect_cooldowns(items: list[dict[str, Any]]) -> dict[str, tuple[dt.date | None, str, str]]:
-    """Map test ids to cooldowns from prior Nightshift issues/PRs."""
-    cooldowns: dict[str, tuple[dt.date | None, str, str]] = {}
-    for item in items:
-        body = item.get("body") or ""
-        keys = TEST_MARKER_RE.findall(body)
-        if not keys:
-            continue
-        cooldown_match = COOLDOWN_MARKER_RE.search(body)
-        cooldown_until = parse_iso_date(cooldown_match.group("date")) if cooldown_match else None
-        if item.get("state") == "open":
-            cooldown_until = dt.date.max
-        elif cooldown_until is None and item.get("closed_at"):
-            closed_date = dt.date.fromisoformat(str(item["closed_at"])[:10])
-            cooldown_until = closed_date + dt.timedelta(days=COOLDOWN_DAYS)
-
-        artifact_url = str(item.get("html_url", ""))
-        artifact_title = str(item.get("title", ""))
-        for key in keys:
-            existing = cooldowns.get(key)
-            if existing is None or (existing[0] or dt.date.min) < (cooldown_until or dt.date.min):
-                cooldowns[key] = (cooldown_until, artifact_url, artifact_title)
-    return cooldowns
 
 
 def repo_root() -> Path:
@@ -330,7 +283,7 @@ def merge_evidence(dest: dict[str, dict[str, Any]], src: dict[str, dict[str, Any
 def candidate_kind(record: dict[str, Any]) -> list[str]:
     """Classify a test candidate from the aggregated evidence."""
     kinds: list[str] = []
-    if record["max_seconds"] >= MIN_SLOW_SECONDS:
+    if record["max_seconds"] >= MIN_SLOW_SECONDS and len(record["run_ids"]) >= MIN_SLOW_RUNS:
         kinds.append("slow")
     if len(record["failure_runs"]) >= MIN_FAILURE_RUNS:
         kinds.append("unstable")
@@ -370,17 +323,11 @@ def ranked_candidates(evidence: dict[str, dict[str, Any]]) -> list[dict[str, Any
     return candidates
 
 
-def select_candidates(
-    ranked: list[dict[str, Any]],
-    cooldowns: dict[str, tuple[dt.date | None, str, str]],
-    today: dt.date,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Filter cooldowns before truncation and diversify across test files."""
-    fresh_ranked, skipped = filter_recent_candidates(ranked, cooldowns, today)
+def select_candidates(ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Diversify selected candidates across test files."""
     selected: list[dict[str, Any]] = []
     per_file_counts: dict[str, int] = {}
-
-    for candidate in fresh_ranked:
+    for candidate in ranked:
         file_key = test_file_key(candidate["test"])
         if per_file_counts.get(file_key, 0) >= MAX_CANDIDATES_PER_FILE:
             continue
@@ -388,36 +335,7 @@ def select_candidates(
         per_file_counts[file_key] = per_file_counts.get(file_key, 0) + 1
         if len(selected) >= MAX_CANDIDATES:
             break
-
-    return selected, skipped
-
-
-def filter_recent_candidates(
-    candidates: list[dict[str, Any]],
-    cooldowns: dict[str, tuple[dt.date | None, str, str]],
-    today: dt.date,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Split candidates into fresh and skipped-by-cooldown sets."""
-    fresh: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    for candidate in candidates:
-        cooldown = cooldowns.get(candidate["test"])
-        if cooldown is None:
-            fresh.append(candidate)
-            continue
-        until, artifact_url, artifact_title = cooldown
-        if until is not None and until >= today:
-            skipped.append(
-                {
-                    "test": candidate["test"],
-                    "cooldown_until": until.isoformat(),
-                    "artifact_url": artifact_url,
-                    "artifact_title": artifact_title,
-                }
-            )
-            continue
-        fresh.append(candidate)
-    return fresh, skipped
+    return selected
 
 
 def build_prompt(
@@ -427,8 +345,7 @@ def build_prompt(
     candidate_file: Path,
     log_root: Path,
     repo: str,
-    fresh_candidates: list[dict[str, Any]],
-    skipped_candidates: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
 ) -> str:
     """Build the agent prompt for one CI-test audit run."""
     return f"""\
@@ -436,22 +353,18 @@ You are the Nightshift CI Test Audit agent.
 
 Your random seed is: {haiku_seed}
 Use this seed to compose a haiku about test maintenance. Include it as the
-epigraph of any PR or issue you create.
+epigraph of any PR you create.
 
 ## Context
 
 You are working in `{repo}` on {date}. A wrapper already inspected recent CI log
-archives on `main`, aggregated candidate tests, and filtered out tests that
-already have an open or recently closed Nightshift investigation.
+archives on `main` and aggregated candidate tests.
 
 Candidate summary JSON: `{candidate_file}`
 Downloaded logs root: `{log_root}`
 
-Fresh candidates:
-{json.dumps(fresh_candidates, indent=2)}
-
-Skipped due to active/recent investigations:
-{json.dumps(skipped_candidates, indent=2)}
+Candidates:
+{json.dumps(candidates, indent=2)}
 
 ## Mission
 
@@ -468,27 +381,20 @@ Read `AGENTS.md` for project conventions.
 
 ## Rules of Engagement
 
-- Prefer a focused in-repo improvement over opening a new issue when the fix is
-  straightforward and low-risk.
+- The only artifact you may produce is a PR with a real code change. Do NOT
+  open standalone GitHub issues from this workflow — if no concrete fix is
+  justified, exit cleanly. The same candidates will surface again on future
+  runs, and that is fine.
+- Prefer a focused in-repo improvement when the fix is straightforward and
+  low-risk. Examples of acceptable fixes: removing a redundant compile,
+  hoisting a shared fixture, deleting a parametrize cell whose coverage is
+  already provided by a sibling, replacing a real-network setup with a
+  pre-recorded fixture.
 - Do not weaken assertions or mark a useful test `slow` just to hide a problem.
 - Do not remove a test unless you can defend why its coverage is redundant,
   invalid, or better expressed elsewhere.
 - If you modify code or tests, run `./infra/pre-commit.py --all-files --fix`
   and run the relevant `uv run pytest ...` targets.
-- If the investigation is real but the fix is too large or risky, open a GitHub
-  issue instead of forcing a partial change.
-- Do not open duplicate artifacts for tests listed in the skipped section.
-
-## Required dedupe markers
-
-If you open a PR or issue, include these hidden markers in the body for every
-test you investigated:
-
-<!-- nightshift-ci-test: path/to/test_file.py::test_name -->
-<!-- nightshift-ci-cooldown-until: YYYY-MM-DD -->
-
-Use a cooldown of at least 30 days from today so future Nightshift runs do not
-re-investigate the same test immediately.
 
 ## Output
 
@@ -496,13 +402,10 @@ re-investigate the same test immediately.
   1. Create or use branch `nightshift/ci-tests-{date.replace('-', '')}`.
   2. Push and open a PR titled `[nightshift] investigate slow/flaky CI tests`.
   3. Add labels `agent-generated` and `nightshift`.
-  4. Begin the PR body with your haiku and include the required hidden markers.
+  4. Begin the PR body with your haiku.
   5. Enable automerge with squash.
-- If code changes are not justified but follow-up is:
-  1. Open one GitHub issue titled `[nightshift] investigate CI test performance/stability`.
-  2. Add labels `agent-generated` and `nightshift`.
-  3. Begin the issue body with your haiku and include the required hidden markers.
-- If no justified action remains after inspection, exit cleanly and explain why.
+- Otherwise, exit cleanly and explain in plain text why no fix was justified.
+  Do not open an issue. Do not create an empty PR. Do not edit unrelated files.
 """
 
 
@@ -547,10 +450,6 @@ def main() -> None:
     date = today.isoformat()
     root = repo_root()
 
-    prior_items = paginated_issues(repo, token, ("nightshift", "agent-generated"))
-    cooldowns = collect_cooldowns(prior_items)
-    logger.info("Loaded %d prior nightshift cooldown markers", len(cooldowns))
-
     combined_evidence: dict[str, dict[str, Any]] = {}
     with tempfile.TemporaryDirectory(prefix="nightshift-ci-tests-") as temp_dir:
         temp_root = Path(temp_dir)
@@ -572,11 +471,10 @@ def main() -> None:
                     continue
                 merge_evidence(combined_evidence, collect_evidence(extracted, workflow_name, run))
 
-        candidates = ranked_candidates(combined_evidence)
-        fresh_candidates, skipped_candidates = select_candidates(candidates, cooldowns, today)
+        candidates = select_candidates(ranked_candidates(combined_evidence))
 
-        if not fresh_candidates:
-            logger.info("No fresh CI test candidates after cooldown filtering. Exiting cleanly.")
+        if not candidates:
+            logger.info("No actionable CI test candidates. Exiting cleanly.")
             return
 
         checkout_branch(root, f"nightshift/ci-tests-{today.strftime('%Y%m%d')}")
@@ -586,8 +484,7 @@ def main() -> None:
                 {
                     "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                     "repo": repo,
-                    "candidates": fresh_candidates,
-                    "skipped": skipped_candidates,
+                    "candidates": candidates,
                 },
                 indent=2,
             )
@@ -599,8 +496,7 @@ def main() -> None:
             candidate_file=candidate_file,
             log_root=logs_root,
             repo=repo,
-            fresh_candidates=fresh_candidates,
-            skipped_candidates=skipped_candidates,
+            candidates=candidates,
         )
         run_agent(prompt, root)
 
