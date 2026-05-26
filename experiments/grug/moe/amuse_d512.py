@@ -38,7 +38,7 @@ _HIDDEN_DIM: int = 512
 _BUDGET: float = 2.19e17
 _TARGET_STEPS: int = 2**14
 _TPU: str = "v5p-8"
-_RUN_SUFFIX: str = "amuse-v6-lr1.5x-b1-0.4-rho-0.6"
+_RUN_SUFFIX: str = "amuse-v7-lr2x-b1-0.4-rho-0.6"
 # AMUSE sweep knobs (override per run):
 #   _LR_MULTIPLIER scales the matrix LR (and adam_lr proportionally) over the
 #     heuristic MuonH baseline. AMUSE has no decay phase so the *average*
@@ -47,7 +47,7 @@ _RUN_SUFFIX: str = "amuse-v6-lr1.5x-b1-0.4-rho-0.6"
 #     (paper d512: {0.4, 0.6}). Smaller β_1 → more "fast Muon" early.
 #   _AMUSE_RHO is the β_t growth exponent (paper d512: {0.6, 0.8}).
 #     Smaller ρ → slower β_t ramp toward 1.
-_LR_MULTIPLIER: float = 1.5
+_LR_MULTIPLIER: float = 2.0
 _AMUSE_BETA1: float = 0.4
 _AMUSE_RHO: float = 0.6
 _AMUSE_T0: int = 500
