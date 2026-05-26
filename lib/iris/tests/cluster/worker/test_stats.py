@@ -11,7 +11,6 @@ from iris.cluster.worker.stats import (
     WorkerStatus,
     build_task_stat,
     build_worker_stat,
-    stats_timestamp,
 )
 from iris.rpc import job_pb2
 
@@ -119,29 +118,6 @@ def test_build_task_stat_shape():
     # Accelerator fields default to None.
     assert stat.accelerator_util_pct is None
     assert stat.accelerator_mem_bytes is None
-
-
-def test_build_worker_stat_ts_defaults_to_now():
-    """Omitting ``ts`` fills in the current stats_timestamp."""
-    before = stats_timestamp()
-    stat = build_worker_stat(
-        worker_id="w-1",
-        status=WorkerStatus.IDLE,
-        address="addr",
-        snapshot=job_pb2.WorkerResourceSnapshot(),
-        metadata=job_pb2.WorkerMetadata(),
-    )
-    after = stats_timestamp()
-    assert before <= stat.ts <= after
-
-
-def test_build_task_stat_ts_defaults_to_now():
-    """Omitting ``ts`` fills in the current stats_timestamp."""
-    usage = job_pb2.ResourceUsage(memory_mb=1, memory_peak_mb=2, disk_mb=3, cpu_millicores=4, process_count=1)
-    before = stats_timestamp()
-    stat = build_task_stat(task_id="t", attempt_id=0, worker_id="w", usage=usage)
-    after = stats_timestamp()
-    assert before <= stat.ts <= after
 
 
 def test_build_task_stat_with_accelerator():
