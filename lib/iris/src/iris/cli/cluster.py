@@ -51,14 +51,6 @@ class WorkerBootstrapRow:
     zone: str
 
 
-_WORKER_BOOTSTRAP_COLUMNS = (
-    "worker_id",
-    "slice_id",
-    "scale_group",
-    "md_gce_zone",
-)
-
-
 def _fetch_worker_bootstrap_rows(client, worker_ids: list[str]) -> dict[str, WorkerBootstrapRow]:
     """Fetch slice_id/scale_group/zone for a set of workers.
 
@@ -70,7 +62,7 @@ def _fetch_worker_bootstrap_rows(client, worker_ids: list[str]) -> dict[str, Wor
     if not worker_ids:
         return {}
     quoted = ", ".join("'" + wid.replace("'", "''") + "'" for wid in worker_ids)
-    sql = f"SELECT {', '.join(_WORKER_BOOTSTRAP_COLUMNS)} FROM workers WHERE worker_id IN ({quoted})"
+    sql = f"SELECT worker_id, slice_id, scale_group, md_gce_zone FROM workers WHERE worker_id IN ({quoted})"
     response = client.execute_raw_query(query_pb2.RawQueryRequest(sql=sql))
     column_index = {col.name: i for i, col in enumerate(response.columns)}
     rows: dict[str, WorkerBootstrapRow] = {}
@@ -1042,15 +1034,6 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
     help="Seconds to observe restarted workers for failures before advancing",
 )
 @click.option(
-    "--rpc-timeout",
-    type=int,
-    default=600,
-    help=(
-        "Deprecated/no-op: the CLI now drives the SSH bootstrap directly per worker. "
-        "Retained for backwards-compatible invocation; ignored at runtime."
-    ),
-)
-@click.option(
     "--skip-current-hash/--no-skip-current-hash",
     default=False,
     help=(
@@ -1067,7 +1050,6 @@ def worker_restart(
     min_batch: int,
     max_batch: int,
     observation_window: int,
-    rpc_timeout: int,
     skip_current_hash: bool,
 ):
     """Rolling restart of workers with adaptive batch sizing.
@@ -1084,7 +1066,6 @@ def worker_restart(
     Running Docker containers are preserved and adopted by the new worker
     process, so tasks are not disrupted.
     """
-    del rpc_timeout  # retained for CLI compatibility; no longer used
     controller_url = require_controller_url(ctx)
 
     config = ctx.obj.get("config")
