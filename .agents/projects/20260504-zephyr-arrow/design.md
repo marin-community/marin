@@ -9,31 +9,61 @@ We should move to using Arrow as the internal format for Zephyr and expose Arrow
 ## Why
 
 - Exposing Arrow to Zephyr jobs should make Python-heavy jobs at least 2x - 3x faster by migrating the logic to Polars and thereby removing the majority of the existing GC time
-- We can, likely, use more [efficient merging algorithms](https://pola.rs/posts/streaming-joins/) for the scatter / reduce phases
 - We can avoid the cost of serialization and deserialization with `cloudpickle`
-- Again, if we move to user logic to Polars, we can parallelize jobs using multithreading at the Zephyr level, since the Python GIL will no longer be holding locks during processing
+- If we move user logic to Polars, we can parallelize jobs using multithreading at the Zephyr level, since the Python GIL will no longer be holding locks during processing
 
 ## Goals
 
-- Migrate the internals of Zephyr to use Arrow for storage, including migrating the scatter format to use zstd compressed IPC files (IPC is the native Arrow format that doesn't incur any serialization or deserialization cost to write to disk).
+- Migrate the internals of Zephyr to use Arrow for storage, including migrating the scatter format to use zstd compressed Parquet files.
 - Keep the API to Zephyr the same, so existing jobs will continue to run (but without all the speed gains)
-- Expose an alternative Zephyr API that allows for processing data directly in Arrow and enabled the 2x - 3x speedups
+- Expose an alternative Zephyr API that allows for processing data directly in Arrow and enables the 2x - 3x speedups
 
 ## Design / Plan
 
-- Replace `ScatterWriter` with a version the reads and writes `zstd` compressed Arrow IPC
+- Replace `ScatterWriter` with a version the reads and writes `zstd` compressed parquet and processes it in Polars
 - Update the necessary sections of `plan.py`: `_merge_sorted_chunks`, `_sorted_merge_join`
-- Update `spill.py` to use Arrow IPC as well
-- Add a new `ArrowDataset` builder that has a very similar API to `Dataset` but provides a `PyArrow.BatchRecord` to the functions.
-  - The main difference will be exposing a new version of `GroupBy` that allows for [Polars-level aggregations](https://docs.pola.rs/user-guide/expressions/aggregation/)
+- Add a new functions to the `Dataset` builder that expose `PyArrow.BatchRecord` instead of Python objects.
+- The main difference will be exposing a new version of `group_by` that allows for doing aggregations using `RecordBatch`s
 
 ### `Dataset` API
 See discussion in [api.md](api.md) for the details of options considered.
 
-The `Dataset` API will change as follows:
+The `Dataset` API will remain unchanged so existing code continues to run. Functions like `load_parquet` and `group_by` will have a `batch_mode` flag that allows for processing.
 
+An example pipeline could look something like this:
 ```
-TBD based on discussion in api.md.
+import polars as pl
+import pyarrow as pa
+
+def flat_map(batch: pa.RecordBatch) -> Iterator[pa.RecordBatch]:
+    hashed = compute_paragraph_hashes(batch)
+    return pl.from_arrow(hashesd).rename({"doc_id": "id"}).to_arrow().to_batches()
+
+def annotate_dups(key: str, records: pa.RecordBatch) -> Iterator[pa.RecordBatch]:
+    df = pl.from_arrow(records)
+    has_dups = df.height > 1
+    cano_id = df["id"][0]
+
+    is_dup = pl.lit(has_dups) & (pl.col("id") != cano_id)
+    return df.select(
+      pl.col("id"),
+      is_dup.alias("is_dup"),
+      pl.when(is_dup)
+          .then(pl.col("paragraph_span").struct.field("span"))
+          .otherwise(pl.lit([], dtype=pl.List(pl.Int64)))
+          .alias("span"),
+      pl.col("file_idx"),
+    ).to_arrow().to_batches()
+
+Dataset
+  .from_files(files)
+  .load_parquet(batch_mode=True)
+  .flat_map(flat_map)
+  .group_by(
+    key=col("hash"),
+    sort_by=col("id")
+    reducer=annotate_dups,
+  )
 ```
 
 ## Risks / Challenges
@@ -64,8 +94,7 @@ From the research in [compute_engine_research.md](compute_engine_research.md) (s
 | Zero-copy with Arrow (strings)                | ✅ is Arrow                     | ❌ copies to StringView                  | ✅ (fails on `string_view` input)       |
 | Memory: spill-to-disk for sort/join           | ❌ no spill                     | ⚠️ streaming merge_sorted experimental  | ✅ k-way merge, all operators           |
 | Streaming larger-than-RAM ops                 | ❌                              | ⚠️ streaming / `LazyFrame` experimental | ✅ production-ready                     |
-
-
 ## Future work
-
-Once this is complete, we can return to [zephyr-performance](../20260430-zephyr-performance/design.md) and implement the parallelization improvements there and actually realize the benefit, since the GIL will not limit multithreading in *Arrow-native* stages.
+Exposing sql is interesting in terms of sql's flexibility and ease for writing ad-hoc queries. Parsing sql to handle distributing it across multiple nodes is well outside the scope of the work we want to do, but there are a few future paths we can explore:
+- Once `RecordBatch` objects are exposed, users can write sql transformations over them using DuckDB or DataFusion
+- We can explore deploying [smallpond](https://github.com/deepseek-ai/smallpond) for ad-hoc (or possibly data processing) queries in a more always-on fashion
