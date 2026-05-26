@@ -25,19 +25,20 @@ Current datasets:
 10. cognitivecomputations/dolphin-r1-nonreasoning
 11. cognitivecomputations/dolphin-r1-reasoning
 12. open-r1/OpenThoughts-114k-math
-13. bespokelabs/Bespoke-Stratos-17k
-14. HuggingFaceTB/smoltalk
-15. PrimeIntellect/verifiable-math-problems
-16. PrimeIntellect/SYNTHETIC-2-SFT-verified
-17. sherryy/tulu-3-sft-personas-instruction-following-expanded
-18. facebook/natural_reasoning
-19. HuggingFaceTB/smoltalk2
-20. nvidia/Nemotron-Post-Training-Dataset-v1
-21. nvidia/Nemotron-Post-Training-Dataset-v2
-22. HuggingFaceH4/no_robots
-23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
-24. lm-provers/FineProofs-SFT
-25. lm-provers/FineProofs-SFT/proof-only
+13. open-r1/OpenR1-Math-220k/default
+14. bespokelabs/Bespoke-Stratos-17k
+15. HuggingFaceTB/smoltalk
+16. PrimeIntellect/verifiable-math-problems
+17. PrimeIntellect/SYNTHETIC-2-SFT-verified
+18. sherryy/tulu-3-sft-personas-instruction-following-expanded
+19. facebook/natural_reasoning
+20. HuggingFaceTB/smoltalk2
+21. nvidia/Nemotron-Post-Training-Dataset-v1
+22. nvidia/Nemotron-Post-Training-Dataset-v2
+23. HuggingFaceH4/no_robots
+24. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
+25. lm-provers/FineProofs-SFT
+26. lm-provers/FineProofs-SFT/proof-only
 """
 
 import dataclasses
@@ -257,6 +258,18 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "source",
 ]
 
+OPENR1_MATH_220K_HF_ID = "open-r1/OpenR1-Math-220k"
+OPENR1_MATH_220K_DEFAULT_NAME = "open-r1/OpenR1-Math-220k/default"
+OPENR1_MATH_220K_REVISION = "e4e141ec9dea9f8326f4d347be56105859b2bd68"
+OPENR1_MATH_220K_METADATA_COLUMNS = [
+    "answer",
+    "problem_type",
+    "question_type",
+    "source",
+    "uuid",
+    "correctness_count",
+]
+
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     "meta-math/MetaMathQA": InstructionDatasetConfig(
@@ -358,6 +371,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter=multi_turn_adapter(),
         metadata_columns=["system", "source", "generated_token_count", "correct"],
         name="open-r1/OpenThoughts-114k-math",
+    ),
+    OPENR1_MATH_220K_DEFAULT_NAME: InstructionDatasetConfig(
+        hf_dataset_id=OPENR1_MATH_220K_HF_ID,
+        revision=OPENR1_MATH_220K_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=OPENR1_MATH_220K_METADATA_COLUMNS,
+        name=OPENR1_MATH_220K_DEFAULT_NAME,
+        subsets=["default"],
+        splits=["train"],
     ),
     "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
         hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
