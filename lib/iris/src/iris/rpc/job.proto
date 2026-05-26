@@ -266,7 +266,7 @@ message TaskAttempt {
   iris.time.Timestamp finished_at = 7;
   bool is_worker_failure = 8;
   // Controller-minted 16-hex-char routing key for this attempt. Surfaced to
-  // operators (dashboard) so the UID-routing rollout can be watched.
+  // operators (dashboard) for traceability.
   string attempt_uid = 9;
 }
 

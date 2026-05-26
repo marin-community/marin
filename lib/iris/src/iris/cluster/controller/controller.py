@@ -2338,9 +2338,10 @@ class Controller:
             # attempts whose terminal Reconcile observation was lost.
             # Including them in the desired set gives the worker a second
             # chance to report -- either with the real terminal status or
-            # via _missing_task_status -- so the heartbeat path can stamp
-            # finished_at_ms. Without this, a single lost RPC strands the
-            # attempt forever, since no other code path polls about it.
+            # via the MISSING synthesis in ``handle_reconcile`` -- so the
+            # heartbeat path can stamp finished_at_ms. Without this, a single
+            # lost RPC strands the attempt forever, since no other code path
+            # polls about it.
             target_ids: set[WorkerId] = set(worker_ids)
             raw_rows = snap.execute(
                 select(

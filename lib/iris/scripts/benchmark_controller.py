@@ -83,7 +83,7 @@ from iris.cluster.controller.transitions import (
 )
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import JobName, WorkerId
-from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, query_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from iris.version import client_revision_date
 from rigging.timing import Timestamp
@@ -147,21 +147,12 @@ class _FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans):
+    def reconcile_workers(self, plans, addresses):
         # Same shape the test-suite FakeProvider returns. Only exercised if
         # someone disables dry_run on the harness.
-        from iris.cluster.controller.worker_provider import WorkerReconcileResult
+        from iris.cluster.controller.reconcile import ReconcileResult
 
-        return [
-            WorkerReconcileResult(
-                worker_id=plan.worker_id,
-                start_response=worker_pb2.Worker.StartTasksResponse() if plan.start_tasks else None,
-                start_error=None,
-                poll_updates=[],
-                poll_error=None,
-            )
-            for plan in plans
-        ]
+        return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]
 
     def close(self):
         pass
@@ -659,29 +650,6 @@ def load_get_job_state(harness: RpcHarness, db: ControllerDB, rps: float, batch:
     return RpcLoad(name="GetJobState", target_rps=rps, invoke=invoke)
 
 
-def load_update_task_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    hb_requests = _build_heartbeat_requests(db)
-    if not hb_requests:
-        return None
-    mid = hb_requests[len(hb_requests) // 2]
-    rpc_req = controller_pb2.Controller.UpdateTaskStatusRequest(
-        worker_id=str(mid.worker_id),
-        updates=[
-            job_pb2.WorkerTaskStatus(
-                task_id=u.task_id.to_wire(),
-                attempt_id=u.attempt_id,
-                state=u.new_state,
-            )
-            for u in mid.updates
-        ],
-    )
-
-    def invoke(client: ControllerServiceClientSync) -> None:
-        client.update_task_status(rpc_req)
-
-    return RpcLoad(name="UpdateTaskStatus", target_rps=rps, invoke=invoke)
-
-
 def load_register_endpoint(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
     sample = _active_task_sample(db, limit=300)
     if not sample:
@@ -888,7 +856,6 @@ def load_get_process_status(harness: RpcHarness, db: ControllerDB, rps: float) -
 PRODUCTION_MIX_RPS: dict[str, float] = {
     "SetTaskStatusText": 316.0,
     "GetJobState": 7.85,
-    "UpdateTaskStatus": 1.71,
     "ListEndpoints": 0.90,
     "GetJobStatus": 0.73,
     "RegisterEndpoint": 0.45,
@@ -908,7 +875,6 @@ PRODUCTION_MIX_RPS: dict[str, float] = {
 _FACTORY_BY_NAME: dict[str, Callable[..., RpcLoad | None]] = {
     "SetTaskStatusText": load_set_task_status_text,
     "GetJobState": load_get_job_state,
-    "UpdateTaskStatus": load_update_task_status,
     "ListEndpoints": load_list_endpoints,
     "GetJobStatus": load_get_job_status,
     "RegisterEndpoint": load_register_endpoint,
@@ -960,7 +926,7 @@ def _bench_load(name: str, harness: RpcHarness, load: RpcLoad | None, **bench_kw
 
 def benchmark_rpcs(db: ControllerDB) -> None:
     """Cover the highest-volume RPCs: GetJobState, ListJobs, GetJobStatus,
-    Register, RegisterEndpoint, LaunchJob, TerminateJob, UpdateTaskStatus.
+    Register, RegisterEndpoint, LaunchJob, TerminateJob.
 
     All RPCs go through ``RpcHarness`` (real Controller in dry_run + Connect
     HTTP). Numbers include serialization, ASGI dispatch, AsyncServiceAdapter,
@@ -1105,46 +1071,6 @@ def benchmark_rpcs(db: ControllerDB) -> None:
         else:
             print("  RPC: TerminateJob                                                 (skipped, no running jobs)")
 
-        # ---- UpdateTaskStatus (4.8k/day, p95=256ms) — one RPC per worker.
-        hb_requests = _build_heartbeat_requests(write_db)
-        if hb_requests:
-            total_t = sum(len(r.updates) for r in hb_requests)
-            print(f"  (UpdateTaskStatus batch: {len(hb_requests)} workers, {total_t} task updates total)")
-
-            rpc_hb_requests = [
-                controller_pb2.Controller.UpdateTaskStatusRequest(
-                    worker_id=str(req.worker_id),
-                    updates=[
-                        job_pb2.WorkerTaskStatus(
-                            task_id=u.task_id.to_wire(),
-                            attempt_id=u.attempt_id,
-                            state=u.new_state,
-                        )
-                        for u in req.updates
-                    ],
-                )
-                for req in hb_requests
-            ]
-            mid = rpc_hb_requests[len(rpc_hb_requests) // 2]
-            update_client = harness.make_client()
-
-            bench(
-                f"RPC: UpdateTaskStatus (1 worker, t={len(mid.updates)})",
-                lambda: update_client.update_task_status(mid),
-            )
-
-            # _update_all_serial is bespoke: it issues one call per worker in sequence
-            # so total latency is the sum — a different measurement than per-RPC.
-            def _update_all_serial():
-                for req in rpc_hb_requests:
-                    update_client.update_task_status(req)
-
-            bench(
-                f"RPC: UpdateTaskStatus (w={len(rpc_hb_requests)} serial, t={total_t})",
-                _update_all_serial,
-                min_runs=3,
-                min_time_s=2.0,
-            )
     finally:
         harness.close()
         write_db.close()
@@ -2054,159 +1980,6 @@ def _run_set_status_text_variant(
         shutil.rmtree(harness_dir, ignore_errors=True)
 
 
-def _measure_update_task_status_under_storm(
-    db: ControllerDB,
-    *,
-    on_loop: bool,
-    storm_rps_target: int,
-    storm_threads: int,
-    victim_duration_s: float,
-) -> tuple[dict, dict]:
-    """Run a victim UpdateTaskStatus RPC alongside a SetTaskStatusText storm.
-
-    Returns ``(baseline, under_storm)`` results so the caller can quantify the
-    blast radius. Both phases share the same harness (and therefore the same
-    background scheduler/polling/ping cadence) so the only changing variable
-    is whether the storm is running.
-
-    The victim is a real ``UpdateTaskStatus`` RPC built from the snapshot's
-    live worker→task attribution. Sample a worker that actually has updates
-    to push so we measure a write-touching call, not a no-op early-return.
-    """
-    label = "on_loop=True" if on_loop else "on_loop=False (threadpool)"
-    write_db = clone_db(db)
-    db_dir = write_db._db_dir
-    db_path = db_dir / ControllerDB.DB_FILENAME
-    write_db.close()
-    harness_dir = Path(tempfile.mkdtemp(prefix="iris_sts_contend_"))
-    harness = RpcHarness(db_path, harness_dir, on_loop=on_loop)
-    try:
-        # Build the victim request. Bias toward a worker with non-empty updates.
-        hb_requests = _build_heartbeat_requests(db)
-        candidates = [req for req in hb_requests if req.updates]
-        if not candidates:
-            print(f"  [{label}] (skipped: no worker with active tasks for victim)")
-            return ({"n": 0, "rps": 0.0}, {"n": 0, "rps": 0.0})
-        sample = candidates[len(candidates) // 2]
-        victim_req = controller_pb2.Controller.UpdateTaskStatusRequest(
-            worker_id=str(sample.worker_id),
-            updates=[
-                job_pb2.WorkerTaskStatus(
-                    task_id=u.task_id.to_wire(),
-                    attempt_id=u.attempt_id,
-                    state=u.new_state,
-                )
-                for u in sample.updates
-            ],
-        )
-
-        def _victim_run(seconds: float) -> dict:
-            client = harness.make_client()
-            latencies: list[float] = []
-            try:
-                deadline = time.perf_counter() + seconds
-                while time.perf_counter() < deadline:
-                    t0 = time.perf_counter()
-                    client.update_task_status(victim_req)
-                    latencies.append((time.perf_counter() - t0) * 1000.0)
-            finally:
-                client.close()
-            if not latencies:
-                return {"n": 0, "rps": 0.0}
-            p50, p95, p99, p999, mx = _percentiles_ms(latencies)
-            return {
-                "n": len(latencies),
-                "rps": len(latencies) / seconds,
-                "p50": p50,
-                "p95": p95,
-                "p99": p99,
-                "p999": p999,
-                "max": mx,
-            }
-
-        # Warmup: prime connections + JIT paths.
-        warmup_client = harness.make_client()
-        try:
-            warmup_client.update_task_status(victim_req)
-            warmup_client.set_task_status_text(
-                job_pb2.SetTaskStatusTextRequest(
-                    task_id="/u/warmup/0", status_text_detail_md="", status_text_summary_md=""
-                )
-            )
-        finally:
-            warmup_client.close()
-
-        # Phase 1: victim baseline (no storm).
-        baseline = _victim_run(victim_duration_s)
-
-        # Phase 2: storm + victim concurrently. The storm threads rate-limit
-        # themselves to ``storm_rps_target`` total so we're testing the
-        # production scenario (1000 RPS), not the saturation ceiling.
-        stop = threading.Event()
-        per_thread_target = storm_rps_target / storm_threads
-        storm_payload = "x" * 256
-        storm_short = storm_payload[:32]
-        storm_latencies: list[list[float]] = [[] for _ in range(storm_threads)]
-
-        def _storm_worker(idx: int) -> None:
-            client = harness.make_client()
-            latencies = storm_latencies[idx]
-            task_id = f"/u/storm/{uuid.uuid4().hex[:8]}-{idx}"
-            interval = 1.0 / per_thread_target if per_thread_target > 0 else 0.0
-            next_send = time.perf_counter()
-            try:
-                while not stop.is_set():
-                    now = time.perf_counter()
-                    wait = next_send - now
-                    if wait > 0:
-                        # Sleep in small slices so stop signal is responsive.
-                        time.sleep(min(wait, 0.05))
-                        continue
-                    t0 = time.perf_counter()
-                    client.set_task_status_text(
-                        job_pb2.SetTaskStatusTextRequest(
-                            task_id=task_id,
-                            status_text_detail_md=storm_payload,
-                            status_text_summary_md=storm_short,
-                        )
-                    )
-                    latencies.append((time.perf_counter() - t0) * 1000.0)
-                    next_send += interval
-                    # If we fell badly behind, don't try to catch up — reset the
-                    # baseline so a slow tail doesn't compound.
-                    if next_send < time.perf_counter() - interval:
-                        next_send = time.perf_counter()
-            finally:
-                try:
-                    client.close()
-                except Exception:
-                    pass
-
-        threads = [
-            threading.Thread(target=_storm_worker, args=(i,), name=f"sts-storm-{i}") for i in range(storm_threads)
-        ]
-        for t in threads:
-            t.start()
-        # Let the storm reach steady state before measuring the victim.
-        time.sleep(0.5)
-        under_storm = _victim_run(victim_duration_s)
-        stop.set()
-        for t in threads:
-            t.join(timeout=10.0)
-
-        storm_total = sum(len(s) for s in storm_latencies)
-        storm_rps_actual = storm_total / (victim_duration_s + 0.5)
-        print(
-            f"  [{label}] storm actual: {storm_rps_actual:.0f} rps "
-            f"(target {storm_rps_target} rps from {storm_threads} threads, sent {storm_total})"
-        )
-        return baseline, under_storm
-    finally:
-        harness.close()
-        shutil.rmtree(db_dir, ignore_errors=True)
-        shutil.rmtree(harness_dir, ignore_errors=True)
-
-
 # ---------------------------------------------------------------------------
 # Group: scenario (production-mix concurrent RPC benchmark)
 # ---------------------------------------------------------------------------
@@ -2251,19 +2024,10 @@ def benchmark_set_task_status_text(db: ControllerDB) -> None:
     (one-at-a-time, blocks every other on_loop handler) or hops into a thread
     via ``asyncio.to_thread`` (parallel-capable, pays a thread-hop per call).
 
-    Two scenarios:
-
-    1. **Saturation probe**: N client threads in a tight loop hitting
-       SetTaskStatusText with no rate limiting — surfaces the ceiling and
-       lets us compare modes head-to-head.
-
-    2. **Production-shape contention**: a victim ``UpdateTaskStatus`` RPC
-       runs alongside a 1000 RPS SetTaskStatusText storm. The delta between
-       victim-baseline and victim-under-storm is the blast radius the prod
-       traffic imposes on every other handler.
-
-    Both scenarios run the controller's scheduler / polling / ping loops at
-    their natural production cadence (10s / 1s / etc).
+    Saturation probe: N client threads in a tight loop hitting
+    SetTaskStatusText with no rate limiting — surfaces the ceiling and
+    lets us compare modes head-to-head. Runs the controller's scheduler /
+    polling / ping loops at their natural production cadence (10s / 1s / etc).
     """
     n_threads = 8
     duration_s = 5.0
@@ -2280,48 +2044,6 @@ def benchmark_set_task_status_text(db: ControllerDB) -> None:
         rps_ratio = on_loop_result["rps"] / threadpool_result["rps"]
         p99_ratio = on_loop_result["p99"] / threadpool_result["p99"]
         print(f"  saturation: on_loop / threadpool ratio  rps x{rps_ratio:.2f}, p99 x{p99_ratio:.2f}")
-
-    # ---- Production-shape contention: victim UpdateTaskStatus + 1000 RPS storm. ----
-    print()
-    storm_rps = 1000
-    storm_threads = 8
-    victim_seconds = 5.0
-    print(
-        f"  (contention probe: victim=UpdateTaskStatus, storm={storm_rps} rps SetTaskStatusText "
-        f"from {storm_threads} threads, {victim_seconds:.0f}s)"
-    )
-    tp_baseline, tp_under = _measure_update_task_status_under_storm(
-        db, on_loop=False, storm_rps_target=storm_rps, storm_threads=storm_threads, victim_duration_s=victim_seconds
-    )
-    _print_probe("Victim: UpdateTaskStatus [storm=threadpool] baseline", tp_baseline)
-    _print_probe("Victim: UpdateTaskStatus [storm=threadpool] +storm", tp_under)
-
-    ol_baseline, ol_under = _measure_update_task_status_under_storm(
-        db, on_loop=True, storm_rps_target=storm_rps, storm_threads=storm_threads, victim_duration_s=victim_seconds
-    )
-    _print_probe("Victim: UpdateTaskStatus [storm=on_loop] baseline", ol_baseline)
-    _print_probe("Victim: UpdateTaskStatus [storm=on_loop] +storm", ol_under)
-
-    # Blast-radius summary: how much does the storm cost the victim?
-    def _ratio(under: dict, base: dict, key: str) -> str:
-        if not under.get("n") or not base.get("n") or base[key] == 0:
-            return "—"
-        return f"x{under[key] / base[key]:.2f}"
-
-    print()
-    print("  blast radius (victim under storm / victim baseline):")
-    print(
-        f"    threadpool storm:  p50 {_ratio(tp_under, tp_baseline, 'p50')}  "
-        f"p95 {_ratio(tp_under, tp_baseline, 'p95')}  "
-        f"p99 {_ratio(tp_under, tp_baseline, 'p99')}  "
-        f"max {_ratio(tp_under, tp_baseline, 'max')}"
-    )
-    print(
-        f"    on_loop storm:     p50 {_ratio(ol_under, ol_baseline, 'p50')}  "
-        f"p95 {_ratio(ol_under, ol_baseline, 'p95')}  "
-        f"p99 {_ratio(ol_under, ol_baseline, 'p99')}  "
-        f"max {_ratio(ol_under, ol_baseline, 'max')}"
-    )
 
 
 # ---------------------------------------------------------------------------
