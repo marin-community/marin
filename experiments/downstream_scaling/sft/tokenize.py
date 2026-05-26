@@ -22,16 +22,12 @@ GSM8K_QA_CHAT_TEMPLATE = "Question: {{ messages[0]['content'] }}\nAnswer:{% gene
 GSM8K_QA_CHAT_FORMAT = ChatLmDatasetFormat(
     messages_field="messages",
     chat_template=GSM8K_QA_CHAT_TEMPLATE,
-    # pack=1: each sequence carries exactly one Q+A pair (padded to seq_len).
-    # Equivalent intent to pack=False, but Levanter's dataset builder has a
-    # bool-subclass-int bug at datasets.py:485-487 that turns `pack=False` into
-    # `max_segments_per_example=int(False)=0`, which fails validation. pack=1
-    # routes through `int(1)=1` → max_segments=1, the correct "no packing" path.
-    # With packing on, one 1024-token sequence holds ~6 Q+A pairs (avg ~161 tok)
-    # -> 360 steps * 64 batch * 6.3 pack ~= 145k pair-views ~= 19 epochs of
-    # GSM8K's 7,473-problem train split. With pack=1, num_train_steps maps 1:1
-    # to pair-views so 117 steps = 1 true epoch.
-    pack=1,
+    # pack=True: Levanter packs ~6 Q+A pairs into each 1024-token sequence
+    # (GSM8K Q+A averages ~161 tokens). One step at batch=64 covers ~403
+    # pair-views, so 19 steps ≈ 7,473 ≈ one true epoch of GSM8K's train split.
+    # (pack=False trips a Levanter bool-subclass-int bug — use pack=True or
+    # pack=1, not pack=False.)
+    pack=True,
     mask_user_turns=True,
 )
 

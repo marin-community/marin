@@ -29,25 +29,25 @@ from experiments.simple_sft_config import SimpleSFTConfig
 logger = logging.getLogger(__name__)
 
 
-SFT_OUTPUT_PREFIX = "checkpoints/downstream_scaling/sft/delphi/gsm8k_qa_nopack_1ep"
+SFT_OUTPUT_PREFIX = "checkpoints/downstream_scaling/sft/delphi/gsm8k_qa_pack_1ep"
 
 
-# 1-epoch SFT on GSM8K train (7,473 examples), batch 64, no sequence packing
-# -> ceil(7473 / 64) = 117 steps. With pack=False each sequence is one Q+A pair,
-# so num_train_steps * batch_size maps 1:1 to pair-views.
+# 1-epoch SFT on GSM8K train (7,473 examples), batch 64, sequence packing on.
+# One 1024-token sequence holds ~6 Q+A pairs (avg ~161 tok), so 19 steps × 64
+# batch × ~6.3 pack ≈ 7,664 pair-views ≈ one true epoch of the 7,473 train set.
 DEFAULT_SFT_CONFIG = SimpleSFTConfig(
     resources=ResourceConfig.with_tpu("v5p-8"),
     train_batch_size=64,
     max_seq_len=1024,
-    num_train_steps=117,
+    num_train_steps=19,
     learning_rate=5e-6,
     warmup=0.03,
     weight_decay=0.0,
     lr_schedule="linear",
     decay=0.9,
     min_lr_ratio=0.0,
-    steps_per_hf_export=117,
-    steps_per_eval=30,
+    steps_per_hf_export=19,
+    steps_per_eval=10,
     steps_per_checkpoint=None,
     pad_tokenizer_to_match_model=True,
     seed=0,
