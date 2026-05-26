@@ -8,7 +8,7 @@ import logging
 import os
 import warnings
 from collections import defaultdict
-from typing import Callable, Generic, Mapping, Optional, Sequence, TypeVar
+from typing import Callable, Generic, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import fsspec
