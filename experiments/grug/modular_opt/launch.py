@@ -209,7 +209,7 @@ def run_grug_modular_opt_trial(config: GrugModularOptLaunchConfig) -> None:
             temporary_base_path=temporary_checkpoint_base_path(config.output_path),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=10),
-            keep=[{"every": 1000}],
+            keep=[],
         ),
     )
 
