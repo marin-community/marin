@@ -5,14 +5,19 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from marin.core.conversation import OpenAIChatMessage
-from marin.transform.conversation.trace_normalization import (
-    hermes_trace_row_id,
-    normalize_hermes_trace_messages,
+from marin.transform.conversation.tool_normalization import (
+    normalize_tool_call_arguments,
+    normalize_wrapped_tool_response_messages,
 )
-from marin.transform.conversation.transform_conversation import TransformSFTDatasetConfig, transform_row
+from marin.transform.conversation.transform_conversation import (
+    TransformSFTDatasetConfig,
+    source_id_or_message_hash,
+    transform_row,
+)
 
 from experiments.posttrain.instruction_datasets import INSTRUCTION_DATASET_NAME_TO_CONFIG
 
@@ -92,21 +97,44 @@ def test_registered_hermes_dataset_transforms(
         '<tool_response>\n{"name": "terminal",}\n</tool_response>',
     ],
 )
-def test_hermes_tool_response_normalization_preserves_raw_content_when_wrapper_cannot_parse(content: str):
+def test_wrapped_tool_response_normalization_preserves_raw_content_when_wrapper_cannot_parse(content: str):
     original = OpenAIChatMessage(role="tool", content=content)
 
-    normalized = normalize_hermes_trace_messages([original], row={})
+    normalized = normalize_wrapped_tool_response_messages([original], row={})
 
     assert normalized == [original]
 
 
-def test_hermes_trace_row_id_uses_source_id_or_deterministic_message_hash():
+def test_source_id_or_message_hash_uses_source_id_or_deterministic_message_hash():
     messages = [{"role": "assistant", "content": "hello"}]
 
-    assert hermes_trace_row_id({"id": "trace-from-source"}, messages) == "trace-from-source"
-    first_fallback = hermes_trace_row_id({}, messages)
-    second_fallback = hermes_trace_row_id({}, messages)
-    changed_fallback = hermes_trace_row_id({}, [{"role": "assistant", "content": "goodbye"}])
+    assert source_id_or_message_hash({"id": "trace-from-source"}, messages) == "trace-from-source"
+    first_fallback = source_id_or_message_hash({}, messages)
+    second_fallback = source_id_or_message_hash({}, messages)
+    changed_fallback = source_id_or_message_hash({}, [{"role": "assistant", "content": "goodbye"}])
 
     assert first_fallback == second_fallback
     assert first_fallback != changed_fallback
+
+
+def test_tool_call_argument_normalization_parses_json_strings_without_mutating_source_message():
+    original: dict[str, Any] = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "type": "function",
+                "function": {"name": "write_file", "arguments": '{"path": "notes.txt", "content": "hi"}'},
+            },
+            {
+                "type": "function",
+                "function": {"name": "terminal", "arguments": "{not-json"},
+            },
+        ],
+    }
+
+    normalized = normalize_tool_call_arguments(original)
+
+    assert normalized["tool_calls"][0]["function"]["arguments"] == {"path": "notes.txt", "content": "hi"}
+    assert normalized["tool_calls"][1]["function"]["arguments"] == "{not-json"
+    assert original["tool_calls"][0]["function"]["arguments"] == '{"path": "notes.txt", "content": "hi"}'

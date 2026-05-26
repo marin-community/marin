@@ -62,12 +62,10 @@ from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
-from marin.transform.conversation.trace_normalization import (
-    hermes_trace_row_id,
-    normalize_hermes_trace_messages,
-)
+from marin.transform.conversation.tool_normalization import normalize_wrapped_tool_response_messages
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
+    source_id_or_message_hash,
     transform_hf_dataset,
 )
 
@@ -338,8 +336,8 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
             assistant_value="gpt",
             system_value="system",
             content_key="value",
-            message_postprocess_fn=normalize_hermes_trace_messages,
-            row_id_fn=hermes_trace_row_id,
+            message_postprocess_fn=normalize_wrapped_tool_response_messages,
+            row_id_fn=source_id_or_message_hash,
         ),
         metadata_columns=["category", "subcategory", "task"],
         name="lambda/hermes-agent-reasoning-traces/glm-5.1",
@@ -356,8 +354,8 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
             assistant_value="gpt",
             system_value="system",
             content_key="value",
-            message_postprocess_fn=normalize_hermes_trace_messages,
-            row_id_fn=hermes_trace_row_id,
+            message_postprocess_fn=normalize_wrapped_tool_response_messages,
+            row_id_fn=source_id_or_message_hash,
         ),
         metadata_columns=["category", "subcategory", "task"],
         name="lambda/hermes-agent-reasoning-traces/kimi",
