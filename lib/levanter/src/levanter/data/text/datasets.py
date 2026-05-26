@@ -349,6 +349,11 @@ class DatasetComponent(DatasetComponentBase):
     pack: bool | int | Literal["pad"] | None = None
     tags: list[str] | None = None
     split: str = "validation"
+    flat_cache: bool = False
+    """If True, treat ``cache_dir`` as the cache root directly (no ``/<split>``
+    suffix appended) and as train-only (no validation cache produced). Use for
+    pre-built TreeCaches whose layout doesn't follow Levanter's ``<root>/train``
+    convention — e.g., shard-ledger-consolidated stores."""
 
 
 @DatasetComponentBase.register_subclass("direct")
@@ -948,7 +953,15 @@ class LmDataConfig:
         ) -> tuple[str, TreeCache[dict] | None, tuple[str, ShardedDataSource, LmDatasetFormatBase] | None]:
             name, component = item
             cache_root = _component_cache_dir(name, component, self.cache_dir)
-            cache_path = os.path.join(cache_root, split)
+            # flat_cache components are train-only TreeCaches at cache_root with
+            # no per-split subdir; skip them for non-train splits and load
+            # cache_root directly for train.
+            if getattr(component, "flat_cache", False):
+                if split != "train":
+                    return name, None, None
+                cache_path = cache_root
+            else:
+                cache_path = os.path.join(cache_root, split)
             source = component.source
 
             if source is None:
