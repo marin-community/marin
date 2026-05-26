@@ -9,8 +9,8 @@ Three layers, exercised in order:
    proto per worker from a ``ReconcileInputs`` snapshot. No DB.
 2. **Wire & dispatch** — ``WorkerProvider.reconcile_workers`` fans out via a
    fake stub factory and synthesizes ``ReconcileResult.observations`` for both
-   the ``Reconcile`` RPC wire (``use_reconcile_rpc=True``) and the legacy
-   ``StartTasks`` + ``PollTasks`` wire (``use_reconcile_rpc=False``).
+   the ``Reconcile`` RPC wire (worker in ``rpc_worker_ids``) and the legacy
+   ``StartTasks`` + ``PollTasks`` wire (worker not in ``rpc_worker_ids``).
 3. **Apply + e2e** — ``ControllerTransitions.apply_reconcile_result`` against
    real SQLite DB state, plus a handful of end-to-end convergence ticks driven
    through ``Controller._reconcile_worker_batch``.
@@ -511,16 +511,17 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[WorkerProv
 
 
 def _reconcile_one(provider: WorkerProvider, plan: WorkerReconcilePlan, *, rpc: bool, address: str = _W1_ADDR):
-    return provider.reconcile_workers([plan], {WorkerId(_W1): address}, use_reconcile_rpc=rpc)
+    rpc_worker_ids = {WorkerId(_W1)} if rpc else set()
+    return provider.reconcile_workers([plan], {WorkerId(_W1): address}, rpc_worker_ids=rpc_worker_ids)
 
 
 def test_reconcile_workers_empty_short_circuits():
     provider, _ = _provider_with_stub()
-    assert provider.reconcile_workers([], {}, use_reconcile_rpc=True) == []
-    assert provider.reconcile_workers([], {}, use_reconcile_rpc=False) == []
+    assert provider.reconcile_workers([], {}, rpc_worker_ids={WorkerId(_W1)}) == []
+    assert provider.reconcile_workers([], {}, rpc_worker_ids=set()) == []
 
 
-# --- New wire (use_reconcile_rpc=True) ---------------------------------------
+# --- New wire (worker in rpc_worker_ids) -------------------------------------
 
 
 def test_reconcile_rpc_forwards_observations_and_skips_legacy_wire():
@@ -554,7 +555,7 @@ def test_reconcile_rpc_failure_returns_error_and_empty_observations():
     assert list(results[0].observations) == []
 
 
-# --- Legacy wire (use_reconcile_rpc=False) -----------------------------------
+# --- Legacy wire (worker not in rpc_worker_ids) ------------------------------
 
 
 def test_legacy_wire_splits_desired_into_start_expected_stop():
@@ -573,7 +574,7 @@ def test_legacy_wire_splits_desired_into_start_expected_stop():
         ],
     )
 
-    results = provider.reconcile_workers([plan], {WorkerId(_W1): _W1_ADDR}, use_reconcile_rpc=False)
+    results = provider.reconcile_workers([plan], {WorkerId(_W1): _W1_ADDR}, rpc_worker_ids=set())
 
     assert len(stub.start_calls) == 1
     started = list(stub.start_calls[0].tasks)
@@ -686,8 +687,27 @@ def _apply_observations(
     state: ControllerTransitions,
     worker_id: str,
     observations: list[worker_pb2.Worker.AttemptObservation],
+    *,
+    plan: WorkerReconcilePlan | None = None,
 ):
-    plan = _make_plan(worker_id)
+    """Apply observations under a plan that requests them by default.
+
+    The controller drops observations whose attempt is not in the per-worker
+    plan (see ``_filter_observations_to_plan``). Tests focused on observation
+    semantics get a plan that asks for every supplied observation; tests that
+    need to exercise the filter pass an explicit ``plan``.
+    """
+    if plan is None:
+        desired = [
+            worker_pb2.Worker.DesiredAttempt(
+                attempt_uid=obs.attempt_uid,
+                run=worker_pb2.Worker.AttemptSpec(),
+                task_id=obs.task_id,
+                attempt_id=obs.attempt_id,
+            )
+            for obs in observations
+        ]
+        plan = _make_plan(worker_id, desired=desired)
     result = ReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
     with state._db.transaction() as cur:
         return state.apply_reconcile_result(cur, plan, result, _NOW)
@@ -826,6 +846,52 @@ def test_apply_result_on_unknown_worker_is_a_noop():
         result = _apply_observations(state, "ghost-worker", [])
         assert result.tasks_to_kill == set()
         assert result.task_kill_workers == {}
+
+
+def test_observation_outside_plan_is_dropped():
+    """An observation whose attempt is not in the per-worker plan is dropped.
+
+    Defends against the prod waste case: an old or out-of-sync worker
+    volunteering observations for attempts the controller has forgotten about.
+    Each accepted observation would otherwise drive a DB write.
+    """
+    with make_controller_state() as state:
+        live_task, live_attempt = _setup_running_task(state)
+
+        # The plan only desires the live attempt; the worker also sends a
+        # terminal observation for a stale attempt the controller never asked
+        # about.
+        stale_task = _task_id("stale-history")
+        plan = _make_plan(_W1, desired=[_desired_run(live_task, live_attempt, spec=None)])
+        observations = [
+            _obs(live_task, live_attempt, job_pb2.TASK_STATE_RUNNING),
+            _obs(stale_task, 0, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0),
+        ]
+        _apply_observations(state, _W1, observations, plan=plan)
+
+        # Live attempt's RUNNING was applied; stale observation was dropped
+        # without raising even though the attempt has no row.
+        assert query_task(state, live_task).state == job_pb2.TASK_STATE_RUNNING
+        assert query_task(state, stale_task) is None
+
+
+def test_observation_inside_plan_matches_by_composite_when_uid_empty():
+    """An observation with empty UID is kept when its composite is in the plan.
+
+    Covers the legacy wire and pre-UID adopted attempts whose observations
+    carry an empty ``attempt_uid`` but a valid composite key.
+    """
+    with make_controller_state() as state:
+        task_id, attempt_id = _setup_running_task(state)
+        # Plan carries the desired attempt; observation has empty UID.
+        plan = _make_plan(_W1, desired=[_desired_run(task_id, attempt_id, spec=None)])
+        _apply_observations(
+            state,
+            _W1,
+            [_obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)],
+            plan=plan,
+        )
+        assert query_task(state, task_id).state == job_pb2.TASK_STATE_SUCCEEDED
 
 
 # --- Coscheduled cascade ----------------------------------------------------
@@ -1020,9 +1086,9 @@ class _ScriptedProvider:
     the right wire was selected and the right plans were dispatched.
     """
 
-    use_reconcile_rpc_expected: bool
+    rpc_worker_ids_expected: set[WorkerId]
     script: list[Any] = field(default_factory=list)
-    calls: list[tuple[list[WorkerReconcilePlan], dict, bool]] = field(default_factory=list)
+    calls: list[tuple[list[WorkerReconcilePlan], dict, set[WorkerId]]] = field(default_factory=list)
 
     def get_process_status(self, *_args, **_kwargs):
         raise NotImplementedError
@@ -1036,11 +1102,11 @@ class _ScriptedProvider:
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans, addresses, *, use_reconcile_rpc):
-        self.calls.append((list(plans), dict(addresses), use_reconcile_rpc))
+    def reconcile_workers(self, plans, addresses, *, rpc_worker_ids):
+        self.calls.append((list(plans), dict(addresses), set(rpc_worker_ids)))
         assert (
-            use_reconcile_rpc == self.use_reconcile_rpc_expected
-        ), f"expected use_reconcile_rpc={self.use_reconcile_rpc_expected}, got {use_reconcile_rpc}"
+            set(rpc_worker_ids) == self.rpc_worker_ids_expected
+        ), f"expected rpc_worker_ids={self.rpc_worker_ids_expected}, got {set(rpc_worker_ids)}"
         tick = len(self.calls) - 1
         responder = self.script[tick] if tick < len(self.script) else (lambda plan: [])
         return [ReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None) for p in plans]
@@ -1072,8 +1138,9 @@ def test_e2e_converges_to_succeeded_through_both_wires(flag, make_controller):
         lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_RUNNING),
         lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0),
     ]
-    provider = _ScriptedProvider(use_reconcile_rpc_expected=flag, script=script)
-    ctrl = make_controller(provider=provider, reconcile_rpc_enabled=flag)
+    expected_ids = {WorkerId(_W1)} if flag else set()
+    provider = _ScriptedProvider(rpc_worker_ids_expected=expected_ids, script=script)
+    ctrl = make_controller(provider=provider, reconcile_rpc_prefix="*" if flag else None)
     state = ctrl._transitions
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1112,8 +1179,8 @@ def test_e2e_missing_observation_fails_attempt_with_worker_lost_spec(make_contro
         lambda _plan: [],  # tick 1: ASSIGNED dispatch
         lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_MISSING),
     ]
-    provider = _ScriptedProvider(use_reconcile_rpc_expected=True, script=script)
-    ctrl = make_controller(provider=provider, reconcile_rpc_enabled=True)
+    provider = _ScriptedProvider(rpc_worker_ids_expected={WorkerId(_W1)}, script=script)
+    ctrl = make_controller(provider=provider, reconcile_rpc_prefix="*")
     state = ctrl._transitions
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1167,8 +1234,8 @@ def test_e2e_converges_with_uid_echoing_worker(make_controller):
         lambda plan: _observation_for_all_run_uid_only(plan, job_pb2.TASK_STATE_RUNNING),
         lambda plan: _observation_for_all_run_uid_only(plan, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0),
     ]
-    provider = _ScriptedProvider(use_reconcile_rpc_expected=True, script=script)
-    ctrl = make_controller(provider=provider, reconcile_rpc_enabled=True)
+    provider = _ScriptedProvider(rpc_worker_ids_expected={WorkerId(_W1)}, script=script)
+    ctrl = make_controller(provider=provider, reconcile_rpc_prefix="*")
     state = ctrl._transitions
 
     wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
@@ -1192,3 +1259,29 @@ def test_e2e_converges_with_uid_echoing_worker(make_controller):
     task_final = query_task(state, task_id)
     assert task_final.state == job_pb2.TASK_STATE_SUCCEEDED
     assert query_job(state, task_final.job_id).state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_reconcile_rpc_prefix_selects_only_matching_workers(make_controller):
+    """``reconcile_rpc_prefix`` routes only prefix-matching workers via the RPC wire.
+
+    Registers two workers (``worker-1`` and ``worker-2``), sets the prefix to
+    ``"worker-1"``, and asserts the controller hands the provider exactly
+    ``{worker-1}`` as the RPC-enabled set. The assertion lives inside
+    ``_ScriptedProvider.reconcile_workers``; reaching the end of the batch
+    without AssertionError is the proof.
+    """
+    provider = _ScriptedProvider(
+        rpc_worker_ids_expected={WorkerId(_W1)},
+        script=[lambda _plan: []],
+    )
+    ctrl = make_controller(provider=provider, reconcile_rpc_prefix="worker-1")
+    state = ctrl._transitions
+
+    register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    register_worker(state, _W2, f"{_W2}:8080", make_worker_metadata())
+
+    ctrl._reconcile_worker_batch()
+
+    assert len(provider.calls) == 1
+    _, _, rpc_ids = provider.calls[0]
+    assert rpc_ids == {WorkerId(_W1)}

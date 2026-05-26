@@ -351,6 +351,48 @@ def task_updates_from_proto(entries) -> list[TaskUpdate]:
     return updates
 
 
+def _filter_observations_to_plan(
+    plan: WorkerReconcilePlan,
+    observations: list[worker_pb2.Worker.AttemptObservation],
+    worker_id: WorkerId,
+) -> list[worker_pb2.Worker.AttemptObservation]:
+    """Drop observations whose attempt is not in the per-worker plan we sent.
+
+    Membership: observation matches if its ``attempt_uid`` is in the plan's
+    non-empty UID set OR its ``(task_id, attempt_id)`` composite is in the
+    plan's composite set. The composite fallback covers legacy-wire workers
+    and pre-upgrade attempts whose observations carry an empty UID.
+
+    The legacy synthesizer in ``_legacy_results_to_reconcile_results`` only
+    produces observations sourced from ``expected_tasks`` / ``start_tasks``,
+    both built from the same plan — so this filter is a no-op on that wire.
+    """
+    plan_uids: set[str] = set()
+    plan_composites: set[tuple[str, int]] = set()
+    for desired in plan.request.desired:
+        if desired.attempt_uid:
+            plan_uids.add(desired.attempt_uid)
+        plan_composites.add((desired.task_id, desired.attempt_id))
+
+    kept: list[worker_pb2.Worker.AttemptObservation] = []
+    dropped = 0
+    for obs in observations:
+        if obs.attempt_uid and obs.attempt_uid in plan_uids:
+            kept.append(obs)
+            continue
+        if (obs.task_id, obs.attempt_id) in plan_composites:
+            kept.append(obs)
+            continue
+        dropped += 1
+    if dropped:
+        logger.debug(
+            "apply_reconcile_result: worker %s sent %d observations outside the plan; dropping",
+            worker_id,
+            dropped,
+        )
+    return kept
+
+
 @dataclass(frozen=True)
 class HeartbeatApplyRequest:
     """Batch of worker heartbeat updates applied atomically."""
@@ -2027,7 +2069,15 @@ class ControllerTransitions:
             return TxResult()
         self._health.heartbeat([worker_id], now_ms)
 
-        all_updates = self._observations_to_updates(cur, result.observations)
+        # Drop observations that fall outside the plan we just sent. Protects
+        # against an old worker volunteering its terminal-state local history
+        # (seen in prod: 287 obs for 1 desired RUNNING attempt) and against any
+        # other extra-observation drift between worker and controller.
+        observations = _filter_observations_to_plan(plan, result.observations, worker_id)
+        if not observations:
+            return TxResult()
+
+        all_updates = self._observations_to_updates(cur, observations)
         if not all_updates:
             return TxResult()
 

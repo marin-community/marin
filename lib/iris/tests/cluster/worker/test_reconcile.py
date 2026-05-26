@@ -283,6 +283,78 @@ def test_terminal_attempt_retained_and_observed_on_later_reconcile(worker, mock_
     assert obs[(task_id, 0)].state == job_pb2.TASK_STATE_SUCCEEDED
 
 
+def test_terminal_attempt_not_in_desired_is_not_observed(worker, mock_runtime):
+    """Terminal local history the controller did not ask about is NOT emitted.
+
+    Reproduces the prod waste case where a worker emitted 287 observations,
+    one for the desired RUNNING attempt and 286 for terminal-state attempts
+    the controller had long since forgotten about. Each unwanted observation
+    would otherwise cost a DB write on the apply side.
+    """
+    finished_task_id = _task_id("finished")
+    finished_req = create_run_task_request(task_id=finished_task_id, attempt_id=0)
+    live_task_id = _task_id("live")
+    live_req = create_run_task_request(task_id=live_task_id, attempt_id=0)
+
+    finished_handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.STOPPED, exit_code=0)],
+    )
+    live_handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+    )
+    mock_runtime.create_container = Mock(side_effect=[finished_handle, live_handle])
+
+    # Drive the finished task to terminal state with controller still asking
+    # about it, then drop it from the desired set on the next tick.
+    _reconcile(worker, [_run_desired(finished_task_id, 0, run_request=finished_req)])
+    finished = worker.get_task(finished_task_id, attempt_id=0)
+    assert finished is not None
+    finished.thread.join(timeout=5.0)
+    assert finished.status == job_pb2.TASK_STATE_SUCCEEDED
+
+    # Start a live task; reconcile with ONLY the live task in the desired set.
+    response = _reconcile(worker, [_run_desired(live_task_id, 0, run_request=live_req)])
+
+    obs = _observations_by_key(response)
+    assert (live_task_id, 0) in obs, "Live attempt in desired set must be observed"
+    assert (
+        finished_task_id,
+        0,
+    ) not in obs, "Terminal attempt outside desired set must NOT be observed (this is the prod waste case)"
+    # The terminal task is still retained locally — only the observation is suppressed.
+    assert worker.get_task(finished_task_id, attempt_id=0) is finished
+
+    worker.kill_task(live_task_id)
+    live = worker.get_task(live_task_id, attempt_id=0)
+    if live and live.thread:
+        live.thread.join(timeout=5.0)
+
+
+def test_zombie_kill_emits_observation(worker, mock_runtime):
+    """A zombie being killed this tick is observed so the controller sees the kill."""
+    task_id = _task_id("zombie-obs")
+    run_req = create_run_task_request(task_id=task_id, attempt_id=0)
+
+    mock_runtime.create_container = Mock(
+        return_value=create_mock_container_handle(
+            status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+        )
+    )
+
+    worker.submit_task(run_req)
+    task = worker.get_task(task_id, attempt_id=0)
+    assert task is not None
+    wait_for_condition(lambda: task.status == job_pb2.TASK_STATE_RUNNING)
+
+    # Empty desired — the running attempt is a zombie and must be observed so
+    # the controller can confirm the kill it implicitly requested.
+    response = _reconcile(worker, [])
+    obs = _observations_by_key(response)
+    assert (task_id, 0) in obs, "Zombie kill must be reported to the controller"
+
+    task.thread.join(timeout=5.0)
+
+
 def test_reconcile_response_includes_worker_id(worker):
     """ReconcileResponse always includes the worker_id."""
     response = _reconcile(worker, [])
