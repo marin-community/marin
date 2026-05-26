@@ -31,7 +31,7 @@ def trim_and_pad(ary: np.ndarray, max_seq_len: int, pad_to: int, padding_value: 
 def convert_rollout_to_training_format(
     rollout: Rollout,
     advantage: float,
-    max_tokens: int,
+    max_seq_len: int,
     pad_to: int,
     pad_token_id: int,
 ) -> dict:
@@ -40,7 +40,7 @@ def convert_rollout_to_training_format(
     Args:
         rollout: The rollout data to convert
         advantage: Precomputed advantage value for this rollout
-        max_tokens: Maximum sequence length for truncation
+        max_seq_len: Maximum sequence length for prompt plus response truncation
         pad_to: Target length to pad to after truncation
         pad_token_id: Token ID to use for padding
 
@@ -70,8 +70,6 @@ def convert_rollout_to_training_format(
         [np.zeros(len(rollout.prompt_tokens), dtype=np.float32), rollout.response_logprobs.astype(np.float32)]
     )
 
-    max_seq_len = max_tokens
-
     input_ids = trim_and_pad(input_tokens, max_seq_len, pad_to, padding_value=pad_token_id)
     position_ids = trim_and_pad(position_ids, max_seq_len, pad_to, padding_value=0)
     loss_weight = trim_and_pad(loss_weight, max_seq_len, pad_to, padding_value=0)
@@ -92,7 +90,8 @@ def convert_rollout_to_training_format(
 
 def create_training_batch_from_rollouts(
     individual_rollouts: list[RolloutWithAdvantage],
-    max_tokens: int,
+    max_seq_len: int,
+    max_output_tokens: int,
     pad_token_id: int,
     pad_to_multiple: int | None = None,
 ) -> TrainingBatch:
@@ -100,7 +99,8 @@ def create_training_batch_from_rollouts(
 
     Args:
         individual_rollouts: List of RolloutWithAdvantage objects with precomputed advantages
-        max_tokens: Maximum sequence length for truncation
+        max_seq_len: Maximum sequence length for prompt plus response truncation
+        max_output_tokens: Maximum response length used for generation and fixed-budget losses
         pad_token_id: Token ID to use for padding
         pad_to_multiple: Optional multiple to pad sequence length to for FlashAttention
 
@@ -110,7 +110,6 @@ def create_training_batch_from_rollouts(
     if not individual_rollouts:
         raise ValueError("Cannot create batch from empty rollout list")
 
-    max_seq_len = max_tokens
     batch_max_len = max(
         min(len(individual.rollout.prompt_tokens) + len(individual.rollout.response_tokens), max_seq_len)
         for individual in individual_rollouts
@@ -120,8 +119,8 @@ def create_training_batch_from_rollouts(
         pad_to = ((batch_max_len + pad_to_multiple - 1) // pad_to_multiple) * pad_to_multiple
         if pad_to > max_seq_len:
             raise ValueError(
-                "Rounded batch padding length exceeds max_tokens. "
-                f"batch_max_len={batch_max_len}, pad_to_multiple={pad_to_multiple}, max_tokens={max_seq_len}. "
+                "Rounded batch padding length exceeds max_seq_len. "
+                f"batch_max_len={batch_max_len}, pad_to_multiple={pad_to_multiple}, max_seq_len={max_seq_len}. "
                 "Increase max_seq_len or reduce flash_attention_block_size."
             )
 
@@ -130,7 +129,7 @@ def create_training_batch_from_rollouts(
         training_example = convert_rollout_to_training_format(
             individual.rollout,
             individual.advantage,
-            max_tokens,
+            max_seq_len,
             pad_to,
             pad_token_id,
         )
@@ -162,7 +161,8 @@ def create_training_batch_from_rollouts(
         temperature=hax.named(stacked["temperature"], ["batch"]),
         top_k=hax.named(stacked["top_k"], ["batch"]),
         truncated=stacked["truncated"],
-        max_output_tokens=max_tokens,
+        max_seq_len=max_seq_len,
+        max_output_tokens=max_output_tokens,
     )
 
     return batch

@@ -135,6 +135,11 @@ class CurriculumConfig:
         """Maximum output tokens across all lessons in the curriculum."""
         return max(lesson.sampling_params.max_output_tokens for lesson in self.lessons.values())
 
+    @property
+    def max_train_output_tokens(self) -> int:
+        """Maximum train response budget across all lessons in the curriculum."""
+        return max(lesson.sampling_params.train_decoding.max_output_tokens for lesson in self.lessons.values())
+
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):
     """Validate that lesson dependencies form a valid DAG (no cycles)."""

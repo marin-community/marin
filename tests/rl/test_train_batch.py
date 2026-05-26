@@ -58,7 +58,9 @@ def test_basic_conversion():
     rollout = create_test_rollout(prompt_len=4, response_len=3)
     advantage = 2.5
 
-    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0, pad_to=16)
+    result = train_batch.convert_rollout_to_training_format(
+        rollout, advantage, max_seq_len=16, pad_token_id=0, pad_to=16
+    )
 
     # Check all expected keys are present
     expected_keys = {
@@ -73,7 +75,7 @@ def test_basic_conversion():
     }
     assert set(result.keys()) == expected_keys
 
-    # Check shapes - should be padded to max_tokens
+    # Check shapes - should be padded to max_seq_len
     for _, value in result.items():
         if isinstance(value, np.ndarray):
             assert len(value) == 16
@@ -84,7 +86,9 @@ def test_loss_mask_correct():
     rollout = create_test_rollout(prompt_len=4, response_len=3)
     advantage = 1.0
 
-    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0, pad_to=16)
+    result = train_batch.convert_rollout_to_training_format(
+        rollout, advantage, max_seq_len=16, pad_token_id=0, pad_to=16
+    )
 
     loss_mask = result["loss_masks"]
 
@@ -100,7 +104,9 @@ def test_loss_weights_have_advantage():
     rollout = create_test_rollout(prompt_len=4, response_len=3)
     advantage = 2.5
 
-    result = train_batch.convert_rollout_to_training_format(rollout, advantage, max_tokens=16, pad_token_id=0, pad_to=16)
+    result = train_batch.convert_rollout_to_training_format(
+        rollout, advantage, max_seq_len=16, pad_token_id=0, pad_to=16
+    )
 
     loss_weights = result["loss_weights"]
 
@@ -113,7 +119,7 @@ def test_token_sequence_shifted_correctly():
     """Test that input sequence contains full prompt+response (shifting now happens in rl_losses.py)."""
     rollout = create_test_rollout(prompt_len=3, response_len=2)
 
-    result = train_batch.convert_rollout_to_training_format(rollout, 1.0, max_tokens=16, pad_token_id=0, pad_to=16)
+    result = train_batch.convert_rollout_to_training_format(rollout, 1.0, max_seq_len=16, pad_token_id=0, pad_to=16)
 
     # Original tokens: prompt=[12345, 12345, 12345], response=[1000, 1001]
     # input_ids should contain the full sequence: [12345, 12345, 12345, 1000, 1001]
@@ -131,7 +137,7 @@ def test_token_sequence_shifted_correctly():
 def test_empty_rollouts_raises_error():
     """Test that empty rollout list raises ValueError."""
     with pytest.raises(ValueError, match="Cannot create batch from empty rollout list"):
-        train_batch.create_training_batch_from_rollouts([], max_tokens=16, pad_token_id=0)
+        train_batch.create_training_batch_from_rollouts([], max_seq_len=16, max_output_tokens=8, pad_token_id=0)
 
 
 def test_single_rollout_batch_creation():
@@ -139,11 +145,15 @@ def test_single_rollout_batch_creation():
     rollout = create_test_rollout()
     individual = RolloutWithAdvantage(rollout=rollout, advantage=1.5)
 
-    batch = train_batch.create_training_batch_from_rollouts([individual], max_tokens=16, pad_token_id=0)
+    batch = train_batch.create_training_batch_from_rollouts(
+        [individual], max_seq_len=16, max_output_tokens=8, pad_token_id=0
+    )
 
     # Should have batch size 1
     assert len(batch) == 1
     assert batch.input_ids.axis_size("batch") == 1
+    assert batch.max_seq_len == 16
+    assert batch.max_output_tokens == 8
 
     # Check that advantage was applied correctly
     # Loss weights should have the advantage value for response tokens
@@ -161,7 +171,9 @@ def test_multiple_rollouts_batch_creation():
         individual = RolloutWithAdvantage(rollout=rollout, advantage=advantage)
         individual_rollouts.append(individual)
 
-    batch = train_batch.create_training_batch_from_rollouts(individual_rollouts, max_tokens=16, pad_token_id=0)
+    batch = train_batch.create_training_batch_from_rollouts(
+        individual_rollouts, max_seq_len=16, max_output_tokens=8, pad_token_id=0
+    )
 
     # Should have batch size 3
     assert len(batch) == 3
@@ -186,10 +198,12 @@ def test_padding_consistency():
 
     individual_rollouts = [RolloutWithAdvantage(rollout=rollout, advantage=1.0) for rollout in rollouts]
 
-    batch = train_batch.create_training_batch_from_rollouts(individual_rollouts, max_tokens=16, pad_token_id=999)
+    batch = train_batch.create_training_batch_from_rollouts(
+        individual_rollouts, max_seq_len=16, max_output_tokens=8, pad_token_id=999
+    )
 
     # All sequences should have the same length after padding
-    assert batch.input_ids.axis_size("position") == 10  # max_tokens (dynamic padding to max in batch)
+    assert batch.input_ids.axis_size("position") == 10  # dynamic padding to max in batch
 
     # Check that padding tokens are present where expected
     # For the shortest rollout (prompt_len=3, response_len=1, total=4)
@@ -202,7 +216,9 @@ def test_batch_dtypes():
     rollout = create_test_rollout(prompt_len=4, response_len=3)
     individual = RolloutWithAdvantage(rollout=rollout, advantage=1.5)
 
-    batch = train_batch.create_training_batch_from_rollouts([individual], max_tokens=16, pad_token_id=0)
+    batch = train_batch.create_training_batch_from_rollouts(
+        [individual], max_seq_len=16, max_output_tokens=8, pad_token_id=0
+    )
 
     # Token IDs and position IDs should be integers
     assert batch.input_ids.array.dtype == np.int32

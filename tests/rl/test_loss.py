@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from marin.rl import train_batch
 from marin.rl.decoding import DecodingConfig
 from marin.rl.kl_regularization import (
     KLConfig,
@@ -16,12 +17,16 @@ from marin.rl.kl_regularization import (
     masked_response_mean,
 )
 from marin.rl.rl_losses import (
+    DrGRPOLoss,
+    GRPOLoss,
+    PolicyGradientReducer,
     RLOOLoss,
+    compute_group_centered_advantages,
     compute_ppo_loss_objective,
     compute_rloo_advantages,
-    rloo_loss_with_importance_sampling,
+    policy_gradient_loss_with_importance_sampling,
 )
-from marin.rl.types import Rollout
+from marin.rl.types import Rollout, RolloutWithAdvantage
 
 
 class DummyNamedArray:
@@ -67,6 +72,7 @@ def create_test_training_batch():
         temperature=DummyNamedArray(jnp.array([1.0], dtype=jnp.float32)),
         top_k=DummyNamedArray(jnp.array([0], dtype=jnp.int32)),
         truncated=jnp.array([0], dtype=jnp.float32),
+        max_seq_len=3,
         max_output_tokens=3,
     )
 
@@ -94,6 +100,49 @@ def test_compute_rloo_advantages():
     for i, rollout_group in enumerate(rollout_groups):
         advantages = compute_rloo_advantages(rollout_group)
         np.testing.assert_array_equal(advantages, expected_advantages[i])
+
+
+def test_compute_group_centered_advantages_without_std_normalization():
+    rollout_group = [
+        create_test_rollout(unique_id=0, episode_reward=0.0),
+        create_test_rollout(unique_id=1, episode_reward=1.0),
+        create_test_rollout(unique_id=2, episode_reward=0.0),
+    ]
+
+    advantages = compute_group_centered_advantages(rollout_group, normalize_by_std=False)
+
+    np.testing.assert_allclose(advantages, [-1.0 / 3.0, 2.0 / 3.0, -1.0 / 3.0], atol=1e-6)
+
+
+def test_compute_group_centered_advantages_uses_sample_std_normalization():
+    rewards = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    rollout_group = [
+        create_test_rollout(unique_id=0, episode_reward=float(rewards[0])),
+        create_test_rollout(unique_id=1, episode_reward=float(rewards[1])),
+        create_test_rollout(unique_id=2, episode_reward=float(rewards[2])),
+    ]
+
+    advantages = compute_group_centered_advantages(rollout_group, normalize_by_std=True)
+    expected = (rewards - np.mean(rewards)) / (np.std(rewards, ddof=1) + 1e-6)
+
+    np.testing.assert_allclose(advantages, expected, atol=1e-6)
+
+
+def test_compute_group_centered_advantages_handles_singleton_and_zero_variance():
+    singleton = [create_test_rollout(unique_id=0, episode_reward=1.0)]
+    zero_variance = [
+        create_test_rollout(unique_id=0, episode_reward=1.0),
+        create_test_rollout(unique_id=1, episode_reward=1.0),
+    ]
+
+    np.testing.assert_array_equal(
+        compute_group_centered_advantages(singleton, normalize_by_std=True),
+        np.array([0.0], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        compute_group_centered_advantages(zero_variance, normalize_by_std=True),
+        np.zeros(2, dtype=np.float32),
+    )
 
 
 @pytest.mark.parametrize(
@@ -163,6 +212,7 @@ def test_ppo_objective(
         loss_masks,
         clip_epsilon_low=clip_epsilon,
         clip_epsilon_high=clip_epsilon,
+        reducer=PolicyGradientReducer.PER_SEQUENCE_TOKEN_MEAN,
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
     )
 
@@ -180,6 +230,55 @@ def test_kl_penalty_dispatches_selected_estimator():
         rtol=1e-6,
         atol=0.0,
     )
+
+
+def test_ppo_objective_current_batch_token_normalized_matches_existing_rloo_reducer():
+    importance_sampling_ratio = jnp.ones((2, 4), dtype=jnp.float32)
+    loss_weights = jnp.array([[1.0, 1.0, 0.0, 0.0], [2.0, 2.0, 2.0, 2.0]], dtype=jnp.float32)
+    loss_masks = jnp.array([[1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]], dtype=jnp.float32)
+
+    loss, _ = compute_ppo_loss_objective(
+        importance_sampling_ratio,
+        loss_weights,
+        loss_masks,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        reducer=PolicyGradientReducer.CURRENT_BATCH_TOKEN_NORMALIZED,
+    )
+
+    # This intentionally preserves the current behavior: row sums are divided by
+    # total batch response tokens, then averaged across rows.
+    np.testing.assert_allclose(loss, -((2.0 / 6.0) + (8.0 / 6.0)) / 2.0)
+
+
+def test_ppo_objective_fixed_response_budget_reducer():
+    importance_sampling_ratio = jnp.ones((2, 4), dtype=jnp.float32)
+    loss_weights = jnp.array([[1.0, 1.0, 0.0, 0.0], [2.0, 2.0, 2.0, 2.0]], dtype=jnp.float32)
+    loss_masks = jnp.array([[1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]], dtype=jnp.float32)
+
+    loss, _ = compute_ppo_loss_objective(
+        importance_sampling_ratio,
+        loss_weights,
+        loss_masks,
+        clip_epsilon_low=0.2,
+        clip_epsilon_high=0.2,
+        reducer=PolicyGradientReducer.FIXED_RESPONSE_BUDGET,
+        fixed_response_budget=4,
+    )
+
+    np.testing.assert_allclose(loss, -((2.0 / 4.0) + (8.0 / 4.0)) / 2.0)
+
+
+def test_ppo_objective_fixed_response_budget_requires_budget():
+    with pytest.raises(ValueError, match="fixed_response_budget is required"):
+        compute_ppo_loss_objective(
+            jnp.ones((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 2), dtype=jnp.float32),
+            jnp.ones((1, 2), dtype=jnp.float32),
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            reducer=PolicyGradientReducer.FIXED_RESPONSE_BUDGET,
+        )
 
 
 def test_k3_helper_matches_stable_closed_form():
@@ -255,6 +354,7 @@ def test_rloo_loss_reports_selected_kl_loss(mode: KLMode, expected_kl_loss: floa
         temperature=SimpleNamespace(array=np.ones((1, 4), dtype=np.float32)),
         top_k=SimpleNamespace(array=np.full((1, 4), 16, dtype=np.float32)),
         truncated=np.array([0.0], dtype=np.float32),
+        max_seq_len=4,
         max_output_tokens=2,
     )
 
@@ -266,7 +366,7 @@ def test_rloo_loss_reports_selected_kl_loss(mode: KLMode, expected_kl_loss: floa
             return reference_logprobs, None
         raise AssertionError("unexpected model passed to compute_policy_stats_fn")
 
-    loss, metrics = rloo_loss_with_importance_sampling(
+    loss, metrics = policy_gradient_loss_with_importance_sampling(
         current_model,
         reference_model,
         batch,
@@ -275,6 +375,7 @@ def test_rloo_loss_reports_selected_kl_loss(mode: KLMode, expected_kl_loss: floa
         clip_epsilon_low=0.2,
         clip_epsilon_high=0.2,
         tis_importance_sampling_ratio_max=2.0,
+        reducer=PolicyGradientReducer.CURRENT_BATCH_TOKEN_NORMALIZED,
         compute_policy_stats_fn=compute_policy_stats_fn,
     )
 
@@ -304,7 +405,7 @@ def test_rloo_loss_policy_entropy_metric_is_opt_in_and_loss_neutral():
         assert compute_entropy
         return current_logprobs, current_policy_entropy
 
-    loss, metrics = rloo_loss_with_importance_sampling(
+    loss, metrics = policy_gradient_loss_with_importance_sampling(
         model=None,
         reference_model=None,
         batch=batch,
@@ -314,6 +415,7 @@ def test_rloo_loss_policy_entropy_metric_is_opt_in_and_loss_neutral():
         clip_epsilon_high=0.2,
         tis_importance_sampling_ratio_max=2.0,
         log_policy_entropy=True,
+        reducer=PolicyGradientReducer.CURRENT_BATCH_TOKEN_NORMALIZED,
         compute_policy_stats_fn=compute_policy_stats_fn,
     )
 
@@ -332,7 +434,7 @@ def test_rloo_loss_skips_policy_entropy_when_metric_disabled():
         assert not compute_entropy
         return current_logprobs, None
 
-    loss, metrics = rloo_loss_with_importance_sampling(
+    loss, metrics = policy_gradient_loss_with_importance_sampling(
         model=None,
         reference_model=None,
         batch=batch,
@@ -342,6 +444,7 @@ def test_rloo_loss_skips_policy_entropy_when_metric_disabled():
         clip_epsilon_high=0.2,
         tis_importance_sampling_ratio_max=2.0,
         log_policy_entropy=False,
+        reducer=PolicyGradientReducer.CURRENT_BATCH_TOKEN_NORMALIZED,
         compute_policy_stats_fn=compute_policy_stats_fn,
     )
 
@@ -368,7 +471,7 @@ def test_rloo_loss_policy_entropy_does_not_request_reference_entropy():
         assert compute_entropy
         return current_logprobs, current_policy_entropy
 
-    loss, metrics = rloo_loss_with_importance_sampling(
+    loss, metrics = policy_gradient_loss_with_importance_sampling(
         model=current_model,
         reference_model=reference_model,
         batch=batch,
@@ -378,6 +481,7 @@ def test_rloo_loss_policy_entropy_does_not_request_reference_entropy():
         clip_epsilon_high=0.2,
         tis_importance_sampling_ratio_max=2.0,
         log_policy_entropy=True,
+        reducer=PolicyGradientReducer.CURRENT_BATCH_TOKEN_NORMALIZED,
         compute_policy_stats_fn=compute_policy_stats_fn,
     )
 
@@ -395,7 +499,7 @@ def test_rloo_loss_rejects_missing_policy_entropy_when_metric_enabled():
         return jnp.array([[0.0, 0.0, 0.0]], dtype=jnp.float32), None
 
     with pytest.raises(ValueError, match="must return entropy"):
-        rloo_loss_with_importance_sampling(
+        policy_gradient_loss_with_importance_sampling(
             model=None,
             reference_model=None,
             batch=batch,
@@ -405,6 +509,7 @@ def test_rloo_loss_rejects_missing_policy_entropy_when_metric_enabled():
             clip_epsilon_high=0.2,
             tis_importance_sampling_ratio_max=2.0,
             log_policy_entropy=True,
+            reducer=PolicyGradientReducer.CURRENT_BATCH_TOKEN_NORMALIZED,
             compute_policy_stats_fn=compute_policy_stats_fn,
         )
 
@@ -420,3 +525,71 @@ def test_rloo_loss_module_allows_vocab_tiling_when_policy_entropy_disabled():
     RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0), log_policy_entropy=False, vocab_tile_size=1024).create_loss_fn(
         reference_model=None, train_model=None
     )
+
+
+def test_grpo_loss_computes_std_normalized_group_advantages_by_default():
+    rewards = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    rollout_group = [
+        create_test_rollout(unique_id=0, episode_reward=float(rewards[0])),
+        create_test_rollout(unique_id=1, episode_reward=float(rewards[1])),
+        create_test_rollout(unique_id=2, episode_reward=float(rewards[2])),
+    ]
+    loss_module = GRPOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0))
+
+    advantages = loss_module.compute_advantages(rollout_group)
+    expected = (rewards - np.mean(rewards)) / (np.std(rewards, ddof=1) + 1e-6)
+
+    np.testing.assert_allclose(advantages, expected, atol=1e-6)
+
+
+def test_grpo_loss_rejects_fixed_response_budget_reducer():
+    with pytest.raises(ValueError, match="Use DrGRPOLoss"):
+        GRPOLoss(
+            kl=KLConfig(mode=KLMode.NONE, beta=0.0),
+            reducer=PolicyGradientReducer.FIXED_RESPONSE_BUDGET,
+        )
+
+
+def test_grpo_loss_reference_model_semantics_match_rloo():
+    assert not GRPOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)).needs_reference_model()
+    assert GRPOLoss(kl=KLConfig(mode=KLMode.K2_LOSS, beta=0.01)).needs_reference_model()
+
+    with pytest.raises(ValueError, match="reference_model is required"):
+        GRPOLoss(kl=KLConfig(mode=KLMode.K2_LOSS, beta=0.01)).create_loss_fn(
+            reference_model=None,
+            train_model=None,
+        )
+
+
+def test_dr_grpo_loss_uses_mean_centered_group_advantages_without_std_normalization():
+    rollout_group = [
+        create_test_rollout(unique_id=0, episode_reward=0.0),
+        create_test_rollout(unique_id=1, episode_reward=1.0),
+        create_test_rollout(unique_id=2, episode_reward=0.0),
+    ]
+    loss_module = DrGRPOLoss(max_output_tokens=8, kl=KLConfig(mode=KLMode.NONE, beta=0.0))
+
+    advantages = loss_module.compute_advantages(rollout_group)
+
+    np.testing.assert_allclose(advantages, [-1.0 / 3.0, 2.0 / 3.0, -1.0 / 3.0], atol=1e-6)
+
+
+def test_dr_grpo_loss_rejects_non_positive_response_budget():
+    with pytest.raises(ValueError, match="max_output_tokens must be positive"):
+        DrGRPOLoss(max_output_tokens=0, kl=KLConfig(mode=KLMode.NONE, beta=0.0))
+
+
+def test_dr_grpo_loss_rejects_batch_response_budget_mismatch():
+    batch = train_batch.create_training_batch_from_rollouts(
+        [RolloutWithAdvantage(rollout=create_test_rollout(prompt_len=2, response_len=3), advantage=1.0)],
+        max_seq_len=8,
+        max_output_tokens=3,
+        pad_token_id=0,
+    )
+    loss_fn = DrGRPOLoss(max_output_tokens=2, kl=KLConfig(mode=KLMode.NONE, beta=0.0)).create_loss_fn(
+        reference_model=None,
+        train_model=None,
+    )
+
+    with pytest.raises(ValueError, match=r"must match TrainingBatch\.max_output_tokens"):
+        loss_fn(model=None, batch=batch, key=None)

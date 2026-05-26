@@ -27,9 +27,9 @@ from marin.rl.types import (
 )
 
 
-def rollouts_to_training_batch(rollouts, max_tokens=32, pad_token_id=0):
+def rollouts_to_training_batch(rollouts, max_seq_len=32, max_output_tokens=16, pad_token_id=0):
     """Helper function to convert rollouts to training batch for testing."""
-    return train_batch.create_training_batch_from_rollouts(rollouts, max_tokens, pad_token_id)
+    return train_batch.create_training_batch_from_rollouts(rollouts, max_seq_len, max_output_tokens, pad_token_id)
 
 
 def create_test_batch(
@@ -86,6 +86,32 @@ def create_test_batch(
 
     # Create batch
     return RolloutBatch(groups=[group], metadata=batch_metadata)
+
+
+def test_replay_buffer_ignores_empty_rollout_batches():
+    replay_buffer = ReplayBuffer(
+        capacity=100,
+        local_batch_size=4,
+        alpha=3.0,
+        total_processes=1,
+        max_samples=-1,
+        max_rollout_step_delay=1000,
+        max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
+        loss_module=RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)),
+        seed=42,
+    )
+    metadata = RolloutMetadata(worker_id="test_worker", timestamp=time.time(), weight_step=0)
+
+    replay_buffer.add_batches(
+        [
+            RolloutBatch(groups=[], metadata=metadata),
+            RolloutBatch(groups=[RolloutGroup(rollouts=[])], metadata=metadata),
+        ]
+    )
+
+    assert replay_buffer.size() == 0
+    assert replay_buffer.get_stats()["total_batches_added"] == 0
 
 
 def test_replay_buffer():
