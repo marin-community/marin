@@ -328,29 +328,6 @@ class TaskUpdate:
     container_id: str | None = None
 
 
-def task_updates_from_proto(entries) -> list[TaskUpdate]:
-    """Convert worker-reported WorkerTaskStatus protos into TaskUpdates.
-
-    Skips UNSPECIFIED/PENDING — the controller is only interested in
-    transitions to BUILDING or beyond.
-    """
-    updates: list[TaskUpdate] = []
-    for entry in entries:
-        if entry.state in (job_pb2.TASK_STATE_UNSPECIFIED, job_pb2.TASK_STATE_PENDING):
-            continue
-        updates.append(
-            TaskUpdate(
-                task_id=JobName.from_wire(entry.task_id),
-                attempt_id=entry.attempt_id,
-                new_state=entry.state,
-                error=entry.error or None,
-                exit_code=entry.exit_code if entry.HasField("exit_code") else None,
-                container_id=entry.container_id or None,
-            )
-        )
-    return updates
-
-
 def _filter_observations_to_plan(
     plan: WorkerReconcilePlan,
     observations: list[worker_pb2.Worker.AttemptObservation],
@@ -358,32 +335,18 @@ def _filter_observations_to_plan(
 ) -> list[worker_pb2.Worker.AttemptObservation]:
     """Drop observations whose attempt is not in the per-worker plan we sent.
 
-    Membership: observation matches if its ``attempt_uid`` is in the plan's
-    non-empty UID set OR its ``(task_id, attempt_id)`` composite is in the
-    plan's composite set. The composite fallback covers legacy-wire workers
-    and pre-upgrade attempts whose observations carry an empty UID.
-
-    The legacy synthesizer in ``_legacy_results_to_reconcile_results`` only
-    produces observations sourced from ``expected_tasks`` / ``start_tasks``,
-    both built from the same plan — so this filter is a no-op on that wire.
+    An observation matches iff its ``attempt_uid`` is in the plan's non-empty
+    UID set.
     """
-    plan_uids: set[str] = set()
-    plan_composites: set[tuple[str, int]] = set()
-    for desired in plan.request.desired:
-        if desired.attempt_uid:
-            plan_uids.add(desired.attempt_uid)
-        plan_composites.add((desired.task_id, desired.attempt_id))
+    plan_uids: set[str] = {desired.attempt_uid for desired in plan.request.desired if desired.attempt_uid}
 
     kept: list[worker_pb2.Worker.AttemptObservation] = []
     dropped = 0
     for obs in observations:
         if obs.attempt_uid and obs.attempt_uid in plan_uids:
             kept.append(obs)
-            continue
-        if (obs.task_id, obs.attempt_id) in plan_composites:
-            kept.append(obs)
-            continue
-        dropped += 1
+        else:
+            dropped += 1
     if dropped:
         logger.debug(
             "apply_reconcile_result: worker %s sent %d observations outside the plan; dropping",
@@ -1660,7 +1623,7 @@ class ControllerTransitions:
 
         Worker-bound dispatch is driven by the polling reconcile loop, which
         reads ``tasks.state = ASSIGNED`` rows from a snapshot and fans out
-        StartTasks RPCs. This method does not enqueue or fan out anything;
+        Reconcile RPCs. This method does not enqueue or fan out anything;
         callers are responsible for waking ``_polling_wake`` after commit so
         the reconcile loop sees the new ASSIGNED rows on its next tick.
 
@@ -2109,7 +2072,8 @@ class ControllerTransitions:
         for desired in plan.request.desired:
             if not desired.HasField("run") or not desired.run.HasField("request"):
                 continue
-            candidates.append((JobName.from_wire(desired.task_id), desired.attempt_id))
+            req = desired.run.request
+            candidates.append((JobName.from_wire(req.task_id), req.attempt_id))
 
         if not candidates:
             return []
@@ -2140,30 +2104,28 @@ class ControllerTransitions:
     ) -> list[TaskUpdate]:
         """Translate ``AttemptObservation`` protos into ``TaskUpdate`` list.
 
-        MISSING becomes ``FAILED("worker_lost_spec")``. Routing prefers the
-        ``attempt_uid`` when set: the UID is resolved to its ``(task_id,
-        attempt_id)`` composite through the ``idx_task_attempts_uid`` index.
-        Observations from pre-UID workers carry an empty ``attempt_uid`` and
-        fall back to the composite key the worker reports directly. A UID that
-        resolves to nothing (e.g. its attempt row was deleted) likewise falls
-        back to the reported composite.
+        MISSING becomes ``FAILED("worker_lost_spec")``. The observation's
+        ``attempt_uid`` is resolved to its ``(task_id, attempt_id)`` composite
+        through the ``idx_task_attempts_uid`` index; observations whose UID
+        cannot be resolved are skipped with a warning (the attempt row has
+        been deleted from under us).
         """
         uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
         uid_to_composite = reads.resolve_attempt_uids(cur, uids)
 
         updates: list[TaskUpdate] = []
         for obs in observations:
-            resolved = uid_to_composite.get(AttemptUid(obs.attempt_uid)) if obs.attempt_uid else None
-            if resolved is not None:
-                task_id, attempt_id = resolved
-            else:
-                if obs.attempt_uid:
-                    logger.debug(
-                        "AttemptObservation uid=%s did not resolve; falling back to composite key",
-                        obs.attempt_uid,
-                    )
-                task_id = JobName.from_wire(obs.task_id)
-                attempt_id = obs.attempt_id
+            if not obs.attempt_uid:
+                logger.warning("AttemptObservation missing attempt_uid; skipping: %s", obs)
+                continue
+            resolved = uid_to_composite.get(AttemptUid(obs.attempt_uid))
+            if resolved is None:
+                logger.warning(
+                    "AttemptObservation uid=%s did not resolve to an attempt row; skipping",
+                    obs.attempt_uid,
+                )
+                continue
+            task_id, attempt_id = resolved
             exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
             error: str | None = obs.error or None
             container_id: str | None = obs.container_id or None
@@ -2845,7 +2807,7 @@ class ControllerTransitions:
         self,
         snap: Tx,
     ) -> tuple[dict[WorkerId, list[RunningTaskEntry]], dict[WorkerId, str]]:
-        """Snapshot running tasks and worker addresses for PollTasks RPCs.
+        """Snapshot running tasks and worker addresses for reconcile dispatch.
 
         Caller passes an open read snapshot or transaction cursor.
         Returns (running_by_worker, worker_addresses) where running_by_worker
@@ -2859,10 +2821,10 @@ class ControllerTransitions:
 
         # Reservation holders are virtual — they live on ``current_worker_id``
         # only as a scheduling anchor and never get a RunTaskRequest. Sending
-        # them in PollTasksRequest.expected_tasks makes the worker reconcile
-        # against its _tasks dict, miss, and return WORKER_FAILED every cycle,
-        # which drains the holder's preemption budget and (post the build-
-        # failure health hook) reaps the claimed worker for a harmless miss.
+        # them in the desired-attempt set makes the worker reconcile against
+        # its _tasks dict, miss, and return WORKER_FAILED every cycle, which
+        # drains the holder's preemption budget and (post the build-failure
+        # health hook) reaps the claimed worker for a harmless miss.
         task_rows = reads.list_active_tasks(
             snap,
             TaskScope(worker_ids=worker_ids),

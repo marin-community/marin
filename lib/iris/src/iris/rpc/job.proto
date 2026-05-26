@@ -608,27 +608,8 @@ message RunTaskRequest {
   string task_image = 11;
 
   // Controller-minted attempt routing key (16 hex chars). The worker echoes
-  // it back on observations so the controller can route by UID instead of
-  // the (task_id, attempt_id) composite. Empty when sent by an older
-  // controller that does not mint UIDs; the worker then routes by composite.
+  // it back on Reconcile observations so the controller can route by UID.
   string attempt_uid = 12;
-}
-
-// Lean task status reported by the worker via PollTasks / UpdateTaskStatus.
-// Covers both running and completed tasks in a single type.
-// Elevated from the Controller message namespace to break the circular
-// dependency between controller.proto and worker.proto.
-message WorkerTaskStatus {
-  string task_id = 1;
-  int32 attempt_id = 2;
-  TaskState state = 3;
-  int32 exit_code = 4;
-  string error = 5;
-  iris.time.Timestamp finished_at = 6;
-  // field 7 was log_directory, removed
-  reserved 8;  // was: ResourceUsage resource_usage (now appended to iris.task by the worker / k8s ResourceCollector)
-  reserved 9;  // was log_entries (pushed via LogService now)
-  string container_id = 10;         // Platform container identifier (Docker container ID, K8s pod name)
 }
 
 // Status text update pushed by a running task to the coordinator.

@@ -3020,10 +3020,10 @@ def test_holder_tasks_excluded_from_building_counts(state):
 
 
 def test_holder_tasks_excluded_from_poll_expected_tasks(state):
-    """Holder tasks must not appear in PollTasks expected_tasks.
+    """Holder tasks must not appear in the Reconcile request's desired set.
 
     Holder tasks are virtual — never dispatched to the worker. If included
-    in expected_tasks the worker reports "Task not found on worker", causing
+    in the desired set the worker reports "Task not found on worker", causing
     a worker_failed → retry loop (GH-3178).
     """
 

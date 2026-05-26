@@ -66,11 +66,7 @@ from iris.cluster.controller.schema import (
     workers_table,
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, attempt_is_worker_failure, task_row_can_be_scheduled
-from iris.cluster.controller.transitions import (
-    ControllerTransitions,
-    HeartbeatApplyRequest,
-    task_updates_from_proto,
-)
+from iris.cluster.controller.transitions import ControllerTransitions
 from iris.cluster.controller.worker_health import WorkerHealthTracker, WorkerLiveness
 from iris.cluster.process_status import get_process_status
 from iris.cluster.redaction import redact_request_env_vars
@@ -1365,9 +1361,9 @@ class ControllerServiceImpl:
         # transaction, so there is no need to recurse manually.
         with self._db.transaction() as cur:
             self._transitions.cancel_job(cur, job_id, reason="Terminated by user")
-        # The next polling tick reconciles each affected worker and sends
-        # StopTasks via the expected_tasks diff; wake the loops so it lands
-        # within one tick rather than waiting on the next backoff.
+        # The next polling tick reconciles each affected worker; the
+        # cancellation appears in the desired-set diff so the worker stops
+        # the attempt within one tick rather than waiting on the next backoff.
         self._controller.wake()
         return job_pb2.Empty()
 
@@ -2540,36 +2536,6 @@ class ControllerServiceImpl:
             pending_buckets=pending_buckets,
             running_buckets=running_buckets,
         )
-
-    # --- Worker Push ---
-
-    def update_task_status(
-        self,
-        request: controller_pb2.Controller.UpdateTaskStatusRequest,
-        _ctx: Any,
-    ) -> controller_pb2.Controller.UpdateTaskStatusResponse:
-        """Worker pushes task state transitions to controller.
-
-        Converts the proto updates into TaskUpdate dataclasses and applies
-        them via ``ControllerTransitions.apply_task_updates``. Stop decisions
-        are delivered via the StopTasks RPC, not piggy-backed on the response.
-
-        The kill decisions produced here are ignored: the poll loop reruns the
-        same transition logic and routes kills through ``_stop_tasks_direct``,
-        so push-path kills are recovered with ≤60s latency.
-        """
-        updates = task_updates_from_proto(request.updates)
-        if updates:
-            with self._db.transaction() as cur:
-                self._transitions.apply_task_updates(
-                    cur,
-                    HeartbeatApplyRequest(
-                        worker_id=WorkerId(request.worker_id),
-                        updates=updates,
-                    ),
-                )
-            self._controller.wake()
-        return controller_pb2.Controller.UpdateTaskStatusResponse()
 
     # --- Task Status Text Push ---
 

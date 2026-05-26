@@ -3,15 +3,21 @@
 
 """Consolidated tests for the controller reconcile pipeline.
 
-Two layers, exercised in order:
+Three layers, exercised in order:
 
 1. **Pure compute** — ``reconcile_workers`` builds one ``ReconcileRequest``
    proto per worker from a ``ReconcileInputs`` snapshot. No DB.
-2. **Apply** — ``ControllerTransitions.apply_reconcile_result`` against real
-   SQLite DB state.
+2. **Wire & dispatch** — ``WorkerProvider.reconcile_workers`` fans out via a
+   fake stub factory and synthesizes ``ReconcileResult.observations``.
+3. **Apply + e2e** — ``ControllerTransitions.apply_reconcile_result`` against
+   real SQLite DB state, plus a handful of end-to-end convergence ticks driven
+   through ``Controller._reconcile_worker_batch``.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 from iris.cluster.controller import writes
@@ -29,6 +35,7 @@ from iris.cluster.controller.transitions import (
     HeartbeatApplyRequest,
     TaskUpdate,
 )
+from iris.cluster.controller.worker_provider import WorkerProvider
 from iris.cluster.types import AttemptUid, JobName, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Timestamp
@@ -75,18 +82,15 @@ def _make_plan(
 
 
 def _obs(
-    task_id: JobName,
-    attempt_id: int,
+    attempt_uid: str,
     state: int,
     *,
     exit_code: int | None = None,
     error: str | None = None,
 ) -> worker_pb2.Worker.AttemptObservation:
     kwargs: dict = {
-        "attempt_uid": "",
+        "attempt_uid": attempt_uid,
         "state": state,
-        "task_id": task_id.to_wire(),
-        "attempt_id": attempt_id,
     }
     if exit_code is not None:
         kwargs["exit_code"] = exit_code
@@ -95,21 +99,17 @@ def _obs(
     return worker_pb2.Worker.AttemptObservation(**kwargs)
 
 
-def _desired_run(task_id: JobName, attempt_id: int, *, spec: job_pb2.RunTaskRequest | None = None):
+def _desired_run(attempt_uid: str, *, spec: job_pb2.RunTaskRequest | None = None):
     return worker_pb2.Worker.DesiredAttempt(
-        attempt_uid="",
+        attempt_uid=attempt_uid,
         run=worker_pb2.Worker.AttemptSpec(request=spec) if spec is not None else worker_pb2.Worker.AttemptSpec(),
-        task_id=task_id.to_wire(),
-        attempt_id=attempt_id,
     )
 
 
-def _desired_stop(task_id: JobName, attempt_id: int, *, reason=worker_pb2.Worker.STOP_REASON_CANCELLED):
+def _desired_stop(attempt_uid: str, *, reason=worker_pb2.Worker.STOP_REASON_CANCELLED):
     return worker_pb2.Worker.DesiredAttempt(
-        attempt_uid="",
+        attempt_uid=attempt_uid,
         stop=reason,
-        task_id=task_id.to_wire(),
-        attempt_id=attempt_id,
     )
 
 
@@ -277,12 +277,11 @@ def test_reconcile_worker_assigned_with_spec_emits_run_with_inline_spec():
 
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
-    assert desired.task_id == row.task_id.to_wire()
-    assert desired.attempt_id == 7
+    assert desired.attempt_uid == row.attempt_uid
     assert desired.HasField("run")
     assert desired.run.HasField("request")
     # The inline RunTaskRequest is stamped with the routing key: the worker's
-    # submit_task reads attempt_uid from the request, not from DesiredAttempt.
+    # submit_task reads attempt_uid from the request.
     assert desired.run.request.task_image == "custom-image"
     assert desired.run.request.task_id == row.task_id.to_wire()
     assert desired.run.request.attempt_id == 7
@@ -301,12 +300,13 @@ def test_reconcile_worker_assigned_without_spec_is_omitted():
 )
 def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_state):
     """BUILDING / RUNNING: run intent but no inline spec (cache-hit invariant)."""
-    plan = _plan_for([_row(task_state, attempt_id=3)])
+    row = _row(task_state, attempt_id=3)
+    plan = _plan_for([row])
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
     assert desired.HasField("run")
     assert not desired.run.HasField("request")
-    assert desired.attempt_id == 3
+    assert desired.attempt_uid == row.attempt_uid
 
 
 @pytest.mark.parametrize(
@@ -321,13 +321,14 @@ def test_reconcile_worker_executing_states_emit_run_without_inline_spec(task_sta
 )
 def test_reconcile_worker_terminal_rows_emit_run_without_inline_spec(task_state):
     """Worker-bound terminal rows stay expected until their attempt is finalized."""
-    plan = _plan_for([_row(task_state, attempt_id=4)])
+    row = _row(task_state, attempt_id=4)
+    plan = _plan_for([row])
 
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
     assert desired.HasField("run")
     assert not desired.run.HasField("request")
-    assert desired.attempt_id == 4
+    assert desired.attempt_uid == row.attempt_uid
 
 
 @pytest.mark.parametrize(
@@ -338,12 +339,13 @@ def test_reconcile_worker_terminal_rows_emit_run_without_inline_spec(task_state)
     ],
 )
 def test_reconcile_worker_stop_states_emit_stop_with_reason(task_state, expected_reason):
-    plan = _plan_for([_row(task_state, attempt_id=2)])
+    row = _row(task_state, attempt_id=2)
+    plan = _plan_for([row])
     assert len(plan.request.desired) == 1
     desired = plan.request.desired[0]
     assert desired.HasField("stop")
     assert desired.stop == expected_reason
-    assert desired.attempt_id == 2
+    assert desired.attempt_uid == row.attempt_uid
 
 
 @pytest.mark.parametrize(
@@ -361,24 +363,19 @@ def test_reconcile_worker_unrecognised_states_are_omitted(task_state):
 def test_reconcile_worker_mixed_rows_per_axis():
     """A worker holding tasks across every axis builds one desired entry per worker-bound row."""
     rows = [
-        _row(job_pb2.TASK_STATE_ASSIGNED, task_id="a", attempt_id=1, job="j1"),
-        _row(job_pb2.TASK_STATE_RUNNING, task_id="b", attempt_id=2, job="j2"),
-        _row(job_pb2.TASK_STATE_KILLED, task_id="c", attempt_id=3, job="j3"),
-        _row(job_pb2.TASK_STATE_SUCCEEDED, task_id="d", attempt_id=4, job="j4"),
+        _row(job_pb2.TASK_STATE_ASSIGNED, task_id="a", attempt_id=1, job="j1", attempt_uid="aaaaaaaaaaaaaaaa"),
+        _row(job_pb2.TASK_STATE_RUNNING, task_id="b", attempt_id=2, job="j2", attempt_uid="bbbbbbbbbbbbbbbb"),
+        _row(job_pb2.TASK_STATE_KILLED, task_id="c", attempt_id=3, job="j3", attempt_uid="cccccccccccccccc"),
+        _row(job_pb2.TASK_STATE_SUCCEEDED, task_id="d", attempt_id=4, job="j4", attempt_uid="dddddddddddddddd"),
     ]
     plan = _plan_for(rows, job_specs={_job_id("j1"): _spec("img-j1")})
 
-    by_task = {d.task_id: d for d in plan.request.desired}
-    assert set(by_task) == {
-        _task_id("a").to_wire(),
-        _task_id("b").to_wire(),
-        _task_id("c").to_wire(),
-        _task_id("d").to_wire(),
-    }
-    assert by_task[_task_id("a").to_wire()].run.HasField("request")
-    assert not by_task[_task_id("b").to_wire()].run.HasField("request")
-    assert by_task[_task_id("c").to_wire()].stop == worker_pb2.Worker.STOP_REASON_CANCELLED
-    assert not by_task[_task_id("d").to_wire()].run.HasField("request")
+    by_uid = {d.attempt_uid: d for d in plan.request.desired}
+    assert set(by_uid) == {row.attempt_uid for row in rows}
+    assert by_uid["aaaaaaaaaaaaaaaa"].run.HasField("request")
+    assert not by_uid["bbbbbbbbbbbbbbbb"].run.HasField("request")
+    assert by_uid["cccccccccccccccc"].stop == worker_pb2.Worker.STOP_REASON_CANCELLED
+    assert not by_uid["dddddddddddddddd"].run.HasField("request")
 
 
 # --- attempt_uid is stamped on every emit site ------------------------------
@@ -422,12 +419,97 @@ def test_reconcile_worker_emits_distinct_uids_for_distinct_rows():
     ]
     plan = _plan_for(rows, job_specs={_job_id("j1"): _spec()})
 
-    uid_by_task = {d.task_id: d.attempt_uid for d in plan.request.desired}
-    assert uid_by_task == {
-        _task_id("a").to_wire(): "1111111111111111",
-        _task_id("b").to_wire(): "2222222222222222",
-        _task_id("c").to_wire(): "3333333333333333",
-    }
+    uids = {d.attempt_uid for d in plan.request.desired}
+    assert uids == {"1111111111111111", "2222222222222222", "3333333333333333"}
+
+
+# ===========================================================================
+# Section 2: wire & dispatch (WorkerProvider.reconcile_workers)
+# ===========================================================================
+
+
+@dataclass
+class _FakeWorkerStub:
+    """In-process WorkerServiceClient stand-in.
+
+    Records every reconcile call and returns canned responses (or raises)
+    according to pre-configured fields.
+    """
+
+    address: str
+    reconcile_calls: list[worker_pb2.Worker.ReconcileRequest] = field(default_factory=list)
+    reconcile_response: worker_pb2.Worker.ReconcileResponse | None = None
+    reconcile_exc: Exception | None = None
+
+    async def reconcile(self, request, *, timeout_ms=None):
+        del timeout_ms
+        self.reconcile_calls.append(request)
+        if self.reconcile_exc is not None:
+            raise self.reconcile_exc
+        return self.reconcile_response or worker_pb2.Worker.ReconcileResponse()
+
+
+@dataclass
+class _FakeStubFactory:
+    stubs: dict[str, _FakeWorkerStub] = field(default_factory=dict)
+
+    def get_stub(self, address: str) -> Any:
+        if address not in self.stubs:
+            self.stubs[address] = _FakeWorkerStub(address=address)
+        return self.stubs[address]
+
+    def evict(self, address: str) -> None:
+        self.stubs.pop(address, None)
+
+    def close(self) -> None:
+        self.stubs.clear()
+
+
+def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[WorkerProvider, _FakeWorkerStub]:
+    """Build a provider with a single stub at ``_W1_ADDR`` (creating a default if needed)."""
+    if stub is None:
+        stub = _FakeWorkerStub(address=_W1_ADDR)
+    factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
+    return WorkerProvider(stub_factory=factory), stub
+
+
+def _reconcile_one(provider: WorkerProvider, plan: WorkerReconcilePlan, *, address: str = _W1_ADDR):
+    return provider.reconcile_workers([plan], {WorkerId(_W1): address})
+
+
+def test_reconcile_workers_empty_short_circuits():
+    provider, _ = _provider_with_stub()
+    assert provider.reconcile_workers([], {}) == []
+
+
+def test_reconcile_rpc_forwards_observations():
+    """One Reconcile RPC per plan; observed observations surface verbatim."""
+    observation = _obs("uid-a", job_pb2.TASK_STATE_RUNNING)
+    stub = _FakeWorkerStub(
+        address=_W1_ADDR,
+        reconcile_response=worker_pb2.Worker.ReconcileResponse(observed=[observation]),
+    )
+    provider, _ = _provider_with_stub(stub)
+    plan = _make_plan(_W1, desired=[_desired_run("uid-a")])
+
+    results = _reconcile_one(provider, plan)
+
+    assert len(stub.reconcile_calls) == 1
+    assert stub.reconcile_calls[0].worker_id == _W1
+    assert len(results) == 1
+    assert results[0].worker_id == WorkerId(_W1)
+    assert results[0].error is None
+    assert list(results[0].observations) == [observation]
+
+
+def test_reconcile_rpc_failure_returns_error_and_empty_observations():
+    stub = _FakeWorkerStub(address=_W1_ADDR, reconcile_exc=RuntimeError("boom"))
+    provider, _ = _provider_with_stub(stub)
+
+    results = _reconcile_one(provider, _make_plan(_W1))
+
+    assert results[0].error == "boom"
+    assert list(results[0].observations) == []
 
 
 # ===========================================================================
@@ -435,8 +517,24 @@ def test_reconcile_worker_emits_distinct_uids_for_distinct_rows():
 # ===========================================================================
 
 
-def _setup_running_task(state: ControllerTransitions, worker_id: str = _W1) -> tuple[JobName, int]:
-    """Register worker, submit job, dispatch, drive to RUNNING."""
+def _attempt_uid(state: ControllerTransitions, task_id: JobName, attempt_id: int) -> str:
+    """Read the controller-minted attempt_uid for one attempt row."""
+    with state._db.read_snapshot() as tx:
+        row = tx.execute(
+            select(task_attempts_table.c.attempt_uid).where(
+                task_attempts_table.c.task_id == task_id,
+                task_attempts_table.c.attempt_id == attempt_id,
+            )
+        ).first()
+    assert row is not None
+    return row.attempt_uid
+
+
+def _setup_running_task(state: ControllerTransitions, worker_id: str = _W1) -> tuple[JobName, int, str]:
+    """Register worker, submit job, dispatch, drive to RUNNING.
+
+    Returns ``(task_id, attempt_id, attempt_uid)``.
+    """
     wid = WorkerId(worker_id)
     register_worker(state, worker_id, f"{worker_id}:8080", make_worker_metadata())
     tasks = submit_job(state, "test-job", make_job_request(name="test-job"))
@@ -444,11 +542,15 @@ def _setup_running_task(state: ControllerTransitions, worker_id: str = _W1) -> t
     dispatch_task(state, task_row, wid)
     refreshed = query_task(state, task_row.task_id)
     assert refreshed is not None
-    return task_row.task_id, refreshed.current_attempt_id
+    uid = _attempt_uid(state, task_row.task_id, refreshed.current_attempt_id)
+    return task_row.task_id, refreshed.current_attempt_id, uid
 
 
-def _setup_assigned_task(state: ControllerTransitions, worker_id: str = _W1) -> tuple[JobName, int]:
-    """Register worker, submit job, queue assignment (no heartbeat → stays ASSIGNED)."""
+def _setup_assigned_task(state: ControllerTransitions, worker_id: str = _W1) -> tuple[JobName, int, str]:
+    """Register worker, submit job, queue assignment (no heartbeat → stays ASSIGNED).
+
+    Returns ``(task_id, attempt_id, attempt_uid)``.
+    """
     wid = WorkerId(worker_id)
     register_worker(state, worker_id, f"{worker_id}:8080", make_worker_metadata())
     tasks = submit_job(state, "test-job", make_job_request(name="test-job"))
@@ -458,7 +560,8 @@ def _setup_assigned_task(state: ControllerTransitions, worker_id: str = _W1) -> 
     refreshed = query_task(state, task_row.task_id)
     assert refreshed is not None
     assert refreshed.state == job_pb2.TASK_STATE_ASSIGNED
-    return task_row.task_id, refreshed.current_attempt_id
+    uid = _attempt_uid(state, task_row.task_id, refreshed.current_attempt_id)
+    return task_row.task_id, refreshed.current_attempt_id, uid
 
 
 def _apply_observations(
@@ -470,20 +573,19 @@ def _apply_observations(
 ):
     """Apply observations under a plan that requests them by default.
 
-    The controller drops observations whose attempt is not in the per-worker
-    plan (see ``_filter_observations_to_plan``). Tests focused on observation
-    semantics get a plan that asks for every supplied observation; tests that
-    need to exercise the filter pass an explicit ``plan``.
+    The controller drops observations whose ``attempt_uid`` is not in the
+    per-worker plan (see ``_filter_observations_to_plan``). Tests focused on
+    observation semantics get a plan that asks for every supplied observation;
+    tests that need to exercise the filter pass an explicit ``plan``.
     """
     if plan is None:
         desired = [
             worker_pb2.Worker.DesiredAttempt(
                 attempt_uid=obs.attempt_uid,
                 run=worker_pb2.Worker.AttemptSpec(),
-                task_id=obs.task_id,
-                attempt_id=obs.attempt_id,
             )
             for obs in observations
+            if obs.attempt_uid
         ]
         plan = _make_plan(worker_id, desired=desired)
     result = ReconcileResult(worker_id=WorkerId(worker_id), observations=observations, error=None)
@@ -526,8 +628,8 @@ def test_terminal_observation_transitions_task_and_job(
     obs_state, expected_task_state, expected_job_state, attempt_kwargs
 ):
     with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
-        _apply_observations(state, _W1, [_obs(task_id, attempt_id, obs_state, **attempt_kwargs)])
+        task_id, attempt_id, uid = _setup_running_task(state)
+        _apply_observations(state, _W1, [_obs(uid, obs_state, **attempt_kwargs)])
 
         task = query_task(state, task_id)
         attempt = query_attempt(state, task_id, attempt_id)
@@ -543,8 +645,8 @@ def test_terminal_observation_transitions_task_and_job(
 
 def test_missing_observation_fails_attempt_with_worker_lost_spec():
     with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
-        _apply_observations(state, _W1, [_obs(task_id, attempt_id, job_pb2.TASK_STATE_MISSING)])
+        task_id, attempt_id, uid = _setup_running_task(state)
+        _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_MISSING)])
 
         task = query_task(state, task_id)
         attempt = query_attempt(state, task_id, attempt_id)
@@ -557,8 +659,8 @@ def test_missing_observation_fails_attempt_with_worker_lost_spec():
 
 def test_duplicate_terminal_observation_does_not_overwrite_finished_at():
     with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
-        observations = [_obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)]
+        task_id, attempt_id, uid = _setup_running_task(state)
+        observations = [_obs(uid, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)]
 
         _apply_observations(state, _W1, observations)
         first = query_attempt(state, task_id, attempt_id)
@@ -573,14 +675,14 @@ def test_duplicate_terminal_observation_does_not_overwrite_finished_at():
 def test_stale_running_observation_does_not_revive_cancelled_task():
     """RUNNING after cancellation must not roll the task forward."""
     with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
+        task_id, _attempt_id, uid = _setup_running_task(state)
         with state._db.transaction() as cur:
             task_row = query_task(state, task_id)
             assert task_row is not None
             state.cancel_job(cur, task_row.job_id, "user_cancel")
         assert query_task(state, task_id).state == job_pb2.TASK_STATE_KILLED
 
-        _apply_observations(state, _W1, [_obs(task_id, attempt_id, job_pb2.TASK_STATE_RUNNING)])
+        _apply_observations(state, _W1, [_obs(uid, job_pb2.TASK_STATE_RUNNING)])
 
         assert query_task(state, task_id).state == job_pb2.TASK_STATE_KILLED
 
@@ -591,8 +693,8 @@ def test_stale_running_observation_does_not_revive_cancelled_task():
 def test_rpc_failure_leaves_running_task_unchanged():
     """RPC failure does not mutate non-ASSIGNED tasks."""
     with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
-        plan = _make_plan(_W1, desired=[_desired_run(task_id, attempt_id, spec=None)])
+        task_id, _attempt_id, uid = _setup_running_task(state)
+        plan = _make_plan(_W1, desired=[_desired_run(uid, spec=None)])
         _apply_failure(state, _W1, plan, "connection refused")
         assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
 
@@ -600,8 +702,12 @@ def test_rpc_failure_leaves_running_task_unchanged():
 def test_rpc_failure_bounces_assigned_task_back_to_pending():
     """RPC failure on an ASSIGNED dispatch synthesizes WORKER_FAILED, returning the task to PENDING."""
     with make_controller_state() as state:
-        task_id, attempt_id = _setup_assigned_task(state)
-        plan = _make_plan(_W1, desired=[_desired_run(task_id, attempt_id, spec=_spec())])
+        task_id, attempt_id, uid = _setup_assigned_task(state)
+        spec = _spec()
+        spec.task_id = task_id.to_wire()
+        spec.attempt_id = attempt_id
+        spec.attempt_uid = uid
+        plan = _make_plan(_W1, desired=[_desired_run(uid, spec=spec)])
         _apply_failure(state, _W1, plan, "timeout")
         # Synthetic WORKER_FAILED bounces the task back to PENDING so it can be re-dispatched.
         assert query_task(state, task_id).state == job_pb2.TASK_STATE_PENDING
@@ -634,42 +740,21 @@ def test_observation_outside_plan_is_dropped():
     Each accepted observation would otherwise drive a DB write.
     """
     with make_controller_state() as state:
-        live_task, live_attempt = _setup_running_task(state)
+        live_task, _live_attempt, live_uid = _setup_running_task(state)
 
         # The plan only desires the live attempt; the worker also sends a
         # terminal observation for a stale attempt the controller never asked
         # about.
-        stale_task = _task_id("stale-history")
-        plan = _make_plan(_W1, desired=[_desired_run(live_task, live_attempt, spec=None)])
+        plan = _make_plan(_W1, desired=[_desired_run(live_uid, spec=None)])
         observations = [
-            _obs(live_task, live_attempt, job_pb2.TASK_STATE_RUNNING),
-            _obs(stale_task, 0, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0),
+            _obs(live_uid, job_pb2.TASK_STATE_RUNNING),
+            _obs("ffffffffffffffff", job_pb2.TASK_STATE_SUCCEEDED, exit_code=0),
         ]
         _apply_observations(state, _W1, observations, plan=plan)
 
         # Live attempt's RUNNING was applied; stale observation was dropped
         # without raising even though the attempt has no row.
         assert query_task(state, live_task).state == job_pb2.TASK_STATE_RUNNING
-        assert query_task(state, stale_task) is None
-
-
-def test_observation_inside_plan_matches_by_composite_when_uid_empty():
-    """An observation with empty UID is kept when its composite is in the plan.
-
-    Covers the legacy wire and pre-UID adopted attempts whose observations
-    carry an empty ``attempt_uid`` but a valid composite key.
-    """
-    with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
-        # Plan carries the desired attempt; observation has empty UID.
-        plan = _make_plan(_W1, desired=[_desired_run(task_id, attempt_id, spec=None)])
-        _apply_observations(
-            state,
-            _W1,
-            [_obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)],
-            plan=plan,
-        )
-        assert query_task(state, task_id).state == job_pb2.TASK_STATE_SUCCEEDED
 
 
 # --- Coscheduled cascade ----------------------------------------------------
@@ -717,7 +802,8 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
                     ),
                 )
 
-        _apply_observations(state, _W1, [_obs(task_id_1, attempt_id_1, job_pb2.TASK_STATE_FAILED, error="oom")])
+        uid_1 = _attempt_uid(state, task_id_1, attempt_id_1)
+        _apply_observations(state, _W1, [_obs(uid_1, job_pb2.TASK_STATE_FAILED, error="oom")])
 
         assert query_task(state, task_id_1).state == job_pb2.TASK_STATE_FAILED
         sibling_state = query_task(state, task_id_2).state
@@ -732,19 +818,6 @@ def test_coscheduled_sibling_cascade_fires_on_terminal_observation():
 # --- UID routing in _observations_to_updates --------------------------------
 
 
-def _attempt_uid(state: ControllerTransitions, task_id: JobName, attempt_id: int) -> str:
-    """Read the controller-minted attempt_uid for one attempt row."""
-    with state._db.read_snapshot() as tx:
-        row = tx.execute(
-            select(task_attempts_table.c.attempt_uid).where(
-                task_attempts_table.c.task_id == task_id,
-                task_attempts_table.c.attempt_id == attempt_id,
-            )
-        ).first()
-    assert row is not None
-    return row.attempt_uid
-
-
 def _observations_to_updates(
     state: ControllerTransitions,
     observations: list[worker_pb2.Worker.AttemptObservation],
@@ -753,69 +826,21 @@ def _observations_to_updates(
         return state._observations_to_updates(cur, observations)
 
 
-def test_observation_routed_by_attempt_uid_overrides_disagreeing_composite():
-    """A resolvable attempt_uid wins even when the observation's composite disagrees.
-
-    The worker echoes the controller-minted UID; the controller resolves it to
-    the true ``(task_id, attempt_id)`` regardless of the (here deliberately
-    wrong) composite fields on the same observation.
-    """
+def test_observation_routed_by_attempt_uid():
+    """A resolvable ``attempt_uid`` is mapped to its ``(task_id, attempt_id)``."""
     with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
-        uid = _attempt_uid(state, task_id, attempt_id)
+        task_id, attempt_id, uid = _setup_running_task(state)
 
-        # Observation carries the right UID but a bogus composite.
-        bogus = _task_id("not-the-real-task")
-        obs = worker_pb2.Worker.AttemptObservation(
-            attempt_uid=uid,
-            state=job_pb2.TASK_STATE_SUCCEEDED,
-            task_id=bogus.to_wire(),
-            attempt_id=attempt_id + 99,
-            exit_code=0,
-        )
+        obs = _obs(uid, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
         updates = _observations_to_updates(state, [obs])
 
         assert len(updates) == 1
-        # Routed by UID to the real attempt, not the bogus composite.
         assert updates[0].task_id == task_id
         assert updates[0].attempt_id == attempt_id
         assert updates[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
 
 
-def test_observation_with_empty_uid_falls_back_to_reported_composite():
-    """An empty attempt_uid (pre-UID worker) routes by the worker-reported composite."""
-    with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
-
-        obs = _obs(task_id, attempt_id, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
-        assert obs.attempt_uid == ""
-        updates = _observations_to_updates(state, [obs])
-
-        assert len(updates) == 1
-        assert updates[0].task_id == task_id
-        assert updates[0].attempt_id == attempt_id
-
-
-def test_observation_with_unresolvable_uid_falls_back_to_reported_composite():
-    """A UID that resolves to nothing falls back to the reported composite."""
-    with make_controller_state() as state:
-        task_id, attempt_id = _setup_running_task(state)
-
-        obs = worker_pb2.Worker.AttemptObservation(
-            attempt_uid="ffffffffffffffff",  # never minted — resolves to nothing
-            state=job_pb2.TASK_STATE_RUNNING,
-            task_id=task_id.to_wire(),
-            attempt_id=attempt_id,
-        )
-        updates = _observations_to_updates(state, [obs])
-
-        assert len(updates) == 1
-        assert updates[0].task_id == task_id
-        assert updates[0].attempt_id == attempt_id
-        assert updates[0].new_state == job_pb2.TASK_STATE_RUNNING
-
-
-def _setup_running_task_named(state: ControllerTransitions, job: str, worker_id: str) -> tuple[JobName, int]:
+def _setup_running_task_named(state: ControllerTransitions, job: str, worker_id: str) -> tuple[JobName, int, str]:
     """Register a worker, submit a uniquely-named job, dispatch, drive to RUNNING."""
     wid = WorkerId(worker_id)
     register_worker(state, worker_id, f"{worker_id}:8080", make_worker_metadata())
@@ -823,25 +848,18 @@ def _setup_running_task_named(state: ControllerTransitions, job: str, worker_id:
     dispatch_task(state, tasks[0], wid)
     refreshed = query_task(state, tasks[0].task_id)
     assert refreshed is not None
-    return tasks[0].task_id, refreshed.current_attempt_id
+    uid = _attempt_uid(state, tasks[0].task_id, refreshed.current_attempt_id)
+    return tasks[0].task_id, refreshed.current_attempt_id, uid
 
 
-def test_observations_to_updates_routes_mixed_uid_and_composite_batch():
-    """A batch mixing a UID-routed and a composite-routed observation routes each correctly."""
+def test_observations_to_updates_routes_batch_by_uid():
+    """A batch of UID-routed observations on different tasks/workers routes each correctly."""
     with make_controller_state() as state:
-        task_a, attempt_a = _setup_running_task_named(state, "mixed-a", _W1)
-        task_b, attempt_b = _setup_running_task_named(state, "mixed-b", _W2)
-        uid_a = _attempt_uid(state, task_a, attempt_a)
+        task_a, attempt_a, uid_a = _setup_running_task_named(state, "mixed-a", _W1)
+        task_b, attempt_b, uid_b = _setup_running_task_named(state, "mixed-b", _W2)
 
-        # task_a observed by UID (composite deliberately wrong); task_b by composite (empty UID).
-        obs_a = worker_pb2.Worker.AttemptObservation(
-            attempt_uid=uid_a,
-            state=job_pb2.TASK_STATE_SUCCEEDED,
-            task_id=_task_id("wrong").to_wire(),
-            attempt_id=attempt_a + 7,
-            exit_code=0,
-        )
-        obs_b = _obs(task_b, attempt_b, job_pb2.TASK_STATE_FAILED, error="oom")
+        obs_a = _obs(uid_a, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+        obs_b = _obs(uid_b, job_pb2.TASK_STATE_FAILED, error="oom")
         updates = _observations_to_updates(state, [obs_a, obs_b])
 
         by_task = {u.task_id: u for u in updates}
@@ -850,3 +868,120 @@ def test_observations_to_updates_routes_mixed_uid_and_composite_batch():
         assert by_task[task_a].new_state == job_pb2.TASK_STATE_SUCCEEDED
         assert by_task[task_b].attempt_id == attempt_b
         assert by_task[task_b].new_state == job_pb2.TASK_STATE_FAILED
+
+
+# --- End-to-end: full controller tick over both wires ----------------------
+
+
+@dataclass
+class _ScriptedProvider:
+    """In-process TaskProvider whose ``reconcile_workers`` returns scripted observations.
+
+    Each tick consumes one ``script`` entry (a callable taking the plan and
+    returning a list of observations). Records every call so tests can assert
+    that the right plans were dispatched.
+    """
+
+    script: list[Any] = field(default_factory=list)
+    calls: list[tuple[list[WorkerReconcilePlan], dict]] = field(default_factory=list)
+
+    def get_process_status(self, *_args, **_kwargs):
+        raise NotImplementedError
+
+    def on_worker_failed(self, *_args, **_kwargs):
+        pass
+
+    def profile_task(self, *_args, **_kwargs):
+        raise NotImplementedError
+
+    def ping_workers(self, workers):
+        return []
+
+    def reconcile_workers(self, plans, addresses):
+        self.calls.append((list(plans), dict(addresses)))
+        tick = len(self.calls) - 1
+        responder = self.script[tick] if tick < len(self.script) else (lambda plan: [])
+        return [ReconcileResult(worker_id=p.worker_id, observations=responder(p), error=None) for p in plans]
+
+    def close(self):
+        pass
+
+
+def _observation_for_all_run(plan: WorkerReconcilePlan, state: int, **kwargs):
+    """Build one observation per run-intent in the plan, echoing the controller-minted UID."""
+    return [
+        worker_pb2.Worker.AttemptObservation(
+            attempt_uid=d.attempt_uid,
+            state=state,
+            **kwargs,
+        )
+        for d in plan.request.desired
+        if d.HasField("run")
+    ]
+
+
+def test_e2e_converges_to_succeeded(make_controller):
+    """Full ASSIGNED → RUNNING → SUCCEEDED convergence over the Reconcile RPC."""
+    script = [
+        lambda _plan: [],  # tick 1: ASSIGNED dispatch, worker hasn't started
+        lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_RUNNING),
+        lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0),
+    ]
+    provider = _ScriptedProvider(script=script)
+    ctrl = make_controller(provider=provider)
+    state = ctrl._transitions
+
+    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    tasks = submit_job(state, "e2e-job", make_job_request(name="e2e-job"))
+    task_id = tasks[0].task_id
+
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+
+    # Tick 1: ASSIGNED — controller dispatches the inline spec.
+    ctrl._reconcile_worker_batch()
+    tick1_desired = list(provider.calls[0][0][0].request.desired)
+    assert len(tick1_desired) == 1
+    assert tick1_desired[0].HasField("run") and tick1_desired[0].run.HasField(
+        "request"
+    ), "first tick should carry inline spec"
+    assert tick1_desired[0].attempt_uid, "controller must emit a non-empty attempt_uid"
+
+    # Tick 2: worker reports RUNNING.
+    ctrl._reconcile_worker_batch()
+    assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    # Tick 3: subsequent run intents must not carry inline spec (cache-hit invariant).
+    ctrl._reconcile_worker_batch()
+    tick3_desired = list(provider.calls[2][0][0].request.desired)
+    assert tick3_desired and tick3_desired[0].HasField("run")
+    assert not tick3_desired[0].run.HasField("request"), "subsequent ticks must not carry inline spec"
+
+    task_final = query_task(state, task_id)
+    assert task_final.state == job_pb2.TASK_STATE_SUCCEEDED
+    assert query_job(state, task_final.job_id).state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_e2e_missing_observation_fails_attempt_with_worker_lost_spec(make_controller):
+    """End-to-end MISSING cascade: dispatch → MISSING → FAILED("worker_lost_spec")."""
+    script = [
+        lambda _plan: [],  # tick 1: ASSIGNED dispatch
+        lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_MISSING),
+    ]
+    provider = _ScriptedProvider(script=script)
+    ctrl = make_controller(provider=provider)
+    state = ctrl._transitions
+
+    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    tasks = submit_job(state, "missing-job", make_job_request(name="missing-job"))
+    task_id = tasks[0].task_id
+
+    with state._db.transaction() as cur:
+        state.queue_assignments(cur, [Assignment(task_id=task_id, worker_id=wid)])
+
+    ctrl._reconcile_worker_batch()
+    ctrl._reconcile_worker_batch()
+
+    task = query_task(state, task_id)
+    assert task.state == job_pb2.TASK_STATE_FAILED
+    assert task.error == "worker_lost_spec"
