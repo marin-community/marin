@@ -395,7 +395,15 @@ def scale_by_klsoaph(
 
             original_shape = grad.shape
             # Pad to multiples of B on the trailing two axes, then reshape to blocks.
+            # The reshape splits each (rows, cols) axis into (R, B); on a sharded
+            # mesh that splits the shard axis, which JAX refuses unless the input
+            # is replicated. We reshard the padded grad to fully replicated here
+            # (cheap: gradient is small at d512) so the reshape is unambiguous,
+            # then run the per-block step on replicated state, and restore the
+            # parameter sharding downstream via _match_named_update_sharding.
             padded = _pad_to_multiple(grad, B)
+            if not jax.sharding.get_abstract_mesh().empty:
+                padded = reshard(padded, _replicated_pspec(padded.ndim))
             grad_blocks = _to_blocks(padded, B)
 
             out = _klsoaph_step_blocked(
