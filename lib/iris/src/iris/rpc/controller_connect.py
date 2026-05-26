@@ -103,9 +103,6 @@ class ControllerService(Protocol):
     async def execute_raw_query(self, request: query__pb2.RawQueryRequest, ctx: RequestContext) -> query__pb2.RawQueryResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def restart_worker(self, request: controller__pb2.Controller.RestartWorkerRequest, ctx: RequestContext) -> controller__pb2.Controller.RestartWorkerResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
     async def set_user_budget(self, request: controller__pb2.Controller.SetUserBudgetRequest, ctx: RequestContext) -> controller__pb2.Controller.SetUserBudgetResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -409,16 +406,6 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.execute_raw_query,
-                ),
-                "/iris.cluster.ControllerService/RestartWorker": Endpoint.unary(
-                    method=MethodInfo(
-                        name="RestartWorker",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.RestartWorkerRequest,
-                        output=controller__pb2.Controller.RestartWorkerResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.restart_worker,
                 ),
                 "/iris.cluster.ControllerService/SetUserBudget": Endpoint.unary(
                     method=MethodInfo(
@@ -1053,26 +1040,6 @@ class ControllerServiceClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def restart_worker(
-        self,
-        request: controller__pb2.Controller.RestartWorkerRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.RestartWorkerResponse:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="RestartWorker",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.RestartWorkerRequest,
-                output=controller__pb2.Controller.RestartWorkerResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
     async def set_user_budget(
         self,
         request: controller__pb2.Controller.SetUserBudgetRequest,
@@ -1250,8 +1217,6 @@ class ControllerServiceSync(Protocol):
     def get_kubernetes_cluster_status(self, request: controller__pb2.Controller.GetKubernetesClusterStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetKubernetesClusterStatusResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def execute_raw_query(self, request: query__pb2.RawQueryRequest, ctx: RequestContext) -> query__pb2.RawQueryResponse:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-    def restart_worker(self, request: controller__pb2.Controller.RestartWorkerRequest, ctx: RequestContext) -> controller__pb2.Controller.RestartWorkerResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def set_user_budget(self, request: controller__pb2.Controller.SetUserBudgetRequest, ctx: RequestContext) -> controller__pb2.Controller.SetUserBudgetResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
@@ -1550,16 +1515,6 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.execute_raw_query,
-                ),
-                "/iris.cluster.ControllerService/RestartWorker": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="RestartWorker",
-                        service_name="iris.cluster.ControllerService",
-                        input=controller__pb2.Controller.RestartWorkerRequest,
-                        output=controller__pb2.Controller.RestartWorkerResponse,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.restart_worker,
                 ),
                 "/iris.cluster.ControllerService/SetUserBudget": EndpointSync.unary(
                     method=MethodInfo(
@@ -2188,26 +2143,6 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="iris.cluster.ControllerService",
                 input=query__pb2.RawQueryRequest,
                 output=query__pb2.RawQueryResponse,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def restart_worker(
-        self,
-        request: controller__pb2.Controller.RestartWorkerRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> controller__pb2.Controller.RestartWorkerResponse:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="RestartWorker",
-                service_name="iris.cluster.ControllerService",
-                input=controller__pb2.Controller.RestartWorkerRequest,
-                output=controller__pb2.Controller.RestartWorkerResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

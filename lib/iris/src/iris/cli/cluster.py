@@ -7,9 +7,12 @@ All cluster subcommands live here: lifecycle (start/stop/restart/status),
 controller VM management, VM operations via controller RPC, and the dashboard tunnel.
 """
 
+import json
 import signal
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -26,13 +29,54 @@ from iris.cli.build import (
 from iris.cli.main import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, rpc_client
 from iris.cluster.config import IrisConfig, clear_remote_state, make_local_config
 from iris.cluster.controller.autoscaler.scaling_group import (
+    _zone_from_template,
     build_worker_config_for_group,
     prepare_slice_config,
 )
+from iris.cluster.providers.gcp.bootstrap import build_worker_bootstrap_script
+from iris.cluster.providers.gcp.workers import GcpWorkerProvider
 from iris.cluster.providers.types import Labels
-from iris.rpc import config_pb2, controller_pb2, job_pb2, vm_pb2
+from iris.rpc import config_pb2, controller_pb2, job_pb2, query_pb2, vm_pb2
 from iris.rpc.proto_utils import format_accelerator_display, vm_state_name
 from iris.time_proto import timestamp_from_proto
+
+
+@dataclass(frozen=True)
+class WorkerBootstrapRow:
+    """Per-worker fields needed to rebuild the bootstrap script CLI-side."""
+
+    worker_id: str
+    slice_id: str
+    scale_group: str
+    zone: str
+
+
+def _fetch_worker_bootstrap_rows(client, worker_ids: list[str]) -> dict[str, WorkerBootstrapRow]:
+    """Fetch slice_id/scale_group/zone for a set of workers.
+
+    Queries the controller's workers table via ExecuteRawQuery so the CLI can
+    drive the bootstrap directly without an autoscaler refresh cycle. Zone is
+    only populated for GCE workers; TPU workers leave it empty and the caller
+    resolves the zone from the scale-group's slice template.
+    """
+    if not worker_ids:
+        return {}
+    quoted = ", ".join("'" + wid.replace("'", "''") + "'" for wid in worker_ids)
+    sql = f"SELECT worker_id, slice_id, scale_group, md_gce_zone FROM workers WHERE worker_id IN ({quoted})"
+    response = client.execute_raw_query(query_pb2.RawQueryRequest(sql=sql))
+    column_index = {col.name: i for i, col in enumerate(response.columns)}
+    rows: dict[str, WorkerBootstrapRow] = {}
+    for raw in response.rows:
+        decoded = json.loads(raw)
+        row = WorkerBootstrapRow(
+            worker_id=decoded[column_index["worker_id"]],
+            slice_id=decoded[column_index["slice_id"]],
+            scale_group=decoded[column_index["scale_group"]],
+            zone=decoded[column_index["md_gce_zone"]],
+        )
+        rows[row.worker_id] = row
+    return rows
+
 
 # =============================================================================
 # Helpers
@@ -91,14 +135,19 @@ def _parse_ghcr_tag(image_tag: str) -> tuple[str, str, str] | None:
     return org, image_name, version
 
 
-def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = False) -> None:
-    """Build and push a single image to GHCR, parsing org/name/version from the tag."""
+def _build_and_push_image(image_tag: str, image_type: str, git_sha: str, verbose: bool = False) -> None:
+    """Build and push a single image to GHCR, parsing org/name/version from the tag.
+
+    The task image uses the ``task`` target in the unified Dockerfile and needs the
+    marin repo root as build context; other targets default to the iris root.
+    """
     ghcr_parsed = _parse_ghcr_tag(image_tag)
     if not ghcr_parsed:
         raise click.ClickException(f"Unrecognized image tag format (expected ghcr.io/...): {image_tag}")
 
     org, image_name, version = ghcr_parsed
     local_tag = f"{image_name}:{version}"
+    context = str(find_marin_root()) if image_type == "task" else None
     click.echo(f"Building {image_type} image: {local_tag}")
     click.echo(f"  Registry: ghcr.io/{org}")
     click.echo()
@@ -106,60 +155,32 @@ def _build_and_push_for_tag(image_tag: str, image_type: str, verbose: bool = Fal
         image_type=image_type,
         tag=local_tag,
         push=True,
-        context=None,
+        context=context,
         platform="linux/amd64,linux/arm64",
+        git_sha=git_sha,
         ghcr_org=org,
         verbose=verbose,
     )
     click.echo()
 
 
-def _build_and_push_task_image(task_tag: str, verbose: bool = False) -> None:
-    """Build and push the task image to GHCR.
-
-    The task image uses the ``task`` target in the unified Dockerfile and needs the
-    marin repo root as build context, so it can't use _build_and_push_for_tag directly.
-    """
-    marin_root = str(find_marin_root())
-
-    ghcr_parsed = _parse_ghcr_tag(task_tag)
-    if not ghcr_parsed:
-        raise click.ClickException(f"Unrecognized image tag format (expected ghcr.io/...): {task_tag}")
-
-    org, image_name, version = ghcr_parsed
-    local_tag = f"{image_name}:{version}"
-    click.echo(f"Building task image: {local_tag}")
-    click.echo(f"  Registry: ghcr.io/{org}")
-    click.echo()
-    build_image(
-        image_type="task",
-        tag=local_tag,
-        push=True,
-        context=marin_root,
-        platform="linux/amd64,linux/arm64",
-        ghcr_org=org,
-        verbose=verbose,
-    )
-    click.echo()
-
-
-def _build_cluster_images(config, verbose: bool = False) -> dict[str, str]:
+def _build_cluster_images(config, git_sha: str, verbose: bool = False) -> dict[str, str]:
     built: dict[str, str] = {}
 
     for tag, typ in [(config.defaults.worker.docker_image, "worker"), (config.controller.image, "controller")]:
         if tag:
-            _build_and_push_for_tag(tag, typ, verbose=verbose)
+            _build_and_push_image(tag, typ, git_sha, verbose=verbose)
             built[typ] = tag
 
     task_tag = config.defaults.worker.default_task_image
     if task_tag:
-        _build_and_push_task_image(task_tag, verbose=verbose)
+        _build_and_push_image(task_tag, "task", git_sha, verbose=verbose)
         built["task"] = task_tag
 
     return built
 
 
-def _pin_latest_images(config) -> dict[str, str]:
+def _pin_latest_images(config, git_sha: str) -> dict[str, str]:
     """Pin :latest image tags to the current git SHA in memory only."""
 
     def _pin_tag(tag: str | None, git_sha: str) -> str | None:
@@ -178,7 +199,6 @@ def _pin_latest_images(config) -> dict[str, str]:
     if not needs_pin:
         return {k: v for k, v in tags.items() if v}
 
-    git_sha = get_git_sha()
     pinned = {name: _pin_tag(tag, git_sha) for name, tag in tags.items()}
 
     if pinned["controller"]:
@@ -250,9 +270,10 @@ def cluster_start(ctx, local: bool, fresh: bool):
         config = make_local_config(config)
     is_local = config.controller.WhichOneof("controller") == "local"
     if not is_local:
-        _pin_latest_images(config)
+        git_sha = get_git_sha()
+        _pin_latest_images(config, git_sha)
         verbose = ctx.obj.get("verbose", False)
-        built = _build_cluster_images(config, verbose=verbose)
+        built = _build_cluster_images(config, git_sha, verbose=verbose)
         if built:
             click.echo("Built image tags:")
             for name, tag in built.items():
@@ -313,9 +334,10 @@ def cluster_start_smoke(ctx, label_prefix, url_file, min_workers, worker_timeout
 
     config.storage.remote_state_dir = marin_temp_bucket(ttl_days=7, prefix=f"iris/state/{label_prefix}")
 
-    _pin_latest_images(config)
+    git_sha = get_git_sha()
+    _pin_latest_images(config, git_sha)
     verbose = ctx.obj.get("verbose", False)
-    _build_cluster_images(config, verbose=verbose)
+    _build_cluster_images(config, git_sha, verbose=verbose)
 
     iris_config = IrisConfig(config)
     bundle = iris_config.provider_bundle()
@@ -950,9 +972,10 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
         controller_url = require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
         click.echo("No existing controller found. Starting fresh...")
-        _pin_latest_images(config)
+        git_sha = get_git_sha()
+        _pin_latest_images(config, git_sha)
         verbose = ctx.obj.get("verbose", False)
-        built = _build_cluster_images(config, verbose=verbose)
+        built = _build_cluster_images(config, git_sha, verbose=verbose)
         if built:
             click.echo("Built image tags:")
             for name, tag in built.items():
@@ -982,9 +1005,10 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
         click.echo(f"Checkpoint: {resp.checkpoint_path} ({resp.job_count} jobs, {resp.worker_count} workers)")
 
     # Build fresh images so the new controller VM gets the latest code
-    _pin_latest_images(config)
+    git_sha = get_git_sha()
+    _pin_latest_images(config, git_sha)
     verbose = ctx.obj.get("verbose", False)
-    built = _build_cluster_images(config, verbose=verbose)
+    built = _build_cluster_images(config, git_sha, verbose=verbose)
     if built:
         click.echo("Built image tags:")
         for name, tag in built.items():
@@ -1001,21 +1025,21 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
 @controller.command("worker-restart")
 @click.option("--worker-id", multiple=True, help="Worker(s) to restart (repeatable; default: all)")
 @click.option("--timeout", type=int, default=120, help="Max seconds to wait per worker to become healthy")
+@click.option("--min-batch", type=int, default=1, help="Minimum workers to restart concurrently")
 @click.option("--max-batch", type=int, default=64, help="Maximum workers to restart concurrently")
 @click.option(
     "--observation-window",
     type=int,
-    default=60,
+    default=30,
     help="Seconds to observe restarted workers for failures before advancing",
 )
 @click.option(
-    "--rpc-timeout",
-    type=int,
-    default=600,
+    "--skip-current-hash/--no-skip-current-hash",
+    default=False,
     help=(
-        "Per-RPC deadline for the restart_worker call (seconds). The server-side handler "
-        "runs the full SSH bootstrap synchronously (image pull + container restart), which "
-        "can take several minutes under autoscaler load; size this independently of --timeout."
+        "Skip workers whose reported git_hash matches the CLI's current working-tree hash "
+        "(``iris build`` would bake this into a fresh image). Useful for resuming a partial "
+        "rollout without redoing already-restarted workers."
     ),
 )
 @click.pass_context
@@ -1023,9 +1047,10 @@ def worker_restart(
     ctx,
     worker_id: tuple[str, ...],
     timeout: int,
+    min_batch: int,
     max_batch: int,
     observation_window: int,
-    rpc_timeout: int,
+    skip_current_hash: bool,
 ):
     """Rolling restart of workers with adaptive batch sizing.
 
@@ -1035,10 +1060,36 @@ def worker_restart(
     failures. Aborts immediately if any worker fails to come back healthy or
     develops failures during observation.
 
+    The CLI drives the SSH bootstrap directly per worker — no controller-side
+    proxy — so bootstrap stdout/stderr streams to the operator's terminal.
+
     Running Docker containers are preserved and adopted by the new worker
     process, so tasks are not disrupted.
     """
     controller_url = require_controller_url(ctx)
+
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for worker-restart")
+    iris_config = IrisConfig(config)
+    bundle = ctx.obj.get("provider_bundle") or iris_config.provider_bundle()
+    if not isinstance(bundle.workers, GcpWorkerProvider):
+        raise click.ClickException("worker-restart is only supported on GCP clusters")
+
+    # Resolve the controller address workers will reconnect to (matches cluster_create_slice).
+    worker_controller_address = iris_config.controller_address()
+    if not worker_controller_address:
+        worker_controller_address = bundle.controller.discover_controller(config.controller)
+
+    base_worker_config = config_pb2.WorkerConfig()
+    base_worker_config.CopyFrom(config.defaults.worker)
+    if not base_worker_config.controller_address:
+        base_worker_config.controller_address = worker_controller_address
+    base_worker_config.platform.CopyFrom(config.platform)
+    if config.storage.remote_state_dir:
+        base_worker_config.storage_prefix = config.storage.remote_state_dir
+
+    scale_groups = dict(config.scale_groups)
 
     with rpc_client(controller_url) as client:
         workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
@@ -1054,6 +1105,16 @@ def worker_restart(
         else:
             workers = list(all_workers)
 
+        if skip_current_hash:
+            target_hash = get_git_sha()
+            if not target_hash or target_hash == "unknown":
+                click.echo(f"--skip-current-hash requires a known git_hash (got: {target_hash!r})", err=True)
+                raise SystemExit(1)
+            before = len(workers)
+            workers = [w for w in workers if w.metadata.git_hash != target_hash]
+            skipped = before - len(workers)
+            click.echo(f"Skipping {skipped}/{before} worker(s) already at local git_hash {target_hash}")
+
         if not workers:
             click.echo("No workers to restart")
             return
@@ -1062,27 +1123,61 @@ def worker_restart(
         total = len(worker_ids)
         click.echo(
             f"Restarting {total} worker(s) "
-            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch}, "
-            f"rpc_timeout={rpc_timeout}s)"
+            f"(timeout={timeout}s, observation={observation_window}s, max_batch={max_batch})"
         )
 
+        rows_by_id = _fetch_worker_bootstrap_rows(client, worker_ids)
+        missing_rows = [wid for wid in worker_ids if wid not in rows_by_id]
+        if missing_rows:
+            click.echo(
+                f"  ABORT: workers missing from controller workers table: {', '.join(sorted(missing_rows))}",
+                err=True,
+            )
+            raise SystemExit(1)
+
         succeeded = 0
-        batch_size = 1
+        batch_size = min_batch
         offset = 0
 
         while offset < total:
             batch = worker_ids[offset : offset + batch_size]
             click.echo(f"\n--- Batch of {len(batch)} (workers {offset + 1}-{offset + len(batch)} of {total}) ---")
 
-            # Issue restart RPCs for the batch
+            # Drive each worker's bootstrap in parallel: build the bootstrap script
+            # locally, then SSH into the VM directly. Bootstrap stdout/stderr streams
+            # via the handle's on_line callback to the CLI logger.
             for wid in batch:
                 click.echo(f"  Restarting {wid}...")
-                resp = client.restart_worker(
-                    controller_pb2.Controller.RestartWorkerRequest(worker_id=wid),
-                    timeout_ms=rpc_timeout * 1000,
-                )
-                if not resp.accepted:
-                    click.echo(f"  ABORT: restart rejected for {wid}: {resp.error}", err=True)
+
+            def _restart(wid: str) -> tuple[str, str | None, str | None]:
+                row = rows_by_id[wid]
+                if not row.slice_id:
+                    return wid, None, "no slice_id (unmanaged worker)"
+                sg_config = scale_groups.get(row.scale_group)
+                if sg_config is None:
+                    return wid, None, f"unknown scale group {row.scale_group!r}"
+                # TPU workers leave md_gce_zone empty; fall back to the scale
+                # group's slice-template zone.
+                zone = row.zone or _zone_from_template(sg_config.slice_template)
+                if not zone:
+                    return wid, None, "missing zone metadata"
+                wc = build_worker_config_for_group(base_worker_config, sg_config)
+                wc.worker_id = wid
+                wc.slice_id = row.slice_id
+                script = build_worker_bootstrap_script(wc)
+                try:
+                    handle = bundle.workers.worker_handle(worker_id=wid, slice_id=row.slice_id, zone=zone)
+                    handle.restart_worker(script)
+                except Exception as e:
+                    return wid, None, str(e)
+                return wid, "ok", None
+
+            with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                results = list(pool.map(_restart, batch))
+
+            for wid, status, error in results:
+                if status is None:
+                    click.echo(f"  ABORT: restart failed for {wid}: {error}", err=True)
                     _print_summary(succeeded, total - succeeded, offset)
                     raise SystemExit(1)
 

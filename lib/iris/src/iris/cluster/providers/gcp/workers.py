@@ -50,6 +50,7 @@ from iris.cluster.providers.types import (
     InfraError,
     Labels,
     ListedSlice,
+    RemoteWorkerHandle,
     SliceHandle,
     generate_slice_suffix,
 )
@@ -315,6 +316,25 @@ class GcpWorkerProvider:
             self._gcp.vm_delete(vm_name, zone)
         except InfraError as e:
             logger.warning("Cleanup of VM %s failed: %s", vm_name, e)
+
+    def worker_handle(self, worker_id: str, slice_id: str, zone: str) -> RemoteWorkerHandle:
+        """Look up a worker handle for an existing slice.
+
+        Discovers the slice via ``list_slices`` (same path the controller's
+        autoscaler uses) and returns the per-worker handle from
+        ``slice.describe().workers``. The handle type — TPU vs standalone GCE —
+        is dispatched by the slice handle itself, so SSH plumbing matches
+        whatever the autoscaler would have used.
+        """
+        candidates = self.list_slices(zones=[zone])
+        for slice_handle in candidates:
+            if slice_handle.slice_id != slice_id:
+                continue
+            for worker in slice_handle.describe().workers:
+                if worker.worker_id == worker_id:
+                    return worker
+            raise ValueError(f"Worker {worker_id!r} not found in slice {slice_id!r}")
+        raise ValueError(f"Slice {slice_id!r} not found in zone {zone!r}")
 
     def create_vm(self, config: config_pb2.VmConfig) -> GcpStandaloneWorkerHandle:
         """Create a GCE instance. Returns a handle with SSH and label/metadata support."""

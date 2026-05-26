@@ -294,8 +294,9 @@ message Controller {
     // The controller uses this as the canonical worker identity.
     string worker_id = 3;
     // Infrastructure identity from WorkerConfig, set by the autoscaler at
-    // bootstrap. Stored in the workers table so restart_worker() can look
-    // up the worker's slice without waiting for the autoscaler refresh cycle.
+    // bootstrap. Stored in the workers table so the CLI-side worker-restart
+    // driver can look up the worker's slice without waiting for the autoscaler
+    // refresh cycle.
     string slice_id = 4;
     string scale_group = 5;
   }
@@ -472,17 +473,6 @@ message Controller {
     repeated NodePoolStatus node_pools = 8;
   }
 
-  // --- Worker Restart ---
-
-  message RestartWorkerRequest {
-    string worker_id = 1;
-  }
-
-  message RestartWorkerResponse {
-    bool accepted = 1;
-    string error = 2;
-  }
-
   // --- Budget Management ---
   message SetUserBudgetRequest {
     string user_id = 1;
@@ -620,9 +610,6 @@ service ControllerService {
 
   // Generic query API
   rpc ExecuteRawQuery(iris.query.RawQueryRequest) returns (iris.query.RawQueryResponse);
-
-  // Worker lifecycle
-  rpc RestartWorker(Controller.RestartWorkerRequest) returns (Controller.RestartWorkerResponse);
 
   // Budget management
   rpc SetUserBudget(Controller.SetUserBudgetRequest) returns (Controller.SetUserBudgetResponse);
