@@ -6,6 +6,9 @@ from marin.transform.conversation.adapters import InputDatasetFormat
 from marin.transform.conversation.transform_conversation import transform_row
 
 from experiments.posttrain.instruction_datasets import (
+    DOLCI_THINK_SFT_PYTHON_HF_ID,
+    DOLCI_THINK_SFT_PYTHON_METADATA_COLUMNS,
+    DOLCI_THINK_SFT_PYTHON_REVISION,
     FINEPROOFS_SFT_METADATA_COLUMNS,
     FINEPROOFS_SFT_REVISION,
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
@@ -23,6 +26,27 @@ SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
         {"role": "user", "content": "Write Python code to count the intersection of two sets."},
         {"role": "assistant", "content": "<think>Use set intersection.</think>\n```python\nprint(len(a & b))\n```"},
     ],
+}
+
+DOLCI_THINK_SFT_PYTHON_SAMPLE = {
+    "messages": [
+        {
+            "role": "user",
+            "content": "Write a Python function add_one(x) that returns x + 1.",
+        },
+        {
+            "role": "assistant",
+            "content": "\n".join(
+                [
+                    "<think>This answer is intentionally wrong.</think>",
+                    "```python\ndef add_one(x):\n    return x - 1\n```",
+                ]
+            ),
+        },
+    ],
+    "sample_id": "93eb9369-60d5-4fb5-bcd8-d43daec74ae4",
+    "question_id": "2b72ffc99cf5fa0c7397ef611f0a35ebb510f44cb2d63d77602b7250d2e4b476",
+    "correct": False,
 }
 
 
@@ -104,4 +128,40 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
         "problem_id": "prime_rl_code_21747",
         "task_type": "prime_rl_code",
         "reward": 1.0,
+    }
+
+
+def test_dolci_think_sft_python_step_transforms_chat_rows():
+    step = get_instruction_dataset(DOLCI_THINK_SFT_PYTHON_HF_ID)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+
+    assert step.name == "documents/allenai/Dolci-Think-SFT-Python"
+    assert step.override_output_path is not None
+    assert step.override_output_path.startswith(
+        f"documents/allenai--Dolci-Think-SFT-Python-{DOLCI_THINK_SFT_PYTHON_REVISION}-"
+    )
+    assert unwrap_versioned_value(cfg.source) == DOLCI_THINK_SFT_PYTHON_HF_ID
+    assert unwrap_versioned_value(cfg.revision) == DOLCI_THINK_SFT_PYTHON_REVISION
+    assert unwrap_versioned_value(cfg.subsets) == ["default"]
+    assert unwrap_versioned_value(cfg.splits) == ["train"]
+    assert unwrap_versioned_value(cfg.metadata_columns) == DOLCI_THINK_SFT_PYTHON_METADATA_COLUMNS
+    assert adapter.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN
+
+    result = transform_row(DOLCI_THINK_SFT_PYTHON_SAMPLE, cfg, adapter)
+
+    assert result is not None
+    assert result.source == DOLCI_THINK_SFT_PYTHON_HF_ID
+    assert [message.role for message in result.messages] == ["user", "assistant"]
+    assert result.messages[0].content == "Write a Python function add_one(x) that returns x + 1."
+    assert result.messages[1].content == "\n".join(
+        [
+            "<|start_think|>This answer is intentionally wrong.<|end_think|>",
+            "```python\ndef add_one(x):\n    return x - 1\n```",
+        ]
+    )
+    assert result.metadata == {
+        "sample_id": "93eb9369-60d5-4fb5-bcd8-d43daec74ae4",
+        "question_id": "2b72ffc99cf5fa0c7397ef611f0a35ebb510f44cb2d63d77602b7250d2e4b476",
+        "correct": False,
     }

@@ -38,6 +38,7 @@ Current datasets:
 23. open-thoughts/OpenThoughts3-1.2M  # Original OT3 dataset; smoltalk2 uses a slightly different version
 24. lm-provers/FineProofs-SFT
 25. lm-provers/FineProofs-SFT/proof-only
+26. allenai/Dolci-Think-SFT-Python
 """
 
 import dataclasses
@@ -248,6 +249,10 @@ SYNTHETIC2_SFT_VERIFIED_HF_ID = "PrimeIntellect/SYNTHETIC-2-SFT-verified"
 SYNTHETIC2_SFT_VERIFIED_REVISION = "fce247fe48af8ff9624fb51d1de63aa1b2332cef"
 SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS = ["problem_id", "task_type", "reward"]
 
+DOLCI_THINK_SFT_PYTHON_HF_ID = "allenai/Dolci-Think-SFT-Python"
+DOLCI_THINK_SFT_PYTHON_REVISION = "36fcd3f93e8e702f793e1d77be44e7849d727a95"
+DOLCI_THINK_SFT_PYTHON_METADATA_COLUMNS = ["sample_id", "question_id", "correct"]
+
 FINEPROOFS_SFT_REVISION = "73661e6"
 FINEPROOFS_SFT_METADATA_COLUMNS = [
     "category",
@@ -406,6 +411,15 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter=multi_turn_adapter(),
         metadata_columns=SYNTHETIC2_SFT_VERIFIED_METADATA_COLUMNS,
         name=SYNTHETIC2_SFT_VERIFIED_HF_ID,
+        subsets=["default"],
+        splits=["train"],
+    ),
+    DOLCI_THINK_SFT_PYTHON_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=DOLCI_THINK_SFT_PYTHON_HF_ID,
+        revision=DOLCI_THINK_SFT_PYTHON_REVISION,
+        adapter=multi_turn_adapter(),
+        metadata_columns=DOLCI_THINK_SFT_PYTHON_METADATA_COLUMNS,
+        name=DOLCI_THINK_SFT_PYTHON_HF_ID,
         subsets=["default"],
         splits=["train"],
     ),
