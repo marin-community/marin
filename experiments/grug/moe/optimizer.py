@@ -8,8 +8,8 @@ import jax
 import jax.numpy as jnp
 import optax
 from levanter.optim import OptimizerConfig
-from levanter.optim.grugmuon import _grug_scale_with_muon
-from levanter.optim.util import CoefficientType, zeropower_via_newtonschulz5
+from levanter.optim.grugmuon import _grug_scale_with_muon, _zeropower_via_newtonschulz_replicated
+from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
@@ -274,7 +274,11 @@ def scale_with_grug_klsoaph(
 def _muon_orthogonalize_per_leaf(direction_updates, steps: int, eps: float, coefficient_type: CoefficientType):
     """Apply Muon's Newton-Schulz orthogonalization + fan_out/fan_in scaling to each matrix leaf.
 
-    Matches ``_grug_scale_with_muon``'s ``transform_array`` formula:
+    Matches ``_grug_scale_with_muon``'s ``transform_array`` formula exactly,
+    using the same ``_zeropower_via_newtonschulz_replicated`` primitive (which
+    reshards to ``P(None, None)`` and uses ``out_sharding=P(None, None)`` on its
+    einsums — required under JAX's Explicit-mesh sharding mode):
+
       - 2D leaves: NS5 directly.
       - 3D leaves (MoE expert stacks): vmap NS5 over the leading axis.
       - After NS5, multiply by ``sqrt(max(1, fan_out / fan_in))``.
@@ -287,12 +291,10 @@ def _muon_orthogonalize_per_leaf(direction_updates, steps: int, eps: float, coef
         if not hasattr(x, "ndim") or x.ndim not in (2, 3):
             return x
         if x.ndim == 2:
-            updated = zeropower_via_newtonschulz5(x, steps=steps, eps=eps, coefficient_type=coefficient_type)
+            updated = _zeropower_via_newtonschulz_replicated(x, steps, eps, coefficient_type, None)
         else:
             updated = jax.vmap(
-                lambda matrix: zeropower_via_newtonschulz5(
-                    matrix, steps=steps, eps=eps, coefficient_type=coefficient_type
-                )
+                lambda matrix: _zeropower_via_newtonschulz_replicated(matrix, steps, eps, coefficient_type, None)
             )(x)
         fan_in, fan_out = updated.shape[-2:]
         scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))

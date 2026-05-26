@@ -36,7 +36,7 @@ _HIDDEN_DIM: int = 512
 _BUDGET: float = 2.19e17
 _TARGET_STEPS: int = 2**14
 _TPU: str = "v5p-8"
-_RUN_SUFFIX: str = "muon-h-v2"
+_RUN_SUFFIX: str = "muon-h-v3"
 
 
 def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
