@@ -33,6 +33,14 @@ VLLM_TPU_ENV_VARS: dict[str, str] = {
     "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1",
     "VLLM_TPU_DISABLE_TOPK_TOPP_OPTIMIZATION": "1",
     "VLLM_TPU_SKIP_PRECOMPILE": "1",
+    # Persistent JAX + vLLM XLA compile caches, GCS-backed, shared across all
+    # vLLM loads through this module. JAX's cache is content-addressed
+    # internally, so different architectures naturally land in different
+    # cache files within the same dir. First model with a given arch +
+    # compile shapes pays full ~5-10 min compile; subsequent models reuse.
+    # TTL on the bucket path is 30 days (handled by lifecycle policy).
+    "JAX_COMPILATION_CACHE_DIR": "gs://marin-us-east5/tmp/ttl=30d/vllm-cache/marin-eval",
+    "VLLM_XLA_CACHE_PATH": "gs://marin-us-east5/tmp/ttl=30d/vllm-cache/marin-eval",
 }
 
 
