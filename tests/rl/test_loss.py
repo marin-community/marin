@@ -7,7 +7,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from marin.rl.decoding import DecodingConfig
-from marin.rl.kl_regularization import KLConfig, KLMode, k2_from_log_ratio, k3_from_log_ratio, masked_response_mean
+from marin.rl.kl_regularization import (
+    KLConfig,
+    KLMode,
+    k2_from_log_ratio,
+    k3_from_log_ratio,
+    kl_penalty_from_log_ratio,
+    masked_response_mean,
+)
 from marin.rl.rl_losses import (
     RLOOLoss,
     compute_ppo_loss_objective,
@@ -163,6 +170,19 @@ def test_ppo_objective(
     np.testing.assert_allclose(loss, expected_loss, atol=1e-6)
 
 
+def test_kl_penalty_dispatches_selected_estimator():
+    log_ratio = np.array([[-0.3, 0.0, 0.5]], dtype=np.float32)
+
+    np.testing.assert_allclose(kl_penalty_from_log_ratio(log_ratio, KLMode.K1_LOSS), log_ratio)
+    np.testing.assert_allclose(kl_penalty_from_log_ratio(log_ratio, KLMode.K2_LOSS), 0.5 * np.square(log_ratio))
+    np.testing.assert_allclose(
+        kl_penalty_from_log_ratio(log_ratio, KLMode.K3_LOSS),
+        np.expm1(-log_ratio) + log_ratio,
+        rtol=1e-6,
+        atol=0.0,
+    )
+
+
 def test_k3_helper_matches_stable_closed_form():
     log_ratio = np.array([[-0.3, 0.0, 0.5]], dtype=np.float32)
     expected = np.expm1(-log_ratio) + log_ratio
@@ -202,18 +222,28 @@ def test_masked_response_mean_ignores_prompt_positions():
 
 def test_rloo_loss_needs_reference_model_only_when_kl_enabled():
     assert not RLOOLoss(kl=KLConfig(mode=KLMode.NONE, beta=0.0)).needs_reference_model()
+    assert not RLOOLoss(kl=KLConfig(mode=KLMode.K1_LOSS, beta=0.0)).needs_reference_model()
     assert not RLOOLoss(kl=KLConfig(mode=KLMode.K2_LOSS, beta=0.0)).needs_reference_model()
+    assert RLOOLoss(kl=KLConfig(mode=KLMode.K1_LOSS, beta=0.01)).needs_reference_model()
     assert RLOOLoss(kl=KLConfig(mode=KLMode.K3_LOSS, beta=0.01)).needs_reference_model()
     assert RLOOLoss(kl=KLConfig(mode=KLMode.K2_LOSS, beta=0.01)).needs_reference_model()
 
 
-@pytest.mark.parametrize("mode", [KLMode.K2_LOSS, KLMode.K3_LOSS])
+@pytest.mark.parametrize("mode", [KLMode.K1_LOSS, KLMode.K2_LOSS, KLMode.K3_LOSS])
 def test_rloo_loss_rejects_missing_reference_model_when_kl_enabled(mode: KLMode):
     with pytest.raises(ValueError, match="reference_model is required"):
         RLOOLoss(kl=KLConfig(mode=mode, beta=0.01)).create_loss_fn(reference_model=None, train_model=None)
 
 
-def test_rloo_loss_reports_k2_metrics():
+@pytest.mark.parametrize(
+    ("mode", "expected_kl_loss"),
+    [
+        (KLMode.K1_LOSS, 0.0875),
+        (KLMode.K2_LOSS, 0.018125),
+        (KLMode.K3_LOSS, 0.01565768),
+    ],
+)
+def test_rloo_loss_reports_selected_kl_loss(mode: KLMode, expected_kl_loss: float):
     current_model = object()
     reference_model = object()
     current_logprobs = np.array([[0.0, 0.0, -0.2, -0.1]], dtype=np.float32)
@@ -237,12 +267,12 @@ def test_rloo_loss_reports_k2_metrics():
             return reference_logprobs, None
         raise AssertionError("unexpected model passed to compute_policy_stats_fn")
 
-    _loss, metrics = rloo_loss_with_importance_sampling(
+    loss, metrics = rloo_loss_with_importance_sampling(
         current_model,
         reference_model,
         batch,
         key=None,
-        kl=KLConfig(mode=KLMode.K2_LOSS, beta=0.25),
+        kl=KLConfig(mode=mode, beta=0.25),
         clip_epsilon_low=0.2,
         clip_epsilon_high=0.2,
         tis_importance_sampling_ratio_max=2.0,
@@ -254,7 +284,8 @@ def test_rloo_loss_reports_k2_metrics():
     np.testing.assert_allclose(float(metrics["kl_k1_mean"]), 0.35, atol=1e-6)
     np.testing.assert_allclose(float(metrics["kl_k2_mean"]), 0.0725, atol=1e-6)
     np.testing.assert_allclose(float(metrics["kl_k3_mean"]), 0.06263071, atol=1e-6)
-    np.testing.assert_allclose(float(metrics["kl_loss"]), 0.018125, atol=1e-6)
+    np.testing.assert_allclose(float(metrics["kl_loss"]), expected_kl_loss, atol=1e-6)
+    np.testing.assert_allclose(float(loss), -1.0 + expected_kl_loss, atol=1e-6)
 
 
 def test_kl_config_rejects_invalid_values():
