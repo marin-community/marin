@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import optax
 from levanter.optim import OptimizerConfig
 from levanter.optim.grugmuon import _grug_scale_with_muon
-from levanter.optim.util import CoefficientType
+from levanter.optim.util import CoefficientType, zeropower_via_newtonschulz5
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
@@ -267,6 +267,83 @@ def scale_with_grug_klsoaph(
         direction, next_state = soap_transform.update(updates, state, params)
         klsoaph_updates = _scale_invariant_hyperball_updates(params, direction, learning_rate)
         return klsoaph_updates, next_state
+
+    return optax.GradientTransformation(init_fn, update_fn)
+
+
+def _muon_orthogonalize_per_leaf(direction_updates, steps: int, eps: float, coefficient_type: CoefficientType):
+    """Apply Muon's Newton-Schulz orthogonalization + fan_out/fan_in scaling to each matrix leaf.
+
+    Matches ``_grug_scale_with_muon``'s ``transform_array`` formula:
+      - 2D leaves: NS5 directly.
+      - 3D leaves (MoE expert stacks): vmap NS5 over the leading axis.
+      - After NS5, multiply by ``sqrt(max(1, fan_out / fan_in))``.
+
+    Used by ``scale_with_grug_klsoaph_muon`` to compose KL SOAP preconditioning
+    with Muon-style orthogonalization before the hyperball post-step.
+    """
+
+    def transform(x):
+        if not hasattr(x, "ndim") or x.ndim not in (2, 3):
+            return x
+        if x.ndim == 2:
+            updated = zeropower_via_newtonschulz5(x, steps=steps, eps=eps, coefficient_type=coefficient_type)
+        else:
+            updated = jax.vmap(
+                lambda matrix: zeropower_via_newtonschulz5(
+                    matrix, steps=steps, eps=eps, coefficient_type=coefficient_type
+                )
+            )(x)
+        fan_in, fan_out = updated.shape[-2:]
+        scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
+        return updated * scale
+
+    return jax.tree.map(transform, direction_updates, is_leaf=lambda x: x is None)
+
+
+def scale_with_grug_klsoaph_muon(
+    beta1: float = 0.95,
+    beta2: float = 0.9,
+    shampoo_beta: float = 0.9,
+    eps: float = 1e-8,
+    precond_freq: int = 5,
+    init_factor: float = 0.1,
+    block_size: int = 128,
+    learning_rate: float = 0.018,
+    ns5_steps: int = 5,
+    ns5_eps: float = 1e-7,
+    ns5_coefficient_type: CoefficientType = "quintic",
+) -> optax.GradientTransformation:
+    """KL-Soap-Muon-H: KLSOAPH direction → Muon NS5 orthogonalize → hyperball.
+
+    Composes the upstream KLSOAPH SOAP-eigenbasis Adam direction with Muon's
+    Newton-Schulz quintic orthogonalization (same coefficients / fan_out-fan_in
+    scaling as ``scale_with_grug_muonh``) before the scale-invariant hyperball
+    post-step. The intent is to test whether NS5 orthogonalization stacks
+    productively on top of SOAP preconditioning.
+    """
+    soap_transform = scale_by_klsoaph(
+        beta1=beta1,
+        beta2=beta2,
+        shampoo_beta=shampoo_beta,
+        eps=eps,
+        precond_freq=precond_freq,
+        init_factor=init_factor,
+        block_size=block_size,
+    )
+
+    def init_fn(params):
+        return soap_transform.init(params)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("scale_with_grug_klsoaph_muon requires params for norm-preserving updates")
+        direction, next_state = soap_transform.update(updates, state, params)
+        orth_direction = _muon_orthogonalize_per_leaf(
+            direction, steps=ns5_steps, eps=ns5_eps, coefficient_type=ns5_coefficient_type
+        )
+        klsoaph_muon_updates = _scale_invariant_hyperball_updates(params, orth_direction, learning_rate)
+        return klsoaph_muon_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
 
@@ -634,13 +711,119 @@ class GrugMoeKLSoapHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
+@OptimizerConfig.register_subclass("grug_moe_klsoaph_muon_v1")
+@dataclass(frozen=True)
+class GrugMoeKLSoapMuonHConfig(OptimizerConfig):
+    """KL-Soap-Muon-H for Grug MoE: KLSOAPH direction + Muon NS5 + hyperball.
+
+    Same routing / mask as ``GrugMoeKLSoapHConfig`` (attn_gate joins the SOAP
+    group; lm_head / output_proj uses adamh; embeddings / router_bias / router
+    use plain Adam). The matrix group adds a Newton-Schulz orthogonalization
+    step between the KLSOAPH direction and the hyperball post-step, using the
+    same NS coefficient set / step count / fan_out-fan_in scaling as
+    ``GrugMoeMuonHConfig``.
+
+    - klsoaph_muon: matrix leaves (ndim in (2, 3)) outside the baseline Adam group
+    - adamh: lm head / output projection matrix
+    - adam: leaves that the variant routes to plain Adam
+    """
+
+    adam_lr: float = 6e-4
+    beta1: float = 0.95
+    beta2: float = 0.9
+    shampoo_beta: float = 0.9
+    epsilon: float = 1e-8
+    precond_freq: int = 5
+    init_factor: float = 0.1
+    block_size: int = 128
+    max_grad_norm: float | None = 1.0
+    # Muon NS5 orthogonalization parameters — defaults match GrugMoeMuonHConfig.
+    ns5_steps: int = 5
+    ns5_eps: float = 1e-7
+    ns5_coefficient_type: CoefficientType = "quintic"
+
+    def build(self, num_train_steps):
+        learning_rate_schedule = self.lr_scheduler(num_train_steps)
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+
+        def optimizer(learning_rate, adam_lr):
+            def klsoaph_muon_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(
+                    scale_with_grug_klsoaph_muon(
+                        beta1=self.beta1,
+                        beta2=self.beta2,
+                        shampoo_beta=self.shampoo_beta,
+                        eps=self.epsilon,
+                        precond_freq=self.precond_freq,
+                        init_factor=self.init_factor,
+                        block_size=self.block_size,
+                        learning_rate=learning_rate,
+                        ns5_steps=self.ns5_steps,
+                        ns5_eps=self.ns5_eps,
+                        ns5_coefficient_type=self.ns5_coefficient_type,
+                    )
+                )
+                components.append(_match_named_update_sharding())
+                return optax.chain(*components)
+
+            def adamh_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate))
+                return optax.chain(*components)
+
+            def adam_transform():
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                components.append(optax.scale(-adam_lr))
+                return optax.chain(*components)
+
+            return optax.multi_transform(
+                {
+                    "klsoaph_muon": klsoaph_muon_transform(),
+                    "adamh": adamh_transform(),
+                    "adam": adam_transform(),
+                },
+                self.create_mask,
+            )
+
+        return optax.inject_hyperparams(optimizer)(
+            learning_rate=learning_rate_schedule,
+            adam_lr=adam_lr_schedule,
+        )
+
+    def create_mask(self, params):
+        paths = leaf_key_paths(params)
+
+        def mask_fn(param, path):
+            path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+            path_lower = path_str.lower()
+            if _uses_klsoaph_baseline_adam_group(path_lower):
+                return "adam"
+            if "output_proj" in path_lower or "lm_head" in path_lower:
+                return "adamh"
+            if hasattr(param, "ndim") and param.ndim in (2, 3):
+                return "klsoaph_muon"
+            return "adam"
+
+        return jax.tree.map(mask_fn, params, paths)
+
+
 __all__ = [
     "GrugMoeAdamHConfig",
     "GrugMoeKLSoapHConfig",
+    "GrugMoeKLSoapMuonHConfig",
     "GrugMoeMuonHConfig",
     "GrugMoeNorMuonHConfig",
     "ScaleByGrugNorMuonHState",
     "scale_with_grug_klsoaph",
+    "scale_with_grug_klsoaph_muon",
     "scale_with_grug_muonh",
     "scale_with_grug_normuonh",
 ]
