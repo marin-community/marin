@@ -253,9 +253,9 @@ class PrimeIntellectEnv(MarinEnv):
         del prng_key
 
         self._validate_sample_request(mode, system_prompt)
-        decoding = inference_ctx.resolve_decoding(decoding)
         verifier_env = self._load_verifier_env()
         self._validate_verifier_env(verifier_env)
+        decoding = inference_ctx.resolve_decoding(decoding)
 
         base_inputs = self._select_inputs(verifier_env, mode, n_examples)
         if base_inputs is None:

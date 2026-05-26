@@ -26,6 +26,7 @@ from marin.rl.environments.inference_ctx import (
 from marin.rl.environments.inference_ctx.inflight.worker import WorkerExtension
 from marin.rl.environments.inference_ctx.openai_compat import OpenAICompatClient
 from marin.rl.environments.inference_ctx.vllm import InferenceMode
+from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from openai.types.completion_usage import CompletionUsage
