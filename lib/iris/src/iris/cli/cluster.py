@@ -1025,7 +1025,7 @@ def controller_restart(ctx, skip_checkpoint: bool, checkpoint_timeout: int):
 @controller.command("worker-restart")
 @click.option("--worker-id", multiple=True, help="Worker(s) to restart (repeatable; default: all)")
 @click.option("--timeout", type=int, default=120, help="Max seconds to wait per worker to become healthy")
-@click.option("--min-batch", type=int, default=1, help="Maximum workers to restart concurrently")
+@click.option("--min-batch", type=int, default=1, help="Minimum workers to restart concurrently")
 @click.option("--max-batch", type=int, default=64, help="Maximum workers to restart concurrently")
 @click.option(
     "--observation-window",
