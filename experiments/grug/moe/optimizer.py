@@ -845,12 +845,16 @@ class GrugMoeAmuseConfig(OptimizerConfig):
     backend_steps: int = 5
     muon_epsilon: float = 1e-8
     coefficient_type: CoefficientType = "quintic"
-    # AMUSE hyperparameters
+    # AMUSE hyperparameters (SF interpolation)
     amuse_beta1: float = 0.6
     amuse_rho: float = 0.8
     amuse_warmup_steps: int = 2000
     amuse_weight_lr_power: float = 2.0
-    # AdamW-no-β1 hyperparameters (β_1 forced to 0 per AMUSE pseudocode)
+    # AdamH / Adam hyperparameters. We deviate from the AMUSE paper here: the
+    # paper's Adam path drops β_1 (so SF's β_t interpolation is the only
+    # smoothing). We keep β_1 instead so the LM head uses the standard SF-AdamH
+    # (b1=0.9) the grug pipeline has been tuned for; SF's β_t stacks on top.
+    beta1: float = 0.9
     beta2: float = 0.95
     epsilon: float = 1e-8
     max_grad_norm: float | None = 1.0
@@ -867,11 +871,14 @@ class GrugMoeAmuseConfig(OptimizerConfig):
             # wraps these uniformly so there is a single AmuseState with X).
             #
             #  muonh: Muon (NS orthogonalize, plain heavy-ball) + hyperball
-            #    post-step. The hyperball already encodes lr; weight decay
-            #    is intentionally NOT applied (hyperball preserves parameter
-            #    norms, which substitutes for explicit weight decay).
-            #  adam_no_b1: AdamW with β_1=0 per AMUSE pseudocode. β_2 keeps
-            #    the variance buffer; SF replaces β_1 with the β_t interp.
+            #    post-step. β_1 is paper-faithful (plain heavy-ball, not
+            #    Nesterov); the hyperball already encodes lr and preserves
+            #    parameter norms, substituting for explicit weight decay.
+            #  adamh (LM head / output proj): AdamH at matrix LR with the
+            #    grug pipeline's β_1. SF's β_t stacks on top of Adam's β_1.
+            #  adamw (1-D / embedding / router / norm): AdamW with the same
+            #    β_1; decoupled weight decay is applied to Z (since hyperball
+            #    is not present on this path, weight decay carries that role).
             muonh_base = scale_with_grug_muonh(
                 momentum=self.muon_momentum,
                 nesterov=False,  # plain heavy-ball per AMUSE pseudocode
@@ -881,17 +888,26 @@ class GrugMoeAmuseConfig(OptimizerConfig):
                 coefficient_type=self.coefficient_type,
             )
 
-            def adam_no_b1_at(lr):
-                return optax.chain(
-                    optax.scale_by_adam(b1=0.0, b2=self.beta2, eps=self.epsilon),
-                    optax.scale_by_learning_rate(lr, flip_sign=True),
-                )
+            adamh_base = scale_by_adamh(
+                b1=self.beta1,
+                b2=self.beta2,
+                eps=self.epsilon,
+                learning_rate=learning_rate,
+            )
+
+            adamw_base = optax.adamw(
+                learning_rate=adam_lr,
+                b1=self.beta1,
+                b2=self.beta2,
+                eps=self.epsilon,
+                weight_decay=self.weight_decay,
+            )
 
             base = optax.multi_transform(
                 {
                     "amuse_muon": muonh_base,
-                    "amuse_adam_at_lr": adam_no_b1_at(learning_rate),
-                    "amuse_adam_at_adam_lr": adam_no_b1_at(adam_lr),
+                    "amuse_adamh": adamh_base,
+                    "amuse_adamw": adamw_base,
                 },
                 self.create_mask,
             )
@@ -923,16 +939,16 @@ class GrugMoeAmuseConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            # 1-D / embedding / router / norm → adam (no SOAP, no Muon)
+            # 1-D / embedding / router / norm → AdamW (decoupled WD) at adam_lr
             if _uses_adamh_baseline_adam_group(path_lower):
-                return "amuse_adam_at_adam_lr"
-            # lm head / output projection → adam at matrix LR
+                return "amuse_adamw"
+            # lm head / output projection → AdamH (hyperball-normalized) at matrix LR
             if "output_proj" in path_lower or "lm_head" in path_lower:
-                return "amuse_adam_at_lr"
-            # Matrix params → Muon under AMUSE
+                return "amuse_adamh"
+            # Matrix params → MuonH (Muon + hyperball) at matrix LR
             if hasattr(param, "ndim") and param.ndim in (2, 3):
                 return "amuse_muon"
-            return "amuse_adam_at_adam_lr"
+            return "amuse_adamw"
 
         return jax.tree.map(mask_fn, params, paths)
 
