@@ -10,6 +10,7 @@ import uuid
 import numpy as np
 import pytest
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -54,7 +55,11 @@ def test_train_worker_with_sequential_digits(tmp_path):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "sequential_digits", "seed": 42, "difficulty": "medium"},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=64),
+                sampling_params=SamplingParams(
+                    n_prompts=8,
+                    n_generations_per_prompt=4,
+                    train_decoding=DecodingConfig(temperature=1.0, max_output_tokens=64),
+                ),
             )
         },
         eval_frequency=100,
@@ -132,7 +137,11 @@ def test_full_integration_sequential_digits(tmp_path):
                     env_class="marin.rl.environments.mock_env.MockEnv",
                     env_args={"task_type": "sequential_digits", "seed": 42, "difficulty": "medium"},
                 ),
-                sampling_params=SamplingParams(temperature=1.0, n_prompts=8, n_generations_per_prompt=4, max_tokens=64),
+                sampling_params=SamplingParams(
+                    n_prompts=8,
+                    n_generations_per_prompt=4,
+                    train_decoding=DecodingConfig(temperature=1.0, max_output_tokens=64),
+                ),
             )
         },
         eval_frequency=100,

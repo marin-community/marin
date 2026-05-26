@@ -6,6 +6,7 @@
 import jax.random
 import numpy as np
 import pytest
+from marin.rl.decoding import DecodingConfig
 from marin.rl.environments.inference_ctx import LevanterInferenceContext
 from marin.rl.environments.math_env import MathEnv
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
@@ -51,12 +52,9 @@ class DummyInferenceContext(LevanterInferenceContext):
     def batch_completions(
         self,
         prompts,
-        temperature,
         n,
-        max_tokens=None,
-        stop=None,
+        decoding,
         system_prompt=None,
-        top_k=None,
     ):
         """Return mock completions for each prompt."""
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]
@@ -77,7 +75,7 @@ def test_math_env_reward_calculation(gpt2_tokenizer):
         inference_ctx=inference_ctx,
         n_examples=1,
         n_generations=1,
-        temperature=0.7,
+        decoding=DecodingConfig(temperature=0.7),
         prng_key=prng_key,
         mode="train",
     )
