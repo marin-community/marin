@@ -475,9 +475,9 @@ Plan locked at `/Users/ahmed/.claude/plans/make-a-plan-effervescent-rivest.md`.
 **Expected smoke result** — 3e18 after 10 SFT steps scores near 0% on GSM8K-256. Smoke verifies wiring, not quality.
 
 **Expected full-sweep findings** (hypothesis to falsify):
-- Base SFT accuracy monotonically increases 3e18 → 1e22.
-- `p33m67` (math-heavy) SFT > `p67m33` (replay-heavy) SFT > base SFT at each of 1e20/1e21/1e22.
-- All SFT cells exceed Rohith's existing `mask_00` (zero-mask base-model) numbers.
+- Post-SFT mean accuracy monotonically increases with base-pretrain scale: 3e18 → 1e22.
+- SFT initialized from `p33m67` (math-heavy midtrain) > SFT initialized from `p67m33` (replay-heavy midtrain) > SFT initialized from the raw base pretrain, at each of 1e20/1e21/1e22.
+- All post-SFT cells exceed Rohith's existing `mask_00` numbers (which evaluate the bare base pretrain at 5-shot solution-primed `mask_fraction=0.0`, no SFT applied).
 
 ### 2026-05-13 — Smoke run (`aa-smoke-sft-gsm8k-3e18-v5`): success after 5 attempts
 
@@ -559,20 +559,32 @@ For now the smoke proves the per-cell pipeline correctness end-to-end. Productio
 - `experiments/downstream_scaling/sft/train.py:_resolve_latest_hf_checkpoint` — accept absolute `://` URIs and skip MARIN_PREFIX join.
 - `experiments/downstream_scaling/evals/algorithms/iid.py:_load_vllm` — replace stale `get_tuned_block_sizes` patch with `get_default_block_sizes` patch (matches `smoke_iid_vllm_tpu.py`).
 
-### 2026-05-14 — Production 1e20 SFT comparison (base vs math-midtrain), both regimes
+### 2026-05-14 — Production 1e20 SFT comparison (SFT from base vs SFT from math-midtrain)
 
-After the smoke landed, ran the first real SFT experiment: pair the **Delphi 1.9B base** at the 3e+20 FLOP IsoFLOP point against **the same base after `p33m67 lr=0.67` math midtraining**, both SFT'd on GSM8K Q+A. Then re-ran the same comparison with `pack=1` and 1 epoch to disentangle training budget from packing. Both pairs succeeded end-to-end. **All artifacts on GCS; zero code committed yet — see the "Code state" section below for the dirty-tree summary.**
+After the smoke landed, ran the first real SFT experiment. **Both cells were SFT'd**; the only thing that varies between them is the checkpoint SFT was initialized from. Cell A: SFT initialized from the raw **Delphi 1.9B base pretrain** at the 3e+20 FLOP IsoFLOP point. Cell B: SFT initialized from **the same base after `p33m67 lr=0.67` math midtraining**. Both used the same GSM8K Q+A SFT recipe, same tokenizer, same eval config. Then re-ran the same pair with `pack=1` and 1 epoch to disentangle training budget from packing. Both pairs succeeded end-to-end. **All artifacts on GCS; zero code committed yet — see the "Code state" section below for the dirty-tree summary.**
 
 #### Headline results
 
-| Cell | 19 epochs (pack=True, 360 steps) | 1 epoch (pack=1, 117 steps) |
-|---|---|---|
-| `1e20_iso` (base pretrain only) | **2.73%** mean / **37.5%** pass@32 | 1.86% / 30.5% |
-| `1e20_p33m67_lr0.67` (math midtrain) | **18.82%** mean / **66.4%** pass@32 | 13.94% / 65.2% |
+**All four cells below are post-SFT.** The only axis that varies between rows is which checkpoint SFT was initialized from (raw base pretrain vs the same base after math midtraining). Both rows use identical SFT recipe, identical tokenizer, identical eval config. **No pre-SFT zero-shot numbers exist** for either checkpoint — see "Missing baselines" below.
 
-- Math midtraining gives a **~7× uplift in mean accuracy** at this scale, robust across training budgets (7.5× at 1 ep, 6.9× at 19 ep).
-- 19 packed-epochs beats 1 unpacked-epoch on mean accuracy for both cells. GSM8K's 7.5k train split is small enough that more SFT doesn't overfit on this format.
-- Pass@32 saturates earlier than mean accuracy (p33m67: 65.2 → 66.4, +1.2pp from extra training vs +4.88pp on mean). At 32 samples we already cover most "in-reach" problems early; later training improves per-sample quality not coverage.
+| SFT-init checkpoint | 19 packed epochs (pack=True, 360 steps) | 1 unpacked epoch (pack=1, 117 steps) |
+|---|---|---|
+| base 1.9B pretrain (slug `1e20_iso`) | **2.73%** mean / **37.5%** pass@32 | 1.86% / 30.5% |
+| math-midtrain 1.9B (slug `1e20_p33m67_lr0.67`) | **18.82%** mean / **66.4%** pass@32 | 13.94% / 65.2% |
+
+- Initializing SFT from the math-midtrained checkpoint instead of the raw base gives a **~7× uplift in post-SFT mean accuracy** at this scale, robust across training budgets (7.5× at 1 unpacked epoch, 6.9× at 19 packed epochs).
+- 19 packed-epochs beats 1 unpacked-epoch on mean accuracy for both rows. GSM8K's 7.5k train split is small enough that more SFT doesn't overfit on this format.
+- Pass@32 saturates earlier than mean accuracy (math-midtrain row: 65.2 → 66.4, +1.2pp from extra training vs +4.88pp on mean). At 32 samples we already cover most "in-reach" problems early; later training improves per-sample quality, not coverage.
+
+#### Missing baselines
+
+What this comparison does **not** measure:
+
+1. **Raw base pretrain at GSM8K Q+A zero-shot, no SFT** — no datapoint for "what does the bare 1.9B base score on `Question: {q}\nAnswer:` with our T=0.6, n=32 sampling config?"
+2. **Raw math-midtrain checkpoint at GSM8K Q+A zero-shot, no SFT** — same gap on the midtrain side. So we cannot decompose the 18.82% post-SFT mean into "midtraining alone gave us X" plus "the SFT pass added Y."
+3. **Apples-to-apples vs Rohith's `mask_00` cell** — his 5-shot solution-primed eval is a different task: same grader, different difficulty. See "Eval-task mismatch with Rohith's matrix" below.
+
+Each of (1) and (2) is one eval-only step (vLLM only, no retrain), ~22 min on v5p-8. Wire by pointing `make_eval_step` at the raw HF checkpoint paths in `models/delphi_extra.py` and `models/midtrain.py` instead of at SFT-step outputs.
 
 #### What we actually trained on (the "1e20" naming clarification)
 
@@ -598,19 +610,61 @@ v5 and v6 are both AdamH ("Attempt 2") iterations — **not** Attempt-1 vs Attem
 
 #### Eval-task mismatch with Rohith's existing matrix
 
-Our `GSM8KQATask` is **zero-shot Q+A**:
+Our `GSM8KQATask` is **zero-shot Q+A** — model gets `Question: {q}\nAnswer:` and must produce the full CoT plus `#### N`.
 
-```
-Question: {q}
-Answer:
-```
+Rohith's `MaskedGSM8KTask` at `mask_fraction=0.0` (his `mask_00` baseline cell) is **5-shot solution-primed completion** — 5 few-shot exemplars followed by the target's full CoT, and the model produces only the final `#### N` line.
 
-Rohith's `MaskedGSM8KTask` at `mask_fraction=0.0` (his `mask_00` baseline cell) is **5-shot solution-primed completion**: each few-shot example presents the full CoT solution body BEFORE the target answer, and the target prompt also includes the partial solution prefix. The model has to produce only the final `#### N` line, not the whole CoT.
-
-Same grader (lm-eval `flexible_extract` / `strict_match` regex over `#### N`), same IID sampling config (n=32, T=0.6, top_p=1.0, top_k=1000, max_tokens=512, seed=42, n_problems=256, v5p-8). Different *task difficulty*. **Our 1e20 numbers are NOT directly comparable to Rohith's `mask_00` numbers.** For apples-to-apples either:
+Same grader (lm-eval `flexible_extract` / `strict_match` regex over `#### N`). **Sampling config is byte-identical between the two** (n=32, T=0.6, top_p=1.0, top_k=1000, max_tokens=512, seed=42, n_problems=256, v5p-8) except for one extra stop token in our launcher (`<|end_of_text|>`). Different *task difficulty*. **Our 1e20 numbers are NOT directly comparable to Rohith's `mask_00` numbers.** For apples-to-apples either:
 
 - Run our SFT'd checkpoints through Rohith's `MaskedGSM8KTask` at `mask_fraction=0.0`, OR
 - Run the base Delphi 1.9B through our `GSM8KQATask` (zero-shot baseline, no SFT).
+
+##### Verified prompt format from `gs://marin-us-east5/downstream_scaling/evals/prompts/masked_gsm8k-42fd11/prompts.jsonl.gz` (the mask_00 artifact)
+
+Pulled an actual prompt to ground-truth the format. At `mask_fraction=0.0`:
+
+```text
+Question: <fewshot_q_0>
+Answer: <fewshot_CoT_0>
+<fewshot_CoT_0 AGAIN — see "doubled CoT" note below>
+#### <fewshot_a_0>
+
+... (5 few-shot exemplars total)
+
+Question: <target_q>
+Answer: <target_CoT, fully written out>
+```
+
+The model continues with `#### N`. For example, the first test problem's target CoT ends with `"She makes 9 * 2 = $<<9*2=18>>18 every day at the farmer's market."` — the model just has to output `#### 18`. **That is pattern matching from a visible answer, not math reasoning.** `mask_00` is therefore much easier than what "5-shot GSM8K baseline" usually means in lm-eval-harness (where the model produces the full CoT from `Question: X\nAnswer:`).
+
+##### Two prompt-construction observations worth knowing before any compatibility eval
+
+These are observations from reading `gsm8k_masked.py:107-130` and verifying against a `mask_05` prompt artifact (`gs://marin-us-east5/downstream_scaling/evals/prompts/masked_gsm8k-8f0376/prompts.jsonl.gz`):
+
+1. **Few-shot exemplars contain the CoT body twice.** Lines 119-120:
+   ```python
+   prompt += task.doc_to_text(fewshot_doc) + task.config.target_delimiter + masked_solution + "\n"
+   prompt += task.doc_to_target(fewshot_doc) + task.config.fewshot_delimiter
+   ```
+   First the (possibly masked) CoT body, then the *unmasked* full answer (`doc_to_target` returns CoT + `#### N`). For `mask_fraction=0.0` the two copies are identical and the duplication is just redundant. For `mask_fraction > 0` the first copy is masked but the second copy is the clean answer — meaning the few-shot exemplars are effectively unmasked regardless of `mask_fraction`. Only the target's CoT is meaningfully masked.
+
+2. **Therefore the mask axis only affects the target's CoT.** The few-shot demonstrations stay clean across all 11 mask conditions, only the target prefix gets perturbed. This is plausibly intentional (the few-shot is teaching "masked-noise → clean-answer", and the model is then asked to do that mapping on a noisy target), but it is not documented in the code. Any analysis that assumes the few-shot also degrades with `mask_fraction` is wrong.
+
+##### Sampling config cross-reference
+
+| Aspect | Rohith mask_00 — `evals/run_delphi_masked_gsm8k_iid.py:25-35` | Our SFT eval — `run_delphi_sft_gsm8k_qa.py:45-52` |
+|---|---|---|
+| `n_samples` | 32 | 32 |
+| `temperature` | 0.6 | 0.6 |
+| `top_p` / `top_k` | 1.0 / 1000 | 1.0 / 1000 |
+| `max_tokens` | 512 | 512 |
+| `seed` | 42 | 42 |
+| `stop` | `("Question:", "</s>", "<|im_end|>")` — 3 stops | `("Question:", "</s>", "<|im_end|>", "<|end_of_text|>")` — 4 stops |
+| `num_fewshot` | **5** (`fewshot_seed=1234`) | **0** |
+| `n_problems` | 256 | 256 |
+| What the model produces | only `#### N` | full CoT + `#### N` |
+
+So if we want to drop our SFT'd checkpoints into Rohith's pipeline for an apples-to-apples comparison, the only delta to manage is `num_fewshot` and the prompt format — the sampling/grader/n_problems all already line up.
 
 #### Bugs discovered + fixed today (all unhashed in iid.py and sft/train.py)
 
@@ -752,7 +806,7 @@ All five flags matter:
    - Re-eval our SFT'd checkpoints with `MaskedGSM8KTask, mask_fraction=0.0, num_fewshot=5` — cheap, ~22 min × N cells (vLLM only, no retrain).
    - Re-eval base Delphi 1.9B with `GSM8KQATask` (zero-shot) to get the "no SFT, no midtrain" baseline. Currently we have no such datapoint.
 
-3. **Code is not committed.** All 6 file modifications + 10 added files are in the dirty working tree on branch `aa_fork_rk_downstream` (pushed to origin earlier as a fork of `rohith-working-agent@a93fcf4cca`). Whether to commit + push is a decision for the user. If committing, suggested split:
+3. **Code is not committed.** [RESOLVED 2026-05-21 in commit `b7ca6bf5f` "initial downstream eval / sft" — everything described below was bundled into a single commit rather than the suggested 3-way split.] All 6 file modifications + 10 added files are in the dirty working tree on branch `aa_fork_rk_downstream` (pushed to origin earlier as a fork of `rohith-working-agent@a93fcf4cca`). Whether to commit + push is a decision for the user. If committing, suggested split:
    - One commit for the framework fixes (`iid.py`, `train.py`, `tokenize.py`) so they could be PR'd upstream cleanly.
    - One commit for the new experiment skeleton (`sft/`, `run_one_sft_gsm8k_qa.py`, `evals/tasks/gsm8k_qa.py`, model registries).
    - One commit for the smoke launcher + initial logbook.
@@ -767,7 +821,7 @@ All five flags matter:
 
 #### TL;DR for the next agent
 
-You're picking up `aa_fork_rk_downstream` after a successful 2-cell 1e20 SFT comparison + a 1-epoch follow-up. Math midtraining gives a ~7× uplift on GSM8K SFT at the 1.9B scale. Nothing's committed. The working launcher is `experiments/downstream_scaling/run_one_sft_gsm8k_qa.py --slug <slug>`; valid slugs are in `_checkpoint_registry()` (3e18 → 1e22 base ladder + 1e20_iso + 6 midtrain variants). The five framework bugs above are all fixed locally — don't re-discover them. The eval-cache-hit pattern (item 5) is the most subtle: **bump `SFT_OUTPUT_PREFIX` whenever you change SFT hyperparameters that aren't `versioned()`, otherwise the executor will reuse the previous eval's grades.**
+You're picking up `aa_fork_rk_downstream` after a successful 2-cell 1e20 SFT comparison + a 1-epoch follow-up. **Initializing SFT from the math-midtrain checkpoint instead of the raw base pretrain gives a ~7× uplift in post-SFT GSM8K accuracy at the 1.9B scale.** We have no pre-SFT zero-shot eval datapoints — only post-SFT — so this comparison isolates the midtrain-init axis but does not decompose "midtrain effect" from "SFT effect." Code uncommitted at EOD 2026-05-14 (later pushed as `b7ca6bf5f` on 2026-05-21). The working launcher is `experiments/downstream_scaling/run_one_sft_gsm8k_qa.py --slug <slug>`; valid slugs are in `_checkpoint_registry()` (3e18 → 1e22 base ladder + 1e20_iso + 6 midtrain variants). The five framework bugs above are all fixed locally — don't re-discover them. The eval-cache-hit pattern (item 5) is the most subtle: **bump `SFT_OUTPUT_PREFIX` whenever you change SFT hyperparameters that aren't `versioned()`, otherwise the executor will reuse the previous eval's grades.**
 
 ### 2026-05-15 — Architectural synopsis of `experiments/downstream_scaling/`
 
@@ -806,3 +860,288 @@ experiments/downstream_scaling/
 - **My modifications to `iid.py` are not opt-in.** The Qwen3 `hf_overrides` and RPA kernel rebase silently change behavior for *every* eval, including Rohith's masked-GSM8K relaunches. Should be flag-gated.
 
 **One-line summary:** Rohith built a tight three-stage protocol for eval-as-data; my SFT addition uses the protocol's outputs but doesn't extend it, so the package has a clean half and an attached half.
+
+### 2026-05-26 — 1 packed epoch SFT pass (pack=True, 19 steps)
+
+Re-ran the same 2-cell 1e20 comparison (SFT from base pretrain vs SFT from math-midtrain), now with **sequence packing on AND only 1 epoch of data coverage**. Both cells were SFT'd; the only thing varied between rows is the SFT-init checkpoint, identical to the 2026-05-14 setup. The new axis swept across the three regimes is **SFT budget × packing**: today's run is ~6× fewer optimizer steps than the 2026-05-14 1-unpacked-epoch run, with the same ~7.5k Q+A pair-views of data coverage; and ~19× fewer optimizer steps than the original 19-packed-epoch run.
+
+Question: does the math-midtrain SFT-init uplift survive when the optimizer trajectory is squeezed to just 19 gradient updates?
+
+#### Config delta vs prior runs
+
+| | 19 packed epochs (2026-05-14) | 1 unpacked epoch (2026-05-14) | 1 packed epoch (today) |
+|---|---|---|---|
+| `pack` | `True` | `1` (no packing) | `True` |
+| `num_train_steps` (= optimizer steps) | 360 | 117 | **19** |
+| Q+A pair-views per step | ~6.3 (packed) | 1 (unpacked) | ~6.3 (packed) |
+| Total Q+A pair-views | ~145k (≈19 epochs of 7.5k) | ~7.5k (≈1 epoch) | ~7.5k (≈1 epoch) |
+| `SFT_OUTPUT_PREFIX` | `gsm8k_qa` | `gsm8k_qa_nopack_1ep` | `gsm8k_qa_pack_1ep` |
+| Eval cell hash | `grade-b0066d` (base), `grade-94dfe4` (math) | `grade-17a6eb` (base), `grade-537f41` (math) | `grade-4d9231` (base), `grade-aa2a87` (math) |
+
+At 19 steps, `warmup=0.03 × 19 ≈ 0.6 steps` — effectively no warmup. The linear schedule covers essentially the entire run.
+
+#### Headline results (this run only)
+
+**Both rows are post-SFT.** Same eval recipe as before (256 problems × 32 IID samples, T=0.6, top_p=1.0, top_k=1000, max_tokens=512, seed=42, zero-shot Q+A prompt, `flexible_extract` grader).
+
+| SFT-init checkpoint | Mean accuracy | Pass@32 |
+|---|---:|---:|
+| base 1.9B pretrain (slug `1e20_iso`) | **1.33%** (109/8192) | **20.70%** (53/256) |
+| math-midtrain 1.9B (slug `1e20_p33m67_lr0.67`) | **7.54%** (618/8192) | **59.77%** (153/256) |
+
+Uplift from math-midtrain SFT-init vs base-pretrain SFT-init: **5.7× mean accuracy, 2.9× pass@32**. Same direction as prior regimes, smaller multiplier.
+
+#### Pass@32 across all three SFT regimes at 1e20
+
+|  | pack=False, 117 steps (1 unpacked epoch) | pack=True, 19 steps (1 packed epoch) | pack=True, 360 steps (19 packed epochs) |
+|---|---:|---:|---:|
+| base-init (`1e20_iso`) | 30.47% | 20.70% | 37.50% |
+| math-init (`1e20_p33m67_lr0.67`) | 65.23% | 59.77% | 66.41% |
+
+#### Reading
+
+- **Absolute accuracy tracks optimizer-step count, not pair-view count.** The 1-packed-epoch run (19 steps) and the 1-unpacked-epoch run (117 steps) see the same ~7.5k Q+A pair-views but differ by ~6× in gradient updates. Both mean accuracy and pass@32 drop meaningfully when steps go down: packing is data-efficient per FLOP but undertrained per optimizer step at fixed epoch count.
+- **The math-midtrain SFT-init uplift is robust across all three regimes** (5.7–7.5× on mean, 2.0–2.9× on pass@32). The midtrain advantage is not a function of SFT budget — it shows up consistently whether the optimizer takes 19, 117, or 360 SFT steps.
+- **Math-midtrain init is more pack-robust than base-pretrain init.** At 1 epoch, base-init loses ~10pp pass@32 when you turn packing on (30.47% → 20.70%); math-init loses only ~5.5pp (65.23% → 59.77%). Reasonable hypothesis: the math-midtrained checkpoint already encodes GSM8K-shaped reasoning patterns, so it needs fewer optimizer steps to specialize.
+- **Pass@32 generally tracks mean accuracy but with much smaller dynamic range.** The math-init row spans 59.77 → 66.41 (Δ ≈ 6.6pp) across 19→360 optimizer steps; the same range covers 7.54 → 18.82 (Δ ≈ 11.3pp) on mean. Pass@32 is closer to a "ceiling-of-reachable-problems" metric at this sampling budget.
+
+#### Operational notes
+
+- **Job IDs**:
+  - `/ahmedah/aa-sft-1e20-iso-pack-1ep` — 2 preempts, 3 attempts, ~60 min total wall-clock.
+  - `/ahmedah/aa-sft-1e20-p33m67-pack-1ep` — 0 preempts, 40:23 end-to-end.
+- **`WANDB_API_KEY` gotcha when launching from skampere3.** The Mac launches in the 2026-05-14 entry had the key baked into local env / config somewhere; skampere3 does not. First two job submissions today failed at config validation (`ValueError: WANDB_API_KEY must be set in the environment ...` raised inside `marin.training.training._check_for_wandb_key`). Fix: pass `-e WANDB_API_KEY "$WANDB_API_KEY"` explicitly to `iris job run`, extracting the value via Python one-liner from `/lfs/skampere3/0/ahmedah/code/marin/.marin.yaml` (memory `reference_marin_yaml_secrets.md` — never `Read`/`cat` that file). Worth fixing in the launcher or the iris config so future skampere3 launches don't need this step.
+- **Iris from skampere3 still needs the IAP-tunnel + pyenv 3.12.0 workaround** in memory `iris_cluster_remote_access.md`. The controller IP has rotated since that memory was written (was `34.171.120.166`, now `34.27.183.11`); the connection method is unchanged. Tunnel listens on `localhost:10000`; iris CLI invocation must include `--controller-url=http://localhost:10000`.
+- **Interactive priority is the iris default.** Passing `--priority interactive` is redundant but harmless. Preemptions today were from another interactive job (`/romain/served-qwen3-humaneval-full-4`), not from production-band displacement.
+
+#### Code state
+
+Two uncommitted edits on `aa_fork_rk_downstream` after these runs (both shipped via the iris workspace bundle at submission time, ~6.4 MB):
+
+| File | Change |
+|---|---|
+| `experiments/downstream_scaling/sft/tokenize.py` | `pack=1` → `pack=True`. Comment block rewritten to reflect new math (19 steps × 64 batch × ~6.3 pair-views per packed sequence ≈ 1 epoch of GSM8K's 7,473-problem train split). |
+| `experiments/downstream_scaling/sft/train.py` | `num_train_steps` 117 → 19; `steps_per_hf_export` 117 → 19; `steps_per_eval` 30 → 10 (one eval mid-training); `SFT_OUTPUT_PREFIX` bumped from `gsm8k_qa_nopack_1ep` to `gsm8k_qa_pack_1ep` so eval doesn't cache-hit prior grades. |
+
+#### GCS artifact map for the 1-packed-epoch run
+
+```
+# SFT'd HF checkpoints (initialization checkpoints unchanged from prior runs)
+gs://marin-us-east5/checkpoints/downstream_scaling/sft/delphi/gsm8k_qa_pack_1ep/1e20_iso/hf/step-18/
+gs://marin-us-east5/checkpoints/downstream_scaling/sft/delphi/gsm8k_qa_pack_1ep/1e20_p33m67_lr0.67/hf/step-18/
+
+# Grades
+gs://marin-us-east5/downstream_scaling/evals/delphi_sft/gsm8k_qa_pack_1ep/iid/1e20_iso/grade-4d9231/grades.jsonl.gz             # 1.33% mean / 20.70% pass@32
+gs://marin-us-east5/downstream_scaling/evals/delphi_sft/gsm8k_qa_pack_1ep/iid/1e20_p33m67_lr0.67/grade-aa2a87/grades.jsonl.gz   # 7.54% mean / 59.77% pass@32
+```
+
+#### Eval methodology — non-standard, deliberate
+
+Worth being explicit, since the screenshot of an earlier session's results table re-surfaced today and the wording confused things. **Our GSM8K eval is not the standard lm-eval-harness GSM8K** in several ways:
+
+| Aspect | This pipeline | Standard lm-eval-harness GSM8K |
+|---|---|---|
+| Prompt | Zero-shot: `Question: {q}\nAnswer:` | 5-shot CoT |
+| Decoding | T=0.6, top_p=1.0, top_k=1000, n=32 samples per problem | Greedy (T=0), n=1 sample |
+| Max gen tokens | 512 | 256–512 |
+| Stop tokens | `("Question:", "</s>", "<|im_end|>", "<|end_of_text|>")` | typically `"\n\n"` |
+| Scored filter | `flexible_extract` (last number in response) | `strict_match` (literal `#### N`) |
+| Problems | first 256 of GSM8K test split | full 1,319 |
+| Reported | mean accuracy + pass@32 | pass@1 |
+
+The setup is internally consistent and well-suited to comparing two SFT-init conditions at fixed eval recipe — it amplifies the signal by drawing 32 samples per problem. **It is not comparable to GSM8K leaderboard numbers**, which use the greedy 5-shot strict-match recipe and report pass@1. `TEMPERATURE=0.6` is inherited from Rohith's `run_delphi_masked_gsm8k_iid.py:30` without a recorded rationale; most likely Llama-3-Instruct's official inference default (Meta's model card pins T=0.6) or pass@k-paper convention.
+
+#### Resolved-by-now from the 2026-05-14 open-questions list
+
+- Item 3 ("Code is not committed") — pushed as `b7ca6bf5f` on 2026-05-21.
+- Item 4 sub-bullet ("Disentangle packing from epochs") — partially addressed by today's 1-packed-epoch run. Cleanly attributing the 19→1-epoch drop to packing vs to fewer optimizer steps would require running `pack=1, num_train_steps=2223` (19 unpacked epochs) — not done.
+
+#### Still open after today
+
+1. **No pre-SFT zero-shot eval datapoints.** Same gap flagged in the 2026-05-14 "Missing baselines" section. Cell A: bare base 1.9B → `GSM8KQATask`. Cell B: bare math-midtrain 1.9B → `GSM8KQATask`. Each is one eval-only step (vLLM only, no retrain), ~22 min on v5p-8 in parallel.
+2. **No `p67m33` (replay-heavy) datapoint at 1e20.** The 3-way comparison (base / math-midtrain / replay-midtrain) at 1e20 is still 1 cell missing. 1 additional SFT cell, ~1 TPU-hour. Disambiguates "math content drives uplift" from "any midtraining drives uplift."
+3. **No 1e21 or 1e22 datapoints.** Scale axis untested. 6 cells total (base + 2 midtrains × 2 scales); 1e22 needs v5p-32 per `SFT_RESOURCES` in `sft/tokenize.py`.
+4. **Compatibility eval pass against Rohith's `MaskedGSM8KTask, mask_fraction=0.0, num_fewshot=5`.** Re-eval the existing 4 post-SFT checkpoints (gsm8k_qa and gsm8k_qa_nopack_1ep prefixes, both slugs) for apples-to-apples vs Rohith's 110-cell matrix. ~22 min × 4 cells.
+5. **`_run_iris_job` inline-execution mystery** (unresolved from 2026-05-13 smoke debugging). SFT runs inline in the coordinator instead of dispatching as a child Iris job, contrary to `step_runner.py:340-346`. Means each cell is its own `iris job run` from a TPU-equipped coordinator; the 16-cell sweep can't run parallel cells from one coordinator. PR #5279 (Russell) is the leading hypothesis.
+6. **No reducer / no plotting.** Computing the 2026-05-26 3-regime pass@32 matrix above required a one-off Python script that pulls each `grades.jsonl.gz` via `gcloud storage cat`. Worth a small read-only summary step in the framework.
+
+#### TL;DR for the next agent (current as of EOD 2026-05-26)
+
+You're picking up `aa_fork_rk_downstream` after a 3rd 1e20 SFT regime — sequence packing turned on with `num_train_steps=19` (1 packed epoch). **Three regimes done, two slugs each. The math-midtrain SFT-init uplift is robust across all three** (5.7–7.5× on mean accuracy, 2.0–2.9× on pass@32). Absolute accuracy tracks optimizer-step count, not pair-view count.
+
+Working launcher: `experiments/downstream_scaling/run_one_sft_gsm8k_qa.py --slug <slug>`. Working iris invocation (logbook section above, plus the new `-e WANDB_API_KEY "$WANDB_API_KEY"` requirement when launching from skampere3). The 5 framework bugs are still fixed; the new edits to `tokenize.py` + `train.py` for today's run are uncommitted on the branch (tree dirty).
+
+**Highest-value next moves**, in order of value-for-cost:
+1. Fire the two pre-SFT zero-shot eval cells (base + math-midtrain) to fill the "Missing baselines" gap. ~22 min × 2 cells, no retrain. Lets you separate "what midtrain alone did" from "what the SFT pass added."
+2. Add `1e20_p67m33_lr0.33` (replay-heavy) — completes the 1e20 3-way comparison. 1 SFT cell, ~1 TPU-hour.
+3. Compatibility eval pass against `MaskedGSM8KTask, mask_fraction=0.0` for apples-to-apples vs Rohith. ~22 min × 4 cells.
+4. Scale to 1e21 + 1e22 for both treatments — the paper-grade scaling-law test. 6 cells; 1e22 needs v5p-32.
+5. Drop midtrain checkpoints into Rohith's mask_00 eval across the full ladder — see the plan in the next section. 108 vLLM-only cells, no SFT.
+
+### 2026-05-26 (continued) — Plan: midtrain matrix via Rohith's mask_00 (drafted, not yet fired)
+
+#### Goal
+
+Extend Rohith's existing mask_00 baseline (10 base-pretrain cells) with a midtrain dimension: **9 scales × 3 mixes × 4 LRs = 108 eval-only cells.** Each cell runs the corresponding midtrain HF checkpoint through `MaskedGSM8KTask(mask_fraction=0.0, num_fewshot=5)` with the byte-identical sampling config from `evals/run_delphi_masked_gsm8k_iid.py` (n=32, T=0.6, top_p=1.0, top_k=1000, max_tokens=512, seed=42). No SFT, no retraining. Output: a `(scale, mix, lr) → pass@32` matrix directly comparable to Rohith's 10 base-pretrain mask_00 numbers and to itself across axes.
+
+The matrix lets us see: (a) the scaling-law shape of the midtrain effect along the FLOPs axis, (b) the LR sensitivity per (scale, mix), (c) which mix dominates at which scale, and (d) the gap between each midtrain cell and Rohith's matched base-pretrain mask_00.
+
+#### Methodology used to pick canonical checkpoints
+
+GCS-naïve enumeration found extra hashes and replicates per (scale, mix, lr) for many cells. To pick exactly one canonical checkpoint per cell:
+
+1. Pulled all 189 runs from the `marin-community/delphi-midtraining` W&B project.
+2. Parsed run names into `(scale, mix, lr)` tuples; grouped duplicates.
+3. For each duplicate group, picked the W&B `state=finished` variant and discarded `state=crashed`/`failed` variants.
+4. Cross-checked GCS file counts: `finished` runs have ≥9 HF step subdirs; `failed`/stub runs have 0 HF step subdirs. Every match held.
+5. Verified all 108 chosen rel-paths exist in `gs://marin-us-east5/checkpoints/` with non-empty `hf/` subdirs. Pass: 108/108.
+
+#### Resolutions of the four open questions
+
+1. **3e18 replicates** — **use `a003`**. W&B has 12 `a003` runs all `finished` for 3e18 (3 mixes × 4 LRs). No `a001`/`a002` 3e18 runs were logged in either `delphi-midtraining` or `marin` projects. GCS confirms: `a001` dirs have 10 HF subdirs each but no W&B record (orphans, possibly from a pre-logging attempt); `a002` dirs have 0 HF subdirs (stub/failed early); `a003` dirs have 10 HF subdirs and match the W&B record. User's instinct that "if we have `a003` something went wrong" is correct — at 3e18 the first two attempts had to be redone.
+
+2. **1e21 / 1e22 hash duplicates** — clean: every duplicate has exactly one `finished` variant and one or more `crashed`/`failed` variants. GCS file counts confirm:
+   - 1e22 `p33m67_lr0.33`: `abdeba` (0 HF subdirs, W&B failed) vs **`e9132105` (11 HF subdirs, finished)** ← use long hash
+   - 1e22 `p33m67_lr0.5`: `91bcb9` failed vs **`0eeca70d` finished**
+   - 1e22 `p33m67_lr0.67`: `089468` failed vs **`54770ae7` finished** (already in registry — correct)
+   - 1e22 `p67m33_lr0.33`: `fe948f` failed vs **`4e8cc7a7` finished** (already in registry — correct)
+   - 1e22 `p67m33_lr0.5`: `8e526a` failed vs **`f60cb12a` finished**
+   - 1e22 `p67m33_lr0.67`: `285e1b` failed vs **`3c17740e` finished**
+   - 1e21 `p67m33_lr0.5`: **`114e49` finished (9 HF subdirs)** vs `fdc4ebf1` crashed (7 HF subdirs) ← use short hash
+   - 1e21 `p67m33_lr0.67`: **`ecbd27` finished** vs `99752407` crashed
+   
+   Interesting pattern: 1e22 the long-hash variants are canonical; 1e21 the short-hash variants are canonical. The W&B/GCS check resolves it deterministically — don't pick by hash length. **No identical-hash collisions were found anywhere.**
+
+3. **`1e21_p67m33_lr0.33` region** — the full HF checkpoint is in **`gs://marin-us-east5/checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64/`** (10 HF step subdirs). The `gs://marin-us-central2/...` directory with the same name has only a `.executor_info` stub and no `hf/` subdir — it's metadata residue, not a real checkpoint. **No cross-region handling needed**, contrary to my earlier draft. User's correction was right.
+
+4. **Off-ladder bases** — out of scope per user direction. Skipping all `delphi-1e20-iso-d2048-L21-*` (4p94b / 10b / 20b token-budget variants at the 1e20-iso stand-in) and skipping pure-math midtrains `delphi-1e20-iso-d2048-L21-math-*` and `delphi-1e21-v5-math-*`. The plan uses Rohith's 9 canonical ladder points (3e18 → 1e22, excluding 1e23) with the canonical token budgets per scale (k0p20 for 3e18→3e20, 9p25b for 1e21, 32p07b for 1e22).
+
+#### Canonical checkpoint inventory (all 108 cells, verified)
+
+Naming + replicate conventions:
+
+| Scale | Token-budget family | Replicate / hash policy |
+|---|---|---|
+| 3e18 | `k0p20-a003` | a003 (W&B-verified canonical) |
+| 9e18 | `k0p20-a002` | a002 |
+| 2e19 | `k0p20-a002` | a002 |
+| 3e19 | `k0p20-a002` | a002 |
+| 9e19 | `k0p20-a002` | a002 |
+| 2e20 | `k0p20-a001` | a001 |
+| 3e20 | `k0p20-a001` | a001 |
+| 1e21 | `9p25b-{hash}` | per-cell hash (12 distinct, all `finished` in W&B) |
+| 1e22 | `32p07b-{hash}` | per-cell hash (12 distinct, all `finished` in W&B) |
+
+Full slug → relative-path mapping (rel-path is appended to `gs://marin-us-east5/`, all paths end in `hf/`):
+
+##### 3e18 — d1024-L11, `k0p20-a003`
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-3e18-p33m67-k0p20-lr33-a003/hf` | `...-lr50-a003/hf` | `...-lr67-a003/hf` | `...-lr83-a003/hf` |
+| p50m50 | `checkpoints/delphi-3e18-p50m50-k0p20-lr33-a003/hf` | `...-lr50-a003/hf` | `...-lr67-a003/hf` | `...-lr83-a003/hf` |
+| p67m33 | `checkpoints/delphi-3e18-p67m33-k0p20-lr33-a003/hf` | `...-lr50-a003/hf` | `...-lr67-a003/hf` | `...-lr83-a003/hf` |
+
+##### 9e18 — d1152-L12, `k0p20-a002`
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-9e18-p33m67-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+| p50m50 | `checkpoints/delphi-9e18-p50m50-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+| p67m33 | `checkpoints/delphi-9e18-p67m33-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+
+##### 2e19 — d1408-L15, `k0p20-a002`
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-2e19-p33m67-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+| p50m50 | `checkpoints/delphi-2e19-p50m50-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+| p67m33 | `checkpoints/delphi-2e19-p67m33-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+
+##### 3e19 — d1536-L16, `k0p20-a002`
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-3e19-p33m67-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+| p50m50 | `checkpoints/delphi-3e19-p50m50-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+| p67m33 | `checkpoints/delphi-3e19-p67m33-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+
+##### 9e19 — d1792-L18, `k0p20-a002`
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-9e19-p33m67-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+| p50m50 | `checkpoints/delphi-9e19-p50m50-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+| p67m33 | `checkpoints/delphi-9e19-p67m33-k0p20-lr33-a002/hf` | `...-lr50-a002/hf` | `...-lr67-a002/hf` | `...-lr83-a002/hf` |
+
+##### 2e20 — d2048-L21, `k0p20-a001`
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-2e20-p33m67-k0p20-lr33-a001/hf` | `...-lr50-a001/hf` | `...-lr67-a001/hf` | `...-lr83-a001/hf` |
+| p50m50 | `checkpoints/delphi-2e20-p50m50-k0p20-lr33-a001/hf` | `...-lr50-a001/hf` | `...-lr67-a001/hf` | `...-lr83-a001/hf` |
+| p67m33 | `checkpoints/delphi-2e20-p67m33-k0p20-lr33-a001/hf` | `...-lr50-a001/hf` | `...-lr67-a001/hf` | `...-lr83-a001/hf` |
+
+##### 3e20 — d2304-L23, `k0p20-a001`
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-3e20-p33m67-k0p20-lr33-a001/hf` | `...-lr50-a001/hf` | `...-lr67-a001/hf` | `...-lr83-a001/hf` |
+| p50m50 | `checkpoints/delphi-3e20-p50m50-k0p20-lr33-a001/hf` | `...-lr50-a001/hf` | `...-lr67-a001/hf` | `...-lr83-a001/hf` |
+| p67m33 | `checkpoints/delphi-3e20-p67m33-k0p20-lr33-a001/hf` | `...-lr50-a001/hf` | `...-lr67-a001/hf` | `...-lr83-a001/hf` |
+
+##### 1e21 — adamh-scaling-ladder 3.4B, `9p25b-{hash}` (per-cell finished-in-W&B canonical hash)
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-1e21-p33m67-9p25b-lr0.33-58ebcb/hf` | `...-lr0.5-efbc63/hf` | `...-lr0.67-9cf8da/hf` | `...-lr0.83-0cb048/hf` |
+| p50m50 | `checkpoints/delphi-1e21-p50m50-9p25b-lr0.33-bccff4/hf` | `...-lr0.5-973c46/hf` | `...-lr0.67-7e82b3/hf` | `...-lr0.83-f9edd2/hf` |
+| p67m33 | `checkpoints/delphi-1e21-p67m33-9p25b-lr0.33-ab4e64/hf` | `...-lr0.5-114e49/hf` | `...-lr0.67-ecbd27/hf` | `...-lr0.83-a1a261/hf` |
+
+##### 1e22 — adamh-scaling-ladder 9.7B, `32p07b-{hash}` (per-cell finished-in-W&B canonical hash; long-hash variants for duplicates)
+| | lr0.33 | lr0.5 | lr0.67 | lr0.83 |
+|---|---|---|---|---|
+| p33m67 | `checkpoints/delphi-1e22-p33m67-32p07b-lr0.33-e9132105/hf` | `...-lr0.5-0eeca70d/hf` | `...-lr0.67-54770ae7/hf` | `...-lr0.83-78fd44/hf` |
+| p50m50 | `checkpoints/delphi-1e22-p50m50-32p07b-lr0.33-c43ada/hf` | `...-lr0.5-ecfa99/hf` | `...-lr0.67-e78260/hf` | `...-lr0.83-3c9f70/hf` |
+| p67m33 | `checkpoints/delphi-1e22-p67m33-32p07b-lr0.33-4e8cc7a7/hf` | `...-lr0.5-f60cb12a/hf` | `...-lr0.67-3c17740e/hf` | `...-lr0.83-d35daa/hf` |
+
+#### Sluggification
+
+`{scale}_{mix}_lr{X.YY}` — e.g., `3e18_p33m67_lr0.33`, `1e22_p67m33_lr0.83`. 108 unique slugs.
+
+#### Implementation sketch
+
+1. **Expand `experiments/downstream_scaling/models/midtrain.py`** from 6 → 108 entries. Build programmatically from a small table — three dicts (`REP`, `HASHES_1e21`, `HASHES_1e22`) plus a `_build_registry()` function that emits the 108-entry dict. The 6 existing entries (`1e20_*_lr*` variants) stay as-is since they describe a *different* base architecture (the 1e20-iso d2048-L21 4p94b family) and are still wired into the SFT pipeline.
+2. **New launcher**: `experiments/downstream_scaling/evals/run_midtrain_masked_gsm8k_iid.py`. Single-cell launcher mirroring `run_one_sft_gsm8k_qa.py` — takes `--slug` and runs one eval. Internal call: `make_eval_step(name=f"downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00/{slug}", model_path=InputName.hardcoded(registry[slug]), task=MaskedGSM8KTask(MaskedGSM8KTaskConfig(tokenizer_path=llama3_tokenizer, mask_fraction=0.0, num_fewshot=5, fewshot_seed=1234, n_problems=256)), alg=make_algorithm("v5p-8"))`.
+3. **Reuse existing `iid.py` fixes**: the `hf_overrides={"architectures": ["Qwen3ForCausalLM"]}` and RPA-kernel rebase are already committed and apply to every vLLM load — midtrain HFs need both (same Levanter-export-with-`LlamaForCausalLM`-architectures-key issue as our SFT'd 1e20_iso).
+4. **Launch pattern**: same iris invocation as the SFT runs but with `python experiments/downstream_scaling/evals/run_midtrain_masked_gsm8k_iid.py --slug <slug>`. From skampere3: IAP tunnel + pyenv 3.12.0 + explicit `-e WANDB_API_KEY` per memory `iris_cluster_remote_access.md` (and the WANDB gotcha logged earlier today).
+5. **Reducer**: small standalone Python script that pulls all 108 `grades.jsonl.gz`, computes pass@32 and mean accuracy per cell, emits a CSV keyed by `(scale, mix, lr)`. Can defer; the per-cell artifacts are useful even without aggregation.
+
+#### Output paths
+
+```
+gs://marin-us-east5/downstream_scaling/evals/delphi_midtrain/masked_gsm8k_mask00/{slug}/
+  ├── completions-{hash}/
+  └── grade-{hash}/grades.jsonl.gz
+```
+
+Plus prompt artifact at `gs://marin-us-east5/downstream_scaling/evals/prompts/masked_gsm8k-42fd11/prompts.jsonl.gz` — already exists (Rohith's mask_00 prompts), will be cache-hit by all 108 cells since `MaskedGSM8KTaskConfig` is identical across them.
+
+#### Cost / wall-clock estimate
+
+- Per cell on v5p-8: ~22 min completions + ~11 min grade = **~33 min uninterrupted**.
+- 108 cells × 33 min = **~59 TPU-hours** if serial.
+- Parallel across us-east5-a + us-central1-a (per memory `feedback_multi_region_tpu_launch.md`) with 3 jobs per region in flight: **~10–12 wall-clock hours** total, more if east5-a stays preempty.
+- Preempt risk: capacity in east5-a has been moderate. Allocate `--max-retries 2` per cell; Iris resumes vLLM jobs cleanly from chunk SUCCESS files. Plan for ~1.5× expected wall-clock to account for preempts.
+
+#### Launch strategy
+
+1. **Smoke first**: pick one small cell, run end-to-end, verify the grade artifact lands. Recommend **`3e18_p33m67_lr0.5`** — smallest model, common LR, ~25 min uninterrupted.
+2. After smoke passes, fire **wave 1** in parallel across both zones: the 12 small-scale cells (3e18 row). 4 cells per region, 3 in flight per region = ~3 cell-rounds per region.
+3. Wave 2: 9e18, 2e19, 3e19, 9e19 = 48 cells. Same parallelism.
+4. Wave 3: 2e20, 3e20 = 24 cells.
+5. Wave 4: 1e21, 1e22 = 24 cells. 1e22 (9.7B params) still fits v5p-8 for vLLM inference — no resource bump needed.
+6. After wave 1 lands (~12 cells), run the reducer to surface partial results. Don't wait for all 108 before looking.
+
+#### Validation before launch
+
+- Confirm `MaskedGSM8KTaskConfig(mask_fraction=0.0)` resolves to a `versioned()` hash that matches Rohith's existing mask_00 prompts artifact at `prompts/masked_gsm8k-42fd11/`. If not, the new launch will write a fresh prompt artifact (still correct, just doesn't reuse the existing one).
+- Confirm tokenizer path resolves: `llama3_tokenizer` should be the same `meta-llama/Meta-Llama-3.1-8B` used by Rohith. If the midtrain checkpoints were trained with a different tokenizer (e.g., Qwen3's), the mask function in `gsm8k_masked.py:77-86` might tokenize the mask token differently, which could change identity. **Check before firing the 108-cell wave** — verify on the smoke cell that the masked solution looks sensible.
+
+#### Open decisions still pending
+
+- **Reducer scope**: just pass@32 + mean_acc per cell? Or also mean ± stderr across the 32 samples per problem? My recommendation: the simple `(scale, mix, lr) → (pass@32, mean_acc, mean_correctness_per_sample)` CSV, with the option to add error bars later by reading the same `grades.jsonl.gz`.
+- **Comparison baseline**: do we want to side-by-side compare each midtrain cell against Rohith's matched base mask_00 cell at the same scale? That's a delta-per-cell view. The base mask_00 numbers live at `gs://marin-us-east5/downstream_scaling/evals/delphi/masked_gsm8k/iid/mask_00/{slug}/grade-*/grades.jsonl.gz` already. Worth folding into the reducer.
+- **Plotting**: out of scope for this plan unless you want it; pass@32-vs-FLOPs lines per mix is the obvious chart. Can be a follow-up.
