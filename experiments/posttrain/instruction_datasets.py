@@ -325,6 +325,8 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["id", "source"],
         name="TIGER-Lab/AceCode-89K",
     ),
+    # AceCode-V2-122K is prompt/test-only. Register only a derived verified
+    # solution view here after generation and execution filtering.
     "cognitivecomputations/dolphin-r1-nonreasoning": InstructionDatasetConfig(
         hf_dataset_id="cognitivecomputations/dolphin-r1",
         revision="f6ac651",
