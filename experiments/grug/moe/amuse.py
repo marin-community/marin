@@ -115,9 +115,12 @@ def amuse(
     """
 
     def _lr(step: chex.Array) -> chex.Array:
-        if callable(learning_rate):
-            return jnp.asarray(learning_rate(step), dtype=jnp.float32)
-        return jnp.asarray(float(learning_rate), dtype=jnp.float32)
+        # learning_rate may arrive as a Python scalar, a schedule callable, or
+        # a JAX-traced array (the standard inject_hyperparams pathway). Don't
+        # try to coerce to Python ``float`` — that fails on tracers — just
+        # convert to a fp32 array. Callable schedules get evaluated at ``step``.
+        lr = learning_rate(step) if callable(learning_rate) else learning_rate
+        return jnp.asarray(lr, dtype=jnp.float32)
 
     def init_fn(params: optax.Params) -> AmuseState:
         z = jax.tree.map(lambda t: t.copy(), params)
