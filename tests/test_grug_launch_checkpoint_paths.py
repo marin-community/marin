@@ -62,7 +62,7 @@ def test_resolve_grug_run_config_sets_temporary_checkpoint_base_path():
         "gs://marin-us-east5/experiments/grug/base-trial/checkpoints",
         "gs://marin-us-east5/tmp/ttl=14d/" "checkpoints-temp/marin-us-east5/experiments/grug/base-trial/checkpoints",
     ]
-    assert checkpointer.keep == []
+    assert checkpointer.keep is None
 
 
 @pytest.mark.parametrize("launcher_path", _GRUG_LAUNCHERS)
@@ -83,4 +83,4 @@ def test_grug_launchers_use_final_only_permanent_retention(launcher_path: Path):
                 keep_values.append(keyword.value)
 
     assert keep_values
-    assert all(isinstance(value, ast.List) and len(value.elts) == 0 for value in keep_values)
+    assert all(isinstance(value, ast.Constant) and value.value is None for value in keep_values)
