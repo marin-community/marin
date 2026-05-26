@@ -19,7 +19,6 @@ from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import Any, Protocol
 
-from iris.env_resources import TaskResources as _TaskResources
 from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
@@ -46,9 +45,7 @@ from zephyr.dataset import (
     resolve_glob,
 )
 from zephyr.expr import Expr, referenced_columns
-from zephyr.external_sort import compute_fan_in, compute_write_batch_size, external_sort_merge
 from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
-from zephyr.shard_keys import composite_sort_key
 from zephyr.shuffle import ScatterReader
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
@@ -182,21 +179,14 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
 
 
 def _reduce_gen(
-    shard: Any,
+    shard: ScatterReader,
     key_fn: Callable,
     reducer_fn: Callable,
-    sort_fn: Callable | None = None,
-    external_sort_dir: str | None = None,
+    external_sort_dir: str,
 ) -> Iterator:
-    # The reducer contract is ``R | Iterator[R]``: it may return a single
-    # result or a stream of results. Discriminate on the actual return value,
-    # not ``inspect.isgeneratorfunction`` — that only recognises functions
-    # literally defined with ``yield`` and misses reducers that *return* an
-    # iterator (a generator expression, ``map``/``filter``, or a call to
-    # another generator function). Such a reducer would otherwise be emitted
-    # whole as one item and crash the downstream writer.
-    for key, items_iter in _merge_sorted_chunks(shard, key_fn, sort_fn, external_sort_dir=external_sort_dir):
-        result = reducer_fn(key, items_iter)
+    merged = shard.merge_sorted_chunks(external_sort_dir)
+    for key, grouped in groupby(merged, key=key_fn):
+        result = reducer_fn(key, grouped)
         if isinstance(result, Iterator):
             yield from result
         else:
@@ -652,66 +642,6 @@ def make_windows(
         yield window
 
 
-def _merge_sorted_chunks(
-    shard: Shard, key_fn: Callable, sort_fn: Callable | None = None, external_sort_dir: str | None = None
-) -> Iterator[tuple[object, Iterator]]:
-    """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
-
-    Each chunk is assumed to be sorted by key (and optionally by sort_fn within key).
-    This function performs a k-way merge across all chunks and groups consecutive
-    items with the same key.
-
-    Args:
-        shard: Shard containing sorted chunks (iterable of chunk lists)
-        key_fn: Function to extract grouping key from item
-        sort_fn: Optional secondary sort key. When provided, the merge uses
-            (key_fn, sort_fn) for ordering but still groups by key_fn alone.
-
-    Yields:
-        Tuples of (key, iterator_of_items) for each unique key
-    """
-    # Merge by composite key when sort_fn is provided, but group by key_fn only.
-    merge_key = composite_sort_key(key_fn, sort_fn)
-
-    # Check if external sort is needed BEFORE materializing all iterators.
-    # ScatterReader can decide using manifest stats (no file opens needed).
-    use_external = (
-        external_sort_dir is not None
-        and isinstance(shard, ScatterReader)
-        and shard.needs_external_sort(_TaskResources.from_environment().memory_bytes)
-    )
-
-    if use_external:
-        memory_limit = _TaskResources.from_environment().memory_bytes
-        # Per-iterator memory ~= compressed bytes for one chunk held by
-        # cat_file. Use the actual max compressed chunk size from the sidecar.
-        per_iter_bytes = shard.max_compressed_chunk_bytes
-        fan_in = compute_fan_in(per_iter_bytes, memory_limit)
-        write_batch_size = compute_write_batch_size(shard.avg_item_bytes)
-        logger.info(
-            "External sort triggered for shard with %d iterators, "
-            "fan_in=%d (per_iter≈%dKB), write_batch_size=%d, spilling to %s",
-            sum(it.chunk_count for it in shard.iterators),
-            fan_in,
-            per_iter_bytes // 1024,
-            write_batch_size,
-            external_sort_dir,
-        )
-        # Pass lazy generator — external_sort_merge consumes in batches without opening all files
-        merged_stream = external_sort_merge(
-            shard.get_iterators(),
-            merge_key,
-            external_sort_dir,
-            fan_in=fan_in,
-            write_batch_size=write_batch_size,
-        )
-    else:
-        chunk_iterators = list(shard.get_iterators())
-        logger.info(f"Merging {len(chunk_iterators):,} sorted chunk iterators")
-        merged_stream = heapq.merge(*chunk_iterators, key=merge_key)
-    yield from groupby(merged_stream, key=key_fn)
-
-
 def _sorted_merge_join(
     left_stream: Iterable,
     right_stream: Iterable,
@@ -858,9 +788,7 @@ def run_stage(
                 # reads all sidecars in parallel and filters for its target.
                 scatter_paths = list(shard)
                 shard = ScatterReader.from_sidecars(scatter_paths, ctx.shard_idx)
-            stream = _reduce_gen(
-                shard, op.key_fn, op.reducer_fn, sort_fn=op.sort_fn, external_sort_dir=external_sort_dir
-            )
+            stream = _reduce_gen(shard, op.key_fn, op.reducer_fn, external_sort_dir)
             op_index += 1
 
         elif isinstance(op, Fold):

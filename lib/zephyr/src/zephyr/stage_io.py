@@ -237,7 +237,7 @@ def _write_stage_output(
         full_gen = itertools.chain([first_item], stage_gen)
 
         num_output_shards = scatter_op.num_output_shards if scatter_op.num_output_shards > 0 else total_shards
-        data_path = f"{stage_dir}/shard-{shard_idx:04d}.shuffle"
+        data_path = f"{stage_dir}/shard-{shard_idx:04d}/scatter/"
         shard = _write_scatter(
             full_gen,
             source_shard,
