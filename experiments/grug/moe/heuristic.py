@@ -87,10 +87,14 @@ class MoeAdamHHeuristic:
 
     # --- LR scaling ---
     # adam_lr = lr_coeff * tokens^lr_tokens_exp * dim^lr_dim_exp * sqrt(tokens_per_batch)
-    # Original (186 runs, R²=0.995) — used for v16 sweep:
-    lr_coeff: float = 0.025469  # 1.63 / sqrt(4096)
-    lr_tokens_exp: float = -0.2813
-    lr_dim_exp: float = -0.3678
+    # MuonH May Recipe refit (issue #5951, 17 finished cells across d{512,768,1024,1280}
+    # x R{4,10,20,60,120,240} x lr_mult{0.4,0.7,1.0,1.3,1.6}, R^2=0.996):
+    #     muonh_lr = 26.9 * tokens^-0.395 * dim^-0.121 * batch_size^0.5
+    # Converted to adam_lr form via adamh_ratio=13/3 and sqrt(seq_len=4096)=64:
+    #     lr_coeff = 26.9 / (13/3 · 64) = 0.09700
+    lr_coeff: float = 0.09700  # 6.21 / sqrt(4096)
+    lr_tokens_exp: float = -0.395
+    lr_dim_exp: float = -0.121
     adamh_ratio: float = 13 / 3
 
     # --- Base hyperparameters ---
