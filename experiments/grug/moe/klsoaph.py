@@ -448,7 +448,9 @@ def _klsoaph_step_local(
         # whitened Gram update
         g_qr_white = g_qr * esi_r[..., None, :]
         left_target = jnp.einsum("...ik,...jk->...ij", g_qr_white, g_qr_white) / inner_cols
-        qlT_g = jnp.einsum("...ki,...kj->...ij", q_l, g32)
+        # qlT_g = q_l.T @ g; since q_r is orthogonal (output of QR), we can derive
+        # this from g_proj = q_l.T @ g @ q_r via g_proj @ q_r.T (saves 1 einsum/step).
+        qlT_g = jnp.einsum("...ij,...kj->...ik", g_proj, q_r)
         qlT_g_white = qlT_g * esi_l[..., :, None]
         right_target = jnp.einsum("...ki,...kj->...ij", qlT_g_white, qlT_g_white) / inner_rows
         nb_gg_l = _symmetrize(shampoo_beta * gg_l + (1.0 - shampoo_beta) * left_target)
