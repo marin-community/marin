@@ -71,6 +71,16 @@ class SweepConfig:
     tag: str
     name_regex: str
     mixture_regex: str
+    # Human-readable label for figure titles (e.g. ``"Mix-stage sweep v2"``).
+    # ``id`` (e.g. ``"run_mix_sweep_v2"``) still drives the cache-dir name and
+    # appears in logs; ``display_name`` is what readers see on plots.
+    display_name: str
+    # Slice strategy for in-progress sweeps. False (default) = use a single
+    # ``ref_step = min over runs of max(_step)`` so every run's cell lines up
+    # at the same step. True = use each run's latest non-null value for each
+    # metric independently — needed when runs are still mid-flight and we want
+    # the best-available cd-val per run without waiting for the slowest one.
+    per_run_final: bool = False
 
 
 SWEEPS: dict[str, SweepConfig] = {
@@ -83,6 +93,7 @@ SWEEPS: dict[str, SweepConfig] = {
         tag="mix",
         name_regex=r"^prot-exp11-dm-mix-100m-.*-v2-[0-9a-f]+$",
         mixture_regex=r"-(?P<mixture>m\d+)-lr",
+        display_name="Mix-stage sweep v2",
     ),
     # Offline full-dataset eval (no max_eval_batches cap) of the v2 mix
     # checkpoints, produced by ``exp11_data_mix_eval.py`` at EVAL_VERSION=v2.
@@ -95,6 +106,22 @@ SWEEPS: dict[str, SweepConfig] = {
         tag="eval",
         name_regex=r"^prot-exp11-dm-mix-100m-.*-v2-eval-v2$",
         mixture_regex=r"-(?P<mixture>m\d+)-lr",
+        display_name="Mix-stage offline eval v2",
+    ),
+    # exp11 scale-stage v6 (6 mixtures, 1.5B model, ~21.5B-token target).
+    # Runs are still in flight; per_run_final=True takes each run's latest
+    # logged cd-val rather than the common min-of-max slice, so the bar chart
+    # surfaces best-available numbers even while training continues.
+    "run_scale_sweep_v6": SweepConfig(
+        id="run_scale_sweep_v6",
+        entity="eric-czech",
+        project="marin",
+        group="exp11-data-mix",
+        tag="scale",
+        name_regex=r"^prot-exp11-dm-scale-1_5b-.*-v6-[0-9a-f]+$",
+        mixture_regex=r"-(?P<mixture>m\d+)-lr",
+        display_name="Scale-stage sweep v6",
+        per_run_final=True,
     ),
 }
 
@@ -121,6 +148,13 @@ MIXTURE_NAMES: dict[str, str] = {
     "m7": "m7 (L→H)",
     "m8": "m8 (H→L)",
     "m9": "m9 (L,M → L,M,H → H)",
+    # Scale-stage mixtures (run_scale_sweep, 1.5B).
+    "m10": "m10 (H)",
+    "m11": "m11 (H31/M26/L43)",
+    "m12": "m12 (L→H)",
+    "m13": "m13 (L→M→H)",
+    "m14": "m14 (M)",
+    "m15": "m15 (L)",
 }
 
 
@@ -187,22 +221,40 @@ def _short_metric_label(name: str) -> str:
 class EvalMeta:
     """W&B-derived eval config for a sweep; consensus across all matched runs.
 
-    Pulled from ``run.config`` at build time and validated to be identical for
-    every run in the sweep — figure annotations relying on these numbers
-    (e.g. "training-time eval = N batches x B examples") are only meaningful
-    if all runs share the same budget. ``build_snapshot`` raises on any
-    disagreement.
+    Pulled from ``run.config`` + ``run.tags`` at build time and validated to
+    be identical for every run in the sweep — figure annotations relying on
+    these numbers (e.g. "training-time eval = N batches x B examples") are
+    only meaningful if all runs share the same budget. ``build_snapshot``
+    raises on any disagreement.
 
     Both training and offline-eval runs expose ``trainer.train_batch_size``
     and ``trainer.max_eval_batches``; the seq-length key differs (``train_seq_len``
     for training, ``max_eval_length`` for offline ``eval_lm`` runs), so the
     extractor prefers ``max_eval_length`` and falls back to ``train_seq_len``.
+
+    ``num_train_steps``, ``params_exact``, and ``tokens_exact`` are best-effort:
+    they default to None when unavailable (e.g. older cached ``meta.json``
+    files that predate these fields). ``exp11_data_mix_sweep._build_trial``
+    bakes the authoritative ``params_exact=<int>`` and ``tokens_exact=<int>``
+    into ``run.tags`` — we always prefer those over recomputing from
+    ``batch * seq * steps`` so the figure reflects what was actually trained.
     """
 
     eval_batch_size: int
     eval_seq_len: int
     # None = "no cap" (full dataset) — the offline-eval mode.
     max_eval_batches: int | None
+    num_train_steps: int | None = None
+    params_exact: int | None = None
+    tokens_exact: int | None = None
+    # Extrapolated per-run FLOPs at completion. Computed from Levanter's
+    # logged ``throughput/total_gflops`` (cumulative GFLOPs through the
+    # latest step): rate = total_gflops / latest_step is the constant
+    # per-step FLOPs cost; rate * num_train_steps * 1e9 gives the at-completion
+    # FLOPs. For finished runs the latest step equals num_train_steps so no
+    # extrapolation occurs; the mean across runs is used since rates differ
+    # only by step-noise (FLOPs depend on model + step count, not mixture).
+    final_flops_per_run: float | None = None
 
 
 # Dotted paths into the nested ``run.config`` dict (W&B stores the levanter
@@ -213,7 +265,19 @@ _META_FROM_CONFIG: dict[str, tuple[str, ...]] = {
     "eval_batch_size": ("trainer.train_batch_size",),
     "max_eval_batches": ("trainer.max_eval_batches",),
     "eval_seq_len": ("max_eval_length", "train_seq_len"),
+    "num_train_steps": ("trainer.num_train_steps",),
 }
+
+# Fields whose absence (None across all runs) is acceptable; everything else
+# in EvalMeta must be present after consensus. Used by ``_consensus_meta`` to
+# decide whether to raise on a missing-only field.
+_OPTIONAL_META_FIELDS: frozenset[str] = frozenset(
+    {"max_eval_batches", "num_train_steps", "params_exact", "tokens_exact", "final_flops_per_run"}
+)
+
+# Levanter logs cumulative GFLOPs under this summary key; used to derive
+# ``final_flops_per_run`` in ``_consensus_meta``.
+TOTAL_GFLOPS_KEY = "throughput/total_gflops"
 
 _MISSING = object()
 
@@ -226,6 +290,25 @@ def _get_nested(cfg: object, dotted_key: str) -> object:
             return _MISSING
         cur = cur[part]
     return cur
+
+
+def _parse_int_tag(tags: object, prefix: str) -> int | None:
+    """Parse a ``<prefix>=<int>`` tag from a run's tag list (e.g. ``params_exact=``).
+
+    Tags are the authoritative record of what was trained; the sweep script
+    bakes ``params_exact`` and ``tokens_exact`` in at launch. Always prefer
+    these over recomputing from config (``batch * seq * steps``) so the figure
+    reflects the trained value verbatim.
+    """
+    if not isinstance(tags, (list, tuple)):
+        return None
+    for tag in tags:
+        if isinstance(tag, str) and tag.startswith(prefix):
+            try:
+                return int(tag.split("=", 1)[1])
+            except ValueError:
+                return None
+    return None
 
 
 def _extract_meta(run) -> dict[str, object]:
@@ -244,27 +327,67 @@ def _extract_meta(run) -> dict[str, object]:
                 break
         else:
             out[field] = None
+    tags = getattr(run, "tags", None)
+    out["params_exact"] = _parse_int_tag(tags, "params_exact=")
+    out["tokens_exact"] = _parse_int_tag(tags, "tokens_exact=")
+    # Raw inputs for the ``final_flops_per_run`` derivation in
+    # ``_consensus_meta``. Per-run (since rate * num_train_steps extrapolates
+    # to completion); not declared as EvalMeta fields, so the strict consensus
+    # loop ignores them.
+    summary = dict(run.summary) if getattr(run, "summary", None) is not None else {}
+    out["_latest_total_gflops"] = summary.get(TOTAL_GFLOPS_KEY)
+    out["_latest_step"] = summary.get("_step")
     return out
+
+
+def _derive_final_flops(per_run: list[dict[str, object]], num_train_steps: int | None) -> float | None:
+    """Mean (total_gflops / latest_step) across runs * num_train_steps * 1e9.
+
+    Returns None when ``num_train_steps`` is unknown or no run has both
+    ``throughput/total_gflops`` and ``_step`` logged. The mean of per-run
+    rates is robust to small step-noise differences; rates should be equal
+    in principle since FLOPs depend on model + step count, not mixture.
+    """
+    if num_train_steps is None:
+        return None
+    rates = []
+    for m in per_run:
+        gflops = m.get("_latest_total_gflops")
+        step = m.get("_latest_step")
+        if gflops is None or step is None:
+            continue
+        step_int = int(step)
+        if step_int <= 0:
+            continue
+        rates.append(float(gflops) / step_int)
+    if not rates:
+        return None
+    return (sum(rates) / len(rates)) * float(num_train_steps) * 1e9
 
 
 def _consensus_meta(per_run: list[dict[str, object]], sweep_id: str) -> EvalMeta:
     """Assert every run agrees on each meta field; return the shared values.
 
-    A None value is treated as "absent" — ``max_eval_batches`` can be absent
-    (None) for offline-eval runs (uncapped) and still valid; the other two
-    fields are required.
+    A None value is treated as "absent" — fields in ``_OPTIONAL_META_FIELDS``
+    can be absent and still valid (e.g. ``max_eval_batches`` is None for
+    offline-eval runs); all other fields are required.
     """
     if not per_run:
         raise RuntimeError(f"Sweep {sweep_id}: no runs to derive meta from")
     consensus: dict[str, object] = {}
-    for field in _META_FROM_CONFIG:
-        values = {m.get(field) for m in per_run}
+    derived_fields = {"final_flops_per_run"}
+    for field in dataclasses.fields(EvalMeta):
+        name = field.name
+        if name in derived_fields:
+            continue
+        values = {m.get(name) for m in per_run}
         if len(values) > 1:
-            raise RuntimeError(f"Sweep {sweep_id}: runs disagree on {field!r}: {sorted(values, key=str)}")
-        consensus[field] = values.pop()
-    for required in ("eval_batch_size", "eval_seq_len"):
-        if consensus[required] is None:
-            raise RuntimeError(f"Sweep {sweep_id}: required meta field {required!r} missing from all runs")
+            raise RuntimeError(f"Sweep {sweep_id}: runs disagree on {name!r}: {sorted(values, key=str)}")
+        consensus[name] = values.pop()
+    for name, value in consensus.items():
+        if value is None and name not in _OPTIONAL_META_FIELDS:
+            raise RuntimeError(f"Sweep {sweep_id}: required meta field {name!r} missing from all runs")
+    consensus["final_flops_per_run"] = _derive_final_flops(per_run, consensus.get("num_train_steps"))  # type: ignore[arg-type]
     return EvalMeta(**consensus)  # type: ignore[arg-type]
 
 
@@ -361,6 +484,34 @@ def build_snapshot(sweep: SweepConfig) -> tuple[pd.DataFrame, EvalMeta]:
     meta = _consensus_meta(metas, sweep.id)
     logger.info("Sweep %s eval meta (consensus across %d runs): %s", sweep.id, len(metas), meta)
 
+    if sweep.per_run_final:
+        # Per-run-final mode: slice each (run, metric) at that run's own
+        # largest step. ``ref_step`` is set to ``step_used`` per row so the
+        # column stays well-defined; renderers detect non-uniform ref_step
+        # and adjust their titles accordingly.
+        logger.info("Per-run-final mode: using each run's latest non-null value per metric")
+        rows: list[dict] = []
+        for run, mixture, df in per_run:
+            run_max_step = int(df["_step"].max())
+            metrics = [c for c in df.columns if c != "_step" and _is_keep_metric(c)]
+            for metric in metrics:
+                value, step = _value_at(df, metric, run_max_step)
+                if value is None:
+                    continue
+                rows.append(
+                    {
+                        "mixture_id": mixture,
+                        "mixture_name": MIXTURE_NAMES.get(mixture, mixture),
+                        "metric": _short_metric_label(metric),
+                        "value": value,
+                        "step_used": step,
+                        "ref_step": step,
+                        "run_name": run.display_name,
+                        "run_state": run.state,
+                    }
+                )
+        return pd.DataFrame(rows), meta
+
     ref_step = min(int(df["_step"].max()) for _, _, df in per_run)
     logger.info("Reference step (min over runs of max-step) = %d", ref_step)
 
@@ -445,19 +596,34 @@ MIXTURE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Static blends", ("m4", "m5", "m6")),
     ("Staged", ("m7", "m8", "m9")),
 )
+# Scale stage: only two groups. m10/m14/m15 are the H/M/L single-quality
+# baselines; m11 (static blend) and m12/m13 (staged curricula) are bucketed
+# together under "Blends" since the scale sweep only re-runs one variant of
+# each blend type.
+SCALE_MIXTURE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Single quality", ("m10", "m14", "m15")),
+    ("Blends", ("m11", "m12", "m13")),
+)
+# Per-sweep override of MIXTURE_GROUPS for the cd-val bar chart. Anything not
+# listed falls back to ``MIXTURE_GROUPS``.
+MIXTURE_GROUPS_BY_SWEEP: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "run_scale_sweep_v6": SCALE_MIXTURE_GROUPS,
+}
 GROUP_COLORS: dict[str, str] = {
     "Single quality": "#4C78A8",
     "Static blends": "#54A24B",
     "Staged": "#E45756",
+    "Blends": "#54A24B",
 }
 GROUP_BY_MIXTURE: dict[str, str] = {mid: label for label, mixtures in MIXTURE_GROUPS for mid in mixtures}
+
 
 # Full-dataset example count for the offline cd-val eval — packed-sequence
 # count in the protein-docs cd-val cache. NOT derivable from W&B (eval runs
 # only log per-component loss/bpb, no per-component iter counts) and not
 # trivial to derive from the cache either (depends on eval-time packing into
-# seq_len=8192 windows). Verified manually by Eric (2026-05-24): 53,699
-# packed sequences. Update if the cd-val cache is rebuilt.
+# seq_len=8192 windows). Manually verified 2026-05-24 at 53,699 packed
+# sequences. Update if the cd-val cache is rebuilt.
 CDVAL_FULL_EXAMPLES = 53_699
 
 
@@ -472,8 +638,21 @@ def _mixture_sort_key(mixture_id: str) -> tuple[int, str]:
     return (int(m.group()) if m else 0, mixture_id)
 
 
+def _step_label(snapshot: pd.DataFrame) -> str:
+    """Title fragment describing the slice step.
+
+    Uniform ref_step => "step=N" (the common-slice case). Non-uniform =>
+    "step=A..B per run (latest)" so the title makes clear the values are
+    not synchronized across runs.
+    """
+    unique = sorted({int(x) for x in snapshot["ref_step"].unique()})
+    if len(unique) == 1:
+        return f"step={unique[0]}"
+    return f"step={unique[0]}..{unique[-1]} per run (latest)"
+
+
 def render_heatmap(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) -> None:
-    ref_step = int(snapshot["ref_step"].iloc[0])
+    step_label = _step_label(snapshot)
 
     mixture_order = sorted(snapshot["mixture_id"].unique(), key=_mixture_sort_key)
     # Resolve display labels live (the CSV stores a snapshot at fetch time;
@@ -522,7 +701,7 @@ def render_heatmap(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) ->
     cbar.set_label("per-metric z-score  (blue = lower loss = better)")
 
     ax.set_title(
-        f"{TITLE_PREFIX} — {sweep.id}: loss by mixture @ step={ref_step}\n"
+        f"{TITLE_PREFIX} — {sweep.id}: loss by mixture @ {step_label}\n"
         f"(annotation = raw loss; color = z-score within column)",
         fontsize=10,
     )
@@ -543,12 +722,55 @@ def render_heatmap(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) ->
     logger.info("Saved %s and %s", pdf_path, png_path)
 
 
-def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path) -> None:
-    """1x3 grid of cd-val bar charts, one per ``MIXTURE_GROUPS`` row.
+def _bar_chart_subtitle(snapshot: pd.DataFrame, sweep: SweepConfig, meta: EvalMeta) -> str | None:
+    """Technical subtitle for the cd-val bar chart, or None.
+
+    Returns None if any required EvalMeta field is missing (older cached
+    snapshots may predate ``tokens_exact``/``final_flops_per_run``; rerun
+    with a fresh meta extraction to populate them).
+
+    Line 1: run shape — params, target steps, target tokens, at-completion
+    FLOPs (FLOPs computed from each run's ``throughput/total_gflops`` /
+    latest step, averaged, then scaled to ``num_train_steps``).
+
+    Line 2: per-run progress vs target. Omitted when every run displays as
+    100% complete; the line would just restate "completion".
+    """
+    if (
+        meta.num_train_steps is None
+        or meta.params_exact is None
+        or meta.tokens_exact is None
+        or meta.final_flops_per_run is None
+    ):
+        return None
+    total = meta.num_train_steps
+    # Match the compact "2.95e20" style (no '+' sign) — matplotlib's default
+    # ``:.2e`` formatter prints "e+20".
+    mantissa, exponent = f"{meta.final_flops_per_run:.2e}".split("e")
+    flops_str = f"{mantissa}e{int(exponent)}"
+    line1 = (
+        f"{meta.params_exact / 1e9:.2f}B params · target {total:,} steps "
+        f"= {meta.tokens_exact / 1e9:.3f}B tokens · ~{flops_str} FLOPs/run @ completion"
+    )
+    ref_lo = int(snapshot["ref_step"].min())
+    ref_hi = int(snapshot["ref_step"].max())
+    pct_lo, pct_hi = 100 * ref_lo / total, 100 * ref_hi / total
+    if round(pct_lo) == 100 and round(pct_hi) == 100:
+        return line1
+    if ref_lo == ref_hi:
+        progress = f"current: step {ref_lo:,} / {total:,} ({pct_lo:.0f}% complete)"
+    else:
+        progress = f"current: step {ref_lo:,}..{ref_hi:,} / {total:,} (~{pct_lo:.0f}-{pct_hi:.0f}% complete)"
+    return f"{line1}\n{progress}"
+
+
+def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, meta: EvalMeta, out_dir: Path) -> None:
+    """1xN grid of cd-val bar charts, one per group in the sweep's group list.
 
     Y-axis range is fixed across subplots so cross-group comparison is fair.
     """
-    ref_step = int(snapshot["ref_step"].iloc[0])
+    step_label = _step_label(snapshot)
+    groups = MIXTURE_GROUPS_BY_SWEEP.get(sweep.id, MIXTURE_GROUPS)
     cdval = snapshot[snapshot["metric"] == "cd-val"].set_index("mixture_id")
     if cdval.empty:
         logger.warning("No cd-val rows in snapshot; skipping bar plot")
@@ -562,8 +784,11 @@ def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path)
     pad = 0.1 * span
     y_min, y_max = y_lo - pad, y_hi + pad
 
-    fig, axes = plt.subplots(1, len(MIXTURE_GROUPS), figsize=(3.6 * len(MIXTURE_GROUPS), 3.8), sharey=True)
-    for ax, (group_label, mixture_ids) in zip(axes, MIXTURE_GROUPS, strict=True):
+    fig, axes = plt.subplots(1, len(groups), figsize=(3.6 * len(groups), 3.8), sharey=True)
+    # plt.subplots collapses to a single Axes when ncols=1; normalize to a list.
+    if len(groups) == 1:
+        axes = [axes]
+    for ax, (group_label, mixture_ids) in zip(axes, groups, strict=True):
         values = [float(cdval.loc[mid, "value"]) if mid in cdval.index else float("nan") for mid in mixture_ids]
         labels = [MIXTURE_NAMES.get(mid, mid) for mid in mixture_ids]
         xs = list(range(len(mixture_ids)))
@@ -586,10 +811,17 @@ def render_cdval_bars(snapshot: pd.DataFrame, sweep: SweepConfig, out_dir: Path)
             )
 
     axes[0].set_ylabel("cd-val loss")
-    fig.suptitle(
-        f"{TITLE_PREFIX} — {sweep.id}: cd-val loss by mixture @ step={ref_step}",
-        fontsize=11,
-    )
+    subtitle = _bar_chart_subtitle(snapshot, sweep, meta)
+    title = f"{TITLE_PREFIX} — {sweep.display_name}: cd-val loss by mixture"
+    if subtitle is None:
+        # No extras for this sweep: keep the legacy single-line title with the
+        # step slice baked in.
+        fig.suptitle(f"{title} @ {step_label}", fontsize=11)
+    else:
+        # Extras present: drop the step from the title (subtitle covers it
+        # via the % complete + step range) and render the technical details
+        # on continuation lines.
+        fig.suptitle(f"{title}\n{subtitle}", fontsize=10)
     fig.tight_layout()
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -786,14 +1018,13 @@ def main(argv: list[str] | None = None) -> int:
     sweep = SWEEPS[args.sweep]
     snapshot, meta = load_or_build_snapshot(sweep, refresh=args.refresh)
 
-    ref_step = int(snapshot["ref_step"].iloc[0])
     wide = snapshot.pivot(index="mixture_name", columns="metric", values="value")
-    logger.info("ref_step = %d  meta = %s", ref_step, meta)
+    logger.info("step slice = %s  meta = %s", _step_label(snapshot), meta)
     logger.info("\n%s", wide.to_string(float_format=lambda v: f"{v:.4f}" if pd.notna(v) else "—"))
 
     plots_dir = _plots_dir(sweep.id)
     render_heatmap(snapshot, sweep, plots_dir)
-    render_cdval_bars(snapshot, sweep, plots_dir)
+    render_cdval_bars(snapshot, sweep, meta, plots_dir)
 
     eval_sweep_id = EVAL_OF.get(args.sweep)
     if eval_sweep_id is not None:
