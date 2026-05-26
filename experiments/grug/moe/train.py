@@ -39,6 +39,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe.amuse import find_amuse_state
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -261,11 +262,15 @@ def initial_state(
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
+    opt_state = optimizer.init(params)
+    # AMUSE maintains its own X sequence (the averaged inference iterate); we
+    # mirror it into ema_params so the existing eval_ema flow uses X.
+    needs_ema_params = (ema_beta is not None) or (find_amuse_state(opt_state) is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
-        opt_state=optimizer.init(params),
-        ema_params=params if ema_beta is not None else None,
+        opt_state=opt_state,
+        ema_params=params if needs_ema_params else None,
         pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
     )
 
@@ -314,7 +319,15 @@ def _make_train_step(
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
         params = optax.apply_updates(qb_params, updates)
 
-        if ema_beta is None:
+        # AMUSE: when the optimizer is AMUSE-based, the averaged sequence X
+        # (which is the model used for inference, per arxiv 2605.22432) is
+        # maintained inside the optimizer state. Mirror it into ema_params so
+        # the existing eval_ema flow uses X instead of Y. Falls back to the
+        # plain EMA recurrence otherwise.
+        amuse_state = find_amuse_state(opt_state)
+        if amuse_state is not None:
+            ema_params = amuse_state.x
+        elif ema_beta is None:
             ema_params = None
         else:
             if qb_ema_params is None:
@@ -464,7 +477,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
-            eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None
+            # The "ema_params" slot also carries AMUSE's X sequence when an
+            # AMUSE-based optimizer is in use; honor eval_ema in that case too.
+            has_amuse = find_amuse_state(state.opt_state) is not None
+            eval_ema = eval_cfg.eval_ema and (config.trainer.ema_beta is not None or has_amuse)
             if interval is not None and interval > 0 and (eval_cfg.eval_current or eval_ema):
                 state_callbacks.add_hook(
                     cb_tagged_evaluate(

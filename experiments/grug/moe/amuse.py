@@ -40,6 +40,9 @@ class AmuseState(NamedTuple):
     """State for the AMUSE wrapper.
 
     z: base sequence (same pytree structure as params).
+    x: averaged sequence (same pytree structure as params). Used as the eval
+       model — populated each step so the trainer can read it directly
+       without needing to walk opt_state and recompute.
     base_state: state of the wrapped base optimizer (e.g., Muon momentum, Adam V).
     weight_sum: running Σ η_i^weight_lr_power, for the c_t averaging coefficient.
     max_lr: max learning rate seen so far (matches optax.contrib.schedule_free).
@@ -47,6 +50,7 @@ class AmuseState(NamedTuple):
     """
 
     z: optax.Params
+    x: optax.Params
     base_state: optax.OptState
     weight_sum: chex.Array
     max_lr: chex.Array
@@ -79,31 +83,33 @@ def amuse(
     beta1: float = 0.6,
     rho: float = 0.8,
     warmup_steps: int = 2000,
-    weight_decay: float = 0.0,
     weight_lr_power: float = 2.0,
 ) -> optax.GradientTransformation:
     """AMUSE wrapper.
 
     The model's parameters represent Y_t (the gradient-evaluation point); grads
     received by ``update_fn`` are ∇L(Y_t). The base_optimizer is expected to
-    return updates Δz that include the ``-η_t`` scaling (so applying them to
-    Z gives the base sequence step). Weight decay (``λ``) is applied to Z via
-    the coupled form ``Z ← (1 - η_t λ) Z + Δz``.
+    return updates Δz that include the ``-η_t`` scaling (and any weight decay
+    on Z if desired). AMUSE itself does only the Y/Z/X averaging — weight
+    decay, gradient clipping, and base-optimizer specifics live in the wrapped
+    base.
 
     Args:
-        base_optimizer: Any optax transform that maps grad → -η_t * direction
-            (e.g., scale_with_grug_muonh, or a chain ending in scale_by_lr).
-            It should NOT have its own SF-style β_1 momentum (AMUSE replaces
-            that with the time-varying β_t interpolation). Muon's μ momentum
-            is fine — it operates pre-orthogonalization, distinct from SF.
+        base_optimizer: Any optax transform that maps grad → Δz, where applying
+            Δz to Z yields the new base sequence Z_{t+1}. AMUSE passes
+            ``params=state.z`` so the base optimizer's hyperball / weight decay
+            sees Z (the right reference frame for the SF Z-update).
+            The base should NOT have its own SF-style β_1 momentum (AMUSE
+            replaces that with the time-varying β_t interpolation). Muon's μ
+            momentum is fine — it operates pre-orthogonalization, distinct
+            from SF.
         learning_rate: schedule callable; used for the c_{t+1} averaging
-            coefficient and for weight decay scaling.
+            coefficient (η_t² / Σ η_i²).
         beta1: initial SF interpolation coefficient. Defaults to 0.6 per the
             paper's d512 LLM recipe (β_1 ∈ {0.4, 0.6}).
         rho: rate of β_t growth toward 1. Defaults to 0.8 per the paper
             (ρ ∈ {0.6, 0.8}). ρ=0 reduces AMUSE to fixed-β SF.
         warmup_steps: T_0. β_t = β_1 below this, schedule kicks in after.
-        weight_decay: λ applied to Z.
         weight_lr_power: exponent on η in the LR-weighted average. Defaults
             to 2.0, matching optax.contrib.schedule_free / Defazio 2024.
     """
@@ -115,8 +121,10 @@ def amuse(
 
     def init_fn(params: optax.Params) -> AmuseState:
         z = jax.tree.map(lambda t: t.copy(), params)
+        x = jax.tree.map(lambda t: t.copy(), params)
         return AmuseState(
             z=z,
+            x=x,
             base_state=base_optimizer.init(params),
             weight_sum=jnp.zeros([], jnp.float32),
             max_lr=jnp.zeros([], jnp.float32),
@@ -125,37 +133,26 @@ def amuse(
 
     def update_fn(grads, state: AmuseState, params=None):
         if params is None:
-            raise ValueError("AMUSE requires params for the Y→X→Y reconstruction")
+            raise ValueError("AMUSE requires params (=Y_t) to compute the Y→Y update")
 
-        # params here is Y_t. We don't need to extract X_t to compute the base
-        # step (the base optimizer operates on Z), but we DO need X_t when
-        # computing the new Y_{t+1}. We recover X_t from the SF identity:
-        #     Y_t = (1 - β_t) Z_t + β_t X_t  =>  X_t = (Y_t - (1-β_t) Z_t) / β_t
+        # params here is Y_t. state.x is X_t (maintained across steps); we
+        # don't need to re-derive it. Advance step / β_t / X recursion below.
         next_step = state.step + 1
-        beta_t = _amuse_beta_t(state.step, warmup_steps, beta1, rho)
-        beta_t = jnp.maximum(beta_t, 1e-8)  # avoid div-by-zero in X recovery
-        x_t = jax.tree.map(lambda y, z: (y - (1.0 - beta_t) * z) / beta_t, params, state.z)
 
-        # Base optimizer step: Δz_grad = base_optimizer(grad, base_state, params=z)
-        # We pass z (not params=Y) so the base optimizer's internal state sees the
-        # right operating point; for stateless base optimizers this doesn't matter.
+        # Base optimizer step: Δz = base_optimizer(grad, base_state, params=z).
+        # Passing params=z so any param-dependent piece of the base (hyperball,
+        # weight-decay scaling, etc.) operates on the base sequence Z.
         base_update, new_base_state = base_optimizer.update(grads, state.base_state, params=state.z)
-
-        # Decoupled weight decay on Z: Z ← (1 - η λ) Z + Δz_grad.
-        lr_t = _lr(next_step)
-        if weight_decay and weight_decay > 0.0:
-            wd = lr_t * float(weight_decay)
-            new_z = jax.tree.map(lambda z, du: (1.0 - wd) * z + du, state.z, base_update)
-        else:
-            new_z = jax.tree.map(lambda z, du: z + du, state.z, base_update)
+        new_z = jax.tree.map(lambda z, du: z + du, state.z, base_update)
 
         # LR-weighted online average (matches optax.contrib.schedule_free): the
         # weight for step t is max_lr^p, normalized by Σ over the trajectory.
+        lr_t = _lr(next_step)
         new_max_lr = jnp.maximum(state.max_lr, lr_t)
         weight = new_max_lr ** float(weight_lr_power)
         new_weight_sum = state.weight_sum + weight
         c_next = jnp.where(new_weight_sum > 0.0, weight / new_weight_sum, 0.0)
-        new_x = jax.tree.map(lambda x, z: (1.0 - c_next) * x + c_next * z, x_t, new_z)
+        new_x = jax.tree.map(lambda x, z: (1.0 - c_next) * x + c_next * z, state.x, new_z)
 
         # New Y_{t+1} = (1 - β_{t+1}) Z_{t+1} + β_{t+1} X_{t+1}.
         beta_next = _amuse_beta_t(next_step, warmup_steps, beta1, rho)
@@ -165,6 +162,7 @@ def amuse(
         update = jax.tree.map(lambda y_new, y_old: y_new - y_old, new_y, params)
         new_state = AmuseState(
             z=new_z,
+            x=new_x,
             base_state=new_base_state,
             weight_sum=new_weight_sum,
             max_lr=new_max_lr,
@@ -175,15 +173,23 @@ def amuse(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def amuse_eval_params(state: AmuseState, params, beta1: float = 0.6, rho: float = 0.8, warmup_steps: int = 2000):
-    """Recover X_t (the averaged sequence used for inference) from Y_t (params) and Z_t (state.z).
+def find_amuse_state(opt_state) -> "AmuseState | None":
+    """Walk ``opt_state`` and return the first ``AmuseState`` found, or None.
 
-    X_t = (Y_t - (1 - β_t) Z_t) / β_t. Uses β_t evaluated at ``state.step``
-    (which is the count of completed steps).
+    Used by the grug trainer to detect whether an AMUSE optimizer is in use,
+    so it can populate ``ema_params`` from ``state.x`` (the averaged sequence)
+    for X-based evaluation.
     """
-    beta_t = _amuse_beta_t(state.step, warmup_steps, beta1, rho)
-    beta_t = jnp.maximum(beta_t, 1e-8)
-    return jax.tree.map(lambda y, z: (y - (1.0 - beta_t) * z) / beta_t, params, state.z)
+    matches = []
+
+    def _is_amuse(x):
+        if isinstance(x, AmuseState):
+            matches.append(x)
+            return True
+        return False
+
+    jax.tree_util.tree_flatten(opt_state, is_leaf=_is_amuse)
+    return matches[0] if matches else None
 
 
-__all__ = ["AmuseState", "amuse", "amuse_eval_params"]
+__all__ = ["AmuseState", "amuse", "find_amuse_state"]

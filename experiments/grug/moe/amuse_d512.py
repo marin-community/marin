@@ -38,7 +38,7 @@ _HIDDEN_DIM: int = 512
 _BUDGET: float = 2.19e17
 _TARGET_STEPS: int = 2**14
 _TPU: str = "v5p-8"
-_RUN_SUFFIX: str = "amuse-v1"
+_RUN_SUFFIX: str = "amuse-v2-x-eval"
 
 
 def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
@@ -104,8 +104,8 @@ def _build_launch() -> tuple[str, GrugMoeDirectLaunchConfig]:
                 eval_batch_size=512,
                 steps_per_eval=1000,
                 max_eval_batches=8,
-                eval_current=True,
-                eval_ema=False,
+                eval_current=True,  # also report eval at Y (current params) for comparison
+                eval_ema=True,  # eval at AMUSE's X (averaged sequence) via ema_params slot
             )
         ),
         checkpoint_keep_every=1000,

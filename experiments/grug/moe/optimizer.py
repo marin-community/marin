@@ -863,67 +863,54 @@ class GrugMoeAmuseConfig(OptimizerConfig):
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
 
         def optimizer(learning_rate, adam_lr):
-            def muon_amuse_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                # Base optimizer for the Muon path: MuonH (Muon orthogonalize +
-                # scale-invariant hyperball post-step). AMUSE passes ``params=Z``
-                # to the base, so the hyperball normalization operates against
-                # the base sequence Z (the right reference for the SF Z-update).
-                muonh_base = scale_with_grug_muonh(
-                    momentum=self.muon_momentum,
-                    nesterov=False,  # AMUSE pseudocode uses plain heavy-ball, not Nesterov
-                    steps=self.backend_steps,
-                    muon_eps=self.muon_epsilon,
-                    learning_rate=learning_rate,
-                    coefficient_type=self.coefficient_type,
-                )
-                components.append(
-                    amuse(
-                        base_optimizer=muonh_base,
-                        learning_rate=learning_rate,
-                        beta1=self.amuse_beta1,
-                        rho=self.amuse_rho,
-                        warmup_steps=self.amuse_warmup_steps,
-                        weight_decay=self.weight_decay,
-                        weight_lr_power=self.amuse_weight_lr_power,
-                    )
-                )
-                components.append(_match_named_update_sharding())
-                return optax.chain(*components)
+            # Per-group base optimizers (no SF averaging — the outer AMUSE
+            # wraps these uniformly so there is a single AmuseState with X).
+            #
+            #  muonh: Muon (NS orthogonalize, plain heavy-ball) + hyperball
+            #    post-step. The hyperball already encodes lr; weight decay
+            #    is intentionally NOT applied (hyperball preserves parameter
+            #    norms, which substitutes for explicit weight decay).
+            #  adam_no_b1: AdamW with β_1=0 per AMUSE pseudocode. β_2 keeps
+            #    the variance buffer; SF replaces β_1 with the β_t interp.
+            muonh_base = scale_with_grug_muonh(
+                momentum=self.muon_momentum,
+                nesterov=False,  # plain heavy-ball per AMUSE pseudocode
+                steps=self.backend_steps,
+                muon_eps=self.muon_epsilon,
+                learning_rate=learning_rate,
+                coefficient_type=self.coefficient_type,
+            )
 
-            def adam_amuse_transform(lr):
-                # Base optimizer for Adam path: scale_by_adam with b1=0 (per AMUSE
-                # pseudocode), then × (-η_t).
-                adam_base = optax.chain(
+            def adam_no_b1_at(lr):
+                return optax.chain(
                     optax.scale_by_adam(b1=0.0, b2=self.beta2, eps=self.epsilon),
                     optax.scale_by_learning_rate(lr, flip_sign=True),
                 )
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    amuse(
-                        base_optimizer=adam_base,
-                        learning_rate=lr,
-                        beta1=self.amuse_beta1,
-                        rho=self.amuse_rho,
-                        warmup_steps=self.amuse_warmup_steps,
-                        weight_decay=self.weight_decay,
-                        weight_lr_power=self.amuse_weight_lr_power,
-                    )
-                )
-                return optax.chain(*components)
 
-            return optax.multi_transform(
+            base = optax.multi_transform(
                 {
-                    "amuse_muon": muon_amuse_transform(),
-                    "amuse_adam_at_lr": adam_amuse_transform(learning_rate),  # for lm_head/output_proj
-                    "amuse_adam_at_adam_lr": adam_amuse_transform(adam_lr),  # for 1-D / embeddings
+                    "amuse_muon": muonh_base,
+                    "amuse_adam_at_lr": adam_no_b1_at(learning_rate),
+                    "amuse_adam_at_adam_lr": adam_no_b1_at(adam_lr),
                 },
                 self.create_mask,
             )
+
+            components = []
+            if self.max_grad_norm:
+                components.append(optax.clip_by_global_norm(self.max_grad_norm))
+            components.append(
+                amuse(
+                    base_optimizer=base,
+                    learning_rate=learning_rate,
+                    beta1=self.amuse_beta1,
+                    rho=self.amuse_rho,
+                    warmup_steps=self.amuse_warmup_steps,
+                    weight_lr_power=self.amuse_weight_lr_power,
+                )
+            )
+            components.append(_match_named_update_sharding())
+            return optax.chain(*components)
 
         return optax.inject_hyperparams(optimizer)(
             learning_rate=learning_rate_schedule,
