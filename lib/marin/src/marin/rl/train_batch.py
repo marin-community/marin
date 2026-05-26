@@ -15,6 +15,7 @@ from typing import Any
 import haliax as hax
 import jax.numpy as jnp
 import numpy as np
+from marin.rl.decoding import DecodingConfig
 
 from .types import (
     BatchInfo,
@@ -63,6 +64,7 @@ def rollout_to_trajectory_record(rollout: Rollout) -> TrajectoryRecord:
 
 def trajectory_record_to_rollout(trajectory: TrajectoryRecord) -> Rollout:
     """Reconstruct a rollout from the neutral trajectory record."""
+    sampling_top_k = None if trajectory.sampling_top_k == TOP_K_NONE_SENTINEL else trajectory.sampling_top_k
     return Rollout(
         env_name=trajectory.env_name,
         env_example_id=trajectory.env_example_id,
@@ -71,8 +73,11 @@ def trajectory_record_to_rollout(trajectory: TrajectoryRecord) -> Rollout:
         response_logprobs=trajectory.behavior_logprobs,
         token_rewards=trajectory.token_rewards,
         episode_reward=trajectory.episode_reward,
-        temperature=trajectory.sampling_temperature,
-        top_k=trajectory.sampling_top_k,
+        decoding=DecodingConfig(
+            temperature=trajectory.sampling_temperature,
+            top_k=sampling_top_k,
+            max_output_tokens=max(1, len(trajectory.response_tokens)),
+        ).as_trace(),
         is_truncated=trajectory.is_truncated,
         metadata=trajectory.rollout_metadata,
         correctness_reward=trajectory.correctness_reward,

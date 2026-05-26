@@ -204,6 +204,7 @@ def create_nano_llama_config() -> LlamaConfig:
         num_kv_heads=8,
         num_layers=4,
         tokenizer=DummyTokenizer(),
+        flash_attention_block_size=16,
     )
 
 
@@ -710,6 +711,7 @@ class RolloutBatchFeeder:
     def __post_init__(self):
         self.thread = None
         self.stop_flag = threading.Event()
+        self.batch_index = 0
 
     def _run(self):
         """Thread target - continuously generate batches until runner completes."""
@@ -730,11 +732,15 @@ class RolloutBatchFeeder:
                 if self.runner.trained_model:
                     model = self.runner.trained_model
 
+                rollout_step = self.runner.all_steps_seen[-1] if self.runner.all_steps_seen else -1
+                batch_index = self.batch_index
+                self.batch_index += 1
                 batch = self.batch_generator(
                     policy_model=model,
                     batch_size=batch_size,
                     tokenizer=self.tokenizer,
-                    step=self.runner.steps_completed,
+                    step=rollout_step,
+                    batch_index=batch_index,
                 )
                 self.queue_writer.write_batch(batch)
         except Exception:

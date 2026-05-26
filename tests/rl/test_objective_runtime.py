@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 import jax
 import numpy as np
 import pytest
+from marin.rl.decoding import DecodingConfig
 from marin.rl.kl_regularization import KLConfig, KLMode
 from marin.rl.objectives.recipes import make_rloo_objective
 from marin.rl.objectives.runtime import ObjectiveRuntimeConfig, build_objective_runtime
@@ -38,8 +39,7 @@ def create_test_rollout(
         response_logprobs=response_logprobs,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
-        temperature=1.0,
-        top_k=16,
+        decoding=DecodingConfig(temperature=1.0, top_k=16).as_trace(),
         is_truncated=is_truncated,
         metadata=RolloutMetadata(
             worker_id="worker-1",

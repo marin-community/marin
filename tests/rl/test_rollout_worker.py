@@ -291,8 +291,7 @@ def test_sample_batch_generates_unique_fallback_group_ids_across_calls():
         response_logprobs=np.array([-0.1, -0.2], dtype=np.float32),
         token_rewards=np.array([1.0, 1.0], dtype=np.float32),
         episode_reward=1.0,
-        temperature=0.7,
-        top_k=5,
+        decoding=DecodingConfig(temperature=0.7, top_k=5, max_output_tokens=32).as_trace(),
         is_truncated=False,
     )
     sample = EnvironmentSample(
@@ -327,11 +326,12 @@ def test_sample_batch_generates_unique_fallback_group_ids_across_calls():
         curriculum_config=SimpleNamespace(
             lessons={
                 "lesson-a": SimpleNamespace(
-                    sampling_params=SimpleNamespace(
-                        temperature=0.7,
-                        top_k=5,
-                        stop_tokens=None,
-                        max_output_tokens=32,
+                    sampling_params=SamplingParams(
+                        train_decoding=DecodingConfig(
+                            temperature=0.7,
+                            top_k=5,
+                            max_output_tokens=32,
+                        )
                     )
                 )
             }

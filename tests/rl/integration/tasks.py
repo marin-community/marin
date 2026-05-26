@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 from marin.rl.decoding import DecodingConfig
-from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutMetadata
+from marin.rl.types import Rollout, RolloutBatch, RolloutGroup, RolloutGroupMetadata, RolloutMetadata
 
 from tests.rl.integration.config import (
     DummyTokenizer,
@@ -15,6 +15,17 @@ from tests.rl.integration.config import (
     encode_prompt_and_response,
     run_inference_with_engine,
 )
+
+SYNTHETIC_ROLLOUT_TEMPERATURE = 1.0
+SYNTHETIC_ROLLOUT_TOP_K = None
+SYNTHETIC_ROLLOUTS_PER_GROUP = 4
+SYNTHETIC_TASK_VERSION = "integration-v1"
+
+
+def _is_response_truncated(response_text: str, tokenizer: DummyTokenizer, max_output_length: int) -> bool:
+    response_token_count = len(tokenizer.encode(response_text, add_special_tokens=False))
+    return response_token_count > max_output_length
+
 
 # ============================================================================
 # Cats Task
@@ -37,6 +48,7 @@ def create_cats_rollout_batch(
     max_output_length: int = 16,
     pad_token_id: int = 0,
     worker_id: str = "test_worker",
+    batch_index: int = 0,
 ) -> RolloutBatch:
     """Create a rollout batch with cat-themed examples using real model logprob computation."""
     if tokenizer is None:
@@ -55,17 +67,19 @@ def create_cats_rollout_batch(
     examples = []
     rng = np.random.default_rng(42)
 
-    for _ in range(batch_size):
-        prompt = rng.choice(prompts)
-        if rng.random() < 0.5:
-            response = " ".join(rng.choice(positive_words, size=rng.integers(1, 8)))
-        else:
-            response = " ".join(rng.choice(negative_words, size=rng.integers(1, 8)))
-        examples.append((prompt, response))
+    for group_idx, group_start in enumerate(range(0, batch_size, SYNTHETIC_ROLLOUTS_PER_GROUP)):
+        prompt = prompts[group_idx % len(prompts)]
+        group_size = min(SYNTHETIC_ROLLOUTS_PER_GROUP, batch_size - group_start)
+        for sample_idx in range(group_size):
+            if sample_idx % 2 == 0:
+                response = " ".join(rng.choice(positive_words, size=rng.integers(1, 8)))
+            else:
+                response = " ".join(rng.choice(negative_words, size=rng.integers(1, 8)))
+            examples.append((group_idx, prompt, response))
 
     # Encode examples
     encoded_examples = []
-    for prompt_text, response_text in examples:
+    for _, prompt_text, response_text in examples:
         encoded = encode_prompt_and_response(
             prompt_text,
             response_text,
@@ -82,52 +96,76 @@ def create_cats_rollout_batch(
     response_tokens = np.stack([ex["response_tokens"] for ex in encoded_examples])
     response_masks = np.stack([ex["response_attention_mask"] for ex in encoded_examples])
 
-    policy_logprobs = compute_model_logprobs(
-        policy_model,
-        prompt_tokens,
-        prompt_masks,
-        response_tokens,
-        response_masks,
+    policy_logprobs = np.asarray(
+        compute_model_logprobs(
+            policy_model,
+            prompt_tokens,
+            prompt_masks,
+            response_tokens,
+            response_masks,
+        )
     )
 
-    # Create individual rollouts
-    rollouts = []
+    num_groups = (batch_size + SYNTHETIC_ROLLOUTS_PER_GROUP - 1) // SYNTHETIC_ROLLOUTS_PER_GROUP
+    grouped_rollouts: list[list[Rollout]] = [[] for _ in range(num_groups)]
     for i in range(len(examples)):
-        prompt_text, response_text = examples[i]
+        group_idx, prompt_text, response_text = examples[i]
         encoded_ex = encoded_examples[i]
         episode_reward = compute_cats_reward(response_text)
 
         # Extract individual arrays (remove batch dimension)
+        response_mask = response_masks[i].astype(bool)
         individual_prompt = encoded_ex["prompt_tokens"][prompt_masks[i] == 1]
-        individual_response = encoded_ex["response_tokens"][response_masks[i] == 1]
-        individual_logprobs = policy_logprobs[i][response_masks[i] == 1]
+        individual_response = encoded_ex["response_tokens"][response_mask]
+        individual_logprobs = policy_logprobs[i][response_mask]
 
         # Token rewards (simple: use episode reward for all response tokens)
         token_rewards = np.full(len(individual_response), episode_reward, dtype=np.float32)
 
+        group_id = f"{worker_id}:cats:{step}:batch-{batch_index}:group-{group_idx}"
+        trace_id = f"{worker_id}:cats:{step}:batch-{batch_index}:trace-{group_idx}"
         rollout = Rollout(
             env_name="mock:cats",
-            env_example_id=f"cats_example_{i}",
+            env_example_id=f"cats_example_{group_idx}_{len(grouped_rollouts[group_idx])}",
             prompt_tokens=individual_prompt,
             response_tokens=individual_response,
             response_logprobs=individual_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
-            decoding=DecodingConfig(temperature=1.0).as_trace(),
+            decoding=DecodingConfig(
+                temperature=SYNTHETIC_ROLLOUT_TEMPERATURE,
+                top_k=SYNTHETIC_ROLLOUT_TOP_K,
+                max_output_tokens=max_output_length,
+            ).as_trace(),
+            is_truncated=_is_response_truncated(response_text, tokenizer, max_output_length),
             metadata=RolloutMetadata(
                 worker_id=worker_id,
                 timestamp=time.time(),
                 weight_step=step,
+                group_id=group_id,
+                trace_id=trace_id,
+                task_name="mock:cats",
+                task_version=SYNTHETIC_TASK_VERSION,
             ),
         )
-        rollouts.append(rollout)
+        grouped_rollouts[group_idx].append(rollout)
 
-    # Group rollouts
-    group = RolloutGroup(rollouts=rollouts)
+    groups = [
+        RolloutGroup(
+            rollouts=rollouts,
+            metadata=RolloutGroupMetadata(
+                group_id=rollouts[0].metadata.group_id,
+                trace_id=rollouts[0].metadata.trace_id,
+                task_name="mock:cats",
+                task_version=SYNTHETIC_TASK_VERSION,
+            ),
+        )
+        for rollouts in grouped_rollouts
+        if rollouts
+    ]
 
-    # Use a fixed large step number to ensure these batches are never discarded
-    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=10000)
-    return RolloutBatch(groups=[group], metadata=metadata)
+    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=step)
+    return RolloutBatch(groups=groups, metadata=metadata)
 
 
 def validate_cats_model(model, tokenizer) -> dict[str, str]:
@@ -230,6 +268,7 @@ def create_sequential_digits_rollout_batch(
     max_output_length: int = 16,
     pad_token_id: int = 0,
     worker_id: str = "test_worker",
+    batch_index: int = 0,
 ) -> RolloutBatch:
     """Create a rollout batch with sequential digit examples."""
     if tokenizer is None:
@@ -243,20 +282,21 @@ def create_sequential_digits_rollout_batch(
         "i like cats",
     ]
 
-    for _ in range(batch_size):
+    for group_idx, group_start in enumerate(range(0, batch_size, SYNTHETIC_ROLLOUTS_PER_GROUP)):
         start_idx = rng.integers(0, 5)
         end_idx = start_idx + rng.integers(start_idx, 9)
         prompt = f"{start_idx} to {end_idx}:"
-        # 60% chance of positive (sequential) response
-        if rng.random() < 0.6:
-            response = "".join(str(i) for i in range(start_idx, end_idx))
-        else:
-            response = rng.choice(bad_responses)
-        examples.append((prompt, response))
+        group_size = min(SYNTHETIC_ROLLOUTS_PER_GROUP, batch_size - group_start)
+        for sample_idx in range(group_size):
+            if sample_idx % 2 == 0:
+                response = "".join(str(i) for i in range(start_idx, end_idx))
+            else:
+                response = rng.choice(bad_responses)
+            examples.append((group_idx, prompt, response))
 
     # Encode examples
     encoded_examples = []
-    for prompt_text, response_text in examples:
+    for _, prompt_text, response_text in examples:
         encoded = encode_prompt_and_response(
             prompt_text,
             response_text,
@@ -273,52 +313,77 @@ def create_sequential_digits_rollout_batch(
     response_tokens = np.stack([ex["response_tokens"] for ex in encoded_examples])
     response_masks = np.stack([ex["response_attention_mask"] for ex in encoded_examples])
 
-    policy_logprobs = compute_model_logprobs(
-        policy_model,
-        prompt_tokens,
-        prompt_masks,
-        response_tokens,
-        response_masks,
+    policy_logprobs = np.asarray(
+        compute_model_logprobs(
+            policy_model,
+            prompt_tokens,
+            prompt_masks,
+            response_tokens,
+            response_masks,
+        )
     )
 
     # Create individual rollouts
-    rollouts = []
+    num_groups = (batch_size + SYNTHETIC_ROLLOUTS_PER_GROUP - 1) // SYNTHETIC_ROLLOUTS_PER_GROUP
+    grouped_rollouts: list[list[Rollout]] = [[] for _ in range(num_groups)]
     for i in range(len(examples)):
-        prompt_text, response_text = examples[i]
+        group_idx, prompt_text, response_text = examples[i]
         encoded_ex = encoded_examples[i]
         episode_reward = compute_sequential_digits_reward(response_text)
 
         # Extract individual arrays (remove batch dimension)
+        response_mask = response_masks[i].astype(bool)
         individual_prompt = encoded_ex["prompt_tokens"][prompt_masks[i] == 1]
-        individual_response = encoded_ex["response_tokens"][response_masks[i] == 1]
-        individual_logprobs = policy_logprobs[i][response_masks[i] == 1]
+        individual_response = encoded_ex["response_tokens"][response_mask]
+        individual_logprobs = policy_logprobs[i][response_mask]
 
         # Token rewards (use episode reward for all response tokens)
         token_rewards = np.full(len(individual_response), episode_reward, dtype=np.float32)
 
+        group_id = f"{worker_id}:sequential_digits:{step}:batch-{batch_index}:group-{group_idx}"
+        trace_id = f"{worker_id}:sequential_digits:{step}:batch-{batch_index}:trace-{group_idx}"
         rollout = Rollout(
             env_name="mock:sequential_digits",
-            env_example_id=f"seq_digits_example_{i}",
+            env_example_id=f"seq_digits_example_{group_idx}_{len(grouped_rollouts[group_idx])}",
             prompt_tokens=individual_prompt,
             response_tokens=individual_response,
             response_logprobs=individual_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
-            decoding=DecodingConfig(temperature=1.0).as_trace(),
+            decoding=DecodingConfig(
+                temperature=SYNTHETIC_ROLLOUT_TEMPERATURE,
+                top_k=SYNTHETIC_ROLLOUT_TOP_K,
+                max_output_tokens=max_output_length,
+            ).as_trace(),
+            is_truncated=_is_response_truncated(response_text, tokenizer, max_output_length),
             metadata=RolloutMetadata(
                 worker_id=worker_id,
                 timestamp=time.time(),
                 weight_step=step,
+                group_id=group_id,
+                trace_id=trace_id,
+                task_name="mock:sequential_digits",
+                task_version=SYNTHETIC_TASK_VERSION,
             ),
         )
-        rollouts.append(rollout)
+        grouped_rollouts[group_idx].append(rollout)
 
-    # Group rollouts
-    group = RolloutGroup(rollouts=rollouts)
+    groups = [
+        RolloutGroup(
+            rollouts=rollouts,
+            metadata=RolloutGroupMetadata(
+                group_id=rollouts[0].metadata.group_id,
+                trace_id=rollouts[0].metadata.trace_id,
+                task_name="mock:sequential_digits",
+                task_version=SYNTHETIC_TASK_VERSION,
+            ),
+        )
+        for rollouts in grouped_rollouts
+        if rollouts
+    ]
 
-    # Use fixed large step number to ensure batches are never discarded
-    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=10000)
-    return RolloutBatch(groups=[group], metadata=metadata)
+    metadata = RolloutMetadata(worker_id=worker_id, timestamp=time.time(), weight_step=step)
+    return RolloutBatch(groups=groups, metadata=metadata)
 
 
 def validate_sequential_digits_model(model, tokenizer) -> dict[str, str]:
