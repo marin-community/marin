@@ -15,8 +15,8 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 import fsspec
 import pyarrow as pa
 from braceexpand import braceexpand
-from pyarrow import RecordBatch
 from datafusion import SessionContext
+from pyarrow import RecordBatch
 from rigging.filesystem import url_to_fs
 
 from zephyr.expr import Expr
