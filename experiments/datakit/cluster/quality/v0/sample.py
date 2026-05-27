@@ -51,14 +51,6 @@ from rigging.log_setup import configure_logging
 logger = logging.getLogger(__name__)
 
 
-# Source carve-outs. Same set excluded by the existing all_sources_quality
-# fan-out (safety_pt/* is not consumed by the standard mixture, climblab-ja
-# is non-English). Matched as prefix or exact name.
-EXCLUDE_PREFIXES: tuple[str, ...] = (
-    "safety_pt/",
-    "climblab-ja",
-)
-
 # Per-document text cap stored in the sample parquet. 32 KB is ~8x the
 # oracle's 4 KB cut-off and ~8x train.py's default truncation; no
 # downstream consumer reads more, so storing more just bloats memory
@@ -95,12 +87,7 @@ class SourceQuota:
 
 def _active_sources() -> dict[str, float]:
     """Return ``{name: rough_token_count_b}`` for the active sources."""
-    out: dict[str, float] = {}
-    for name, src in all_sources().items():
-        if any(name == p or name.startswith(p) for p in EXCLUDE_PREFIXES):
-            continue
-        out[name] = src.rough_token_count_b
-    return out
+    return {name: src.rough_token_count_b for name, src in all_sources().items()}
 
 
 def compute_quotas(

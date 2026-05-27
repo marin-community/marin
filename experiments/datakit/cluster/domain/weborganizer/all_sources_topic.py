@@ -5,11 +5,10 @@
 
 Applies AllenAI's Dolma3 fasttext WebOrganizer topic classifier
 (``allenai/dolma3-fasttext-weborganizer-topic-classifier``) to every normalized
-source in :func:`marin.datakit.sources.all_sources` (minus the standard
-``safety_pt/*`` / ``climblab-ja`` carve-outs -- see ``_EXCLUDE_PREFIXES``),
-producing one co-partitioned Parquet attributes dataset per source. Output
-records are ``{id, top_label, top_score, labels, scores}`` (full label
-distribution, since downstream consolidate applies its own topic thresholds).
+source in :func:`marin.datakit.sources.all_sources`, producing one
+co-partitioned Parquet attributes dataset per source. Output records are
+``{id, top_label, top_score, labels, scores}`` (full label distribution, since
+downstream consolidate applies its own topic thresholds).
 
 DAG shape::
 
@@ -96,17 +95,6 @@ PER_SOURCE_MAX_WORKERS: int | None = None
 # Permanent output prefix -- sibling of the v0 clustering artifacts under
 # ``gs://marin-eu-west4/datakit/``. No TTL, no churn between runs.
 _OUTPUT_PREFIX = "gs://marin-eu-west4/datakit/weborganizer"
-
-# Sources excluded from the topic fan-out. Match against the registry name as
-# a prefix (``safety_pt/`` skips every ``safety_pt/...`` source). Mirrors the
-# standard datakit carve-outs in dedup/all_sources_fuzzy.py and store/all_sources_store.py:
-# safety_pt and climblab-ja are deliberately omitted from the downstream
-# consolidated store, so classifying them wastes worker time on data nothing
-# downstream consumes.
-_EXCLUDE_PREFIXES: tuple[str, ...] = (
-    "safety_pt/",
-    "climblab-ja",
-)
 
 
 class WeborgTopicOutput(BaseModel):
@@ -223,8 +211,6 @@ def build_classify_steps() -> list[StepSpec]:
 
     classify_steps: list[StepSpec] = []
     for name, src in all_sources().items():
-        if any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES):
-            continue
         classify_steps.append(
             classify_weborg_topic_step(
                 name=f"topic/{name}",

@@ -89,12 +89,6 @@ WORKER_RESOURCES = ResourceConfig(cpu=2, ram="16g")
 # Zephyr default for workers (None = framework default).
 PER_SOURCE_MAX_WORKERS: int | None = None
 
-# Same set excluded by the dolma3-quality and weborganizer fan-outs.
-_EXCLUDE_PREFIXES: tuple[str, ...] = (
-    "safety_pt/",
-    "climblab-ja",
-)
-
 
 class LlmQualityOutput(BaseModel):
     """Step artifact for one source's LLM-quality classification.
@@ -247,8 +241,6 @@ def build_classify_steps(*, model_bin_path: str, inference_name: str) -> list[St
 
     steps: list[StepSpec] = [model_step]
     for name, src in all_sources().items():
-        if any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES):
-            continue
         steps.append(
             classify_llm_quality_step(
                 name=f"quality-llm/{name}",

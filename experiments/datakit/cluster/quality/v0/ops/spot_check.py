@@ -47,8 +47,6 @@ from rigging.log_setup import configure_logging
 logger = logging.getLogger(__name__)
 
 
-EXCLUDE_PREFIXES: tuple[str, ...] = ("safety_pt/", "climblab-ja")
-
 DEFAULT_TOP_K = 3
 DEFAULT_BOTTOM_K = 3
 DEFAULT_THRESHOLD = 0.5
@@ -232,7 +230,7 @@ def run(
     num_workers: int,
     preview: int,
 ) -> list[SourceStats]:
-    names = sorted(n for n in all_sources() if not any(n == e or n.startswith(e) for e in EXCLUDE_PREFIXES))
+    names = sorted(all_sources())
     logger.info("spot-checking %d active sources from %s", len(names), inference_base)
     results: list[SourceStats] = []
     with ThreadPoolExecutor(max_workers=num_workers) as pool:

@@ -57,14 +57,6 @@ QUALITY_ROOT = "gs://marin-eu-west4/datakit/llm-quality-classifier/inference/son
 DEDUP_PATH = "gs://marin-eu-west4/datakit/dedup/dedup_v0_manual"
 OUTPUT_PATH = "gs://marin-eu-west4/datakit/store/v0.1_20260518"
 
-# Sources excluded from the v0 store. Both were held out of the dedup run
-# (see ``experiments/datakit/dedup/all_sources_fuzzy.py``), so excluding them
-# here keeps the invariant that every kept doc has all four attributes.
-_EXCLUDE_PREFIXES: tuple[str, ...] = (
-    "safety_pt/",
-    "climblab-ja",
-)
-
 CLUSTER_VIEW = 40
 SPLIT = "train"
 
@@ -74,10 +66,6 @@ SPLIT = "train"
 # pool without benefit.
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="5g")
 MAX_WORKERS = 2048
-
-
-def _is_excluded(name: str) -> bool:
-    return any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES)
 
 
 _HASH_LEN = 8
@@ -142,12 +130,7 @@ def main() -> None:
 
     dedup = Artifact.from_path(DEDUP_PATH, FuzzyDupsAttrData)
 
-    sources_to_resolve = []
-    for source_name in all_sources():
-        if _is_excluded(source_name):
-            logger.info("excluding %s", source_name)
-            continue
-        sources_to_resolve.append(source_name)
+    sources_to_resolve = list(all_sources())
 
     # Build a {source_name: full_dir} index per root via shallow fs.ls walks
     # -- bounded GCS work + bounded memory. See `_build_resolution_index`.

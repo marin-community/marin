@@ -5,10 +5,9 @@
 
 Applies AllenAI's Dolma3 fasttext quality classifier
 (``allenai/dolma3-fasttext-quality-classifier``) to every normalized source in
-:func:`marin.datakit.sources.all_sources` (minus the standard ``safety_pt/*`` /
-``climblab-ja`` carve-outs -- see ``_EXCLUDE_PREFIXES``), producing one
-co-partitioned Parquet attributes dataset per source. Output records are
-``{id, score}`` (binary classifier collapsed via ``score_target_label``).
+:func:`marin.datakit.sources.all_sources`, producing one co-partitioned Parquet
+attributes dataset per source. Output records are ``{id, score}`` (binary
+classifier collapsed via ``score_target_label``).
 
 DAG shape::
 
@@ -108,18 +107,6 @@ PER_SOURCE_MAX_WORKERS = 1024
 # Permanent output prefix -- sibling of the v0 clustering and weborganizer
 # artifacts under ``gs://marin-eu-west4/datakit/``. No TTL, no churn between runs.
 _OUTPUT_PREFIX = "gs://marin-eu-west4/datakit/dolma3-quality"
-
-# Sources excluded from the quality fan-out. Match against the registry name
-# as a prefix (``safety_pt/`` skips every ``safety_pt/...`` source). Mirrors
-# the standard datakit carve-outs in dedup/all_sources_fuzzy.py,
-# store/all_sources_store.py, and cluster/weborganizer/all_sources_topic.py:
-# safety_pt and climblab-ja are deliberately omitted from the downstream
-# consolidated store, so classifying them wastes worker time on data nothing
-# downstream consumes.
-_EXCLUDE_PREFIXES: tuple[str, ...] = (
-    "safety_pt/",
-    "climblab-ja",
-)
 
 
 class DolmaQualityOutput(BaseModel):
@@ -236,8 +223,6 @@ def build_classify_steps() -> list[StepSpec]:
 
     classify_steps: list[StepSpec] = []
     for name, src in all_sources().items():
-        if any(name == p or name.startswith(p) for p in _EXCLUDE_PREFIXES):
-            continue
         classify_steps.append(
             classify_dolma3_quality_step(
                 name=f"quality/{name}",
