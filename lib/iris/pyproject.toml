@@ -79,6 +79,12 @@ packages = ["src/iris"]
 # probe in _bundled_iris_config_dir() in iris.cli.main).
 "config" = "iris/config"
 
+# Stamp iris/_build_info.py with the client revision date on every wheel build
+# (not just published ones), so non-editable git installs report a real date to
+# the controller instead of being rejected as stale. See hatch_build.py.
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.sdist]
 # Without an explicit sdist scope, hatchling sweeps the whole iris/ directory
 # and bundles ~146 MiB of dashboard/node_modules (git-ignored but still on
