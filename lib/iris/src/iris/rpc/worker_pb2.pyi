@@ -103,21 +103,25 @@ class Worker(_message.Message):
         health: Worker.WorkerHealth
         def __init__(self, worker_id: _Optional[str] = ..., observed: _Optional[_Iterable[_Union[Worker.AttemptObservation, _Mapping]]] = ..., health: _Optional[_Union[Worker.WorkerHealth, _Mapping]] = ...) -> None: ...
     class DesiredAttempt(_message.Message):
-        __slots__ = ("attempt_uid", "run", "stop")
+        __slots__ = ("attempt_uid", "run", "stop", "task_id", "attempt_id")
         ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
         RUN_FIELD_NUMBER: _ClassVar[int]
         STOP_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         attempt_uid: str
         run: Worker.AttemptSpec
         stop: Worker.StopReason
-        def __init__(self, attempt_uid: _Optional[str] = ..., run: _Optional[_Union[Worker.AttemptSpec, _Mapping]] = ..., stop: _Optional[_Union[Worker.StopReason, str]] = ...) -> None: ...
+        task_id: str
+        attempt_id: int
+        def __init__(self, attempt_uid: _Optional[str] = ..., run: _Optional[_Union[Worker.AttemptSpec, _Mapping]] = ..., stop: _Optional[_Union[Worker.StopReason, str]] = ..., task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class AttemptSpec(_message.Message):
         __slots__ = ("request",)
         REQUEST_FIELD_NUMBER: _ClassVar[int]
         request: _job_pb2.RunTaskRequest
         def __init__(self, request: _Optional[_Union[_job_pb2.RunTaskRequest, _Mapping]] = ...) -> None: ...
     class AttemptObservation(_message.Message):
-        __slots__ = ("attempt_uid", "state", "exit_code", "error", "container_id", "finished_at", "resource_usage")
+        __slots__ = ("attempt_uid", "state", "exit_code", "error", "container_id", "finished_at", "resource_usage", "task_id", "attempt_id")
         ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
         STATE_FIELD_NUMBER: _ClassVar[int]
         EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
@@ -125,6 +129,8 @@ class Worker(_message.Message):
         CONTAINER_ID_FIELD_NUMBER: _ClassVar[int]
         FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
         RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
+        TASK_ID_FIELD_NUMBER: _ClassVar[int]
+        ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
         attempt_uid: str
         state: _job_pb2.TaskState
         exit_code: int
@@ -132,7 +138,9 @@ class Worker(_message.Message):
         container_id: str
         finished_at: _time_pb2.Timestamp
         resource_usage: _job_pb2.ResourceUsage
-        def __init__(self, attempt_uid: _Optional[str] = ..., state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., container_id: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ...) -> None: ...
+        task_id: str
+        attempt_id: int
+        def __init__(self, attempt_uid: _Optional[str] = ..., state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., container_id: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ..., task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class WorkerHealth(_message.Message):
         __slots__ = ("healthy", "health_error", "resources")
         HEALTHY_FIELD_NUMBER: _ClassVar[int]

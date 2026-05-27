@@ -335,18 +335,29 @@ def _filter_observations_to_plan(
 ) -> list[worker_pb2.Worker.AttemptObservation]:
     """Drop observations whose attempt is not in the per-worker plan we sent.
 
-    An observation matches iff its ``attempt_uid`` is in the plan's non-empty
-    UID set.
+    Membership: observation matches if its ``attempt_uid`` is in the plan's
+    non-empty UID set OR its ``(task_id, attempt_id)`` composite is in the
+    plan's composite set. The composite fallback covers observations from
+    pre-UID-label adopted attempts that carry an empty UID until the worker
+    stamps it on the first reconcile tick.
     """
-    plan_uids: set[str] = {desired.attempt_uid for desired in plan.request.desired if desired.attempt_uid}
+    plan_uids: set[str] = set()
+    plan_composites: set[tuple[str, int]] = set()
+    for desired in plan.request.desired:
+        if desired.attempt_uid:
+            plan_uids.add(desired.attempt_uid)
+        plan_composites.add((desired.task_id, desired.attempt_id))
 
     kept: list[worker_pb2.Worker.AttemptObservation] = []
     dropped = 0
     for obs in observations:
         if obs.attempt_uid and obs.attempt_uid in plan_uids:
             kept.append(obs)
-        else:
-            dropped += 1
+            continue
+        if (obs.task_id, obs.attempt_id) in plan_composites:
+            kept.append(obs)
+            continue
+        dropped += 1
     if dropped:
         logger.debug(
             "apply_reconcile_result: worker %s sent %d observations outside the plan; dropping",
@@ -2104,28 +2115,33 @@ class ControllerTransitions:
     ) -> list[TaskUpdate]:
         """Translate ``AttemptObservation`` protos into ``TaskUpdate`` list.
 
-        MISSING becomes ``FAILED("worker_lost_spec")``. The observation's
-        ``attempt_uid`` is resolved to its ``(task_id, attempt_id)`` composite
-        through the ``idx_task_attempts_uid`` index; observations whose UID
-        cannot be resolved are skipped with a warning (the attempt row has
-        been deleted from under us).
+        MISSING becomes ``FAILED("worker_lost_spec")``. Routing prefers the
+        ``attempt_uid`` when set: the UID is resolved to its ``(task_id,
+        attempt_id)`` composite through the ``idx_task_attempts_uid`` index.
+        Observations from pre-UID-label adopted attempts carry an empty
+        ``attempt_uid`` and fall back to the composite key the worker reports
+        directly. A UID that resolves to nothing (e.g. its attempt row was
+        deleted) likewise falls back to the reported composite.
         """
         uids = [AttemptUid(obs.attempt_uid) for obs in observations if obs.attempt_uid]
         uid_to_composite = reads.resolve_attempt_uids(cur, uids)
 
         updates: list[TaskUpdate] = []
         for obs in observations:
-            if not obs.attempt_uid:
-                logger.warning("AttemptObservation missing attempt_uid; skipping: %s", obs)
-                continue
-            resolved = uid_to_composite.get(AttemptUid(obs.attempt_uid))
-            if resolved is None:
-                logger.warning(
-                    "AttemptObservation uid=%s did not resolve to an attempt row; skipping",
-                    obs.attempt_uid,
-                )
-                continue
-            task_id, attempt_id = resolved
+            resolved = uid_to_composite.get(AttemptUid(obs.attempt_uid)) if obs.attempt_uid else None
+            if resolved is not None:
+                task_id, attempt_id = resolved
+            else:
+                if obs.attempt_uid:
+                    logger.debug(
+                        "AttemptObservation uid=%s did not resolve; falling back to composite key",
+                        obs.attempt_uid,
+                    )
+                if not obs.task_id:
+                    logger.warning("AttemptObservation missing both attempt_uid and task_id; skipping: %s", obs)
+                    continue
+                task_id = JobName.from_wire(obs.task_id)
+                attempt_id = obs.attempt_id
             exit_code: int | None = obs.exit_code if obs.exit_code != 0 else None
             error: str | None = obs.error or None
             container_id: str | None = obs.container_id or None

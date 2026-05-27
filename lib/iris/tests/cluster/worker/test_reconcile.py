@@ -10,14 +10,16 @@ These exercise the Reconcile RPC handler in-process by calling
 from unittest.mock import Mock
 
 import pytest
-from iris.cluster.runtime.types import ContainerPhase, ContainerStatus
+from iris.cluster.runtime.types import ContainerPhase, ContainerStatus, ExecutionStage
 from iris.cluster.types import JobName
+from iris.cluster.worker.task_attempt import TaskAttempt
 from iris.cluster.worker.worker import Worker, WorkerConfig
 from iris.rpc import job_pb2, worker_pb2
 from iris.test_util import wait_for_condition
 from rigging.timing import Duration
 
 from tests.cluster.worker.conftest import create_mock_container_handle, create_run_task_request
+from tests.cluster.worker.test_worker import _make_discovered_container
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -42,8 +44,15 @@ def _task_id(name: str = "reconcile-task") -> str:
 def _run_desired(
     attempt_uid: str,
     run_request: job_pb2.RunTaskRequest | None = None,
+    task_id: str = "",
+    attempt_id: int = 0,
 ) -> worker_pb2.Worker.DesiredAttempt:
-    """Build a DesiredAttempt with intent=run, optionally with inline spec."""
+    """Build a DesiredAttempt with intent=run, optionally with inline spec.
+
+    ``task_id`` / ``attempt_id`` are the rollover composite key, set by the
+    controller on every reconcile so the worker can route to a label-less
+    adopted attempt on a UID miss.
+    """
     spec = (
         worker_pb2.Worker.AttemptSpec(request=run_request)
         if run_request is not None
@@ -51,13 +60,17 @@ def _run_desired(
     )
     return worker_pb2.Worker.DesiredAttempt(
         attempt_uid=attempt_uid,
+        task_id=task_id,
+        attempt_id=attempt_id,
         run=spec,
     )
 
 
-def _stop_desired(attempt_uid: str) -> worker_pb2.Worker.DesiredAttempt:
+def _stop_desired(attempt_uid: str, task_id: str = "", attempt_id: int = 0) -> worker_pb2.Worker.DesiredAttempt:
     return worker_pb2.Worker.DesiredAttempt(
         attempt_uid=attempt_uid,
+        task_id=task_id,
+        attempt_id=attempt_id,
         stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
     )
 
@@ -493,3 +506,99 @@ def test_stop_intent_routes_to_attempt_by_uid(worker, mock_runtime):
     assert task.should_stop is True
     task.thread.join(timeout=5.0)
     assert task.status == job_pb2.TASK_STATE_KILLED
+
+
+# ============================================================================
+# Composite-fallback (pre-UID-label adoption) tests. Remove these when the
+# composite-fallback shim is taken back out — see issue/agent scheduled for
+# 2026-06-03.
+# ============================================================================
+
+
+def _adopt_labelless(worker: Worker, task_id: str, attempt_id: int = 0):
+    """Inject a label-less adopted attempt into ``worker._tasks``.
+
+    Simulates the state left behind by ``Worker.adopt_running_containers`` when
+    it picks up a container created before the ``iris.attempt_uid`` label
+    rollout (2026-05-19): the resulting TaskAttempt carries an empty
+    ``attempt_uid`` and an existing container handle.
+    """
+    discovered = _make_discovered_container(
+        task_id=task_id,
+        attempt_id=attempt_id,
+        attempt_uid="",
+        worker_id=worker._worker_id or "",
+        phase=ExecutionStage.RUN,
+        running=True,
+    )
+    handle = create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)] * 100,
+    )
+    attempt = TaskAttempt.adopt(
+        discovered=discovered,
+        container_handle=handle,
+        log_client=None,
+        port_allocator=worker._port_allocator,
+        poll_interval_seconds=worker._config.poll_interval.to_seconds(),
+    )
+    worker._tasks.append(attempt)
+    return attempt
+
+
+def test_run_intent_stamps_uid_on_labelless_adopted_attempt(worker):
+    """Reconcile's first run intent stamps the controller UID on a label-less attempt."""
+    task_id = _task_id("rollover-stamp")
+    attempt = _adopt_labelless(worker, task_id, attempt_id=0)
+    assert attempt.attempt_uid == ""
+
+    # Controller-side: run intent with the real UID + composite, no inline spec.
+    response = _reconcile(worker, [_run_desired("uid-rollover", task_id=task_id, attempt_id=0)])
+
+    # UID has been stamped onto the adopted attempt.
+    assert attempt.attempt_uid == "uid-rollover"
+    # No zombie kill: the attempt is still tracked and not flagged should_stop.
+    assert attempt.should_stop is False
+    # Observation now keyed by the real UID, with composite also stamped.
+    obs = _observations_by_uid(response)
+    assert "uid-rollover" in obs
+    assert obs["uid-rollover"].task_id == task_id
+    assert obs["uid-rollover"].attempt_id == 0
+    assert obs["uid-rollover"].state != job_pb2.TASK_STATE_MISSING
+
+
+def test_stop_intent_via_composite_kills_labelless_attempt(worker):
+    """Stop intent routes by composite when the worker holds a label-less adopted attempt."""
+    task_id = _task_id("rollover-stop")
+    attempt = _adopt_labelless(worker, task_id, attempt_id=0)
+    assert attempt.attempt_uid == ""
+
+    _reconcile(worker, [_stop_desired("uid-rollover-stop", task_id=task_id, attempt_id=0)])
+
+    assert attempt.should_stop is True
+
+
+def test_labelless_attempt_observation_carries_composite(worker):
+    """Observations from a label-less adopted attempt carry the composite key."""
+    task_id = _task_id("rollover-obs")
+    _adopt_labelless(worker, task_id, attempt_id=0)
+
+    response = _reconcile(worker, [_run_desired("uid-rollover-obs", task_id=task_id, attempt_id=0)])
+
+    # Observation now carries the stamped UID + composite.
+    obs = _observations_by_uid(response)
+    assert "uid-rollover-obs" in obs
+    assert obs["uid-rollover-obs"].task_id == task_id
+    assert obs["uid-rollover-obs"].attempt_id == 0
+
+
+def test_missing_observation_carries_composite(worker):
+    """MISSING for a UID with no local attempt also carries the composite for routing."""
+    task_id = _task_id("missing-composite")
+
+    response = _reconcile(worker, [_run_desired("uid-missing", task_id=task_id, attempt_id=3)])
+
+    obs = _observations_by_uid(response)
+    assert "uid-missing" in obs
+    assert obs["uid-missing"].state == job_pb2.TASK_STATE_MISSING
+    assert obs["uid-missing"].task_id == task_id
+    assert obs["uid-missing"].attempt_id == 3

@@ -92,6 +92,8 @@ def _reconcile_worker(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
                     run=worker_pb2.Worker.AttemptSpec(request=req),
+                    task_id=wire_task_id,
+                    attempt_id=row.attempt_id,
                 )
             )
         elif row.task_state in EXECUTING_TASK_STATES:
@@ -99,6 +101,8 @@ def _reconcile_worker(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
                     run=worker_pb2.Worker.AttemptSpec(),
+                    task_id=wire_task_id,
+                    attempt_id=row.attempt_id,
                 )
             )
         elif row.task_state == job_pb2.TASK_STATE_KILLED:
@@ -106,6 +110,8 @@ def _reconcile_worker(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
                     stop=worker_pb2.Worker.STOP_REASON_CANCELLED,
+                    task_id=wire_task_id,
+                    attempt_id=row.attempt_id,
                 )
             )
         elif row.task_state == job_pb2.TASK_STATE_PREEMPTED:
@@ -113,6 +119,8 @@ def _reconcile_worker(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
                     stop=worker_pb2.Worker.STOP_REASON_PREEMPTED,
+                    task_id=wire_task_id,
+                    attempt_id=row.attempt_id,
                 )
             )
         elif row.task_state in _TERMINAL_EXPECTED_STATES:
@@ -120,6 +128,8 @@ def _reconcile_worker(
                 worker_pb2.Worker.DesiredAttempt(
                     attempt_uid=row.attempt_uid,
                     run=worker_pb2.Worker.AttemptSpec(),
+                    task_id=wire_task_id,
+                    attempt_id=row.attempt_id,
                 )
             )
         # Unrecognised states are omitted from desired.

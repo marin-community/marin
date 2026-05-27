@@ -518,9 +518,9 @@ def test_stop_intent_by_uid_kills_live_twin(mock_worker, mock_runtime):
     live attempt by UID, then re-resolved by composite when killing — landing
     on the terminal twin, so the live attempt kept running.
     """
-    _task_id, terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
+    task_id, terminal, live = _terminal_and_live_twins(mock_worker, mock_runtime)
 
-    mock_worker._process_stop_intent("uid-live")
+    mock_worker._process_stop_intent(task_id, 0, "uid-live")
 
     wait_for_condition(lambda: live.status == job_pb2.TASK_STATE_KILLED)
     live.thread.join(timeout=15.0)

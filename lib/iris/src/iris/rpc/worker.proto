@@ -99,7 +99,13 @@ message Worker {
       StopReason stop = 11;
     }
 
-    reserved 100, 101;  // legacy composite key (task_id, attempt_id)
+    // Legacy composite key. Retained as a rollover fallback so a worker that
+    // adopted a pre-UID-label container (created before 2026-05-19) can
+    // route by (task_id, attempt_id) and stamp the UID onto its local
+    // attempt on the first reconcile tick. Scheduled for removal once
+    // label-less containers have aged out of the cluster.
+    string task_id = 100;
+    int32 attempt_id = 101;
   }
 
   message AttemptSpec {
@@ -119,7 +125,12 @@ message Worker {
     iris.time.Timestamp finished_at = 6;
     iris.job.ResourceUsage resource_usage = 7;
 
-    reserved 100, 101;  // legacy composite key (task_id, attempt_id)
+    // Legacy composite key. Set so the controller can route an observation
+    // emitted by a pre-UID-label adopted attempt (empty attempt_uid) back to
+    // its DB row via (task_id, attempt_id). Scheduled for removal alongside
+    // the matching DesiredAttempt fields.
+    string task_id = 100;
+    int32 attempt_id = 101;
   }
 
   enum StopReason {
