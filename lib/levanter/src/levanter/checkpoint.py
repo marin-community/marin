@@ -383,17 +383,18 @@ def _temporary_checkpoint_sort_key(record: _TemporaryCheckpointRecord) -> tuple[
 def _temporary_checkpoint_record(checkpoint_path: str) -> _TemporaryCheckpointRecord | None:
     try:
         metadata = _load_metadata(checkpoint_path)
-        if not metadata.get("is_temporary", False):
-            return None
-
-        return _TemporaryCheckpointRecord(
-            path=checkpoint_path,
-            step=int(metadata["step"]),
-            timestamp=datetime.datetime.fromisoformat(metadata["timestamp"]),
-        )
-    except Exception:
-        logger.exception("Error loading metadata for checkpoint %s", checkpoint_path)
+    except FileNotFoundError:
+        logger.warning("Could not load metadata for checkpoint %s.", checkpoint_path)
         return None
+
+    if not metadata.get("is_temporary", False):
+        return None
+
+    return _TemporaryCheckpointRecord(
+        path=checkpoint_path,
+        step=int(metadata["step"]),
+        timestamp=datetime.datetime.fromisoformat(metadata["timestamp"]),
+    )
 
 
 class Checkpointer:
