@@ -708,9 +708,7 @@ class ZephyrCoordinator:
             )
             if throughput_strs is not None:
                 items_s, bytes_s, item_rate_s, byte_rate_s = throughput_strs
-                lines.append(
-                    f"\n**Throughput** — {items_s} items ({item_rate_s}/s), {bytes_s} ({byte_rate_s}/s)"
-                )
+                lines.append(f"\n**Throughput** — {items_s} items ({item_rate_s}/s), {bytes_s} ({byte_rate_s}/s)")
 
             detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
 
