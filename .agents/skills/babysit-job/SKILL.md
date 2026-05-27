@@ -60,6 +60,13 @@ If any required field is missing, ask for it before proceeding.
   port-binding conflicts).
 - Sleep must be foreground (max ~10 min due to tool timeout). Loop control is at
   agent level, not bash.
+- Screen/process alive is not enough. Check state-file freshness plus
+  stdout/event-log mtime when a monitor writes them; if no monitor state or
+  event update occurs for more than 2 cadences, report `monitor stale`
+  separately from `run unhealthy`.
+- If an Iris/orchestrator query is blocked or inconclusive, do not assume job
+  failure. Cross-check W&B freshness, live logs, checkpoint movement,
+  worker/TPU health, and latest monitor state.
 
 ## MCP-Assisted Monitoring
 
@@ -140,7 +147,17 @@ part of the setup. The state file allows resume after context reset.
    and failed with exit 137" → cgroup OOM, raise `--memory` on resubmit.
 
 4. PRINT W&B RUN IDS/LINKS (once per training run)
+   - For normal runs, record the active W&B run id/display name/link when W&B is
+     available; many runs use autoassigned ids.
+   - When the launch workflow provides an intended W&B identity, validate the
+     active run id/display name, state, `_timestamp`, `global_step`, and key
+     losses against it. Do not rely only on a stored URL.
+   - During resume catch-up, W&B and checkpoint progress may be stale. Live
+     training-progress log lines with advancing timestamps are sufficient
+     liveness until W&B appears; once W&B is active, require W&B
+     timestamps/steps to keep moving.
 5. REPORT PROGRESS (format: ~<current>/<exact_max>)
+   - Resolve `<exact_max>` from the launched config/code, not from progress-bar display text.
 6. EVALUATE (terminal? error? stalled? -> recover or continue)
 
 7. RECOVER (STOP -> RESUBMIT)
@@ -175,6 +192,23 @@ When EVALUATE detects an error, before recovery:
 - If progress stalls across multiple intervals with `OwnerDiedError`, dead node,
   or unsatisfied resources -> mark `degraded` and notify user.
 - If same error repeats after one fix attempt, do not retry blindly; report to user.
+- Noisy shutdown traces are not decisive by themselves. Terminal Iris/orchestrator
+  status, driver/process exit code, final checkpoint state, and W&B state
+  determine whether a run succeeded.
+
+## Completion
+
+Before declaring the job complete:
+
+- Verify terminal state is successful.
+- Verify W&B is finished or has the expected final state and metrics when W&B is
+  part of the run.
+- Verify the final checkpoint has `metadata.json` when the run is expected to
+  write a checkpoint.
+- Capture final metrics, final step, W&B run id/display name, output root, final
+  checkpoint path, and caveats in the monitoring state or handoff note.
+- Stop/delete monitor heartbeats and resident monitoring sessions that are no
+  longer needed.
 
 ## When to Escalate
 
