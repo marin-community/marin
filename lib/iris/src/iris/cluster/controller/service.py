@@ -110,6 +110,7 @@ class UserStats:
 
 # Maximum bundle size in bytes (25 MB) - matches client-side limit
 MAX_BUNDLE_SIZE_BYTES = 25 * 1024 * 1024
+WORKDIR_FILE_OFFLOAD_THRESHOLD = 10 * 1024  # 10KB — externalize large workdir files to blob store
 
 # Soft cap on how long launch_job waits for a replaced job's worker-bound
 # attempts to finalize before force-reaping them. Sized to exceed the worst-
@@ -969,10 +970,10 @@ class ControllerServiceImpl:
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
-        return self._bundle_store.get_zip(bundle_id)
+        return self._bundle_store.get(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
-        return self._bundle_store.get_zip(blob_id)
+        return self._bundle_store.get(blob_id)
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -1187,12 +1188,29 @@ class ControllerServiceImpl:
                     f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
                 )
 
-            bundle_id = self._bundle_store.write_zip(request.bundle_blob)
+            bundle_id = self._bundle_store.write(request.bundle_blob)
 
             new_request = controller_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             new_request.ClearField("bundle_blob")
             new_request.bundle_id = bundle_id
+            request = new_request
+
+        # Externalize large workdir files to the blob store so request_proto
+        # (and every RunTaskRequest dispatch) stays small.
+        large_files = {
+            name: data
+            for name, data in request.entrypoint.workdir_files.items()
+            if len(data) > WORKDIR_FILE_OFFLOAD_THRESHOLD
+        }
+        if large_files:
+            new_request = controller_pb2.Controller.LaunchJobRequest()
+            new_request.CopyFrom(request)
+            for name, data in large_files.items():
+                blob_id = self._bundle_store.write(data)
+                del new_request.entrypoint.workdir_files[name]
+                new_request.entrypoint.workdir_file_refs[name] = blob_id
+                logger.info("Externalized workdir file %s (%d bytes) as blob %s", name, len(data), blob_id[:12])
             request = new_request
 
         # Auto-inject device constraints from the resource spec.

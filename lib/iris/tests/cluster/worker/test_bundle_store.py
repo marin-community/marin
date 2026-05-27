@@ -48,7 +48,7 @@ def test_extract_bundle_fetches_on_demand(monkeypatch, store, tmp_path):
     bundle_id = hashlib.sha256(bundle_zip).hexdigest()
 
     def fake_urlopen(url: str, timeout: int):
-        assert url == f"http://controller.internal/bundles/{bundle_id}.zip"
+        assert url == f"http://controller.internal/blobs/{bundle_id}"
         return _FakeResponse(bundle_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
@@ -62,7 +62,7 @@ def test_extract_bundle_fetches_on_demand(monkeypatch, store, tmp_path):
 def test_extract_bundle_uses_cache_on_hit(store, tmp_path):
     """extract_bundle_to should use local cache without hitting the network."""
     bundle_zip = _make_zip({"cached.txt": b"cached data"})
-    bundle_id = store.write_zip(bundle_zip)
+    bundle_id = store.write(bundle_zip)
 
     extract_dir = tmp_path / "extract"
     store.extract_bundle_to(bundle_id, extract_dir)
@@ -74,7 +74,7 @@ def test_extract_bundle_hash_verification_failure(monkeypatch, store, tmp_path):
     wrong_id = "a" * 64
 
     def fake_urlopen(url: str, timeout: int):
-        assert url == f"http://controller.internal/bundles/{wrong_id}.zip"
+        assert url == f"http://controller.internal/blobs/{wrong_id}"
         return _FakeResponse(bad_zip)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
@@ -88,38 +88,38 @@ def test_lru_eviction_by_item_count(store):
         bundle_zip = _make_zip({"test.txt": f"bundle {i}".encode()})
         bundle_id = hashlib.sha256(bundle_zip).hexdigest()
         bundles.append((bundle_id, bundle_zip))
-        store.write_zip(bundle_zip)
+        store.write(bundle_zip)
 
-    # Evicted from in-memory cache, but still in fsspec storage
-    # so get_zip should still find it
-    assert store.get_zip(bundles[0][0]) == bundles[0][1]
-    assert store.get_zip(bundles[1][0]) == bundles[1][1]
-    assert store.get_zip(bundles[2][0]) == bundles[2][1]
+    # Evicted from in-memory cache, but still in fsspec storage so get should still find it.
+    assert store.get(bundles[0][0]) == bundles[0][1]
+    assert store.get(bundles[1][0]) == bundles[1][1]
+    assert store.get(bundles[2][0]) == bundles[2][1]
 
 
-def test_get_or_fetch_fetches_blob_on_demand(monkeypatch, store):
-    """get_or_fetch should fetch from controller on cache miss using the provided URL path."""
+def test_get_fetches_on_demand(monkeypatch, store):
+    """get should fetch from controller on cache miss."""
     data = b"large pickle data"
-    content_id = hashlib.sha256(data).hexdigest()
+    blob_id = hashlib.sha256(data).hexdigest()
 
     def fake_urlopen(url: str, timeout: int):
-        assert url == f"http://controller.internal/blobs/{content_id}"
+        assert url == f"http://controller.internal/blobs/{blob_id}"
         return _FakeResponse(data)
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
 
-    result = store.get_or_fetch(content_id, f"blobs/{content_id}")
+    result = store.get(blob_id)
     assert result == data
 
 
-def test_get_or_fetch_uses_cache_on_hit(store):
-    """get_or_fetch should return cached data without hitting the network."""
+def test_get_uses_cache_on_hit(store):
+    """get should return cached data without hitting the network."""
     data = b"cached blob"
-    content_id = store.write_zip(data)
-    assert store.get_or_fetch(content_id, f"blobs/{content_id}") == data
+    store.write(data)
+    blob_id = hashlib.sha256(data).hexdigest()
+    assert store.get(blob_id) == data
 
 
-def test_get_or_fetch_hash_verification_failure(monkeypatch, store):
+def test_get_hash_verification_failure(monkeypatch, store):
     bad_data = b"wrong content"
     wrong_id = "c" * 64
 
@@ -129,4 +129,4 @@ def test_get_or_fetch_hash_verification_failure(monkeypatch, store):
 
     monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
     with pytest.raises(ValueError, match="Hash mismatch"):
-        store.get_or_fetch(wrong_id, f"blobs/{wrong_id}")
+        store.get(wrong_id)

@@ -216,6 +216,38 @@ def test_launch_job_accepts_same_shape_alternatives(service):
     assert response.job_id == JobName.root("test-user", "matched-tpu-variants").to_wire()
 
 
+def test_launch_job_externalizes_large_workdir_files(service, state):
+    request = make_job_request("big-pickle-job")
+    small_file = b"tiny"
+    large_file = b"x" * (32 * 1024)  # 32KB, above 10KB threshold
+    request.entrypoint.workdir_files["small.txt"] = small_file
+    request.entrypoint.workdir_files["_callable.pkl"] = large_file
+    service.launch_job(request, None)
+
+    job_id = JobName.root("test-user", "big-pickle-job")
+    with state._db.read_snapshot() as snap:
+        template = state.run_request_template(snap, job_id)
+    assert template is not None
+    # Small file stays inline
+    assert dict(template.entrypoint.workdir_files) == {"small.txt": small_file}
+    # Large file externalized to a 64-char SHA-256 blob ref
+    assert len(template.entrypoint.workdir_file_refs["_callable.pkl"]) == 64
+
+
+def test_launch_job_keeps_small_workdir_files_inline(service, state):
+    request = make_job_request("small-pickle-job")
+    small_file = b"x" * 1024  # 1KB
+    request.entrypoint.workdir_files["_callable.pkl"] = small_file
+    service.launch_job(request, None)
+
+    job_id = JobName.root("test-user", "small-pickle-job")
+    with state._db.read_snapshot() as snap:
+        template = state.run_request_template(snap, job_id)
+    assert template is not None
+    assert dict(template.entrypoint.workdir_files) == {"_callable.pkl": small_file}
+    assert "_callable.pkl" not in template.entrypoint.workdir_file_refs
+
+
 def test_launch_job_rejects_duplicate_name(service):
     """Verify launch_job rejects duplicate job names for running jobs."""
     request = make_job_request("duplicate-job")
