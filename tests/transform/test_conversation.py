@@ -5,11 +5,15 @@
 
 from pathlib import Path
 
-from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
+from marin.transform.conversation.adapters import InputDatasetFormat, ReasoningContentMode, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import transform_conversation_to_dolma
 from marin.transform.conversation.preference_data_adapters import PreferenceTransformAdapter
 from marin.transform.conversation.transform_conversation import (
+    RowFilter,
+    RowFilterOperator,
     TransformSFTDatasetConfig,
+    row_matches_filters,
+    shard_example_limit,
     transform_row,
 )
 
@@ -78,6 +82,29 @@ FINEPROOFS_METADATA_COLUMNS = [
     "source",
 ]
 
+NEMOTRON_TOOL_TRACE_SAMPLE = {
+    "messages": [
+        {"role": "user", "content": "Solve 2 + 2."},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "I should compute the sum.",
+            "tool_calls": [
+                {
+                    "id": "call_python",
+                    "type": "function",
+                    "function": {"name": "python", "arguments": '{"code": "2 + 2"}'},
+                }
+            ],
+        },
+        {"role": "tool", "name": "python", "tool_call_id": "call_python", "content": "4"},
+        {"role": "assistant", "content": "\\boxed{4}", "reasoning_content": ""},
+    ],
+    "tools": [{"type": "function", "function": {"name": "python", "parameters": {}}}],
+    "tool_usage": "with Python TIR",
+    "license": "cc-by-4.0",
+}
+
 
 class TestTransformAdapters:
     """Test the different adapter formats."""
@@ -121,6 +148,25 @@ class TestTransformAdapters:
         assert messages[0].content == "Explain quantum computing"
         assert messages[1].role == "assistant"
         assert messages[2].role == "system"
+
+    def test_single_column_adapter_preserves_structured_tool_messages(self):
+        """Test Nemotron-style structured messages with reasoning and tool calls."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            reasoning_content_key="reasoning_content",
+            reasoning_content_mode=ReasoningContentMode.PRESERVE_FIELD,
+            message_passthrough_keys=("reasoning_content", "tool_calls", "tool_call_id", "name"),
+        )
+
+        messages = adapter.transform_conversation_to_openai_format(NEMOTRON_TOOL_TRACE_SAMPLE)
+        dumped = [message.model_dump() for message in messages]
+
+        assert [message.role for message in messages] == ["user", "assistant", "tool", "assistant"]
+        assert dumped[1]["reasoning_content"] == "I should compute the sum."
+        assert dumped[1]["tool_calls"] == NEMOTRON_TOOL_TRACE_SAMPLE["messages"][1]["tool_calls"]
+        assert dumped[2]["name"] == "python"
+        assert dumped[2]["tool_call_id"] == "call_python"
+        assert "reasoning_content" not in dumped[3]
 
 
 class TestTransformRow:
@@ -243,6 +289,54 @@ class TestTransformRow:
         }
 
         assert transform_row(row, cfg, adapter) is None
+
+    def test_nemotron_structured_row_preserves_tools_and_normalizes_tool_calls(self):
+        """Test structured multi-turn rows with top-level tools metadata."""
+        adapter = TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            reasoning_content_key="reasoning_content",
+            reasoning_content_mode=ReasoningContentMode.PRESERVE_FIELD,
+            message_passthrough_keys=("reasoning_content", "tool_calls", "tool_call_id", "name"),
+            metadata_remap={"tools": "tools"},
+        )
+        cfg = TransformSFTDatasetConfig(
+            source="nvidia/Nemotron-SFT-Math-v3",
+            revision="ff4439c",
+            output_path="/tmp/output",
+            metadata_columns=["tool_usage", "license"],
+            adapter=adapter,
+        )
+
+        result = transform_row(NEMOTRON_TOOL_TRACE_SAMPLE, cfg, adapter)
+
+        assert result is not None
+        dumped = result.model_dump()
+        assert dumped["tools"] == NEMOTRON_TOOL_TRACE_SAMPLE["tools"]
+        assert result.metadata == {"tool_usage": "with Python TIR", "license": "cc-by-4.0"}
+        assert dumped["messages"][1]["reasoning_content"] == "I should compute the sum."
+        assert dumped["messages"][1]["tool_calls"][0]["function"]["arguments"] == {"code": "2 + 2"}
+        assert dumped["messages"][2]["role"] == "tool"
+        assert dumped["messages"][2]["tool_call_id"] == "call_python"
+
+    def test_row_filters_support_tool_usage_and_presence_checks(self):
+        """Test row filters used for dataset views."""
+        assert row_matches_filters(
+            NEMOTRON_TOOL_TRACE_SAMPLE,
+            [RowFilter("tool_usage", RowFilterOperator.EQUALS, "with Python TIR")],
+        )
+        assert not row_matches_filters(
+            NEMOTRON_TOOL_TRACE_SAMPLE,
+            [RowFilter("tool_usage", RowFilterOperator.EQUALS, "without Python TIR")],
+        )
+        assert row_matches_filters(NEMOTRON_TOOL_TRACE_SAMPLE, [RowFilter("tools", RowFilterOperator.NON_EMPTY)])
+        assert row_matches_filters({"tools": []}, [RowFilter("tools", RowFilterOperator.EMPTY)])
+
+    def test_shard_example_limit_distributes_split_cap_deterministically(self):
+        limits = [shard_example_limit(100, 6, shard_idx) for shard_idx in range(6)]
+
+        assert limits == [17, 17, 17, 17, 16, 16]
+        assert sum(limit for limit in limits if limit is not None) == 100
+        assert shard_example_limit(None, 6, 0) is None
 
 
 class TestPreferenceDataTransform:

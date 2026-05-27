@@ -3,7 +3,7 @@
 
 from marin.execution.executor import unwrap_versioned_value
 from marin.transform.conversation.adapters import InputDatasetFormat
-from marin.transform.conversation.transform_conversation import transform_row
+from marin.transform.conversation.transform_conversation import row_matches_filters, transform_row
 
 from experiments.posttrain.instruction_datasets import (
     FINEPROOFS_SFT_METADATA_COLUMNS,
@@ -23,6 +23,43 @@ SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
         {"role": "user", "content": "Write Python code to count the intersection of two sets."},
         {"role": "assistant", "content": "<think>Use set intersection.</think>\n```python\nprint(len(a & b))\n```"},
     ],
+}
+
+NEMOTRON_STRUCTURED_SAMPLE = {
+    "uuid": "math-row-1",
+    "expected_answer": "4",
+    "problem": "Solve 2 + 2.",
+    "original_expected_answer": "4",
+    "changed_answer_to_majority": False,
+    "data_source": "aops",
+    "used_in": ["train"],
+    "metadata": {
+        "reason_high_with_tool": {"count": 1, "pass": 1, "accuracy": 1.0},
+        "reason_medium_no_tool": {"count": 1, "pass": 1, "accuracy": 1.0},
+    },
+    "license": "cc-by-4.0",
+    "url": "https://example.com/problem",
+    "user_name": "example-user",
+    "user_url": "https://example.com/user",
+    "tool_usage": "with Python TIR",
+    "messages": [
+        {"role": "user", "content": "Solve 2 + 2."},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "Use Python for the arithmetic.",
+            "tool_calls": [
+                {
+                    "id": "call_python",
+                    "type": "function",
+                    "function": {"name": "python", "arguments": '{"code": "2 + 2"}'},
+                }
+            ],
+        },
+        {"role": "tool", "name": "python", "tool_call_id": "call_python", "content": "4"},
+        {"role": "assistant", "content": "\\boxed{4}", "reasoning_content": ""},
+    ],
+    "tools": [{"type": "function", "function": {"name": "python", "parameters": {}}}],
 }
 
 
@@ -69,6 +106,105 @@ def test_get_instruction_dataset_preserves_fineproofs_config():
     assert unwrap_versioned_value(proof_only_cfg.metadata_columns) == FINEPROOFS_SFT_METADATA_COLUMNS
     assert unwrap_versioned_value(proof_only_cfg.adapter).dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE
     assert proof_only_step.name == "documents/lm-provers/FineProofs-SFT/proof-only"
+
+
+def test_nemotron_sft_math_v3_views_filter_caps_and_transform_tool_rows():
+    python_tir_step = get_instruction_dataset("nvidia/Nemotron-SFT-Math-v3/python-tir-pilot")
+    python_tir_cfg = python_tir_step.config
+    no_tool_cfg = get_instruction_dataset("nvidia/Nemotron-SFT-Math-v3/no-tool-pilot").config
+    full_python_cfg = get_instruction_dataset("nvidia/Nemotron-SFT-Math-v3/python-tir").config
+
+    assert row_matches_filters(NEMOTRON_STRUCTURED_SAMPLE, unwrap_versioned_value(python_tir_cfg.row_filters))
+    assert not row_matches_filters(NEMOTRON_STRUCTURED_SAMPLE, unwrap_versioned_value(no_tool_cfg.row_filters))
+    assert unwrap_versioned_value(python_tir_cfg.max_examples_per_split) == 100_000
+    assert unwrap_versioned_value(full_python_cfg.max_examples_per_split) is None
+
+    result = transform_row(NEMOTRON_STRUCTURED_SAMPLE, python_tir_cfg, unwrap_versioned_value(python_tir_cfg.adapter))
+
+    assert result is not None
+    dumped = result.model_dump()
+    assert dumped["tools"] == NEMOTRON_STRUCTURED_SAMPLE["tools"]
+    assert dumped["messages"][1]["reasoning_content"] == "Use Python for the arithmetic."
+    assert dumped["messages"][1]["tool_calls"][0]["function"]["arguments"] == {"code": "2 + 2"}
+    assert dumped["messages"][2]["role"] == "tool"
+    assert dumped["messages"][2]["tool_call_id"] == "call_python"
+    assert result.metadata["tool_usage"] == "with Python TIR"
+
+
+def test_nemotron_math_v2_pilot_views_target_reasoning_splits_and_transform_tool_rows():
+    high_step = get_instruction_dataset("nvidia/Nemotron-Math-v2/high-pilot")
+    high_cfg = high_step.config
+    medium_step = get_instruction_dataset("nvidia/Nemotron-Math-v2/medium-pilot")
+    medium_cfg = medium_step.config
+
+    assert unwrap_versioned_value(high_cfg.splits) == ["high_part00", "high_part01", "high_part02"]
+    assert unwrap_versioned_value(high_cfg.max_examples_per_split) == 50_000
+    assert unwrap_versioned_value(medium_cfg.splits) == ["medium"]
+    assert unwrap_versioned_value(medium_cfg.max_examples_per_split) == 150_000
+    assert high_step.override_output_path != medium_step.override_output_path
+
+    result = transform_row(NEMOTRON_STRUCTURED_SAMPLE, high_cfg, unwrap_versioned_value(high_cfg.adapter))
+
+    assert result is not None
+    dumped = result.model_dump()
+    assert dumped["tools"] == NEMOTRON_STRUCTURED_SAMPLE["tools"]
+    assert dumped["messages"][1]["reasoning_content"] == "Use Python for the arithmetic."
+    assert dumped["messages"][1]["tool_calls"][0]["function"]["arguments"] == {"code": "2 + 2"}
+    assert result.metadata["metadata"]["reason_high_with_tool"]["accuracy"] == 1.0
+    assert result.metadata["used_in"] == ["train"]
+
+
+def test_prismmath_and_openmathinstruct2_registered_adapters_transform_rows():
+    prism_step = get_instruction_dataset("nvidia/Nemotron-PrismMath")
+    prism_cfg = prism_step.config
+    openmath_step = get_instruction_dataset("nvidia/OpenMathInstruct-2/train_1M")
+    openmath_cfg = openmath_step.config
+
+    prism_result = transform_row(
+        {"id": "prism-1", "problem": "Find x if x + 1 = 3.", "solution": "Subtract 1 to get x = 2."},
+        prism_cfg,
+        unwrap_versioned_value(prism_cfg.adapter),
+    )
+    openmath_result = transform_row(
+        {
+            "problem": "Compute 6 * 7.",
+            "generated_solution": "6 * 7 = 42.",
+            "expected_answer": "42",
+            "problem_source": "MATH",
+        },
+        openmath_cfg,
+        unwrap_versioned_value(openmath_cfg.adapter),
+    )
+
+    assert prism_result is not None
+    assert [message.content for message in prism_result.messages] == [
+        "Find x if x + 1 = 3.",
+        "Subtract 1 to get x = 2.",
+    ]
+    assert prism_result.metadata == {"id": "prism-1"}
+
+    assert openmath_result is not None
+    assert unwrap_versioned_value(openmath_cfg.splits) == ["train_1M"]
+    assert [message.content for message in openmath_result.messages] == ["Compute 6 * 7.", "6 * 7 = 42."]
+    assert openmath_result.metadata == {"expected_answer": "42", "problem_source": "MATH"}
+
+
+def test_new_dataset_view_output_paths_are_unique():
+    dataset_keys = [
+        "nvidia/Nemotron-SFT-Math-v3/no-tool-pilot",
+        "nvidia/Nemotron-SFT-Math-v3/python-tir-pilot",
+        "nvidia/Nemotron-SFT-Math-v3/no-tool",
+        "nvidia/Nemotron-SFT-Math-v3/python-tir",
+        "nvidia/Nemotron-Math-v2/high-pilot",
+        "nvidia/Nemotron-Math-v2/medium-pilot",
+        "nvidia/Nemotron-PrismMath",
+        "nvidia/OpenMathInstruct-2/train_1M",
+    ]
+
+    output_paths = [get_instruction_dataset(dataset_key).override_output_path for dataset_key in dataset_keys]
+
+    assert all(output_path is not None and output_path.startswith("documents/") for output_path in output_paths)
+    assert len(output_paths) == len(set(output_paths))
 
 
 def test_synthetic2_sft_verified_step_transforms_chat_rows():

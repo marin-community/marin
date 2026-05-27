@@ -45,16 +45,19 @@ import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from marin.execution.executor import executor_main
 from marin.execution.types import ExecutorStep, output_path_of, this_output_path, versioned
-from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
+from marin.transform.conversation.adapters import InputDatasetFormat, ReasoningContentMode, TransformAdapter
 from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
 from marin.transform.conversation.transform_conversation import (
+    RowFilter,
+    RowFilterOperator,
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
@@ -117,6 +120,8 @@ class InstructionDatasetConfig:
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
+        row_filters: Filters to apply before transforming raw rows.
+        max_examples_per_split: Optional deterministic cap per split after filtering.
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
         max_parallelism: Max number of parallel data processing tasks. Reduce if needed to avoid HF rate limits.
     """
@@ -128,6 +133,8 @@ class InstructionDatasetConfig:
     name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
+    row_filters: list[RowFilter] = field(default_factory=list)
+    max_examples_per_split: int | None = None
     max_parallelism: int | None = 32  # 32 works for free users; set to None to use default behavior (full parallelism)
 
 
@@ -152,6 +159,24 @@ def multi_turn_adapter(
         content_key=content_key,
         metadata_remap=metadata_remap or {},
         replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
+    )
+
+
+def structured_multi_turn_adapter(
+    *,
+    conversation_column: str = "messages",
+    reasoning_content_mode: ReasoningContentMode = ReasoningContentMode.PRESERVE_FIELD,
+    metadata_remap: dict[str, str] | None = None,
+    extra_metadata_fn=None,
+) -> TransformAdapter:
+    return TransformAdapter(
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column=conversation_column,
+        reasoning_content_key="reasoning_content",
+        reasoning_content_mode=reasoning_content_mode,
+        message_passthrough_keys=("reasoning_content", "tool_calls", "tool_call_id", "name"),
+        metadata_remap=metadata_remap or {},
         extra_metadata_fn=extra_metadata_fn,
     )
 
@@ -256,6 +281,48 @@ FINEPROOFS_SFT_METADATA_COLUMNS = [
     "qwen3-4b-thinking-reward@128",
     "source",
 ]
+
+NEMOTRON_SFT_MATH_V3_HF_ID = "nvidia/Nemotron-SFT-Math-v3"
+NEMOTRON_SFT_MATH_V3_REVISION = "ff4439c1073c87e006ab7ee5f1e5e28c4790dab3"
+NEMOTRON_SFT_MATH_V3_METADATA_COLUMNS = [
+    "uuid",
+    "expected_answer",
+    "problem",
+    "changed_answer_to_majority",
+    "data_source",
+    "used_in",
+    "license",
+    "url",
+    "user_name",
+    "user_url",
+    "tool_usage",
+]
+
+NEMOTRON_MATH_V2_HF_ID = "nvidia/Nemotron-Math-v2"
+NEMOTRON_MATH_V2_REVISION = "8e793210e175b6406c752a870f585f62de98c0d3"
+NEMOTRON_MATH_V2_METADATA_COLUMNS = [
+    "uuid",
+    "expected_answer",
+    "problem",
+    "original_expected_answer",
+    "changed_answer_to_majority",
+    "data_source",
+    "used_in",
+    "metadata",
+    "license",
+    "url",
+    "user_name",
+    "user_url",
+]
+
+NEMOTRON_PRISMMATH_HF_ID = "nvidia/Nemotron-PrismMath"
+NEMOTRON_PRISMMATH_REVISION = "8a35a0602167ad1f1ec9d6db5e72281e486738a7"
+NEMOTRON_PRISMMATH_METADATA_COLUMNS = ["id"]
+
+OPENMATHINSTRUCT2_HF_ID = "nvidia/OpenMathInstruct-2"
+OPENMATHINSTRUCT2_REVISION = "469216e3f46f4dacf476b382e192485ea51a143e"
+OPENMATHINSTRUCT2_TRAIN_1M_HF_ID = f"{OPENMATHINSTRUCT2_HF_ID}/train_1M"
+OPENMATHINSTRUCT2_METADATA_COLUMNS = ["expected_answer", "problem_source"]
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -559,7 +626,67 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="nvidia/OpenMathReasoning/genselect",
         splits=["genselect"],
     ),
+    NEMOTRON_PRISMMATH_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=NEMOTRON_PRISMMATH_HF_ID,
+        revision=NEMOTRON_PRISMMATH_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="solution",
+        ),
+        metadata_columns=NEMOTRON_PRISMMATH_METADATA_COLUMNS,
+        name=NEMOTRON_PRISMMATH_HF_ID,
+        splits=["train"],
+    ),
+    OPENMATHINSTRUCT2_TRAIN_1M_HF_ID: InstructionDatasetConfig(
+        hf_dataset_id=OPENMATHINSTRUCT2_HF_ID,
+        revision=OPENMATHINSTRUCT2_REVISION,
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="generated_solution",
+        ),
+        metadata_columns=OPENMATHINSTRUCT2_METADATA_COLUMNS,
+        name=OPENMATHINSTRUCT2_TRAIN_1M_HF_ID,
+        splits=["train_1M"],
+    ),
 }
+
+for view_name, tool_usage, max_examples_per_split in [
+    ("no-tool-pilot", "without Python TIR", 100_000),
+    ("python-tir-pilot", "with Python TIR", 100_000),
+    ("no-tool", "without Python TIR", None),
+    ("python-tir", "with Python TIR", None),
+]:
+    dataset_key = f"{NEMOTRON_SFT_MATH_V3_HF_ID}/{view_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=NEMOTRON_SFT_MATH_V3_HF_ID,
+        revision=NEMOTRON_SFT_MATH_V3_REVISION,
+        adapter=structured_multi_turn_adapter(metadata_remap={"tools": "tools"}),
+        metadata_columns=NEMOTRON_SFT_MATH_V3_METADATA_COLUMNS,
+        splits=["train"],
+        row_filters=[RowFilter("tool_usage", RowFilterOperator.EQUALS, tool_usage)],
+        max_examples_per_split=max_examples_per_split,
+    )
+
+INSTRUCTION_DATASET_NAME_TO_CONFIG[f"{NEMOTRON_MATH_V2_HF_ID}/high-pilot"] = InstructionDatasetConfig(
+    name=f"{NEMOTRON_MATH_V2_HF_ID}/high-pilot",
+    hf_dataset_id=NEMOTRON_MATH_V2_HF_ID,
+    revision=NEMOTRON_MATH_V2_REVISION,
+    adapter=structured_multi_turn_adapter(metadata_remap={"tools": "tools"}),
+    metadata_columns=NEMOTRON_MATH_V2_METADATA_COLUMNS,
+    splits=["high_part00", "high_part01", "high_part02"],
+    max_examples_per_split=50_000,
+)
+
+INSTRUCTION_DATASET_NAME_TO_CONFIG[f"{NEMOTRON_MATH_V2_HF_ID}/medium-pilot"] = InstructionDatasetConfig(
+    name=f"{NEMOTRON_MATH_V2_HF_ID}/medium-pilot",
+    hf_dataset_id=NEMOTRON_MATH_V2_HF_ID,
+    revision=NEMOTRON_MATH_V2_REVISION,
+    adapter=structured_multi_turn_adapter(metadata_remap={"tools": "tools"}),
+    metadata_columns=NEMOTRON_MATH_V2_METADATA_COLUMNS,
+    splits=["medium"],
+    max_examples_per_split=150_000,
+)
 
 for split_name in SMOLTALK2_SPLITS:
     dataset_key = f"HuggingFaceTB/smoltalk2/{split_name}"
@@ -613,6 +740,10 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
     adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
 
     def canonicalize(value):
+        if dataclasses.is_dataclass(value):
+            return canonicalize(dataclasses.asdict(value))
+        if isinstance(value, Enum):
+            return value.value
         if isinstance(value, dict):
             return {k: canonicalize(v) for k, v in sorted(value.items())}
         if isinstance(value, list):
@@ -628,6 +759,8 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
         -{sorted(dataset_cfg.splits)}\
+        -{canonicalize(dataset_cfg.row_filters)}\
+        -{dataset_cfg.max_examples_per_split}\
         -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
@@ -642,6 +775,8 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
             adapter=versioned(adapter),
             subsets=versioned(dataset_cfg.subsets),
             splits=versioned(dataset_cfg.splits),
+            row_filters=versioned(dataset_cfg.row_filters),
+            max_examples_per_split=versioned(dataset_cfg.max_examples_per_split),
             max_parallelism=dataset_cfg.max_parallelism,
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
