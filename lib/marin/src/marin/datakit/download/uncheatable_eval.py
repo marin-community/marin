@@ -15,12 +15,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
-from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
@@ -237,11 +236,7 @@ def _normalize_record(raw: Any, dataset: UncheatableEvalDataset, index: int) -> 
 def _download_and_convert_single(
     task: DownloadTask,
 ) -> dict[str, Any]:
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
+    session = build_retrying_session(status_forcelist=(500, 502, 503, 504))
 
     logger.info("Downloading %s from %s", task.dataset.name, task.download_url)
     response = session.get(task.download_url, timeout=task.cfg.request_timeout, headers=_http_headers(task.cfg))

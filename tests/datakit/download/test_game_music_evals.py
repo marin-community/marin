@@ -120,7 +120,7 @@ def test_stage_lichess_pgn_sample_preserves_symbolic_text_and_writes_metadata(
     compressed = zstandard.ZstdCompressor().compress(f"{game_one}\n{game_two}\n".encode())
     monkeypatch.setattr(
         game_music_evals,
-        "_build_session",
+        "build_retrying_session",
         lambda: _FakeSession({source_url: _FakeResponse(raw_bytes=compressed)}),
     )
 
@@ -179,7 +179,7 @@ def test_stage_hf_json_text_source_preserves_abc_notation_and_caps_examples(
     ]
     monkeypatch.setattr(
         game_music_evals,
-        "_build_session",
+        "build_retrying_session",
         lambda: _FakeSession({source_url: _FakeResponse(json_payload=records)}),
     )
 

@@ -627,10 +627,6 @@ class Autoscaler:
         self.probe_health(timestamp)
         return self.update(demand_entries, timestamp)
 
-    def get_tracked_worker(self, worker_id: str) -> TrackedWorker | None:
-        """Look up a tracked worker by ID."""
-        return self._worker_registry.tracked_worker(worker_id)
-
     def restore_tracked_workers(self, workers: dict[str, TrackedWorker]) -> None:
         """Restore tracked worker state from a snapshot. Called before loops start."""
         self._worker_registry.restore(workers)
@@ -705,10 +701,6 @@ class Autoscaler:
         if routing_proto is not None:
             status.last_routing_decision.CopyFrom(routing_proto)
         return status
-
-    def get_group(self, name: str) -> ScalingGroup | None:
-        """Get a scale group by name."""
-        return self._groups.get(name)
 
     @property
     def groups(self) -> dict[str, ScalingGroup]:

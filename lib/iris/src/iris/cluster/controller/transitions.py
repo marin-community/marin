@@ -301,21 +301,6 @@ class PruneResult:
         return self.jobs_deleted + self.workers_deleted
 
 
-@dataclass
-class WorkerConfig:
-    """Static worker configuration for v0.
-
-    Args:
-        worker_id: Unique worker identifier
-        address: Worker RPC address (host:port)
-        metadata: Worker environment metadata
-    """
-
-    worker_id: str
-    address: str
-    metadata: job_pb2.WorkerMetadata
-
-
 @dataclass(frozen=True)
 class TaskUpdate:
     """Single task state update applied in a batch."""
@@ -2903,19 +2888,6 @@ class ControllerTransitions:
             removed_workers=[(wid, addr) for wid, addr in results.removed_workers if addr is not None],
             results=results.results,
         )
-
-    def load_workers_from_config(self, configs: list[WorkerConfig]) -> None:
-        """Load workers from static configuration in a single transaction."""
-        now = Timestamp.now()
-        with self._db.transaction() as cur:
-            for cfg in configs:
-                self.register_or_refresh_worker(
-                    cur,
-                    worker_id=WorkerId(cfg.worker_id),
-                    address=cfg.address,
-                    metadata=cfg.metadata,
-                    ts=now,
-                )
 
     # --- Task Status Text ---
 

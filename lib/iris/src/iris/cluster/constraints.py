@@ -1141,19 +1141,6 @@ def check_resource_fit(
     return None
 
 
-def resource_capacity_from_spec(spec: job_pb2.ResourceSpecProto) -> ResourceCapacity:
-    """Extract ResourceCapacity from a job's ResourceSpecProto."""
-    from iris.cluster.types import get_gpu_count, get_tpu_count
-
-    return ResourceCapacity(
-        cpu_millicores=spec.cpu_millicores,
-        memory_bytes=spec.memory_bytes,
-        disk_bytes=spec.disk_bytes,
-        gpu_count=get_gpu_count(spec.device) if spec.HasField("device") else 0,
-        tpu_count=get_tpu_count(spec.device) if spec.HasField("device") else 0,
-    )
-
-
 def worker_attributes_from_resources(resources: config_pb2.ScaleGroupResources) -> dict[str, str]:
     """Derive well-known worker attributes from scale group resources config.
 
