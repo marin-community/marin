@@ -11113,3 +11113,432 @@ Follow-up at ~2026-05-24T10:01Z:
   `8` running, `2` pending for TPU capacity).
 - `2e19` and `3e19/p33,p50` remain non-terminal but are task-pending after
   more preemptions. `9e18` remains the active progress path.
+
+## 2026-05-25T00:42Z — Delphi 3e19 70% native prefix checkpoint launch
+
+Follow-up to the successful `3e18` prefix-checkpoint pipeline sanity check.
+The next materialization is the `3e19` Delphi native/full-state checkpoint at
+the exact 70% pretraining prefix.
+
+Preflight:
+
+- Base: `3e19`
+- Source checkpoint:
+  `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-20000`
+- Original pretraining schedule length from `.executor_info`: `38,014`
+  trainer steps
+- Target checkpoint: `26,609` (`70.00%`)
+- Steps to train from source: `6,609`
+- Output root:
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609`
+- Final checkpoint path:
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609/checkpoints/step-26609`
+- TPU request: `v6e-4`, `128g` RAM, interactive priority, pinned to
+  `us-east5`
+- Safety checks: dry-run confirmed the original Delphi root will not be
+  modified; destination `step-26609` and the output root were absent before
+  launch.
+
+Launch command tracked by the monitor:
+
+```bash
+.venv/bin/python -u scratch/submit_delphi_prefix_3e19.py
+```
+
+Monitor state file:
+`scratch/20260524-1742_delphi_prefix_3e19_monitoring_state.json`
+
+Submitted at `2026-05-25T00:45:41Z` as Iris root job
+`/ahmed/delphi-prefix-3e19-step26609`.
+
+Startup failure at `2026-05-25T00:53Z`:
+
+- Root and child both reached `JOB_STATE_FAILED` before any materialized
+  checkpoint was written.
+- The child failed while staging the source checkpoint through `mirror://`:
+  `TransferBudgetExceeded` after `8.92GiB`; the next shard would have brought
+  the process total to `11.08GiB`, above the default `10GiB` mirror budget.
+- The source full-state checkpoint is `11.15GiB` total. The failed attempt
+  already copied most shards into the `us-east5` mirror location; missing source
+  pieces included `manifest.ocdbt` and two `d/...` files.
+- Confirmed no final checkpoint exists at
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609/checkpoints/step-26609`.
+
+Recovery plan applied at `2026-05-25T01:32Z`:
+
+- Keep the same Iris root job id and output root:
+  `/ahmed/delphi-prefix-3e19-step26609` and
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609`.
+- Wrap the source checkpoint path in executor `mirrored(..., budget_gb=20)`
+  for this helper. This keeps the Levanter worker loading
+  `mirror://checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-20000`
+  while propagating `MARIN_MIRROR_BUDGET_GB=20` to the child training
+  environment.
+- Focused verification passed:
+  `uv run --with pytest --with pytest-timeout python -m pytest tests/test_materialize_delphi_prefix_checkpoint.py`
+  (`6 passed`) and `py_compile` for the helper, tests, and submit script.
+- Dry-run now reports source mirror budget `20 GB`, original schedule length
+  `38,014`, target `26,609`, and the same final destination path.
+
+Final outcome at `2026-05-25T04:44Z`:
+
+- Relaunch succeeded as the same Iris root job
+  `/ahmed/delphi-prefix-3e19-step26609`.
+- `train_lm` had one TPU preemption, then recovered under the same child job and
+  finished successfully; root and child both ended `JOB_STATE_SUCCEEDED`.
+- Logs confirmed the source checkpoint was staged from
+  `mirror://checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-20000`,
+  loaded from the `us-east5` mirror, and training resumed from step `20001`.
+- Final native/full-state checkpoint was saved at
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609/checkpoints/step-26609`
+  at `2026-05-25T03:42:42Z`.
+- `metadata.json` reports `step=26609`, `target_step=26609`,
+  `source_step=20000`, `base=3e19`, and
+  `materialization=delphi_prefix_checkpoint`.
+- Checked the original Delphi root for `checkpoints/step-26609`; no such path
+  exists there, so the canonical source root was not mutated by this
+  materialization.
+
+## 2026-05-25T05:07Z — Delphi 3e20 70% native prefix checkpoint launch
+
+Following the successful `3e19` materialization, launch the `3e20` Delphi
+native/full-state checkpoint at the exact 70% pretraining prefix. Ahmed asked
+to run this one on `v5p-8` interactive.
+
+Preflight:
+
+- Base: `3e20`
+- Source checkpoint:
+  `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-20000`
+- Original pretraining schedule length from `.executor_info`: `35,510`
+  trainer steps
+- Target checkpoint: `24,857` (`70.00%`)
+- Steps to train from source: `4,857`
+- Output root:
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e20-step24857`
+- Final checkpoint path:
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e20-step24857/checkpoints/step-24857`
+- TPU request: `v5p-8`, `128g` RAM, interactive priority, pinned to
+  `us-east5`
+- The source checkpoint is `28.44GiB`; increased the helper-local source
+  mirror budget from `20 GB` to `40 GB` before launch.
+- Safety checks: dry-run confirmed the original Delphi root will not be
+  modified; destination output root was absent before launch.
+- Focused verification passed:
+  `uv run --with pytest --with pytest-timeout python -m pytest tests/test_materialize_delphi_prefix_checkpoint.py`
+  (`6 passed`) and `py_compile` for the helper and tests.
+
+Launch command tracked by the monitor:
+
+```bash
+.venv/bin/python -u scratch/submit_delphi_prefix_3e20.py
+```
+
+Monitor state file:
+`scratch/20260525-0507_delphi_prefix_3e20_monitoring_state.json`
+
+Submitted at `2026-05-25T05:08:42Z` as Iris root job
+`/ahmed/delphi-prefix-3e20-step24857`.
+
+Startup update at `2026-05-25T05:43Z`:
+
+- Root and child are both `JOB_STATE_RUNNING`:
+  `/ahmed/delphi-prefix-3e20-step24857` and
+  `/ahmed/delphi-prefix-3e20-step24857/train_lm`.
+- W&B run:
+  `https://wandb.ai/marin-community/marin/runs/delphi-3e20-step24857`.
+- Logs confirmed original schedule length `35,510`, target step `24,857`,
+  training load path
+  `mirror://checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-20000`,
+  and source mirror budget `40 GB`.
+- The full source checkpoint mirror completed: `45` files staged to the
+  `us-east5` mirror, then Levanter loaded
+  `gs://marin-us-east5/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-20000`.
+- Logs show `Resuming training from step 20001`; first train step completed
+  and temporary checkpoints exist at least through `step-20073`.
+- Throughput on `v5p-8` settled near `7.8-8.1s/step` in the latest sample,
+  so reaching `24,857` is likely a multi-hour run if this rate holds.
+
+Progress update at `2026-05-25T15:47Z`:
+
+- Root and child are still `JOB_STATE_RUNNING` with no failures or preemptions.
+- Latest saved temporary checkpoint:
+  `gs://marin-us-east5/tmp/ttl=14d/checkpoints-temp/marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e20-step24857/checkpoints/step-24313`.
+- Final checkpoint `step-24857` does not exist yet.
+- Latest observed rate remains about `7.8s/step`; `step-24313 -> step-24857`
+  leaves roughly `544` steps, about `70-80` minutes plus checkpoint-save
+  overhead if throughput stays stable.
+
+## 2026-05-25T16:32Z — Delphi native prefix checkpoint inventory
+
+Verified the completed native/full-state prefix checkpoints before continuing
+with the active `3e20` materialization.
+
+Completed checkpoints:
+
+| Base | Source step | Target step | Original schedule | Output root | Final checkpoint |
+| --- | ---: | ---: | ---: | --- | --- |
+| `3e18` | `20000` | `26134` | `37335` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-step26134` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-step26134/checkpoints/step-26134` |
+| `3e19` | `20000` | `26609` | `38014` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609/checkpoints/step-26609` |
+
+GCS verification:
+
+- `3e18` final checkpoint contains `manifest.ocdbt`, `metadata.json`, and
+  checkpoint data under `d/`.
+- `3e19` final checkpoint contains `manifest.ocdbt`, `metadata.json`, and
+  checkpoint data under `d/`.
+- `3e18` metadata reports `step=26134`, `target_step=26134`,
+  `source_step=20000`, `base=3e18`, and
+  `materialization=delphi_prefix_checkpoint`.
+- `3e19` metadata reports `step=26609`, `target_step=26609`,
+  `source_step=20000`, `base=3e19`, and
+  `materialization=delphi_prefix_checkpoint`.
+- Checked the original Delphi source roots for `checkpoints/step-26134` and
+  `checkpoints/step-26609`; neither path exists there, so these
+  materializations did not mutate the canonical source roots.
+
+Monitor state files:
+
+- `scratch/20260524-1558_monitoring_state.json` records `3e18` as
+  `status=succeeded`, W&B
+  `https://wandb.ai/marin-community/marin/runs/delphi-3e18-step26134`, and the
+  final checkpoint path above.
+- `scratch/20260524-1742_delphi_prefix_3e19_monitoring_state.json` records
+  `3e19` as `status=succeeded`, W&B
+  `https://wandb.ai/marin-community/marin/runs/delphi-3e19-step26609`, and the
+  final checkpoint path above.
+
+## 2026-05-25T18:05Z — Delphi 3e20 70% native prefix checkpoint completed
+
+Final outcome for the active `3e20` materialization:
+
+- Iris root `/ahmed/delphi-prefix-3e20-step24857` and child
+  `/ahmed/delphi-prefix-3e20-step24857/train_lm` both ended
+  `JOB_STATE_SUCCEEDED` with exit code `0`.
+- Iris reports `failure_count=0` and `preemption_count=0`.
+- Final native/full-state checkpoint was saved at
+  `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e20-step24857/checkpoints/step-24857`
+  at `2026-05-25T17:01:44Z`.
+- The final checkpoint contains `manifest.ocdbt`, `metadata.json`, and
+  checkpoint data under `d/`.
+- `metadata.json` reports `step=24857`, `target_step=24857`,
+  `source_step=20000`, `base=3e20`, and
+  `materialization=delphi_prefix_checkpoint`.
+- Checked the original Delphi source root for `checkpoints/step-24857`; no such
+  path exists there, so the canonical source root was not mutated.
+- The `us-east5` temp checkpoint path no longer listed temp checkpoint objects
+  after the final checkpoint completed.
+
+Monitor state updated:
+`scratch/20260525-0507_delphi_prefix_3e20_monitoring_state.json` now records
+`status=succeeded`, W&B
+`https://wandb.ai/marin-community/marin/runs/delphi-3e20-step24857`, and the
+final checkpoint path above.
+
+## 2026-05-25T20:22Z — Registered materialized 70% prefix checkpoints for cooldown YAMLs
+
+Ahmed asked to find the completed prefix checkpoints and add them as cooldown
+midtraining options.
+
+Found all materialized prefix checkpoint roots under
+`gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/`:
+
+| Base | Candidate ID | Schedule length | Target step | Checkpoint path |
+| --- | --- | ---: | ---: | --- |
+| `3e18` | `delphi-3e18-cooldown30` | `37335` | `26134` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-step26134/checkpoints/step-26134` |
+| `3e19` | `delphi-3e19-cooldown30` | `38014` | `26609` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609/checkpoints/step-26609` |
+| `3e20` | `delphi-3e20-cooldown30` | `35510` | `24857` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e20-step24857/checkpoints/step-24857` |
+
+Config updates:
+
+- Updated
+  `experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/checkpoint_candidates.yaml`
+  so the `3e18`, `3e19`, and `3e20` `cooldown30` candidate rows now point to
+  the materialized exact-target checkpoint paths above, have
+  `suggested_step_delta: 0`, `suggested_relation_to_target: exact_target`,
+  `materialized_checkpoint: true`, and `review_status: approved`.
+- Recomputed the `3e18`, `3e19`, and `3e20` `cooldown20`/`cooldown10` target
+  metadata in the same YAML against the original scheduler lengths.
+- Updated `experiments/delphi_models.py` for these three bases so
+  `num_train_steps` reflects the original trainer schedule length from
+  `.executor_info`; `verified_checkpoint_step` remains the latest checkpoint
+  observed under the canonical source root.
+- The per-mix YAMLs already reference these candidate IDs:
+  `p33m67.yaml`, `p50m50.yaml`, and `p67m33.yaml` each contain
+  `delphi-3e18-cooldown30`, `delphi-3e19-cooldown30`, and
+  `delphi-3e20-cooldown30`, so no duplicate per-mix cells were needed.
+
+Validation:
+
+- Parsed `checkpoint_candidates.yaml` and verified every candidate row's
+  `target_step` matches `int(train_prefix_ratio * model.num_train_steps)`.
+- Verified the 30% cooldown launcher resolution for `3e18`, `3e19`, and
+  `3e20` uses scheduler lengths `37335`, `38014`, and `35510`, matching the
+  materialized checkpoint metadata.
+- Dry-run for `3e20/p33m67/cooldown30` resolves
+  `resume_step: 24857`, `checkpoint_relation: exact_target`, and the
+  `us-east5` checkpoint path above.
+- `uv run python -m py_compile experiments/delphi_models.py experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py`
+  passed.
+- `uv run --with pytest --with pytest-timeout python -m pytest tests/midtraining/test_spec_validators.py tests/midtraining/test_levanter_config.py`
+  passed (`26` tests).
+- `git diff --check` passed for the touched config/logbook files.
+
+## 2026-05-25T20:32Z — Verified cooldown eval cadence and math validation split
+
+Ahmed asked to double-check the eval cadence and confirm the true-cooldown runs
+use the same Nemotron math validation split as CPT.
+
+Rendered config behavior:
+
+- `lib/marin/src/marin/midtraining/levanter_config.py` sets
+  `trainer.steps_per_eval` from the resolved spec.
+- CPT eval cadence is based on the CPT step budget.
+- Cooldown eval cadence is based on the remaining tail
+  `base.num_train_steps - resume_step`.
+- The default policy targets roughly `40` eval points, bounded by
+  `eval_min_steps=25` and `eval_max_steps=200`.
+
+For the new 70% prefix cooldown runs:
+
+| Base | Resume step | Schedule length | Tail steps | Rendered `steps_per_eval` |
+| --- | ---: | ---: | ---: | ---: |
+| `3e18` | `26134` | `37335` | `11201` | `200` |
+| `3e19` | `26609` | `38014` | `11405` | `200` |
+| `3e20` | `24857` | `35510` | `10653` | `200` |
+
+Validation split check:
+
+- Both CPT (`experiments/midtrain_specs/delphi_small_cpt_k020.py`) and
+  true-cooldown
+  (`experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py`)
+  pass `data_section_override=load_legacy_data_section(mix)`.
+- The rendered true-cooldown `data:` block matches the CPT/reference
+  `experiments/midtrain_specs/data_sections/<mix>.json` block byte-for-byte for
+  all `3e18`, `3e19`, `3e20` x `p33m67`, `p50m50`, `p67m33` 70% cooldown
+  cells.
+- The math validation component is
+  `nemotron_cc_math_v1/4plus`, `split: validation`, cache
+  `gs://marin-us-east5/tokenized/nemotron_cc_math_v1/4plus-2c5519`, with
+  `num_validation_sequences: {"nemotron_cc_math_v1/4plus": 12500}`.
+
+Test updates:
+
+- Added a true-cooldown launcher regression test to
+  `tests/midtraining/test_val_set_equivalence.py` so the rendered cooldown
+  `data:` block must stay identical to the CPT/reference split.
+- Updated the stale 3e18 CPT expected step count from `7400` to `7467`, matching
+  the corrected original Delphi scheduler length `37335`.
+- `uv run --with pytest --with pytest-timeout python -m pytest tests/midtraining/test_val_set_equivalence.py`
+  passed (`48` tests).
+
+## 2026-05-25T20:59Z — Launched 3e18/3e19 70% true-cooldown batch jobs in us-east5
+
+Ahmed asked to relaunch Delphi true-cooldown for `3e18` and `3e19`, pinned to
+`us-east5` and set to Iris batch priority to avoid cross-region checkpoint
+movement.
+
+Launched the six `cooldown30` cells from the materialized 70% prefix
+checkpoints:
+
+| Base | Mix | Root job | TPU | Source checkpoint |
+| --- | --- | --- | --- | --- |
+| `3e18` | `p33m67` | `/ahmed/aa-true-d3e18-p33m67-cd30-v6e4-batch-a001-1779742118` | `v6e-4` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-step26134/checkpoints/step-26134` |
+| `3e18` | `p50m50` | `/ahmed/aa-true-d3e18-p50m50-cd30-v6e4-batch-a001-1779742167` | `v6e-4` | same `3e18` prefix checkpoint |
+| `3e18` | `p67m33` | `/ahmed/aa-true-d3e18-p67m33-cd30-v6e4-batch-a001-1779742167` | `v6e-4` | same `3e18` prefix checkpoint |
+| `3e19` | `p33m67` | `/ahmed/aa-true-d3e19-p33m67-cd30-v6e8-batch-a001-1779742167` | `v6e-8` | `gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e19-step26609/checkpoints/step-26609` |
+| `3e19` | `p50m50` | `/ahmed/aa-true-d3e19-p50m50-cd30-v6e8-batch-a001-1779742167` | `v6e-8` | same `3e19` prefix checkpoint |
+| `3e19` | `p67m33` | `/ahmed/aa-true-d3e19-p67m33-cd30-v6e8-batch-a001-1779742167` | `v6e-8` | same `3e19` prefix checkpoint |
+
+Launch invariants:
+
+- All root coordinator submissions used `--region us-east5 --priority batch`.
+- All launchers used `--output-region us-east5`.
+- Did not pass `--allow-cross-region-stage`; staging must be same-region or fail.
+- The first completed stage manifest,
+  `delphi-true-3e18-p33m67-cooldown30-a001`, reports
+  `cross_region_copy: false`, with source and destination both under
+  `gs://marin-us-east5`.
+- `3e18/p50m50` and `3e18/p67m33` also wrote manifests and child TPU jobs;
+  their manifests likewise report `cross_region_copy: false`.
+
+Startup snapshot:
+
+- `3e18` `p33m67`, `p50m50`, and `p67m33` each have a pending child TPU job
+  under the root coordinator, waiting for `v6e-4` capacity in `us-east5`.
+- `3e19` `p33m67` and `p50m50` root coordinators are running and staging their
+  larger prefix checkpoints; checkpoint directories exist but manifests had not
+  appeared at the snapshot time.
+- `3e19/p67m33` root coordinator is accepted but pending on `us-east5` CPU
+  coordinator capacity.
+
+Resume state file:
+`scratch/20260525-2059_true_midtrain_cd30_3e18_3e19_launch_state.json`.
+
+## 2026-05-27T04:03Z — Invalidated materialized Delphi prefix checkpoints and switched cooldown30 to no-retrain native checkpoints
+
+Ahmed asked to fix the broken prefix checkpoint situation without retraining.
+
+Root cause correction:
+
+- The materialized prefix checkpoints were invalid. The helper decoded old
+  untyped Delphi `.executor_info` model payloads as `type: llama`, which built a
+  no-QK-norm model tree.
+- Original Delphi native checkpoints do contain Qwen3 `q_norm`/`k_norm` arrays
+  and matching Adam state; the materialized prefix checkpoints dropped them.
+- The launched true-cooldown jobs failed correctly when the Qwen3 launcher tried
+  to restore those missing arrays.
+- CPT runs are not implicated: they render `type: qwen3` and use model-only HF
+  initialization; a checked CPT output checkpoint had QK-norm arrays and Adam
+  state.
+
+Code fixes:
+
+- `scripts/materialize_delphi_prefix_checkpoint.py` now defaults old untyped
+  Delphi model payloads to `type: qwen3`, then fails closed unless the decoded
+  source config is a `Qwen3Config`.
+- `experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py`
+  verifies the factorized heuristic returns `Qwen3Config` and renders
+  `type: qwen3` directly.
+- Added tests for both the old untyped `.executor_info` decode path and the
+  true-cooldown rendered model type.
+
+No-retrain checkpoint policy:
+
+- Did not graft stale QK-norm arrays into the bad prefix checkpoints. That
+  would make them loadable but scientifically wrong because the intervening
+  weights were trained under the wrong no-QK-norm forward pass.
+- Updated
+  `experiments/midtrain_specs/true_midtrain/nemotron_math_only/configs/checkpoint_candidates.yaml`
+  so the approved cooldown30 rows point only to existing native Qwen3
+  checkpoints. The bad materialized paths remain recorded as
+  `invalidated_materialized_checkpoint_path` with reason
+  `missing_qwen3_q_norm_k_norm_arrays`.
+
+Current no-retrain cooldown30 candidates:
+
+| Base | Target step | Selected native step | Delta | Progress | Path |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `3e18` | `26134` | `30000` | `+3866` | `80.3536%` | `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6/checkpoints/step-30000` |
+| `3e19` | `26609` | `30000` | `+3391` | `78.9183%` | `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6/checkpoints/step-30000` |
+| `3e20` | `24857` | `20000` | `-4857` | `56.3222%` | `gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6/checkpoints/step-20000` |
+
+Validation:
+
+- Verified the selected native checkpoints contain QK-norm keys:
+  `3e18 step-30000`: `210` OCDBT keys, `12` QK-norm keys;
+  `3e19 step-30000`: `210` keys, `12` QK-norm keys;
+  `3e20 step-20000`: `1218` keys, `12` QK-norm keys.
+- Dry-ran the launcher for `3e18`, `3e19`, and `3e20` `p33m67/cooldown30`;
+  each now points at the native source checkpoint above, not the invalid
+  materialized prefix path.
+- `uv run --with pytest --with pytest-timeout python -m pytest tests/test_materialize_delphi_prefix_checkpoint.py -x --timeout=120`
+  passed (`7` tests).
+- `uv run --with pytest --with pytest-timeout python -m pytest tests/midtraining/test_val_set_equivalence.py::test_true_cooldown_rendered_data_section_bit_identical_to_reference -x --timeout=120`
+  passed (`9` tests).
+
+Operational caveat:
+
+- These no-retrain replacement checkpoints live in `us-central2`. Launching
+  cooldown jobs in `us-east5` will require explicit staging/copy approval or a
+  same-region execution plan.

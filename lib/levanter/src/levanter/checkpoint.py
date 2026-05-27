@@ -397,6 +397,7 @@ class Checkpointer:
         delete_old_temp_checkpoints: bool = True,
         delete_previous_temporary_checkpoint_after_save: bool = True,
         debug: CheckpointDebugConfig | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -430,6 +431,7 @@ class Checkpointer:
         self._last_save_step = 0
         self.delete_previous_temporary_checkpoint_after_save = delete_previous_temporary_checkpoint_after_save
         self.debug = debug or CheckpointDebugConfig()
+        self.metadata = dict(metadata or {})
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -650,6 +652,7 @@ class Checkpointer:
             commit_callback=commit_callback,
             is_temporary=is_temporary,
             debug=self.debug,
+            metadata=self.metadata,
         )
         self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
@@ -671,6 +674,7 @@ def save_checkpoint(
     commit_callback: Optional[Callable[[], None]] = None,
     is_temporary: bool = True,
     debug: CheckpointDebugConfig | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ):
     """
     Save a checkpoint to a given path using TensorStore with OCDBT.
@@ -718,7 +722,7 @@ def save_checkpoint(
             progress_logger.set_phase("metadata_write")
         status = "completed"
         try:
-            _save_metadata(checkpoint_path, fs, step, is_temporary)
+            _save_metadata(checkpoint_path, fs, step, is_temporary, metadata)
             logger.info(f"Saved checkpoint to {checkpoint_path} for step {step}")
 
             if commit_callback is not None:
@@ -755,8 +759,12 @@ def save_checkpoint(
     return checkpoint_path
 
 
-def _save_metadata(checkpoint_path, fs, step, is_temporary):
+def _save_metadata(checkpoint_path, fs, step, is_temporary, extra_metadata=None):
     metadata = {"step": step, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": is_temporary}
+    if extra_metadata:
+        if any(key in extra_metadata for key in ("step", "timestamp", "is_temporary")):
+            raise ValueError("checkpoint metadata cannot override step, timestamp, or is_temporary")
+        metadata.update(extra_metadata)
     if jax.process_index() == 0:
         with fs.open(os.path.join(checkpoint_path, "metadata.json"), "w") as json_out:
             json.dump(metadata, json_out)
@@ -1066,6 +1074,8 @@ class CheckpointerConfig:
     """If True, delete the previously saved temporary checkpoint after a successful new save."""
     debug: CheckpointDebugConfig = field(default_factory=CheckpointDebugConfig)
     """Checkpoint-path diagnostics. Disabled by default."""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    """Extra JSON metadata to include in every checkpoint metadata file."""
 
     def expanded_path(self, run_id) -> str:
         if self.append_run_id_to_base_path:
@@ -1089,6 +1099,7 @@ class CheckpointerConfig:
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
             delete_previous_temporary_checkpoint_after_save=self.delete_previous_temporary_checkpoint_after_save,
             debug=self.debug,
+            metadata=self.metadata,
         )
 
     def __post_init__(self):
@@ -1099,6 +1110,8 @@ class CheckpointerConfig:
             self.temporary_base_path = os.path.expanduser(self.temporary_base_path)
         if isinstance(self.debug, dict):
             self.debug = CheckpointDebugConfig(**self.debug)
+        if any(key in self.metadata for key in ("step", "timestamp", "is_temporary")):
+            raise ValueError("CheckpointerConfig.metadata cannot override step, timestamp, or is_temporary")
 
         # validate the checkpoint intervals.
         # we want to make sure that the intervals are monotonic. only the last one can be None

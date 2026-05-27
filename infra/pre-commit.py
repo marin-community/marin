@@ -68,6 +68,10 @@ EXCLUDE_PATTERNS = [
     "**/*-template.yaml",
 ]
 
+LARGE_FILE_EXCLUDE_PATTERNS = [
+    ".agents/logbooks/**",
+]
+
 
 @dataclass
 class CheckResult:
@@ -299,6 +303,8 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
 
     large_files = []
     for file_path in files:
+        if matches_pattern(file_path, LARGE_FILE_EXCLUDE_PATTERNS):
+            continue
         if file_path.stat().st_size > max_size:
             large_files.append((file_path, file_path.stat().st_size))
 

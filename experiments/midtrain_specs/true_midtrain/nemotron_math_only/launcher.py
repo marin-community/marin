@@ -27,6 +27,7 @@ from typing import Any
 import draccus
 import levanter.config  # noqa: F401 - registers draccus codecs used by Levanter config objects
 import yaml
+from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamHConfig
 from marin.midtraining import (
     LLAMA3_TOKENIZER,
@@ -60,6 +61,7 @@ WANDB_PROJECT = "delphi-midtraining"
 DEFAULT_OUTPUT_REGION = "us-east5"
 DEFAULT_CONTAINER_RAM = "256g"
 APPROVED_REVIEW_STATUS = "approved"
+DELPHI_MODEL_TYPE = "qwen3"
 
 
 def parse_args() -> argparse.Namespace:
@@ -245,7 +247,9 @@ def build_spec(
 
 def model_config_for_base(base: Any) -> dict[str, Any]:
     cfg = completed_adamh_heuristic._build_model_config(hidden_size=base.hidden_dim)
-    return {"type": "qwen3", **draccus.encode(cfg)}
+    if not isinstance(cfg, Qwen3Config):
+        raise ValueError(f"True Delphi midtraining must render {Qwen3Config.__name__}; got {type(cfg).__name__}.")
+    return {**draccus.encode(cfg), "type": DELPHI_MODEL_TYPE}
 
 
 def optimizer_config_for_cooldown(base: Any) -> dict[str, Any]:

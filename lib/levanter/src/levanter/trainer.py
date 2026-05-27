@@ -324,6 +324,11 @@ class Trainer:
     def num_train_steps(self) -> int:
         return self.config.num_train_steps
 
+    @property
+    def stop_step(self) -> int:
+        """Absolute training step where this run should stop."""
+        return self.config.stop_step or self.config.num_train_steps
+
     @typing.overload
     def add_hook(self, fn: Callable[[StepInfo], Any], *, every: int = 1): ...
 
@@ -522,7 +527,7 @@ class Trainer:
         iter_data = iter(train_loader)
         is_first_step = True
 
-        while int(state.step) < self.num_train_steps:
+        while int(state.step) < self.stop_step:
             with capture_time() as loading_time:
                 try:
                     example = next(iter_data)
@@ -552,9 +557,11 @@ class Trainer:
         Performs training until the number of steps is reached.
         """
         # Handle case where training is already complete (e.g., resuming from final checkpoint)
-        if int(state.step) >= self.num_train_steps:
+        stop_step = self.stop_step
+        if int(state.step) >= stop_step:
             logger.info(
-                f"Training already complete at step {state.step} (target: {self.num_train_steps}). "
+                f"Training already complete at step {state.step} (stop step: {stop_step}; "
+                f"schedule length: {self.num_train_steps}). "
                 "Running final hooks only."
             )
             info = StepInfo(state, 0.0, 0.0)
@@ -848,6 +855,13 @@ class TrainerConfig:
 
     # Config related to duration
     num_train_steps: int = 400_000  # number of training steps
+    stop_step: int | None = None
+    """Optional absolute step to stop training before ``num_train_steps``.
+
+    Optimizers are still built with ``num_train_steps``. Use this only when
+    materializing an intermediate full-state checkpoint while preserving the
+    original learning-rate schedule length.
+    """
     steps_per_eval: int = 1_000  # how often to evaluate
     max_eval_batches: Optional[int] = None  # max number of batches to evaluate on. None means all batches
 
@@ -918,6 +932,11 @@ class TrainerConfig:
                 DeprecationWarning,
             )
             self.tracker = self.wandb
+        if self.stop_step is not None:
+            if self.stop_step <= 0:
+                raise ValueError(f"stop_step must be positive when set, got {self.stop_step}")
+            if self.stop_step > self.num_train_steps:
+                raise ValueError(f"stop_step cannot exceed num_train_steps: {self.stop_step} > {self.num_train_steps}")
 
     def initialize(self):
         """Initializes jax, logging, setting the run name/id in the process"""

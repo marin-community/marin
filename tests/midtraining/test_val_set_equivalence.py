@@ -28,8 +28,20 @@ from experiments.midtrain_specs import (
     load_legacy_data_section,
 )
 from experiments.midtrain_specs.delphi_small_cpt_k020 import build_spec
+from experiments.midtrain_specs.true_midtrain.nemotron_math_only.launcher import (
+    build_spec as build_cooldown_spec,
+)
+from experiments.midtrain_specs.true_midtrain.nemotron_math_only.launcher import (
+    planned_cell,
+    reviewed_candidate,
+)
 
 REFERENCE_DIR = Path(__file__).resolve().parents[2] / "experiments" / "midtrain_specs" / "data_sections"
+COOLDOWN30_TPUS = {
+    "3e18": "v6e-4",
+    "3e19": "v6e-8",
+    "3e20": "v5p-8",
+}
 
 VAL_DETERMINING_KEYS = (
     "components",  # includes math cache_dir and split=validation
@@ -102,6 +114,37 @@ def test_small_base_rendered_data_section_bit_identical_to_reference(base_key: s
     ), f"Rendered data section for base={base_key!r} mix={mix!r} drifted from 1e21 reference."
 
 
+@pytest.mark.parametrize("mix", DELPHI_MIDTRAIN_MIXES)
+@pytest.mark.parametrize("base_key", ["3e18", "3e19", "3e20"])
+def test_true_cooldown_rendered_data_section_bit_identical_to_reference(base_key: str, mix: str):
+    """The reviewed true-cooldown launch path must use the same math val split as CPT."""
+    candidate = reviewed_candidate(base_key, 0.30)
+    cell = planned_cell(mix, base_key, 0.30, candidate["candidate_id"])
+    spec = build_cooldown_spec(
+        candidate=candidate,
+        cell=cell,
+        mix=mix,
+        tpu_type=COOLDOWN30_TPUS[base_key],
+        attempt=1,
+        output_region="us-east5",
+        ram="256g",
+        child_preemptible=True,
+    )
+    resolved = resolve_midtrain_spec(spec)
+    validate_midtrain_spec(resolved)
+    rendered = render_train_lm_config(resolved)
+    ref = json.loads((REFERENCE_DIR / f"{mix}.json").read_text(encoding="utf-8"))
+
+    assert rendered["data"] == ref
+    assert rendered["model"]["type"] == "qwen3"
+    remaining_steps = spec.base.num_train_steps - candidate["suggested_step"]
+    expected_eval_steps = min(
+        spec.eval_max_steps,
+        max(spec.eval_min_steps, remaining_steps // spec.eval_target_points),
+    )
+    assert rendered["trainer"]["steps_per_eval"] == expected_eval_steps
+
+
 def test_small_base_cpt_schedule_is_triangular_not_wsd():
     """CPT should match legacy warmup -> decay, with no stable LR plateau."""
     spec = build_spec(base_key="3e18", mix="p33m67", lr_factor=0.5)
@@ -113,7 +156,7 @@ def test_small_base_cpt_schedule_is_triangular_not_wsd():
     assert optimizer["warmup"] == CPT_DEFAULT_WARMUP_FRACTION
     assert optimizer["decay"] is CPT_DEFAULT_DECAY
     assert optimizer["lr_schedule"] == "linear"
-    assert rendered["trainer"]["num_train_steps"] == 7400
+    assert rendered["trainer"]["num_train_steps"] == 7467
 
 
 def test_small_base_build_spec_rejects_disallowed_tpu():

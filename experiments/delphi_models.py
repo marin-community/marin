@@ -272,7 +272,9 @@ DELPHI_1E23_GCS_RUN_ROOT = "gs://marin-us-central2/adamh-scaling-ladder-nemotron
 # ---------------------------------------------------------------------------
 # ISOFlop-bucket winners - the seven scaling-law fit points (3e18 to 3e20)
 # Architecture verified from experiments/exp1337_eval_suite.py:174-180.
-# Final num_train_steps verified by `gsutil ls .../checkpoints/` 2026-05-14.
+# `num_train_steps` is the original trainer schedule length from each run's
+# `.executor_info`. `verified_checkpoint_step` is the latest observed native
+# checkpoint under the canonical pretraining root.
 # ---------------------------------------------------------------------------
 
 # **The CANONICAL 3e20 anchor - use this for 1e20-region midtraining.**
@@ -285,7 +287,7 @@ DELPHI_3E20 = DelphiModel(
     hidden_dim=2304,
     num_layers=23,
     batch_size=128,
-    num_train_steps=35_408,
+    num_train_steps=35_510,
     gcs_run_root="gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+20-d2304-L23-B128-adamh_scaling_v6",
     verified_checkpoint_step=35_408,
     # v6 isoflop bucket winner — verbatim from .executor_info.config.train_config.optimizer.
@@ -337,7 +339,7 @@ DELPHI_3E19 = DelphiModel(
     hidden_dim=1536,
     num_layers=16,
     batch_size=32,
-    num_train_steps=37_870,
+    num_train_steps=38_014,
     gcs_run_root="gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+19-d1536-L16-B32-adamh_scaling_v6",
     verified_checkpoint_step=37_870,
     peak_lr=0.0036221806669679214,
@@ -388,7 +390,7 @@ DELPHI_3E18 = DelphiModel(
     hidden_dim=1024,
     num_layers=11,
     batch_size=8,
-    num_train_steps=37_001,
+    num_train_steps=37_335,
     gcs_run_root="gs://marin-us-central2/checkpoints/isoflop/isoflop-3e+18-d1024-L11-B8-adamh_scaling_v6",
     verified_checkpoint_step=37_001,
     peak_lr=0.0027599905274620106,
