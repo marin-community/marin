@@ -609,6 +609,52 @@ MIX_CONFIGS: tuple[MixConfig, ...] = (
         data_seed=19,
         checkpoints_per_run=5,
     ),
+    # Continuation from exp135-zoonomia-m3 at step-23660 (~80% through m3, just
+    # before its cooldown starts). Same upstream-heavy 0.1875/0.25/0.1875/0.1875/0.1875
+    # mixture and cds-sized new portion as m3. No rewarmup — picks up at peak LR;
+    # combined run cools down over its last 20%.
+    MixConfig(
+        name="exp135-zoonomia-m3.1",
+        weights={
+            "cds": 0.1875,
+            "upstream": 0.25,
+            "downstream": 0.1875,
+            "ncrna_exon": 0.1875,
+            "ccre_non_promoter": 0.1875,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        continuation=ResumeBeforeCooldown(
+            checkpoint_path=(
+                "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i22-exp135-zoonomia-m3-3aae5f/checkpoints/step-23660/"
+            ),
+            parent_step=23660,
+        ),
+        data_seed=20,
+        checkpoints_per_run=5,
+    ),
+    # Continuation from exp135-zoonomia-m1 at step-23664 (~80% through m1, just
+    # before its cooldown starts). Same uniform 1/5 mixture and cds-sized new
+    # portion as m1. No rewarmup — picks up at peak LR; combined run cools down
+    # over its last 20%.
+    MixConfig(
+        name="exp135-zoonomia-m1.1",
+        weights={
+            "cds": 1 / 5,
+            "upstream": 1 / 5,
+            "downstream": 1 / 5,
+            "ncrna_exon": 1 / 5,
+            "ccre_non_promoter": 1 / 5,
+        },
+        max_train_examples=MAX_TRAIN_EXAMPLES_PER_REGION["cds"],
+        continuation=ResumeBeforeCooldown(
+            checkpoint_path=(
+                "gs://marin-us-east5/checkpoints/dna-bolinas-mix-v0.9-p1B-i20-exp135-zoonomia-m1-3ea283/checkpoints/step-23664/"
+            ),
+            parent_step=23664,
+        ),
+        data_seed=21,
+        checkpoints_per_run=5,
+    ),
 )
 
 
