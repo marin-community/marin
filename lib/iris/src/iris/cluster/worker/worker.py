@@ -799,20 +799,6 @@ class Worker:
         """
         return list(self._tasks)
 
-    def list_current_tasks(self) -> list[TaskInfo]:
-        """List only the most recent attempt for each task.
-
-        Returns TaskInfo views for the current (highest attempt_id) attempt of each task.
-        """
-        # Group by task_id and return only the highest attempt_id for each
-        by_task: dict[str, TaskAttempt] = {}
-        for task in self._tasks:
-            task_id = task.task_id.to_wire()
-            existing = by_task.get(task_id)
-            if existing is None or task.attempt_id > existing.attempt_id:
-                by_task[task_id] = task
-        return list(by_task.values())
-
     def _collect_resource_metrics(self) -> job_pb2.WorkerResourceSnapshot:
         """Collect host metrics with running-task and process aggregates filled in."""
         snapshot = self._host_metrics.collect()

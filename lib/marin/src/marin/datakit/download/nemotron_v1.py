@@ -8,15 +8,13 @@ import logging
 import os
 from collections.abc import Iterator
 
-import requests
 import zstandard
 from fray.cluster import ResourceConfig
-from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
-from urllib3.util import Retry
 from zephyr import Dataset, ZephyrContext
 from zephyr.writers import atomic_rename
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.normalize import normalize_step
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_exists
@@ -54,11 +52,7 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str, b
     cc_url = f"{base_url}/{input_file_path}"
     logger.info(f"Downloading Nemotron CC file {cc_url} to {output_file_path}")
 
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
+    session = build_retrying_session(status_forcelist=(500, 502, 503, 504))
 
     response = session.get(cc_url, headers={"user-agent": myagent}, stream=True)
     response.raise_for_status()

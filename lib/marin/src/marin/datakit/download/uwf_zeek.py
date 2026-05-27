@@ -32,11 +32,10 @@ from typing import Any
 from urllib.parse import urljoin
 
 import requests
-from requests.adapters import HTTPAdapter
 from rigging.filesystem import open_url
-from urllib3.util import Retry
 from zephyr.writers import atomic_rename
 
+from marin.datakit.download.http_session import build_retrying_session
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_mkdirs
@@ -83,21 +82,6 @@ class _HrefParser(HTMLParser):
         for key, value in attrs:
             if key.lower() == "href" and value:
                 self.hrefs.append(value)
-
-
-def _build_session() -> requests.Session:
-    retry = Retry(
-        total=5,
-        connect=5,
-        read=5,
-        backoff_factor=1.0,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset({"GET"}),
-    )
-    session = requests.Session()
-    session.mount("http://", HTTPAdapter(max_retries=retry))
-    session.mount("https://", HTTPAdapter(max_retries=retry))
-    return session
 
 
 def _list_hrefs(session: requests.Session, url: str, *, timeout_seconds: int) -> list[str]:
@@ -182,7 +166,7 @@ def download_uwf_zeek_sample(
     output_path = str(output_path)
     fsspec_mkdirs(output_path, exist_ok=True)
 
-    session = _build_session()
+    session = build_retrying_session()
     output_file = posixpath.join(output_path, output_filename)
     manifest_entries: list[dict[str, Any]] = []
     total_rows = 0

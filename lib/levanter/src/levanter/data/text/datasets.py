@@ -30,7 +30,7 @@ from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlDataSource,
-    WrappedHFDataSource,
+    datasource_from_hf_or_none,
 )
 from levanter.data.text.cache import build_lm_dataset_cache, load_lm_dataset_cache
 from levanter.data.text.examples import (
@@ -276,26 +276,9 @@ class HfDatasetSourceConfig(LmDatasetSourceConfigBase):
             logger.warning(f"Splits {split} not found for {self.id} {self.name}")
             return None
         if self.id is not None:
-            try:
-                ds = WrappedHFDataSource(
-                    self.id,
-                    split=split,
-                    name=self.name,
-                    revision=self.revision,
-                    streaming=self.stream,
-                )
-            except ValueError as e:
-                # if the message starts with Bad split, then just return None
-                if str(e).startswith("Bad split"):
-                    logger.warning(f"Splits {split} not found for {self.id} {self.name}")
-                    return None
-                else:
-                    raise
-
-            if len(ds.shard_names) == 0:
-                return None
-
-            return ds
+            return datasource_from_hf_or_none(
+                self.id, split=split, name=self.name, revision=self.revision, streaming=self.stream
+            )
 
 
 @LmDatasetSourceConfigBase.register_subclass("url")
