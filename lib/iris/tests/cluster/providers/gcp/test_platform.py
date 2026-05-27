@@ -18,6 +18,7 @@ import pytest
 from iris.cluster.providers.gcp.controller import GcpControllerProvider
 from iris.cluster.providers.gcp.fake import InMemoryGcpService
 from iris.cluster.providers.gcp.handles import GcpVmSliceHandle, _build_gce_resource_name
+from iris.cluster.providers.gcp.service import VmCreateRequest
 from iris.cluster.providers.gcp.workers import (
     GcpWorkerProvider,
     _run_vm_slice_bootstrap,
@@ -199,8 +200,6 @@ def test_tunnel_returns_address_directly():
 
 def _register_controller_vm(gcp_service: InMemoryGcpService, *, os_login: bool, zone: str = "us-central2-b") -> None:
     """Register a controller VM in the in-memory service for tunnel tests."""
-    from iris.cluster.providers.gcp.service import VmCreateRequest
-
     metadata = {"enable-oslogin": "TRUE", "block-project-ssh-keys": "TRUE"} if os_login else {}
     gcp_service.vm_create(
         VmCreateRequest(
@@ -908,8 +907,6 @@ def _make_vm_slice_for_bootstrap(
     zone: str = "us-central2-b",
 ) -> tuple[GcpVmSliceHandle, str]:
     """Create a VM in InMemoryGcpService and return a handle + vm_name for bootstrap testing."""
-    from iris.cluster.providers.gcp.service import VmCreateRequest
-
     vm_name = "test-bootstrap-vm"
     gcp_service.vm_create(
         VmCreateRequest(
@@ -1031,8 +1028,6 @@ def test_vm_bootstrap_cloud_not_ready_raises_phase1_timeout():
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
 
     # Create a VM but set it to non-READY state
-    from iris.cluster.providers.gcp.service import VmCreateRequest
-
     vm_name = "test-stuck-vm"
     gcp_service.vm_create(
         VmCreateRequest(
