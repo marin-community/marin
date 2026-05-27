@@ -3,15 +3,12 @@
 
 """Content-addressed BundleStore with fsspec persistence and in-memory LRU cache.
 
-Two namespaces share the same store and cache:
-
-* Bundles (zipped workdirs): ``{storage_dir}/{id}.zip``
-* Blobs (large workdir files): ``{storage_dir}/blobs/{id}``
-
-The in-memory cache is populated lazily and shared across both namespaces.
-``get_zip``/``get_blob`` check cache → fsspec storage → controller HTTP
-endpoint (when ``controller_address`` is set, i.e. on workers). Eviction
-from the in-memory cache does not delete from fsspec storage.
+A single content-addressed namespace serves both zipped workdirs and
+externalized workdir files. Disk layout: ``{storage_dir}/{id}``. The
+in-memory cache is populated lazily. ``get`` checks cache → fsspec
+storage → controller HTTP endpoint (when ``controller_address`` is set,
+i.e. on workers). Eviction from the in-memory cache does not delete from
+fsspec storage.
 """
 
 from __future__ import annotations
@@ -23,7 +20,6 @@ import threading
 import time
 import zipfile
 from collections import OrderedDict
-from collections.abc import Callable
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -53,17 +49,13 @@ class BundleStore:
 
         self._fs, self._fs_path = fsspec.core.url_to_fs(storage_dir)
         self._fs.mkdirs(self._fs_path, exist_ok=True)
-        self._fs.mkdirs(f"{self._fs_path}/blobs", exist_ok=True)
 
-        # bundle_id/blob_id -> bytes, ordered by access (MRU at end).
+        # content id -> bytes, ordered by access (MRU at end).
         self._cache: OrderedDict[str, bytes] = OrderedDict()
         self._cache_bytes = 0
 
-    def _bundle_fs_path(self, bundle_id: str) -> str:
-        return f"{self._fs_path}/{bundle_id}.zip"
-
-    def _blob_fs_path(self, blob_id: str) -> str:
-        return f"{self._fs_path}/blobs/{blob_id}"
+    def _path_for(self, cid: str) -> str:
+        return f"{self._fs_path}/{cid}"
 
     def _cache_put(self, cid: str, data: bytes) -> None:
         """Insert into in-memory cache and evict if needed. Caller must hold _lock."""
@@ -81,19 +73,22 @@ class BundleStore:
             _, evicted = self._cache.popitem(last=False)
             self._cache_bytes -= len(evicted)
 
-    def _write_at(self, data: bytes, path: str) -> str:
+    def write(self, data: bytes) -> str:
+        """Write bytes if absent and return canonical content id."""
         cid = content_id(data)
+        path = self._path_for(cid)
         with self._lock:
-            if cid in self._cache:
-                self._cache.move_to_end(cid)
-                return cid
+            # Always ensure disk has the bytes: a cache hit without disk write
+            # would leave workers unable to fetch this id after a restart.
             if not self._fs.exists(path):
                 with self._fs.open(path, "wb") as f:
                     f.write(data)
             self._cache_put(cid, data)
         return cid
 
-    def _read_at(self, cid: str, path: str, url_path: str, writer: Callable[[bytes], str]) -> bytes:
+    def get(self, cid: str) -> bytes:
+        """Read bytes by content id. Falls back to controller on workers."""
+        path = self._path_for(cid)
         with self._lock:
             if cid in self._cache:
                 self._cache.move_to_end(cid)
@@ -103,21 +98,17 @@ class BundleStore:
                     data = f.read()
                 self._cache_put(cid, data)
                 return data
-        # Outside lock: fetch from controller and route through the matching writer.
-        self._fetch_from_controller(cid, url_path, writer)
-        return self._read_at(cid, path, url_path, writer)
+        # Outside lock: fetch from controller and persist locally.
+        data = self._fetch_from_controller(cid)
+        self.write(data)
+        return data
 
-    def _fetch_from_controller(self, cid: str, url_path: str, writer: Callable[[bytes], str]) -> None:
-        """Fetch content over HTTP, verify hash, and persist via ``writer``.
-
-        Retries up to 3 times with exponential backoff. ``writer`` must be
-        either ``write_zip`` or ``write_blob`` so the fetched bytes land in
-        the correct namespace.
-        """
+    def _fetch_from_controller(self, cid: str) -> bytes:
+        """Fetch content over HTTP and verify hash. Retries up to 3 times."""
         if not self._controller_address:
             raise FileNotFoundError(f"Content {cid} not found and no controller configured")
 
-        url = f"{self._controller_address}/{url_path}"
+        url = f"{self._controller_address}/blobs/{cid}"
         for attempt in range(3):
             try:
                 with urlopen(url, timeout=120) as resp:
@@ -131,27 +122,11 @@ class BundleStore:
         actual = content_id(data)
         if actual != cid:
             raise ValueError(f"Hash mismatch while fetching {cid}: got {actual}")
-        writer(data)
-
-    def write_zip(self, blob: bytes) -> str:
-        """Write zip bytes if absent and return canonical bundle id."""
-        return self._write_at(blob, self._bundle_fs_path(content_id(blob)))
-
-    def get_zip(self, bundle_id: str) -> bytes:
-        """Read zip bytes by bundle id. Falls back to controller on workers."""
-        return self._read_at(bundle_id, self._bundle_fs_path(bundle_id), f"bundles/{bundle_id}.zip", self.write_zip)
-
-    def write_blob(self, data: bytes) -> str:
-        """Write blob bytes if absent and return canonical blob id."""
-        return self._write_at(data, self._blob_fs_path(content_id(data)))
-
-    def get_blob(self, blob_id: str) -> bytes:
-        """Read blob bytes by id. Falls back to controller on workers."""
-        return self._read_at(blob_id, self._blob_fs_path(blob_id), f"blobs/{blob_id}", self.write_blob)
+        return data
 
     def extract_bundle_to(self, bundle_id: str, dest: Path) -> None:
         """Extract a bundle zip into ``dest`` with zip-slip protection."""
-        blob = self.get_zip(bundle_id)
+        blob = self.get(bundle_id)
 
         dest.mkdir(parents=True, exist_ok=True)
         base = dest.resolve()

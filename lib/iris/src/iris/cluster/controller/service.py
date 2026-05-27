@@ -970,10 +970,10 @@ class ControllerServiceImpl:
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def bundle_zip(self, bundle_id: str) -> bytes:
-        return self._bundle_store.get_zip(bundle_id)
+        return self._bundle_store.get(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
-        return self._bundle_store.get_blob(blob_id)
+        return self._bundle_store.get(blob_id)
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id."""
@@ -1188,7 +1188,7 @@ class ControllerServiceImpl:
                     f"Bundle size {bundle_size_mb:.1f}MB exceeds maximum {max_size_mb:.0f}MB",
                 )
 
-            bundle_id = self._bundle_store.write_zip(request.bundle_blob)
+            bundle_id = self._bundle_store.write(request.bundle_blob)
 
             new_request = controller_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
@@ -1207,7 +1207,7 @@ class ControllerServiceImpl:
             new_request = controller_pb2.Controller.LaunchJobRequest()
             new_request.CopyFrom(request)
             for name, data in large_files.items():
-                blob_id = self._bundle_store.write_blob(data)
+                blob_id = self._bundle_store.write(data)
                 del new_request.entrypoint.workdir_files[name]
                 new_request.entrypoint.workdir_file_refs[name] = blob_id
                 logger.info("Externalized workdir file %s (%d bytes) as blob %s", name, len(data), blob_id[:12])

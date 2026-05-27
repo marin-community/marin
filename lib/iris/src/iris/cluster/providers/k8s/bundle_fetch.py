@@ -60,10 +60,14 @@ def fetch_bundle(controller_url: str, bundle_id: str, workdir: str) -> None:
 def fetch_workdir_blob_refs(controller_url: str, blob_refs_json: str, workdir: str) -> None:
     """Download externalized workdir files from the controller's blob endpoint."""
     refs = json.loads(blob_refs_json)
+    workdir_norm = os.path.normpath(workdir)
     for name, blob_id in refs.items():
         url = f"{controller_url}/blobs/{blob_id}"
-        rel_path = os.path.normpath(name)
-        dst_path = os.path.join(workdir, rel_path)
+        dst_path = os.path.normpath(os.path.join(workdir, name))
+        # Contain writes to workdir: reject ``../`` escapes and absolute keys
+        # that ``os.path.join`` would otherwise honor and drop ``workdir``.
+        if not dst_path.startswith(workdir_norm + os.sep) and dst_path != workdir_norm:
+            raise ValueError(f"Path traversal in workdir blob ref: {name}")
         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
 
         for attempt in range(3):
@@ -71,6 +75,9 @@ def fetch_workdir_blob_refs(controller_url: str, blob_refs_json: str, workdir: s
                 req = urllib.request.Request(url)
                 with urllib.request.urlopen(req, timeout=300) as resp:
                     data = resp.read()
+                actual = hashlib.sha256(data).hexdigest()
+                if actual != blob_id:
+                    raise ValueError(f"Blob hash mismatch for {name}: expected {blob_id}, got {actual}")
                 with open(dst_path, "wb") as f:
                     f.write(data)
                 print(f"Fetched blob ref {name} ({len(data)} bytes) from {blob_id[:12]}")
