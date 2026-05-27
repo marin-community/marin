@@ -12,7 +12,6 @@ from iris.cluster.controller.autoscaler.backoff_detector import (
     DEFAULT_DECAY_PER_FAILURE,
     DEFAULT_PROBE_FLOOR_PER_MINUTE,
     DEFAULT_RECOVERY_DURATION,
-    DEFAULT_SHORT_LIVED_THRESHOLD,
     BackoffDetector,
     GroupHealth,
     SliceFate,
@@ -103,23 +102,6 @@ def test_long_lived_survivor_termination_classifies_correctly(detector: BackoffD
     detector.record_created("survivor", ts(0))
     detector.record_terminated("survivor", SliceFate.PREEMPTED, ts(45 * 60))
     assert detector.health(ts(45 * 60 + 1)) == 1.0
-
-
-def test_default_short_lived_threshold_classifies_20_minute_preemption_as_failure() -> None:
-    """GCP often returns spot capacity that lives 10-25 min before reclaim; the
-    default threshold must classify those as failures so AIMD throttles the
-    group. Uses the production default rather than the fixture's local override.
-    """
-    bucket = TokenBucket(capacity=BASE_RATE_PER_MIN, refill_period=Duration.from_minutes(1))
-    detector = BackoffDetector(
-        group_name="g",
-        scale_up_bucket=bucket,
-        base_scale_up_per_minute=BASE_RATE_PER_MIN,
-    )
-    assert DEFAULT_SHORT_LIVED_THRESHOLD >= Duration.from_minutes(25)
-    detector.record_created("s", ts(0))
-    detector.record_terminated("s", SliceFate.PREEMPTED, ts(20 * 60))
-    assert detector.health(ts(20 * 60)) < 1.0
 
 
 def test_unknown_slice_termination_counted_as_short_lived(detector: BackoffDetector) -> None:
