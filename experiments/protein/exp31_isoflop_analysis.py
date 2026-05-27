@@ -3,12 +3,14 @@
 
 """Analyze exp31 protein iso-FLOP sweep results from W&B.
 
-Companion to ``exp31_isoflop_sweep.py``. Pulls the final
-``eval/protein-docs-cd-val/loss`` plus throughput / parameter-count summary
-fields for every *finished* run in the sweep, validates that the achieved
-training FLOPs (``throughput/total_gflops``) match the planned budget tag
-within ``FLOP_VALIDATION_TOL``, and renders iso-FLOP curves of cd-val loss
-vs parameter count (one trace per FLOP budget).
+Companion to ``exp31_isoflop_sweep.py``. For every *finished* run in the sweep,
+pulls the final ``eval/protein-docs-cd-val/loss`` and the achieved training
+FLOPs (``throughput/total_gflops``), reads ``parameter_count`` and
+``token_count`` from the ``params_exact`` / ``tokens_exact`` tags (the
+canonical compute-budget axes), validates that achieved FLOPs match the
+planned budget within ``FLOP_VALIDATION_TOL``, and renders iso-FLOP curves of
+cd-val loss against both parameter count and token count (one trace per FLOP
+budget per view).
 
 The W&B fetch result is reduced to a single ``snapshot.csv`` under
 ``experiments/protein/exp31_isoflop_results/``; pass ``--refresh`` to re-pull.
@@ -39,6 +41,7 @@ import numpy as np
 import pandas as pd
 import wandb
 from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter, LogLocator
 
 logger = logging.getLogger(__name__)
 
@@ -111,12 +114,13 @@ PLOTS_DIR: Path = RESULTS_DIR / "plots"
 
 EVAL_METRIC: str = "eval/protein-docs-cd-val/loss"
 
-# Levanter throughput-callback summary fields. ``total_gflops`` reports
-# training (fwd+bwd) FLOPs in gigaflops -- multiply by 1e9 to compare to the
-# planned budget (which is in raw FLOPs).
-THROUGHPUT_TOKENS_KEY: str = "throughput/total_tokens"
+# Levanter throughput-callback summary field: training (fwd+bwd) FLOPs in
+# gigaflops. Multiply by 1e9 to compare to the planned budget (raw FLOPs).
+# Parameter and token counts are read from the ``params_exact`` /
+# ``tokens_exact`` tags (set by the sweep recipe) rather than from Levanter's
+# runtime ``parameter_count`` / ``throughput/total_tokens`` summaries, so the
+# plot axes match the sweep's compute-budget design exactly.
 THROUGHPUT_GFLOPS_KEY: str = "throughput/total_gflops"
-PARAMETER_COUNT_KEY: str = "parameter_count"
 
 # Achieved FLOPs may differ slightly from the planned budget due to integer
 # step-count rounding (solver tolerance 1%) and the throughput accumulator's
@@ -167,6 +171,56 @@ def fmt_budget_label(budget: float) -> str:
     mantissa, exponent = f"{budget:.1e}".split("e")
     mantissa = mantissa.rstrip("0").rstrip(".")
     return f"{mantissa}e{int(exponent)}"
+
+
+def fmt_count(n: int | float) -> str:
+    """Compact precise count, e.g. ``120.7M``, ``1.007B``. Matches ``exp31_isoflop_sweep.fmt_count``."""
+    if n >= 1_000_000_000:
+        return f"{n / 1e9:.3f}B"
+    if n >= 1_000_000:
+        return f"{n / 1e6:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1e3:.1f}K"
+    return str(int(n))
+
+
+# --- Plot axes ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class IsoflopAxis:
+    """X-axis spec for iso-FLOP curves; selects the parameter-count or token-count view.
+
+    ``tick_mode`` controls x-axis ticks:
+      * ``per_value``: one tick per distinct value, labelled from ``label_column``.
+        Useful when the values come from a small configured grid (e.g. parameter
+        sizes shared across budgets).
+      * ``decade``: matplotlib's default log-major ticks, relabelled with ``fmt_count``.
+        Useful when values are dense and per-value ticks would overlap (e.g. token
+        counts, which vary per (budget, params) combination).
+    """
+
+    name: str  # short slug used in filenames
+    value_column: str  # df column driving x-axis position
+    label_column: str  # df column with the abbreviated tick label
+    axis_label: str  # human-readable axis label
+    tick_mode: str  # "per_value" or "decade"
+
+
+PARAMS_AXIS = IsoflopAxis(
+    name="params",
+    value_column="parameter_count",
+    label_column="params_label",
+    axis_label="Parameter count",
+    tick_mode="per_value",
+)
+TOKENS_AXIS = IsoflopAxis(
+    name="tokens",
+    value_column="token_count",
+    label_column="tokens_label",
+    axis_label="Training token count",
+    tick_mode="decade",
+)
 
 
 # --- W&B fetch + snapshot ---------------------------------------------------
@@ -220,21 +274,15 @@ def build_snapshot() -> tuple[pd.DataFrame, SweepMeta]:
             continue
 
         budget = parse_tag_float(r.tags, "budget_exact")
-        params_label = parse_tag_value(r.tags, "params")
-        if params_label is None:
-            raise KeyError(f"Tag 'params' missing from {r.display_name!r}")
-        params_planned = parse_tag_int(r.tags, "params_exact")
-        tokens_planned = parse_tag_int(r.tags, "tokens_exact")
+        parameter_count = parse_tag_int(r.tags, "params_exact")
+        token_count = parse_tag_int(r.tags, "tokens_exact")
         batch = parse_tag_int(r.tags, "batch")
         lr = parse_tag_float(r.tags, "lr_exact")
         beta2 = parse_tag_float(r.tags, "beta2")
 
-        summary = r.summary
-        total_gflops = summary.get(THROUGHPUT_GFLOPS_KEY)
-        total_tokens = summary.get(THROUGHPUT_TOKENS_KEY)
-        parameter_count = summary.get(PARAMETER_COUNT_KEY)
-        if any(v is None for v in (total_gflops, total_tokens, parameter_count)):
-            skipped.append((r.display_name, "missing throughput/parameter_count summary"))
+        total_gflops = r.summary.get(THROUGHPUT_GFLOPS_KEY)
+        if total_gflops is None:
+            skipped.append((r.display_name, f"missing {THROUGHPUT_GFLOPS_KEY} summary"))
             continue
 
         eval_hit = fetch_last_value(r, EVAL_METRIC)
@@ -250,14 +298,11 @@ def build_snapshot() -> tuple[pd.DataFrame, SweepMeta]:
                 "run_state": r.state,
                 "budget": budget,
                 "budget_label": fmt_budget_label(budget),
-                "params_label": params_label,
-                "params_planned": params_planned,
-                "tokens_planned": tokens_planned,
+                "parameter_count": parameter_count,
+                "token_count": token_count,
                 "batch": batch,
                 "lr": lr,
                 "beta2": beta2,
-                "parameter_count": int(parameter_count),
-                "total_tokens": int(total_tokens),
                 "total_gflops": float(total_gflops),
                 "achieved_flops": float(total_gflops) * 1e9,
                 "cd_val_loss": loss,
@@ -326,28 +371,55 @@ def assign_regime(df: pd.DataFrame) -> pd.DataFrame:
     return df.assign(regime=base.map(lambda n: 2 if n in r2 else 1).astype(int))
 
 
+def add_view_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """Derive abbreviated tick labels from the canonical ``parameter_count`` / ``token_count`` ints."""
+    return df.assign(
+        params_label=df["parameter_count"].map(fmt_count),
+        tokens_label=df["token_count"].map(fmt_count),
+    )
+
+
+REQUIRED_SNAPSHOT_COLUMNS: frozenset[str] = frozenset(
+    {
+        "run_name",
+        "budget",
+        "parameter_count",
+        "token_count",
+        "total_gflops",
+        "achieved_flops",
+        "cd_val_loss",
+    }
+)
+
+
 def load_or_build_snapshot(*, refresh: bool) -> tuple[pd.DataFrame, SweepMeta]:
     """Cached fetch: returns (snapshot_df, meta). ``--refresh`` skips the cache."""
     if not refresh and SNAPSHOT_PATH.exists() and META_PATH.exists():
         logger.info("Loading cached snapshot+meta from %s", SNAPSHOT_PATH.parent)
         df = pd.read_csv(SNAPSHOT_PATH)
+        missing = REQUIRED_SNAPSHOT_COLUMNS - set(df.columns)
+        if missing:
+            raise RuntimeError(
+                f"Cached snapshot at {SNAPSHOT_PATH} is missing columns {sorted(missing)}; "
+                "pass --refresh to regenerate.",
+            )
         validate_flops(df, FLOP_VALIDATION_TOL)
-        return assign_regime(df), load_meta(META_PATH)
+        return add_view_labels(assign_regime(df)), load_meta(META_PATH)
     df, meta = build_snapshot()
     SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(SNAPSHOT_PATH, index=False)
     save_meta(meta, META_PATH)
     logger.info("Wrote %d rows to %s and meta to %s", len(df), SNAPSHOT_PATH, META_PATH)
-    return assign_regime(df), meta
+    return add_view_labels(assign_regime(df)), meta
 
 
 # --- Plot --------------------------------------------------------------------
 
 
-def render_isoflop_curves(df: pd.DataFrame, out_dir: Path) -> None:
-    """One trace per FLOP budget: cd-val loss vs parameter count (log x).
+def render_isoflop_curves(df: pd.DataFrame, axis: IsoflopAxis, out_dir: Path) -> None:
+    """One trace per FLOP budget: cd-val loss vs ``axis.value_column`` (log x).
 
-    Regime-1 points are connected in order of increasing params so the U-shaped
+    Regime-1 points are connected in order of increasing x so the U-shaped
     iso-FLOP curve is visually obvious; an open diamond marks the empirical
     minimum within each budget over regime-1 points only. Regime-2 points
     (runs that did not surpass the critical learning transition) are drawn
@@ -357,10 +429,11 @@ def render_isoflop_curves(df: pd.DataFrame, out_dir: Path) -> None:
         logger.warning("Empty snapshot; nothing to plot")
         return
 
+    x_col, label_col = axis.value_column, axis.label_column
     budgets_present = sorted(df["budget"].unique())
     fig, ax = plt.subplots(figsize=(8.5, 5.2))
     for budget in budgets_present:
-        sub = df[df["budget"] == budget].sort_values("parameter_count")
+        sub = df[df["budget"] == budget].sort_values(x_col)
         r1 = sub[sub["regime"] == 1]
         r2 = sub[sub["regime"] == 2]
         color = BUDGET_COLORS.get(budget, "#999999")
@@ -370,7 +443,7 @@ def render_isoflop_curves(df: pd.DataFrame, out_dir: Path) -> None:
         label += ")"
         if not r1.empty:
             ax.plot(
-                r1["parameter_count"],
+                r1[x_col],
                 r1["cd_val_loss"],
                 "-o",
                 color=color,
@@ -383,7 +456,7 @@ def render_isoflop_curves(df: pd.DataFrame, out_dir: Path) -> None:
             if len(r1) >= 2:
                 i_min = r1["cd_val_loss"].idxmin()
                 ax.scatter(
-                    r1.loc[i_min, "parameter_count"],
+                    r1.loc[i_min, x_col],
                     r1.loc[i_min, "cd_val_loss"],
                     marker="D",
                     s=70,
@@ -394,7 +467,7 @@ def render_isoflop_curves(df: pd.DataFrame, out_dir: Path) -> None:
                 )
         if not r2.empty:
             ax.scatter(
-                r2["parameter_count"],
+                r2[x_col],
                 r2["cd_val_loss"],
                 marker="o",
                 s=42,
@@ -406,18 +479,27 @@ def render_isoflop_curves(df: pd.DataFrame, out_dir: Path) -> None:
             )
 
     ax.set_xscale("log")
-    # Replace matplotlib's auto-log ticks with one tick per distinct param count,
-    # labelled with the abbreviated string from the run's ``params=`` tag.
-    tick_df = df[["parameter_count", "params_label"]].drop_duplicates().sort_values("parameter_count")
-    ax.set_xticks(tick_df["parameter_count"].tolist())
-    ax.set_xticks([], minor=True)
-    ax.set_xticklabels(tick_df["params_label"].tolist(), rotation=30, ha="right")
-    ax.set_xlabel("Parameter count")
+    if axis.tick_mode == "per_value":
+        # One tick per distinct x value, labelled from ``axis.label_column``.
+        tick_df = df[[x_col, label_col]].drop_duplicates().sort_values(x_col)
+        ax.set_xticks(tick_df[x_col].tolist())
+        ax.set_xticks([], minor=True)
+        ax.set_xticklabels(tick_df[label_col].tolist(), rotation=30, ha="right")
+    elif axis.tick_mode == "decade":
+        # Major ticks at 1x and 3x each decade (5 ticks over the exp31 token range,
+        # ~3e8..1e10), labelled with fmt_count. Per-value ticks would overlap here
+        # because each (budget, params) combination produces its own token count.
+        ax.xaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 3.0)))
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _pos: fmt_count(v)))
+    else:
+        raise ValueError(f"Unknown tick_mode {axis.tick_mode!r}")
+    ax.set_xlabel(axis.axis_label)
     ax.set_ylabel("cd-val loss  (distance-bin only, masked)")
     n_r1 = int((df["regime"] == 1).sum())
     n_r2 = int((df["regime"] == 2).sum())
     ax.set_title(
-        f"{TITLE_PREFIX} - iso-FLOP curves on protein-docs-cd (Qwen3 + WSD, {n_r1} R1 + {n_r2} R2 runs)",
+        f"{TITLE_PREFIX} - iso-FLOP curves on protein-docs-cd vs {axis.axis_label.lower()} "
+        f"(Qwen3 + WSD, {n_r1} R1 + {n_r2} R2 runs)",
         fontsize=11,
     )
     ax.grid(True, which="both", linestyle="--", alpha=0.4)
@@ -465,8 +547,9 @@ def render_isoflop_curves(df: pd.DataFrame, out_dir: Path) -> None:
 
     fig.tight_layout()
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = out_dir / "isoflop_curves.pdf"
-    png_path = out_dir / "isoflop_curves.png"
+    stem = f"isoflop_curves_by_{axis.name}"
+    pdf_path = out_dir / f"{stem}.pdf"
+    png_path = out_dir / f"{stem}.png"
     fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -622,7 +705,7 @@ def main(argv: list[str] | None = None) -> int:
     wide_cols = [
         "budget_label",
         "parameter_count",
-        "total_tokens",
+        "token_count",
         "total_gflops",
         "achieved_flops",
         "cd_val_loss",
@@ -637,7 +720,8 @@ def main(argv: list[str] | None = None) -> int:
             float_format=lambda v: f"{v:.4f}" if abs(v) < 1e6 else f"{v:.3e}",
         ),
     )
-    render_isoflop_curves(df, PLOTS_DIR)
+    for axis in (PARAMS_AXIS, TOKENS_AXIS):
+        render_isoflop_curves(df, axis, PLOTS_DIR)
 
     base_to_run = dict(zip(df["run_name"].map(base_run_name), df["run_name"], strict=True))
     needed_names = {base_to_run[b] for b in REGIME_1_RUNS + REGIME_2_RUNS}
