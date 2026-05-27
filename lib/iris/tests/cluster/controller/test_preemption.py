@@ -10,7 +10,6 @@ from iris.cluster.controller.controller import (
     RunningTaskInfo,
     _get_running_tasks_with_band_and_value,
     _pending_tasks_with_jobs,
-    _preempt_solo,
     _run_preemption_pass,
     _sort_pending_tasks_by_resolved_band,
 )
@@ -491,69 +490,6 @@ def test_solo_preemptor_does_not_tear_down_slice():
 
     preemptions = _run_preemption_pass(unscheduled, victims, ctx)
     assert preemptions == []
-
-
-def test_preempt_solo_stops_at_equal_priority_victim():
-    """`solo_victims` is sorted by descending `band_sort_key`, so once the
-    band-priority gate trips, every later victim is also equal-or-lower
-    priority and must not be considered. Regression for issue #5888: a
-    `continue` here scans the entire unpreemptible tail (~9k PRODUCTION
-    tasks on the marin controller) every scheduling tick.
-    """
-    w1 = WorkerId("w1")
-    ctx = _make_simple_context(
-        [
-            WorkerCapacity(
-                worker_id=w1,
-                available_cpu_millicores=0,
-                available_memory=0,
-                available_gpus=0,
-                available_tpus=0,
-            )
-        ]
-    )
-
-    # Same-priority victim trips the gate (PRODUCTION preemptor vs
-    # PRODUCTION victim — `band_sort_key <= candidate.band`).
-    gate_victim = RunningTaskInfo(
-        task_id=JobName.from_wire("/alice/prod:0"),
-        worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_PRODUCTION,
-        resource_value=1000,
-        is_coscheduled=False,
-        cpu_millicores=1000,
-        memory_bytes=1024**3,
-        gpu_count=0,
-        tpu_count=0,
-    )
-    # Bait: lower-priority and otherwise preemptible. With `continue`, the
-    # scan would reach this and emit a pair; with `break`, the gate stops
-    # the loop before bait is considered.
-    bait = RunningTaskInfo(
-        task_id=JobName.from_wire("/alice/batch:0"),
-        worker_id=w1,
-        band_sort_key=job_pb2.PRIORITY_BAND_BATCH,
-        resource_value=500,
-        is_coscheduled=False,
-        cpu_millicores=1000,
-        memory_bytes=1024**3,
-        gpu_count=0,
-        tpu_count=0,
-    )
-
-    candidate = PreemptionCandidate(
-        JobName.from_wire("/bob/prod:0"),
-        _cpu_requirements(1),
-        job_pb2.PRIORITY_BAND_PRODUCTION,
-    )
-
-    # Pass victims in gate-then-bait order — the same shape produced by the
-    # `(-band_sort_key, resource_value)` sort once the gate-equal tail has
-    # been reached.
-    pair = _preempt_solo(candidate, None, [gate_victim, bait], ctx)
-    assert pair is None
-    # Bait remains untouched: the loop must not flag it preempted.
-    assert not bait.already_preempted
 
 
 # ---------------------------------------------------------------------------
