@@ -2438,11 +2438,6 @@ class Controller:
 
                 self._transitions.update_worker_pings(live_worker_ids)
 
-                # TODO(#5872): also fast-path remove workers with
-                # liveness.draining=True AND zero RUNNING-state assignments,
-                # bypassing PING_FAILURE_THRESHOLD. Needs DB access here to
-                # query running_tasks_by_worker; wire alongside the existing
-                # workers_over_threshold path or extend the tracker.
                 unhealthy = self._health.workers_over_threshold()
                 if unhealthy:
                     logger.warning(
@@ -2456,6 +2451,28 @@ class Controller:
                         sibling_reason="unhealthy worker failed, slice terminated",
                     )
                     self._health.forget_many(removed)
+
+                # Fast-path: a draining worker (GCP host-preempt notice) whose
+                # active tasks have all been routed away by ``_apply_drain``
+                # has nothing left to do — evict immediately rather than wait
+                # the full ping-failure window.
+                draining_ids = {wid for wid, lv in self._health.all().items() if lv.draining}
+                if draining_ids:
+                    with self._db.read_snapshot() as tx:
+                        running = reads.running_tasks_by_worker(tx, draining_ids)
+                    drained = [wid for wid in draining_ids if not running.get(wid)]
+                    if drained:
+                        logger.info(
+                            "Ping loop: evicting %d drained worker(s) with no running tasks: %s",
+                            len(drained),
+                            [str(wid) for wid in drained[:10]],
+                        )
+                        removed = self._terminate_workers(
+                            [str(wid) for wid in drained],
+                            reason="worker drained (host preempt)",
+                            sibling_reason="drained worker, slice torn down",
+                        )
+                        self._health.forget_many(removed)
 
             except Exception:
                 logger.exception("Ping loop iteration failed")

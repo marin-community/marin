@@ -4060,3 +4060,32 @@ def test_apply_reconcile_drain_empty_worker_still_marks_health(state):
     assert tx_result.tasks_to_kill == set()
     assert tx_result.task_kill_workers == {}
     assert state._health.liveness(worker_id).draining is True
+
+
+def test_apply_reconcile_drain_clears_running_tasks_for_reaper_fast_path(state):
+    """After drain, ``running_tasks_by_worker`` reports the worker as idle.
+
+    This is the contract the ping-loop fast-path relies on: a draining worker
+    with zero RUNNING tasks is evicted immediately, bypassing the standard
+    ping-failure window. Verify both halves of the predicate hold after
+    ``_apply_drain`` runs.
+    """
+    worker_id = register_worker(state, "w-drain-fp", "host:8080", make_worker_metadata())
+    [task] = submit_job(state, "fastpath-job", make_job_request("fastpath-job"))
+    dispatch_task(state, task, worker_id)
+    assert _query_task(state, task.task_id).state == job_pb2.TASK_STATE_RUNNING
+
+    with state._db.read_snapshot() as tx:
+        before = reads.running_tasks_by_worker(tx, {worker_id})
+    assert before[worker_id] == {task.task_id}
+
+    plan = _drain_plan("w-drain-fp")
+    result = _draining_result("w-drain-fp", observations=[])
+    with state._db.transaction() as cur:
+        state.apply_reconcile_result(cur, plan, result, Timestamp.now())
+
+    # Reaper fast-path predicate: draining bit set AND zero running tasks.
+    assert state._health.liveness(worker_id).draining is True
+    with state._db.read_snapshot() as tx:
+        after = reads.running_tasks_by_worker(tx, {worker_id})
+    assert after[worker_id] == set()
