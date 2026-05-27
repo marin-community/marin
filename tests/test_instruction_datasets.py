@@ -25,6 +25,25 @@ SYNTHETIC2_SFT_VERIFIED_SAMPLE = {
     ],
 }
 
+NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_HF_ID = "nvidia/Nemotron-SpecializedDomains-Finance-v1"
+NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_SAMPLE = {
+    "messages": [
+        {"role": "system", "content": ""},
+        {
+            "role": "user",
+            "content": "You are given a financial text extracted from 10-K or 10-Q files.\n\nQuestion: What changed?",
+        },
+        {
+            "role": "assistant",
+            "reasoning_content": "Compare the 2021 and 2020 net interest figures.",
+            "content": "Answer: Net interest expense decreased by about 2.9%.",
+        },
+    ],
+    "uuid": "6a4ce9e3-0010-55ea-b730-1bf4cc5db85e",
+    "license": "cc-by-4.0",
+    "used_in": ["super_v3"],
+}
+
 
 def test_fineproofs_sft_datasets_are_registered():
     raw_dataset = INSTRUCTION_DATASET_NAME_TO_CONFIG["lm-provers/FineProofs-SFT"]
@@ -105,3 +124,47 @@ def test_synthetic2_sft_verified_step_transforms_chat_rows():
         "task_type": "prime_rl_code",
         "reward": 1.0,
     }
+
+
+def test_nemotron_specialized_domains_finance_transform_preserves_reasoning_content():
+    step = get_instruction_dataset(NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_HF_ID)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+    expected_user_prompt = "You are given a financial text extracted from 10-K or 10-Q files.\n\nQuestion: What changed?"
+
+    result = transform_row(NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_SAMPLE, cfg, adapter)
+
+    assert result is not None
+    assert result.source == NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_HF_ID
+    assert [message.role for message in result.messages] == ["system", "user", "assistant"]
+    assert result.messages[0].content == ""
+    assert result.messages[1].content == expected_user_prompt
+    assistant_message = result.messages[2].model_dump()
+    assert assistant_message["content"] == "Answer: Net interest expense decreased by about 2.9%."
+    assert assistant_message["reasoning_content"] == "Compare the 2021 and 2020 net interest figures."
+    assert result.metadata == {
+        "uuid": "6a4ce9e3-0010-55ea-b730-1bf4cc5db85e",
+        "license": "cc-by-4.0",
+        "used_in": ["super_v3"],
+    }
+
+
+def test_nemotron_specialized_domains_finance_transform_allows_answer_only_rows():
+    step = get_instruction_dataset(NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_HF_ID)
+    cfg = step.config
+    adapter = unwrap_versioned_value(cfg.adapter)
+    sample = {
+        **NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_SAMPLE,
+        "messages": [
+            {"role": "user", "content": "Question: What changed?"},
+            {"role": "assistant", "content": "Answer: Revenue increased."},
+        ],
+    }
+
+    result = transform_row(sample, cfg, adapter)
+
+    assert result is not None
+    assert result.source == NEMOTRON_SPECIALIZED_DOMAINS_FINANCE_HF_ID
+    assistant_message = result.messages[1].model_dump()
+    assert assistant_message["content"] == "Answer: Revenue increased."
+    assert "reasoning_content" not in assistant_message
