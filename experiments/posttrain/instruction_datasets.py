@@ -104,6 +104,25 @@ NEMOTRON_V2_SPLITS = [
 
 NEMOTRON_V1_SPLITS = ["chat", "code", "math", "stem", "tool_calling"]
 
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_HF_ID = "nvidia/Nemotron-SFT-Instruction-Following-Chat-v2"
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_REVISION = "1a9454ed054b8544503ab8d8c0a519d141a44c5b"
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_SPLITS = ["reasoning_off", "reasoning_on"]
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_METADATA_COLUMNS = ["uuid", "license", "used_in", "reasoning"]
+NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_FEATURES = {
+    "messages": {
+        "feature": {
+            "role": {"dtype": "string", "_type": "Value"},
+            "content": {"dtype": "string", "_type": "Value"},
+            "reasoning_content": {"dtype": "string", "_type": "Value"},
+        },
+        "_type": "List",
+    },
+    "uuid": {"dtype": "string", "_type": "Value"},
+    "license": {"dtype": "string", "_type": "Value"},
+    "used_in": {"feature": {"dtype": "string", "_type": "Value"}, "_type": "List"},
+    "reasoning": {"dtype": "string", "_type": "Value"},
+}
+
 
 @dataclass(frozen=True)
 class InstructionDatasetConfig:
@@ -111,7 +130,7 @@ class InstructionDatasetConfig:
 
     Args:
         hf_dataset_id: The Hugging Face repo id of the dataset.
-        revision: The revision of the dataset to download. A 7-character commit hash.
+        revision: The revision of the dataset to download.
         adapter: Adapter that converts rows from this dataset to OpenAI chat format.
         metadata_columns: The columns to extract from the dataset. Check the dataset's schema for available columns.
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
@@ -119,6 +138,8 @@ class InstructionDatasetConfig:
                 Defaults to `train` only
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
         max_parallelism: Max number of parallel data processing tasks. Reduce if needed to avoid HF rate limits.
+        load_dataset_features: Optional serialized Hugging Face features override for datasets with inconsistent
+            inferred split schemas.
     """
 
     hf_dataset_id: str
@@ -129,6 +150,7 @@ class InstructionDatasetConfig:
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
     max_parallelism: int | None = 32  # 32 works for free users; set to None to use default behavior (full parallelism)
+    load_dataset_features: dict[str, Any] | None = None
 
 
 def multi_turn_adapter(
@@ -138,6 +160,7 @@ def multi_turn_adapter(
     assistant_value: str = "assistant",
     system_value: str = "system",
     content_key: str = "content",
+    reasoning_content_key: str = "",
     metadata_remap: dict[str, str] | None = None,
     replacements: dict[str, str] | None = None,
     extra_metadata_fn=None,
@@ -150,6 +173,7 @@ def multi_turn_adapter(
         assistant_value=assistant_value,
         system_value=system_value,
         content_key=content_key,
+        reasoning_content_key=reasoning_content_key,
         metadata_remap=metadata_remap or {},
         replacements=replacements,
         extra_metadata_fn=extra_metadata_fn,
@@ -595,6 +619,21 @@ for split_name in NEMOTRON_V1_SPLITS:
         splits=[split_name],
     )
 
+for split_name in NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_SPLITS:
+    dataset_key = f"{NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_HF_ID}/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_HF_ID,
+        revision=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_REVISION,
+        adapter=multi_turn_adapter(
+            reasoning_content_key="reasoning_content",
+            extra_metadata_fn=reasoning_to_chat_kwargs,
+        ),
+        metadata_columns=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_METADATA_COLUMNS,
+        splits=[split_name],
+        load_dataset_features=NEMOTRON_SFT_INSTRUCTION_FOLLOWING_CHAT_V2_FEATURES,
+    )
+
 
 def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     dataset_name = hf_dataset_id.replace("/", "--")
@@ -611,6 +650,8 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
 
     adapter_dict = dataclasses.asdict(adapter)
     adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
+    if adapter_dict.get("reasoning_content_key") == "":
+        del adapter_dict["reasoning_content_key"]
 
     def canonicalize(value):
         if isinstance(value, dict):
@@ -629,6 +670,9 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
         -{sorted(dataset_cfg.subsets)}\
         -{sorted(dataset_cfg.splits)}\
         -{adapter_signature_str}"
+    if dataset_cfg.load_dataset_features is not None:
+        features_signature = json.dumps(canonicalize(dataset_cfg.load_dataset_features), sort_keys=True)
+        config_str = f"{config_str}-{features_signature}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
     transform_step = ExecutorStep(
@@ -642,6 +686,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
             adapter=versioned(adapter),
             subsets=versioned(dataset_cfg.subsets),
             splits=versioned(dataset_cfg.splits),
+            load_dataset_features=versioned(dataset_cfg.load_dataset_features),
             max_parallelism=dataset_cfg.max_parallelism,
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
