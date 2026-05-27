@@ -203,7 +203,7 @@ def resolve_controller_ssh_config(
     if not vms:
         return local_ssh_config
 
-    advertised = vms[0].labels.get(labels.iris_ssh_auth_mode) if vms[0].labels else None
+    advertised = vms[0].labels.get(labels.iris_ssh_auth_mode)
     if not advertised:
         return local_ssh_config
     advertised_mode = auth_mode_from_label(advertised)
