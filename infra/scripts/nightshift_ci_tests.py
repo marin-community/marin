@@ -33,7 +33,7 @@ MAX_RUNS_PER_WORKFLOW = 5
 MAX_CANDIDATES = 8
 MAX_CANDIDATES_PER_FILE = 2
 MIN_FAILURE_RUNS = 2
-MIN_SLOW_SECONDS = 8.0
+MIN_SLOW_SECONDS = 60.0
 # Require a test to land in the per-workflow `--durations` slow window in at least
 # this many distinct runs before treating it as actionable. Single-observation
 # slow hits are dominated by JIT warm-up cost and cold imports; they are not
