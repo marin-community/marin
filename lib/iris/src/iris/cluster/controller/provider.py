@@ -20,9 +20,9 @@ class ProviderUnsupportedError(ProviderError):
 class TaskProvider(Protocol):
     """Abstraction over a task execution backend.
 
-    Implementations dispatch task lifecycle RPCs (Ping, StartTasks, StopTasks,
-    PollTasks, etc.) to remote workers. Logs are pushed directly to the
-    LogService by workers/tasks, not fetched via this protocol.
+    Implementations dispatch task lifecycle RPCs (Ping, Reconcile, etc.) to
+    remote workers. Logs are pushed directly to the LogService by
+    workers/tasks, not fetched via this protocol.
     """
 
     def get_process_status(

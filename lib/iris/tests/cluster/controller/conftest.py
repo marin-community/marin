@@ -112,7 +112,7 @@ class FakeProvider:
     def ping_workers(self, workers):
         return []
 
-    def reconcile_workers(self, plans, addresses, *, use_reconcile_rpc):
+    def reconcile_workers(self, plans, addresses):
         from iris.cluster.controller.reconcile import ReconcileResult
 
         return [ReconcileResult(worker_id=plan.worker_id, observations=[], error=None) for plan in plans]

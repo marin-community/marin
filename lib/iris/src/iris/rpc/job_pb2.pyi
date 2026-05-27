@@ -743,24 +743,6 @@ class RunTaskRequest(_message.Message):
     attempt_uid: str
     def __init__(self, task_id: _Optional[str] = ..., num_tasks: _Optional[int] = ..., entrypoint: _Optional[_Union[RuntimeEntrypoint, _Mapping]] = ..., environment: _Optional[_Union[EnvironmentConfig, _Mapping]] = ..., bundle_id: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., timeout: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ..., ports: _Optional[_Iterable[str]] = ..., attempt_id: _Optional[int] = ..., constraints: _Optional[_Iterable[_Union[Constraint, _Mapping]]] = ..., task_image: _Optional[str] = ..., attempt_uid: _Optional[str] = ...) -> None: ...
 
-class WorkerTaskStatus(_message.Message):
-    __slots__ = ("task_id", "attempt_id", "state", "exit_code", "error", "finished_at", "container_id")
-    TASK_ID_FIELD_NUMBER: _ClassVar[int]
-    ATTEMPT_ID_FIELD_NUMBER: _ClassVar[int]
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
-    CONTAINER_ID_FIELD_NUMBER: _ClassVar[int]
-    task_id: str
-    attempt_id: int
-    state: TaskState
-    exit_code: int
-    error: str
-    finished_at: _time_pb2.Timestamp
-    container_id: str
-    def __init__(self, task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ..., state: _Optional[_Union[TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., container_id: _Optional[str] = ...) -> None: ...
-
 class SetTaskStatusTextRequest(_message.Message):
     __slots__ = ("task_id", "status_text_detail_md", "status_text_summary_md")
     TASK_ID_FIELD_NUMBER: _ClassVar[int]

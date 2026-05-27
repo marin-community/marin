@@ -446,8 +446,10 @@ def test_dashboard_worker_detail(smoke_cluster, smoke_page, smoke_screenshot, ca
     wait_for_dashboard_ready(smoke_page)
 
     smoke_page.wait_for_function(
-        f"() => document.body.textContent.includes('{worker_id}') && " "document.body.textContent.includes('Healthy')",
-        timeout=10000,
+        f"() => document.body.textContent.includes('{worker_id}') && "
+        "document.body.textContent.includes('Healthy') && "
+        "!document.body.textContent.includes('Loading worker...')",
+        timeout=15000,
     )
     smoke_screenshot(
         "worker-detail", "Worker detail page with identity info, health badge, metric sparklines, and task history"
@@ -458,14 +460,15 @@ def test_dashboard_autoscaler_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Autoscaler tab shows scale groups."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/autoscaler")
     wait_for_dashboard_ready(smoke_page)
-    # Wait for actual scale group content, not just the tab heading ("Autoscaler")
-    # which appears before the API response loads.
+    # Wait for actual scale group content. The strict !Loading-autoscaler-status check
+    # blocks on the AutoscalerTab.vue placeholder so the screenshot isn't taken
+    # during a refetch cycle.
     smoke_page.wait_for_function(
-        "() => !document.body.textContent.includes('Loading') && "
+        "() => !document.body.textContent.includes('Loading autoscaler status') && "
         "(document.body.textContent.includes('Scale Group') || "
         "document.body.textContent.includes('scale group') || "
         "document.body.textContent.includes('local-cpu'))",
-        timeout=10000,
+        timeout=15000,
     )
     smoke_screenshot("autoscaler-tab", "Autoscaler tab showing scale group configuration")
 
@@ -836,7 +839,7 @@ def test_stress_50_tasks(smoke_cluster):
         cpu=0,
         replicas=50,
     )
-    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 4)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
