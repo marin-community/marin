@@ -15,8 +15,9 @@ Reference pivot reproduces the exact aggregation from the gist's analysis.md:
 (experiment, dataset) x subset, then MAX rolled up per experiment and overall.
 
 Composite metrics:
-  composite1 = mean(missense, tss_proximal, 5_prime_UTR, 3_prime_UTR, splicing, synonymous)
+  composite1 = mean(missense, tss_proximal, 5_prime_UTR, 3_prime_UTR, splicing, synonymous, ncrna, distal)
   composite2 = composite1 without synonymous_variant
+(ncrna = non_coding_transcript_exon_variant)
 
 Visualization: 1x2 (bar chart of composites, heatmap of composite1 constituents) covering
 the reference per-experiment MAX rows, the overall MAX (exp{55,58,59}), exp109's
@@ -39,6 +40,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.patches import Patch
 
 VERSION = "v0.5"
 EXP109_NAME = "exp109"
@@ -57,6 +59,8 @@ WANDB_RUN_PREFIX = f"dna-bolinas-scaling-{VERSION}-"
 EXP135_NAME = "exp135"
 EXP135_RUNS: dict[str, str] = {
     "dna-bolinas-mix-v0.9-p1B-i0-uniform": "1B-m1",
+    "dna-bolinas-mix-v0.9-p1B-i16-uniform_to_upstream_3.6": "1B-m2",
+    "dna-bolinas-mix-v0.9-p1B-i24-exp135-zoonomia-m5.1": "1B-m5.1",
 }
 
 REFERENCE_PARQUET_URL = (
@@ -93,8 +97,15 @@ COMPOSITE1_CONSTITUENTS = (
     "3_prime_UTR_variant",
     "splicing",
     "synonymous_variant",
+    "non_coding_transcript_exon_variant",
+    "distal",
 )
 COMPOSITE2_CONSTITUENTS = tuple(m for m in COMPOSITE1_CONSTITUENTS if m != "synonymous_variant")
+
+# Display aliases for verbose metric names; applied only at plot time, not in stored data.
+METRIC_DISPLAY_NAMES = {
+    "non_coding_transcript_exon_variant": "ncrna",
+}
 
 # W&B lm_eval keys pulled from scan_history; enumerated here so history iteration is scoped.
 WANDB_METRIC_KEYS = (
@@ -500,7 +511,7 @@ def plot_composites(viz: pd.DataFrame) -> None:
         x - width / 2,
         comp_wide["composite1"].values,
         width,
-        label="composite1 (6 subsets)",
+        label=f"composite1 ({len(COMPOSITE1_CONSTITUENTS)} subsets)",
         color="#4C72B0",
         edgecolor="k",
         linewidth=0.4,
@@ -509,20 +520,20 @@ def plot_composites(viz: pd.DataFrame) -> None:
         x + width / 2,
         comp_wide["composite2"].values,
         width,
-        label="composite2 (no synonymous)",
+        label=f"composite2 ({len(COMPOSITE2_CONSTITUENTS)} subsets, no synonymous)",
         color="#DD8452",
         edgecolor="k",
         linewidth=0.4,
     )
-    # Hatch reference bars (//) and exp135 bars (xx) to visually distinguish them from exp109.
-    reference_hatch = "//"
+    # Hatch exp109 and exp135 bars with distinct patterns; reference bars are left unhatched.
+    exp109_hatch = "//"
     exp135_hatch = "xx"
     for bars in (bars1, bars2):
         for bar, name in zip(bars, order, strict=True):
             if name.startswith(EXP135_NAME):
                 bar.set_hatch(exp135_hatch)
-            elif not name.startswith(EXP109_NAME):
-                bar.set_hatch(reference_hatch)
+            elif name.startswith(EXP109_NAME):
+                bar.set_hatch(exp109_hatch)
     for bars in (bars1, bars2):
         for bar in bars:
             h = bar.get_height()
@@ -541,15 +552,29 @@ def plot_composites(viz: pd.DataFrame) -> None:
     ax_bar.set_xticklabels(order, rotation=30, ha="right", fontsize=9)
     ax_bar.set_ylabel("AUPRC (mean of constituents)")
     ax_bar.set_title(f"Composite AUPRC — {EXP109_NAME} vs TraitGym reference")
-    ax_bar.legend(fontsize=9, loc="upper right")
+    # Two legends: metric (color) and source (hatch). Add the first as an Artist so the second
+    # call does not overwrite it.
+    color_legend = ax_bar.legend(fontsize=8, loc="upper left", title="metric", title_fontsize=8)
+    ax_bar.add_artist(color_legend)
+    hatch_handles = [
+        Patch(facecolor="lightgray", edgecolor="k", label=f"{AGGREGATE_EXP_NAME} (isolated mix)"),
+        Patch(facecolor="lightgray", edgecolor="k", hatch=exp109_hatch, label=f"{EXP109_NAME} (proportional mix)"),
+        Patch(facecolor="lightgray", edgecolor="k", hatch=exp135_hatch, label=f"{EXP135_NAME} (uniform base mix)"),
+    ]
+    ax_bar.legend(handles=hatch_handles, fontsize=8, loc="upper right", title="source", title_fontsize=8)
     ax_bar.grid(axis="y", alpha=0.3, linewidth=0.5)
     ymax = float(np.nanmax(comp_wide.values)) if comp_wide.size else 1.0
-    ax_bar.set_ylim(0, ymax * 1.25)
+    ax_bar.set_ylim(0, ymax * 1.55)
 
     data = heatmap_wide.values.astype(float)
     im = ax_heat.imshow(data, aspect="auto", cmap="viridis", vmin=np.nanmin(data), vmax=np.nanmax(data))
     ax_heat.set_xticks(np.arange(heatmap_wide.shape[1]))
-    ax_heat.set_xticklabels(heatmap_wide.columns, rotation=30, ha="right", fontsize=9)
+    ax_heat.set_xticklabels(
+        [METRIC_DISPLAY_NAMES.get(c, c) for c in heatmap_wide.columns],
+        rotation=30,
+        ha="right",
+        fontsize=9,
+    )
     ax_heat.set_yticks(np.arange(heatmap_wide.shape[0]))
     ax_heat.set_yticklabels(heatmap_wide.index, fontsize=9)
     ax_heat.set_title("Composite1 constituents (AUPRC)")
@@ -562,6 +587,20 @@ def plot_composites(viz: pd.DataFrame) -> None:
             rgba = im.cmap(im.norm(v))
             lum = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
             ax_heat.text(j, i, f"{v:.3f}", ha="center", va="center", fontsize=8, color="white" if lum < 0.5 else "black")
+
+    # Group-separator lines between source groups (matches the bar-plot hatch legend).
+    def _source_group(name: str) -> str:
+        if name.startswith(EXP135_NAME):
+            return "exp135"
+        if name.startswith(EXP109_NAME):
+            return "exp109"
+        return "reference"
+
+    row_groups = [_source_group(n) for n in heatmap_wide.index]
+    for i in range(1, len(row_groups)):
+        if row_groups[i] != row_groups[i - 1]:
+            ax_heat.axhline(y=i - 0.5, color="black", linewidth=1.2, zorder=5)
+
     fig.colorbar(im, ax=ax_heat, shrink=0.85)
 
     fig.suptitle(
