@@ -24,18 +24,13 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import ClassVar
 
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Timestamp
 
 from iris.rpc import job_pb2
 
 WORKER_STATS_NAMESPACE = "iris.worker"
 TASK_STATS_NAMESPACE = "iris.task"
 TASK_STATUS_NAMESPACE = "iris.task_status"
-
-# Dashboard queries cap how far back to look so a worker that stops pushing
-# disappears from the UI even if its rows are still on disk pending the
-# next finelog compaction sweep. Workers must re-emit faster than this.
-TASK_STATUS_RETENTION = Duration.from_seconds(10 * 60)
 
 
 def stats_timestamp() -> datetime:

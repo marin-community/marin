@@ -7,7 +7,7 @@
 
 export const TASK_STATUS_NAMESPACE = 'iris.task_status'
 
-// Must stay in sync with TASK_STATUS_RETENTION in lib/iris/src/iris/cluster/worker/stats.py.
+// Workers must re-emit faster than this window or their tasks will fall off the UI.
 export const TASK_STATUS_RETENTION_INTERVAL = "INTERVAL '10 minutes'"
 
 function sqlString(value: string): string {
