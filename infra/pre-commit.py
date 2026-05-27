@@ -883,22 +883,28 @@ def run_lint_review() -> int:
     """Run the advisory `infra/lint.md` catalog over the branch diff via an agent.
 
     Findings are advisory and never block — they are printed for the author to
-    act on before pushing. Returns 0 when the review ran (with or without
-    findings), 1 only when it could not run.
+    act on before pushing. Returns 0 in all cases that fit the advisory contract
+    (no findings, findings emitted, agent unavailable, merge-base unresolved,
+    timeout). Returns 1 only when the agent itself ran and exited non-zero,
+    which indicates a tooling bug worth surfacing.
     """
     agent_cmd = shlex.split(os.environ.get("MARIN_LINT_AGENT", LINT_REVIEW_AGENT_DEFAULT))
     if not agent_cmd or shutil.which(agent_cmd[0]) is None:
         agent_name = agent_cmd[0] if agent_cmd else "(empty)"
         click.echo(f"  ⚠ Lint review skipped: agent '{agent_name}' not found on PATH")
-        return 1
+        return 0
 
-    merge_base = subprocess.run(
+    base_result = subprocess.run(
         ["git", "merge-base", "origin/main", "HEAD"],
         cwd=ROOT_DIR,
         capture_output=True,
         text=True,
-        check=True,
-    ).stdout.strip()
+    )
+    if base_result.returncode != 0:
+        click.echo("  ⚠ Lint review skipped: could not resolve merge-base with origin/main")
+        click.echo(f"    (run `git fetch origin main` first; git said: {base_result.stderr.strip()})")
+        return 0
+    merge_base = base_result.stdout.strip()
     # Diff the working tree against the merge-base: covers all branch work,
     # committed and uncommitted, so the review runs whether or not the author
     # has committed before reaching the pre-push checklist.
@@ -931,7 +937,7 @@ def run_lint_review() -> int:
         )
     except subprocess.TimeoutExpired:
         click.echo(f"  ⚠ Lint review timed out after {LINT_REVIEW_TIMEOUT}s")
-        return 1
+        return 0
 
     if result.returncode != 0:
         click.echo(f"  ⚠ Lint review agent exited {result.returncode}:")

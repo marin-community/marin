@@ -49,7 +49,7 @@ just to satisfy this rule — omit the link when there is no pre-existing issue.
 
 Run these before pushing; do not skip any step.
 
-1. `./infra/pre-commit.py --changed --fix` — resolve all issues. Do not substitute `uv run pre-commit ...`.
+1. `./infra/pre-commit.py --changed-files --fix` — resolve all issues. Do not substitute `uv run pre-commit ...`.
 2. `./infra/pre-commit.py --review` — advisory agentic pass over the branch diff against the `infra/lint.md` rule catalog. Fix the findings it reports (search `infra/lint.md` for each `ml-...` code to see the rule and when it is acceptable to ignore); re-run once to confirm. Findings do not block, but address them — they are the nits a reviewer would otherwise flag.
 3. `uv run pytest -m 'not slow'` — relevant test directories.
 4. If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`
