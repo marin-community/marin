@@ -33,7 +33,7 @@ from levanter.data.text import (
 )
 from levanter.tokenizers import TokenizerBackend
 from rigging.log_setup import configure_logging
-from zephyr import Dataset, ZephyrContext
+from zephyr import Dataset, InputFileSpec, ZephyrContext
 from zephyr.dataset import FileEntry
 from zephyr.readers import load_file
 
@@ -275,7 +275,7 @@ def _exemplar_for(
 
     first_non_empty: str | None = None
     for path in candidates:
-        if next(iter(load_file(path)), None) is not None:
+        if next(iter(load_file(InputFileSpec(path=path, columns=["id"]))), None) is not None:
             first_non_empty = path
             break
     if first_non_empty is None:
