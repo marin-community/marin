@@ -6,7 +6,20 @@ DeepEP-backed backend or benchmark path is selected.
 
 ## Install
 
-DeepEP is treated as an external source checkout rather than a vendored package.
+DeepEP is treated as an external source checkout rather than a vendored package. Install the Levanter GPU and DeepEP
+extras so the JAX runtime and packaged FFI shim sources are available:
+
+```bash
+pip install "marin-levanter[gpu,deepep]"
+```
+
+For a source checkout, the equivalent is:
+
+```bash
+uv sync --extra gpu --extra deepep --package marin-levanter
+```
+
+Then point Levanter at the external DeepEP source tree:
 
 ```bash
 git clone https://github.com/deepseek-ai/DeepEP.git /path/to/DeepEP
@@ -22,7 +35,7 @@ export MARIN_DEEPEP_CACHE_DIR=/path/to/cache
 ```
 
 For environments where raw `nvcc` linking does not find the CUDA/PyTorch runtime libraries cleanly, the transport FFI
-also supports a Torch extension build:
+also supports a Torch extension build if PyTorch is already installed in the environment:
 
 ```bash
 export DEEPEP_BUILD_WITH_TORCH_EXTENSION=1

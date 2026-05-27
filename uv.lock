@@ -5751,7 +5751,7 @@ requires-dist = [
     { name = "xprof", marker = "extra == 'profiling'" },
     { name = "zstandard", specifier = ">=0.18.0" },
 ]
-provides-extras = ["gpu", "tpu", "torch-test", "profiling", "serve", "lm-eval", "kernels", "kitoken", "gcp"]
+provides-extras = ["gpu", "deepep", "tpu", "torch-test", "profiling", "serve", "lm-eval", "kernels", "kitoken", "gcp"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from importlib.resources import files
 
 import pytest
 
+import levanter.kernels.deepep
 from levanter.kernels.deepep.availability import (
     DEEPEP_CACHE_ENV,
     DEEPEP_CUDA_ARCH_ENV,
@@ -13,6 +15,13 @@ from levanter.kernels.deepep.availability import (
     deepep_cache_root,
     deepep_cuda_arch_flag,
     deepep_source_root,
+)
+
+
+_DEEPEP_FFI_SOURCES = (
+    "deepep_layout_ffi.cu",
+    "deepep_transport_ffi.cu",
+    "deepep_transport_pyext.cc",
 )
 
 
@@ -55,3 +64,10 @@ def test_deepep_cache_root_can_be_overridden(tmp_path, monkeypatch):
     monkeypatch.setenv(DEEPEP_CACHE_ENV, str(tmp_path))
 
     assert deepep_cache_root("deepep_transport_ffi") == tmp_path.resolve() / "deepep_transport_ffi"
+
+
+def test_deepep_ffi_sources_are_package_resources():
+    csrc = files(levanter.kernels.deepep) / "csrc"
+
+    for source in _DEEPEP_FFI_SOURCES:
+        assert (csrc / source).is_file()
