@@ -11542,3 +11542,111 @@ Operational caveat:
 - These no-retrain replacement checkpoints live in `us-central2`. Launching
   cooldown jobs in `us-east5` will require explicit staging/copy approval or a
   same-region execution plan.
+
+## 2026-05-27T08:00Z — Defense-in-depth against silent type-degradation in the cooldown path
+
+Audit + fixes so the silent QK-norm-drop bug class can never recur in the
+true-cooldown pipeline. Five defenses now layered between spec construction
+and the final saved checkpoint. Full risk register including outstanding
+follow-ups (R1-R7) at
+`.agents/projects/silent_type_degradation_risk_register.md`.
+
+### Defenses now active
+
+| # | Layer | Catches |
+| --- | --- | --- |
+| D1 | Materialize helper Qwen3 fail-closed | untyped `.executor_info` -> wrong source class (already in `5afac0bdf`) |
+| D2 | Launcher renders explicit `type: qwen3` | wrong type at spec construction (already in `5afac0bdf`) |
+| D3 | `_assert_model_config_matches_base` requires `model_config["type"]` | any spec built without an explicit discriminator — fails at `validate_midtrain_spec`, before submission |
+| D4 | `_check_cooldown_stage` enumerates OCDBT keys and asserts class-specific arrays | degraded source ckpt — blocks the launch before any TPU time spent |
+| D5 | Launcher `_verify_final_checkpoint` runs the same schema check on the final saved ckpt | (so-far-unobserved) case where load -> train -> save silently degrades mid-run |
+
+### New module
+
+`lib/marin/src/marin/midtraining/checkpoint_schema.py`:
+
+- `default_list_checkpoint_keys(checkpoint_dir)`: tensorstore-backed OCDBT
+  kvstore enumeration. Fails loud on unreachable paths (no silent
+  fallback to empty list).
+- `assert_qwen3_qk_norm_present(checkpoint_dir, *, num_layers, list_keys)`:
+  substring-match for `q_norm` and `k_norm` in the OCDBT key list.
+  Fails closed with an actionable error naming the missing markers and
+  pointing at commit `5afac0bdf` and the materialize helper.
+- `assert_checkpoint_complete_for_model_type(...)`: dispatcher on declared
+  `model_type`. Currently only Qwen3 has class-specific checks; other types
+  pass through after verifying the discriminator is non-empty.
+
+Injection-friendly: tests pass fake `list_keys` callables, matching the
+existing `fake_gcs` pattern in `preflight.py`.
+
+### Edits
+
+- `lib/marin/src/marin/midtraining/preflight.py`: `preflight()` now accepts
+  `list_ocdbt_keys` (defaults to the tensorstore-backed helper);
+  `_check_cooldown_stage` calls `assert_checkpoint_complete_for_model_type`
+  against the staged source after artifact checks pass.
+- `lib/marin/src/marin/midtraining/spec.py`:
+  `_assert_model_config_matches_base` now also asserts `model_config["type"]`
+  exists and is a string before checking dim invariants.
+- `lib/marin/src/marin/midtraining/__init__.py`: re-export the new helpers
+  (`assert_checkpoint_complete_for_model_type`, `assert_qwen3_qk_norm_present`,
+  `default_list_checkpoint_keys`, `ListCheckpointKeys`).
+- `experiments/midtrain_specs/true_midtrain/nemotron_math_only/launcher.py`:
+  after `result.wait()` returns `succeeded`, calls a new
+  `_verify_final_checkpoint(spec, num_train_steps)` that lists `step-*`
+  dirs under `permanent_checkpoints_uri`, picks the latest, and applies
+  the schema check. Iris success + bad ckpt -> launcher returns 1.
+
+### Tests
+
+- New `tests/midtraining/test_checkpoint_schema.py` (13 tests):
+  unit tests for the schema helpers (happy path, both-missing, only-q-missing,
+  zero-layers, dispatcher behavior for qwen3 vs llama, empty model_type,
+  tensorstore error surfacing); preflight integration tests for
+  Qwen3-cooldown happy path, degraded source ckpt, missing-artifact
+  short-circuit, and untyped-model-config rejection.
+- New tests in `tests/midtraining/test_spec_validators.py`:
+  `test_model_config_requires_type_discriminator` and
+  `test_model_config_type_must_be_string`.
+- Full midtraining + materialize suite: `143 passed`. Pre-commit clean
+  (Ruff, Black, license, pyrefly, large files, ast, merge conflicts,
+  whitespace, EOL, markdown).
+
+### Risk register
+
+`.agents/projects/silent_type_degradation_risk_register.md` catalogs the
+five active defenses plus seven outstanding follow-ups (R1-R7), each with
+location, why-it-matters, action, and estimated effort. Highlights:
+
+- **R1** — Levanter `tree_deserialize_leaves_tensorstore` silently drops
+  extra on-disk keys; needs a `strict=True` mode wired into the cooldown
+  init path. Half-day; touches vendored Levanter.
+- **R2** — Materialize helper's `optimizer`, `data.format`, `tracker`
+  normalizers use heuristics rather than fail-closed asserts. Lower
+  blast radius (optimizer-state errors surface as training-dynamics
+  drift), but same bug class.
+- **R3** — `_check_cpt_init` does not run the OCDBT-key check; CPT from
+  `NATIVE_LEVANTER` source could replay the bug. Plumbing already in
+  place, just needs the call.
+- **R5** — `DelphiModel` has no `model_type` field; spec validator
+  can't cross-check `model_config["type"]` against the base's expected
+  class. Add `model_type: str = "qwen3"` to `DelphiModel`.
+- **R7** — `list_delphi_checkpoints.py` doesn't surface schema
+  completeness. Adding it would have caught the original incident
+  before the candidate yaml was approved.
+
+### Operator playbook (also in the risk-register doc)
+
+If a future cooldown launch fails with `missing Qwen3 QK-norm arrays`:
+
+1. Do not graft missing arrays into the bad checkpoint. Intervening
+   weights were trained under the wrong forward pass; the graft is
+   scientifically wrong. (Considered and rejected at the original
+   incident — see entry above at `2026-05-27T04:03Z`.)
+2. Re-materialize the prefix checkpoint with the fixed helper, writing
+   to a new `-qwen3` discriminator path so the old root remains as audit
+   trail.
+3. Update the candidate row in `checkpoint_candidates.yaml` to point at
+   the new path, mark `materialized_checkpoint: true`, leave the old
+   path as `invalidated_materialized_checkpoint_path`.
+4. Re-run the launcher. The preflight schema check (D4) should now pass.

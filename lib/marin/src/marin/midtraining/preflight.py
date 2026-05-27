@@ -14,6 +14,11 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from marin.midtraining.checkpoint_schema import (
+    ListCheckpointKeys,
+    assert_checkpoint_complete_for_model_type,
+    default_list_checkpoint_keys,
+)
 from marin.midtraining.identity import RunIdentity, output_region
 from marin.midtraining.modes import CheckpointSourceKind, CooldownMode, CptMode
 from marin.midtraining.schema import SCHEMA_VERSION, RunManifestRow, read_run_manifest
@@ -89,12 +94,18 @@ def preflight(
     exists: GcsExists = default_gcs_exists,
     list_: GcsList = default_gcs_list,
     read_manifest: ReadManifest = read_run_manifest,
+    list_ocdbt_keys: ListCheckpointKeys = default_list_checkpoint_keys,
 ) -> PreflightReport:
     """Run all guards required before a launch.
 
     ``allow_existing_matching_manifest`` is only for an Iris retry of the same
     coordinator task attempt. A normal fresh launch should leave it false so an
     existing run namespace remains a hard collision.
+
+    ``list_ocdbt_keys`` is the injection point for the staged-checkpoint
+    schema check (see ``marin.midtraining.checkpoint_schema``). Tests pass
+    a fake; production uses ``default_list_checkpoint_keys`` which goes
+    through ``tensorstore``.
     """
     spec = resolved.spec
     run = spec.run
@@ -138,7 +149,14 @@ def preflight(
         init_uri = _check_cpt_init(spec.mode, exists, failures, warnings)
     else:
         assert isinstance(spec.mode, CooldownMode)
-        staged_uri = _check_cooldown_stage(spec, spec.mode, exists, failures, cross_region_copy)
+        staged_uri = _check_cooldown_stage(
+            spec,
+            spec.mode,
+            exists,
+            failures,
+            cross_region_copy,
+            list_ocdbt_keys=list_ocdbt_keys,
+        )
 
     _check_run_namespace(
         resolved,
@@ -191,6 +209,8 @@ def _check_cooldown_stage(
     exists: GcsExists,
     failures: list[str],
     cross_region_copy: CrossRegionCopyPolicy,
+    *,
+    list_ocdbt_keys: ListCheckpointKeys,
 ) -> str:
     staged_path = mode.resume.staged_checkpoint_path
     if not exists(staged_path):
@@ -210,11 +230,45 @@ def _check_cooldown_stage(
                 "pass CrossRegionCopyPolicy(allowed=True, budget_gb=..., reason=...) to authorize."
             )
 
+    artifacts_ok = True
     for required in ("manifest.ocdbt", "metadata.json"):
         if not exists(f"{staged_path}/{required}"):
             failures.append(f"Cooldown staged checkpoint missing {required} at {staged_path}/{required}")
+            artifacts_ok = False
     if not exists(f"{staged_path}/d"):
         failures.append(f"Cooldown staged checkpoint missing 'd/' subtree at {staged_path}/d")
+        artifacts_ok = False
+
+    # Schema-level check: the on-disk OCDBT must contain every array the
+    # declared model class expects. This catches the silent-type-degradation
+    # bug class (see marin.midtraining.checkpoint_schema) BEFORE we burn TPU
+    # time on a staged checkpoint that's missing q_norm/k_norm arrays.
+    # Skip if file-level artifacts are already failing — listing OCDBT keys
+    # would just produce a confusing secondary error.
+    if artifacts_ok:
+        model_type = spec.model_config.get("type") if isinstance(spec.model_config, dict) else None
+        if not model_type:
+            failures.append(
+                f"Cooldown spec.model_config is missing the 'type' discriminator field; "
+                f"got model_config keys={sorted(spec.model_config) if hasattr(spec.model_config, 'keys') else '?'}. "
+                "An untyped model config silently defaults at decode time and is the root "
+                "cause of the 2026-05-27 silent-type-degradation bug. Set "
+                "model_config['type'] explicitly (e.g. 'qwen3' for Delphi)."
+            )
+        else:
+            try:
+                assert_checkpoint_complete_for_model_type(
+                    staged_path,
+                    model_type=model_type,
+                    num_layers=spec.base.num_layers,
+                    list_keys=list_ocdbt_keys,
+                )
+            except ValueError as exc:
+                failures.append(str(exc))
+            except RuntimeError as exc:
+                # tensorstore could not open the kvstore — surface as a
+                # preflight failure rather than swallowing it.
+                failures.append(f"Cooldown staged checkpoint schema check failed: {exc}")
     return staged_path
 
 

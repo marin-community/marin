@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -37,9 +38,11 @@ from marin.midtraining import (
     CrossRegionCopyPolicy,
     MidtrainSpec,
     append_to_attempt_group,
+    assert_checkpoint_complete_for_model_type,
     build_launch_request,
     build_manifest_row,
     build_run_identity,
+    default_gcs_list,
     preflight,
     render_train_lm_config,
     resolve_midtrain_spec,
@@ -152,7 +155,45 @@ def main() -> int:
             time.sleep(30)
             continue
         print(f"  {spec.run.run_id}: {status_value}")
-        return 0 if status_value == "succeeded" else 1
+        if status_value != "succeeded":
+            return 1
+        # Post-save sanity: the on-disk final checkpoint must contain every
+        # array the declared model class expects. Catches the (so-far
+        # unobserved but topologically possible) case where the load/train/save
+        # pipeline silently degraded the param tree mid-run. Iris reporting
+        # success is not enough — Levanter would happily checkpoint a Llama
+        # param tree even if the spec said Qwen3. See marin.midtraining.checkpoint_schema.
+        try:
+            _verify_final_checkpoint(spec, resolved.num_train_steps)
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            print(f"FAIL {spec.run.run_id}: post-save checkpoint schema check failed: {exc}")
+            return 1
+        return 0
+
+
+def _verify_final_checkpoint(spec: MidtrainSpec, num_train_steps: int) -> None:
+    permanent_root = spec.run.permanent_checkpoints_uri
+    step_dirs = [entry.rstrip("/") for entry in default_gcs_list(permanent_root)]
+    step_pattern = re.compile(r"step-(\d+)$")
+    candidates = [(int(m.group(1)), entry) for entry in step_dirs if (m := step_pattern.search(entry))]
+    if not candidates:
+        raise FileNotFoundError(
+            f"No step-* checkpoint directories found under {permanent_root}; "
+            "iris reported success but no permanent checkpoint was written."
+        )
+    final_step, final_dir = max(candidates, key=lambda kv: kv[0])
+    print(f"  {spec.run.run_id}: verifying final checkpoint at {final_dir} (step={final_step})")
+    model_type = spec.model_config.get("type") if hasattr(spec.model_config, "get") else None
+    if not model_type:
+        raise ValueError(
+            "spec.model_config['type'] is unset at post-save check; "
+            "this should have been caught earlier in validate_midtrain_spec."
+        )
+    assert_checkpoint_complete_for_model_type(
+        final_dir,
+        model_type=str(model_type),
+        num_layers=spec.base.num_layers,
+    )
 
 
 def reviewed_candidate(base: str, cooldown_ratio: float) -> dict[str, Any]:

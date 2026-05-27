@@ -361,6 +361,27 @@ def _assert_safety(spec: MidtrainSpec, manifest: DataCacheManifest) -> None:
 
 
 def _assert_model_config_matches_base(spec: MidtrainSpec) -> None:
+    # Hard-fail on missing 'type' discriminator. An untyped model config
+    # silently falls back to draccus's registry default ('llama') at
+    # downstream decode time. That's the root cause of the 2026-05-27
+    # silent-type-degradation bug: the param tree is built without
+    # q_norm/k_norm, the loader drops the on-disk arrays, training writes
+    # an incomplete checkpoint that only blows up at the next consumer.
+    # Catching the missing discriminator here means launches refuse before
+    # any TPU work is dispatched.
+    model_type = spec.model_config.get("type") if hasattr(spec.model_config, "get") else None
+    if not model_type:
+        raise ValueError(
+            "MidtrainSpec.model_config is missing the 'type' discriminator. "
+            "Set model_config['type'] explicitly (e.g. 'qwen3' for Delphi). "
+            "See marin.midtraining.checkpoint_schema for context on the "
+            "silent-type-degradation bug class this guards against."
+        )
+    if not isinstance(model_type, str):
+        raise ValueError(
+            f"MidtrainSpec.model_config['type'] must be a string, got {type(model_type).__name__}={model_type!r}."
+        )
+
     expected = {
         "hidden_dim": (spec.base.hidden_dim, "base.hidden_dim"),
         "num_layers": (spec.base.num_layers, "base.num_layers"),

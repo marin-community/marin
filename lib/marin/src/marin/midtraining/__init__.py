@@ -15,6 +15,12 @@ Downstream analysis tools should depend on :mod:`marin.midtraining.schema`
 """
 
 from marin.midtraining.budget import BudgetKind, BudgetPolicy, ResolvedBudget, resolve_cpt_budget
+from marin.midtraining.checkpoint_schema import (
+    ListCheckpointKeys,
+    assert_checkpoint_complete_for_model_type,
+    assert_qwen3_qk_norm_present,
+    default_list_checkpoint_keys,
+)
 from marin.midtraining.data_manifest import (
     DataCacheComponent,
     DataCacheManifest,
@@ -97,6 +103,7 @@ __all__ = [
     "DataManifestPointer",
     "LaunchRequest",
     "LaunchResult",
+    "ListCheckpointKeys",
     "MidtrainSpec",
     "PreflightReport",
     "ResolvedBudget",
@@ -107,12 +114,15 @@ __all__ = [
     "TokenizerRef",
     "TrainingMode",
     "append_to_attempt_group",
+    "assert_checkpoint_complete_for_model_type",
+    "assert_qwen3_qk_norm_present",
     "attempt_group_manifest_uri",
     "build_launch_request",
     "build_manifest_row",
     "build_run_identity",
     "default_gcs_exists",
     "default_gcs_list",
+    "default_list_checkpoint_keys",
     "evaluate_startup",
     "fake_gcs",
     "get_tokenizer",

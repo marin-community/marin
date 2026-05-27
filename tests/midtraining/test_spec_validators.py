@@ -159,6 +159,23 @@ def test_model_config_max_seq_len_must_match_spec_seq_len():
         _resolve_and_validate(spec)
 
 
+def test_model_config_requires_type_discriminator():
+    # The 2026-05-27 silent-type-degradation root cause: an untyped model
+    # config silently defaults at downstream decode time. validate_midtrain_spec
+    # must catch this before any launch.
+    untyped = {k: v for k, v in make_model_config(FAKE_1E21).items() if k != "type"}
+    spec = make_cpt_spec(model_config_override=untyped)
+    with pytest.raises(ValueError, match="missing the 'type' discriminator"):
+        _resolve_and_validate(spec)
+
+
+def test_model_config_type_must_be_string():
+    bad_cfg = {**make_model_config(FAKE_1E21), "type": 42}
+    spec = make_cpt_spec(model_config_override=bad_cfg)
+    with pytest.raises(ValueError, match="must be a string"):
+        _resolve_and_validate(spec)
+
+
 def test_checkpoint_override_requires_meaningful_reason():
     from marin.midtraining.modes import CheckpointOverride
     from marin.midtraining.tokenizers import LLAMA3_TOKENIZER
