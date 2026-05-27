@@ -3560,3 +3560,36 @@ single-sampler eval/backlog window. It resolved into normal training progress,
 checkpointing, weight serving, and rollout weight update without manual
 recovery. I stopped the local scratch monitor loop before commit prep so it
 would not keep mutating local scratch logs.
+
+## CODEX 2026-05-27T04:06:43Z - Babysitting update: trainer completed step 110
+
+Current state:
+
+- Iris reports the active root wrapper, launcher, RL coordinator, train child,
+  and rollout-0 child as `JOB_STATE_RUNNING`.
+- No current child has a non-empty Iris error string. Historical killed children
+  remain from earlier parent preemptions, but the active
+  `20260526-041102-42dd473c` instance is still running.
+- Rollout-0 generated another 64-group train rollout at weight step 109 at
+  `2026-05-27T04:03:59Z` and logged rollout step 71.
+- Trainer collected that batch at `2026-05-27T04:04:00Z` with reward mean
+  `0.5674` and reward std `0.2354`, then advanced to
+  `Progress on:train 111it/500it`.
+- Trainer served weights for weight id 110 and completed training step 110 at
+  `2026-05-27T04:04:12Z` with `train_step=81.50s`,
+  `rollout_wait=0.00s`, `iteration=85.31s`, and `loss=-0.0413`.
+- During that step it filtered 912 stale rollouts and kept 784 remaining. This
+  is expected with the one-sampler eval/train cadence and still left the run
+  moving.
+- Rollout-0 received weights from step 110 at `2026-05-27T04:04:25Z`.
+- Greedy pass@1 eval at weight step 110 completed at
+  `2026-05-27T04:05:20Z` with `pass_at_1=0.468`,
+  `truncated_rate=0.08`, and `cap_saturated_rate=0.086`.
+- Rollout-0 then started the next pass@16 sample eval at
+  `2026-05-27T04:05:20Z`; trainer wait warnings had only reached
+  `cumulative_wait=120s` at the latest log pull.
+- Latest version-sorted GCS checkpoint listing still ends at `step-109`.
+
+Conclusion: the run is healthy at the latest check. It advanced through another
+training step, served/received new weights, and entered the next expected
+single-sampler pass@16 eval window. No manual recovery was needed.
