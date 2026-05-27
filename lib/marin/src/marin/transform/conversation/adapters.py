@@ -21,6 +21,9 @@ class InputDatasetFormat(str, Enum):
     |  {"role": "assistant", "content": "..."}] |
     | ----------------------------------------- |
 
+    NON_EMPTY_SINGLE_COLUMN_MULTI_TURN is the same format, except empty conversations
+    are skipped instead of becoming empty SFT examples.
+
 
     INSTRUCTION_RESPONSE example:
     In the huggingface dataset, there exists two columns with a single message each.
@@ -50,6 +53,7 @@ class InputDatasetFormat(str, Enum):
     """
 
     SINGLE_COLUMN_MULTI_TURN = "messages"
+    NON_EMPTY_SINGLE_COLUMN_MULTI_TURN = "non_empty_messages"
     INSTRUCTION_RESPONSE = "instruction_response"
     INSTRUCT_COLUMN_RESPONSE = "instruct_column_response"
     INSTRUCT_MSG_RESPONSE = "instruct_msg_response"
@@ -117,7 +121,10 @@ class TransformAdapter:
             messages.append(OpenAIChatMessage(role="user", content=instruction))
             messages.append(OpenAIChatMessage(role="assistant", content=response))
             return messages
-        elif self.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN:
+        elif self.dataset_format in (
+            InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            InputDatasetFormat.NON_EMPTY_SINGLE_COLUMN_MULTI_TURN,
+        ):
             messages = []
             role_to_openai_role = {
                 self.user_value: "user",
@@ -126,6 +133,8 @@ class TransformAdapter:
                 self.tool_value: "tool",
             }
             conversation = row[self.conversation_column]
+            if self.dataset_format == InputDatasetFormat.NON_EMPTY_SINGLE_COLUMN_MULTI_TURN and not conversation:
+                return None
             for conv in conversation:
                 role = role_to_openai_role[conv[self.role_key]]
                 messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))

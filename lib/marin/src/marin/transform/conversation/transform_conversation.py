@@ -25,13 +25,13 @@ from typing import Any
 import datasets
 import draccus
 import fsspec
-from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
+from marin.core.conversation import DolmaConversationOutput
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
 from rigging.filesystem import url_to_fs
 from zephyr import Dataset, ZephyrContext, load_jsonl, write_jsonl_file
 
-from .adapters import TransformAdapter
+from .adapters import InputDatasetFormat, TransformAdapter
 
 _RESERVED_TOP_LEVEL_FIELDS = {"id", "source", "messages", "added", "created", "metadata"}
 DEFAULT_TEXT_REPLACEMENTS = {"<think>": "<|start_think|>", "</think>": "<|end_think|>"}
@@ -120,10 +120,11 @@ def _normalize_tool_structures(message: dict) -> dict:
 
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
     source = unwrap_versioned_value(cfg.source)
-    transformed_row_messages: list[OpenAIChatMessage] | None = adapter.transform_conversation_to_openai_format(row)
+    transformed_row_messages = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:
-        logger.warning(f"{source} returning no valid messages")
+        if adapter.dataset_format != InputDatasetFormat.NON_EMPTY_SINGLE_COLUMN_MULTI_TURN:
+            logger.warning(f"{source} returning no valid messages")
         return None
 
     messages: list[dict[str, Any]] = [message.model_dump() for message in transformed_row_messages]

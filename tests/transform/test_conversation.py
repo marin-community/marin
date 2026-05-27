@@ -3,6 +3,7 @@
 
 """Tests for conversation data transformation scripts."""
 
+import logging
 from pathlib import Path
 
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
@@ -77,6 +78,22 @@ FINEPROOFS_METADATA_COLUMNS = [
     "qwen3-4b-thinking-reward@128",
     "source",
 ]
+
+NEMOTRON_MATH_PROOFS_THEOREM_ONLY_SAMPLE = {
+    "problem": "Prove that there exists a polynomial P with the requested root.",
+    "source": "aops",
+    "formal_statement": "theorem problem_568570 : True := by sorry",
+    "lean_header": "import Mathlib\nimport Aesop",
+    "url": None,
+    "user_name": None,
+    "user_url": None,
+    "sft_line_number": None,
+    "messages": [],
+    "uuid": "b2ee7144-44aa-5d7f-8acc-812fae259c90",
+    "used_in": [],
+    "tools": [],
+    "license": "cc-by-4.0",
+}
 
 
 class TestTransformAdapters:
@@ -243,6 +260,23 @@ class TestTransformRow:
         }
 
         assert transform_row(row, cfg, adapter) is None
+
+    def test_nemotron_math_proofs_theorem_only_row_is_skipped_without_warning(self, caplog):
+        """Test theorem-only rows do not become empty SFT examples."""
+        adapter = TransformAdapter(dataset_format=InputDatasetFormat.NON_EMPTY_SINGLE_COLUMN_MULTI_TURN)
+        cfg = TransformSFTDatasetConfig(
+            source="nvidia/Nemotron-Math-Proofs-v1",
+            revision="97229c5",
+            output_path="/tmp/output",
+            metadata_columns=[],
+            adapter=adapter,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="marin.transform.conversation.transform_conversation"):
+            result = transform_row(NEMOTRON_MATH_PROOFS_THEOREM_ONLY_SAMPLE, cfg, adapter)
+
+        assert result is None
+        assert "returning no valid messages" not in caplog.text
 
 
 class TestPreferenceDataTransform:
