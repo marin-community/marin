@@ -611,6 +611,8 @@ service ControllerService {
   // Scheduler state (dashboard)
   rpc GetSchedulerState(Controller.GetSchedulerStateRequest) returns (Controller.GetSchedulerStateResponse);
 
-  // Task-to-controller status text push
+  // Deprecated. Discards the payload; status text now writes to the
+  // iris.task_status finelog namespace. Kept one release so pre-cutover
+  // clients don't crash; removal tracked by the iris-status-cleanup cron.
   rpc SetTaskStatusText(iris.job.SetTaskStatusTextRequest) returns (iris.job.SetTaskStatusTextResponse);
 }

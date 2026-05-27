@@ -1626,22 +1626,6 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
     assert response.job_id == child_id.to_wire()
 
 
-def test_set_task_status_text_persists_via_store(service):
-    """set_task_status_text persists the supplied markdown via the store."""
-    service.launch_job(make_job_request("stats-job"), None)
-    task_id = JobName.root("test-user", "stats-job").task(0)
-    detail_text = "Physical stages:\n→ 1. Map\n\nShards: 3/10 complete, 2 in-flight, 5 queued"
-    summary_text = "**Map** 30% (3/10) 1.2 MiB/s"
-    request = job_pb2.SetTaskStatusTextRequest(
-        task_id=task_id.to_wire(),
-        status_text_detail_md=detail_text,
-        status_text_summary_md=summary_text,
-    )
-    service.set_task_status_text(request, None)
-    assert service._transitions.get_status_text_detail(task_id.to_wire()) == detail_text
-    assert service._transitions.get_status_text_summary(task_id.to_wire()) == summary_text
-
-
 def test_list_tasks_returns_current_attempt_timing(service, state):
     """ListTasks must surface the current attempt's started_at and exactly one attempt entry.
 
@@ -1673,3 +1657,19 @@ def test_list_tasks_returns_current_attempt_timing(service, state):
     # exactly one attempt entry — the current one — even if more existed
     assert len(proto.attempts) == 1
     assert proto.attempts[0].attempt_id == proto.current_attempt_id
+
+
+def test_set_task_status_text_handler_is_noop(service):
+    """Deprecated handler must accept and discard the payload without error.
+
+    Old clients still call this RPC; new clients write to iris.task_status.
+    """
+    response = service.set_task_status_text(
+        job_pb2.SetTaskStatusTextRequest(
+            task_id="/u/job/0",
+            status_text_detail_md="ignored",
+            status_text_summary_md="ignored",
+        ),
+        None,
+    )
+    assert isinstance(response, job_pb2.SetTaskStatusTextResponse)
