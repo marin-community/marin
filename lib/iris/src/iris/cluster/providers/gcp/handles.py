@@ -16,21 +16,12 @@ import re
 import threading
 from dataclasses import dataclass
 
-from rigging.timing import Duration, Timestamp
+from rigging.timing import Timestamp
 
 from iris.cluster.providers._worker_base import RemoteExecWorkerBase
 from iris.cluster.providers.gcp.service import GcpService
-from iris.cluster.providers.gcp.ssh import (
-    os_login_enabled_on_vm,
-    ssh_impersonate_service_account,
-    ssh_key_file,
-)
-from iris.cluster.providers.remote_exec import (
-    DirectSshRemoteExec,
-    GceRemoteExec,
-    GcloudRemoteExec,
-    resolve_current_os_login_user,
-)
+from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account
+from iris.cluster.providers.remote_exec import GceRemoteExec, GcloudRemoteExec
 from iris.cluster.providers.types import (
     CloudSliceState,
     CloudWorkerState,
@@ -41,7 +32,6 @@ from iris.cluster.providers.types import (
 )
 from iris.cluster.types import get_tpu_topology
 from iris.rpc import config_pb2
-from iris.time_proto import duration_from_proto
 
 logger = logging.getLogger(__name__)
 
@@ -80,23 +70,6 @@ _QR_STATE_MAP: dict[str, CloudSliceState] = {
 _GCE_NAME_MAX_LEN = 63
 _GCE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 _GCE_NAME_EDGE_RE = re.compile(r"^-+|-+$")
-_GCE_VM_SLICE_SSH_USER = "iris"
-
-
-def _os_login_user(
-    ssh_config: config_pb2.SshConfig | None,
-) -> str:
-    if ssh_config and ssh_config.os_login_user:
-        return ssh_config.os_login_user
-    if ssh_config and ssh_config.user and ssh_config.user != "root":
-        return ssh_config.user
-    return resolve_current_os_login_user(impersonate_service_account=ssh_impersonate_service_account(ssh_config))
-
-
-def _vm_slice_metadata_user(ssh_config: config_pb2.SshConfig | None) -> str:
-    if ssh_config and ssh_config.user and ssh_config.user != "root":
-        return ssh_config.user
-    return _GCE_VM_SLICE_SSH_USER
 
 
 def _build_gce_resource_name(name_prefix: str, suffix: str) -> str:
@@ -344,37 +317,14 @@ class GcpSliceHandle:
                     i,
                 )
 
-            impersonate_sa = ssh_impersonate_service_account(self._ssh_config)
-            if os_login_enabled_on_vm(tpu_info.metadata):
-                remote_exec = DirectSshRemoteExec(
-                    host=external_ip or internal_ip,
-                    user=_os_login_user(self._ssh_config),
-                    key_file=ssh_key_file(
-                        self._ssh_config,
-                        impersonate_sa,
-                        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
-                    ),
-                    connect_timeout=(
-                        duration_from_proto(self._ssh_config.connect_timeout)
-                        if self._ssh_config and self._ssh_config.HasField("connect_timeout")
-                        else Duration.from_seconds(30)
-                    ),
-                )
-            else:
-                remote_exec = GcloudRemoteExec(
-                    project_id=self._project_id,
-                    _zone=self._zone,
-                    vm_id=self._slice_id,
-                    worker_index=i,
-                    ssh_user=_vm_slice_metadata_user(self._ssh_config),
-                    ssh_key_file=ssh_key_file(
-                        self._ssh_config,
-                        impersonate_sa,
-                        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
-                    ),
-                    impersonate_service_account=impersonate_sa,
-                    _address=internal_ip,
-                )
+            remote_exec = GcloudRemoteExec(
+                project_id=self._project_id,
+                _zone=self._zone,
+                vm_id=self._slice_id,
+                worker_index=i,
+                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+                _address=internal_ip,
+            )
             workers.append(
                 GcpWorkerHandle(
                     _vm_id=f"{self._slice_id}-worker-{i}",
@@ -492,23 +442,11 @@ class GcpVmSliceHandle:
 
         state = _VM_STATE_MAP.get(vm_info.status, CloudSliceState.UNKNOWN)
 
-        impersonate_sa = ssh_impersonate_service_account(self._ssh_config)
-        os_login = os_login_enabled_on_vm(vm_info.metadata)
         remote_exec = GceRemoteExec(
             project_id=self._project_id,
             zone=self._zone,
             vm_name=self._vm_name,
-            ssh_user=None if os_login else _vm_slice_metadata_user(self._ssh_config),
-            ssh_key_file=ssh_key_file(
-                self._ssh_config,
-                impersonate_sa,
-                auth_mode=(
-                    config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
-                    if os_login
-                    else config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-                ),
-            ),
-            impersonate_service_account=impersonate_sa,
+            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
         )
         worker = GcpStandaloneWorkerHandle(
             _vm_id=f"{self._slice_id}-worker-0",

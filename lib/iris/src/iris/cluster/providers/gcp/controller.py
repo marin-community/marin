@@ -22,13 +22,8 @@ from iris.cluster.controller.vm_lifecycle import restart_controller as vm_restar
 from iris.cluster.controller.vm_lifecycle import start_controller as vm_start_controller
 from iris.cluster.controller.vm_lifecycle import stop_controller as vm_stop_controller
 from iris.cluster.providers.gcp.service import GcpService
-from iris.cluster.providers.gcp.ssh import (
-    os_login_enabled_on_vm,
-    ssh_impersonate_service_account,
-    ssh_key_file,
-)
+from iris.cluster.providers.gcp.ssh import ssh_impersonate_service_account
 from iris.cluster.providers.gcp.workers import GcpWorkerProvider
-from iris.cluster.providers.remote_exec import resolve_current_os_login_user
 from iris.cluster.providers.types import (
     Labels,
     default_stop_all,
@@ -161,34 +156,23 @@ def _build_tunnel_ssh_cmd(
     zone: str,
     vm_name: str,
     local_port: int,
-    ssh_config: config_pb2.SshConfig | None,
     effective_service_account: str | None,
-    use_os_login: bool,
 ) -> list[str]:
-    auth_mode = (
-        config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN if use_os_login else config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-    )
-    key_file = ssh_key_file(ssh_config, effective_service_account, auth_mode=auth_mode)
+    """Build a `gcloud compute ssh` tunnel command.
 
-    target = vm_name
-    if use_os_login:
-        os_login_user = (ssh_config and ssh_config.os_login_user) or resolve_current_os_login_user(
-            impersonate_service_account=effective_service_account
-        )
-        target = f"{os_login_user}@{vm_name}"
-
+    No explicit user or key flag: gcloud auto-detects OS Login from the VM's
+    enable-oslogin metadata and picks the right user/key itself.
+    """
     cmd = [
         "gcloud",
         "compute",
         "ssh",
-        target,
+        vm_name,
         f"--project={project}",
         f"--zone={zone}",
     ]
     if effective_service_account:
         cmd.append(f"--impersonate-service-account={effective_service_account}")
-    if key_file:
-        cmd.append(f"--ssh-key-file={key_file}")
     cmd.extend(
         [
             "--",
@@ -232,24 +216,16 @@ def _establish_tunnel(
     zone: str,
     vm_name: str,
     local_port: int,
-    ssh_config: config_pb2.SshConfig | None,
     effective_service_account: str | None,
-    use_os_login: bool,
     timeout: float,
 ) -> subprocess.Popen:
-    """Open an SSH tunnel to the controller VM in the requested auth mode.
-
-    ``use_os_login`` is probed from the controller VM's ``enable-oslogin``
-    metadata in the caller; no runtime fallback — the metadata is the truth.
-    """
+    """Open an SSH tunnel to the controller VM."""
     cmd = _build_tunnel_ssh_cmd(
         project=project,
         zone=zone,
         vm_name=vm_name,
         local_port=local_port,
-        ssh_config=ssh_config,
         effective_service_account=effective_service_account,
-        use_os_login=use_os_login,
     )
     proc = subprocess.Popen(
         cmd,
@@ -278,12 +254,12 @@ def _gcp_tunnel(
 ) -> Iterator[str]:
     """SSH tunnel to the controller VM, yielding the local URL.
 
-    Discovers the controller VM via the iris-controller label, probes
-    ``enable-oslogin`` from instance metadata, then builds the tunnel
-    command in the matching mode. Binds 127.0.0.1 to avoid IPv6 collisions;
-    picks a free port if ``local_port`` is None.
+    Discovers the controller VM via the iris-controller label and shells out
+    to `gcloud compute ssh`; gcloud auto-detects OS Login vs metadata SSH
+    from the VM's own enable-oslogin metadata.
     """
     effective_service_account = ssh_impersonate_service_account(ssh_config)
+    _check_gcloud_ssh_key()
 
     if local_port is None:
         local_port = find_free_port(start=10000)
@@ -294,20 +270,8 @@ def _gcp_tunnel(
     if not running:
         raise RuntimeError(f"No controller VM found (label={labels.iris_controller}=true, project={project})")
     vm = running[0]
-    use_os_login = os_login_enabled_on_vm(vm.metadata)
 
-    # Provision the OS Login key only when we're going to use it; the
-    # default-path key is still needed for the metadata path so verify after.
-    key_file = ssh_key_file(
-        ssh_config,
-        effective_service_account,
-        auth_mode=(
-            config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN if use_os_login else config_pb2.SshConfig.SSH_AUTH_MODE_METADATA
-        ),
-    )
-    _check_gcloud_ssh_key(key_file)
-
-    logger.info("Establishing SSH tunnel to %s (zone=%s, os_login=%s)...", vm.name, vm.zone, use_os_login)
+    logger.info("Establishing SSH tunnel to %s (zone=%s)...", vm.name, vm.zone)
 
     proc = retry_with_backoff(
         lambda: _establish_tunnel(
@@ -315,9 +279,7 @@ def _gcp_tunnel(
             zone=vm.zone,
             vm_name=vm.name,
             local_port=local_port,
-            ssh_config=ssh_config,
             effective_service_account=effective_service_account,
-            use_os_login=use_os_login,
             timeout=timeout,
         ),
         retryable=lambda e: isinstance(e, RuntimeError) and _is_transient_ssh_error(str(e)),
