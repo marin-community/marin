@@ -353,17 +353,41 @@ class TestScalingGroupChurnDetector:
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         create_ts = Timestamp.from_ms(1_000_000)
-        # Three slices created and "preempted" 6 minutes later (past 5-min threshold).
+        # Three slices created and "preempted" 31 minutes later (past the 30-min default).
         for i in range(3):
             slice_id = f"s{i}"
             group.detector.record_created(slice_id, create_ts)
             group.detector.record_terminated(
                 slice_id,
                 SliceFate.PREEMPTED,
-                Timestamp.from_ms(1_000_000 + 6 * 60 * 1000),
+                Timestamp.from_ms(1_000_000 + 31 * 60 * 1000),
             )
-        now = Timestamp.from_ms(1_000_000 + 7 * 60 * 1000)
+        now = Timestamp.from_ms(1_000_000 + 32 * 60 * 1000)
         assert group.can_scale_up(timestamp=now)
+
+    def test_short_lived_threshold_is_per_scaling_group(self, unbounded_config: config_pb2.ScaleGroupConfig):
+        """ScalingGroup.short_lived_threshold flows through to its detector.
+
+        A group configured with a 10-min threshold treats a 15-min preemption as
+        a positive sample; a default-configured group (30 min) decays health on
+        the same event.
+        """
+        ts_created = Timestamp.from_ms(1_000_000)
+        ts_preempted = Timestamp.from_ms(1_000_000 + 15 * 60 * 1000)
+
+        tight = ScalingGroup(
+            unbounded_config,
+            make_mock_platform(),
+            short_lived_threshold=Duration.from_minutes(10),
+        )
+        tight.detector.record_created("s", ts_created)
+        tight.detector.record_terminated("s", SliceFate.PREEMPTED, ts_preempted)
+        assert tight.detector.health(ts_preempted) == 1.0
+
+        default = ScalingGroup(unbounded_config, make_mock_platform())
+        default.detector.record_created("s", ts_created)
+        default.detector.record_terminated("s", SliceFate.PREEMPTED, ts_preempted)
+        assert default.detector.health(ts_preempted) < 1.0
 
 
 class TestScalingGroupDemandTracking:
