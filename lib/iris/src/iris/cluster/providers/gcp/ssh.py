@@ -27,6 +27,16 @@ def uses_os_login(ssh_config: config_pb2.SshConfig | None) -> bool:
     return ssh_config.auth_mode == config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN
 
 
+def os_login_enabled_on_vm(metadata: dict[str, str]) -> bool:
+    """True when GCE instance metadata advertises ``enable-oslogin=TRUE``.
+
+    The cluster sets this when the VM is created in OS Login mode (see
+    ``OS_LOGIN_METADATA``). Clients probe this on the live VM to pick the
+    right SSH transport regardless of local YAML auth_mode.
+    """
+    return metadata.get("enable-oslogin", "").upper() == "TRUE"
+
+
 class OsLoginKeyProvisioner:
     """Lazily provisions an SSH keypair and registers it with OS Login.
 

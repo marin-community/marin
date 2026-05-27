@@ -10,7 +10,6 @@ tests that cannot be expressed through the protocol are in dedicated sections.
 
 from __future__ import annotations
 
-import io
 import unittest.mock
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -198,8 +197,28 @@ def test_tunnel_returns_address_directly():
         assert tunneled == addr
 
 
+def _register_controller_vm(gcp_service: InMemoryGcpService, *, os_login: bool, zone: str = "us-central2-b") -> None:
+    """Register a controller VM in the in-memory service for tunnel tests."""
+    from iris.cluster.providers.gcp.service import VmCreateRequest
+
+    metadata = {"enable-oslogin": "TRUE", "block-project-ssh-keys": "TRUE"} if os_login else {}
+    gcp_service.vm_create(
+        VmCreateRequest(
+            name="iris-controller-iris",
+            zone=zone,
+            machine_type="n2-standard-4",
+            labels={Labels("iris").iris_controller: "true"},
+            metadata=metadata,
+        )
+    )
+    # InMemoryGcpService creates VMs in PROVISIONING; the tunnel filters for RUNNING.
+    gcp_service._vms[("iris-controller-iris", zone)].status = "RUNNING"
+
+
 def test_gcp_tunnel_prefers_ssh_impersonation_config():
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    _register_controller_vm(gcp_service, os_login=True)
+
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     ssh_config = config_pb2.SshConfig(
         auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
@@ -214,7 +233,6 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
         controller_service_account="iris-worker@test-project.iam.gserviceaccount.com",
     )
 
-    list_result = unittest.mock.Mock(returncode=0, stdout="iris-controller-iris us-central2-b\n", stderr="")
     ssh_proc = unittest.mock.Mock()
     ssh_proc.poll.return_value = None
     ssh_proc.terminate.return_value = None
@@ -226,11 +244,8 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
         unittest.mock.patch(
             "iris.cluster.providers.gcp.controller.resolve_current_os_login_user",
             return_value="svc-user",
-        ) as resolve_user,
+        ),
         unittest.mock.patch("iris.cluster.providers.gcp.controller.wait_for_port"),
-        unittest.mock.patch(
-            "iris.cluster.providers.gcp.controller.subprocess.run", return_value=list_result
-        ) as run_mock,
         unittest.mock.patch(
             "iris.cluster.providers.gcp.controller.subprocess.Popen", return_value=ssh_proc
         ) as popen_mock,
@@ -238,19 +253,20 @@ def test_gcp_tunnel_prefers_ssh_impersonation_config():
         with controller.tunnel("unused") as tunneled:
             assert tunneled == "http://127.0.0.1:10042"
 
-    resolve_user.assert_called_with(impersonate_service_account=ssh_config.impersonate_service_account)
-    list_cmd = run_mock.call_args.args[0]
     ssh_cmd = popen_mock.call_args.args[0]
-    assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in list_cmd
     assert f"--impersonate-service-account={ssh_config.impersonate_service_account}" in ssh_cmd
+    # OS Login-enabled VM → tunnel command targets svc-user@vm.
+    assert "svc-user@iris-controller-iris" in ssh_cmd
 
 
-def test_gcp_tunnel_falls_back_to_metadata_on_os_login_error():
-    """OS Login attempt fails with an auth-marker stderr; metadata retry fires."""
+def test_gcp_tunnel_uses_metadata_when_vm_lacks_os_login():
+    """Controller VM without enable-oslogin metadata → tunnel uses metadata SSH (no user@vm)."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    _register_controller_vm(gcp_service, os_login=False)
+
     gcp_config = config_pb2.GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
     ssh_config = config_pb2.SshConfig(
-        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_METADATA,
+        auth_mode=config_pb2.SshConfig.SSH_AUTH_MODE_OS_LOGIN,
         key_file="/tmp/iris-key",
     )
     worker_provider = GcpWorkerProvider(
@@ -258,45 +274,26 @@ def test_gcp_tunnel_falls_back_to_metadata_on_os_login_error():
     )
     controller = GcpControllerProvider(worker_provider=worker_provider)
 
-    list_result = unittest.mock.Mock(returncode=0, stdout="iris-controller-iris us-central2-b\n", stderr="")
-
-    failing_proc = unittest.mock.Mock()
-    failing_proc.stderr = io.BytesIO(b"Permission denied (publickey).")
-    failing_proc.terminate.return_value = None
-    failing_proc.wait.return_value = 0
-
-    succeeding_proc = unittest.mock.Mock()
-    succeeding_proc.stderr = io.BytesIO(b"")
-    succeeding_proc.terminate.return_value = None
-    succeeding_proc.wait.return_value = 0
+    ssh_proc = unittest.mock.Mock()
+    ssh_proc.poll.return_value = None
+    ssh_proc.terminate.return_value = None
+    ssh_proc.wait.return_value = 0
 
     with (
         unittest.mock.patch("iris.cluster.providers.gcp.controller._check_gcloud_ssh_key"),
         unittest.mock.patch("iris.cluster.providers.gcp.controller.find_free_port", return_value=10042),
+        unittest.mock.patch("iris.cluster.providers.gcp.controller.wait_for_port"),
         unittest.mock.patch(
-            "iris.cluster.providers.gcp.controller.resolve_current_os_login_user",
-            return_value="svc-user",
-        ),
-        unittest.mock.patch(
-            "iris.cluster.providers.gcp.controller.wait_for_port",
-            side_effect=[False, True],
-        ),
-        unittest.mock.patch("iris.cluster.providers.gcp.controller.subprocess.run", return_value=list_result),
-        unittest.mock.patch(
-            "iris.cluster.providers.gcp.controller.subprocess.Popen",
-            side_effect=[failing_proc, succeeding_proc],
+            "iris.cluster.providers.gcp.controller.subprocess.Popen", return_value=ssh_proc
         ) as popen_mock,
     ):
         with controller.tunnel("unused") as tunneled:
             assert tunneled == "http://127.0.0.1:10042"
 
-    assert popen_mock.call_count == 2
-    first_cmd = popen_mock.call_args_list[0].args[0]
-    second_cmd = popen_mock.call_args_list[1].args[0]
-    # OS Login attempt uses user@vm; metadata fallback uses bare vm name.
-    assert "svc-user@iris-controller-iris" in first_cmd
-    assert "iris-controller-iris" in second_cmd
-    assert "svc-user@iris-controller-iris" not in second_cmd
+    ssh_cmd = popen_mock.call_args.args[0]
+    # No OS Login → no user@vm prefix; bare vm name is the SSH target.
+    assert "iris-controller-iris" in ssh_cmd
+    assert "@iris-controller-iris" not in " ".join(ssh_cmd)
 
 
 def test_gce_remote_exec_builds_optional_flags_inline():
