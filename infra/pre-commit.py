@@ -878,9 +878,26 @@ LINT_REVIEW_INSTRUCTIONS = (
     "from the diff as given; do not re-derive it."
 )
 
+# Env vars that mark a Claude Code session and would re-bind the spawned headless
+# agent to its parent's transcript / session. Stripped before exec so the
+# sub-agent runs as a fresh, isolated session.
+LINT_REVIEW_STRIPPED_ENV = (
+    "ANTHROPIC_API_KEY",  # force subscription auth, not metered API billing
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SSE_PORT",
+)
 
-def run_lint_review() -> int:
+
+def run_lint_review(agent_command: str) -> int:
     """Run the advisory `infra/lint.md` catalog over the branch diff via an agent.
+
+    `agent_command` is the headless CLI invocation of the agent that will read
+    the prompt from stdin and print findings to stdout (e.g. `claude -p`,
+    `codex exec`). Callers should pass the command for the agent they are
+    themselves running so the sub-agent matches the calling environment.
 
     Findings are advisory and never block — they are printed for the author to
     act on before pushing. Returns 0 in all cases that fit the advisory contract
@@ -888,7 +905,7 @@ def run_lint_review() -> int:
     timeout). Returns 1 only when the agent itself ran and exited non-zero,
     which indicates a tooling bug worth surfacing.
     """
-    agent_cmd = shlex.split(os.environ.get("MARIN_LINT_AGENT", LINT_REVIEW_AGENT_DEFAULT))
+    agent_cmd = shlex.split(agent_command)
     if not agent_cmd or shutil.which(agent_cmd[0]) is None:
         agent_name = agent_cmd[0] if agent_cmd else "(empty)"
         click.echo(f"  ⚠ Lint review skipped: agent '{agent_name}' not found on PATH")
@@ -921,9 +938,10 @@ def run_lint_review() -> int:
 
     prompt = f"{LINT_CATALOG.read_text()}\n\n{LINT_REVIEW_INSTRUCTIONS}\n\n```diff\n{diff}\n```\n"
 
-    # `claude` reads the prompt from stdin in print mode. Drop ANTHROPIC_API_KEY
-    # so the agent uses interactive subscription auth, not metered API billing.
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    # Strip session/auth markers so the headless agent runs as a fresh session
+    # rather than nesting under the calling agent's transcript or being billed
+    # via metered API auth.
+    env = {k: v for k, v in os.environ.items() if k not in LINT_REVIEW_STRIPPED_ENV}
 
     try:
         result = subprocess.run(
@@ -973,6 +991,17 @@ def run_lint_review() -> int:
     is_flag=True,
     help="Run the advisory infra/lint.md rule catalog over the branch diff via an agent",
 )
+@click.option(
+    "--agent-command",
+    "agent_command",
+    default=LINT_REVIEW_AGENT_DEFAULT,
+    show_default=True,
+    help=(
+        "Headless agent invocation for --review. Agents calling this from a skill "
+        "should pass their own command (e.g. 'claude -p', 'codex exec') so the "
+        "sub-agent matches the calling environment."
+    ),
+)
 @click.option("--files", "files_opt", multiple=True, help="Files to check (alias for positional args)")
 @click.argument("files", nargs=-1)
 def main(
@@ -981,11 +1010,12 @@ def main(
     changed_files: bool,
     pre_commit: bool,
     review: bool,
+    agent_command: str,
     files_opt: tuple[str, ...],
     files: tuple[str, ...],
 ):
     if review:
-        sys.exit(run_lint_review())
+        sys.exit(run_lint_review(agent_command))
 
     all_files_set: set[pathlib.Path] = set()
     input_files = files_opt + files
