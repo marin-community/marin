@@ -27,12 +27,15 @@ from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
     CheckpointDebugConfig,
+    CheckpointCandidate,
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
     _collect_debug_checkpointer_state,
     _load_metadata,
+    discover_checkpoint_candidates,
     discover_latest_checkpoint,
+    latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
     register_debug_checkpointer_state_provider,
@@ -69,6 +72,12 @@ def _on_step(checkpointer: Checkpointer, step: int, *, force: bool = False):
 def _get_checkpoint_steps(checkpoint_dir):
     paths = list(pathlib.Path(checkpoint_dir).iterdir())
     return sorted([_load_metadata(f)["step"] for f in paths])
+
+
+def _write_checkpoint_metadata(path: pathlib.Path, *, step: int, timestamp: str, is_temporary: bool = False) -> None:
+    path.mkdir(parents=True)
+    with (path / "metadata.json").open("w") as f:
+        json.dump({"step": step, "timestamp": timestamp, "is_temporary": is_temporary}, f)
 
 
 def test_checkpointer_changing_policy():
@@ -277,6 +286,47 @@ def test_checkpoint_discovery_across_multiple_paths():
         # With additional paths, the newer checkpoint in temp_dir wins
         latest_both = discover_latest_checkpoint(permanent_dir, temp_dir)
         assert latest_both == f"{temp_dir}/step-15"
+
+
+def test_checkpoint_candidate_discovery_sorts_by_numeric_step_before_timestamp():
+    with tempfile.TemporaryDirectory() as tempdir:
+        root = pathlib.Path(tempdir)
+        _write_checkpoint_metadata(root / "step-9", step=9, timestamp="2021-01-03T00:00:00")
+        _write_checkpoint_metadata(root / "step-10", step=10, timestamp="2021-01-01T00:00:00")
+        _write_checkpoint_metadata(root / "incomplete", step=11, timestamp="2021-01-04T00:00:00")
+        (root / "incomplete" / "metadata.json").unlink()
+
+        candidates = discover_checkpoint_candidates(tempdir)
+
+        assert candidates == [
+            CheckpointCandidate(
+                path=f"{tempdir}/step-9",
+                step=9,
+                timestamp=datetime.datetime(2021, 1, 3, 0, 0, 0),
+                metadata={"step": 9, "timestamp": "2021-01-03T00:00:00", "is_temporary": False},
+            ),
+            CheckpointCandidate(
+                path=f"{tempdir}/step-10",
+                step=10,
+                timestamp=datetime.datetime(2021, 1, 1, 0, 0, 0),
+                metadata={"step": 10, "timestamp": "2021-01-01T00:00:00", "is_temporary": False},
+            ),
+        ]
+        assert latest_checkpoint_path(tempdir) == f"{tempdir}/step-10"
+
+
+def test_checkpoint_candidate_discovery_can_exclude_rejected_lineage_and_max_step():
+    with tempfile.TemporaryDirectory() as good_dir, tempfile.TemporaryDirectory() as rejected_dir:
+        _write_checkpoint_metadata(pathlib.Path(good_dir) / "step-100", step=100, timestamp="2021-01-01T00:00:00")
+        _write_checkpoint_metadata(pathlib.Path(good_dir) / "step-120", step=120, timestamp="2021-01-02T00:00:00")
+        _write_checkpoint_metadata(pathlib.Path(rejected_dir) / "step-130", step=130, timestamp="2021-01-03T00:00:00")
+
+        candidates = discover_checkpoint_candidates(good_dir, rejected_dir, exclude_paths=[rejected_dir], max_step=110)
+
+        assert [candidate.path for candidate in candidates] == [f"{good_dir}/step-100"]
+        assert latest_checkpoint_path(good_dir, rejected_dir, exclude_paths=[rejected_dir], max_step=110) == (
+            f"{good_dir}/step-100"
+        )
 
 
 def test_checkpointer_temporary_base_path_routes_temp_checkpoints():

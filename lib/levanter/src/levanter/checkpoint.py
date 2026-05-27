@@ -348,6 +348,16 @@ class CheckpointInterval:
     until: Optional[int] = None  # until what step to save checkpoints with this policy, None means forever
 
 
+@dataclass(frozen=True)
+class CheckpointCandidate:
+    """A complete checkpoint discovered under a checkpoint root."""
+
+    path: str
+    step: int
+    timestamp: datetime.datetime
+    metadata: Mapping[str, Any]
+
+
 @dataclass
 class CheckpointDebugConfig:
     enabled: bool = False
@@ -980,61 +990,108 @@ def _load_metadata(checkpoint_path, fs=None):
     return metadata
 
 
-def discover_latest_checkpoint(checkpoint_path: PathLike, *additional_paths: PathLike) -> Optional[str]:
+def discover_checkpoint_candidates(
+    checkpoint_path: PathLike,
+    *additional_paths: PathLike,
+    exclude_paths: Sequence[PathLike] = (),
+    max_step: int | None = None,
+) -> list[CheckpointCandidate]:
+    """Return complete checkpoint candidates across one or more roots.
+
+    A complete candidate is a checkpoint directory with a readable
+    ``metadata.json`` containing a parseable integer ``step`` and ISO-format
+    ``timestamp``. Results are sorted by numeric step, then timestamp, then path.
+    This function is intentionally importable for operational one-liners, e.g.:
+
+    ```bash
+    uv run python -c 'from levanter.checkpoint import latest_checkpoint_path; print(latest_checkpoint_path("gs://..."))'
+    ```
+    """
+    all_paths = [str(checkpoint_path)] + [str(p) for p in additional_paths]
+    candidates_by_path: dict[str, CheckpointCandidate] = {}
+
+    for cp_path in all_paths:
+        for candidate in _discover_checkpoint_candidates_single(cp_path):
+            if max_step is not None and candidate.step > max_step:
+                continue
+            if _is_path_under_any(candidate.path, exclude_paths):
+                continue
+            candidates_by_path[candidate.path] = candidate
+
+    return sorted(candidates_by_path.values(), key=_checkpoint_candidate_sort_key)
+
+
+def _checkpoint_candidate_sort_key(candidate: CheckpointCandidate) -> tuple[int, datetime.datetime, str]:
+    return (candidate.step, candidate.timestamp, candidate.path)
+
+
+def _is_path_under_any(path: str, roots: Sequence[PathLike]) -> bool:
+    normalized_path = path.rstrip("/")
+    for root in roots:
+        normalized_root = str(root).rstrip("/")
+        if normalized_path == normalized_root or normalized_path.startswith(f"{normalized_root}/"):
+            return True
+    return False
+
+
+def discover_latest_checkpoint(
+    checkpoint_path: PathLike,
+    *additional_paths: PathLike,
+    exclude_paths: Sequence[PathLike] = (),
+    max_step: int | None = None,
+) -> Optional[str]:
     """
     Discover the latest checkpoint across one or more root paths.
 
-    When additional_paths are provided, all roots are searched and the newest
-    valid checkpoint (by timestamp then step) across all roots is returned.
+    When additional_paths are provided, all roots are searched and the highest
+    numeric-step complete checkpoint across all roots is returned.
     """
     all_paths = [str(checkpoint_path)] + [str(p) for p in additional_paths]
-    best: Optional[str] = None
-    best_key: tuple[datetime.datetime, int] | None = None
+    candidates = discover_checkpoint_candidates(
+        checkpoint_path, *additional_paths, exclude_paths=exclude_paths, max_step=max_step
+    )
 
-    for cp_path in all_paths:
-        found = _discover_latest_checkpoint_single(cp_path)
-        if found is None:
-            continue
-        try:
-            metadata = _load_metadata(found)
-            key = (datetime.datetime.fromisoformat(metadata["timestamp"]), metadata["step"])
-        except Exception:
-            logger.exception("Error loading metadata for discovered checkpoint %s", found)
-            continue
-        if best_key is None or key > best_key:
-            best = found
-            best_key = key
-
-    if best is not None:
-        logger.info(f"Discovered latest checkpoint at {best}")
+    if candidates:
+        latest = candidates[-1].path
+        logger.info("Discovered latest checkpoint at %s", latest)
+        return latest
     else:
         logger.warning(f"No checkpoints found in {all_paths}")
-    return best
+        return None
 
 
-def latest_checkpoint_path(checkpoint_path: PathLike, *additional_paths: PathLike) -> str:
+def latest_checkpoint_path(
+    checkpoint_path: PathLike,
+    *additional_paths: PathLike,
+    exclude_paths: Sequence[PathLike] = (),
+    max_step: int | None = None,
+) -> str:
     """Return the latest concrete checkpoint path across one or more search roots."""
-    latest = discover_latest_checkpoint(checkpoint_path, *additional_paths)
+    latest = discover_latest_checkpoint(
+        checkpoint_path, *additional_paths, exclude_paths=exclude_paths, max_step=max_step
+    )
     if latest is None:
         search_paths = [str(checkpoint_path)] + [str(path) for path in additional_paths]
         raise FileNotFoundError(f"Could not discover checkpoint under any of: {search_paths}")
     return latest
 
 
-def _discover_latest_checkpoint_single(checkpoint_path: str) -> Optional[str]:
-    """Discover the latest checkpoint in a single root path."""
-    ckpt_dirs = _discover_checkpoint_paths_single(checkpoint_path)
+def _discover_checkpoint_candidates_single(checkpoint_path: str) -> list[CheckpointCandidate]:
+    """Discover complete checkpoint candidates in a single root path."""
+    candidates: list[CheckpointCandidate] = []
 
-    def checkpoint_sort_key(ckpt_dir):
-        fs, _ = _get_fs_and_plain_path(ckpt_dir)
-        metadata = json.load(fs.open(os.path.join(ckpt_dir, "metadata.json")))
-        return (datetime.datetime.fromisoformat(metadata["timestamp"]), metadata["step"])
+    for ckpt_dir in _discover_checkpoint_paths_single(checkpoint_path):
+        try:
+            metadata = _load_metadata(ckpt_dir)
+            step = int(metadata["step"])
+            timestamp = datetime.datetime.fromisoformat(metadata["timestamp"])
+        except Exception:
+            logger.exception("Error loading metadata for discovered checkpoint %s", ckpt_dir)
+            continue
 
-    if len(ckpt_dirs) > 0:
-        out = max(ckpt_dirs, key=checkpoint_sort_key)
-        return out
-    else:
-        return None
+        candidates.append(CheckpointCandidate(path=ckpt_dir, step=step, timestamp=timestamp, metadata=metadata))
+
+    return sorted(candidates, key=_checkpoint_candidate_sort_key)
 
 
 def _discover_checkpoint_paths_single(checkpoint_path: str) -> list[str]:
