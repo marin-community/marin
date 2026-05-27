@@ -64,6 +64,5 @@ class StateCallbackRunner(Generic[S]):
             step_duration=step_duration,
         )
         for hook in self._hooks:
-            # `every=N` means N, 2N, 3N, ...; skip the spurious match at step 0 for periodic hooks.
-            if force or (info.step % hook.every == 0 and (info.step != 0 or hook.every == 1)):
+            if force or (info.step > 1 and info.step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
