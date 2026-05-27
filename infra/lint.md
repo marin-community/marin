@@ -35,7 +35,9 @@ refactor if you need to.
 **When allowed:** Only to handle external-dependency conditions (a package
 only available with a certain extra). The optional-dep case is canonical
 and *correct*, not a nit — a `try/except ImportError` or a docstring
-noting the extra makes the intent obvious.
+noting the extra makes the intent obvious. Mark such an import with
+`# noqa: PLC0415` on the `import` line to record the exception explicitly;
+see "Suppression markers" under "Detector usage".
 
 Import-cycle workarounds are *not* a stable exception. In well-factored
 Python the structural fix always exists: extract a `Protocol` / ABC / shared
@@ -1010,6 +1012,14 @@ If the diff is empty, emit nothing and stop. If it is larger than one pass, driv
 Scan added/modified hunks plus enough surrounding context to judge intent (usually the enclosing function/class). Do not flag pre-existing code in unchanged regions. Migrations, `__init__.py` exports, proto definitions, and test fixtures all count. Generated stubs (e.g. `*_pb2.py`, `*_pb2_grpc.py`) are out of scope — skip them.
 
 Security findings (auth, injection, secrets) are out of scope — they belong in `/security-review`.
+
+### Suppression markers
+
+A finding is suppressed when the line it cites carries a trailing
+`# noqa: <code>` comment that names the rule — ruff's suppression convention.
+`<code>` is the rule's `ml-...` code, or for `ml-local-import` the equivalent
+ruff code `PLC0415`. A suppressed line is an author-approved exception: do not
+emit a finding for it.
 
 ### Confidence
 
