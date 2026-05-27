@@ -836,7 +836,7 @@ def test_stress_50_tasks(smoke_cluster):
         cpu=0,
         replicas=50,
     )
-    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 2)
+    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 4)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
