@@ -189,6 +189,7 @@ class WorkerProvider:
                     worker_id=plan.worker_id,
                     observations=list(response.observed),
                     error=None,
+                    draining=bool(response.health.draining),
                 )
             except Exception as e:
                 return ReconcileResult(worker_id=plan.worker_id, observations=[], error=str(e))

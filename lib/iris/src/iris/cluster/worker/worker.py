@@ -41,6 +41,7 @@ from iris.cluster.worker.env_probe import (
     probe_hardware,
 )
 from iris.cluster.worker.port_allocator import PortAllocator
+from iris.cluster.worker.preempt_watcher import PreemptWatcher
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.stats import (
     TASK_STATS_NAMESPACE,
@@ -197,6 +198,12 @@ class Worker:
         self._tasks: list[TaskAttempt] = []
         self._lock = threading.Lock()
 
+        # Drain latch flipped by the preempt watcher (or tests). Once True,
+        # subsequent ReconcileResponse.health.draining is True; the controller
+        # treats further per-task observations as preempt-induced.
+        self._draining: bool = False
+        self._preempt_watcher = PreemptWatcher(on_preempt=self._on_preempt)
+
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
         # LogClient and RemoteLogHandler are created in start() before container
@@ -309,6 +316,7 @@ class Worker:
         if self._config.controller_address:
             self._threads.spawn(target=self._run_lifecycle, name="worker-lifecycle")
             self._threads.spawn(target=self._run_profile_loop, name="profile-loop")
+            self._threads.spawn(target=self._preempt_watcher.run, name="preempt-watcher")
 
     def _cleanup_all_iris_containers(self) -> None:
         """Remove all iris-managed containers at startup.
@@ -581,6 +589,23 @@ class Worker:
                 return
             # Check every second
             stop_event.wait(1.0)
+
+    def _on_preempt(self) -> None:
+        """Latch ``_draining`` and SIGTERM every live attempt.
+
+        Called by ``PreemptWatcher`` on a confirmed GCP preempt notice. The
+        latch is monotonic: once flipped, ``handle_reconcile`` stamps
+        ``WorkerHealth.draining=True`` on every reply, and the controller's
+        atomic-slice rule takes over from per-task classification.
+        """
+        with self._lock:
+            if self._draining:
+                return
+            self._draining = True
+            snapshot = list(self._tasks)
+        logger.warning("worker entering drain: GCP preempt signal received")
+        for attempt in snapshot:
+            self._kill_async(attempt)
 
     def _reset_worker_state(self) -> None:
         """Reset worker state: stop task threads, wipe containers, clear tracking."""
@@ -928,10 +953,13 @@ class Worker:
         if not health.healthy:
             logger.warning("Reconcile: worker health check failed: %s", health.error)
 
+        with self._lock:
+            draining = self._draining
         worker_health = worker_pb2.Worker.WorkerHealth(
             healthy=health.healthy,
             health_error=health.error,
             resources=resource_snapshot,
+            draining=draining,
         )
 
         return worker_pb2.Worker.ReconcileResponse(

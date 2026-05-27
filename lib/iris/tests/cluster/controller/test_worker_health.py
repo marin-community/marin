@@ -17,6 +17,7 @@ from iris.cluster.controller.reads import healthy_active_workers_with_attributes
 from iris.cluster.controller.schema import workers_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import WorkerId
+from rigging.timing import Timestamp
 from sqlalchemy import insert, select
 
 
@@ -105,6 +106,28 @@ def test_snapshot_reports_both_counters(tracker: WorkerHealthTracker) -> None:
     assert tracker.snapshot() == {wid: (3, 2)}
 
 
+def test_mark_draining_sets_bit_and_is_idempotent(tracker: WorkerHealthTracker) -> None:
+    """``mark_draining`` latches the bit; subsequent calls are no-ops."""
+    wid = WorkerId("w-1")
+    tracker.register(wid, now_ms=Timestamp.now().epoch_ms())
+    assert tracker.liveness(wid).draining is False
+
+    tracker.mark_draining(wid)
+    assert tracker.liveness(wid).draining is True
+
+    tracker.mark_draining(wid)
+    assert tracker.liveness(wid).draining is True
+
+
+def test_mark_draining_silently_skips_unknown_worker(tracker: WorkerHealthTracker) -> None:
+    """``mark_draining`` on an unregistered worker is a no-op (no exception, no state)."""
+    wid = WorkerId("never-registered")
+    tracker.mark_draining(wid)
+    # No state was created; default liveness still reports draining=False.
+    assert tracker.liveness(wid).draining is False
+    assert tracker.snapshot() == {}
+
+
 def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
     """Seeding liveness from persisted workers marks every DB worker healthy.
 
@@ -115,8 +138,6 @@ def test_seeds_liveness_from_persisted_workers(tmp_path: Path) -> None:
     The seeding logic is now a free function on Controller; this test
     exercises it directly via WorkerHealthTracker.heartbeat.
     """
-    from rigging.timing import Timestamp
-
     db = ControllerDB(db_dir=tmp_path)
     try:
         with db.transaction() as cur:

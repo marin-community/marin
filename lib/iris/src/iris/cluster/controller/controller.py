@@ -2438,6 +2438,11 @@ class Controller:
 
                 self._transitions.update_worker_pings(live_worker_ids)
 
+                # TODO(#5872): also fast-path remove workers with
+                # liveness.draining=True AND zero RUNNING-state assignments,
+                # bypassing PING_FAILURE_THRESHOLD. Needs DB access here to
+                # query running_tasks_by_worker; wire alongside the existing
+                # workers_over_threshold path or extend the tracker.
                 unhealthy = self._health.workers_over_threshold()
                 if unhealthy:
                     logger.warning(

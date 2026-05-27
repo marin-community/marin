@@ -142,12 +142,14 @@ class Worker(_message.Message):
         attempt_id: int
         def __init__(self, attempt_uid: _Optional[str] = ..., state: _Optional[_Union[_job_pb2.TaskState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., container_id: _Optional[str] = ..., finished_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ..., resource_usage: _Optional[_Union[_job_pb2.ResourceUsage, _Mapping]] = ..., task_id: _Optional[str] = ..., attempt_id: _Optional[int] = ...) -> None: ...
     class WorkerHealth(_message.Message):
-        __slots__ = ("healthy", "health_error", "resources")
+        __slots__ = ("healthy", "health_error", "resources", "draining")
         HEALTHY_FIELD_NUMBER: _ClassVar[int]
         HEALTH_ERROR_FIELD_NUMBER: _ClassVar[int]
         RESOURCES_FIELD_NUMBER: _ClassVar[int]
+        DRAINING_FIELD_NUMBER: _ClassVar[int]
         healthy: bool
         health_error: str
         resources: _job_pb2.WorkerResourceSnapshot
-        def __init__(self, healthy: _Optional[bool] = ..., health_error: _Optional[str] = ..., resources: _Optional[_Union[_job_pb2.WorkerResourceSnapshot, _Mapping]] = ...) -> None: ...
+        draining: bool
+        def __init__(self, healthy: _Optional[bool] = ..., health_error: _Optional[str] = ..., resources: _Optional[_Union[_job_pb2.WorkerResourceSnapshot, _Mapping]] = ..., draining: _Optional[bool] = ...) -> None: ...
     def __init__(self) -> None: ...

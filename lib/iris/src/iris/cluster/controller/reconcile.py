@@ -49,11 +49,17 @@ class ReconcileResult:
     ``observations`` is the (possibly empty) list of proto observations the
     apply layer should consume. ``error`` is set when the reconcile RPC
     outright failed; ``observations`` is then empty.
+
+    ``draining`` mirrors ``ReconcileResponse.health.draining``: the worker
+    knows its host is going away (e.g. GCP preemption notice). When set, the
+    apply layer discards observations and atomically marks the worker's
+    active tasks PREEMPTED.
     """
 
     worker_id: WorkerId
     observations: list[worker_pb2.Worker.AttemptObservation]
     error: str | None = None
+    draining: bool = False
 
 
 _ASSIGNED_STATES: frozenset[int] = ACTIVE_TASK_STATES - EXECUTING_TASK_STATES

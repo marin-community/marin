@@ -2025,6 +2025,14 @@ class ControllerTransitions:
             return TxResult()
         self._health.heartbeat([worker_id], now_ms)
 
+        # Drain bit short-circuits per-task classification: the worker has
+        # told us its host is going away, so every active task on it must be
+        # treated as PREEMPTED in this same tx. Observations are intentionally
+        # discarded — they may contain post-latch FAILED exits from JAX peer
+        # loss that would otherwise burn the failure budget.
+        if result.draining:
+            return self._apply_drain(cur, worker_id, now_ms)
+
         # Drop observations that fall outside the plan we just sent. Protects
         # against an old worker volunteering its terminal-state local history
         # (seen in prod: 287 obs for 1 desired RUNNING attempt) and against any
@@ -2049,6 +2057,89 @@ class ControllerTransitions:
 
         req = HeartbeatApplyRequest(worker_id=worker_id, updates=all_updates)
         return self._apply_task_transitions(cur, req, now_ms, task_map, attempt_map)
+
+    def _apply_drain(self, cur: Tx, worker_id: WorkerId, now_ms: int) -> TxResult:
+        """Atomically mark every active task on ``worker_id`` PREEMPTED.
+
+        Triggered by ``ReconcileResult.draining=True``. The worker has
+        confirmed a host-preempt notice; from this point on its per-task exit
+        classifications cannot be trusted (a JAX peer-loss FAILED on a sibling
+        looks identical to a real bug exit). The drain rule sidesteps that by
+        routing every active assignment through the existing PREEMPTED retry
+        path, which charges ``preemption_count`` (not ``failure_count``) and
+        re-coschedules siblings atomically.
+        """
+        rows = reads.list_active_tasks(
+            cur,
+            TaskScope(worker_id=worker_id),
+            states=ACTIVE_TASK_STATES,
+        )
+        if not rows:
+            self._health.mark_draining(worker_id)
+            return TxResult()
+
+        reason = f"worker {worker_id} draining (host preempt)"
+        tasks_to_kill: set[JobName] = set()
+        task_kill_workers: dict[JobName, WorkerId] = {}
+        # Job states may need recompute if any sibling cascade flips a job
+        # terminal; the originally-draining tasks already cover their own
+        # jobs via the cascade below.
+        jobs_to_recompute: set[JobName] = set()
+
+        # Phase 1: mark each draining-worker task PREEMPTED.
+        for row in rows:
+            new_state, preemption_count = _resolve_task_failure_state(
+                row.state,
+                row.preemption_count,
+                row.max_retries_preemption,
+                job_pb2.TASK_STATE_PREEMPTED,
+            )
+            _mark_task_producing_transition(
+                cur,
+                self._endpoints,
+                row.task_id.to_wire(),
+                row.current_attempt_id,
+                new_state,
+                reason,
+                now_ms,
+                attempt_state=job_pb2.TASK_STATE_PREEMPTED,
+                preemption_count=preemption_count,
+            )
+            tasks_to_kill.add(row.task_id)
+            task_kill_workers[row.task_id] = worker_id
+            jobs_to_recompute.add(row.job_id)
+            log_event("task_preempted", row.task_id.to_wire(), reason=reason)
+
+            # Coscheduled siblings must bounce to PENDING in the same tx so
+            # the slice re-coschedules atomically on a fresh worker; without
+            # this the retry can land on a different slice from siblings still
+            # RUNNING on healthy hosts.
+            if new_state == job_pb2.TASK_STATE_PENDING and row.has_coscheduling:
+                siblings = _find_coscheduled_siblings(cur, row.job_id, row.task_id, True)
+                sibling_kills, sibling_workers = _requeue_coscheduled_siblings(
+                    cur,
+                    self._endpoints,
+                    siblings,
+                    row.task_id,
+                    now_ms,
+                )
+                tasks_to_kill.update(sibling_kills)
+                task_kill_workers.update(sibling_workers)
+
+        # Phase 2: recompute job state and cascade for any job that flipped
+        # terminal under the per-task transitions above.
+        for job_id in jobs_to_recompute:
+            new_job_state = self._recompute_job_state(cur, job_id)
+            if new_job_state is not None and new_job_state in TERMINAL_JOB_STATES:
+                cascade_kills, cascade_workers = _finalize_terminal_job(
+                    cur, self._endpoints, job_id, new_job_state, now_ms
+                )
+                tasks_to_kill.update(cascade_kills)
+                task_kill_workers.update(cascade_workers)
+
+        self._health.mark_draining(worker_id)
+        log_event("worker_draining", str(worker_id), tasks=len(rows))
+        return TxResult(tasks_to_kill=tasks_to_kill, task_kill_workers=task_kill_workers)
 
     def _assigned_updates_from_plan(
         self,

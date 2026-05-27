@@ -26,6 +26,7 @@ from iris.cluster.controller.controller import compute_demand_entries
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow
 from iris.cluster.controller.reads import WorkerResourceUsage
+from iris.cluster.controller.reconcile import ReconcileResult, WorkerReconcilePlan
 from iris.cluster.controller.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
     JobRequirements,
@@ -44,7 +45,7 @@ from iris.cluster.controller.transitions import (
     TaskUpdate,
 )
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func, select, text
 from sqlalchemy import update as sa_update
@@ -3921,3 +3922,141 @@ def test_job_cancel_marks_job_killed(harness) -> None:
     with harness.state._db.transaction() as cur:
         harness.state.cancel_job(cur, jid, reason="manual")
     assert harness.query_job(jid).state == job_pb2.JOB_STATE_KILLED
+
+
+# =============================================================================
+# apply_reconcile_result: drain path (GCP host-preempt atomic slice rule)
+# =============================================================================
+
+
+def _drain_plan(worker_id: str):
+    """Empty reconcile plan for ``worker_id`` (drain path ignores observations)."""
+    return WorkerReconcilePlan(
+        worker_id=WorkerId(worker_id),
+        request=worker_pb2.Worker.ReconcileRequest(worker_id=worker_id, desired=[]),
+    )
+
+
+def _draining_result(worker_id: str, observations=None):
+    """Build a draining ``ReconcileResult`` for ``worker_id``."""
+    return ReconcileResult(
+        worker_id=WorkerId(worker_id),
+        observations=list(observations or []),
+        error=None,
+        draining=True,
+    )
+
+
+def test_apply_reconcile_drain_marks_all_worker_tasks_preempted(state):
+    """Draining worker: every active task transitions to PREEMPTED in one tx; FAILED observations are discarded."""
+    worker_id = register_worker(state, "w1", "host:8080", make_worker_metadata())
+
+    # Three independent (non-coscheduled) tasks running on the same worker.
+    task_ids = []
+    for i in range(3):
+        req = make_job_request(f"drain-job-{i}")
+        req.max_retries_preemption = 5
+        tasks = submit_job(state, f"drain-{i}", req)
+        dispatch_task(state, tasks[0], worker_id)
+        assert _query_task(state, tasks[0].task_id).state == job_pb2.TASK_STATE_RUNNING
+        task_ids.append(tasks[0].task_id)
+
+    # Fabricate FAILED observations that, in the non-draining path, would burn
+    # the failure budget. The drain rule must throw them away.
+    contradictory = [
+        worker_pb2.Worker.AttemptObservation(
+            attempt_uid=_query_attempt(state, tid, _query_task(state, tid).current_attempt_id).attempt_uid,
+            state=job_pb2.TASK_STATE_FAILED,
+            error="JAX peer lost",
+        )
+        for tid in task_ids
+    ]
+
+    plan = _drain_plan("w1")
+    result = _draining_result("w1", observations=contradictory)
+    with state._db.transaction() as cur:
+        tx_result = state.apply_reconcile_result(cur, plan, result, Timestamp.now())
+
+    # Every task on the draining worker bounces to PENDING (retry budget
+    # remains); failure_count untouched, preemption_count bumped once.
+    for tid in task_ids:
+        task = _query_task(state, tid)
+        assert task.state == job_pb2.TASK_STATE_PENDING
+        assert task.preemption_count == 1
+        assert task.failure_count == 0
+        assert tid in tx_result.tasks_to_kill
+
+    # The worker is latched as draining.
+    assert state._health.liveness(worker_id).draining is True
+
+
+def test_apply_reconcile_drain_coscheduled_requeues_siblings(state):
+    """Drain on a coscheduled slice: the draining-worker task bounces and the healthy sibling is requeued atomically."""
+    # Two workers in one tpu group, one coscheduled job with two replicas.
+    for i in range(2):
+        meta = make_worker_metadata()
+        meta.attributes[WellKnownAttribute.TPU_NAME].string_value = "tpu-a"
+        meta.attributes[WellKnownAttribute.TPU_WORKER_ID].int_value = i
+        register_worker(state, f"w{i}", f"addr{i}:8080", meta)
+
+    req = controller_pb2.Controller.LaunchJobRequest(
+        name="drain-coscheduled",
+        entrypoint=_make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        replicas=2,
+        environment=job_pb2.EnvironmentConfig(),
+        max_retries_preemption=5,
+    )
+    req.coscheduling.group_by = WellKnownAttribute.TPU_NAME
+    tasks = submit_job(state, "drain-cosched", req)
+
+    # Dispatch task-0 to w0 (draining), task-1 to w1 (healthy).
+    dispatch_task(state, tasks[0], WorkerId("w0"))
+    dispatch_task(state, tasks[1], WorkerId("w1"))
+    sibling_attempt_id_before = _query_task(state, tasks[1].task_id).current_attempt_id
+
+    plan = _drain_plan("w0")
+    result = _draining_result("w0", observations=[])
+    with state._db.transaction() as cur:
+        tx_result = state.apply_reconcile_result(cur, plan, result, Timestamp.now())
+
+    # Task on the draining worker — bounces to PENDING (retry budget remains),
+    # preemption_count bumped once.
+    draining_task = _query_task(state, tasks[0].task_id)
+    assert draining_task.state == job_pb2.TASK_STATE_PENDING
+    assert draining_task.preemption_count == 1
+    assert draining_task.failure_count == 0
+
+    # Sibling on the healthy worker — bounced to PENDING with attempt marked
+    # PREEMPTED, but sibling counters untouched (per _requeue_coscheduled_siblings).
+    sibling_task = _query_task(state, tasks[1].task_id)
+    assert sibling_task.state == job_pb2.TASK_STATE_PENDING
+    assert sibling_task.preemption_count == 0
+    assert sibling_task.failure_count == 0
+    sibling_attempt = _query_attempt(state, tasks[1].task_id, sibling_attempt_id_before)
+    assert sibling_attempt is not None
+    assert sibling_attempt.state == job_pb2.TASK_STATE_PREEMPTED
+
+    # Controller schedules the kill RPCs to both workers so neither retains a
+    # ghost process before the slice re-coschedules.
+    assert tasks[0].task_id in tx_result.tasks_to_kill
+    assert tasks[1].task_id in tx_result.tasks_to_kill
+    assert tx_result.task_kill_workers[tasks[1].task_id] == WorkerId("w1")
+
+    # And the draining worker is latched.
+    assert state._health.liveness(WorkerId("w0")).draining is True
+
+
+def test_apply_reconcile_drain_empty_worker_still_marks_health(state):
+    """Drain on a worker with no active tasks: no kills, but the draining bit latches."""
+    worker_id = register_worker(state, "w-idle", "host:8080", make_worker_metadata())
+    assert state._health.liveness(worker_id).draining is False
+
+    plan = _drain_plan("w-idle")
+    result = _draining_result("w-idle", observations=[])
+    with state._db.transaction() as cur:
+        tx_result = state.apply_reconcile_result(cur, plan, result, Timestamp.now())
+
+    assert tx_result.tasks_to_kill == set()
+    assert tx_result.task_kill_workers == {}
+    assert state._health.liveness(worker_id).draining is True

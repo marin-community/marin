@@ -45,6 +45,7 @@ class WorkerLiveness:
     consecutive_failures: int = 0
     last_heartbeat_ms: int = 0
     build_failures: int = 0
+    draining: bool = False
 
 
 class WorkerHealthTracker:
@@ -126,6 +127,20 @@ class WorkerHealthTracker:
             if state is None:
                 return
             state.healthy = False
+
+    def mark_draining(self, worker_id: WorkerId) -> None:
+        """Latch the worker as draining (host preempt notice received).
+
+        The bit is monotonic; there is no clearing path. Read via
+        ``liveness().draining``. A future change (TODO #5872) will let the
+        ping-failure reaper fast-path eviction of draining workers with zero
+        RUNNING-state task assignments.
+        """
+        with self._lock:
+            state = self._states.get(worker_id)
+            if state is None:
+                return
+            state.draining = True
 
     # -- Reads --------------------------------------------------------------
 

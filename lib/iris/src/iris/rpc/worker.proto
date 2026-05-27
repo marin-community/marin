@@ -147,6 +147,11 @@ message Worker {
     bool healthy = 1;
     string health_error = 2;
     iris.job.WorkerResourceSnapshot resources = 3;
+    // Worker has received a host-preempt signal; it is killing all local
+    // attempts and going away. The controller treats this as authoritative:
+    // observations on this reconcile are discarded, every active task on the
+    // worker (plus coscheduled siblings) is marked TASK_STATE_PREEMPTED.
+    bool draining = 4;
   }
 }
 
