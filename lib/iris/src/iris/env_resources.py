@@ -163,6 +163,7 @@ def _resolve_disk(proto: job_pb2.ResourceSpecProto | None) -> int:
         stat = os.statvfs("/")
         return stat.f_bavail * stat.f_frsize
     except OSError:
+        logger.warning("Cannot determine free disk space via os.statvfs('/')", exc_info=True)
         return 0
 
 

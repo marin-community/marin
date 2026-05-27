@@ -292,9 +292,6 @@ class ScatterReader:
     directly for testing.
     """
 
-    _merge_config = pl.Config(ascii_tables=True, apply_on_context_enter=True)
-    _merge_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)
-
     def __init__(
         self,
         files: list[tuple[str, list[str]]],
@@ -355,7 +352,6 @@ class ScatterReader:
     def total_chunks(self) -> int:
         return sum(len(chunks) for _, chunks in self._files)
 
-    @_merge_config
     def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
         """Merge sorted chunks using k-way merge, yielding items in global sort order.
 
@@ -368,67 +364,74 @@ class ScatterReader:
         Yields:
             Deserialized Python items in merged sort order.
         """
-        if self.total_chunks == 0:
-            return
 
-        estimated_merge_memory_bytes = self.avg_item_bytes * self.total_chunks * _POLARS_STREAMING_CHUNK_SIZE
-        # Overhead per row in the Polars DataFrame plus the deserialized Python object.
-        # Future Polars-only processing would remove the Python overhead.
-        overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
-        num_workers = zephyr_worker_ctx().num_workers
+        with pl.Config() as polars_config:
+            polars_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)
 
-        task_resources = TaskResources.from_environment()
-        memory_bytes = task_resources.memory_bytes / num_workers
+            if self.total_chunks == 0:
+                return
 
-        if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
-            fan_in = math.ceil(math.sqrt(self.total_chunks))
-            disk_bytes = task_resources.disk_bytes / num_workers * _LOCAL_DISK_SHUFFLE_UTILIZATION
-            need_bytes = self.total_chunk_bytes
-            use_local = need_bytes <= disk_bytes
+            estimated_merge_memory_bytes = self.avg_item_bytes * self.total_chunks * _POLARS_STREAMING_CHUNK_SIZE
+            # Overhead per row in the Polars DataFrame plus the deserialized Python object.
+            # Future Polars-only processing would remove the Python overhead.
+            overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
+            num_workers = zephyr_worker_ctx().num_workers
 
-            logger.info(
-                "[shard %d] Merging %d chunks via external sort (%s memory needed > %s memory available); fan_in=%d, "
-                "spill=%s (%s needed %s %s available)",
-                self._target_shard,
-                self.total_chunks,
-                humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
-                humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
-                fan_in,
-                "local" if use_local else "gcs",
-                humanfriendly.format_size(need_bytes, binary=True),
-                "<=" if use_local else ">",
-                humanfriendly.format_size(disk_bytes, binary=True),
-            )
+            task_resources = TaskResources.from_environment()
+            memory_bytes = task_resources.memory_bytes / num_workers
 
-            if use_local:
-                spill_dir = tempfile.mkdtemp(prefix=f"zephyr-sort-{self._target_shard:04d}-")
-            else:
-                spill_dir = external_sort_dir
+            if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
+                fan_in = math.ceil(math.sqrt(self.total_chunks))
+                disk_bytes = task_resources.disk_bytes / num_workers * _LOCAL_DISK_SHUFFLE_UTILIZATION
+                need_bytes = self.total_chunk_bytes
+                use_local = need_bytes <= disk_bytes
 
-            try:
-                merged = external_sort_merge(
-                    input_frames=self.get_frames(),
-                    sort_key=_SORT_KEY_COL,
-                    external_sort_dir=spill_dir,
-                    fan_in=fan_in,
-                    shard=self._target_shard,
+                logger.info(
+                    "[shard %d] Merging %d chunks via external sort "
+                    "(%s memory needed > %s memory available); fan_in=%d, "
+                    "spill=%s (%s needed %s %s available)",
+                    self._target_shard,
+                    self.total_chunks,
+                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
+                    fan_in,
+                    "local" if use_local else "gcs",
+                    humanfriendly.format_size(need_bytes, binary=True),
+                    "<=" if use_local else ">",
+                    humanfriendly.format_size(disk_bytes, binary=True),
                 )
 
-                yield from itertools.chain.from_iterable(map(_dataframe_to_items, merged))
-            finally:
                 if use_local:
-                    shutil.rmtree(spill_dir, ignore_errors=True)
-        else:
-            logger.info(
-                "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
-                self._target_shard,
-                self.total_chunks,
-                humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
-                humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
-            )
-            merged_lf = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL)
+                    spill_dir = tempfile.mkdtemp(prefix=f"zephyr-sort-{self._target_shard:04d}-")
+                else:
+                    spill_dir = external_sort_dir
 
-            yield from itertools.chain.from_iterable(_dataframe_to_items(batch) for batch in merged_lf.collect_batches())
+                try:
+                    merged = external_sort_merge(
+                        input_frames=self.get_frames(),
+                        sort_key=_SORT_KEY_COL,
+                        external_sort_dir=spill_dir,
+                        fan_in=fan_in,
+                        shard=self._target_shard,
+                    )
+
+                    yield from itertools.chain.from_iterable(map(_dataframe_to_items, merged))
+                finally:
+                    if use_local:
+                        shutil.rmtree(spill_dir, ignore_errors=True)
+            else:
+                logger.info(
+                    "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
+                    self._target_shard,
+                    self.total_chunks,
+                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
+                )
+                merged_lf = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL)
+
+                yield from itertools.chain.from_iterable(
+                    _dataframe_to_items(batch) for batch in merged_lf.collect_batches()
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +492,8 @@ class ScatterWriter:
         self._chunk_paths: dict[int, list[str]] = defaultdict(list)
         self._chunk_bytes: dict[int, list[int]] = defaultdict(list)
         self._avg_item_bytes: float = 0.0
+        self._total_bytes_written: int = 0
+        self._total_rows_written: int = 0
         self._n_chunks_written = 0
         # Throttles the per-flush progress log so high-fanout workloads don't log too often
         self._progress_log_limiter = RateLimiter(interval_seconds=_PROGRESS_LOG_INTERVAL_SECONDS)
@@ -499,46 +504,48 @@ class ScatterWriter:
         ensure_parent_dir(data_path)
 
     def _flush(self, target: int) -> None:
-        df = self._buffers[target]
+        try:
+            df = self._buffers[target]
 
-        if df.is_empty():
-            return
-
-        if self._combiner_fn is not None:
-            rows = list(_dataframe_to_items(df))
-            rows = _apply_combiner(rows, self._key_fn, self._combiner_fn)
-
-            if len(rows) == 0:
+            if df.is_empty():
                 return
 
-            df = _items_to_dataframe(rows, self._key_fn, self._sort_fn, num_output_shards=0).drop(_SHARD_COL)
+            if self._combiner_fn is not None:
+                rows = list(_dataframe_to_items(df))
+                rows = _apply_combiner(rows, self._key_fn, self._combiner_fn)
 
-        sorted_df = df.sort(_SORT_KEY_COL)
+                if len(rows) == 0:
+                    return
 
-        self._avg_item_bytes = sorted_df.estimated_size() / len(sorted_df)
+                df = _items_to_dataframe(rows, self._key_fn, self._sort_fn, num_output_shards=0).drop(_SHARD_COL)
 
-        # Write each flush as its own parquet file so we can use scan_parquet to stream it lazily in the reducer.
-        chunk_path = f"{self._data_path}t{target:04d}-c{self._n_chunks_written:04d}.parquet"
-        buf = io.BytesIO()
-        sorted_df.write_parquet(buf, compression="zstd")
-        chunk_data = buf.getvalue()
-        with open_url(chunk_path, "wb") as f:
-            f.write(chunk_data)
+            sorted_df = df.sort(_SORT_KEY_COL)
 
-        self._chunk_paths[target].append(chunk_path)
-        self._chunk_bytes[target].append(len(chunk_data))
+            self._total_bytes_written += sorted_df.estimated_size()
+            self._total_rows_written += len(sorted_df)
 
-        self._n_chunks_written += 1
-        if self._progress_log_limiter.should_run():
-            logger.info(
-                "[shard %d] Wrote %d scatter chunks so far (latest chunk size: %d items)",
-                self._source_shard,
-                self._n_chunks_written,
-                len(df),
-            )
+            # Write each flush as its own parquet file so we can use scan_parquet to stream it lazily in the reducer.
+            chunk_path = f"{self._data_path}t{target:04d}-c{self._n_chunks_written:04d}.parquet"
+            buf = io.BytesIO()
+            sorted_df.write_parquet(buf, compression="zstd")
+            chunk_data = buf.getvalue()
+            with open_url(chunk_path, "wb") as f:
+                f.write(chunk_data)
 
-        del self._buffers[target]
-        gc.collect()  # Force gc, since flush creates copies of the DataFrame and buffers
+            self._chunk_paths[target].append(chunk_path)
+            self._chunk_bytes[target].append(len(chunk_data))
+
+            self._n_chunks_written += 1
+            if self._progress_log_limiter.should_run():
+                logger.info(
+                    "[shard %d] Wrote %d scatter chunks so far (latest chunk size: %d items)",
+                    self._source_shard,
+                    self._n_chunks_written,
+                    len(df),
+                )
+        finally:
+            del self._buffers[target]
+            gc.collect()  # Force gc, since flush creates copies of the DataFrame and buffers
 
     def _compact_buffers(self) -> None:
         """Rechunk each shard's DataFrame to consolidate accumulated Arrow chunks.
@@ -597,6 +604,10 @@ class ScatterWriter:
         with log_time(f"Flushing remaining buffers for {self._data_path}"):
             for target in sorted(self._buffers.keys()):
                 self._flush(target)
+
+        self._avg_item_bytes = (
+            self._total_bytes_written / self._total_rows_written if self._total_rows_written > 0 else 0.0
+        )
 
         logger.info(
             "[shard %d] scatter write done: %d pre-close flushes + %d at close = %d total; "
