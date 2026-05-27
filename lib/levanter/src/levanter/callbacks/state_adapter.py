@@ -64,5 +64,12 @@ class StateCallbackRunner(Generic[S]):
             step_duration=step_duration,
         )
         for hook in self._hooks:
-            if force or info.step % hook.every == 0:
+            if force:
+                hook.fn.on_step(info, force=force)
+            elif hook.every > 1 and info.step == 0:
+                # "every N" means N, 2N, 3N, ...; skip the spurious match at step 0
+                # so periodic hooks (eval, checkpointing) don't waste a slot before
+                # any meaningful training has happened.
+                continue
+            elif info.step % hook.every == 0:
                 hook.fn.on_step(info, force=force)
