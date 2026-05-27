@@ -229,3 +229,171 @@ def test_dry_run_plan_prints_operator_safety_summary(capsys):
     assert "source mirror budget:     40 GB" in out
     assert "regions:                  us-east5" in out
     assert "original Delphi root will not be modified" in out
+
+
+# ---------------------------------------------------------------------------
+# --also-save-step / extra_target_steps
+# ---------------------------------------------------------------------------
+
+
+def _multi_target_request(
+    *,
+    source_step: int = 20_000,
+    extras: tuple[int, ...] = (23_000,),
+    target_step: int = 25_900,
+) -> MaterializeRequest:
+    return MaterializeRequest(
+        base="3e18",
+        source_step=source_step,
+        target_step=target_step,
+        output_root="gs://marin-us-east5/checkpoints/delphi-prefix-checkpoints/delphi-3e18-prefixes-qwen3",
+        tpu="v5p-8",
+        ram="128g",
+        regions=("us-east5",),
+        extra_target_steps=extras,
+    )
+
+
+def test_rejects_extra_target_step_at_or_before_source():
+    model = get_delphi_model("3e18")
+    with pytest.raises(ValueError, match="must be > source_step"):
+        build_materialization_plan(
+            _multi_target_request(extras=(20_000,)),
+            model,
+            source_train_config(),
+        )
+    with pytest.raises(ValueError, match="must be > source_step"):
+        build_materialization_plan(
+            _multi_target_request(extras=(19_999,)),
+            model,
+            source_train_config(),
+        )
+
+
+def test_rejects_extra_target_step_at_or_after_target():
+    model = get_delphi_model("3e18")
+    with pytest.raises(ValueError, match="must be < target_step"):
+        build_materialization_plan(
+            _multi_target_request(extras=(25_900,), target_step=25_900),
+            model,
+            source_train_config(),
+        )
+    with pytest.raises(ValueError, match="must be < target_step"):
+        build_materialization_plan(
+            _multi_target_request(extras=(26_000,), target_step=25_900),
+            model,
+            source_train_config(),
+        )
+
+
+def test_rejects_duplicate_extra_target_steps():
+    model = get_delphi_model("3e18")
+    with pytest.raises(ValueError, match="must be distinct"):
+        build_materialization_plan(
+            _multi_target_request(extras=(22_000, 22_000)),
+            model,
+            source_train_config(),
+        )
+
+
+def test_multi_target_keep_policies_are_sorted_and_well_formed():
+    # Levanter's Checkpointer constructor asserts step_policies sorted
+    # ascending by ``until`` (lib/levanter/src/levanter/checkpoint.py:436).
+    # The helper must emit ``keep`` in ascending order regardless of the
+    # input ordering of ``extra_target_steps``.
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(
+            _multi_target_request(extras=(24_000, 22_000, 23_500)),
+            model,
+            source_train_config(),
+        )
+    keep = plan.train_config.trainer.checkpointer.keep
+    # One policy per extra step, sorted ascending, every == until == step.
+    # The final target_step is NOT in keep — it's covered by Levanter's
+    # forced save at training end (trainer.py:568,581).
+    assert keep == [
+        {"every": 22_000, "until": 22_000},
+        {"every": 23_500, "until": 23_500},
+        {"every": 24_000, "until": 24_000},
+    ]
+
+
+def test_multi_target_destinations_cover_every_save_point():
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(
+            _multi_target_request(extras=(23_000, 24_500), target_step=25_900),
+            model,
+            source_train_config(),
+        )
+    dests = plan.destination_checkpoint_paths
+    # Sorted ascending; final is the target_step.
+    assert len(dests) == 3
+    assert dests[0].endswith("/checkpoints/step-23000")
+    assert dests[1].endswith("/checkpoints/step-24500")
+    assert dests[2].endswith("/checkpoints/step-25900")
+    assert plan.destination_checkpoint_path == dests[-1]  # back-compat shortcut
+    assert plan.all_target_steps == (23_000, 24_500, 25_900)
+
+
+def test_multi_target_metadata_lists_all_target_steps():
+    # Each save's metadata.json carries ``all_target_steps`` so an
+    # intermediate ckpt's metadata can be distinguished from "only save".
+    # The legacy ``target_step`` field still equals the FINAL target.
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(
+            _multi_target_request(extras=(23_000, 24_500), target_step=25_900),
+            model,
+            source_train_config(),
+        )
+    meta = plan.train_config.trainer.checkpointer.metadata
+    assert meta["target_step"] == 25_900  # legacy: the final
+    assert meta["all_target_steps"] == [23_000, 24_500, 25_900]  # new: every save
+    assert meta["materialization"] == "delphi_prefix_checkpoint"
+
+
+def test_single_target_keeps_empty_keep_policy():
+    # Backward compatibility: when no extras are requested, ``keep`` must
+    # stay empty (the original behavior pre-extension). Only the forced
+    # final save fires.
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(request(), model, source_train_config())
+    assert plan.train_config.trainer.checkpointer.keep == []
+    assert plan.destination_checkpoint_paths == (plan.destination_checkpoint_path,)
+    assert plan.all_target_steps == (25_900,)
+    assert plan.train_config.trainer.checkpointer.metadata["all_target_steps"] == [25_900]
+
+
+def test_multi_target_dry_run_plan_lists_every_destination(capsys):
+    model = get_delphi_model("3e18")
+    with (
+        patch("rigging.filesystem.urllib.request.urlopen", side_effect=OSError("not on GCP")),
+        patch.dict("os.environ", {"MARIN_PREFIX": "gs://marin-us-east5/scratch"}),
+    ):
+        plan = build_materialization_plan(
+            _multi_target_request(extras=(23_000, 24_500), target_step=25_900),
+            model,
+            source_train_config(),
+        )
+    print_plan(plan)
+    out = capsys.readouterr().out
+    assert "extra target steps:" in out
+    assert "23,000" in out and "24,500" in out
+    assert "destination checkpoints:" in out
+    for dest in plan.destination_checkpoint_paths:
+        assert dest in out

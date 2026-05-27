@@ -77,6 +77,15 @@ class MaterializeRequest:
     ram: str
     regions: tuple[str, ...] = ()
     allow_existing_destination: bool = False
+    # Optional intermediate checkpoint steps the helper should ALSO save on the
+    # way to ``target_step``. Each entry must be strictly inside
+    # ``(source_step, target_step)`` and distinct from the others. Levanter
+    # writes a permanent checkpoint at every step listed here (via per-step
+    # ``CheckpointInterval`` policies) in addition to the forced save at the
+    # final ``target_step``. Used by the cooldown plan when one base needs
+    # multiple prefix targets that share a single at-or-before native source —
+    # one training run, multiple committed outputs.
+    extra_target_steps: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,9 +94,27 @@ class MaterializationPlan:
     model: DelphiModel
     train_config: TrainLmConfig
     source_checkpoint_path: str
-    destination_checkpoint_path: str
+    destination_checkpoint_paths: tuple[str, ...]
+    """Sorted ascending. Last entry is the final ``target_step`` destination;
+    any earlier entries correspond to ``request.extra_target_steps`` and are
+    saved via the keep policy before training stops at ``target_step``."""
     temporary_checkpoint_path: str
     original_num_train_steps: int
+
+    @property
+    def destination_checkpoint_path(self) -> str:
+        """Backward-compat single-destination shortcut == the final target.
+
+        Existing callers (tests, the launcher's post-train check, the
+        single-target launch path) keep working. Multi-target callers should
+        read ``destination_checkpoint_paths`` directly.
+        """
+        return self.destination_checkpoint_paths[-1]
+
+    @property
+    def all_target_steps(self) -> tuple[int, ...]:
+        """All steps Levanter will commit in this run, sorted ascending."""
+        return tuple(sorted({*self.request.extra_target_steps, self.request.target_step}))
 
     @property
     def steps_to_train(self) -> int:
@@ -121,7 +148,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--allow-existing-destination",
         action="store_true",
-        help="Allow <output-root>/checkpoints/step-<target-step> to exist before launch.",
+        help="Allow any <output-root>/checkpoints/step-<N> directory (final or extra) to exist before launch.",
+    )
+    parser.add_argument(
+        "--also-save-step",
+        dest="extra_target_steps",
+        action="append",
+        default=[],
+        type=int,
+        help=(
+            "Additional intermediate step to save during the same training run. "
+            "Repeatable. Each must be strictly inside (source-step, target-step). "
+            "Useful when two cooldown prefixes share a single at-or-before native source."
+        ),
     )
     return parser.parse_args()
 
@@ -137,6 +176,7 @@ def main() -> int:
         ram=args.ram,
         regions=tuple(args.regions),
         allow_existing_destination=args.allow_existing_destination,
+        extra_target_steps=tuple(args.extra_target_steps),
     )
     model = get_delphi_model(request.base)
     source_config = load_source_train_config(model)
@@ -166,7 +206,8 @@ def build_materialization_plan(
     validate_static_request(request, model, source_config)
     source_checkpoint_path = model.levanter_checkpoint_path(request.source_step)
     output_root = request.output_root.rstrip("/")
-    destination_checkpoint_path = join_path(output_root, CHECKPOINTS_DIR, f"step-{request.target_step}")
+    all_steps = sorted({*request.extra_target_steps, request.target_step})
+    destination_checkpoint_paths = tuple(join_path(output_root, CHECKPOINTS_DIR, f"step-{step}") for step in all_steps)
     train_config = materialized_train_config(
         source_config,
         model=model,
@@ -178,7 +219,7 @@ def build_materialization_plan(
         model=model,
         train_config=train_config,
         source_checkpoint_path=source_checkpoint_path,
-        destination_checkpoint_path=destination_checkpoint_path,
+        destination_checkpoint_paths=destination_checkpoint_paths,
         temporary_checkpoint_path=temporary_checkpoint_base_path(output_root),
         original_num_train_steps=source_config.trainer.num_train_steps,
     )
@@ -210,6 +251,27 @@ def validate_static_request(
             f"{model.gcs_run_root!r}."
         )
 
+    # extra_target_steps must be a set of distinct ints strictly inside
+    # (source_step, target_step). Any value at or outside this open interval
+    # would either never fire (below source) or collide with the forced final
+    # save (at target). The Levanter Checkpointer constructor also asserts
+    # ``step_policies`` sorted ascending by ``until`` (checkpoint.py:436); we
+    # build keep policies from these extras in ascending order downstream.
+    extras = request.extra_target_steps
+    if len(extras) != len(set(extras)):
+        raise ValueError(f"extra_target_steps must be distinct, got {extras!r}")
+    for extra in extras:
+        if extra <= request.source_step:
+            raise ValueError(
+                f"extra_target_step={extra} must be > source_step={request.source_step}; "
+                "Levanter cannot save at a step already in the past."
+            )
+        if extra >= request.target_step:
+            raise ValueError(
+                f"extra_target_step={extra} must be < target_step={request.target_step}; "
+                "use --target-step for the final save (it is forced unconditionally at training end)."
+            )
+
 
 def validate_checkpoint_io(plan: MaterializationPlan) -> None:
     missing = missing_checkpoint_artifacts(plan.source_checkpoint_path)
@@ -226,11 +288,13 @@ def validate_checkpoint_io(plan: MaterializationPlan) -> None:
             f"metadata={metadata_step}, expected={plan.request.source_step}"
         )
 
-    if not plan.request.allow_existing_destination and path_exists_or_has_children(plan.destination_checkpoint_path):
-        raise FileExistsError(
-            f"Destination checkpoint already exists: {plan.destination_checkpoint_path}. "
-            "Pass --allow-existing-destination only if this is an intentional relaunch."
-        )
+    if not plan.request.allow_existing_destination:
+        for destination in plan.destination_checkpoint_paths:
+            if path_exists_or_has_children(destination):
+                raise FileExistsError(
+                    f"Destination checkpoint already exists: {destination}. "
+                    "Pass --allow-existing-destination only if this is an intentional relaunch."
+                )
 
 
 def materialized_train_config(
@@ -249,11 +313,23 @@ def materialized_train_config(
         marin_relative_path(source_checkpoint_path),
         budget_gb=SOURCE_CHECKPOINT_MIRROR_BUDGET_GB,
     )
+    # For each requested intermediate step X, register a Levanter keep policy
+    # ``{"every": X, "until": X}``. ``_get_current_step_save_interval`` picks
+    # the first policy whose ``until >= step``, then triggers a permanent save
+    # when ``step % every == 0``. Since X % X == 0, the policy fires at exactly
+    # step X. Past step X the policy becomes inactive (``until < step``) and
+    # the next-larger extra (or no policy) takes over. Sort ascending because
+    # Levanter's Checkpointer constructor asserts step_policies sorted by
+    # ``until`` (lib/levanter/src/levanter/checkpoint.py:436). The final
+    # target_step is NOT in ``keep`` — it gets a force=True save at training
+    # end (trainer.py:568,581), so it would write whether or not a keep policy
+    # mentioned it.
+    keep_policies = [{"every": step, "until": step} for step in sorted(request.extra_target_steps)]
     checkpointer = dataclasses.replace(
         source_config.trainer.checkpointer,
         base_path=join_path(output_root, CHECKPOINTS_DIR),
         temporary_base_path=temporary_checkpoint_base_path(output_root),
-        keep=[],
+        keep=keep_policies,
         append_run_id_to_base_path=False,
         metadata=checkpoint_metadata(model=model, request=request, source_checkpoint_path=source_checkpoint_path),
     )
@@ -284,8 +360,17 @@ def checkpoint_metadata(
     request: MaterializeRequest,
     source_checkpoint_path: str,
 ) -> dict[str, Any]:
+    # ``all_target_steps`` lists every step the run intends to commit (extras
+    # via keep policy + the final via force-save at training end), sorted
+    # ascending. An intermediate ckpt's per-save ``metadata.json`` carries
+    # this list so consumers can disambiguate "this step is one of several
+    # intentional outputs" from "this is the only intentional save". The
+    # legacy ``target_step`` field remains for backward compat and always
+    # equals the FINAL target_step (== max(all_target_steps)).
+    all_target_steps = sorted({*request.extra_target_steps, request.target_step})
     metadata = {
         "target_step": request.target_step,
+        "all_target_steps": all_target_steps,
         "source_step": request.source_step,
         "base": model.flops_key,
         "source_checkpoint_path": mirror_marin_uri(source_checkpoint_path),
@@ -308,11 +393,13 @@ def levanter_stop_step_for_checkpoint_step(checkpoint_step: int) -> int:
 
 
 def tracker_with_prefix_tags(tracker: object, request: MaterializeRequest) -> object:
+    extras_tag = ",".join(str(s) for s in sorted(request.extra_target_steps)) if request.extra_target_steps else "none"
     tags = (
         "delphi_prefix_checkpoint",
         f"base:{request.base}",
         f"source_step:{request.source_step}",
         f"target_step:{request.target_step}",
+        f"extra_target_steps:{extras_tag}",
         "preserve_original_lr_schedule",
     )
     if isinstance(tracker, WandbConfig):
@@ -580,6 +667,11 @@ def print_plan(plan: MaterializationPlan) -> None:
         f"  target step:              {plan.request.target_step:,} " f"({plan.target_percent:.2f}% of original schedule)"
     )
     print(f"  steps to train:           {plan.steps_to_train:,}")
+    if plan.request.extra_target_steps:
+        extras_str = ", ".join(
+            f"{s:,} ({100*s/plan.original_num_train_steps:.2f}%)" for s in sorted(plan.request.extra_target_steps)
+        )
+        print(f"  extra target steps:       {extras_str}")
     print(f"  source checkpoint:        {plan.source_checkpoint_path}")
     training_load_path = display_training_load_path(plan.train_config.trainer.initialize_from)
     if training_load_path != plan.source_checkpoint_path:
@@ -587,7 +679,12 @@ def print_plan(plan: MaterializationPlan) -> None:
     mirror_budget = training_load_mirror_budget(plan.train_config.trainer.initialize_from)
     if mirror_budget is not None:
         print(f"  source mirror budget:     {mirror_budget:g} GB")
-    print(f"  destination checkpoint:   {plan.destination_checkpoint_path}")
+    if len(plan.destination_checkpoint_paths) == 1:
+        print(f"  destination checkpoint:   {plan.destination_checkpoint_path}")
+    else:
+        print("  destination checkpoints:")
+        for dest in plan.destination_checkpoint_paths:
+            print(f"                            {dest}")
     print(f"  temporary checkpoint dir: {plan.temporary_checkpoint_path}")
     print(f"  TPU:                      {plan.request.tpu}")
     print(f"  RAM:                      {plan.request.ram}")

@@ -181,19 +181,31 @@ def _verify_final_checkpoint(spec: MidtrainSpec, num_train_steps: int) -> None:
             f"No step-* checkpoint directories found under {permanent_root}; "
             "iris reported success but no permanent checkpoint was written."
         )
-    final_step, final_dir = max(candidates, key=lambda kv: kv[0])
-    print(f"  {spec.run.run_id}: verifying final checkpoint at {final_dir} (step={final_step})")
     model_type = spec.model_config.get("type") if hasattr(spec.model_config, "get") else None
     if not model_type:
         raise ValueError(
             "spec.model_config['type'] is unset at post-save check; "
             "this should have been caught earlier in validate_midtrain_spec."
         )
-    assert_checkpoint_complete_for_model_type(
-        final_dir,
-        model_type=str(model_type),
-        num_layers=spec.base.num_layers,
+    # Validate EVERY step-* dir the run produced, not just the latest. A run
+    # may commit multiple permanent checkpoints (e.g. when using the
+    # materialize helper's --also-save-step or any Levanter keep policy). All
+    # of them inherit the same in-memory param tree, so they all share the
+    # same Qwen3-completeness property — but defense-in-depth says check
+    # each. Catches the topologically-possible case where one save's
+    # tensorstore commit raced or partial-wrote.
+    candidates.sort(key=lambda kv: kv[0])
+    final_step, _ = candidates[-1]
+    print(
+        f"  {spec.run.run_id}: verifying {len(candidates)} saved checkpoint(s) under {permanent_root} "
+        f"(steps={[s for s, _ in candidates]}, final={final_step})"
     )
+    for _step, dir_ in candidates:
+        assert_checkpoint_complete_for_model_type(
+            dir_,
+            model_type=str(model_type),
+            num_layers=spec.base.num_layers,
+        )
 
 
 def reviewed_candidate(base: str, cooldown_ratio: float) -> dict[str, Any]:
