@@ -369,6 +369,33 @@ class CheckpointDebugConfig:
         self.validate()
 
 
+@dataclass(frozen=True)
+class _TemporaryCheckpointRecord:
+    path: str
+    step: int
+    timestamp: datetime.datetime
+
+
+def _temporary_checkpoint_sort_key(record: _TemporaryCheckpointRecord) -> tuple[int, datetime.datetime, str]:
+    return (record.step, record.timestamp, record.path)
+
+
+def _temporary_checkpoint_record(checkpoint_path: str) -> _TemporaryCheckpointRecord | None:
+    try:
+        metadata = _load_metadata(checkpoint_path)
+        if not metadata.get("is_temporary", False):
+            return None
+
+        return _TemporaryCheckpointRecord(
+            path=checkpoint_path,
+            step=int(metadata["step"]),
+            timestamp=datetime.datetime.fromisoformat(metadata["timestamp"]),
+        )
+    except Exception:
+        logger.exception("Error loading metadata for checkpoint %s", checkpoint_path)
+        return None
+
+
 class Checkpointer:
     """
     A checkpointer class that saves checkpoints with two different, but overlapping policies: time and step.
@@ -383,7 +410,7 @@ class Checkpointer:
         default_factory=lambda: [CheckpointInterval(every=1000)]
     )
 
-    _last_temporary_checkpoint: Optional[str] = None
+    _temporary_checkpoints: list["_TemporaryCheckpointRecord"]
 
     def __init__(
         self,
@@ -395,7 +422,7 @@ class Checkpointer:
         keep_params: PyTree[FilterSpec] = True,
         dt_now_injection: Optional[Callable[[], datetime.datetime]] = None,
         delete_old_temp_checkpoints: bool = True,
-        delete_previous_temporary_checkpoint_after_save: bool = True,
+        keep_last_temporary_checkpoints: int = 1,
         debug: CheckpointDebugConfig | None = None,
     ):
         """
@@ -416,10 +443,14 @@ class Checkpointer:
             keep_params: a PyTree of FilterSpecs that specifies which parameters to keep in the checkpoint
             dt_now_injection: a function that returns the current time. useful for testing
             delete_old_temp_checkpoints: if True, carry forward a temporary checkpoint discovered at startup so the
-                next successful save can clean it up.
-            delete_previous_temporary_checkpoint_after_save: if True, delete the previously saved temporary checkpoint
-                after a new checkpoint commits successfully.
+                next successful save can clean it up according to keep_last_temporary_checkpoints.
+            keep_last_temporary_checkpoints: number of complete temporary checkpoints to retain after a temporary
+                checkpoint commits successfully. Set to 0 to delete temporary checkpoints after they commit. Permanent
+                checkpoints still clean up temporary checkpoints because they supersede them for recovery.
         """
+        if keep_last_temporary_checkpoints < 0:
+            raise ValueError("keep_last_temporary_checkpoints must be non-negative")
+
         self.base_path = str(base_path)
         self.temporary_base_path = str(temporary_base_path) if temporary_base_path is not None else None
         self.save_interval = save_interval
@@ -428,8 +459,9 @@ class Checkpointer:
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
-        self.delete_previous_temporary_checkpoint_after_save = delete_previous_temporary_checkpoint_after_save
+        self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
+        self._temporary_checkpoints = []
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -455,23 +487,13 @@ class Checkpointer:
             self._async_checkpoint_remover_thread.start()
             self._checkpoint_being_removed = None
 
-        # discover latest checkpoint and see if it's temporary
-        self._last_temporary_checkpoint = None
-        # Check both base_path and temporary_base_path for prior temporary checkpoints
-        search_paths = [self.base_path]
-        if self.temporary_base_path is not None:
-            search_paths.append(self.temporary_base_path)
-        for search_path in search_paths:
-            latest_checkpoint = discover_latest_checkpoint(search_path)
-            if latest_checkpoint is not None and delete_old_temp_checkpoints:
-                metadata = _load_metadata(latest_checkpoint)
-                if metadata.get("is_temporary", False):
-                    logger.info(
-                        f"Found prior temporary checkpoint {latest_checkpoint}. We will delete it after"
-                        " saving a new checkpoint."
-                    )
-                    self._last_temporary_checkpoint = latest_checkpoint
-                    break
+        if jax.process_index() == 0 and delete_old_temp_checkpoints:
+            self._temporary_checkpoints = self._discover_temporary_checkpoints()
+            if self._temporary_checkpoints:
+                logger.info(
+                    "Found prior temporary checkpoints %s. They will be cleaned up after saving a new checkpoint.",
+                    [record.path for record in self._temporary_checkpoints],
+                )
 
     def load_checkpoint(
         self,
@@ -545,7 +567,6 @@ class Checkpointer:
                 logger.info(f"Saving temporary checkpoint at step {step}.")
 
         if should_save:
-            last_checkpoint = self._last_temporary_checkpoint
             destination = f"step-{step}"
 
             # Route temporary checkpoints to temporary_base_path when configured
@@ -554,38 +575,15 @@ class Checkpointer:
             else:
                 save_base_path = self.base_path
 
-            if not save_permanent_ckpt:
-                self._last_temporary_checkpoint = os.path.join(save_base_path, destination)
-            else:
-                self._last_temporary_checkpoint = None
+            checkpoint_path = os.path.join(save_base_path, destination)
 
             def callback():
-                if last_checkpoint is not None:
-                    if not self.delete_previous_temporary_checkpoint_after_save:
-                        logger.info(
-                            "Keeping previous temporary checkpoint %s after saving new checkpoint because "
-                            "delete_previous_temporary_checkpoint_after_save=False.",
-                            last_checkpoint,
-                        )
-                        return
-                    # check if we still want to delete it. Sometimes we like to replace the metadata of the last
-                    # checkpoint. It'd be nice if the process weren't manual, but this is a good compromise
-                    try:
-                        last_metadata = _load_metadata(last_checkpoint)
-                        if last_metadata.get("is_temporary", False):
-                            logger.info(
-                                f"Deleting old temporary checkpoint {last_checkpoint} after saving new checkpoint."
-                            )
-                            # we can delete the last temporary checkpoint now
-                            self._rm_checkpoint(last_checkpoint)
-                        else:
-                            logger.info(
-                                f"Not deleting old temporary checkpoint {last_checkpoint} because it is no longer"
-                                " temporary."
-                            )
-                    except FileNotFoundError:
-                        logger.warning(f"Could not load metadata for last temporary checkpoint {last_checkpoint}.")
-                        # if we can't load the metadata, we can't delete it, so just log a warning
+                if jax.process_index() == 0:
+                    if not save_permanent_ckpt:
+                        self._record_temporary_checkpoint(checkpoint_path)
+                        self._prune_temporary_checkpoints(self.keep_last_temporary_checkpoints)
+                    else:
+                        self._prune_temporary_checkpoints(0)
 
             self.save_checkpoint(
                 tree=tree,
@@ -595,6 +593,56 @@ class Checkpointer:
                 is_temporary=not save_permanent_ckpt,
                 base_path_override=save_base_path,
             )
+
+    def _discover_temporary_checkpoints(self) -> list["_TemporaryCheckpointRecord"]:
+        search_paths = [self.base_path]
+        if self.temporary_base_path is not None:
+            search_paths.append(self.temporary_base_path)
+
+        records_by_path: dict[str, _TemporaryCheckpointRecord] = {}
+        for search_path in search_paths:
+            for checkpoint_path in _discover_checkpoint_paths_single(search_path):
+                record = _temporary_checkpoint_record(checkpoint_path)
+                if record is not None:
+                    records_by_path[record.path] = record
+
+        return sorted(records_by_path.values(), key=_temporary_checkpoint_sort_key)
+
+    def _record_temporary_checkpoint(self, checkpoint_path: str) -> None:
+        record = _temporary_checkpoint_record(checkpoint_path)
+        if record is None:
+            logger.warning(
+                "New checkpoint %s was expected to be temporary but metadata does not say so.", checkpoint_path
+            )
+            return
+
+        records_by_path = {existing.path: existing for existing in self._temporary_checkpoints}
+        records_by_path[record.path] = record
+        self._temporary_checkpoints = sorted(records_by_path.values(), key=_temporary_checkpoint_sort_key)
+
+    def _prune_temporary_checkpoints(self, keep: int) -> None:
+        if keep == 0:
+            retained: list[_TemporaryCheckpointRecord] = []
+            to_delete = self._temporary_checkpoints
+        else:
+            retained = self._temporary_checkpoints[-keep:]
+            to_delete = self._temporary_checkpoints[:-keep]
+
+        for record in to_delete:
+            try:
+                metadata = _load_metadata(record.path)
+            except FileNotFoundError:
+                logger.warning("Could not load metadata for temporary checkpoint %s.", record.path)
+                continue
+
+            if metadata.get("is_temporary", False):
+                logger.info("Deleting old temporary checkpoint %s after saving new checkpoint.", record.path)
+                self._rm_checkpoint(record.path)
+            else:
+                logger.info("Not deleting checkpoint %s because it is no longer temporary.", record.path)
+                retained.append(record)
+
+        self._temporary_checkpoints = sorted(retained, key=_temporary_checkpoint_sort_key)
 
     def _get_current_step_save_interval(self, step):
         # binary search for the correct interval
@@ -974,23 +1022,10 @@ def latest_checkpoint_path(checkpoint_path: PathLike, *additional_paths: PathLik
 
 def _discover_latest_checkpoint_single(checkpoint_path: str) -> Optional[str]:
     """Discover the latest checkpoint in a single root path."""
-    fs: AbstractFileSystem
-    fs, _ = _get_fs_and_plain_path(checkpoint_path)
-
-    def is_checkpoint_dir(path: str):
-        return fs.exists(os.path.join(path, "metadata.json"))
-
-    def maybe_unstrip_protocol(path: str):
-        base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
-        if base_path_protocol != "" and not urllib.parse.urlparse(path).scheme != "":
-            return f"{base_path_protocol}://{path}"
-        return path
-
-    ckpt_dirs = [maybe_unstrip_protocol(d) for d in fs.glob(os.path.join(checkpoint_path, "*")) if fs.isdir(d)]
-    ckpt_dirs.append(checkpoint_path)
-    ckpt_dirs = [d for d in ckpt_dirs if is_checkpoint_dir(d)]
+    ckpt_dirs = _discover_checkpoint_paths_single(checkpoint_path)
 
     def checkpoint_sort_key(ckpt_dir):
+        fs, _ = _get_fs_and_plain_path(ckpt_dir)
         metadata = json.load(fs.open(os.path.join(ckpt_dir, "metadata.json")))
         return (datetime.datetime.fromisoformat(metadata["timestamp"]), metadata["step"])
 
@@ -999,6 +1034,25 @@ def _discover_latest_checkpoint_single(checkpoint_path: str) -> Optional[str]:
         return out
     else:
         return None
+
+
+def _discover_checkpoint_paths_single(checkpoint_path: str) -> list[str]:
+    """Discover valid checkpoint directories in a single root path."""
+    fs: AbstractFileSystem
+    fs, _ = _get_fs_and_plain_path(checkpoint_path)
+
+    def is_checkpoint_dir(path: str):
+        return fs.exists(os.path.join(path, "metadata.json"))
+
+    def maybe_unstrip_protocol(path: str):
+        base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
+        if base_path_protocol != "" and urllib.parse.urlparse(path).scheme == "":
+            return f"{base_path_protocol}://{path}"
+        return path
+
+    ckpt_dirs = [maybe_unstrip_protocol(d) for d in fs.glob(os.path.join(checkpoint_path, "*")) if fs.isdir(d)]
+    ckpt_dirs.append(checkpoint_path)
+    return sorted(d for d in ckpt_dirs if is_checkpoint_dir(d))
 
 
 def _get_fs_and_plain_path(path, fs=None):
@@ -1029,8 +1083,8 @@ class CheckpointerConfig:
 
     This is useful if the run is being preempted and restarted, and you want to keep the old checkpoints.
     """
-    delete_previous_temporary_checkpoint_after_save: bool = True
-    """If True, delete the previously saved temporary checkpoint after a successful new save."""
+    keep_last_temporary_checkpoints: int = 1
+    """Number of complete temporary checkpoints to retain after a successful temporary checkpoint commit."""
     debug: CheckpointDebugConfig = field(default_factory=CheckpointDebugConfig)
     """Checkpoint-path diagnostics. Disabled by default."""
 
@@ -1054,7 +1108,7 @@ class CheckpointerConfig:
             step_policies=keeps,
             temporary_base_path=self.expanded_temporary_path(run_id),
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
-            delete_previous_temporary_checkpoint_after_save=self.delete_previous_temporary_checkpoint_after_save,
+            keep_last_temporary_checkpoints=self.keep_last_temporary_checkpoints,
             debug=self.debug,
         )
 
@@ -1066,6 +1120,8 @@ class CheckpointerConfig:
             self.temporary_base_path = os.path.expanduser(self.temporary_base_path)
         if isinstance(self.debug, dict):
             self.debug = CheckpointDebugConfig(**self.debug)
+        if self.keep_last_temporary_checkpoints < 0:
+            raise ValueError("keep_last_temporary_checkpoints must be non-negative")
 
         # validate the checkpoint intervals.
         # we want to make sure that the intervals are monotonic. only the last one can be None

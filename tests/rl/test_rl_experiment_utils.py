@@ -61,7 +61,7 @@ def _test_config(
     train_ram: str | None = None,
     inference_ram: str | None = None,
     zone: str | None = None,
-    delete_previous_temporary_checkpoint_after_save: bool = True,
+    keep_last_temporary_checkpoints: int = 1,
     checkpoint_debug: CheckpointDebugConfig | None = None,
 ) -> RLExperimentConfig:
     return RLExperimentConfig(
@@ -87,7 +87,7 @@ def _test_config(
         train_ram=train_ram,
         inference_ram=inference_ram,
         zone=zone,
-        delete_previous_temporary_checkpoint_after_save=delete_previous_temporary_checkpoint_after_save,
+        keep_last_temporary_checkpoints=keep_last_temporary_checkpoints,
         checkpoint_debug=checkpoint_debug or CheckpointDebugConfig(),
     )
 
@@ -281,7 +281,7 @@ def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monk
             train_tpu_type="v5p-8",
             inference_tpu_type="v5p-8",
             zone="us-central1-b",
-            delete_previous_temporary_checkpoint_after_save=False,
+            keep_last_temporary_checkpoints=3,
             checkpoint_debug=CheckpointDebugConfig(
                 enabled=True,
                 log_interval=15.0,
@@ -298,7 +298,7 @@ def test_build_rl_job_config_propagates_checkpoint_controls_and_instance_id(monk
     assert job_config.run_config.zone == "us-central1-b"
     assert job_config.curriculum.actor_name == "curriculum-rl-test-instance"
     assert job_config.weight_transfer.coordinator_name == "wt-coord-rl-test-instance"
-    assert not job_config.trainer.checkpointer.delete_previous_temporary_checkpoint_after_save
+    assert job_config.trainer.checkpointer.keep_last_temporary_checkpoints == 3
     assert job_config.trainer.checkpointer.debug.enabled
     assert job_config.trainer.checkpointer.debug.log_interval == 15.0
     assert job_config.trainer.checkpointer.debug.dump_stacks_after == 45.0
