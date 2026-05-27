@@ -607,9 +607,12 @@ def _preempt_solo(
             continue
         if victim.device_variant != wanted_variant:
             continue
-        # Can only preempt strictly lower priority (higher band_sort_key)
+        # Can only preempt strictly lower priority (higher band_sort_key).
+        # `solo_victims` is sorted by descending band_sort_key, so once this
+        # gate trips every later victim also fails — break, don't continue,
+        # to avoid scanning the unpreemptible tail (issue #5888).
         if victim.band_sort_key <= candidate.band:
-            continue
+            break
 
         cap = context.capacities.get(victim.worker_id)
         if cap is None:
