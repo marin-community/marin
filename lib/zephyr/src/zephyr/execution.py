@@ -212,6 +212,22 @@ def _stage_throughput(
     return items, bytes_processed, item_rate, byte_rate
 
 
+def _format_throughput(throughput: tuple[int, int, float, float]) -> tuple[str, str, str, str]:
+    """Render a ``_stage_throughput`` tuple into display strings, preserving field order.
+
+    Centralizes the convention that item counts/rates use SI suffixes while byte
+    totals/rates use binary prefixes. Returns ``(items, bytes_processed,
+    item_rate, byte_rate)`` so callers can unpack in the same order as the input.
+    """
+    items, bytes_processed, item_rate, byte_rate = throughput
+    return (
+        _format_count(items),
+        _format_bytes(bytes_processed),
+        _format_count(item_rate),
+        _format_bytes(byte_rate),
+    )
+
+
 def _shared_data_path(prefix: str, execution_id: str, name: str) -> str:
     """Path for a shared data object: {prefix}/{execution_id}/shared/{name}.pkl"""
     return f"{prefix}/{execution_id}/shared/{name}.pkl"
@@ -678,6 +694,7 @@ class ZephyrCoordinator:
             totals = self.get_counters()
             elapsed = time.monotonic() - (stage_start or time.monotonic())
             throughput = _stage_throughput(totals, stage_name, elapsed)
+            throughput_strs = _format_throughput(throughput) if throughput is not None else None
 
             lines = ["**Stages**\n"]
             for idx, stage in enumerate(plan_stages):
@@ -689,11 +706,10 @@ class ZephyrCoordinator:
             lines.append(
                 f"\n**Shards** — {completed}/{total_shards} complete ({pct}%), {in_flight} in-flight, {queued} queued"
             )
-            if throughput is not None:
-                items, bytes_processed, item_rate, byte_rate = throughput
+            if throughput_strs is not None:
+                items_s, bytes_s, item_rate_s, byte_rate_s = throughput_strs
                 lines.append(
-                    f"\n**Throughput** — {_format_count(items)} items ({_format_count(item_rate)}/s), "
-                    f"{_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)"
+                    f"\n**Throughput** — {items_s} items ({item_rate_s}/s), {bytes_s} ({byte_rate_s}/s)"
                 )
 
             detail_md = "\n".join(lines)[:MAX_STATUS_TEXT_LENGTH]
@@ -701,10 +717,10 @@ class ZephyrCoordinator:
             current_stage_desc = _get_stage_description(plan_stages[current_stage_index]) if plan_stages else ""
             summary_lines = [f"**{current_stage_desc}** ({current_stage_index + 1}/{len(plan_stages)})"]
             summary_lines.append(f"{completed}/{total_shards} shards ({pct}%)")
-            if throughput is not None:
-                _, _, item_rate, byte_rate = throughput
-                summary_lines.append(f"{_format_count(item_rate)} items/s")
-                summary_lines.append(f"{_format_bytes(byte_rate)}/s")
+            if throughput_strs is not None:
+                _, _, item_rate_s, byte_rate_s = throughput_strs
+                summary_lines.append(f"{item_rate_s} items/s")
+                summary_lines.append(f"{byte_rate_s}/s")
             summary_md = "  \n".join(summary_lines)
             return detail_md, summary_md
 
@@ -737,14 +753,14 @@ class ZephyrCoordinator:
         elapsed = time.monotonic() - (self._stage_monotonic_start or time.monotonic())
         throughput = _stage_throughput(totals, self._stage_name, elapsed)
         if throughput is not None:
-            items, bytes_processed, item_rate, byte_rate = throughput
+            items_s, bytes_s, item_rate_s, byte_rate_s = _format_throughput(throughput)
             logger.info(
                 base_msg + "; items=%s (%s/s), bytes_processed=%s (%s/s)",
                 *base_args,
-                _format_count(items),
-                _format_count(item_rate),
-                _format_bytes(bytes_processed),
-                _format_bytes(byte_rate),
+                items_s,
+                item_rate_s,
+                bytes_s,
+                byte_rate_s,
             )
         else:
             logger.info(base_msg, *base_args)
@@ -1482,10 +1498,10 @@ class ZephyrWorker:
                 detail_lines = [f"**Stage**: {stage}", f"**Active tasks**: {active}"]
                 throughput = _stage_throughput(self._last_reported_counters, stage, 1.0)
                 if throughput is not None:
-                    items, bytes_processed, item_rate, byte_rate = throughput
+                    items_s, bytes_s, item_rate_s, byte_rate_s = _format_throughput(throughput)
                     detail_lines += [
-                        f"**Items**: {_format_count(items)} ({_format_count(item_rate)}/s)",
-                        f"**Throughput**: {_format_bytes(bytes_processed)} ({_format_bytes(byte_rate)}/s)",
+                        f"**Items**: {items_s} ({item_rate_s}/s)",
+                        f"**Throughput**: {bytes_s} ({byte_rate_s}/s)",
                     ]
             return "  \n".join(detail_lines), summary_md
 
