@@ -1,0 +1,137 @@
+# Inference Randomness and Trainer-Inference Mismatch: Notes from Agarwal (ICLR 2026 SPOT) and Ring-linear (arXiv:2510.19338)
+
+## TL;DR
+
+Trainer-inference (T/I) mismatch is a numerical-implementation phenomenon — not a randomness phenomenon — that arises because training stacks (Megatron/FSDP) and inference engines (vLLM/SGLang) compute logits along different code paths, and the errors accumulate layer-by-layer and token-by-token. The literature treats it as something to be **fixed at the systems level** (FP32 KV-cache for linear attention, FP32 RMSNorm/LM-head, identical attention backend, deterministic MoE permutation, stable top-k) and then **patched algorithmically** with truncated importance sampling (TIS) or hard masking of high-divergence tokens (IcePop/Masked-IS). Inference RNG itself (seeds, sampling stream state) is **never treated as a knob** in either source — it is implicitly assumed to be averaged over by the sampling-based estimator. Our `tis_importance_sampling_ratio_max=2.0` is on the loose end; tighter caps (1.1-1.5) or hard masking of tokens with |Δlog p| > 0.8 are more common at the frontier.
+
+## Source summary
+
+**Agarwal, "The Hitchhiker's Guide to Frontier Reinforcement Learning"** (ICLR 2026 Workshop on Scaling Post-Training for LLMs, 38 slides, Periodic Labs). A practitioner's tour of what breaks when you scale RL to 1T+ parameter MoEs. Three infra pillars are called out by name on slide 4-5 ("Stable RL for Large MoEs requires several infra pieces"): (a) dealing with train-inference discrepancy, (b) asynchronous RL, (c) "easy-to-tune" and stable algorithm. Slides 14-22 are the directly relevant T/I-mismatch block, with router-replay, attention-kernel bug story, and masked-IS REINFORCE. Subsidiary themes: drop KL regularization when possible, prefer simple algorithms, use async/pipeline RL with off-policy samples.
+
+**Ring-linear-2.0 technical report ("Every Attention Matters", arXiv:2510.19338, Ling Team, Oct 2025).** Despite the architecture-focused title, **Section 5.2 ("Reinforcement Learning") is the canonical recent reference on systematic train-inference alignment for RL**, and it is the paper Agarwal explicitly cites on his MoE T/I slide. The paper claims "the root cause of the prevalent problem of training collapse in RL is training-inference disparity," and walks through six modules where they had to enforce alignment (KV cache, LM head, RMSNorm, attention, RoPE, MoE) before plain PPO with rollout-probability importance weighting becomes stable. Figure 10 ablates each fix in turn against reward; Figure 12 ablates clipping with rollout vs. recomputed-training probabilities. Sections 1-4 and 6 are unrelated architecture/scaling content.
+
+## What is the trainer-inference mismatch, mechanically?
+
+The mismatch is **not** Monte-Carlo noise from inference sampling. It is the systematic divergence between two implementations of the same forward pass, evaluated on the **same** token sequence. Concretely (Ring-linear §5.2, p. 12-14):
+
+- **Tokenizer rounding** is not really an issue here — both engines tokenize identically. The damage is downstream.
+- **KV-cache numerical precision.** Inference engines store KV in BF16 by default; for *linear* attention the KV state is accumulated recurrently (their Eq. 4: `kv_t = λ·kv_{t-1} + k_t^T v_t`), so BF16 round-off accumulates progressively, and Fig. 11 shows large divergences in token output probabilities purely from this. For softmax attention the issue is less catastrophic (KV doesn't accumulate), but still nonzero.
+- **LM-head precision.** "The softmax function is highly sensitive to numerical precision, necessitating FP32 for the lm_head layer" (p. 14). Training engines run LM-head in BF16 by default to save memory; inference engines often do too. If one of them rounds differently, the per-token softmax shifts.
+- **RMSNorm.** Three things matter: (i) compute in FP32, (ii) use the same epsilon in trainer and inference, (iii) keep residual in FP32 and *un-fuse* RMSNorm from residual in both. Otherwise the kernel-fusion choices differ and so do the activations.
+- **RoPE.** "Minor discrepancies often exist between a common PyTorch implementation and a RoPE operator in an inference engine, which can lead to slightly different outputs even with identical inputs" (p. 15).
+- **Attention backend / kernel.** The biggest single source. Agarwal slide 20 ("Frontier RL can run into kernel bugs"): cuDNN's `causal` vs `padding_causal` (the latter is required for sequence packing in trainers) produce **different** attention outputs. This made T/I mismatch "4× worse in KL for Kimi-K2"; Nvidia is upstreaming a cuDNN fix. The Ring-linear paper says the same in prose: "the used backend must be consistent between training and inference, e.g., FlashAttention. Second, watch out for the misalignment between prefill (used during training) and decode (used during inference). This issue causes the training-inference disparity to worsen with longer outputs" (p. 15). vLLM's PagedAttention/chunked-prefill paths are exactly this kind of prefill-vs-decode mismatch generator.
+- **MoE specifics.** Two killers: `torch.topk` is non-stable (ties broken differently in different runs), and token-permutation/summation order matters. Both need deterministic replacements. Agarwal additionally documents the "expert selection drift" problem (slide 17, "Train-inference mismatch is worse for MoEs"): even small logit differences can flip top-k expert selection, and a flipped routing decision changes the activation completely. Agarwal's "Router Replay" slide (slide 18-19) attacks this directly — replay the inference-time router decisions in the trainer so both forward passes use the same expert assignment.
+
+**Magnitude.** Ring-linear: "in extreme cases, the output probability for the same token can be 0 during training and 1 during inference" (p. 13). Less pathologically, Fig. 12 right panel shows that without alignment, the fraction of tokens with `|p_train − p_rollout| > 0.8` exceeds 10⁻⁴ per step and grows monotonically. Agarwal slide 22 reports for Kimi-K2 that masking the worst-mismatch tokens removes "usually <0.02% tokens or lower" — i.e., the heavy tail of mismatched tokens is **very sparse but very damaging**. Dense (non-MoE) models without sequence packing should sit in the 10⁻⁵-10⁻⁴ tail-fraction range; we are running dense Llama-3.1-8B without sequence packing, so we are on the easy end of this spectrum.
+
+## Standard corrections in the literature
+
+Both sources reach the **same conclusion** by different routes: fix what you can systemically, then absorb the residual with an importance-sampling reweight.
+
+**Ring-linear (Eq. 5 vs Eq. 6):** The "ideal" PPO uses `π_train(x,θ) / π_rollout(x,θ_old)` — i.e., importance-weight by the *actual sampling distribution* (vLLM/SGLang). The "verl/OpenRLHF compromise" replaces the rollout probability with a re-forward through the trainer (`π_train(x,θ_old)`), giving Eq. 6. The paper argues Eq. 6 is *biased* because it "totally ignores the training-inference disparity," and that the right approach is to systemically align so that Eq. 5 (using rollout probs) becomes safe to use directly. Fig. 12 confirms: post-alignment, "Clipping with Rollout Probs" yields strictly higher reward than "Clipping with Training Probs" and keeps the |Δp|>0.8 tail bounded.
+
+**Agarwal (slides 22-24):** Two algorithmic remedies, both in the importance-sampling family:
+- **Masked-IS REINFORCE / IcePop** (slide 22, citing IcePop): compute `r_t = π_train / π_rollout` per token, and **hard-mask** (zero out the contribution of) any token whose ratio exceeds a threshold. Empirically <0.02% of tokens get masked. This is qualitatively different from PPO-style clipping: clipping keeps the gradient but caps its magnitude; masking drops the token entirely.
+- **Group Sequence Policy Optimization (GSPO)** (Zheng et al., arXiv:2507.18071, cited in Ring-linear §5.2). Per-sequence rather than per-token importance ratio: `r = π_train(y|x) / π_rollout(y|x)` over the whole rollout. Cited as Agarwal's preferred "easy-to-tune and stable algorithm" direction.
+- **"Your efficient RL framework secretly brings you off-policy RL training"** (Yao et al., 2025, cited in Ring-linear §5.2 — notion.site link). This is the conceptual framing that says: because of T/I mismatch, every RL framework is implicitly doing off-policy RL on `π_rollout`, even when you think you're on-policy. The fix is either (a) close the gap systematically or (b) use a proper off-policy estimator.
+
+**Our setup** uses the standard token-level TIS form: `r_t = p_trainer / p_vllm` capped at 2.0. This sits between Ring-linear's "ideal Eq. 5 with rollout probs as denominator" (which we are doing — vLLM is `π_rollout`) and IcePop-style hard masking. The token-level clip is what verl, OpenRLHF, and most academic codebases use; per-sequence (GSPO) and hard-mask (IcePop) are recent variants that work better on hard cases (long-CoT MoE) but neither source claims they are necessary for dense 8B + short-CoT MATH.
+
+## Clip-ratio guidance: what value, when, why?
+
+Neither source publishes a number for the TIS cap directly. Indirect signals:
+
+- **Ring-linear Fig. 12** uses standard PPO clip values `ϵ = 0.2` (i.e., ratios in [0.8, 1.2]) on the *behavior cloning* clip, separately from any TIS truncation. They report stable training in the post-alignment regime without an explicit TIS cap visible in equations 5/6 — i.e., they rely on the PPO clip alone after fixing the disparity at source.
+- **Agarwal slide 22:** "Mask tokens with large train-inference mismatch, usually <0.02% tokens or lower." No numeric ratio cited, but the IcePop paper itself uses a log-ratio threshold of ~0.5-1.0 (corresponding to ratios ~1.65-2.7) which is roughly consistent with our 2.0 cap as a soft equivalent.
+- **DAPO clip-higher (`ϵ_low=0.2, ϵ_high=0.28`):** This is the policy clip, not TIS clip. The asymmetric form (Yu et al., arXiv:2503.14476) reflects a different concern (asymmetric incentive to explore upward) and is orthogonal to T/I correction.
+
+**Verdict on our 2.0:** loose-but-defensible. Tighten if you see (a) reward plateau followed by collapse mid-training, or (b) the fraction of tokens hitting the cap grows above ~0.1%. For dense Llama-3.1-8B on MATH-500 with vLLM-on-TPU, the regime should be benign (no MoE expert drift, no MHA-vs-FA backend swap as long as the trainer uses the same attention impl) and 2.0 should not be the binding constraint. **Recommendation:** log the per-step histogram of `r_t` and the fraction `Pr(r_t > 2.0)`; if it exceeds 10⁻³ per step the cap is too loose, if it exceeds 10⁻² the alignment is broken upstream and capping won't save you.
+
+## Inference randomness considerations (the heart of the question)
+
+Neither source treats inference RNG as a controllable knob. The Ring-linear paper's third alignment principle is **"eliminating non-determinism"** (p. 14), and they list `torch.topk` (non-stable on ties) and token-permutation order. But "non-determinism" here means non-bitwise-reproducible kernels, *not* sampling RNG. The sampling distribution `π_rollout(·|x, θ)` is treated as a fixed (possibly degenerate) distribution whose samples we draw — the seed determines which sample we get, but the *distribution* is what enters the IS ratio, and the distribution is invariant under seed permutation.
+
+This has several concrete implications for our setup:
+
+1. **Correlated vs. decorrelated worker seeds:** From a *bias* standpoint, it does not matter — the expectation of the gradient estimator is unchanged. From a *variance* standpoint, decorrelating worker seeds is strictly better: it spreads the per-step sample across more independent draws from the per-prompt response distribution. Our current scheme of `base + 1000 + worker_index` per-worker seeds **collides at adjacent base seeds** (`base=0, w=1` and `base=1, w=0` both land at `1001`) and should be replaced with `jax.random.fold_in(jrandom.PRNGKey(base), worker_index)` — the canonical JAX key-derivation primitive that Levanter already uses for the same pattern (`PermutationDataset`, `MixtureDataset`, flash-attention dropout keys, etc.). `fold_in` is collision-free by Threefry avalanche, invariant to `num_rollout_workers`, and needs no stride/nonce/assert. See the main `rl_blog.md` logbook section "CLAUDE 2026-05-27 — Inference-side seeding" for the full derivation, the precedent table, and the replacement helper.
+
+2. **Engine-level vs per-request seed (TPU vLLM limitation):** The papers don't speak to this directly, but the implication is benign. With engine-level seeding only, the RNG state advances based on which prompts hit which batches and how many tokens are decoded. This means that **two runs with the same engine seed but slightly different prompt ordering produce different completions** — which is just another form of sample-level noise. The IS reweight in Eq. 5/6 is **agnostic to which sample was drawn** because the ratio is evaluated at the actually-sampled token, regardless of how it was sampled. The per-request limitation matters for *reproducibility* (you can't replay a single rollout exactly), but not for *correctness* of the gradient.
+
+3. **Should we want determinism?** No — the literature is clear that on-policy RL **needs** the sampling distribution to be the true (stochastic) policy distribution. Greedy sampling collapses `π_rollout` to a delta function at argmax, which (a) eliminates the IS denominator's variance but (b) destroys exploration and gives a degenerate `Â=0` for any tied prompt. The Ring-linear training curves (Fig. 13) and Agarwal's whole talk are framed around stochastic rollouts at the standard temperature (1.0 for thinking models). Greedy fractions are not discussed.
+
+4. **Temperature × mismatch interaction:** Lower temperature concentrates `π_rollout` on a smaller set of tokens. This (a) reduces the typical magnitude of `r_t` for chosen tokens (since the chosen tokens are higher-probability) but (b) *increases* the relative damage of any single mismatched-routing or mismatched-kernel decision because the policy is more confident and the asymmetry between "what train says" and "what infer sampled" gets larger when both distributions are peaked. Ring-linear runs RL at the long-context regime (64K) without a stated temperature change; Agarwal does not discuss schedules. Empirically the GRPO/DAPO literature uses temperature 1.0 throughout and we should do the same unless we have a specific reason to anneal.
+
+5. **Inference-RNG as noise vs signal:** Neither paper treats it as signal. The model is: `gradient = E_{π_rollout}[ ... ]`, and any seed-driven variation is variance to be reduced by averaging over more samples — exactly what `n_generations_per_prompt=16` is for. There is no version of the theory where "use the same seed across workers" is correct.
+
+## Seed variation as variance reduction (added on review)
+
+The framing the papers leave implicit but is worth making explicit: the mismatch `ε(s, prompt) = p_trainer − p_vllm` is **deterministic given the engine seed and prompt sequence**, and varies with `s` in ways we don't directly control. Decompose its contribution to the gradient estimator into two parts:
+
+1. **Systematic bias.** The component of `ε` that is constant across all `s` (e.g., vLLM's PagedAttention always rounds a specific way; the TPU softmax precision is uniformly worse than the trainer's FP32 LM-head). **TIS reweighting handles this**; the clip-at-2.0 just bounds the worst case. Seed variation does **not** affect systematic bias — by definition, that part is invariant under `s`.
+2. **Stochastic / trajectory-dependent variance.** The component of `ε` that bounces around as the engine RNG state advances. Different engine seeds → different per-token mismatch realizations. **By construction this part has expectation zero** (it is whatever is left over after removing systematic bias), so averaging over multiple seed trajectories drives it toward zero.
+
+This is the correct way to read "invariance via seed": you get **invariance to which specific RNG trajectory the run happened to traverse**. You do not get invariance to the underlying numerical bias — that is a systems problem.
+
+### Within-run vs across-run averaging
+
+**Implicit averaging within a single 500-step run.** Per step we make 64 prompts × 16 generations = 1024 vLLM forward passes; over 500 steps that is ~5×10⁵ forward passes. The vLLM global RNG state advances through hundreds of thousands of distinct configurations. The aggregate gradient direction is **already averaged over a massive number of RNG trajectories** by the end of the run. For long runs the trajectory-dependent variance contribution to the *terminal* metrics is small relative to genuine SGD noise from batch order and model state. This is why 500-step runs at different base seeds tend to land at similar pass@1 numbers in well-tuned settings — the within-run averaging swamps the across-run variation.
+
+**Explicit averaging across K base seeds.** Each run sees a different vLLM RNG trajectory from the start. Step-by-step the runs differ noticeably; at convergence they sit close together modulo (a) real SGD noise and (b) any residual bias that TIS did not fully cancel. The K-seed sweep produces **a confidence interval on the reported metric**, not a smaller bias. It is what you cite to a reviewer who asks "how robust is pass@1 to seed choice."
+
+### When seed variation has the most teeth
+
+1. **Short runs and warmup.** At step 0 the implicit averaging has only seen ~10³ RNG draws. Trajectory-dependent variance is large relative to the eventual run-mean. Decorrelated workers (vs colliding seeds) approximately double the effective sample size during warmup and stabilize early steps.
+2. **Per-checkpoint diagnostics.** Want to know whether TIS is doing its job at a given checkpoint? Run K rollout-only passes at the same weights with different engine seeds; look at gradient direction stability. Stable across seeds → TIS is absorbing the mismatch. Diverging → some component of the mismatch is escaping correction (probably a kernel or backend discrepancy TIS isn't built to catch).
+3. **Reported eval numbers in the blog.** "pass@1 = 0.X ± Y over K seeds" requires K decorrelated runs. One seed gives a point estimate with no defensible error bar.
+4. **Stress-testing the clip cap.** If the per-token `r_t` histogram is concentrated near 1 with very few hits at the clip, TIS is benign. If different seeds give noticeably different histograms — especially if some show bimodality or a heavy upper mode — you have RNG-conditional pathologies the others happen to dodge. That is the IcePop "switch to masking" signal.
+
+### Consequences for our setup
+
+- **The within-run picture for the live 500-step run is fine.** Single base seed (42) with one rollout worker is enough RNG averaging to get a stable point estimate of terminal pass@1. We are not in the regime where one seed gives misleading numbers because of insufficient implicit averaging.
+- **The across-run picture is currently broken** by the seed-spacing bug (`worker_seed = base + 1000 + i` with `num_rollout_workers = 2` collides at adjacent base seeds). For a K-seed blog report to be honest, the seeds need to be actually decorrelated. The fix is `jax.random.fold_in(jrandom.PRNGKey(base), worker_index)` — JAX's standard key-derivation primitive, already used by Levanter for exactly this `(parent_key, index) → child_key` pattern (`PermutationDataset`, `MixtureDataset`, `flash_attention` dropout, eval harness, JIT scheduler). Beats stride-based or sha256-based alternatives on every axis: simpler (5 lines incl. docstring), invariant to `num_rollout_workers` (existing workers' seeds unchanged when you add a worker), no constants to maintain, and consistent with the per-epoch `fold_in` already used inside the Feistel scheduler at `rollout_schedule.py:73`. **Land before any K-seed report.**
+- **Concrete monitoring recommendation** (independent of K-seed strategy): log per-step `r_t` summary stats to W&B — at minimum `mean(r_t)`, `std(r_t)`, `Pr(r_t > 2.0)`, and a coarse histogram bucket count. If `mean(r_t)` drifts from 1.0, TIS is biased somewhere; if `Pr(r_t > 2.0)` exceeds 10⁻³ per step, tighten the cap; if `std(r_t)` differs noticeably between rollout workers in the same run, the within-run averaging argument breaks and we have residual seed sensitivity worth investigating.
+
+### TL;DR for this section
+
+Seed variation gives **variance reduction, not bias correction**. Variance reduction is most valuable (a) at warmup, (b) for diagnostics, and (c) for honest reportable confidence intervals across runs. For our 500-step blog run, within-run averaging already does most of the variance reduction work; the practical value of cross-run K-seed sweeps is mainly to defend the headline number with an error bar, and that defensibility requires fixing the per-worker seed-derivation bug first (replace `base + 1000 + i` with `jrandom.fold_in(PRNGKey(base), i)`).
+
+## Implications for our specific setup
+
+Cross-referencing the question list with the sources:
+
+- **Is clip-at-2.0 reasonable?** Defensible for dense 8B + short-CoT MATH. Loose end of the range. Frontier-MoE work (Kimi-K2, Ring-flash-linear, GPT-OSS-120B in this same paper family) uses tighter caps (~1.5) plus hard masking. **Action:** keep 2.0, log `Pr(r_t > 2.0)` per step, tighten only if it exceeds 10⁻³.
+- **Should we be doing more than TIS?** Probably not for this run. Per-sequence (GSPO) and hard-mask (IcePop) are diminishing-returns variants for the MoE/long-CoT regime; Llama-3.1-8B dense is the easy regime where the Ring-linear ablation (Fig. 10) suggests *systematic* alignment is sufficient and Eq. 5 with clipping works. The action item is to confirm that vLLM and the trainer use the **same attention backend and same RMSNorm/RoPE impl** — those are the failure modes that produce the 4× KL blow-up Agarwal flags.
+- **Does engine-level seeding limit us?** No, for the reasons in (2) above. It limits reproducibility, not correctness.
+- **Failure modes to watch in the 500-step blog run:**
+  - **Sudden reward collapse mid-training** (Ring-linear Fig. 10 "Original" curve crashes from 0.5 → 0.1 around step 250). Signal: monitor reward + the |Δlog p| histogram. If the histogram tail grows just before reward drops, T/I disparity is the cause.
+  - **Length explosion** under DAPO clip-higher. Agarwal doesn't discuss explicitly; this is a known DAPO pathology — `clip_high=0.28` lets long-tail upward gradients through more freely, which can favor longer responses without an explicit length penalty. With our 1024-token cap and `n_generations_per_prompt=16` this should be visible as mean response length climbing toward the cap.
+  - **Per-token IS ratio histogram becoming bimodal** with a heavy upper mode at the cap (2.0). This is the IcePop "mask these tokens" pattern. If it appears, switch from clipping to masking (zero the loss contribution) rather than just raising the cap.
+  - **Reward hacking via formatting tricks** — not in either source explicitly but worth flagging for MATH-500 with regex-extracted answers.
+
+## Other relevant frontier-RL insights from the talk
+
+Agarwal's broader prescriptions, paraphrased:
+
+- **Drop KL regularization if it works without it** (slide 24). "Pick the simplest choice that works." Many recent papers (DAPO, GRPO variants) report comparable results with KL=0. We have `kl_loss_weight=0` (or similar) — fine.
+- **Asynchronous / Pipeline RL** (slides 25-28). Periodic Labs uses "Pipeline RL" — in-house async stack that pauses and resumes inference during weight updates without quiescing requests. This is independent of our (simpler) sync architecture but worth knowing if we scale.
+- **Stale rollouts are OK** (slide 29-30). Async RL by construction uses off-policy data; the IS reweight handles it. Implication: we don't need to be paranoid about "the policy that generated this rollout is exactly the policy we're updating" — there can be a few-step staleness without harm, as long as we IS-weight.
+- **"The core algorithm is simple. The engineering to make it work reliably at scale is hard"** (slide 5). The whole talk is in this spirit — the wins are in systems alignment, not in fancy new RL algorithms.
+- **For scientific discovery RL** (slides 33-37), Agarwal flags high-latency reward functions (physical experiments) as the next big infra challenge — not directly relevant but informs the "high resilience to very stale, off-policy samples" framing.
+
+## Open questions / things the sources don't answer
+
+- **What's the right TIS cap for dense 8B?** Neither paper gives a number. We have 2.0; the IcePop/Ring-linear literature is for MoE/long-CoT. A small ablation (1.5 vs 2.0 vs 3.0) on a 100-step pilot would settle this for our regime.
+- **vLLM-on-TPU vs vLLM-on-GPU mismatch profile.** The papers all reference GPU stacks. TPU vLLM uses different kernels (no cuDNN, different attention impl). The mismatch surface is therefore different — could be smaller (TPU's matmul is more numerically predictable) or larger (less mature kernel set). We won't know without measuring `D_KL(π_train || π_rollout)` directly.
+- **Per-request vs engine-level seed effect on sample diversity within a step.** With engine-level seeding and 16 generations per prompt arriving in one batch, the relative diversity vs per-request seeding has not been studied (to my knowledge in either source). Likely benign because the vLLM RNG state advances per token, but worth a sanity check that we are not getting `n_generations_per_prompt=16` near-duplicates.
+- **Should `n_generations_per_prompt` change to compensate?** If TIS variance is the bottleneck, more samples help; if T/I bias is the bottleneck, more samples don't. Neither paper studies this directly.
+- **What does "systematic alignment" look like for the Marin trainer?** Ring-linear's prescription assumes you control both the trainer and the inference engine. We use Levanter (JAX) for the trainer and vLLM (PyTorch on TPU) for inference — *different software stacks entirely*. There is no realistic path to module-by-module activation alignment of the kind Ring-linear ran. The TIS reweight is therefore doing more work for us than for them, and tightening the cap (or switching to masking) is the only knob we have.
+
+## References for fast follow-up
+
+- Agarwal, R. *The Hitchhiker's Guide to Frontier Reinforcement Learning.* ICLR 2026 SPOT workshop, Apr 2026. https://agarwl.github.io/images/research/iclr_spot_talk_v2.pdf
+- Ling Team. *Every Attention Matters: An Efficient Hybrid Architecture for Long-Context Reasoning.* arXiv:2510.19338v2, Oct 2025. Section 5.2 is the T/I alignment material.
+- Zheng et al. *Group Sequence Policy Optimization.* arXiv:2507.18071, 2025. The per-sequence IS variant cited by both sources.
+- Yao et al. *Your efficient RL framework secretly brings you off-policy RL training.* https://fengyao.notion.site/off-policy-rl, 2025. The conceptual framing that all RL frameworks are implicitly off-policy due to T/I mismatch.
+- IcePop (referenced by Agarwal slide 22). The hard-masking variant of IS for mismatched tokens.
+- Yu et al. *DAPO.* arXiv:2503.14476. Source of our asymmetric clip-higher; orthogonal to TIS.
+- Ahmadian et al. *RLOO.* arXiv:2402.14740. Source of our advantage estimator; orthogonal to TIS.

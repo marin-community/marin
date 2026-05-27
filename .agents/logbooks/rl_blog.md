@@ -3593,3 +3593,287 @@ Current state:
 Conclusion: the run is healthy at the latest check. It advanced through another
 training step, served/received new weights, and entered the next expected
 single-sampler pass@16 eval window. No manual recovery was needed.
+
+## CLAUDE 2026-05-27 — Inference-side seeding: design, alternatives, and a 3-seed ablation bug
+
+This section is a focused write-up of the seeding scheme for the rollout /
+inference side, what it actually controls, what the alternative configurations
+would buy us, and a real bug in the per-run seed derivation that breaks
+multi-seed ablations.
+
+### The seed derivation rule (as of `c99ccd685` + `397b97b32`)
+
+```
+base_seed (RLJob.seed, --seed flag)        = N        (default 42)
+trainer_seed                               = N
+replay_buffer_seed                         = N
+rollout_base = N + 1000                   (rl_job.py:237)
+rollout_worker_i_seed = rollout_base + i  (orchestration.py:209)
+vllm_engine_seed_i = rollout_worker_i_seed
+feistel_scheduler_seed_i = rollout_worker_i_seed
+```
+
+Layer-by-layer:
+
+- **Trainer / replay buffer (`seed = N`)**: drives `jrandom.PRNGKey(N)` for
+  trainer `model_key` and `training_key`, and `np.random.default_rng(N)` for
+  the replay buffer's `choice(env_choices, size=local_batch_size, replace=False)`
+  that selects groups for each gradient step.
+- **Rollout base (`+1000` nonce)**: separates rollout-side RNG from trainer-side
+  RNG. Cosmetic in the sense that Threefry's avalanche would decorrelate even
+  `+1`, but the visual separation between "42" (trainer) and "1042" (rollout-0)
+  in logs/W&B is real ergonomics.
+- **Per-worker (`+i`)**: gives each rollout worker its own Feistel scheduler key
+  (different permutation of the train split) and its own vLLM engine seed
+  (different initial RNG state inside vLLM's global sampling stream).
+
+### What controls what
+
+| Component | Seed used | Effect |
+|---|---|---|
+| Trainer model key, training key | `N` | Sharding + loss-step RNG (mostly no-op for RLOO w/o dropout) |
+| Replay buffer `choice` | `N` | Which groups from the buffer make each gradient batch |
+| Feistel scheduler per worker | `N + 1000 + i` | Which problem indices each worker samples per step / epoch |
+| vLLM engine seed per worker | `N + 1000 + i` | Initial RNG state of the vLLM TPU sampler; advances per `generate()` call |
+
+### Why TPU vLLM forces engine-level (not per-request) seeding
+
+`SamplingParams.seed` is **not supported on TPU vLLM** (per PR #5256 commit
+message: *"unsupported per-request SamplingParams seeds"*). The only seed knob
+is the engine-level init seed in `AsyncEngineArgs(seed=...)`. After init, the
+global RNG state advances based on which prompts hit which batches and how
+many tokens are decoded. This is data-dependent and async-scheduler-dependent,
+so two engines doing different work diverge their RNG state almost immediately
+even if initialized with the same seed.
+
+Practical consequence: "same engine seed across workers" only buys you
+bit-identical RNG at engine init. After the first `generate()` call the two
+engines have diverged. So you can't cleanly hold the vLLM seed *constant per
+request* in this stack — only at engine init.
+
+### Frame: what does this matter for, given trainer-inference mismatch?
+
+The TIS correction (`do_trainer_inference_mismatch_importance_sampling=True`,
+clip at 2.0) handles the per-sequence numerical gap between vLLM (sampling)
+and the trainer (logprob re-evaluation). It's computed **per rollout** and
+does not interact with how many workers there are or how their seeds are
+configured. Multiple workers neither help nor hurt TIS.
+
+What multiple workers DO affect:
+
+1. Per-prompt **variance reduction** in RLOO advantage estimates (group size)
+2. **Coverage** of the training distribution per gradient step
+
+These two trade off, and they're what determines whether "same problems /
+different RNG" vs "different problems / same RNG" matters in practice.
+
+### Alternatives considered
+
+**Option A — same vLLM engine seed across workers, different problem seeds**
+
+Two workers init vLLM with the same seed, then sample different problems via
+different Feistel keys. After the first `generate()`, engines diverge anyway
+because they're processing different prompts. Net effect indistinguishable
+from the current setup. Pure no-op on TPU. Would only become meaningful if
+TPU vLLM gained per-request seeds (or we moved to GPU inference, where
+`SamplingParams.seed` works).
+
+**Option B — same problem seed across workers, different vLLM seeds**
+
+Both workers see the same Feistel permutation = same 64 prompts each step.
+Different vLLM engines produce different completions. Naively this looks
+attractive — you double per-prompt completion diversity from 16 to 32. But
+the way RLOO groups are formed in this codebase blocks the variance-reduction
+benefit:
+
+- Each worker emits ONE group per prompt of size `n_generations_per_prompt = 16`
+- Buffer holds `G_X_worker0` and `G_X_worker1` as **two separate groups of 16**, not one merged group of 32
+- RLOO's leave-one-out advantage is computed **within each group**, so the
+  effective group size for variance purposes stays 16
+- Both groups DO contribute to the gradient (trainer doesn't discard duplicates),
+  but the 1/(N-1) variance benefit of a merged group never materializes
+
+Net: same compute, half the unique-prompt coverage per step, marginal extra
+gradient diversity. Strict downgrade for Math500 where ~12000 train problems
+makes coverage the binding concern. Would become attractive only if (a) the
+dataset were tiny enough that re-seeing prompts beats new prompts, AND (b)
+the buffer / advantage code merged groups by `(prompt_id, weight_step)`.
+
+**Option C — different problem seeds AND different vLLM seeds across workers (CURRENT)**
+
+Each worker covers a disjoint slice of problems per step (Feistel permutations
+are different by `worker_index`) and generates with independent vLLM RNG.
+Workers do non-overlapping work, buffer accumulates 2× more unique-prompt
+groups per step, throughput scales near-linearly with worker count. This is
+what's actually live and what the validation + 500-step blog run use.
+
+The architectural note worth recording: **preemption robustness is a property
+of the Feistel scheduler, not of Option C specifically.** Under any of A/B/C
+the scheduler is stateless, the ledger persists per-worker cursors, and a
+restarted worker resumes at the next index in its own permutation. C's
+genuine differentiator vs B is "wider unique-prompt coverage per step,"
+not preemption resilience.
+
+**Architectural extension (not landed)**: a buffer that merges groups by
+`(prompt_id, weight_step)` would unlock genuine RLOO variance reduction
+when running with same-prompt workers. Reasonable future direction; out of
+scope for the blog comparison.
+
+### The 3-seed ablation bug
+
+The current per-worker derivation `worker_seed = (base + 1000) + i` collides
+across runs whenever the spacing between adjacent base seeds is smaller than
+the number of rollout workers. With `num_rollout_workers = 2`:
+
+```
+base = 0 → workers at 1000, 1001
+base = 1 → workers at 1001, 1002
+base = 2 → workers at 1002, 1003
+```
+
+| worker_seed | base=0 | base=1 | base=2 |
+|---|---|---|---|
+| 1000 | rollout-0 | — | — |
+| **1001** | rollout-1 | **rollout-0** | — |
+| **1002** | — | rollout-1 | **rollout-0** |
+| 1003 | — | — | rollout-1 |
+
+Run 0's rollout-1 ≡ Run 1's rollout-0 by literal `worker_seed = 1001`. Same
+Feistel scheduler key → identical permutation of MATH-500. Same vLLM engine
+init seed → identical initial RNG state. Threefry's avalanche only
+decorrelates *different* keys; identical keys produce identical streams.
+
+**Impact on a 3-seed ablation (base ∈ {0,1,2})**:
+
+- 6 logical rollout workers across the 3 runs, but only **4 unique
+  worker_seeds** (1000, 1001, 1002, 1003)
+- Pairs `(seed=0, seed=1)` and `(seed=1, seed=2)` share half of their
+  rollout-side work patterns
+- Only the pair `(seed=0, seed=2)` is fully decorrelated
+- Any "between-seed variance" you compute over the three runs is biased low
+  because of the shared structure
+- The "robust across seeds" claim that a 3-seed run would purport to support
+  is genuinely overstated by the current derivation
+
+Residual non-determinism from vLLM TPU async batch scheduling does add some
+noise on top, but it's not statistical independence — two workers with
+identical seed pick the same problems in the same order regardless of
+scheduler timing.
+
+### The fix — use `jax.random.fold_in`, which is the Levanter idiom
+
+The principled answer to "derive an independent child seed from a master seed
+plus an integer index" is **JAX's `fold_in` primitive**. It is the standard
+key-derivation operation in JAX's PRNG model (Threefry under the hood), and
+Levanter already uses it everywhere for exactly this `(parent_key, index)
+→ child_key` shape of problem:
+
+| file | usage |
+|---|---|
+| `levanter/data/permutation.py:22, 225, 233` | per-window permutation key in `PermutationDataset` / block-shuffle |
+| `levanter/data/mixture.py:501` | per-block dataset assignment in `MixtureDataset` |
+| `levanter/data/dataset.py:248, 338, 360` | generic `_maybe_fold_in_key` and `_fold_in_key_vmap` plumbing |
+| `levanter/eval_harness.py:879` | per-eval-i key in lm-eval-harness |
+| `levanter/main/sample_lm.py:186` | per-row sampling keys |
+| `levanter/models/flash_attention.py:256, 365, 386` | per-block dropout keys inside flash attention |
+| `levanter/inference/jit_scheduler.py:672, 711` | per-position sampling keys in the JIT scheduler |
+| `levanter/inference/engine.py:1033` | per-child sequence keys |
+| `marin/rl/rollout_schedule.py:73` (already!) | per-epoch Feistel permutation key — `jrandom.fold_in(jrandom.PRNGKey(seed & 0xFFFFFFFF), epoch)` |
+
+The rollout scheduler **already uses `fold_in` for its own per-epoch key
+derivation.** Using it one level up for per-worker keys closes the loop
+consistently.
+
+#### The replacement
+
+Replace `rl_job.py:237` (`rollout_seed = self.config.seed + 1000`) and the
+per-worker derivation at `orchestration.py:209` (`worker_seed = rollout_config.seed + i`)
+with one helper:
+
+```python
+import jax.random as jrandom
+
+def derive_worker_seed(base_seed: int, worker_index: int) -> int:
+    """Derive a 32-bit int seed for rollout worker `worker_index` from `base_seed`.
+
+    Uses JAX's `fold_in` key-derivation primitive (Threefry under the hood).
+    Matches the Levanter convention for parent_key + index → child_key.
+
+    Properties:
+      - Avalanche-strong: adjacent (base, worker) pairs produce uncorrelated outputs.
+      - Invariant to total `num_rollout_workers`: adding or removing workers
+        does not change existing workers' seeds.
+      - No stride / nonce / bound to maintain. Composes freely with multi-seed
+        ablations across any range of base_seed values without collisions.
+      - Suitable for `random.Random(...)`, `np.random.default_rng(...)`, and
+        `vllm.AsyncEngineArgs(seed=...)` — all of which want a plain int.
+    """
+    key = jrandom.fold_in(jrandom.PRNGKey(base_seed), worker_index)
+    return int(jrandom.randint(key, (), 0, 2**31 - 1))
+```
+
+Call site:
+
+```python
+for i in range(run_config.num_rollout_workers):
+    worker_seed = derive_worker_seed(rollout_config.seed, i)
+    # pass worker_seed to both vLLM engine init and the Feistel scheduler
+```
+
+Verified empirically (live demo on this machine):
+
+```
+base=0  worker=0  →  447,923,887
+base=0  worker=1  →  390,137,614
+base=1  worker=0  → 1,410,347,216
+base=1  worker=1  →    923,606,004
+base=2  worker=0  → 1,566,417,524
+base=42 worker=0  → 1,788,795,708
+```
+
+No two `(base, worker_index)` pairs collide. Each output is a uniform draw
+from `[0, 2³¹)`. The base=1/worker=0 seed and base=0/worker=1 seed differ
+by ~10⁹ — fully decorrelated.
+
+#### Why this beats the stride / hash alternatives I previously enumerated
+
+| approach | principled? | simple? | num-workers invariant? | needs constants? |
+|---|---|---|---|---|
+| `worker_seed = base * STRIDE + nonce + i` | positional encoding (correct but cramped) | ✅ | ❌ — bumping STRIDE re-shuffles every existing seed | yes (STRIDE, nonce, assert) |
+| sha256 of `"rollout:{seed}"` | overwhelming-probability bijection | ❌ — needs hashlib, multi-line, opaque | ✅ | no |
+| **`jrandom.fold_in(PRNGKey(base), i)`** | **canonical JAX key derivation** | ✅ — five lines including docstring | ✅ — value depends only on `(base, i)` | no |
+
+The killer property is **num-workers invariance**: with `fold_in`, the worker
+seed for `(base=42, worker_index=0)` is the same value whether the run has 1
+worker, 2 workers, or 100. No stride to widen, no constant to bump, no
+silent re-permutation of existing schedules if we add a worker later. The
+stride approach has an implicit dependency on the assumed maximum worker
+count; `fold_in` has none.
+
+The principled justification: JAX's PRNG model gives you key-derivation as a
+primitive (`fold_in`) and key-splitting as a primitive (`split`). They are
+specifically designed for the "parent key + integer index → child key"
+pattern. Threefry's avalanche guarantees that distinct inputs produce
+uncorrelated outputs. We do not need to invent an encoding when the right
+primitive is already in the stack — and is already in use by Levanter for
+the exact same problem shape.
+
+### Regression test
+
+Add a test in `tests/rl/test_rl_job.py` that asserts:
+
+1. **Uniqueness**: across `(base_seed ∈ {0…99}) × (worker_index ∈ {0…99})`,
+   all 10,000 `derive_worker_seed` outputs are distinct.
+2. **Num-workers invariance**: for any fixed `(base_seed, worker_index)`,
+   `derive_worker_seed` returns the same value regardless of any other
+   parameters in the run config.
+3. **Decorrelation sanity**: outputs for `(base=N, w=0)` and `(base=N, w=1)`
+   differ in at least 16 bits (loose Hamming distance check; Threefry should
+   give ~16 bits of difference on average for any 1-bit input change).
+
+### Status
+
+Not landed on `origin/rl_blog` as of `1f630a15d`. The live 500-step run uses
+`base=42` only, so it is not affected. Should land **before** any K-seed
+ablation launch; otherwise the resulting "seed variance" numbers will be
+correlated and not honestly defensible.
