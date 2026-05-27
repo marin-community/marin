@@ -27,7 +27,7 @@ RAW_TARGET_TOTAL_TOKENS_B: float = 1000.0
 """Target size (billions of tokens) for the pre-normalize by-provenance sample.
 
 Drives per-source sampling fractions via
-:func:`experiments.testbed.sampler.proportional_sample_fractions` so
+:func:`experiments.datakit.testbed.sampler.proportional_sample_fractions` so
 every experiment downstream pays O(sampled) rather than O(full upstream).
 Matches the "~1T token testbed" headline.
 """

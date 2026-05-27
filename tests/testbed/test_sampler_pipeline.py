@@ -6,7 +6,7 @@
 import pytest
 from marin.datakit.sources import DatakitSource, all_sources
 
-from experiments.testbed.sampler import build_testbed_steps
+from experiments.datakit.testbed.sampler import build_testbed_steps
 
 _ALL = all_sources()
 _ALL_LIST = list(_ALL.values())

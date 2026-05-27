@@ -45,7 +45,7 @@ from marin.execution.step_spec import StepSpec
 from marin.utils import fsspec_glob, fsspec_mkdirs
 from rigging.filesystem import url_to_fs
 
-from experiments.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
+from experiments.datakit.testbed.settings import RAW_TARGET_TOTAL_TOKENS_B
 
 _SAMPLE_REMOTE_RESOURCES = ResourceConfig(cpu=1, ram="5g")
 
@@ -358,7 +358,7 @@ def build_testbed_steps(
     (``data/datakit/normalized/{src.name}-{hash}/``) — the hash incorporates
     ``sample_fraction`` so different fractions don't collide. Tokenize
     runs in the training executor graph (see
-    :mod:`experiments.testbed.train`), not the ferry.
+    :mod:`experiments.datakit.testbed.train`), not the ferry.
 
     Args:
         sources: DatakitSource list to ferry. ``None`` selects every entry

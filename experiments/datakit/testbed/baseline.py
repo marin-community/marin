@@ -31,10 +31,10 @@ import draccus
 from marin.execution.executor import ExecutorMainConfig, executor_main
 from rigging.log_setup import configure_logging
 
-from experiments.testbed.mixture import tokenized_bucket_weights_step
-from experiments.testbed.sampler import build_testbed_steps
-from experiments.testbed.settings import TESTBED_TOKENIZER
-from experiments.testbed.train import run_testbed_config, testbed_tokenize
+from experiments.datakit.testbed.mixture import tokenized_bucket_weights_step
+from experiments.datakit.testbed.sampler import build_testbed_steps
+from experiments.datakit.testbed.settings import TESTBED_TOKENIZER
+from experiments.datakit.testbed.train import run_testbed_config, testbed_tokenize
 
 logger = logging.getLogger(__name__)
 
